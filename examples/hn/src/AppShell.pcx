@@ -11,6 +11,6 @@
     <pp-outlet></pp-outlet>
   </main>
   <footer>
-    <span class="mono">pocopine hn · fetched live from hacker-news.firebaseio.com</span>
+    <span class="mono">pocopine hn · fetched live from hn.algolia.com</span>
   </footer>
 </div>
