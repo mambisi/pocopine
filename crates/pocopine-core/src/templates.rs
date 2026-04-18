@@ -1,7 +1,7 @@
 //! Component template registry.
 //!
 //! The `#[component]` macro emits a call to [`register_template`] with the
-//! component's compiled HTML. The macro pipes the raw `.pcx` contents
+//! component's compiled HTML. The macro pipes the raw `.poco` contents
 //! through [`inject_pp_data`] so the walker can recognise the template
 //! root by its `pp-data` attribute without authors having to type one.
 
@@ -32,7 +32,7 @@ pub fn is_registered(name: &str) -> bool {
 /// comments, doctypes, and leading whitespace are skipped.
 ///
 /// The parser is deliberately minimal — enough for plain HTML-with-
-/// directives as authored in `.pcx` files. A full HTML parser is
+/// directives as authored in `.poco` files. A full HTML parser is
 /// overkill for a compile-time rewrite of author-controlled input.
 pub fn inject_pp_data(raw: &str, name: &str) -> String {
     // Walk to the first opening tag, skipping comments / doctypes.

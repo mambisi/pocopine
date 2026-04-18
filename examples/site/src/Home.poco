@@ -17,7 +17,7 @@
     <h2><span class="section__label">§ 01</span>A component, end to end</h2>
     <p class="sub">
       A Rust struct is the state. Handlers mutate <code>&amp;mut self</code>.
-      The <code>.pcx</code> file is plain HTML with <code>pp-*</code> directives.
+      The <code>.poco</code> file is plain HTML with <code>pp-*</code> directives.
       The macro wires it into a custom element tag.
     </p>
 
@@ -38,7 +38,7 @@ impl Counter {
 }</pre>
       </figure>
       <figure>
-        <figcaption>Counter.pcx</figcaption>
+        <figcaption>Counter.poco</figcaption>
 <pre>&lt;div pp-init="init"&gt;
   &lt;button pp-on:click="increment"&gt;+&lt;/button&gt;
   &lt;span pp-text="count"&gt;&lt;/span&gt;
@@ -67,7 +67,7 @@ impl Counter {
       <article class="card">
         <span class="chip">Components</span>
         <h3>Custom element tags</h3>
-        <p>Rust struct + <code>.pcx</code> template auto-registers a
+        <p>Rust struct + <code>.poco</code> template auto-registers a
           <code>&lt;kebab-name&gt;</code> tag. Props are HTML attrs,
           coerced to the Rust field type.</p>
       </article>

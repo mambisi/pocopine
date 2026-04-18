@@ -12,7 +12,7 @@
 //!
 //! Defaults when the user passes no arguments to `#[component]`:
 //!   * `name = <kebab-case of the struct ident>`
-//!   * `template = "<StructIdent>.pcx"` (relative to the calling `.rs`)
+//!   * `template = "<StructIdent>.poco"` (relative to the calling `.rs`)
 //!   * `style` is omitted unless explicit
 //!
 //! A struct ident whose kebab-case matches a known HTML element is rejected
@@ -143,7 +143,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let template_path: LitStr = match &args.template {
         Some(s) => s.clone(),
-        None => LitStr::new(&format!("{ident_str}.pcx"), struct_ident.span()),
+        None => LitStr::new(&format!("{ident_str}.poco"), struct_ident.span()),
     };
 
     let field_idents: Vec<_> = input

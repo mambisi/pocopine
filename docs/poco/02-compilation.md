@@ -1,4 +1,4 @@
-# Compiling `.pcx` + `.rs` + `.css` → registered component
+# Compiling `.poco` + `.rs` + `.css` → registered component
 
 The user writes three files. The `#[component]` macro ties them
 together at compile time; no separate build step is needed.
@@ -9,7 +9,7 @@ together at compile time; no separate build step is needed.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "counter",
-    template = "Counter.pcx",
+    template = "Counter.poco",
     style = "Counter.css",     // optional
 )]
 pub struct Counter { pub count: i32 }
@@ -32,7 +32,7 @@ The new `template` + `style` arguments extend `register()`:
 impl Counter {
     pub fn register() {
         register_component("counter", || Rc::new(RefCell::new(Counter::default())));
-        register_template("counter", include_str!("Counter.pcx"));
+        register_template("counter", include_str!("Counter.poco"));
         inject_style("counter", include_str!("Counter.css"));
     }
 }
@@ -41,13 +41,13 @@ impl Counter {
 Key points:
 
 1. **`include_str!` is used deliberately.** cargo tracks it, so edits
-   to the `.pcx` or `.css` invalidate the build cache. No extra
+   to the `.poco` or `.css` invalidate the build cache. No extra
    `rerun-if-changed` plumbing.
-2. **Validation at expansion time.** The macro parses the `.pcx`,
+2. **Validation at expansion time.** The macro parses the `.poco`,
    walks the root element, and rejects if:
    * there's more than one root element,
    * the root element's `pp-data` attribute doesn't match `name`.
-   Errors point to the `.pcx` with a file+line span.
+   Errors point to the `.poco` with a file+line span.
 3. **CSS is transformed before emission** (see `03-scoped-styles.md`).
    The `include_str!` still gives cargo the cache key; the transform
    runs in the macro body and the result is emitted as a string literal.
@@ -89,7 +89,7 @@ machinery or defer.
 
 ## What the macro does **not** do
 
-* **It doesn't parse the `.pcx` as HTML deeply.** Minimum validation
+* **It doesn't parse the `.poco` as HTML deeply.** Minimum validation
   only (root element, root `pp-data`). Leaving the body opaque means
   the compiler doesn't need to keep up with every directive's options.
   The walker already does real directive parsing at runtime.
@@ -104,7 +104,7 @@ machinery or defer.
 * **Separate `build.rs` codegen.** Considered; adds a per-project
   build script with no upside when `include_str!` already handles
   caching. Skipped.
-* **`.pcx` as proc-macro input via `pcx!("Counter.pcx")`.** Clean in
+* **`.poco` as proc-macro input via `poco!("Counter.poco")`.** Clean in
   isolation, but then `Counter.rs` no longer looks like a normal
   struct definition — it becomes a macro call that hides the type.
   Rejected for DX (no rust-analyzer completion on the struct, no

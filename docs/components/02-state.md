@@ -55,7 +55,7 @@ attrs seed once; `pp-bind:` attrs stay reactive. Full specification
 in `03-composition.md`.
 
 ```html
-<!-- TodoList.pcx -->
+<!-- TodoList.poco -->
 <div pp-init="init">
   <h1 pp-text="title"></h1>
   <todo-item id="1" label="Buy milk" />
@@ -101,12 +101,12 @@ impl TodoItem {
 ```
 
 ```html
-<!-- TodoItem.pcx -->
+<!-- TodoItem.poco -->
 <li pp-data="todo-item">
   <button pp-on:click="complete">✓</button>
 </li>
 
-<!-- TodoList.pcx -->
+<!-- TodoList.poco -->
 <ul pp-data="todo-list" pp-on:todo-completed="record_completed">
   <li pp-data="todo-item">...</li>
 </ul>

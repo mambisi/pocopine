@@ -1,6 +1,6 @@
-//! HN components. One `#[component]` per file so the `.pcx` template
+//! HN components. One `#[component]` per file so the `.poco` template
 //! sits next to the struct it belongs to (the proc-macro resolves
-//! `include_str!("<Ident>.pcx")` relative to the calling `.rs`).
+//! `include_str!("<Ident>.poco")` relative to the calling `.rs`).
 
 pub mod app_shell;
 pub mod not_found;

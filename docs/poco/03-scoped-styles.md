@@ -1,4 +1,4 @@
-# Scoped styles for `.pcx` components
+# Scoped styles for `.poco` components
 
 Goal: CSS in a component's `.css` file applies only to that
 component's template by default. Same idea as Vue SFC / Svelte, but
@@ -14,14 +14,14 @@ For a component `name = "counter"`:
    deterministic digest (FNV-1a or blake3 truncated). Stable across
    builds and machines.
 2. Attribute namespace: `data-pp-<H>`, e.g. `data-pp-a1b2c3d4`.
-3. **Template pass**: walk the `.pcx` HTML, append `data-pp-<H>` to
+3. **Template pass**: walk the `.poco` HTML, append `data-pp-<H>` to
    every element. Done at `#[component]` expansion time; the macro
    emits the rewritten HTML as the literal string it registers.
 4. **CSS pass**: parse `Counter.css`, append `[data-pp-<H>]` to every
    selector's last compound. Done at the same expansion time.
 
 Both passes happen inside the `pocopine-macros` (or a helper
-`pocopine-pcx`) crate. The runtime wasm sees already-scoped strings.
+`pocopine-poco`) crate. The runtime wasm sees already-scoped strings.
 
 ## Scoping is the default
 
@@ -63,7 +63,7 @@ button[data-pp-a1b2c3d4]         { padding: 0.5rem; }
 body.dark .wrapper               { background: #000; }  /* :global() unscoped */
 ```
 
-**Input** (`Counter.pcx`):
+**Input** (`Counter.poco`):
 
 ```html
 <div pp-data="counter" class="wrapper">
@@ -93,7 +93,7 @@ body.dark .wrapper               { background: #000; }  /* :global() unscoped */
 * **`@media` / `@supports`** — the at-rule itself is untouched;
   selectors inside are scoped normally.
 * **Cross-component selectors**: `.parent .child` in `Parent.css`
-  expecting to hit a `.child` inside an imported `Child.pcx` **breaks**
+  expecting to hit a `.child` inside an imported `Child.poco` **breaks**
   under scoping. Document this; `:deep(.child)` opt-out rewrites to
   `.parent[data-pp-H] .child` (drops the trailing attribute).
 
@@ -104,7 +104,7 @@ body.dark .wrapper               { background: #000; }  /* :global() unscoped */
   — regex-based selector munging breaks on attribute selectors with
   commas inside strings.
 * **HTML parser**: hand-rolled single-pass tokenizer is fine for v0.
-  The `.pcx` is our format, we can forbid edge cases. If we ever want
+  The `.poco` is our format, we can forbid edge cases. If we ever want
   full HTML5, reach for `html5ever`.
 * **Hash function**: FNV-1a (no extra dep; runs in proc-macro context
   without blowing compile times). Switch to `blake3` only if we hit a

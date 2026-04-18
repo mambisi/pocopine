@@ -193,7 +193,7 @@ examples/blog/
   src/
     shared.rs       # Post + any other wire types
     lib.rs          # BlogPost component + #[server] get_post
-    BlogPost.pcx    # template
+    BlogPost.poco    # template
     bin/
       server.rs     # #[tokio::main] axum entry, calls __get_post_route
   index.html        # mounts <blog-post post-id="1"> and <blog-post post-id="999">

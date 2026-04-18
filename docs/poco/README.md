@@ -1,6 +1,6 @@
-# `.pcx` — pocopine component templates
+# `.poco` — pocopine component templates
 
-A `.pcx` file holds **only** the HTML template for a component, with
+A `.poco` file holds **only** the HTML template for a component, with
 `pp-*` directives. The Rust type lives in a `.rs` file beside it; the
 styles live in a `.css` file beside it. Three files, one component.
 
@@ -13,7 +13,7 @@ inside `pp-*="..."` attribute values.
 
 Docs in this folder:
 
-1. [`01-format.md`](./01-format.md) — the `.pcx` format itself, and
+1. [`01-format.md`](./01-format.md) — the `.poco` format itself, and
    the matching `.rs` + `.css` contract.
 2. [`02-compilation.md`](./02-compilation.md) — how the `#[component]`
    macro's `template = "..."` + `style = "..."` arguments wire the

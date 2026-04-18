@@ -37,7 +37,7 @@ ident — no prefix:
 ## Using a component in a parent's template
 
 ```html
-<!-- TodoList.pcx -->
+<!-- TodoList.poco -->
 <div pp-init="init">
   <h1 pp-text="title"></h1>
   <todo-item id="1" label="Buy milk" />
@@ -97,7 +97,7 @@ Children inside the tag become slot content. One default slot for v0;
 named slots land with iteration.
 
 ```html
-<!-- Card.pcx -->
+<!-- Card.poco -->
 <div class="card">
   <header pp-text="title"></header>
   <main>
@@ -107,7 +107,7 @@ named slots land with iteration.
 ```
 
 ```html
-<!-- Parent.pcx, using <card> -->
+<!-- Parent.poco, using <card> -->
 <card title="Hello">
   <p>Body content lives here.</p>
   <button pp-on:click="dismiss">OK</button>
@@ -166,7 +166,7 @@ component's registered template string, it injects `pp-data="<name>"`
 onto the root element. Authors just write the template:
 
 ```html
-<!-- Counter.pcx — as authored -->
+<!-- Counter.poco — as authored -->
 <div pp-init="init">
   <button pp-on:click="decrement">-</button>
   <span class="count" pp-text="count"></span>
@@ -236,7 +236,7 @@ impl TodoItem {
 }
 ```
 
-**`components/TodoList.pcx`** (v0 — `pp-for` not yet available)
+**`components/TodoList.poco`** (v0 — `pp-for` not yet available)
 
 ```html
 <div pp-init="init">
@@ -246,7 +246,7 @@ impl TodoItem {
 </div>
 ```
 
-**`components/TodoItem.pcx`**
+**`components/TodoItem.poco`**
 
 ```html
 <div>

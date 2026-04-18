@@ -6,12 +6,12 @@
 | **Author** | pocopine team |
 | **Created** | 2026-04-18 |
 | **Supersedes** | — |
-| **Related docs** | [`docs/components/`](../docs/components/), [`docs/pcx/`](../docs/pcx/) |
+| **Related docs** | [`docs/components/`](../docs/components/), [`docs/poco/`](../docs/poco/) |
 
 ## 1. Summary
 
 A pocopine component is a Rust struct plus a `#[handlers]` impl plus a
-`.pcx` template plus an optional `.css` stylesheet. The macro derives
+`.poco` template plus an optional `.css` stylesheet. The macro derives
 everything it can — tag name, template path, stylesheet path — so
 annotating a struct with `#[component]` is typically all the author
 writes. Composition is tag-based via bare kebab-case tags; props flow
@@ -40,7 +40,7 @@ one consistent style across apps.
 * Zero ceremony for the common case: `#[component]` with no arguments.
 * Composition reads as HTML, not configuration.
 * No mixed-language files — Rust, HTML, CSS each stay in their native
-  file type (see `feedback_pcx_format`).
+  file type (see `feedback_poco_format`).
 * Multiple components per Rust module allowed (see
   `feedback_rust_modules`).
 
@@ -86,7 +86,7 @@ Given `pub struct <Ident>`, the macro derives:
 | Attribute | Default |
 |---|---|
 | `name` | kebab-case of the struct ident |
-| `template` | `"<Ident>.pcx"` resolved relative to the `.rs` file |
+| `template` | `"<Ident>.poco"` resolved relative to the `.rs` file |
 | `style` | `"<Ident>.css"` resolved relative to the `.rs` file, if the file exists |
 | Tag | `<name>` (no prefix) |
 
@@ -105,25 +105,25 @@ matching label in the Rust API.
 src/
   components/
     counter.rs          # module
-    Counter.pcx         # template
+    Counter.poco         # template
     Counter.css         # (optional)
 
     todo.rs             # module with multiple components
-    TodoList.pcx
+    TodoList.poco
     TodoList.css
-    TodoItem.pcx
+    TodoItem.poco
     TodoItem.css
   lib.rs
 ```
 
 * `.rs` = Rust module, can hold multiple components and helper types.
-* `.pcx` and `.css` = per-component, named after the struct (PascalCase).
+* `.poco` and `.css` = per-component, named after the struct (PascalCase).
 * Avoid per-component directories until a component demands its own
   subtree; start flat, promote later.
 
-### 5.4 Template format (`.pcx`)
+### 5.4 Template format (`.poco`)
 
-`.pcx` is HTML with `pp-*` directives — no embedded Rust or CSS.
+`.poco` is HTML with `pp-*` directives — no embedded Rust or CSS.
 
 * **Single root element.**
 * Authored template **does not include `pp-data`** on the root; the
@@ -138,7 +138,7 @@ A plain `.css` file. When a stylesheet is associated with a component,
 it is **scoped by default** using the data-attribute strategy
 (`data-pp-<hash>` on every template element; `[data-pp-<hash>]`
 appended to every selector's last compound). Opt out per-rule with
-`:global(...)`. Full spec: `docs/pcx/03-scoped-styles.md`.
+`:global(...)`. Full spec: `docs/poco/03-scoped-styles.md`.
 
 Implementation uses `lightningcss` for parsing and rewriting.
 
@@ -206,7 +206,7 @@ exactly one default slot per template, marked with the native HTML
 `<slot>` element:
 
 ```html
-<!-- Card.pcx -->
+<!-- Card.poco -->
 <div class="card">
   <header pp-text="title"></header>
   <slot></slot>
@@ -324,7 +324,7 @@ Each step is individually landable and shippable.
   directive that does what a tag can do; parent templates become
   uglier; props need their own directive too (`pp-props="..."`).
 * **Vue/Svelte SFC-style single files**. Rejected up-front — see
-  `feedback_pcx_format`. Users hated the mixed-language experience and
+  `feedback_poco_format`. Users hated the mixed-language experience and
   the tooling implications.
 * **Callback props**. Rejected for v0. Event dispatch is a strict
   superset (a callback is an event handler the child doesn't know the
@@ -346,7 +346,7 @@ Each step is individually landable and shippable.
   Probably the emitted string, but the server-layer RFC will settle
   it.
 * **`:deep(...)` scoping opt-out for cross-component selectors.**
-  Mentioned in `docs/pcx/03-scoped-styles.md` but semantics aren't
+  Mentioned in `docs/poco/03-scoped-styles.md` but semantics aren't
   locked. Punt to the scoped-styles implementation PR.
 
 ## 11. Migration / impact

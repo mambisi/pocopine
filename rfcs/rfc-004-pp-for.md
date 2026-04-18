@@ -35,7 +35,7 @@ string in Rust and the walker does one `innerHTML` set. Works, but:
 * No per-item reactivity — a single field change forces rebuilding
   the entire list's HTML string.
 * Loop + formatting logic lives outside the template file, split
-  across `.pcx` and `.rs`. The template stops describing the shape
+  across `.poco` and `.rs`. The template stops describing the shape
   of what's rendered.
 * Recursive trees (e.g. HN comments) become recursive string
   builders in Rust instead of recursive component templates.
@@ -202,7 +202,7 @@ walks the chain naturally.
 ### 5.6 Recursive components
 
 Comments in HN are the driving use case. A `<hn-comment>` component
-receives the comment node as a prop; its own `.pcx` contains:
+receives the comment node as a prop; its own `.poco` contains:
 
 ```html
 <article>

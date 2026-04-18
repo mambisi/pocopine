@@ -1,6 +1,6 @@
-# `.pcx` file format
+# `.poco` file format
 
-A `.pcx` file is **only** HTML with `pp-*` directives. Nothing else.
+A `.poco` file is **only** HTML with `pp-*` directives. Nothing else.
 No embedded Rust. No embedded CSS. No `<script>` or `<style>` blocks.
 
 Rust lives in its own `.rs` file; CSS lives in its own `.css` file.
@@ -27,7 +27,7 @@ grammar. That's a small, well-scoped plugin — not a full SFC plugin.
 
 Three files in the same directory:
 
-**`Counter.pcx`**
+**`Counter.poco`**
 
 ```html
 <div pp-data="counter" pp-init="init" class="wrapper">
@@ -44,7 +44,7 @@ use pocopine::prelude::*;
 use serde::{Serialize, Deserialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(name = "counter", template = "Counter.pcx", style = "Counter.css")]
+#[component(name = "counter", template = "Counter.poco", style = "Counter.css")]
 pub struct Counter {
     pub count: i32,
 }
@@ -65,7 +65,7 @@ impl Counter {
 button   { padding: 0.5rem 1rem; }
 ```
 
-## Rules for the `.pcx` body
+## Rules for the `.poco` body
 
 * **Single root element.** It must carry `pp-data="name"` matching the
   `#[component(name = "...")]` in the paired `.rs`. Fragments aren't
@@ -88,7 +88,7 @@ button   { padding: 0.5rem 1rem; }
 * `template` and `style` paths are **relative to the `.rs` file**, same
   as `include_str!`. Both accept missing files (warn, don't error) so a
   component can be authored without styles.
-* The paired `.pcx` must exist at the `template` path; the macro reads
+* The paired `.poco` must exist at the `template` path; the macro reads
   and validates it at compile time (see `02-compilation.md`).
 
 ## Rules for the `.css` file
@@ -105,10 +105,10 @@ Convention, not a rule:
 
 ```
 components/
-  Counter.pcx
+  Counter.poco
   Counter.rs
   Counter.css
-  TodoList.pcx
+  TodoList.poco
   TodoList.rs
   TodoList.css
 ```
@@ -119,7 +119,7 @@ become a clippy-style lint warning later.
 
 ## Future: syntax highlighting
 
-The whole point of keeping `.pcx` as "HTML with `pp-*` attributes" is
+The whole point of keeping `.poco` as "HTML with `pp-*` attributes" is
 that an editor can:
 
 1. Treat the file as HTML by default → every editor gets free HTML

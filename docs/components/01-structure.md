@@ -3,7 +3,7 @@
 Opinionated defaults, with Rust's module conventions intact. A `.rs`
 file is a Rust module and can hold multiple components, helper types,
 and free functions — same as any Rust file. What *is* strictly
-per-component is the template and (optional) stylesheet: one `.pcx`
+per-component is the template and (optional) stylesheet: one `.poco`
 per component, one `.css` per component.
 
 ## File layout
@@ -16,13 +16,13 @@ declares them.
 src/
   components/
     counter.rs          # module — declares `Counter`
-    Counter.pcx         # template for Counter
+    Counter.poco         # template for Counter
     Counter.css         # styles for Counter
 
     todo.rs             # module — declares `TodoList` and `TodoItem`
-    TodoList.pcx        # template for TodoList
+    TodoList.poco        # template for TodoList
     TodoList.css        # styles for TodoList
-    TodoItem.pcx        # template for TodoItem
+    TodoItem.poco        # template for TodoItem
     TodoItem.css        # styles for TodoItem
   lib.rs
 ```
@@ -37,7 +37,7 @@ src/
   until a component accumulates enough state to warrant its own
   module tree. Start flat; promote later.
 * **Template and stylesheet names are `PascalCase`**, one per
-  component. The macro defaults `template = "<StructName>.pcx"` and
+  component. The macro defaults `template = "<StructName>.poco"` and
   `style = "<StructName>.css"` resolved next to the `.rs` file — no
   explicit paths unless overriding.
 * **Runtime name is auto-derived** kebab-case of the struct ident
@@ -172,7 +172,7 @@ impl TodoItem {
   native builds) don't belong on the struct. Stash them in a
   `thread_local` keyed by scope id, or promote the need to a store.
 
-## Shape of a template (`.pcx`)
+## Shape of a template (`.poco`)
 
 ```html
 <div pp-data="counter" pp-init="init">
@@ -203,7 +203,7 @@ button   { padding: 0.5rem 1rem; }
 
 **Rules:**
 
-* **Scoped by default** (see `docs/pcx/03-scoped-styles.md`).
+* **Scoped by default** (see `docs/poco/03-scoped-styles.md`).
 * **Style by class** where practical — scoped element selectors work
   but classes are grep-able and survive refactors better.
 * **Opt out of scoping** per-rule with `:global(...)`. Don't fight
@@ -217,7 +217,7 @@ Given a component `pub struct TodoItem { ... }` declared in
 | Field | Default |
 |---|---|
 | `name` | kebab-case of ident → `"todo-item"` |
-| `template` | `"TodoItem.pcx"` (next to `todo.rs`) |
+| `template` | `"TodoItem.poco"` (next to `todo.rs`) |
 | `style` | `"TodoItem.css"` (next to `todo.rs`) if it exists, else nothing |
 
 So the minimal component is just:
