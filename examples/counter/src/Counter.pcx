@@ -1,0 +1,14 @@
+<div pp-init="init">
+  <p>
+    <span class="count" pp-text="count"></span>
+    <span pp-text="label"></span>
+  </p>
+  <button pp-on:click="decrement">-</button>
+  <button pp-on:click="increment">+</button>
+  <button pp-on:click="reset">reset</button>
+  <p pp-show="count">(non-zero: shows only when count is truthy)</p>
+  <p>Title-bound to count: <em pp-bind:title="count">hover me</em></p>
+  <p>Two-way bound input:
+    <input type="number" pp-model.number="count" />
+  </p>
+</div>

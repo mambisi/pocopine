@@ -1,0 +1,17 @@
+[package]
+name = "pocopine-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for pocopine projects: build, run, dev."
+
+[[bin]]
+name = "pocopine"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tiny_http = "0.12"
+notify = "6"
+anyhow = "1"

@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pocopine counter</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; }
+    .count { font-size: 2rem; font-weight: 600; }
+    button { padding: 0.5rem 1rem; margin-right: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>pocopine counter</h1>
+
+  <!-- Default initial state (empty body) -->
+  <counter></counter>
+
+  <h2>Pre-seeded via attributes</h2>
+  <!-- Static props: count starts at 10, label at "bumps" -->
+  <counter count="10" label="bumps"></counter>
+
+  <script type="module">
+    import init from "./pkg/counter.js";
+    init();
+  </script>
+</body>
+</html>

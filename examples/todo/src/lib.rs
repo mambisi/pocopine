@@ -1,0 +1,46 @@
+//! Todo example — demonstrates tag-based composition, static props,
+//! reactive `pp-bind:` props into a child, and default `<slot>` content.
+
+use pocopine::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct TodoList {
+    pub title: String,
+    pub current_label: String,
+}
+
+#[handlers]
+impl TodoList {
+    pub fn init(&mut self) {
+        if self.title.is_empty() {
+            self.title = "Things to do".into();
+        }
+        if self.current_label.is_empty() {
+            self.current_label = "Edit me".into();
+        }
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct TodoItem {
+    pub id: i32,
+    pub label: String,
+    pub done: bool,
+}
+
+#[handlers]
+impl TodoItem {
+    pub fn toggle(&mut self) {
+        self.done = !self.done;
+    }
+}
+
+#[wasm_bindgen(start)]
+pub fn main() {
+    TodoList::register();
+    TodoItem::register();
+    pocopine::run();
+}

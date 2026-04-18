@@ -1,0 +1,50 @@
+[package]
+name = "pocopine-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Client-side reactive runtime for pocopine — a Rust/WASM port of Alpine.js."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+once_cell = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "AddEventListenerOptions",
+    "Attr",
+    "CssStyleDeclaration",
+    "CustomEvent",
+    "CustomEventInit",
+    "Document",
+    "DomTokenList",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlCollection",
+    "HtmlElement",
+    "HtmlHeadElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "MutationObserver",
+    "MutationObserverInit",
+    "MutationRecord",
+    "NamedNodeMap",
+    "Node",
+    "NodeList",
+    "Window",
+    "console",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

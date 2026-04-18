@@ -1,6 +1,36 @@
-[package]
-name = "pocopine"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "crates/pocopine",
+    "crates/pocopine-cli",
+    "crates/pocopine-core",
+    "crates/pocopine-macros",
+    "examples/counter",
+    "examples/todo",
+]
 
-[dependencies]
+# The CLI builds for the host; everything else builds for wasm32. Exclude the
+# CLI's own target dir from default wasm builds so `cargo build -p counter
+# --target wasm32-unknown-unknown` doesn't pull in host-only deps.
+[workspace.metadata.hosts]
+cli = ["pocopine-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pocopine/pocopine"
+
+[workspace.dependencies]
+pocopine-core = { path = "crates/pocopine-core", version = "0.1.0" }
+pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+linkme = "0.3"
+once_cell = "1"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

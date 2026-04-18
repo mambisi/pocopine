@@ -1,0 +1,6 @@
+<li>
+  <input type="checkbox" pp-model="done" />
+  <strong pp-text="label"></strong>
+  <slot></slot>
+  <button pp-on:click="toggle">toggle</button>
+</li>

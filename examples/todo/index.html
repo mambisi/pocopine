@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pocopine todo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 600px; }
+    ul { list-style: none; padding-left: 0; }
+    li { padding: 0.5rem 0; border-bottom: 1px solid #eee; }
+    button { margin-left: 0.5rem; }
+    input[type="text"], input:not([type]) { padding: 0.4rem; width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>pocopine todo</h1>
+  <todo-list></todo-list>
+
+  <script type="module">
+    import init from "./pkg/todo.js";
+    init();
+  </script>
+</body>
+</html>

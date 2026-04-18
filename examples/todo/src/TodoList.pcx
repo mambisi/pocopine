@@ -1,0 +1,11 @@
+<div pp-init="init">
+  <h2 pp-text="title"></h2>
+  <ul>
+    <todo-item id="1" label="Buy milk"><em>&nbsp;(groceries)</em></todo-item>
+    <todo-item id="2" label="Write docs" done><em>&nbsp;(writing)</em></todo-item>
+    <todo-item id="3" pp-bind:label="current_label"><em>&nbsp;(live via pp-bind)</em></todo-item>
+  </ul>
+  <p>Edit the label of item #3:
+    <input pp-model="current_label" />
+  </p>
+</div>
