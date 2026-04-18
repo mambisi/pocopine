@@ -5,6 +5,7 @@
       type="search"
       placeholder="search stories on hacker news…"
       pp-model="query"
+      pp-on:input.debounce.300="search"
       autocomplete="off"
       spellcheck="false"
     />
