@@ -9,12 +9,14 @@ use web_sys::{CustomEvent, CustomEventInit, Element};
 
 use crate::reactive::ScopeId;
 use crate::scope::current_el;
+use crate::store::stores_object;
 
 pub fn resolve(key: &str, _scope_id: ScopeId) -> JsValue {
     match key {
         "$el" => current_el().map(JsValue::from).unwrap_or(JsValue::UNDEFINED),
         "$refs" => build_refs(),
         "$dispatch" => build_dispatch(),
+        "$store" => stores_object(),
         _ => JsValue::UNDEFINED,
     }
 }

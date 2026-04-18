@@ -11,3 +11,6 @@ looks the way it does — the code itself tells you *what*.
   paired with sibling `.rs` + `.css` files. No mixed-language SFCs.
 
 Formal design decisions live one level up in [`../rfcs/`](../rfcs/).
+For the server-function end-to-end example, see
+[`examples/blog/`](../examples/blog/) — it wires `App`, a `#[server]`
+function, and an axum server binary into one working app.

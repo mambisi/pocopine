@@ -1,9 +1,9 @@
 //! `pp-text="field"` — set `textContent` from a scope field, reactively.
 
-use js_sys::Reflect;
 use wasm_bindgen::JsValue;
 
 use super::DirectiveCall;
+use crate::path::resolve_path;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
@@ -15,7 +15,7 @@ pub fn run(call: &DirectiveCall) {
     let id = effect(move || {
         let el_for_magic = el.clone();
         with_current_el(&el_for_magic, || {
-            let v = Reflect::get(&proxy, &JsValue::from_str(&key)).unwrap_or(JsValue::UNDEFINED);
+            let v = resolve_path(&proxy, &key);
             el.set_text_content(Some(&js_to_string(&v)));
         });
     });

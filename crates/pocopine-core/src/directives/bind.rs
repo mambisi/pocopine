@@ -16,6 +16,7 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use super::DirectiveCall;
+use crate::path::resolve_path;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::{child_component_proxy, track_effect_on};
@@ -32,8 +33,7 @@ pub fn run(call: &DirectiveCall) {
 
     let id = effect(move || {
         with_current_el(&el.clone(), || {
-            let v = Reflect::get(&parent_proxy, &JsValue::from_str(&key))
-                .unwrap_or(JsValue::UNDEFINED);
+            let v = resolve_path(&parent_proxy, &key);
             match &child_proxy {
                 Some(cp) => {
                     // Prop write — the set trap on the child's proxy

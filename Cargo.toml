@@ -5,6 +5,8 @@ members = [
     "crates/pocopine-cli",
     "crates/pocopine-core",
     "crates/pocopine-macros",
+    "crates/pocopine-server",
+    "examples/blog",
     "examples/counter",
     "examples/todo",
 ]

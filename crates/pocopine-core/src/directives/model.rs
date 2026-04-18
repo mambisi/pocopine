@@ -5,13 +5,14 @@
 //! field changes; the write side listens for `input`/`change` and sets the
 //! field on the proxy so a `trigger` fires.
 
-use js_sys::{Array, Reflect};
+use js_sys::Array;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 
 use super::DirectiveCall;
+use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
@@ -29,8 +30,7 @@ pub fn run(call: &DirectiveCall) {
     let el_r = el.clone();
     let id = effect(move || {
         with_current_el(&el_r.clone(), || {
-            let v = Reflect::get(&proxy_r, &JsValue::from_str(&key_r))
-                .unwrap_or(JsValue::UNDEFINED);
+            let v = resolve_path(&proxy_r, &key_r);
             write_to_element(&el_r, &v);
         });
     });
@@ -42,8 +42,9 @@ pub fn run(call: &DirectiveCall) {
     let el_w = el.clone();
     let handler = Closure::wrap(Box::new(move |_ev: Event| {
         let v = read_from_element(&el_w, number);
-        // Go through the proxy so the set trap fires `trigger`.
-        let _ = Reflect::set(&proxy_w, &JsValue::from_str(&key_w), &v);
+        // Route through the final proxy's set trap via write_path so
+        // dotted keys (`$store.prefs.theme`) work and trigger fires.
+        let _ = write_path(&proxy_w, &key_w, &v);
     }) as Box<dyn FnMut(Event)>);
 
     let event_name = if lazy { "change" } else { "input" };

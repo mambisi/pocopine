@@ -5,16 +5,21 @@
 //! depend on `pocopine` and pull everything from `pocopine::prelude::*`.
 
 pub use pocopine_core::{
-    batch, computed, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run,
-    run_now, rw_signal, set_auto_flush, signal, watch, ComponentState, Computed, EffectId,
-    EffectOptions, RwSignal, Scope, ScopeId, Setter, Signal, SignalId,
+    batch, computed, current_effect, current_scope_id, effect, effect_with, fetch, flush_sync,
+    on_cleanup, release, run, run_now, rw_signal, set_auto_flush, signal, store, this,
+    trigger_scope, watch, App, Component, ComponentState, Computed, EffectId, EffectOptions,
+    Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, SignalId,
+    Store, StoreHandle,
 };
-pub use pocopine_macros::{component, handlers};
+// Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
+// and the macro namespace (the attribute `#[store]`). They don't collide.
+pub use pocopine_macros::{component, handlers, server, store};
 
 pub mod prelude {
     pub use crate::{
-        batch, component, computed, effect, handlers, on_cleanup, run, rw_signal, signal,
-        watch, ComponentState, Computed, RwSignal, Setter, Signal,
+        batch, component, computed, dispatch, effect, handlers, on_cleanup, run, rw_signal,
+        signal, store, this, watch, App, Component, ComponentState, Computed, Handle,
+        RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
@@ -24,10 +29,64 @@ pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
     pub use pocopine_core::{
-        inject_pp_data, inject_style, register_component, register_template, ComponentState,
-        HandlerDispatch,
+        inject_pp_data, inject_style, register_component, register_store_scope,
+        register_template, store_scope, Component, ComponentState, Handle, HandlerDispatch,
+        Scope, Store,
     };
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;
     pub use wasm_bindgen::JsValue;
+    pub use wasm_bindgen_futures;
+}
+
+/// Dispatch an async action and apply a state update when it resolves.
+///
+/// The canonical shape for any async handler work: "do `X`, then when
+/// the result is back, mutate `self` with it." The macro captures the
+/// typed handle to `Self` via [`this`], spawns the body on the
+/// microtask executor, and routes the awaited value through
+/// [`Handle::update`] so reactivity fires exactly once at the end.
+///
+/// # Shape
+///
+/// ```ignore
+/// dispatch!(
+///     <expr evaluated in async context>,  // any expression, including `.await`s
+///     |s, result| { /* update block — `s: &mut Self`, `result: T` */ },
+/// );
+/// ```
+///
+/// # Example
+///
+/// ```ignore
+/// #[handlers]
+/// impl BlogPost {
+///     pub fn init(&mut self) {
+///         self.loading = true;
+///         let post_id = self.post_id;
+///         dispatch!(
+///             get_post(post_id).await,
+///             |s, result| {
+///                 s.loading = false;
+///                 match result {
+///                     Ok(p)  => { s.title = p.title; s.body = p.body; }
+///                     Err(e) => { s.error = e.to_string(); }
+///                 }
+///             },
+///         );
+///     }
+/// }
+/// ```
+///
+/// Must be called inside a `#[handlers]` method — `this::<Self>()`
+/// panics outside an invoke context.
+#[macro_export]
+macro_rules! dispatch {
+    ($body:expr, |$s:ident, $result:ident| $update:block $(,)?) => {{
+        let __pocopine_handle = $crate::this::<Self>();
+        $crate::__private::wasm_bindgen_futures::spawn_local(async move {
+            let $result = $body;
+            __pocopine_handle.update(|$s| $update);
+        });
+    }};
 }

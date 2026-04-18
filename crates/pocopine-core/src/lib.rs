@@ -8,27 +8,39 @@
 //! Signals, computed values, and watchers compose with the same engine via
 //! a synthetic [`reactive::SIGNAL_SCOPE`].
 
+pub mod app;
 pub mod computed;
 pub mod directives;
+pub mod fetch;
+pub mod handle;
 pub mod handler;
 pub mod magics;
+pub mod path;
 pub mod reactive;
 pub mod registry;
 pub mod scope;
+pub mod server;
 pub mod signal;
+pub mod store;
 pub mod styles;
 pub mod templates;
 pub mod walker;
 pub mod watch;
 
+pub use app::{App, Component};
 pub use computed::{computed, Computed};
+pub use handle::{this, Handle};
 pub use handler::HandlerDispatch;
+pub use server::{Result as ServerResult, ServerError};
+pub use store::{
+    register_store_scope, store, store_scope, stores_object, Store, StoreHandle,
+};
 pub use reactive::{
     batch, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run_now,
-    set_auto_flush, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
+    set_auto_flush, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
 };
 pub use registry::{register_component, ComponentCtor, ComponentEntry, COMPONENT_ENTRIES};
-pub use scope::{ComponentState, Scope};
+pub use scope::{current_scope_id, ComponentState, Scope};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use styles::inject_style;
 pub use templates::{inject_pp_data, is_registered, register_template, template_for};

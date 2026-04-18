@@ -1,11 +1,10 @@
 //! `pp-show="field"` — toggle display by truthiness of a scope field.
 
-use js_sys::Reflect;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsValue;
 use web_sys::HtmlElement;
 
 use super::DirectiveCall;
+use crate::path::resolve_path;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
@@ -19,8 +18,7 @@ pub fn run(call: &DirectiveCall) {
 
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
-            let v = Reflect::get(&proxy, &JsValue::from_str(&key))
-                .unwrap_or(JsValue::UNDEFINED);
+            let v = resolve_path(&proxy, &key);
             let truthy = !v.is_falsy();
             let style = html_el.style();
             if truthy {

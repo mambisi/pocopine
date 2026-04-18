@@ -4,6 +4,7 @@
 //! a `js_sys::Proxy` whose `get`/`set` traps plug into [`crate::reactive`] so
 //! any directive that reads a field through the proxy gets auto-subscribed.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -35,10 +36,19 @@ pub trait ComponentState: 'static {
 }
 
 /// A live component instance bound to a DOM element.
+///
+/// Holds both the type-erased `ComponentState` handle the walker uses and
+/// a typed `Rc<RefCell<T>>` behind an `Any` for handler code that wants
+/// to mutate the underlying Rust struct directly (see
+/// [`crate::this`](crate::handle::this)).
 #[derive(Clone)]
 pub struct Scope {
     pub id: ScopeId,
     pub state: Rc<RefCell<dyn ComponentState>>,
+    /// `Rc<RefCell<T>>` erased behind `dyn Any`. `T` is the concrete
+    /// struct the user annotated with `#[component]` / `#[store]`.
+    /// Downcast via [`Scope::typed`] to mutate Rust fields directly.
+    pub typed: Rc<dyn Any>,
 }
 
 thread_local! {
@@ -50,12 +60,25 @@ thread_local! {
     /// walker immediately around each directive call so `$el` works without
     /// threading the element through every call site.
     static CURRENT_EL: RefCell<Option<Element>> = const { RefCell::new(None) };
+
+    /// The scope whose handler is currently executing, if any. Set by
+    /// `Scope::invoke` for the duration of the call so handlers can
+    /// discover their own id — useful when a handler needs to capture the
+    /// id for an `async` task that will mutate the scope after the
+    /// handler returns.
+    static CURRENT_SCOPE_ID: std::cell::Cell<Option<ScopeId>> =
+        const { std::cell::Cell::new(None) };
 }
 
 impl Scope {
-    pub fn new(state: Rc<RefCell<dyn ComponentState>>) -> Self {
+    /// Build a scope from a typed `Rc<RefCell<T>>`. Stashes both the
+    /// type-erased and the typed form so later code (walker + handler
+    /// handles) can choose the right one.
+    pub fn new<T: ComponentState + 'static>(state: Rc<RefCell<T>>) -> Self {
         let id = next_scope_id();
-        let scope = Scope { id, state };
+        let erased: Rc<RefCell<dyn ComponentState>> = state.clone();
+        let typed: Rc<dyn Any> = Rc::new(state);
+        let scope = Scope { id, state: erased, typed };
         SCOPES.with(|s| s.borrow_mut().insert(id, scope.clone()));
         scope
     }
@@ -68,6 +91,12 @@ impl Scope {
     /// Remove a scope from the registry. Called when its element is unmounted.
     pub fn remove(id: ScopeId) {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
+    }
+
+    /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct
+    /// this scope was created with. `None` on type mismatch.
+    pub fn typed<T: 'static>(&self) -> Option<Rc<RefCell<T>>> {
+        self.typed.downcast_ref::<Rc<RefCell<T>>>().cloned()
     }
 
     /// Build a `js_sys::Proxy` whose `get` trap records dependencies and
@@ -121,10 +150,32 @@ impl Scope {
     /// Invoke a handler by name. Mutates Rust state directly, then sweep-
     /// triggers every key on this scope so effects re-evaluate.
     pub fn invoke(&self, key: &str, args: &Array) -> JsValue {
+        let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         let out = self.state.borrow_mut().invoke(key, args);
+        CURRENT_SCOPE_ID.with(|c| c.set(prev));
         trigger_scope(self.id);
         out
     }
+}
+
+/// The scope whose handler is currently on the stack. `None` outside of a
+/// handler invocation. Handlers use this to hand their id to an async task:
+///
+/// ```ignore
+/// pub fn init(&mut self) {
+///     let id = pocopine::current_scope_id().unwrap();
+///     self.loading = true;
+///     wasm_bindgen_futures::spawn_local(async move {
+///         let post = api::get_post(1).await;
+///         if let Some(scope) = Scope::find(id) {
+///             scope.state.borrow_mut().set("title", /* ... */);
+///             pocopine::reactive::trigger_scope(id);
+///         }
+///     });
+/// }
+/// ```
+pub fn current_scope_id() -> Option<ScopeId> {
+    CURRENT_SCOPE_ID.with(|c| c.get())
 }
 
 /// Set the current element for the duration of a directive call. The caller

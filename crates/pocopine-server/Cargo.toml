@@ -1,0 +1,20 @@
+[package]
+name = "pocopine-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host-side helpers for pocopine server functions (axum integration, static-file serving)."
+
+# Skip this crate entirely on wasm32 — its deps (axum, tokio) don't compile
+# for that target. Users who want server functions build their server binary
+# on the host, client bundle on wasm32.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+serde_json = "1"
+
+[dependencies]
+serde = { workspace = true }

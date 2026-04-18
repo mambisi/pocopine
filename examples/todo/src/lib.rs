@@ -1,5 +1,6 @@
 //! Todo example — demonstrates tag-based composition, static props,
-//! reactive `pp-bind:` props into a child, and default `<slot>` content.
+//! reactive `pp-bind:` props into a child, default `<slot>` content,
+//! and a singleton `#[store]` accessed via the `$store` magic path.
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -38,9 +39,29 @@ impl TodoItem {
     }
 }
 
+/// App-wide preferences — shared across all components via `$store.preferences`.
+#[derive(Serialize, Deserialize)]
+#[store]
+pub struct Preferences {
+    pub theme: String,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self { theme: "light".into() }
+    }
+}
+
+// An empty `#[handlers]` is required for any struct used with
+// `#[component]` or `#[store]`. Populated once we need actions on the store.
+#[handlers]
+impl Preferences {}
+
 #[wasm_bindgen(start)]
 pub fn main() {
-    TodoList::register();
-    TodoItem::register();
-    pocopine::run();
+    App::new()
+        .register::<TodoList>()
+        .register::<TodoItem>()
+        .store::<Preferences>()
+        .run();
 }

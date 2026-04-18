@@ -163,9 +163,13 @@ fn apply_static_props(el: &Element, scope: &Scope) {
         if name.starts_with("pp-") || name.starts_with("__pp_") {
             continue;
         }
+        // HTML attributes are kebab-case by convention (`post-id`); Rust
+        // fields are snake_case (`post_id`). Map between them so authors
+        // don't have to pick one side's spelling.
+        let field = name.replace('-', "_");
         let raw = a.value();
         let js = coerce_attr_value(&raw);
-        scope.state.borrow_mut().set(&name, js);
+        scope.state.borrow_mut().set(&field, js);
     }
 }
 

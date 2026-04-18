@@ -31,6 +31,5 @@ impl Counter {
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    Counter::register();
-    pocopine::run();
+    App::new().register::<Counter>().run();
 }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pocopine blog</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 720px; }
+    article { border: 1px solid #eee; padding: 1rem 1.5rem; border-radius: 6px; }
+    button { margin-top: 1rem; padding: 0.4rem 0.9rem; }
+    em { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>pocopine blog</h1>
+
+  <blog-post post-id="1"></blog-post>
+
+  <h2 style="margin-top:2rem">A missing post (server-returned error)</h2>
+  <blog-post post-id="999"></blog-post>
+
+  <script type="module">
+    import init from "./pkg/blog.js";
+    init();
+  </script>
+</body>
+</html>

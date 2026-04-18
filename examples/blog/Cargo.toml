@@ -1,0 +1,31 @@
+[package]
+name = "blog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+# When set, `pocopine run` / `pocopine dev` spawns this binary instead of
+# running the static-file server. The bin is expected to handle static +
+# `/_pocopine/*` routes itself (see `src/bin/server.rs`).
+bin = "server"
+port = 3000
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+# Server binary doesn't build on wasm32; only build it on the host.
+required-features = []
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine" }
+wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
