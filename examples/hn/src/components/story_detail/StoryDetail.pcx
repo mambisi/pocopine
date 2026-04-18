@@ -1,0 +1,32 @@
+<article pp-init="init">
+  <p><a href="/" pp-route>← top</a></p>
+
+  <p pp-show="loading" class="status"><em>Loading…</em></p>
+  <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
+
+  <header class="story-head">
+    <h1 class="story-head__title" pp-text="title"></h1>
+    <p class="story-head__meta">
+      <strong pp-text="points"></strong> points
+      &middot; by <span pp-text="author"></span>
+      &middot; <span pp-text="age"></span>
+      &middot; <span pp-text="comment_count"></span> comments
+    </p>
+    <p class="story-head__link" pp-show="url">
+      <a pp-bind:href="url" target="_blank" rel="noopener noreferrer">
+        <span pp-text="domain"></span> ↗
+      </a>
+    </p>
+  </header>
+
+  <template pp-if="text">
+    <div class="story-text" pp-html="text"></div>
+  </template>
+
+  <template pp-if="comments_html">
+    <section class="comments-wrap">
+      <h2>Comments</h2>
+      <div pp-html="comments_html"></div>
+    </section>
+  </template>
+</article>
