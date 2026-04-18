@@ -8,6 +8,7 @@ use wasm_bindgen::JsValue;
 use web_sys::{CustomEvent, CustomEventInit, Element};
 
 use crate::reactive::ScopeId;
+use crate::router::route_proxy;
 use crate::scope::current_el;
 use crate::store::stores_object;
 
@@ -17,6 +18,7 @@ pub fn resolve(key: &str, _scope_id: ScopeId) -> JsValue {
         "$refs" => build_refs(),
         "$dispatch" => build_dispatch(),
         "$store" => stores_object(),
+        "$route" => route_proxy(),
         _ => JsValue::UNDEFINED,
     }
 }

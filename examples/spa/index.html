@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pocopine SPA</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1b100a; background: #f3e7cf; }
+    h1, h2 { margin: 0 0 0.5rem; }
+    .nav { display: flex; gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid #d9c394; margin-bottom: 1.25rem; }
+    .nav a { color: #a32727; text-decoration: none; border-bottom: 1px solid transparent; padding-bottom: 2px; }
+    .nav a:hover { border-bottom-color: #a32727; }
+    main { min-height: 8rem; padding: 1rem 0; }
+    code { font-family: ui-monospace, Menlo, monospace; background: #ebdbba; padding: 1px 5px; }
+    footer { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #d9c394; color: #6b5643; font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>pocopine SPA</h1>
+  <app-shell></app-shell>
+  <script type="module">
+    import init from "./pkg/spa.js";
+    init();
+  </script>
+</body>
+</html>

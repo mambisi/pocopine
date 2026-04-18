@@ -43,9 +43,10 @@ pub fn start(root: &Element) {
     install_observer(root);
 }
 
-fn walk(el: &Element) {
-    // Pre-order: bind this node first so inner pp-* directives see the scope
-    // established by an outer pp-data.
+/// Pre-order walk: bind this element, then recurse into its children.
+/// Public so the router can walk the custom-element tag it creates
+/// inside an `<pp-outlet>`.
+pub fn walk(el: &Element) {
     bind(el);
     let children = el.children();
     for i in 0..children.length() {
@@ -56,11 +57,18 @@ fn walk(el: &Element) {
 }
 
 fn bind(el: &Element) {
+    // Step 0: `<pp-outlet>` is the router's mount point. Hand the
+    // element over; don't try to bind directives or mount anything.
+    let tag = el.local_name();
+    if tag == "pp-outlet" {
+        crate::router::set_outlet(el.clone());
+        return;
+    }
+
     // Step 1: tag-based mounting. If this element's tag name is a
     // registered component, clone its template in and wire up the scope
     // onto the template's root. Directives on the tag itself evaluate in
     // the parent's scope (handled by the standard pp-* pass below).
-    let tag = el.local_name();
     if is_registered(&tag) && get_private(el, SCOPE_ID_KEY).is_none()
         && get_private(el, "__pp_mounted").is_none()
     {

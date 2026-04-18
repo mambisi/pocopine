@@ -1,0 +1,6 @@
+<section>
+  <h2>About</h2>
+  <p>pocopine is a Rust/WASM framework. The router is centralized in
+  the <code>App</code> builder; every matched route mounts into a
+  <code>&lt;pp-outlet&gt;</code>.</p>
+</section>

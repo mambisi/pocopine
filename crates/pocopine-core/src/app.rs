@@ -26,6 +26,7 @@
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::router;
 use crate::store::Store;
 use crate::walker;
 
@@ -51,6 +52,7 @@ type Hook = Box<dyn FnOnce()>;
 pub struct App {
     components: Vec<&'static str>,
     stores: Vec<&'static str>,
+    routes: Vec<&'static str>,
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
 }
@@ -75,6 +77,18 @@ impl App {
         self
     }
 
+    /// Register a route. `pattern` is a path with optional `:name`
+    /// segments (`"/blog/:id"`) or the 404 fallback `"*"`. `C` must be
+    /// a `#[component]` whose tag name is the kebab-case of its ident.
+    /// Matching routes paint their component into the
+    /// `<pp-outlet>` with captured params passed through as attributes.
+    pub fn route<C: Component>(mut self, pattern: &'static str) -> Self {
+        C::register();
+        router::register_route(pattern.to_string(), C::NAME);
+        self.routes.push(pattern);
+        self
+    }
+
     /// Run `f` before the initial DOM walk.
     pub fn before_mount(mut self, f: impl FnOnce() + 'static) -> Self {
         self.before_mount.push(Box::new(f));
@@ -88,12 +102,16 @@ impl App {
         self
     }
 
-    /// Fire pre-mount hooks, start the walker, then fire post-mount hooks.
+    /// Fire pre-mount hooks, start the walker, initialise the router
+    /// (if any routes were registered), then fire post-mount hooks.
     pub fn run(self) {
         for f in self.before_mount {
             f();
         }
         walker::start_on_body();
+        if !self.routes.is_empty() {
+            router::init();
+        }
         let after = self.after_mount;
         if !after.is_empty() {
             spawn_local(async move {
@@ -114,5 +132,10 @@ impl App {
     /// Snapshot of the registered store names. Debug utility only.
     pub fn registered_stores(&self) -> &[&'static str] {
         &self.stores
+    }
+
+    /// Snapshot of the registered route patterns. Debug utility only.
+    pub fn registered_routes(&self) -> &[&'static str] {
+        &self.routes
     }
 }

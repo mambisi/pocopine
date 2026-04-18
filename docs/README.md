@@ -11,6 +11,10 @@ looks the way it does — the code itself tells you *what*.
   paired with sibling `.rs` + `.css` files. No mixed-language SFCs.
 
 Formal design decisions live one level up in [`../rfcs/`](../rfcs/).
-For the server-function end-to-end example, see
-[`examples/blog/`](../examples/blog/) — it wires `App`, a `#[server]`
-function, and an axum server binary into one working app.
+Example apps:
+
+- [`examples/counter/`](../examples/counter/) — a single component.
+- [`examples/todo/`](../examples/todo/) — multi-component, slots, and a store.
+- [`examples/blog/`](../examples/blog/) — `App` + `#[server]` + axum server bin.
+- [`examples/spa/`](../examples/spa/) — `App::route` + `<pp-outlet>` + `pp-route` + `$route`.
+- [`examples/site/`](../examples/site/) — the marketing page, dogfooded.

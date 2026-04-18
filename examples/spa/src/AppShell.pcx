@@ -1,0 +1,15 @@
+<div class="shell">
+  <nav class="nav">
+    <a href="/" pp-route>home</a>
+    <a href="/about" pp-route>about</a>
+    <a href="/blog/1" pp-route>post 1</a>
+    <a href="/blog/2" pp-route>post 2</a>
+    <a href="/missing" pp-route>404 link</a>
+  </nav>
+  <main>
+    <pp-outlet></pp-outlet>
+  </main>
+  <footer>
+    <small>URL: <code pp-text="$route.path"></code></small>
+  </footer>
+</div>

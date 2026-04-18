@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="pocopine — a Rust/WASM framework. Components, stores, and server functions in one codebase." />
+  <title>pocopine — a Rust/WASM app framework</title>
+  <style>
+    /* ───── reset + base ────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f3e7cf;      /* beige */
+      color: #1b100a;           /* ink */
+      font-family: ui-serif, Iowan Old Style, "Charter", Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      line-height: 1.6;
+    }
+
+    :root {
+      --cream:     #f3e7cf;
+      --beige:     #e8d7b5;
+      --card:      #ebdbba;
+      --border:    #d9c394;
+      --ink:       #1b100a;
+      --ink-soft:  #3a2820;
+      --muted:     #6b5643;
+      --red:       #a32727;
+      --red-dark:  #731616;
+      --red-faint: #d47272;
+    }
+
+    /* ───── typography ──────────────────────────────────── */
+    h1, h2, h3 {
+      font-family: ui-serif, Iowan Old Style, "Charter", Georgia, serif;
+      color: var(--ink);
+      line-height: 1.06;
+      letter-spacing: -0.015em;
+      margin: 0;
+      font-weight: 600;
+    }
+    h1 { font-size: clamp(2.6rem, 6.2vw, 4.25rem); font-weight: 700; }
+    h2 { font-size: 1.55rem; margin-top: 5rem; margin-bottom: 1.25rem; }
+    h3 { font-size: 1.1rem; font-weight: 700; }
+    p  { margin: 0 0 1rem; }
+
+    a {
+      color: var(--red);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+    a:hover { color: var(--red-dark); }
+
+    code, pre, .mono, .brand, nav a, .btn, .chip {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-feature-settings: "ss01", "cv01";
+    }
+    code { font-size: 0.93em; }
+
+    /* ───── layout containers ───────────────────────────── */
+    .site-header {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem 1.5rem 0;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 5rem;
+    }
+    footer {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    /* ───── header ─────────────────────────────────────── */
+    .brand {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--ink);
+      text-decoration: none;
+      padding-bottom: 2px;
+      border-bottom: 2px solid var(--red);
+    }
+    .brand::after {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-left: 6px;
+      background: var(--red);
+      vertical-align: 2px;
+    }
+    nav { display: flex; gap: 1.75rem; }
+    nav a {
+      color: var(--ink-soft);
+      text-decoration: none;
+      font-size: 0.9rem;
+      padding-bottom: 2px;
+      border-bottom: 1px solid transparent;
+    }
+    nav a:hover {
+      color: var(--red);
+      border-bottom-color: var(--red);
+    }
+
+    /* ───── hero ───────────────────────────────────────── */
+    .hero {
+      padding: 4rem 0 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .hero__eyebrow {
+      font-family: ui-monospace, Menlo, monospace;
+      color: var(--red);
+      font-size: 0.82rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+    }
+    .hero h1 {
+      max-width: 16ch;
+      margin-bottom: 1.5rem;
+    }
+    .hero h1 em {
+      font-style: italic;
+      color: var(--red);
+    }
+    .lede {
+      max-width: 46ch;
+      font-size: 1.2rem;
+      line-height: 1.55;
+      color: var(--ink-soft);
+    }
+    .actions {
+      margin-top: 2.25rem;
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.7rem 1.1rem;
+      font-size: 0.92rem;
+      text-decoration: none;
+      border: 2px solid var(--ink);
+      line-height: 1;
+      transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .btn.primary { background: var(--red); color: var(--cream); border-color: var(--red); }
+    .btn.primary:hover { background: var(--red-dark); border-color: var(--red-dark); color: var(--cream); }
+    .btn.ghost   { background: transparent; color: var(--ink); }
+    .btn.ghost:hover { background: var(--ink); color: var(--cream); }
+
+    /* ───── section heading ────────────────────────────── */
+    .section__label {
+      display: inline-block;
+      font-family: ui-monospace, Menlo, monospace;
+      color: var(--red);
+      font-size: 0.82rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-right: 0.5rem;
+    }
+    section p.sub {
+      max-width: 55ch;
+      color: var(--ink-soft);
+    }
+
+    /* ───── code blocks ────────────────────────────────── */
+    pre {
+      background: var(--card);
+      border-left: 3px solid var(--red);
+      padding: 1.1rem 1.25rem;
+      margin: 0;
+      overflow-x: auto;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: var(--ink-soft);
+    }
+    pre .c  { color: var(--muted); font-style: italic; }   /* comment */
+    pre .k  { color: var(--red); }                         /* keyword */
+    pre .t  { color: #8a5a12; }                            /* type / brown-amber */
+    pre .s  { color: #566c2e; }                            /* string / olive */
+    pre .at { color: var(--ink); font-weight: 600; }       /* attribute */
+    pre .p  { color: var(--muted); }                        /* punctuation */
+    pre .tag { color: #6b3e88; }                           /* html tag muted violet — but keep palette; use red-dark */
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      align-items: start;
+    }
+    .two-col figure { margin: 0; }
+    .two-col figcaption {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 0.45rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* ───── demo ──────────────────────────────────────── */
+    .demo-frame {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      margin-top: 1rem;
+      position: relative;
+    }
+    .demo-frame::before {
+      content: "LIVE";
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      color: var(--red);
+      padding: 2px 6px;
+      border: 1px solid var(--red);
+    }
+    .counter {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .counter__btn {
+      background: var(--ink);
+      color: var(--cream);
+      border: none;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 1.1rem;
+      width: 2.75rem;
+      height: 2.75rem;
+      cursor: pointer;
+      transition: background-color 0.1s;
+    }
+    .counter__btn:hover { background: var(--red); }
+    .counter__value {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: var(--red);
+      min-width: 3ch;
+      text-align: center;
+      line-height: 1;
+    }
+    .counter__reset {
+      background: transparent;
+      border: 1px solid var(--ink);
+      color: var(--ink);
+      padding: 0.45rem 0.8rem;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.85rem;
+      cursor: pointer;
+      margin-left: auto;
+    }
+    .counter__reset:hover { background: var(--ink); color: var(--cream); }
+
+    /* ───── pillars ───────────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    .card {
+      padding-top: 1rem;
+      border-top: 2px solid var(--ink);
+    }
+    .card h3 {
+      margin-bottom: 0.4rem;
+      letter-spacing: -0.005em;
+    }
+    .card .chip {
+      display: inline-block;
+      background: var(--red);
+      color: var(--cream);
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      padding: 2px 6px;
+      margin-bottom: 0.7rem;
+      text-transform: uppercase;
+    }
+    .card p {
+      color: var(--ink-soft);
+      font-size: 0.98rem;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    /* ───── getting started ───────────────────────────── */
+    .steps {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin: 1.5rem 0 0;
+      display: grid;
+      gap: 1rem;
+    }
+    .steps li {
+      counter-increment: step;
+      padding: 1rem 1.25rem;
+      background: var(--card);
+      border-left: 3px solid var(--red);
+      position: relative;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.92rem;
+    }
+    .steps li::before {
+      content: counter(step, decimal-leading-zero);
+      position: absolute;
+      top: 0.6rem;
+      right: 0.75rem;
+      color: var(--red-faint);
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+    }
+    .steps li code { background: none; padding: 0; color: var(--ink); }
+    .steps li .note {
+      display: block;
+      margin-top: 0.35rem;
+      color: var(--muted);
+      font-family: ui-serif, Georgia, serif;
+      font-size: 0.88rem;
+    }
+
+    /* ───── footer ────────────────────────────────────── */
+    footer .mono { font-family: ui-monospace, Menlo, monospace; }
+    footer a { color: var(--ink-soft); }
+    footer a:hover { color: var(--red); }
+
+    /* ───── selection colour ──────────────────────────── */
+    ::selection { background: var(--red); color: var(--cream); }
+
+    /* ───── responsive ────────────────────────────────── */
+    @media (max-width: 760px) {
+      .site-header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+      nav { gap: 1.25rem; }
+      h2 { margin-top: 3.5rem; }
+      .two-col { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: 1fr; gap: 1.25rem; }
+      .counter__reset { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <a class="brand" href="/">pocopine</a>
+    <nav>
+      <a href="#demo">Demo</a>
+      <a href="#pillars">Features</a>
+      <a href="#get-started">Get started</a>
+      <a href="https://github.com/pocopine/pocopine">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+
+    <!-- ─────────────────────── HERO ────────────────────── -->
+    <section class="hero">
+      <div class="hero__eyebrow">v0.1 · Rust · WebAssembly</div>
+      <h1>Write the whole app <em>in Rust.</em></h1>
+      <p class="lede">
+        pocopine is a Rust/WASM framework. Component templates,
+        shared stores, and server functions — one codebase,
+        two compile targets, zero JavaScript glue.
+      </p>
+      <div class="actions">
+        <a class="btn primary" href="#get-started">Get started</a>
+        <a class="btn ghost" href="#demo">See it running</a>
+      </div>
+    </section>
+
+
+    <!-- ─────────────────────── SAMPLE ──────────────────── -->
+    <section class="sample">
+      <h2><span class="section__label">§ 01</span>A component, end to end</h2>
+      <p class="sub">
+        A Rust struct is the state. Handlers mutate <code>&amp;mut self</code>.
+        The <code>.pcx</code> file is plain HTML with <code>pp-*</code> directives.
+        The macro wires it into a custom element tag.
+      </p>
+
+      <div class="two-col" style="margin-top: 1.5rem;">
+        <figure>
+          <figcaption>counter.rs</figcaption>
+<pre><span class="c">// src/components/counter.rs</span>
+<span class="k">use</span> pocopine::prelude::<span class="p">*</span>;
+
+<span class="at">#[derive(Default, Serialize, Deserialize)]</span>
+<span class="at">#[component]</span>
+<span class="k">pub struct</span> <span class="t">Counter</span> {
+    <span class="k">pub</span> count: <span class="t">i32</span>,
+}
+
+<span class="at">#[handlers]</span>
+<span class="k">impl</span> <span class="t">Counter</span> {
+    <span class="k">pub fn</span> increment(<span class="p">&amp;</span><span class="k">mut</span> self) {
+        self.count <span class="p">+=</span> <span class="s">1</span>;
+    }
+}</pre>
+        </figure>
+
+        <figure>
+          <figcaption>Counter.pcx</figcaption>
+<pre><span class="p">&lt;</span><span class="k">div</span> <span class="at">pp-init</span>=<span class="s">"init"</span><span class="p">&gt;</span>
+  <span class="p">&lt;</span><span class="k">button</span> <span class="at">pp-on:click</span>=<span class="s">"increment"</span><span class="p">&gt;</span>+<span class="p">&lt;/</span><span class="k">button</span><span class="p">&gt;</span>
+  <span class="p">&lt;</span><span class="k">span</span> <span class="at">pp-text</span>=<span class="s">"count"</span><span class="p">&gt;&lt;/</span><span class="k">span</span><span class="p">&gt;</span>
+<span class="p">&lt;/</span><span class="k">div</span><span class="p">&gt;</span>
+
+<span class="c">&lt;!-- any parent template --&gt;</span>
+<span class="p">&lt;</span><span class="k">counter</span><span class="p">&gt;&lt;/</span><span class="k">counter</span><span class="p">&gt;</span></pre>
+        </figure>
+      </div>
+    </section>
+
+
+    <!-- ─────────────────────── DEMO ────────────────────── -->
+    <section id="demo">
+      <h2><span class="section__label">§ 02</span>Running on this page</h2>
+      <p class="sub">
+        The same component from the snippet above, mounted through
+        the walker. Click around — state is Rust, rendering is
+        reactive, no JS on the edit path.
+      </p>
+
+      <div class="demo-frame">
+        <counter></counter>
+      </div>
+    </section>
+
+
+    <!-- ─────────────────────── PILLARS ─────────────────── -->
+    <section id="pillars">
+      <h2><span class="section__label">§ 03</span>What's in the box</h2>
+
+      <div class="cards">
+        <article class="card">
+          <span class="chip">Components</span>
+          <h3>Custom element tags</h3>
+          <p>
+            <code>#[component]</code> derives the scope, registers a
+            <code>&lt;kebab-name&gt;</code> tag, and binds props from HTML
+            attributes straight onto Rust fields. Templates are plain
+            HTML, not a DSL.
+          </p>
+        </article>
+
+        <article class="card">
+          <span class="chip">Stores</span>
+          <h3>Reactive singletons</h3>
+          <p>
+            <code>#[store]</code> gives you a one-per-app struct readable
+            from templates via <code>$store.name.field</code> and from
+            Rust via <code>pocopine::store::&lt;T&gt;().update(|s| …)</code>.
+            Same reactivity engine.
+          </p>
+        </article>
+
+        <article class="card">
+          <span class="chip">Server</span>
+          <h3>Typed REST bindings</h3>
+          <p>
+            <code>#[server] async fn foo(a: A) -&gt; Result&lt;R, _&gt;</code>
+            compiles twice: a fetch stub on wasm32 and an axum route
+            on the host. One signature, no schema file, no JSON
+            hand-plumbing.
+          </p>
+        </article>
+      </div>
+    </section>
+
+
+    <!-- ─────────────────────── GET STARTED ────────────── -->
+    <section id="get-started">
+      <h2><span class="section__label">§ 04</span>Get started</h2>
+      <p class="sub">
+        While the crate is pre-release, clone and run an example directly.
+        The CLI auto-detects whether a project declares a server binary
+        and dev-serves accordingly.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <code>git clone https://github.com/pocopine/pocopine</code>
+          <span class="note">Pull the repo — examples live in <code>examples/</code>.</span>
+        </li>
+        <li>
+          <code>cargo run -p pocopine-cli -- dev --path examples/counter</code>
+          <span class="note">Static example → <code>http://localhost:5243</code>.</span>
+        </li>
+        <li>
+          <code>cargo run -p pocopine-cli -- dev --path examples/blog</code>
+          <span class="note">Full stack + <code>#[server]</code> → <code>http://localhost:3000</code>.</span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer>
+    <span class="mono">pocopine · MIT OR Apache-2.0</span>
+    <span><a href="https://github.com/pocopine/pocopine">source</a> · <a href="https://github.com/pocopine/pocopine/tree/master/docs">docs</a> · <a href="https://github.com/pocopine/pocopine/tree/master/rfcs">rfcs</a></span>
+  </footer>
+
+  <script type="module">
+    import init from "./pkg/site.js";
+    init();
+  </script>
+
+</body>
+</html>

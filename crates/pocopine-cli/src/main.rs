@@ -241,35 +241,54 @@ fn handle(root: &Path, request: tiny_http::Request) {
     let rel = if rel.is_empty() { "index.html" } else { rel };
 
     let candidate = root.join(rel);
-    let canonical = match candidate.canonicalize() {
-        Ok(p) if p.starts_with(root) => p,
-        _ => {
-            let _ = request.respond(
-                tiny_http::Response::from_string("not found").with_status_code(404),
-            );
-            return;
-        }
-    };
+    let looks_like_asset = looks_like_asset_path(rel);
 
-    let target = if canonical.is_dir() {
-        canonical.join("index.html")
-    } else {
-        canonical
-    };
+    let canonical = candidate
+        .canonicalize()
+        .ok()
+        .filter(|p| p.starts_with(root));
 
-    match std::fs::read(&target) {
-        Ok(body) => {
+    // Serve the resolved path when it exists …
+    if let Some(canonical) = canonical {
+        let target = if canonical.is_dir() {
+            canonical.join("index.html")
+        } else {
+            canonical
+        };
+        if let Ok(body) = std::fs::read(&target) {
             let mime = mime_of(&target);
             let header =
                 tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
             let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
-        }
-        Err(_) => {
-            let _ = request.respond(
-                tiny_http::Response::from_string("not found").with_status_code(404),
-            );
+            return;
         }
     }
+
+    // … otherwise fall back to the root's index.html for *non-asset* paths
+    // (SPA history-fallback). Asset-looking paths (anything with a file
+    // extension in the last segment) 404 so bad imports aren't masked.
+    if !looks_like_asset {
+        let fallback = root.join("index.html");
+        if let Ok(body) = std::fs::read(&fallback) {
+            let header =
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                    .unwrap();
+            let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
+            return;
+        }
+    }
+
+    let _ = request.respond(
+        tiny_http::Response::from_string("not found").with_status_code(404),
+    );
+}
+
+/// True when the last URL segment has a file extension. Used to decide
+/// whether an unmatched path should 404 or fall back to index.html:
+/// `/pkg/spa.js` → 404, `/blog/42` → index.html.
+fn looks_like_asset_path(rel: &str) -> bool {
+    let last = rel.rsplit('/').next().unwrap_or("");
+    last.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
 }
 
 fn mime_of(path: &Path) -> &'static str {

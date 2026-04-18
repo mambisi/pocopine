@@ -8,6 +8,8 @@ members = [
     "crates/pocopine-server",
     "examples/blog",
     "examples/counter",
+    "examples/site",
+    "examples/spa",
     "examples/todo",
 ]
 

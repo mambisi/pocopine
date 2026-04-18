@@ -15,6 +15,7 @@ pub mod html;
 pub mod init;
 pub mod model;
 pub mod on;
+pub mod route;
 pub mod show;
 pub mod text;
 
@@ -45,6 +46,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("show", show::run);
         m.insert("model", model::run);
         m.insert("init", init::run);
+        m.insert("route", route::run);
         m
     })
 }

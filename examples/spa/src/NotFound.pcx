@@ -1,0 +1,5 @@
+<section>
+  <h2>404</h2>
+  <p>Nothing is routed to <code pp-text="$route.path"></code>.</p>
+  <p><a href="/" pp-route>Go home</a></p>
+</section>

@@ -18,6 +18,7 @@ pub mod magics;
 pub mod path;
 pub mod reactive;
 pub mod registry;
+pub mod router;
 pub mod scope;
 pub mod server;
 pub mod signal;
@@ -40,6 +41,7 @@ pub use reactive::{
     set_auto_flush, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
 };
 pub use registry::{register_component, ComponentCtor, ComponentEntry, COMPONENT_ENTRIES};
+pub use router::{navigate, register_route};
 pub use scope::{current_scope_id, ComponentState, Scope};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use styles::inject_style;

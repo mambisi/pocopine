@@ -1,0 +1,6 @@
+<div class="counter" pp-init="init">
+  <button class="counter__btn" pp-on:click="decrement" aria-label="decrement">&minus;</button>
+  <span class="counter__value" pp-text="count"></span>
+  <button class="counter__btn" pp-on:click="increment" aria-label="increment">+</button>
+  <button class="counter__reset" pp-on:click="reset">reset</button>
+</div>
