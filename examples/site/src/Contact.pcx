@@ -1,0 +1,30 @@
+<section>
+  <h1>Contact</h1>
+  <p class="sub">
+    Drop a line. Submit goes through <code>submit_contact()</code>
+    — a <code>#[server]</code> function that logs the message on
+    the server side and returns a typed <code>ContactResponse</code>.
+  </p>
+
+  <p pp-show="submitted" class="status status--ok">
+    Thanks — message received. id <code pp-text="last_id"></code>.
+  </p>
+  <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
+
+  <form class="contact-form" pp-on:submit.prevent="submit">
+    <label>
+      <span>Name</span>
+      <input type="text" pp-model="name" autocomplete="name" />
+    </label>
+    <label>
+      <span>Email</span>
+      <input type="email" pp-model="email" autocomplete="email" />
+    </label>
+    <label>
+      <span>Message</span>
+      <textarea pp-model="message" rows="6"></textarea>
+    </label>
+    <button type="submit" class="btn primary" pp-show="!submitting">Send</button>
+    <button type="button" class="btn primary" pp-show="submitting" disabled>Sending…</button>
+  </form>
+</section>

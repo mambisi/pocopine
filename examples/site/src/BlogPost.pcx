@@ -1,0 +1,12 @@
+<article pp-init="init">
+  <p><a href="/blog" pp-route>← back to blog</a></p>
+
+  <p pp-show="loading" class="status"><em>Loading…</em></p>
+  <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
+
+  <header class="post-head">
+    <h1 pp-text="title"></h1>
+    <p class="article-date" pp-text="date"></p>
+  </header>
+  <div class="post-body" pp-html="body"></div>
+</article>

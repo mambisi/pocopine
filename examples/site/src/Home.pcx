@@ -1,0 +1,90 @@
+<div>
+  <section class="hero">
+    <div class="hero__eyebrow">v0.1 · Rust · WebAssembly</div>
+    <h1>Write the whole app <em>in Rust.</em></h1>
+    <p class="lede">
+      pocopine is a Rust/WASM framework. Component templates,
+      shared stores, and server functions — one codebase,
+      two compile targets, zero JavaScript glue.
+    </p>
+    <div class="actions">
+      <a class="btn primary" href="/blog" pp-route>Read the blog</a>
+      <a class="btn ghost" href="/contact" pp-route>Get in touch</a>
+    </div>
+  </section>
+
+  <section class="sample">
+    <h2><span class="section__label">§ 01</span>A component, end to end</h2>
+    <p class="sub">
+      A Rust struct is the state. Handlers mutate <code>&amp;mut self</code>.
+      The <code>.pcx</code> file is plain HTML with <code>pp-*</code> directives.
+      The macro wires it into a custom element tag.
+    </p>
+
+    <div class="two-col">
+      <figure>
+        <figcaption>counter.rs</figcaption>
+<pre>#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct Counter {
+    pub count: i32,
+}
+
+#[handlers]
+impl Counter {
+    pub fn increment(&amp;mut self) {
+        self.count += 1;
+    }
+}</pre>
+      </figure>
+      <figure>
+        <figcaption>Counter.pcx</figcaption>
+<pre>&lt;div pp-init="init"&gt;
+  &lt;button pp-on:click="increment"&gt;+&lt;/button&gt;
+  &lt;span pp-text="count"&gt;&lt;/span&gt;
+&lt;/div&gt;
+
+&lt;!-- any parent template --&gt;
+&lt;counter&gt;&lt;/counter&gt;</pre>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="section__label">§ 02</span>Running on this page</h2>
+    <p class="sub">
+      The same component from the snippet above. State is Rust,
+      rendering is reactive, no JS on the edit path.
+    </p>
+    <div class="demo-frame">
+      <counter></counter>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="section__label">§ 03</span>Where to next</h2>
+    <div class="cards">
+      <article class="card">
+        <span class="chip">Components</span>
+        <h3>Custom element tags</h3>
+        <p>Rust struct + <code>.pcx</code> template auto-registers a
+          <code>&lt;kebab-name&gt;</code> tag. Props are HTML attrs,
+          coerced to the Rust field type.</p>
+      </article>
+      <article class="card">
+        <span class="chip">Server</span>
+        <h3>Typed REST</h3>
+        <p>One <code>#[server] async fn</code> — wasm32 emits a
+          fetch stub, the host emits an axum route. This site's
+          blog + contact form run on top of it.</p>
+      </article>
+      <article class="card">
+        <span class="chip">Router</span>
+        <h3>Centralized routes</h3>
+        <p><code>App::route::&lt;Page&gt;("/pattern/:slug")</code>.
+          One URL map; <code>&lt;pp-outlet&gt;</code> is the mount
+          point; <code>pp-route</code> makes links client-side.</p>
+      </article>
+    </div>
+  </section>
+</div>
