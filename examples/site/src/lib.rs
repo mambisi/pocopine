@@ -390,6 +390,14 @@ impl Perf {
         if self.loaded == 0 {
             self.load_more();
         }
+        // Bind an IntersectionObserver to the bottom sentinel so the
+        // next page fetches as soon as it scrolls into view — no
+        // button, no click. The observer re-enters through
+        // `Scope::invoke("load_more", ...)` so it hits the same
+        // handler path a button click would.
+        if let Some(scope_id) = pocopine::current_scope_id() {
+            install_scroll_observer(scope_id);
+        }
     }
 
     pub fn load_more(&mut self) {
@@ -426,6 +434,50 @@ impl Perf {
             },
         );
     }
+}
+
+/// Install an `IntersectionObserver` that watches the `.perf-sentinel`
+/// element and invokes `load_more` on `scope_id` each time the
+/// sentinel scrolls into view. `load_more` itself no-ops when a fetch
+/// is already in flight or the pool is exhausted, so re-entry during
+/// a single intersection event is safe.
+fn install_scroll_observer(scope_id: pocopine::ScopeId) {
+    use std::cell::Cell;
+    thread_local! { static INSTALLED: Cell<bool> = const { Cell::new(false) }; }
+    if INSTALLED.with(|c| c.replace(true)) {
+        return;
+    }
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Ok(Some(sentinel)) = doc.query_selector(".perf-sentinel") else { return };
+
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(
+        move |entries: js_sys::Array, _obs: wasm_bindgen::JsValue| {
+            for i in 0..entries.length() {
+                let entry = entries.get(i);
+                let intersecting = js_sys::Reflect::get(
+                    &entry,
+                    &wasm_bindgen::JsValue::from_str("isIntersecting"),
+                )
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+                if intersecting {
+                    if let Some(scope) = pocopine::Scope::find(scope_id) {
+                        scope.invoke("load_more", &js_sys::Array::new());
+                    }
+                }
+            }
+        },
+    )
+        as Box<dyn FnMut(js_sys::Array, wasm_bindgen::JsValue)>);
+
+    use wasm_bindgen::JsCast;
+    let Ok(observer) = web_sys::IntersectionObserver::new(cb.as_ref().unchecked_ref()) else {
+        return;
+    };
+    observer.observe(&sentinel);
+    cb.forget();
 }
 
 fn render_batch(articles: &[ArticleSummary]) -> String {

@@ -3,9 +3,8 @@
   <p class="sub">
     Two things are happening on this page. The counter re-renders only
     itself when it changes &mdash; the article list below is untouched.
-    Scroll to the bottom and click <strong>Load more</strong> to page
-    twenty articles at a time through the <code>list_articles_page</code>
-    server function.
+    Scroll down and the next page of articles loads automatically
+    through the <code>list_articles_page</code> server function.
   </p>
 
   <div class="perf-row">
@@ -38,12 +37,10 @@
   <ul class="article-list" pp-html="list_html"></ul>
 
   <div class="scroll-bottom">
-    <button class="btn primary"
-            pp-on:click="load_more"
-            pp-show="!loading && !exhausted">
-      Load more
-    </button>
     <p pp-show="loading" class="status"><em>Fetching page <span pp-text="page"></span>…</em></p>
     <p pp-show="exhausted" class="status">All <strong pp-text="loaded"></strong> articles loaded.</p>
+    <!-- The IntersectionObserver watches this element. When it scrolls
+         into view, the observer invokes `load_more` on the Perf scope. -->
+    <div class="perf-sentinel" aria-hidden="true"></div>
   </div>
 </section>
