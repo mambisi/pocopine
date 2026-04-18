@@ -6,7 +6,15 @@
 
   <header class="post-head">
     <h1 pp-text="title"></h1>
-    <p class="article-date" pp-text="date"></p>
+    <p class="post-meta">
+      <span pp-text="date"></span>
+      <span class="dot">·</span>
+      <span class="size-chip" pp-text="size_label" title="body size"></span>
+      <span class="dot">·</span>
+      <span class="mono" title="time between init and response render">
+        fetched in <span pp-text="elapsed_ms"></span> ms
+      </span>
+    </p>
   </header>
   <div class="post-body" pp-html="body"></div>
 </article>

@@ -6,6 +6,8 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use shared::{Article, ArticleSummary, ContactMessage, ContactResponse};
+#[cfg(not(target_arch = "wasm32"))]
+use shared::human_bytes;
 
 // ─── server functions ────────────────────────────────────────────
 
@@ -17,8 +19,64 @@ fn load_articles_from_disk() -> Result<Vec<Article>, pocopine::ServerError> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/articles.json");
     let text = std::fs::read_to_string(path)
         .map_err(|e| pocopine::ServerError::App(format!("read articles.json: {e}")))?;
-    serde_json::from_str::<Vec<Article>>(&text)
-        .map_err(|e| pocopine::ServerError::App(format!("parse articles.json: {e}")))
+    let mut articles: Vec<Article> = serde_json::from_str(&text)
+        .map_err(|e| pocopine::ServerError::App(format!("parse articles.json: {e}")))?;
+
+    // Append synthetic perf-test articles so users can exercise the
+    // pipeline at real payload sizes without bloating articles.json.
+    articles.push(synthetic_perf_article(
+        "perf-50kb",
+        "Performance test · 50 KB body",
+        "2026-04-15",
+        "A medium-sized body (~50 KB) for checking client-side parse and render times.",
+        50_000,
+    ));
+    articles.push(synthetic_perf_article(
+        "perf-500kb",
+        "Performance test · 500 KB body",
+        "2026-04-16",
+        "A large body (~500 KB) — stresses JSON deserialisation, the fetch helper, and `pp-html` innerHTML replacement.",
+        500_000,
+    ));
+
+    // Populate size metadata for every article (real + synthetic).
+    for a in &mut articles {
+        a.bytes = a.body.len();
+        a.size_label = human_bytes(a.bytes);
+    }
+
+    Ok(articles)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn synthetic_perf_article(
+    slug: &str,
+    title: &str,
+    date: &str,
+    excerpt: &str,
+    approx_bytes: usize,
+) -> Article {
+    // Repeat a real-looking paragraph until we cross the target size.
+    // `<p>` per repetition keeps `pp-html` rendering real paragraphs
+    // rather than one monolithic blob.
+    const PARA: &str =
+        "<p>This paragraph is a deliberately repeated block used to size \
+         the article's body to a measurable number of bytes. The whole \
+         payload travels over the /_pocopine/get_article route as a JSON \
+         <code>Result&lt;Article&gt;</code> and renders through <code>pp-html</code>.</p>";
+    let mut body = String::with_capacity(approx_bytes + PARA.len());
+    while body.len() < approx_bytes {
+        body.push_str(PARA);
+    }
+    Article {
+        slug: slug.into(),
+        title: title.into(),
+        date: date.into(),
+        excerpt: excerpt.into(),
+        body,
+        bytes: 0,
+        size_label: String::new(),
+    }
 }
 
 #[pocopine::server]
@@ -126,7 +184,10 @@ fn render_article_list(articles: &[ArticleSummary]) -> String {
     for a in articles {
         out.push_str(&format!(
             "<li class=\"article-card\">\
-                <h3><a href=\"/blog/{slug}\" pp-route>{title}</a></h3>\
+                <div class=\"article-card__head\">\
+                    <h3><a href=\"/blog/{slug}\" pp-route>{title}</a></h3>\
+                    <span class=\"size-chip\" title=\"{bytes} bytes\">{size_label}</span>\
+                </div>\
                 <p class=\"article-date\">{date}</p>\
                 <p>{excerpt}</p>\
             </li>",
@@ -134,6 +195,8 @@ fn render_article_list(articles: &[ArticleSummary]) -> String {
             title = html_escape(&a.title),
             date = html_escape(&a.date),
             excerpt = html_escape(&a.excerpt),
+            bytes = a.bytes,
+            size_label = html_escape(&a.size_label),
         ));
     }
     out.push_str("</ul>");
@@ -160,8 +223,11 @@ pub struct BlogPost {
     pub title: String,
     pub date: String,
     pub body: String,
+    pub size_label: String,
+    pub bytes: u32,
     pub loading: bool,
     pub error: String,
+    pub elapsed_ms: u32,
 }
 
 #[handlers]
@@ -169,13 +235,17 @@ impl BlogPost {
     pub fn init(&mut self) {
         self.loading = true;
         let slug = self.slug.clone();
+        let start = performance_now();
         dispatch!(get_article(slug).await, |s, result| {
             s.loading = false;
+            s.elapsed_ms = (performance_now() - start).round().max(0.0) as u32;
             match result {
                 Ok(article) => {
                     s.title = article.title;
                     s.date = article.date;
                     s.body = article.body;
+                    s.bytes = article.bytes as u32;
+                    s.size_label = article.size_label;
                     s.error.clear();
                 }
                 Err(e) => {
@@ -184,6 +254,15 @@ impl BlogPost {
             }
         },);
     }
+}
+
+/// Wall-clock now-ms for the perf counter. Falls back to 0 if the
+/// Performance API isn't reachable (shouldn't happen in a browser).
+fn performance_now() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or(0.0)
 }
 
 #[derive(Default, Serialize, Deserialize)]

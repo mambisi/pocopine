@@ -200,6 +200,18 @@
     .article-card h3 { margin-bottom: 0.25rem; font-size: 1.2rem; }
     .article-card h3 a { color: var(--ink); text-decoration: none; }
     .article-card h3 a:hover { color: var(--red); text-decoration: underline; }
+    .article-card__head {
+      display: flex; align-items: baseline;
+      justify-content: space-between; gap: 0.75rem;
+    }
+    .article-card__head h3 { flex: 1; margin-bottom: 0.25rem; }
+    .size-chip {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.72rem; letter-spacing: 0.08em;
+      color: var(--red); border: 1px solid var(--red);
+      padding: 2px 6px; text-transform: uppercase;
+      white-space: nowrap;
+    }
     .article-date {
       font-family: ui-monospace, Menlo, monospace;
       color: var(--muted); font-size: 0.78rem;
@@ -209,7 +221,14 @@
 
     /* ───── blog post ──────────────────────────────────── */
     .post-head { margin: 1.5rem 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
-    .post-head h1 { margin-bottom: 0.25rem; }
+    .post-head h1 { margin-bottom: 0.35rem; }
+    .post-meta {
+      display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.45rem;
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.8rem; color: var(--muted);
+      margin: 0;
+    }
+    .post-meta .dot { color: var(--border); }
     .post-body p { font-size: 1.05rem; line-height: 1.65; }
     .post-body code {
       background: var(--card); padding: 1px 5px;
