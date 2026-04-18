@@ -1,1 +1,10 @@
+# Rust
 /target
+
+# wasm-pack output
+pkg/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo

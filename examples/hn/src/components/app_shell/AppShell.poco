@@ -4,7 +4,7 @@
     <nav>
       <a href="/" pp-route>top</a>
       <a href="https://news.ycombinator.com/" target="_blank" rel="noopener">hn</a>
-      <a href="https://github.com/pocopine/pocopine">github</a>
+      <a href="https://github.com/mambisi/pocopine">github</a>
     </nav>
   </header>
   <main>
