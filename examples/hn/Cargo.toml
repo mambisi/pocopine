@@ -21,6 +21,7 @@ pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 web-sys = { version = "0.3", features = ["Window", "Performance"] }
+js-sys = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-server = { path = "../../crates/pocopine-server" }

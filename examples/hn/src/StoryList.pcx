@@ -1,10 +1,26 @@
 <section pp-init="init">
+  <form class="search" pp-on:submit.prevent="search">
+    <input
+      class="search__input"
+      type="search"
+      placeholder="search stories on hacker news…"
+      pp-model="query"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button type="submit" class="search__submit">Search</button>
+  </form>
+
   <div class="status-row">
-    <p pp-show="loading" class="status"><em>Loading top stories…</em></p>
-    <p pp-show="!loading" class="status">
-      <strong pp-text="count"></strong> stories &middot; fetched in <strong pp-text="fetch_ms"></strong> ms
+    <p pp-show="loading" class="status"><em>Fetching…</em></p>
+    <p pp-show="!loading && applied_query" class="status">
+      <strong pp-text="count"></strong> results for <code pp-text="applied_query"></code> &middot; <strong pp-text="fetch_ms"></strong> ms
+    </p>
+    <p pp-show="!loading && !applied_query" class="status">
+      <strong pp-text="count"></strong> stories on the front page &middot; fetched in <strong pp-text="fetch_ms"></strong> ms
     </p>
   </div>
+
   <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
   <div class="stories-wrap" pp-html="list_html"></div>
 </section>

@@ -481,6 +481,7 @@ name = "hn"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "js-sys",
  "pocopine",
  "pocopine-server",
  "reqwest",

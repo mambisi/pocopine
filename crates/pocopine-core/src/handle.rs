@@ -33,7 +33,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::reactive::{trigger_scope, ScopeId};
-use crate::scope::{current_scope_id, Scope};
+use crate::scope::{current_scope_id, with_current_scope_id, Scope};
 
 /// Typed handle onto a component or store scope.
 ///
@@ -68,9 +68,15 @@ impl<T: 'static> Handle<T> {
 
     /// Mutate the underlying `T`. After `f` returns, every subscriber of
     /// the scope's keys is notified (same as a handler invocation).
+    ///
+    /// `CURRENT_SCOPE_ID` is bound to this handle's scope for the
+    /// duration of `f` so `dispatch!` / `this::<T>()` called from
+    /// inside the closure still resolve — even when `update` is
+    /// invoked from an async task outside any `Scope::invoke` chain.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        let out = f(&mut self.inner.borrow_mut());
-        trigger_scope(self.scope_id);
+        let sid = self.scope_id;
+        let out = with_current_scope_id(sid, || f(&mut self.inner.borrow_mut()));
+        trigger_scope(sid);
         out
     }
 

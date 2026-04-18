@@ -178,6 +178,18 @@ pub fn current_scope_id() -> Option<ScopeId> {
     CURRENT_SCOPE_ID.with(|c| c.get())
 }
 
+/// Run `f` with `CURRENT_SCOPE_ID` set to `id`, restoring the prior
+/// value on exit. Used by [`crate::handle::Handle::update`] so
+/// `dispatch!` / `this::<T>()` called from inside an async update
+/// closure still sees its own scope. Also used internally by
+/// [`Scope::invoke`].
+pub fn with_current_scope_id<R>(id: ScopeId, f: impl FnOnce() -> R) -> R {
+    let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(id)));
+    let out = f();
+    CURRENT_SCOPE_ID.with(|c| c.set(prev));
+    out
+}
+
 /// Set the current element for the duration of a directive call. The caller
 /// is responsible for clearing it on exit.
 pub fn with_current_el<R>(el: &Element, f: impl FnOnce() -> R) -> R {
