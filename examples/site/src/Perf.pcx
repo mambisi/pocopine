@@ -1,0 +1,49 @@
+<section pp-init="init">
+  <h1>Performance</h1>
+  <p class="sub">
+    Two things are happening on this page. The counter re-renders only
+    itself when it changes &mdash; the article list below is untouched.
+    Scroll to the bottom and click <strong>Load more</strong> to page
+    twenty articles at a time through the <code>list_articles_page</code>
+    server function.
+  </p>
+
+  <div class="perf-row">
+    <div class="perf-counter">
+      <small class="mono">independent re-render ↓</small>
+      <counter></counter>
+    </div>
+    <dl class="perf-stats">
+      <div>
+        <dt>loaded</dt>
+        <dd><strong pp-text="loaded"></strong> articles</dd>
+      </div>
+      <div>
+        <dt>pages</dt>
+        <dd><strong pp-text="page"></strong> fetched</dd>
+      </div>
+      <div>
+        <dt>last fetch</dt>
+        <dd><strong pp-text="last_ms"></strong> ms</dd>
+      </div>
+      <div>
+        <dt>total bytes</dt>
+        <dd><strong pp-text="total_bytes_label"></strong></dd>
+      </div>
+    </dl>
+  </div>
+
+  <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
+
+  <ul class="article-list" pp-html="list_html"></ul>
+
+  <div class="scroll-bottom">
+    <button class="btn primary"
+            pp-on:click="load_more"
+            pp-show="!loading && !exhausted">
+      Load more
+    </button>
+    <p pp-show="loading" class="status"><em>Fetching page <span pp-text="page"></span>…</em></p>
+    <p pp-show="exhausted" class="status">All <strong pp-text="loaded"></strong> articles loaded.</p>
+  </div>
+</section>

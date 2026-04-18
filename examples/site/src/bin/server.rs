@@ -13,7 +13,10 @@ async fn main() -> std::io::Result<()> {
         static_files,
         tower_http::services::ServeFile,
     };
-    use site::{__get_article_route, __list_articles_route, __submit_contact_route};
+    use site::{
+        __get_article_route, __list_articles_page_route, __list_articles_route,
+        __submit_contact_route,
+    };
 
     // Anchor to the crate root so `cargo run --bin server` and
     // `pocopine dev` both work regardless of CWD.
@@ -25,6 +28,7 @@ async fn main() -> std::io::Result<()> {
     let static_service = static_files(manifest_dir).fallback(ServeFile::new(index_path));
     let router = Router::new().fallback_service(static_service);
     let router = __list_articles_route(router);
+    let router = __list_articles_page_route(router);
     let router = __get_article_route(router);
     let router = __submit_contact_route(router);
 

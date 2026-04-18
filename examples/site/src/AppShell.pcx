@@ -4,6 +4,7 @@
     <nav>
       <a href="/" pp-route>Home</a>
       <a href="/blog" pp-route>Blog</a>
+      <a href="/perf" pp-route>Perf</a>
       <a href="/contact" pp-route>Contact</a>
       <a href="https://github.com/pocopine/pocopine">GitHub</a>
     </nav>

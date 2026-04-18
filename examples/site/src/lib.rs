@@ -5,25 +5,27 @@ pub mod shared;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use shared::{Article, ArticleSummary, ContactMessage, ContactResponse};
-#[cfg(not(target_arch = "wasm32"))]
-use shared::human_bytes;
+use shared::{human_bytes, Article, ArticleSummary, ContactMessage, ContactResponse};
 
 // ─── server functions ────────────────────────────────────────────
 
 /// Host-side helper — reads articles.json off disk. Shared by the two
 /// server fns below so they parse once. Target-gated because the
 /// client stub never executes this body.
+/// `articles.json` is embedded into the server binary at compile time
+/// via `include_str!`. No runtime disk I/O; edits require a rebuild.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_articles_from_disk() -> Result<Vec<Article>, pocopine::ServerError> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/articles.json");
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| pocopine::ServerError::App(format!("read articles.json: {e}")))?;
-    let mut articles: Vec<Article> = serde_json::from_str(&text)
+const ARTICLES_JSON: &str = include_str!("../articles.json");
+
+/// Load every article — the real ones from `ARTICLES_JSON`, the two
+/// big perf fixtures, and a pool of 500 small synthetic articles for
+/// infinite-scroll testing. Shared by every server fn so parsing and
+/// generation happens once per request.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_articles() -> Result<Vec<Article>, pocopine::ServerError> {
+    let mut articles: Vec<Article> = serde_json::from_str(ARTICLES_JSON)
         .map_err(|e| pocopine::ServerError::App(format!("parse articles.json: {e}")))?;
 
-    // Append synthetic perf-test articles so users can exercise the
-    // pipeline at real payload sizes without bloating articles.json.
     articles.push(synthetic_perf_article(
         "perf-50kb",
         "Performance test · 50 KB body",
@@ -39,7 +41,30 @@ fn load_articles_from_disk() -> Result<Vec<Article>, pocopine::ServerError> {
         500_000,
     ));
 
-    // Populate size metadata for every article (real + synthetic).
+    // Pool of 500 tiny articles — feeds the /perf infinite-scroll
+    // demo with enough rows to actually exercise pagination.
+    for i in 1..=500_u32 {
+        let month = ((i - 1) / 30 % 12) + 1;
+        let day = ((i - 1) % 30) + 1;
+        articles.push(Article {
+            slug: format!("article-{i:04}"),
+            title: format!("Generated article #{i}"),
+            date: format!("2026-{month:02}-{day:02}"),
+            excerpt: format!(
+                "Synthetic article #{i} — used for paginated fetch + list-render \
+                 benchmarks on the /perf page."
+            ),
+            body: format!(
+                "<p>Body of generated article #{i}.</p>\
+                 <p>This pool is intentionally short per row. It's here to \
+                 measure client-side list rendering and the server-fn \
+                 pagination pipeline, not individual page payload size.</p>"
+            ),
+            bytes: 0,
+            size_label: String::new(),
+        });
+    }
+
     for a in &mut articles {
         a.bytes = a.body.len();
         a.size_label = human_bytes(a.bytes);
@@ -81,13 +106,33 @@ fn synthetic_perf_article(
 
 #[pocopine::server]
 pub async fn list_articles() -> ServerResult<Vec<ArticleSummary>> {
-    let articles = load_articles_from_disk()?;
-    Ok(articles.into_iter().map(ArticleSummary::from).collect())
+    // Preserve the blog page's existing behavior: just the hand-authored
+    // + large perf articles, without the synthetic pool. The pool is
+    // exposed separately via `list_articles_page`.
+    let articles = load_articles()?;
+    Ok(articles
+        .into_iter()
+        .take(5)
+        .map(ArticleSummary::from)
+        .collect())
+}
+
+#[pocopine::server]
+pub async fn list_articles_page(offset: u32, limit: u32) -> ServerResult<Vec<ArticleSummary>> {
+    let articles = load_articles()?;
+    let total = articles.len();
+    let start = (offset as usize).min(total);
+    let end = start.saturating_add(limit as usize).min(total);
+    Ok(articles[start..end]
+        .iter()
+        .cloned()
+        .map(ArticleSummary::from)
+        .collect())
 }
 
 #[pocopine::server]
 pub async fn get_article(slug: String) -> ServerResult<Article> {
-    let articles = load_articles_from_disk()?;
+    let articles = load_articles()?;
     articles
         .into_iter()
         .find(|a| a.slug == slug)
@@ -319,17 +364,104 @@ pub struct NotFound {}
 #[handlers]
 impl NotFound {}
 
+/// Perf page — paginated infinite-scroll + a counter at the top
+/// demonstrating that reactivity reruns only the effects subscribed
+/// to a changed key (the list doesn't re-render when the counter
+/// increments).
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct Perf {
+    pub loaded: u32,
+    pub page: u32,
+    pub last_ms: u32,
+    pub total_bytes: u32,
+    pub total_bytes_label: String,
+    pub list_html: String,
+    pub loading: bool,
+    pub error: String,
+    pub exhausted: bool,
+}
+
+const PAGE_SIZE: u32 = 20;
+
+#[handlers]
+impl Perf {
+    pub fn init(&mut self) {
+        if self.loaded == 0 {
+            self.load_more();
+        }
+    }
+
+    pub fn load_more(&mut self) {
+        if self.loading || self.exhausted {
+            return;
+        }
+        self.loading = true;
+        let offset = self.loaded;
+        let start = performance_now();
+        dispatch!(
+            list_articles_page(offset, PAGE_SIZE).await,
+            |s, result| {
+                s.loading = false;
+                s.last_ms = (performance_now() - start).round().max(0.0) as u32;
+                match result {
+                    Ok(batch) => {
+                        if batch.is_empty() {
+                            s.exhausted = true;
+                            return;
+                        }
+                        s.page += 1;
+                        for a in &batch {
+                            s.total_bytes += a.bytes as u32;
+                        }
+                        s.total_bytes_label = human_bytes(s.total_bytes as usize);
+                        s.loaded += batch.len() as u32;
+                        s.list_html.push_str(&render_batch(&batch));
+                        s.error.clear();
+                    }
+                    Err(e) => {
+                        s.error = e.to_string();
+                    }
+                }
+            },
+        );
+    }
+}
+
+fn render_batch(articles: &[ArticleSummary]) -> String {
+    let mut out = String::new();
+    for a in articles {
+        out.push_str(&format!(
+            "<li class=\"article-card\">\
+                <div class=\"article-card__head\">\
+                    <h3><a href=\"/blog/{slug}\" pp-route>{title}</a></h3>\
+                    <span class=\"size-chip\">{size_label}</span>\
+                </div>\
+                <p class=\"article-date\">{date}</p>\
+                <p>{excerpt}</p>\
+            </li>",
+            slug = html_escape(&a.slug),
+            title = html_escape(&a.title),
+            date = html_escape(&a.date),
+            size_label = html_escape(&a.size_label),
+            excerpt = html_escape(&a.excerpt),
+        ));
+    }
+    out
+}
+
 // ─── entry ────────────────────────────────────────────────────────
 
 #[wasm_bindgen(start)]
 pub fn main() {
     App::new()
         .register::<AppShell>()
-        .register::<Counter>() // live demo on the home page
+        .register::<Counter>() // live demo on the home page and /perf
         .route::<Home>("/")
         .route::<Blog>("/blog")
         .route::<BlogPost>("/blog/:slug")
         .route::<Contact>("/contact")
+        .route::<Perf>("/perf")
         .route::<NotFound>("*")
         .run();
 }
