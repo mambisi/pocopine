@@ -5,7 +5,9 @@ pub mod shared;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use shared::{human_bytes, Article, ArticleSummary, ContactMessage, ContactResponse};
+use shared::{human_bytes, ArticleSummary, ContactMessage, ContactResponse};
+#[cfg(not(target_arch = "wasm32"))]
+use shared::Article;
 
 // ─── server functions ────────────────────────────────────────────
 
@@ -105,19 +107,6 @@ fn synthetic_perf_article(
 }
 
 #[pocopine::server]
-pub async fn list_articles() -> ServerResult<Vec<ArticleSummary>> {
-    // Preserve the blog page's existing behavior: just the hand-authored
-    // + large perf articles, without the synthetic pool. The pool is
-    // exposed separately via `list_articles_page`.
-    let articles = load_articles()?;
-    Ok(articles
-        .into_iter()
-        .take(5)
-        .map(ArticleSummary::from)
-        .collect())
-}
-
-#[pocopine::server]
 pub async fn list_articles_page(offset: u32, limit: u32) -> ServerResult<Vec<ArticleSummary>> {
     let articles = load_articles()?;
     let total = articles.len();
@@ -128,15 +117,6 @@ pub async fn list_articles_page(offset: u32, limit: u32) -> ServerResult<Vec<Art
         .cloned()
         .map(ArticleSummary::from)
         .collect())
-}
-
-#[pocopine::server]
-pub async fn get_article(slug: String) -> ServerResult<Article> {
-    let articles = load_articles()?;
-    articles
-        .into_iter()
-        .find(|a| a.slug == slug)
-        .ok_or_else(|| pocopine::ServerError::App(format!("no article with slug: {slug}")))
 }
 
 #[pocopine::server]
@@ -191,63 +171,6 @@ pub struct Home {}
 #[handlers]
 impl Home {}
 
-#[derive(Default, Serialize, Deserialize)]
-#[component]
-pub struct Blog {
-    pub loading: bool,
-    pub error: String,
-    pub list_html: String,
-}
-
-#[handlers]
-impl Blog {
-    pub fn init(&mut self) {
-        self.loading = true;
-        dispatch!(list_articles().await, |s, result| {
-            s.loading = false;
-            match result {
-                Ok(articles) => {
-                    s.error.clear();
-                    s.list_html = render_article_list(&articles);
-                }
-                Err(e) => {
-                    s.error = e.to_string();
-                }
-            }
-        },);
-    }
-}
-
-/// Build the article-list markup client-side. When it lands in the
-/// DOM via `pp-html`, the MutationObserver walks the added nodes —
-/// so `pp-route` on the anchors gets wired up like any other link.
-fn render_article_list(articles: &[ArticleSummary]) -> String {
-    if articles.is_empty() {
-        return "<p><em>No articles yet.</em></p>".into();
-    }
-    let mut out = String::from("<ul class=\"article-list\">");
-    for a in articles {
-        out.push_str(&format!(
-            "<li class=\"article-card\">\
-                <div class=\"article-card__head\">\
-                    <h3><a href=\"/blog/{slug}\" pp-route>{title}</a></h3>\
-                    <span class=\"size-chip\" title=\"{bytes} bytes\">{size_label}</span>\
-                </div>\
-                <p class=\"article-date\">{date}</p>\
-                <p>{excerpt}</p>\
-            </li>",
-            slug = html_escape(&a.slug),
-            title = html_escape(&a.title),
-            date = html_escape(&a.date),
-            excerpt = html_escape(&a.excerpt),
-            bytes = a.bytes,
-            size_label = html_escape(&a.size_label),
-        ));
-    }
-    out.push_str("</ul>");
-    out
-}
-
 fn html_escape(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -259,46 +182,6 @@ fn html_escape(s: &str) -> String {
             _ => c.to_string(),
         })
         .collect()
-}
-
-#[derive(Default, Serialize, Deserialize)]
-#[component]
-pub struct BlogPost {
-    pub slug: String,
-    pub title: String,
-    pub date: String,
-    pub body: String,
-    pub size_label: String,
-    pub bytes: u32,
-    pub loading: bool,
-    pub error: String,
-    pub elapsed_ms: u32,
-}
-
-#[handlers]
-impl BlogPost {
-    pub fn init(&mut self) {
-        self.loading = true;
-        let slug = self.slug.clone();
-        let start = performance_now();
-        dispatch!(get_article(slug).await, |s, result| {
-            s.loading = false;
-            s.elapsed_ms = (performance_now() - start).round().max(0.0) as u32;
-            match result {
-                Ok(article) => {
-                    s.title = article.title;
-                    s.date = article.date;
-                    s.body = article.body;
-                    s.bytes = article.bytes as u32;
-                    s.size_label = article.size_label;
-                    s.error.clear();
-                }
-                Err(e) => {
-                    s.error = e.to_string();
-                }
-            }
-        },);
-    }
 }
 
 /// Wall-clock now-ms for the perf counter. Falls back to 0 if the
@@ -486,13 +369,12 @@ fn render_batch(articles: &[ArticleSummary]) -> String {
         out.push_str(&format!(
             "<li class=\"article-card\">\
                 <div class=\"article-card__head\">\
-                    <h3><a href=\"/blog/{slug}\" pp-route>{title}</a></h3>\
+                    <h3>{title}</h3>\
                     <span class=\"size-chip\">{size_label}</span>\
                 </div>\
                 <p class=\"article-date\">{date}</p>\
                 <p>{excerpt}</p>\
             </li>",
-            slug = html_escape(&a.slug),
             title = html_escape(&a.title),
             date = html_escape(&a.date),
             size_label = html_escape(&a.size_label),
@@ -510,8 +392,6 @@ pub fn main() {
         .register::<AppShell>()
         .register::<Counter>() // live demo on the home page and /perf
         .route::<Home>("/")
-        .route::<Blog>("/blog")
-        .route::<BlogPost>("/blog/:slug")
         .route::<Contact>("/contact")
         .route::<Perf>("/perf")
         .route::<NotFound>("*")

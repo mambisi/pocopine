@@ -3,7 +3,6 @@
     <a class="brand" href="/" pp-route>pocopine</a>
     <nav>
       <a href="/" pp-route>Home</a>
-      <a href="/blog" pp-route>Blog</a>
       <a href="/perf" pp-route>Perf</a>
       <a href="/contact" pp-route>Contact</a>
       <a href="https://github.com/pocopine/pocopine">GitHub</a>
@@ -16,6 +15,5 @@
 
   <footer>
     <span class="mono">pocopine · MIT OR Apache-2.0</span>
-    <span class="route-mono">at <code pp-text="$route.path"></code></span>
   </footer>
 </div>
