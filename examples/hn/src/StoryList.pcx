@@ -1,0 +1,10 @@
+<section pp-init="init">
+  <div class="status-row">
+    <p pp-show="loading" class="status"><em>Loading top stories…</em></p>
+    <p pp-show="!loading" class="status">
+      <strong pp-text="count"></strong> stories &middot; fetched in <strong pp-text="fetch_ms"></strong> ms
+    </p>
+  </div>
+  <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
+  <div class="stories-wrap" pp-html="list_html"></div>
+</section>

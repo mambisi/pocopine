@@ -3,7 +3,6 @@
     <a class="brand" href="/" pp-route>pocopine</a>
     <nav>
       <a href="/" pp-route>Home</a>
-      <a href="/perf" pp-route>Perf</a>
       <a href="/contact" pp-route>Contact</a>
       <a href="https://github.com/pocopine/pocopine">GitHub</a>
     </nav>

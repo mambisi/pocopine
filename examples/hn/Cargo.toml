@@ -1,5 +1,5 @@
 [package]
-name = "site"
+name = "hn"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ publish = false
 
 [package.metadata.pocopine]
 bin = "server"
-port = 3000
+port = 3001
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,7 +20,13 @@ path = "src/bin/server.rs"
 pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
+web-sys = { version = "0.3", features = ["Window", "Performance"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-server = { path = "../../crates/pocopine-server" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls-webpki-roots",
+] }
+futures = "0.3"
