@@ -20,11 +20,18 @@
   </header>
 
   <template pp-if="text">
-    <div class="story-text" pp-html="text"></div>
+    <div class="story-text"
+         pp-html="text"
+         pp-transition:enter="pp-fade-enter"
+         pp-transition:enter-start="pp-fade-enter-start"
+         pp-transition:enter-end="pp-fade-enter-end"></div>
   </template>
 
   <template pp-if="comments_html">
-    <section class="comments-wrap">
+    <section class="comments-wrap"
+             pp-transition:enter="pp-fade-enter"
+             pp-transition:enter-start="pp-fade-enter-start"
+             pp-transition:enter-end="pp-fade-enter-end">
       <h2>Comments</h2>
       <div pp-html="comments_html"></div>
     </section>

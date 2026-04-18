@@ -6,6 +6,12 @@
 //! to falsy, remove the clone (which cleans up effects + scopes via
 //! the `MutationObserver` path). Unlike `pp-show`, `pp-if` actually
 //! unmounts — effects stop running, scopes are released.
+//!
+//! If the template body has any `pp-transition:*` attributes, mounts
+//! and unmounts go through [`crate::directives::transition`] so the
+//! enter sequence plays after insert and the remove is deferred until
+//! the leave sequence finishes. A re-flip to truthy mid-leave cancels
+//! the pending unmount and resumes enter on the same clone.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,6 +20,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
 
+use super::transition;
 use super::DirectiveCall;
 use crate::path::resolve_truthy;
 use crate::reactive::effect;
@@ -39,8 +46,8 @@ pub fn run(call: &DirectiveCall) {
     let effect_id = effect(move || {
         let truthy = resolve_truthy(&parent_proxy, &expr);
 
-        let mut slot = current.borrow_mut();
-        match (truthy, slot.as_ref()) {
+        let existing = current.borrow().clone();
+        match (truthy, existing) {
             (true, None) => {
                 let Some(clone_root) = clone_template_body(&template) else {
                     console::error_1(&JsValue::from_str(
@@ -54,18 +61,40 @@ pub fn run(call: &DirectiveCall) {
                         .is_ok()
                     {
                         walker::walk(&clone_root);
-                        *slot = Some(clone_root);
+                        *current.borrow_mut() = Some(clone_root.clone());
+                        transition::enter(&clone_root, || {});
                     }
                 }
             }
-            (false, Some(_)) => {
-                if let Some(clone) = slot.take() {
-                    if let Some(parent) = clone.parent_node() {
-                        let _ = parent.remove_child(&clone);
-                    }
+            (true, Some(clone)) => {
+                // Idle / already showing: no-op. Mid-leave: cancel
+                // and play enter on the same clone.
+                if transition::is_leaving(&clone) {
+                    transition::enter(&clone, || {});
                 }
             }
-            _ => {} // already in the desired state
+            (false, Some(clone)) => {
+                if transition::is_leaving(&clone) {
+                    // Already unmounting; leave fires the removal.
+                    return;
+                }
+                let clone_cap = clone.clone();
+                let slot_cap = current.clone();
+                transition::leave(&clone, move || {
+                    if let Some(parent) = clone_cap.parent_node() {
+                        let _ = parent.remove_child(&clone_cap);
+                    }
+                    // Only clear the slot if it still points to this
+                    // clone — a rapid re-mount could have replaced it.
+                    let mut slot = slot_cap.borrow_mut();
+                    if let Some(cur) = slot.as_ref() {
+                        if cur.is_same_node(Some(clone_cap.as_ref())) {
+                            *slot = None;
+                        }
+                    }
+                });
+            }
+            (false, None) => {}
         }
     });
 

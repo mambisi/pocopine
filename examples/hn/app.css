@@ -41,3 +41,14 @@ code, .mono, .points, .domain, nav a, .hn-header .brand,
 .status { color: var(--muted); font-size: 0.88rem; padding: 0.4rem 0; }
 .status--error { color: var(--orange-dk); }
 .domain { color: var(--muted); font-size: 0.8rem; }
+
+/* Tailwind-style fade-and-rise used by pp-transition. */
+.pp-fade-enter, .pp-fade-leave {
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+}
+.pp-fade-enter-start, .pp-fade-leave-end {
+  opacity: 0; transform: translateY(4px);
+}
+.pp-fade-enter-end, .pp-fade-leave-start {
+  opacity: 1; transform: translateY(0);
+}

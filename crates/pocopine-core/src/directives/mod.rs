@@ -20,6 +20,7 @@ pub mod on;
 pub mod route;
 pub mod show;
 pub mod text;
+pub mod transition;
 
 pub struct DirectiveCall<'a> {
     pub el: &'a Element,

@@ -334,6 +334,7 @@ fn release_subtree(node: &Node) {
         if let Some(id) = get_private(&el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
             Scope::remove(ScopeId(id as u64));
         }
+        crate::directives::transition::release(&el);
     }
 }
 
