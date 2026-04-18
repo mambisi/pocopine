@@ -90,6 +90,22 @@ pub struct AppShell {}
 #[handlers]
 impl AppShell {}
 
+/// Row shape the StoryList template iterates. All display-time
+/// derivations live here so the `pp-for` body stays declarative.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct StoryView {
+    pub id: String,
+    pub title: String,
+    pub title_href: String,
+    pub external: bool,
+    pub domain: String,
+    pub points: i32,
+    pub author: String,
+    pub age: String,
+    pub item_url: String,
+    pub comments_label: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct StoryList {
@@ -97,7 +113,7 @@ pub struct StoryList {
     pub applied_query: String,
     pub loading: bool,
     pub error: String,
-    pub list_html: String,
+    pub stories: Vec<StoryView>,
     pub count: u32,
     pub fetch_ms: u32,
 }
@@ -128,7 +144,7 @@ impl StoryList {
             match result {
                 Ok(stories) => {
                     s.count = stories.len() as u32;
-                    s.list_html = render_story_list(&stories);
+                    s.stories = stories.into_iter().map(story_to_view).collect();
                     s.error.clear();
                 }
                 Err(e) => s.error = e.to_string(),
@@ -193,60 +209,29 @@ impl NotFound {}
 
 // ─── rendering helpers ─────────────────────────────────────────
 
-fn render_story_list(stories: &[Story]) -> String {
-    let mut out = String::from("<ol class=\"stories\">");
-    for s in stories {
-        let url = s.url.clone().unwrap_or_default();
-        let has_url = !url.is_empty();
-        let domain = extract_domain(&url);
-        let title_href = if has_url {
-            url.clone()
-        } else {
-            format!("/item/{}", s.id)
-        };
-        let title_attrs = if has_url {
-            "target=\"_blank\" rel=\"noopener noreferrer\""
-        } else {
-            "pp-route"
-        };
-        let comments_label = match s.num_comments {
-            None | Some(0) => "discuss".to_string(),
-            Some(1) => "1 comment".to_string(),
-            Some(n) => format!("{n} comments"),
-        };
-        out.push_str(&format!(
-            "<li class=\"story\">\
-                <div class=\"story__body\">\
-                    <a class=\"story__title\" href=\"{title_href}\" {title_attrs}>{title}</a>\
-                    {domain}\
-                    <div class=\"story__meta\">\
-                        <span class=\"points\"><strong>{points}</strong> points</span>\
-                        <span class=\"sep\">·</span>\
-                        <span class=\"author\">by {author}</span>\
-                        <span class=\"sep\">·</span>\
-                        <span class=\"age\">{age}</span>\
-                        <span class=\"sep\">·</span>\
-                        <a class=\"comments-link\" href=\"/item/{id}\" pp-route>{comments_label}</a>\
-                    </div>\
-                </div>\
-            </li>",
-            title_href = html_escape(&title_href),
-            title_attrs = title_attrs,
-            title = html_escape(&s.title),
-            domain = if domain.is_empty() {
-                String::new()
-            } else {
-                format!(" <span class=\"domain\">({})</span>", html_escape(&domain))
-            },
-            points = s.points.unwrap_or(0),
-            author = html_escape(&s.author),
-            age = html_escape(&humanize_age(s.created_at_i)),
-            id = s.id,
-            comments_label = html_escape(&comments_label),
-        ));
+fn story_to_view(s: Story) -> StoryView {
+    let url = s.url.clone().unwrap_or_default();
+    let external = !url.is_empty();
+    let domain = extract_domain(&url);
+    let item_url = format!("/item/{}", s.id);
+    let title_href = if external { url } else { item_url.clone() };
+    let comments_label = match s.num_comments {
+        None | Some(0) => "discuss".to_string(),
+        Some(1) => "1 comment".to_string(),
+        Some(n) => format!("{n} comments"),
+    };
+    StoryView {
+        id: s.id,
+        title: s.title,
+        title_href,
+        external,
+        domain,
+        points: s.points.unwrap_or(0),
+        author: s.author,
+        age: humanize_age(s.created_at_i),
+        item_url,
+        comments_label,
     }
-    out.push_str("</ol>");
-    out
 }
 
 fn render_comment_tree(nodes: &[ItemNode], depth: usize) -> String {

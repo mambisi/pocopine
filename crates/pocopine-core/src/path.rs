@@ -21,6 +21,22 @@ pub fn resolve_path(root: &JsValue, path: &str) -> JsValue {
     })
 }
 
+/// Evaluate `expr` as a truthiness test. Supports an optional leading
+/// `!` that negates the result; the remainder is resolved as a dotted
+/// path via [`resolve_path`]. Anything richer (binary `&&` / `||`,
+/// comparisons) is intentionally out of scope — components should
+/// precompute those into a boolean field.
+pub fn resolve_truthy(root: &JsValue, expr: &str) -> bool {
+    let trimmed = expr.trim();
+    let (negate, rest) = match trimmed.strip_prefix('!') {
+        Some(r) => (true, r.trim_start()),
+        None => (false, trimmed),
+    };
+    let v = resolve_path(root, rest);
+    let truthy = !v.is_falsy();
+    if negate { !truthy } else { truthy }
+}
+
 /// Write the final segment of `path` on the deepest reachable object.
 /// Used by `pp-model` for dotted-path two-way bindings (`$store.foo.bar`).
 /// Returns `true` if the write succeeded.

@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlElement;
 
 use super::DirectiveCall;
-use crate::path::resolve_path;
+use crate::path::resolve_truthy;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
@@ -18,8 +18,7 @@ pub fn run(call: &DirectiveCall) {
 
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
-            let v = resolve_path(&proxy, &key);
-            let truthy = !v.is_falsy();
+            let truthy = resolve_truthy(&proxy, &key);
             let style = html_el.style();
             if truthy {
                 let _ = style.remove_property("display");

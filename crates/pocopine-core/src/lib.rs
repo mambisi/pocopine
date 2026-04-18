@@ -14,6 +14,7 @@ pub mod directives;
 pub mod fetch;
 pub mod handle;
 pub mod handler;
+pub mod loop_scope;
 pub mod magics;
 pub mod path;
 pub mod reactive;

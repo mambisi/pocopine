@@ -39,8 +39,21 @@ pub fn start_on_body() {
 /// Walk `root`, bind directives on it and all descendants, then install a
 /// `MutationObserver` so later DOM mutations are picked up too.
 pub fn start(root: &Element) {
+    crate::styles::inject_style(
+        "__pp_cloak",
+        "[pp-cloak] { display: none !important; }",
+    );
     walk(root);
     install_observer(root);
+}
+
+/// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
+/// through it. Used by `pp-for` when cloning the template body: the loop
+/// scope has to be bound before `walk()` descends so child directives
+/// see the per-item proxy instead of the parent's.
+pub fn bind_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) {
+    set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
+    set_private(el, SCOPE_PROXY_KEY, proxy);
 }
 
 /// Pre-order walk: bind this element, then recurse into its children.
@@ -123,6 +136,11 @@ fn bind(el: &Element) {
     if let Some(v) = init_value {
         dispatch(el, &proxy, scope_id, "pp-init", &v);
     }
+
+    // `pp-cloak` only exists to hide the element until binding completes.
+    // Drop it now that directives have run so the global cloak CSS rule
+    // stops matching.
+    let _ = el.remove_attribute("pp-cloak");
 }
 
 /// Mount a registered component on `el`:

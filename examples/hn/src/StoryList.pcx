@@ -23,5 +23,38 @@
   </div>
 
   <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
-  <div class="stories-wrap" pp-html="list_html"></div>
+
+  <ol class="stories">
+    <template pp-for="story in stories">
+      <li class="story">
+        <div class="story__body">
+          <a
+            pp-show="story.external"
+            class="story__title"
+            pp-bind:href="story.title_href"
+            target="_blank"
+            rel="noopener noreferrer"
+            pp-text="story.title"
+          ></a>
+          <a
+            pp-show="!story.external"
+            class="story__title"
+            pp-bind:href="story.title_href"
+            pp-route
+            pp-text="story.title"
+          ></a>
+          <span pp-show="story.domain" class="domain">(<span pp-text="story.domain"></span>)</span>
+          <div class="story__meta">
+            <span class="points"><strong pp-text="story.points"></strong> points</span>
+            <span class="sep">·</span>
+            <span class="author">by <span pp-text="story.author"></span></span>
+            <span class="sep">·</span>
+            <span class="age" pp-text="story.age"></span>
+            <span class="sep">·</span>
+            <a class="comments-link" pp-bind:href="story.item_url" pp-route pp-text="story.comments_label"></a>
+          </div>
+        </div>
+      </li>
+    </template>
+  </ol>
 </section>

@@ -11,7 +11,9 @@ use web_sys::Element;
 use crate::reactive::ScopeId;
 
 pub mod bind;
+pub mod for_;
 pub mod html;
+pub mod if_;
 pub mod init;
 pub mod model;
 pub mod on;
@@ -47,6 +49,8 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("model", model::run);
         m.insert("init", init::run);
         m.insert("route", route::run);
+        m.insert("for", for_::run);
+        m.insert("if", if_::run);
         m
     })
 }
