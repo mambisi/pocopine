@@ -8,7 +8,7 @@ use crate::shared::ItemNode;
 use crate::{extract_domain, get_item_tree, html_escape, humanize_age, performance_now};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component]
+#[component(style = "story_detail.css")]
 pub struct StoryDetail {
     pub id: u32,
     pub title: String,

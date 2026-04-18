@@ -24,7 +24,7 @@ pub struct StoryView {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component]
+#[component(style = "story_list.css")]
 pub struct StoryList {
     pub query: String,
     pub applied_query: String,

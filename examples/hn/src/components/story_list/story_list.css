@@ -1,0 +1,81 @@
+.search {
+  display: flex; gap: 0;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  background: #fff;
+  transition: border-color 0.1s;
+}
+.search:focus-within { border-color: var(--orange); }
+.search__input {
+  flex: 1;
+  padding: 0.7rem 0.9rem;
+  border: none; outline: none;
+  background: transparent;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.search__input::placeholder { color: var(--muted); }
+.search__submit {
+  border: none;
+  background: var(--orange);
+  color: #fff;
+  padding: 0 1.1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: background-color 0.1s;
+}
+.search__submit:hover { background: var(--orange-dk); }
+
+.status-row {
+  color: var(--muted); font-size: 0.82rem;
+  padding: 0.15rem 0 0.8rem;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.status-row strong { color: var(--ink); }
+.status-row code {
+  background: var(--orange-bg); color: var(--orange-dk);
+  padding: 1px 5px; border-radius: 2px;
+}
+
+.stories { list-style: none; padding: 0; margin: 0; counter-reset: story; }
+.stories li.story {
+  counter-increment: story;
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  transition: background-color 0.08s;
+}
+.stories li.story:hover { background: var(--orange-bg); }
+.stories li.story::before {
+  content: counter(story) ".";
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.85rem;
+  text-align: right; padding-top: 3px;
+}
+.story__body { min-width: 0; }
+.story__title {
+  font-size: 0.98rem; line-height: 1.35;
+  color: var(--ink); font-weight: 500;
+  margin-right: 0.25rem;
+}
+.story__title:visited { color: var(--ink-soft); }
+.story__title:hover { color: var(--orange-dk); text-decoration: underline; }
+.story__meta {
+  margin-top: 0.3rem;
+  color: var(--muted); font-size: 0.78rem;
+  display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: baseline;
+}
+.story__meta .points strong { color: var(--orange-dk); font-weight: 700; }
+.story__meta .sep { color: var(--border); }
+.story__meta .comments-link { color: var(--muted); }
+.story__meta .comments-link:hover { color: var(--orange-dk); text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .stories li.story { padding: 0.6rem; }
+}

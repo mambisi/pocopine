@@ -1,0 +1,43 @@
+/* Global tokens, reset, base typography, and shared utilities.
+   Component-local styles live next to their .rs file. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --orange:    #ff6600;
+  --orange-dk: #d25000;
+  --orange-bg: #fff4e8;
+  --ink:       #1a1a1a;
+  --ink-soft:  #3a3a3a;
+  --muted:     #828282;
+  --border:    #e8e5df;
+  --card:      #ffffff;
+  --cream:     #faf8f3;
+}
+
+html { -webkit-font-smoothing: antialiased; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: "Verdana", "Geneva", system-ui, -apple-system, sans-serif;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+a { color: var(--ink); text-decoration: none; }
+a:hover { color: var(--orange-dk); }
+
+::selection { background: var(--orange); color: #fff; }
+
+code, .mono, .points, .domain, nav a, .hn-header .brand,
+.comment__meta, .story__meta, .story-head__meta,
+.search__input, .search__submit {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.status { color: var(--muted); font-size: 0.88rem; padding: 0.4rem 0; }
+.status--error { color: var(--orange-dk); }
+.domain { color: var(--muted); font-size: 0.8rem; }
