@@ -132,9 +132,13 @@ fn bind(el: &Element) {
     // registered component, clone its template in and wire up the scope
     // onto the template's root. Directives on the tag itself evaluate in
     // the parent's scope (handled by the standard pp-* pass below).
-    if is_registered(&tag) && get_private(el, SCOPE_ID_KEY).is_none()
-        && get_private(el, "__pp_mounted").is_none()
-    {
+    //
+    // The guard keys only on `__pp_mounted` — NOT `SCOPE_ID_KEY` — because
+    // pp-for pins a `LoopScope` onto the clone root before walking, and
+    // that clone root is often a registered component tag. Keying on
+    // SCOPE_ID_KEY would mistake the loop scope for "already mounted"
+    // and skip the component mount entirely.
+    if is_registered(&tag) && get_private(el, "__pp_mounted").is_none() {
         mount_component(el, &tag);
     }
 
