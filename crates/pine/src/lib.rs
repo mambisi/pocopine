@@ -25,6 +25,7 @@
 
 pub mod button;
 pub mod checkbox;
+pub mod collapsible;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod popover;
@@ -34,6 +35,7 @@ pub mod tooltip;
 
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
+pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
 pub use dialog::PineDialog;
 pub use dropdown_menu::{
     PineDropdownMenuCheckboxItem, PineDropdownMenuContent, PineDropdownMenuGroup,
@@ -50,6 +52,9 @@ pub use tooltip::PineTooltip;
 /// before mounting.
 pub fn register_all() {
     PineButton::register();
+    PineCollapsibleRoot::register();
+    PineCollapsibleTrigger::register();
+    PineCollapsibleContent::register();
     PineDialog::register();
     PinePopover::register();
     PineDropdownMenuRoot::register();

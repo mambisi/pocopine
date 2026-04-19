@@ -36,6 +36,10 @@ pub struct PineDemoApp {
     /// RadioGroup tag keeps this in sync with whichever RadioItem
     /// is currently selected.
     pub density: String,
+
+    /// Collapsible open state — bound two-way via
+    /// `pp-model:open` on `<pine-collapsible-root>`.
+    pub faq_open: bool,
 }
 
 #[handlers]

@@ -1,0 +1,4 @@
+<div class="pine-collapsible-root"
+     :data-state="open ? 'open' : 'closed'">
+  <slot></slot>
+</div>

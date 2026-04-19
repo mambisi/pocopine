@@ -120,6 +120,24 @@
     </span>
   </section>
 
+  <!-- PineCollapsible — single-region open/close ─────────── -->
+  <h2>Collapsible</h2>
+  <section>
+    <pine-collapsible-root pp-model:open="faq_open">
+      <pine-collapsible-trigger>
+        <span pp-text="faq_open ? 'Hide details' : 'Show details'"></span>
+      </pine-collapsible-trigger>
+      <pine-collapsible-content>
+        <p style="margin:0">
+          Body content revealed by the Collapsible compound.
+          The Root owns `open`; Trigger and Content both inject
+          the handle and mirror the state via `watch_scope_field`.
+          <strong>Currently {faq_open ? 'open' : 'closed'}.</strong>
+        </p>
+      </pine-collapsible-content>
+    </pine-collapsible-root>
+  </section>
+
   <!-- PineTabs ───────────────────────────────────────────── -->
   <h2>Tabs</h2>
   <section>

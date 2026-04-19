@@ -1,0 +1,9 @@
+<button type="button"
+        class="pine-collapsible-trigger"
+        :aria-expanded="open ? 'true' : 'false'"
+        :data-state="open ? 'open' : 'closed'"
+        :data-disabled="disabled"
+        :disabled="disabled"
+        @click="toggle">
+  <slot></slot>
+</button>

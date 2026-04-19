@@ -909,6 +909,68 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
     host.remove();
 }
 
+// ─── PineCollapsible ──────────────────────────────────────────────
+
+/// Collapsible's Trigger toggles Root.open; Content is gated on
+/// the same value via pp-if. Validates the second compound
+/// pattern end-to-end (DropdownMenu was the first) — proves the
+/// substrate scales beyond menus.
+#[wasm_bindgen_test]
+async fn collapsible_trigger_toggles_and_content_mounts() {
+    let host = mount(
+        "<pine-collapsible-root>\
+           <pine-collapsible-trigger class=\"cp-trig\">Toggle</pine-collapsible-trigger>\
+           <pine-collapsible-content>\
+             <p class=\"cp-body\">Revealed.</p>\
+           </pine-collapsible-content>\
+         </pine-collapsible-root>",
+    );
+    tick().await;
+
+    let trigger = host.query_selector(".cp-trig button").unwrap().unwrap();
+
+    // Initial state: closed — aria-expanded=false, content not
+    // mounted (pp-if gated on Content.open=false).
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false"),
+        "initial aria-expanded reflects Root.open=false"
+    );
+    assert!(
+        host.query_selector(".cp-body").unwrap().is_none(),
+        "content not in DOM when closed"
+    );
+
+    // Click → Root.open flips, Trigger's mirror fires,
+    // Content's mirror fires → pp-if mounts the body.
+    trigger
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("true")
+    );
+    assert!(
+        host.query_selector(".cp-body").unwrap().is_some(),
+        "content mounted after open"
+    );
+
+    // Click again → closes, body unmounts.
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        host.query_selector(".cp-body").unwrap().is_none(),
+        "content unmounted after close"
+    );
+
+    host.remove();
+}
+
 // ─── PinePopover ──────────────────────────────────────────────────
 
 /// Popover opens on `open=true`, anchors to the trigger via a

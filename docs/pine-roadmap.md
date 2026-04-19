@@ -15,7 +15,8 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineButton | stable | `variant` / `size` / `disabled` + `pp-as` |
 | PineDialog | stable | modal, focus trap, scroll lock, `pp-model:open` |
 | PinePopover | stable | non-modal, `pp-anchor`, `pp-model:open` |
-| PineDropdownMenu* (compound) | stable | Root/Trigger/Portal/Content/Item — see §2 |
+| PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
+| PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
 | PineTabs | stable | tablist-only; panels author-owned |
 | PineTooltip | stable | hover/focus + delay |
 | PineSwitch | stable | `role="switch"`, `pp-model:checked` |
@@ -191,7 +192,7 @@ After DropdownMenu's core is fleshed out:
 
 | # | Component | Why |
 |---|---|---|
-| 1 | **Collapsible** | Single open/close region — the minimum viable compound (Root/Trigger/Content). Tiny, prove the shape outside DropdownMenu. |
+| 1 | ~~**Collapsible**~~ | Done — second compound validated the pattern. |
 | 2 | **Accordion** | Wraps Collapsible + lifts single-vs-multiple state. Layout staple. |
 | 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
 | 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
