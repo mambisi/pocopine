@@ -202,9 +202,13 @@ fn panel_root() -> Option<Element> {
     window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(ROOT_ID))
 }
 
-/// Best-effort string view of a JsValue for display in the panel.
-/// Strings come through as-is (without the surrounding quotes) for
-/// readability; everything else is `JSON.stringify`-ed.
+/// Characters in a value cell before we replace the middle with `…`.
+/// Chosen to roughly fit the 320px panel at the monospace size.
+const MAX_VALUE_CHARS: usize = 80;
+
+/// Best-effort string view of a `JsValue` for display in the panel.
+/// Arrays collapse to a length summary; long strings / objects get
+/// truncated in the middle so both ends stay visible.
 fn stringify(v: &JsValue) -> String {
     if v.is_undefined() {
         return "undefined".into();
@@ -213,7 +217,7 @@ fn stringify(v: &JsValue) -> String {
         return "null".into();
     }
     if let Some(s) = v.as_string() {
-        return format!("\"{s}\"");
+        return truncate(&format!("\"{s}\""));
     }
     if let Some(n) = v.as_f64() {
         return n.to_string();
@@ -221,12 +225,33 @@ fn stringify(v: &JsValue) -> String {
     if let Some(b) = v.as_bool() {
         return b.to_string();
     }
-    if let Ok(json) = js_sys::JSON::stringify(v) {
-        if let Some(s) = json.as_string() {
-            return s;
-        }
+    if js_sys::Array::is_array(v) {
+        let len = js_sys::Array::from(v).length();
+        return format!("[{len} items]");
     }
-    "?".into()
+    let raw = js_sys::JSON::stringify(v)
+        .ok()
+        .and_then(|s| s.as_string())
+        .unwrap_or_else(|| "?".into());
+    truncate(&raw)
+}
+
+/// Clamp `s` to `MAX_VALUE_CHARS`, replacing the interior with `…` so
+/// both the start and end stay readable. UTF-8 safe.
+fn truncate(s: &str) -> String {
+    let n = s.chars().count();
+    if n <= MAX_VALUE_CHARS {
+        return s.to_string();
+    }
+    let budget = MAX_VALUE_CHARS.saturating_sub(1);
+    let head_len = budget.div_ceil(2);
+    let tail_len = budget - head_len;
+    let head: String = s.chars().take(head_len).collect();
+    let tail: String = s.chars().rev().take(tail_len).collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}…{tail}")
 }
 
 fn escape(s: &str) -> String {
