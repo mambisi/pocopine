@@ -172,6 +172,87 @@ async fn tabs_render_set_aria_selected_and_emit_update_model() {
     host.remove();
 }
 
+// ─── PineSwitch ───────────────────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn switch_toggles_aria_and_emits_model_event() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount("<pine-switch checked=\"false\"></pine-switch>");
+    tick().await;
+
+    let tag = host.query_selector("pine-switch").unwrap().unwrap();
+    let btn = host
+        .query_selector("button[role=\"switch\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        btn.get_attribute("aria-checked").as_deref(),
+        Some("false"),
+        "initial aria-checked"
+    );
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("unchecked"));
+
+    let last = Rc::new(Cell::new(None::<bool>));
+    let lc = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::CustomEvent)> =
+        Closure::wrap(Box::new(move |ev: web_sys::CustomEvent| {
+            lc.set(ev.detail().as_bool());
+        }));
+    let target: &web_sys::EventTarget = tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    btn.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(last.take(), Some(true), "pp:update:model fired with true");
+    assert_eq!(btn.get_attribute("aria-checked").as_deref(), Some("true"));
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("checked"));
+
+    cb.forget();
+    host.remove();
+}
+
+// ─── PineCheckbox ─────────────────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn checkbox_tri_state_maps_aria_checked_correctly() {
+    let host = mount("<pine-checkbox state=\"indeterminate\"></pine-checkbox>");
+    tick().await;
+
+    let btn = host
+        .query_selector("button[role=\"checkbox\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        btn.get_attribute("aria-checked").as_deref(),
+        Some("mixed"),
+        "indeterminate maps to aria-checked=mixed"
+    );
+    assert_eq!(
+        btn.get_attribute("data-state").as_deref(),
+        Some("indeterminate")
+    );
+
+    // Click: indeterminate → checked (not → unchecked).
+    btn.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(btn.get_attribute("aria-checked").as_deref(), Some("true"));
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("checked"));
+
+    // Click again: checked → unchecked.
+    btn.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(btn.get_attribute("aria-checked").as_deref(), Some("false"));
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("unchecked"));
+
+    host.remove();
+}
+
 // ─── PineDropdownMenu ─────────────────────────────────────────────
 
 /// Opening a menu teleports it to body, sets first menuitem's

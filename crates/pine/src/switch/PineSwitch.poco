@@ -1,1 +1,11 @@
-<button type="button" role="switch" class="pine-switch"></button>
+<button type="button"
+        role="switch"
+        class="pine-switch"
+        :aria-checked="checked ? 'true' : 'false'"
+        :data-state="checked ? 'checked' : 'unchecked'"
+        :data-disabled="disabled"
+        :disabled="disabled"
+        @click="toggle">
+  <span class="pine-switch-thumb"
+        :data-state="checked ? 'checked' : 'unchecked'"></span>
+</button>

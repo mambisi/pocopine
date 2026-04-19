@@ -1,11 +1,51 @@
-//! `PineCheckbox` — tri-state checkbox primitive (placeholder).
+//! `PineCheckbox` — tri-state checkbox, `role="checkbox"`.
+//!
+//! `state` is one of `"checked"`, `"unchecked"`, or
+//! `"indeterminate"`. Click cycles
+//! `unchecked → checked → unchecked` (with `indeterminate →
+//! checked`). Fires `pp:update:model` with the new string on
+//! every change; pair with `pp-model="state"` on the tag for
+//! two-way binding against a parent `String` field.
+//!
+//! ```html
+//! <pine-checkbox pp-model="agree"></pine-checkbox>
+//! ```
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+/// Initial state defaults to `"unchecked"` (via our manual Default
+/// impl; the macro-generated `#[derive(Default)]` would produce an
+/// empty string which renders as a non-checkbox state).
+#[derive(Serialize, Deserialize)]
 #[component(template = "PineCheckbox.poco")]
-pub struct PineCheckbox {}
+pub struct PineCheckbox {
+    pub state: String,
+    pub disabled: bool,
+}
+
+impl Default for PineCheckbox {
+    fn default() -> Self {
+        Self {
+            state: "unchecked".into(),
+            disabled: false,
+        }
+    }
+}
 
 #[handlers]
-impl PineCheckbox {}
+impl PineCheckbox {
+    pub fn toggle(&mut self) {
+        if self.disabled {
+            return;
+        }
+        self.state = match self.state.as_str() {
+            "checked" => "unchecked".into(),
+            _ => "checked".into(), // unchecked OR indeterminate → checked
+        };
+        pocopine::dispatch_event(
+            "pp:update:model",
+            &wasm_bindgen::JsValue::from_str(&self.state),
+        );
+    }
+}
