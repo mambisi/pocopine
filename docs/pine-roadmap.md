@@ -19,7 +19,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
 | PineAccordion* (compound) | stable | Root/Item/Trigger/Content; `type="single\|multiple"`, `collapsible` |
 | PineAvatar* (compound) | stable | Root/Image/Fallback; `pp-show`-gated fallback during load |
-| PineTabs | stable | tablist-only; panels author-owned |
+| PineTabs* (compound, 4 parts) | stable | Root/List/Trigger/Content; legacy monolithic retained |
 | PineTooltip | stable | hover/focus + delay |
 | PineSwitch | stable | `role="switch"`, `pp-model:checked` |
 | PineCheckbox | stable | tri-state, `pp-model:state` |
@@ -234,7 +234,7 @@ Monolithic → compound migration status:
 
 - ~~**Dialog**~~ → done (Root/Trigger/Portal/Overlay/Content/Title/Description/Close)
 - ~~**Popover**~~ → done (Root/Trigger/Portal/Content/Close)
-- **Tabs** — pending
+- ~~**Tabs**~~ → done (Root/List/Trigger/Content; legacy monolithic kept for back-compat)
 - **Tooltip** — pending
 
 The substrate pieces needed for a Radix-style compound are now

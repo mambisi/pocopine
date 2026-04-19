@@ -201,19 +201,25 @@
     </pine-accordion-root>
   </section>
 
-  <!-- PineTabs ───────────────────────────────────────────── -->
+  <!-- PineTabs — compound (Radix-style) ──────────────────── -->
   <h2>Tabs</h2>
   <section>
-    <pine-tabs pp-model:value="tab" pp-bind:tabs="tabs"></pine-tabs>
-    <div role="tabpanel" pp-show="tab == 'account'">
-      <strong>Account</strong> — manage your profile and auth.
-    </div>
-    <div role="tabpanel" pp-show="tab == 'notifications'">
-      <strong>Notifications</strong> — email and push preferences.
-    </div>
-    <div role="tabpanel" pp-show="tab == 'billing'">
-      <strong>Billing</strong> — invoices and payment methods.
-    </div>
+    <pine-tabs-root pp-model:value="tab">
+      <pine-tabs-list>
+        <pine-tabs-trigger value="account">Account</pine-tabs-trigger>
+        <pine-tabs-trigger value="notifications">Notifications</pine-tabs-trigger>
+        <pine-tabs-trigger value="billing">Billing</pine-tabs-trigger>
+      </pine-tabs-list>
+      <pine-tabs-content value="account">
+        <strong>Account</strong> — manage your profile and auth.
+      </pine-tabs-content>
+      <pine-tabs-content value="notifications">
+        <strong>Notifications</strong> — email and push preferences.
+      </pine-tabs-content>
+      <pine-tabs-content value="billing">
+        <strong>Billing</strong> — invoices and payment methods.
+      </pine-tabs-content>
+    </pine-tabs-root>
   </section>
 
   <!-- PineTooltip ────────────────────────────────────────── -->

@@ -21,7 +21,6 @@ pub struct PineDemoApp {
     pub actions_fired: u32,
 
     pub tab: String,
-    pub tabs: Vec<pine::TabDef>,
 
     pub dark_mode: bool,
     pub agree_state: String,
@@ -54,23 +53,6 @@ impl PineDemoApp {
         self.show_muted = "unchecked".into();
         self.show_archived = "unchecked".into();
         self.density = "comfortable".into();
-        self.tabs = vec![
-            pine::TabDef {
-                value: "account".into(),
-                label: "Account".into(),
-                disabled: false,
-            },
-            pine::TabDef {
-                value: "notifications".into(),
-                label: "Notifications".into(),
-                disabled: false,
-            },
-            pine::TabDef {
-                value: "billing".into(),
-                label: "Billing".into(),
-                disabled: false,
-            },
-        ];
     }
 
     pub fn bump(&mut self) {

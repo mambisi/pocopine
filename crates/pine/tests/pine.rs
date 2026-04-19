@@ -94,7 +94,81 @@ async fn button_pp_as_hoists_author_element() {
     host.remove();
 }
 
-// ─── PineTabs ─────────────────────────────────────────────────────
+// ─── PineTabs (compound) ──────────────────────────────────────────
+
+/// Compound Tabs: clicking a Trigger flips Root.value;
+/// sibling Trigger/Content pairs mirror `selected` reactively.
+/// Aria-selected + data-state follow, Content's pp-show gates
+/// on the match, aria-labelledby points at the matching Trigger.
+#[wasm_bindgen_test]
+async fn tabs_compound_select_via_trigger_mirrors_siblings() {
+    let host = mount(
+        "<pine-tabs-root value=\"a\">\
+           <pine-tabs-list>\
+             <pine-tabs-trigger value=\"a\" class=\"tc-a\">A</pine-tabs-trigger>\
+             <pine-tabs-trigger value=\"b\" class=\"tc-b\">B</pine-tabs-trigger>\
+           </pine-tabs-list>\
+           <pine-tabs-content value=\"a\" class=\"tc-panel-a\">Panel A</pine-tabs-content>\
+           <pine-tabs-content value=\"b\" class=\"tc-panel-b\">Panel B</pine-tabs-content>\
+         </pine-tabs-root>",
+    );
+    tick().await;
+    tick().await;
+
+    let trig_a = host.query_selector(".tc-a button").unwrap().unwrap();
+    let trig_b = host.query_selector(".tc-b button").unwrap().unwrap();
+    let panel_a: HtmlElement = host
+        .query_selector(".tc-panel-a div")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    let panel_b: HtmlElement = host
+        .query_selector(".tc-panel-b div")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    // Initial: A selected.
+    assert_eq!(trig_a.get_attribute("aria-selected").as_deref(), Some("true"));
+    assert_eq!(trig_b.get_attribute("aria-selected").as_deref(), Some("false"));
+    assert_ne!(
+        panel_a.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "panel A visible initially"
+    );
+    assert_eq!(
+        panel_b.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "panel B hidden initially"
+    );
+
+    // aria-labelledby on panels points at their sibling trigger's id.
+    let panel_b_el = host.query_selector(".tc-panel-b div").unwrap().unwrap();
+    let labelledby = panel_b_el.get_attribute("aria-labelledby").unwrap_or_default();
+    let trig_b_id = trig_b.get_attribute("id").unwrap_or_default();
+    assert_eq!(labelledby, trig_b_id, "panel B aria-labelledby → trigger B id");
+
+    // Click B → B selected; A mirrors back to inactive.
+    trig_b.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert_eq!(trig_a.get_attribute("aria-selected").as_deref(), Some("false"));
+    assert_eq!(trig_b.get_attribute("aria-selected").as_deref(), Some("true"));
+    assert_ne!(
+        panel_b.style().get_property_value("display").unwrap_or_default(),
+        "none"
+    );
+    assert_eq!(
+        panel_a.style().get_property_value("display").unwrap_or_default(),
+        "none"
+    );
+
+    host.remove();
+}
+
+// ─── PineTabs (legacy monolithic) ─────────────────────────────────
 
 // Host component that supplies `tabs` / `current` to the
 // pine-tabs tag and updates `current` from the component's

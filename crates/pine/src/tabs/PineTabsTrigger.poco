@@ -1,0 +1,11 @@
+<button type="button"
+        role="tab"
+        class="pine-tabs-trigger"
+        :id="trigger_id"
+        :aria-selected="selected ? 'true' : 'false'"
+        :data-state="selected ? 'active' : 'inactive'"
+        :data-disabled="disabled"
+        :disabled="disabled"
+        @click="click">
+  <slot></slot>
+</button>
