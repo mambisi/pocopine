@@ -704,4 +704,165 @@ mod tests {
     fn rejects_trailing_garbage() {
         parse_err("a b");
     }
+
+    // Associativity + nesting coverage — the grammar commits to
+    // left-associative binops and right-associative ternary, matching
+    // JS / Vue / React semantics.
+
+    #[test]
+    fn and_is_left_associative() {
+        // `a && b && c` → `(a && b) && c`
+        let e = parse_ok("a && b && c");
+        match e.value {
+            Expr::BinOp(BinOp::And, lhs, rhs) => {
+                assert!(
+                    matches!(lhs.value, Expr::BinOp(BinOp::And, _, _)),
+                    "left arm should be another AND",
+                );
+                assert!(
+                    matches!(rhs.value, Expr::Path(_)),
+                    "right arm should be a leaf path",
+                );
+            }
+            other => panic!("expected top-level AND, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn or_is_left_associative() {
+        let e = parse_ok("a || b || c");
+        match e.value {
+            Expr::BinOp(BinOp::Or, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::BinOp(BinOp::Or, _, _)));
+                assert!(matches!(rhs.value, Expr::Path(_)));
+            }
+            other => panic!("expected top-level OR, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn equality_is_left_associative() {
+        // `a == b == c` → `(a == b) == c`. Unusual but legal.
+        let e = parse_ok("a == b == c");
+        match e.value {
+            Expr::BinOp(BinOp::Eq, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::BinOp(BinOp::Eq, _, _)));
+                assert!(matches!(rhs.value, Expr::Path(_)));
+            }
+            other => panic!("expected EQ at top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_or_and_mixed_precedence() {
+        // `!a || b && c` → `(!a) || (b && c)` —
+        // `!` binds tightest, `&&` tighter than `||`.
+        let e = parse_ok("!a || b && c");
+        match e.value {
+            Expr::BinOp(BinOp::Or, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::Not(_)), "left is `!a`");
+                assert!(
+                    matches!(rhs.value, Expr::BinOp(BinOp::And, _, _)),
+                    "right is `b && c`",
+                );
+            }
+            other => panic!("expected OR at top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relation_tighter_than_equality_tighter_than_and() {
+        // `a < b == c && d` → `((a < b) == c) && d`
+        let e = parse_ok("a < b == c && d");
+        match e.value {
+            Expr::BinOp(BinOp::And, lhs, rhs) => {
+                match lhs.value {
+                    Expr::BinOp(BinOp::Eq, eq_l, _) => {
+                        assert!(matches!(eq_l.value, Expr::BinOp(BinOp::Lt, _, _)));
+                    }
+                    other => panic!("expected EQ inside AND's left, got {other:?}"),
+                }
+                assert!(matches!(rhs.value, Expr::Path(_)));
+            }
+            other => panic!("expected AND at top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parens_override_precedence() {
+        // `a && (b || c)` → top is AND, not OR as it would be without parens.
+        let e = parse_ok("a && (b || c)");
+        match e.value {
+            Expr::BinOp(BinOp::And, _, rhs) => {
+                assert!(matches!(rhs.value, Expr::BinOp(BinOp::Or, _, _)));
+            }
+            other => panic!("expected AND at top after parens, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deeply_nested_parens() {
+        // `((a || b) && (c || d))` — two-level paren nest resolves
+        // correctly; top is AND.
+        let e = parse_ok("((a || b) && (c || d))");
+        match e.value {
+            Expr::BinOp(BinOp::And, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::BinOp(BinOp::Or, _, _)));
+                assert!(matches!(rhs.value, Expr::BinOp(BinOp::Or, _, _)));
+            }
+            other => panic!("expected AND between two OR groups, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_path_many_segments() {
+        let e = parse_ok("a.b.c.d.e");
+        match e.value {
+            Expr::Path(segs) => assert_eq!(segs, vec!["a", "b", "c", "d", "e"]),
+            other => panic!("expected Path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ternary_with_complex_condition() {
+        // `a && b ? c : d` — `&&` binds tighter than `?:`, so
+        // condition is `(a && b)`.
+        let e = parse_ok("a && b ? c : d");
+        match e.value {
+            Expr::Ternary(cond, _, _) => {
+                assert!(matches!(cond.value, Expr::BinOp(BinOp::And, _, _)));
+            }
+            other => panic!("expected Ternary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ternary_in_ternary_branches() {
+        // `a ? (b ? c : d) : (e ? f : g)` — nested ternary in both arms.
+        let e = parse_ok("a ? (b ? c : d) : (e ? f : g)");
+        match e.value {
+            Expr::Ternary(_, then_e, else_e) => {
+                assert!(matches!(then_e.value, Expr::Ternary(_, _, _)));
+                assert!(matches!(else_e.value, Expr::Ternary(_, _, _)));
+            }
+            other => panic!("expected Ternary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unary_not_stacks() {
+        // `!!a` → Not(Not(a)). No special-case collapse; the
+        // evaluator computes `true` for truthy `a`.
+        let e = parse_ok("!!a");
+        match e.value {
+            Expr::Not(inner) => assert!(matches!(inner.value, Expr::Not(_))),
+            other => panic!("expected Not(Not), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn comparison_with_string_literal() {
+        let e = parse_ok("role == 'admin' || role == \"editor\"");
+        assert!(matches!(e.value, Expr::BinOp(BinOp::Or, _, _)));
+    }
 }

@@ -260,6 +260,8 @@ the same way.
 
 ## 9. Alternatives considered
 
+### 9.1 Approach-level alternatives
+
 * **Embed a real JS evaluator** (something like `boa` or a tiny
   JS parser). Too big, too many corner cases, and Pocopine
   templates don't want JS semantics — they want a tiny
@@ -274,6 +276,53 @@ the same way.
 * **Leave it at `resolve_truthy` and have authors derive fields
   in Rust.** Viable today; ugly for `pp-bind:class` ternaries and
   every Pine `variant == "x"` check. Papercuts add up.
+
+### 9.2 Why hand-rolled over the Rust parser libraries
+
+Considered against the mature Rust parsing ecosystem:
+
+| Option | Why not |
+|---|---|
+| [`winnow`](https://docs.rs/winnow/) | The natural successor to nom, excellent ergonomics. Best alternative. But our grammar is ten productions with no lookahead > 1 token — we use maybe 3% of winnow's surface. The transitive dep adds ~25-40KB (uncompressed) to every user's wasm bundle. |
+| [`chumsky`](https://docs.rs/chumsky/) | Purpose-built for rich error recovery, the strongest case for LSP diagnostics. Its model assumes live-typed input where a user holds Shift while typing; `.poco` templates are file-at-rest, parsed once at directive setup. The error-recovery infrastructure it bundles is cost we pay on every page load forever. |
+| [`nom`](https://docs.rs/nom/) | Predecessor to winnow. Same size cost, slightly less polished API today. |
+| [`pest`](https://pest.rs/) | Requires a `.pest` grammar file compiled at build time. Fine for a larger language; overhead isn't justified for ten productions. |
+| [`rust-peg`](https://docs.rs/peg/) | Macro DSL to define grammar inline. Elegant, but the generated code pulls in the peg runtime on every wasm build. |
+| [`LALRPOP`](https://github.com/lalrpop/lalrpop) | LR(1) parser generator. Designed for full programming languages — dramatically over-spec'd for this grammar and adds a build-time dep. |
+| [`combine`](https://docs.rs/combine/) | Parser combinator with strong type safety. Steeper learning curve; same wasm-size concerns as winnow/nom. |
+| [`pom`](https://docs.rs/pom/) | Operator-overloading PEG. Neat syntax but a niche crate; dep-weight problem applies. |
+
+**Decisive factor**: *every byte of the parser ships in every user's
+wasm bundle, every page load, forever*. The runtime is the hot path
+for distribution. For a grammar that fits on one page of
+Rust-source, a hand-rolled recursive descent wins the size ×
+complexity × control × blast-radius trade strictly.
+
+**What we gained by writing it ourselves**:
+
+* **Exactly the tokens we want.** Our lexer emits `OrOr` when it
+  sees `||`, not a generic `Op("||")` we'd have to re-disambiguate
+  downstream.
+* **Span-level errors from day one.** `ParseError { message, span,
+  hint }` is our type, not a library's `Error<I>` we'd have to
+  translate.
+* **LSP story stays open.** A future `.poco` language server lives
+  host-side, doesn't care about wasm size, and can consume the same
+  `ParseError` + `Spanned<Expr>` types without a second parse or
+  translation layer. That's the same argument that usually pushes
+  people *toward* chumsky; we get it by making the output types
+  LSP-shaped from the start.
+* **~400 lines of code we understand.** When the grammar grows
+  (arithmetic in v2? Custom user operators?), we extend the parser
+  ourselves — no dep upgrade treadmill, no upstream regressions
+  breaking our build.
+
+**When we'd reconsider**: if the grammar grows to include
+arithmetic + string concatenation + function calls + method calls
++ spread operators (effectively a JS subset), the complexity starts
+to justify a library. At that point `winnow` is the first choice;
+the port is a two-day piece of work given the span + error types
+already decouple us from whatever parsing tech sits underneath.
 
 ## 10. Out of scope (future)
 
