@@ -20,8 +20,7 @@ use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, refs, tick, ScopeId};
 use serde::{Deserialize, Serialize};
 
-use js_sys::Reflect;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 thread_local! {
@@ -71,34 +70,8 @@ impl PineDropdownMenu {
 
     pub fn close(&mut self) {
         self.open = false;
-        emit_open_changed();
+        emit_from_host("pp:update:model", false);
     }
-}
-
-/// See `PineDialog::emit_open_changed` for rationale. DropdownMenu
-/// uses `pp-ref="menu"` on the teleported root, so we walk from
-/// that ref back to the host tag.
-fn emit_open_changed() {
-    let Some(host) = find_host_element() else { return };
-    emit_from(&host, "pp:update:model", false);
-}
-
-fn find_host_element() -> Option<Element> {
-    let scope = current_scope_id()?;
-    let mut cur: Option<Element> = refs::get_on(scope, "menu");
-    let origin_key = JsValue::from_str(
-        pocopine_core::directives::teleport::TELEPORT_ORIGIN_KEY,
-    );
-    while let Some(el) = cur {
-        let v = Reflect::get(el.as_ref(), &origin_key).ok()?;
-        if !v.is_undefined() && !v.is_null() {
-            if let Ok(template) = v.dyn_into::<Element>() {
-                return template.parent_element();
-            }
-        }
-        cur = el.parent_element();
-    }
-    None
 }
 
 fn activate(scope: ScopeId) {

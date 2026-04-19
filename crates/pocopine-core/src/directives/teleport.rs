@@ -28,6 +28,32 @@ const TELEPORTED_KEY: &str = "__pp_teleported";
 /// through the parent scope) walk back to the host-scope DOM.
 pub const TELEPORT_ORIGIN_KEY: &str = "__pp_teleport_origin";
 
+/// Walk from `el` up through ancestor `__pp_teleport_origin`
+/// pointers to find the original host element — the parent of
+/// the `<template pp-teleport>` whose body was cloned. Returns
+/// `None` when `el` is not inside a teleported subtree or the
+/// chain can't be resolved.
+///
+/// Used by overlay components (Dialog, Popover, DropdownMenu)
+/// that dispatch `pp:update:model` from the host tag rather than
+/// the teleported content, since bubbling from `<body>` wouldn't
+/// reach a listener on the original host.
+pub fn host_of(el: &Element) -> Option<Element> {
+    let origin_key = JsValue::from_str(TELEPORT_ORIGIN_KEY);
+    let mut cur: Option<Element> = Some(el.clone());
+    while let Some(node) = cur {
+        if let Ok(v) = Reflect::get(node.as_ref(), &origin_key) {
+            if !v.is_undefined() && !v.is_null() {
+                if let Ok(template) = v.dyn_into::<Element>() {
+                    return template.parent_element();
+                }
+            }
+        }
+        cur = node.parent_element();
+    }
+    None
+}
+
 pub fn run(call: &DirectiveCall) {
     // When `pp-if` is also present, that directive owns the mount
     // cycle and consults [`resolve_target`] directly. Standalone

@@ -32,6 +32,24 @@ pub fn emit<T: Serialize>(name: &str, detail: T) {
     emit_from(&el, name, detail);
 }
 
+/// Emit from the host tag of the teleported subtree the current
+/// element lives in. Walks `current_el` up through
+/// `__pp_teleport_origin` pointers to find the original host,
+/// then dispatches via [`emit_from`]. No-op outside a handler
+/// context or when the current element isn't teleported.
+///
+/// This is the one-liner for overlay components (Dialog, Popover,
+/// DropdownMenu) whose content has been moved to `<body>` but
+/// whose `pp-model` listener still lives on the host tag —
+/// bubbling from the teleport target wouldn't reach it.
+pub fn emit_from_host<T: Serialize>(name: &str, detail: T) {
+    let Some(el) = current_el() else { return };
+    let Some(host) = crate::directives::teleport::host_of(&el) else {
+        return;
+    };
+    emit_from(&host, name, detail);
+}
+
 /// Variant of [`emit`] that dispatches from an explicit element.
 /// Needed by overlays whose emitting handlers run inside a
 /// teleported subtree: bubbling from the teleport target would

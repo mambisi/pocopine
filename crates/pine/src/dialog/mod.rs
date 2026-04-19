@@ -17,13 +17,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use js_sys::Reflect;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, refs, scroll_lock, tick, ScopeId};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
-use wasm_bindgen::JsValue;
-use web_sys::Element;
 
 thread_local! {
     /// Per-scope non-serializable runtime state. Populated on
@@ -96,7 +92,7 @@ impl PineDialog {
     pub fn on_overlay_click(&mut self) {
         if self.dismiss_on_overlay {
             self.open = false;
-            emit_open_changed(false);
+            emit_from_host("pp:update:model", false);
         }
     }
 
@@ -104,7 +100,7 @@ impl PineDialog {
     pub fn on_escape(&mut self) {
         if self.dismiss_on_escape {
             self.open = false;
-            emit_open_changed(false);
+            emit_from_host("pp:update:model", false);
         }
     }
 
@@ -112,40 +108,8 @@ impl PineDialog {
     /// button inside the dialog.
     pub fn close(&mut self) {
         self.open = false;
-        emit_open_changed(false);
+        emit_from_host("pp:update:model", false);
     }
-}
-
-/// Fire `pp:update:model` so `pp-model:open` on the parent picks
-/// up the internally-driven close. Dispatched from the host
-/// `<pine-dialog>` tag (not the teleported content) because
-/// bubbling from `<body>` wouldn't reach the host's listener.
-/// RFC-028's `emit_from` handles the deferral.
-fn emit_open_changed(open: bool) {
-    let Some(host) = find_host_element() else { return };
-    emit_from(&host, "pp:update:model", open);
-}
-
-/// Walk from the dialog's `content` ref up through the teleported
-/// subtree back to the `<pine-dialog>` host tag. Returns `None` if
-/// the content ref isn't registered yet (dialog never opened) or
-/// the teleport metadata can't be found.
-fn find_host_element() -> Option<Element> {
-    let scope = current_scope_id()?;
-    let mut cur: Option<Element> = refs::get_on(scope, "content");
-    let origin_key = JsValue::from_str(
-        pocopine_core::directives::teleport::TELEPORT_ORIGIN_KEY,
-    );
-    while let Some(el) = cur {
-        let v = Reflect::get(el.as_ref(), &origin_key).ok()?;
-        if !v.is_undefined() && !v.is_null() {
-            if let Ok(template) = v.dyn_into::<Element>() {
-                return template.parent_element();
-            }
-        }
-        cur = el.parent_element();
-    }
-    None
 }
 
 fn activate(scope: ScopeId) {

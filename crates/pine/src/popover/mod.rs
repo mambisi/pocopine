@@ -21,13 +21,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, refs, ScopeId};
+use pocopine::{current_scope_id, focus, ScopeId};
 use serde::{Deserialize, Serialize};
-
-use js_sys::Reflect;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::JsValue;
-use web_sys::Element;
 
 thread_local! {
     static RUNTIME: RefCell<HashMap<ScopeId, PopoverRuntime>> =
@@ -92,48 +87,21 @@ impl PinePopover {
     pub fn on_outside(&mut self) {
         if self.dismiss_on_outside {
             self.open = false;
-            emit_open_changed(false);
+            emit_from_host("pp:update:model", false);
         }
     }
 
     pub fn on_escape(&mut self) {
         if self.dismiss_on_escape {
             self.open = false;
-            emit_open_changed(false);
+            emit_from_host("pp:update:model", false);
         }
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        emit_open_changed(false);
+        emit_from_host("pp:update:model", false);
     }
-}
-
-/// Fire `pp:update:model` through the `<pine-popover>` host tag so
-/// `pp-model:open` on the parent picks up an internally-driven
-/// close. See `PineDialog::emit_open_changed` for the rationale
-/// behind walking back through the teleport origin.
-fn emit_open_changed(open: bool) {
-    let Some(host) = find_host_element() else { return };
-    emit_from(&host, "pp:update:model", open);
-}
-
-fn find_host_element() -> Option<Element> {
-    let scope = current_scope_id()?;
-    let mut cur: Option<Element> = refs::get_on(scope, "content");
-    let origin_key = JsValue::from_str(
-        pocopine_core::directives::teleport::TELEPORT_ORIGIN_KEY,
-    );
-    while let Some(el) = cur {
-        let v = Reflect::get(el.as_ref(), &origin_key).ok()?;
-        if !v.is_undefined() && !v.is_null() {
-            if let Ok(template) = v.dyn_into::<Element>() {
-                return template.parent_element();
-            }
-        }
-        cur = el.parent_element();
-    }
-    None
 }
 
 
