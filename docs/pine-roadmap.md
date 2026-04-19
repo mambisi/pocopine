@@ -54,10 +54,10 @@ Content/Item). Comparing surface against reka's
 | `to` (target selector) | no | we hardcode `body` |
 | `disabled` / `forceMount` | no | |
 
-### 2.4 Content — **biggest gap**
+### 2.4 Content
 | reka | have? | note |
 |---|---|---|
-| auto-anchor to trigger (no prop) | **no** | we require author-provided `anchor` attribute selector |
+| auto-anchor to trigger (no prop) | **have** | via `on_setup` — Trigger stamps `data-pine-dm-trigger="{scope_id}"`, Content's `on_setup` reads injected root and sets `anchor = "[data-pine-dm-trigger=\"N\"]"` before pp-anchor binds |
 | `side` / `sideOffset` / `align` / `alignOffset` | no | we hardcode `bottom-start` + offset 4 |
 | `avoidCollisions` / `sticky` / `hideWhenDetached` | no | `pp-anchor` has `flip` modifier but not these |
 | emits `escapeKeyDown` / `pointerDownOutside` / `interactOutside` / `dismiss` / `closeAutoFocus` | no | authors can't veto dismiss |
@@ -78,20 +78,33 @@ RadioGroup, RadioItem, Sub, SubTrigger, SubContent, Filter.
 ### 2.7 Priority additions (next round)
 In this order:
 
-1. **Auto-anchor** (Trigger-owned element becomes Content's anchor
-   without the author writing a selector). Requires either a
-   substrate hook that runs before children walk, or an effect
-   that installs `pp-anchor` after mount.
-2. **Item `select` event with preventDefault**. Aligns with reka;
+1. ~~**Auto-anchor**~~ — done (shipped via `on_setup` hook;
+   commit `af9bf20`). Unlocks multi-instance menus.
+2. **Group / Label / Separator**. Visual primitives, ~30
+   lines each. Do these first — they give every remaining item
+   variant (CheckboxItem, RadioItem) a sibling to reference in
+   examples and tests. Prove the non-stateful compound parts
+   before the stateful ones.
+3. **Item `select` event with preventDefault**. Aligns with reka;
    lets authors keep the menu open after an action. Needs
-   `emit`-returnable semantics (currently `emit` is fire-and-forget).
-3. **Sub/SubTrigger/SubContent**. Submenu flyouts — heavy lift,
-   but it's the other defining Radix feature.
-4. **CheckboxItem / RadioItem / RadioGroup / ItemIndicator**. The
-   "stateful item" variants. Cheap once the select event is in.
-5. **Group / Label / Separator / Arrow**. Visual primitives. Small.
-6. **Content config props** (`side`, `sideOffset`, `align`,
-   `alignOffset`) — prop plumbing, no substrate work.
+   `emit`-returnable semantics (currently `emit` is fire-and-forget)
+   OR a different mechanism: Item fires `select` *synchronously* on
+   the li (custom event `pp:select`), author listens with
+   `@pp:select.prevent` to veto close, Item checks if default was
+   prevented before calling `root.close()`. Simpler.
+4. **CheckboxItem / RadioItem / RadioGroup / ItemIndicator**.
+   Stateful items — each compound part uses `on_setup` to
+   subscribe to the state (checkbox value, radio group value).
+   Pattern is now well-trodden.
+5. **Arrow**. Small. Needs `pp-anchor` to expose its final side/
+   align so the arrow can orient itself — adds a tiny data-attr.
+6. **Sub/SubTrigger/SubContent**. Submenu flyouts — requires:
+   nested `pp-anchor` (Sub anchors to SubTrigger), hover-intent
+   timers, left-arrow close semantics, parent menu stays open.
+   Heavier lift, save for last.
+7. **Content config props** (`side`, `sideOffset`, `align`,
+   `alignOffset`). Prop plumbing over `pp-anchor`'s modifier
+   syntax; no substrate work.
 
 ---
 
@@ -168,38 +181,75 @@ Coverage: 8 of ~60.
 
 ## 4. Recommended next primitives
 
-Ranked by (leverage × simplicity on current substrate):
+Reshuffled after the `on_setup` + auto-anchor work. Each compound
+primitive now costs about the same (the pattern is mechanical);
+the question is what unblocks the most end-user surface.
+
+### 4.1 Close the DropdownMenu surface first (§2.7)
+
+Until DropdownMenu's own missing parts land — Separator, Label,
+Group, Item.select-with-prevent — every menu-using demo page has
+gaps. Finishing our flagship compound proves the pattern scales
+**inside** a component, and the remaining parts are a few lines
+each. Do §2.7 items 2-4 before anything else in this table.
+
+### 4.2 Broaden to new components
+
+After DropdownMenu's core is fleshed out:
 
 | # | Component | Why |
 |---|---|---|
-| 1 | **Separator** | Trivial (`role="separator"`); every compound uses one |
-| 2 | **Label** | One directive, clicks-through `<label for>`; form ergonomics |
-| 3 | **Accordion / Collapsible** | Layout staple, reuses `pp-transition` |
-| 4 | **RadioGroup** | Pairs with Checkbox/Switch we already ship |
-| 5 | **Avatar** | Image + fallback — independent, no compound needed |
-| 6 | **Toggle / ToggleGroup** | Same shape as Switch + pp-roving |
-| 7 | **DropdownMenu — Sub + CheckboxItem + RadioItem** | Finishes our compound before moving on |
-| 8 | **AlertDialog** | ~30 lines on top of Dialog |
-| 9 | **HoverCard** | Popover + hover/delay (reuse Tooltip timing) |
-| 10 | **ContextMenu** | DropdownMenu + pointer-coord anchor |
+| 1 | **Collapsible** | Single open/close region — the minimum viable compound (Root/Trigger/Content). Tiny, prove the shape outside DropdownMenu. |
+| 2 | **Accordion** | Wraps Collapsible + lifts single-vs-multiple state. Layout staple. |
+| 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
+| 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
+| 5 | **Avatar** | Root/Image/Fallback — simple compound that exercises `pp-if` for fallback. Independent of any overlay. |
+| 6 | **AlertDialog** | ~30 lines layered on Dialog (forbid dismiss-on-outside, `role="alertdialog"`). |
+| 7 | **HoverCard** | Popover + hover delay timers (copy Tooltip's timing). |
+| 8 | **ContextMenu** | DropdownMenu + pointer-coord anchor. Free once Sub lands. |
+| 9 | **Tooltip provider** | Radix's single-open policy across a subtree (compound-rewrite territory). |
 
-Do not start until a user asks (we ship *what's needed*, not a
-Radix-parity race):
+### 4.3 Substrate gaps worth filling opportunistically
 
-- Date/time primitives — large, locale-dependent, wait for demand.
-- Color primitives — niche; wait.
-- Combobox/Select — needs solid listbox + typeahead; do *after*
-  DropdownMenu is fully fleshed out, the pieces compose.
-- Toast — needs a global store surface.
+Surfaces that hurt multiple components:
+
+- **`pp-anchor` config props**. Today every compound hardcodes
+  `bottom-start.offset.4.flip`. Wrap in a helper or add
+  prop-based side/align to avoid repeating the modifier syntax.
+- **`pp-transition` + `forceMount`**. Without forceMount we can't
+  animate dismiss (content is removed before CSS runs). Needed
+  for any polished animation story.
+- **Global store / portal region**. Blocks Toast.
+
+### 4.4 Hold until asked
+
+- Date/time primitives — large, locale-dependent.
+- Color primitives — niche.
+- Combobox/Select — composes Listbox + Popover + filter; revisit
+  after DropdownMenu is finished.
+- Toast — needs a global store + live-region viewport.
+- Slider, NumberField, PinInput, Tree, Splitter, ScrollArea,
+  NavigationMenu — each non-trivial, wait for demand.
 
 ---
 
 ## 5. Compound-rewrite backlog
 
-v0 shipped monolithic. With provide/inject (RFC-027),
-`watch_scope_field` (added in DropdownMenu work), and the
-CTX_PARENT plumbing, any of these can now be refactored to
-compound:
+v0 shipped monolithic. The substrate pieces needed for a Radix-
+style compound are now all in place:
+
+- `provide` / `inject` — RFC-027
+- `watch_scope_field(scope_id, field, cb)` — cross-scope reactive
+  subscribe (for children mirroring root state)
+- `CTX_PARENT_KEY` stamp on slot-inserted elements — keeps
+  inject-chain correct across the slot boundary
+- `on_setup(&mut self)` — pre-children-walk hook for
+  context-dependent field initialisation
+- Attribute-fallthrough skips `@`/`:` shorthand, so authors'
+  event bindings stay on the tag instead of clobbering the
+  template's own
+
+Any of these can now be refactored to compound:
 
 - **Dialog** → Root/Trigger/Portal/Overlay/Content/Title/Description/Close
 - **Popover** → Root/Trigger/Portal/Content
