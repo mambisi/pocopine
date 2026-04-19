@@ -8,7 +8,7 @@
 
   <template pp-if="comment.children.length">
     <ul class="comments comments--nested">
-      <template pp-for="child in comment.children">
+      <template pp-for="child in comment.children" pp-key="child.id">
         <hn-comment pp-bind:comment="child"></hn-comment>
       </template>
     </ul>

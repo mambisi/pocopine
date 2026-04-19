@@ -34,7 +34,7 @@
              pp-transition:enter-end="pp-fade-enter-end">
       <h2>Comments</h2>
       <ul class="comments">
-        <template pp-for="c in comments">
+        <template pp-for="c in comments" pp-key="c.id">
           <hn-comment pp-bind:comment="c"></hn-comment>
         </template>
       </ul>

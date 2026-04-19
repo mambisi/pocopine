@@ -22,3 +22,4 @@ Conventions:
 | 004 | [`pp-for` (list iteration)](./rfc-004-pp-for.md) | Accepted |
 | 005 | [`pp-transition` (enter / leave animations)](./rfc-005-pp-transition.md) | Implemented |
 | 006 | [`pp-teleport` (dialogs, popovers, portals)](./rfc-006-pp-teleport.md) | Implemented |
+| 007 | [`pp-for` keyed iteration](./rfc-007-pp-for-keys.md) | Implemented |

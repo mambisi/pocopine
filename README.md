@@ -157,6 +157,7 @@ decisions are in [`rfcs/`](./rfcs):
 | 004 | [`pp-for` list iteration](./rfcs/rfc-004-pp-for.md) |
 | 005 | [`pp-transition` enter/leave animations](./rfcs/rfc-005-pp-transition.md) |
 | 006 | [`pp-teleport` dialogs / popovers / portals](./rfcs/rfc-006-pp-teleport.md) |
+| 007 | [`pp-for` keyed iteration](./rfcs/rfc-007-pp-for-keys.md) |
 
 ## Styling with Tailwind / DaisyUI
 

@@ -26,7 +26,7 @@
   <p pp-show="error" class="status status--error"><span pp-text="error"></span></p>
 
   <ol class="stories">
-    <template pp-for="story in stories">
+    <template pp-for="story in stories" pp-key="story.id">
       <li class="story">
         <div class="story__body">
           <a
