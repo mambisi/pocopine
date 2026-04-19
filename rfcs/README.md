@@ -25,3 +25,6 @@ Conventions:
 | 007 | [`pp-for` keyed iteration](./rfc-007-pp-for-keys.md) | Implemented |
 | 008 | [event handler arguments](./rfc-008-event-handler-args.md) | Implemented |
 | 009 | [`pp-model` on components](./rfc-009-pp-model-components.md) | Implemented |
+| 010 | [Attribute fallthrough + `cx!`](./rfc-010-attribute-fallthrough.md) | Accepted |
+| 011 | [Scoped slots](./rfc-011-scoped-slots.md) | Accepted |
+| 012 | [Template expression evaluator](./rfc-012-expression-evaluator.md) | Accepted |
