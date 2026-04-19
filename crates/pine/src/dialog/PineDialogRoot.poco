@@ -1,4 +1,4 @@
-<div class="pine-collapsible-root"
+<div class="pine-dialog-root"
      pp-ref="root"
      :data-state="open ? 'open' : 'closed'">
   <slot></slot>

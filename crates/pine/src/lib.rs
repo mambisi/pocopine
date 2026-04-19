@@ -30,6 +30,7 @@ pub mod checkbox;
 pub mod collapsible;
 pub mod dialog;
 pub mod dropdown_menu;
+pub mod overlay;
 pub mod popover;
 pub mod switch;
 pub mod tabs;
@@ -42,14 +43,19 @@ pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
-pub use dialog::PineDialog;
+pub use dialog::{
+    PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay,
+    PineDialogPortal, PineDialogRoot, PineDialogTitle, PineDialogTrigger,
+};
 pub use dropdown_menu::{
     PineDropdownMenuCheckboxItem, PineDropdownMenuContent, PineDropdownMenuGroup,
     PineDropdownMenuItem, PineDropdownMenuItemIndicator, PineDropdownMenuLabel,
     PineDropdownMenuPortal, PineDropdownMenuRadioGroup, PineDropdownMenuRadioItem,
     PineDropdownMenuRoot, PineDropdownMenuSeparator, PineDropdownMenuTrigger,
 };
-pub use popover::PinePopover;
+pub use popover::{
+    PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
+};
 pub use switch::PineSwitch;
 pub use tabs::{PineTabs, TabDef};
 pub use tooltip::PineTooltip;
@@ -68,8 +74,19 @@ pub fn register_all() {
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();
-    PineDialog::register();
-    PinePopover::register();
+    PineDialogRoot::register();
+    PineDialogTrigger::register();
+    PineDialogPortal::register();
+    PineDialogOverlay::register();
+    PineDialogContent::register();
+    PineDialogTitle::register();
+    PineDialogDescription::register();
+    PineDialogClose::register();
+    PinePopoverRoot::register();
+    PinePopoverTrigger::register();
+    PinePopoverPortal::register();
+    PinePopoverContent::register();
+    PinePopoverClose::register();
     PineDropdownMenuRoot::register();
     PineDropdownMenuTrigger::register();
     PineDropdownMenuPortal::register();

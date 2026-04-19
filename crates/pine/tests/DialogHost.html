@@ -1,9 +1,14 @@
 <div>
   <button class="dh-open" @click="open_it">open</button>
   <span class="dh-state" pp-text="dialog_open ? 'open' : 'closed'"></span>
-  <pine-dialog pp-model:open="dialog_open">
-    <template pp-slot="title">Hello</template>
-    <template pp-slot="description">World</template>
-    <button class="dh-inside">OK</button>
-  </pine-dialog>
+  <pine-dialog-root pp-model:open="dialog_open">
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <pine-dialog-title>Hello</pine-dialog-title>
+        <pine-dialog-description>World</pine-dialog-description>
+        <button class="dh-inside">OK</button>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
 </div>

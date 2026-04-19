@@ -1,58 +1,55 @@
-//! `PinePopover` — anchored floating panel.
+//! `<pine-popover-*>` — non-modal floating panel primitive.
 //!
-//! Lighter-weight than `PineDialog`: no focus trap, no scroll
-//! lock. Uses `pp-anchor` for positioning (default placement
-//! `bottom-start`), dismisses on outside click and Escape,
-//! teleports to `<body>` so `overflow: hidden` ancestors don't
-//! clip it.
+//! Reka-ui anatomy. Five parts:
+//!
+//! - **Root** (`pine-popover-root`) — owns `open` + `modal`,
+//!   provides Handle.
+//! - **Trigger** (`pine-popover-trigger`) — button toggles Root,
+//!   stamps `data-pine-popover-trigger="{scope_id}"` so Content
+//!   auto-anchors via the same mechanism as DropdownMenu.
+//! - **Portal** (`pine-popover-portal`) — teleport wrapper.
+//! - **Content** (`pine-popover-content`) — `role="dialog"` with
+//!   `pp-anchor` targeting the Trigger, escape + click-outside
+//!   dismiss.
+//! - **Close** (`pine-popover-close`) — button → `Root.close()`.
 //!
 //! ```html
-//! <button id="trigger" @click="open = !open">Open</button>
-//! <pine-popover :open="open" anchor="#trigger">
-//!   <p>Popover content.</p>
-//! </pine-popover>
+//! <pine-popover-root pp-model:open="open">
+//!   <pine-popover-trigger>Open</pine-popover-trigger>
+//!   <pine-popover-portal>
+//!     <pine-popover-content>
+//!       <p>Panel content.</p>
+//!       <pine-popover-close>Close</pine-popover-close>
+//!     </pine-popover-content>
+//!   </pine-popover-portal>
+//! </pine-popover-root>
 //! ```
-//!
-//! The `anchor` prop accepts either a CSS selector (`"#trigger"`,
-//! `".btn"`) or a `pp-ref` name that exists on the Pine
-//! component's own scope.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
+use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, ScopeId};
+use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-thread_local! {
-    static RUNTIME: RefCell<HashMap<ScopeId, PopoverRuntime>> =
-        RefCell::new(HashMap::new());
-}
+const ROOT_KEY: &str = "pine-popover-root";
 
-#[derive(Default)]
-struct PopoverRuntime {
-    saved: Option<focus::Saved>,
-}
+// ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PinePopover.poco")]
-pub struct PinePopover {
-    /// Open / closed state. Bind with `pp-model="open"`.
+#[component(template = "PinePopoverRoot.poco")]
+pub struct PinePopoverRoot {
     pub open: bool,
-    /// CSS selector or scope-local `pp-ref` name identifying the
-    /// trigger element to anchor against.
-    pub anchor: String,
-    /// Close when the user clicks outside the popover.
+    /// Non-modal by default — matches reka-ui. Set `true` to get
+    /// a focus trap + scroll lock via the shared overlay helper.
+    pub modal: bool,
     pub dismiss_on_outside: bool,
-    /// Close on Escape keypress while focus is inside.
     pub dismiss_on_escape: bool,
 }
 
-impl Default for PinePopover {
+impl Default for PinePopoverRoot {
     fn default() -> Self {
         Self {
             open: false,
-            anchor: String::new(),
+            modal: false,
             dismiss_on_outside: true,
             dismiss_on_escape: true,
         }
@@ -60,67 +57,177 @@ impl Default for PinePopover {
 }
 
 #[handlers]
-impl PinePopover {
-    #[watch(open)]
-    fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {
-        match (prev, is_open) {
-            (None, true) | (Some(false), true) => {
-                if let Some(scope) = current_scope_id() {
-                    activate(scope);
-                }
+impl PinePopoverRoot {
+    pub fn on_setup(&mut self) {
+        provide(ROOT_KEY, this::<Self>());
+    }
+
+    pub fn open_popover(&mut self) {
+        if !self.open {
+            self.open = true;
+            emit_from_self(true);
+        }
+    }
+    pub fn close(&mut self) {
+        if self.open {
+            self.open = false;
+            emit_from_self(false);
+        }
+    }
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        emit_from_self(self.open);
+    }
+}
+
+/// Emit `pp:update:model` from Root's element (via `pp-ref="root"`)
+/// so the parent's pp-model listener catches it even when the
+/// change was initiated from Content (teleported to `<body>`).
+fn emit_from_self(open: bool) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    pocopine::emit_from(&root_el, "pp:update:model", open);
+}
+
+// ── Trigger ───────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePopoverTrigger.poco")]
+pub struct PinePopoverTrigger {
+    pub open: bool,
+}
+
+#[handlers]
+impl PinePopoverTrigger {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            self.open = root.with(|r| r.open);
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) else { return };
+        let root_scope = root.scope_id();
+        let me = this::<Self>();
+        watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
+            me.update(|s| s.open = is_open);
+        });
+        // Stamp the button so Content's pp-anchor can target it
+        // uniquely, mirroring DropdownMenu's auto-anchor scheme.
+        if let Some(scope) = current_scope_id() {
+            if let Some(btn) = refs::get_on(scope, "trigger") {
+                let _ = btn.set_attribute(
+                    "data-pine-popover-trigger",
+                    &format!("{}", root_scope.0),
+                );
             }
-            (Some(true), false) => {
-                if let Some(scope) = current_scope_id() {
-                    deactivate(scope);
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PinePopoverRoot| r.toggle());
+        }
+    }
+}
+
+// ── Portal ────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePopoverPortal.poco")]
+pub struct PinePopoverPortal {
+    pub open: bool,
+}
+
+#[handlers]
+impl PinePopoverPortal {
+    pub fn on_ready(&self) {
+        let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) else { return };
+        let me = this::<Self>();
+        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
+            me.update(|s| s.open = is_open);
+        });
+    }
+}
+
+// ── Content ───────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePopoverContent.poco")]
+pub struct PinePopoverContent {
+    /// Computed in `on_setup` from the injected root scope id —
+    /// per-instance selector for pp-anchor. Matches the
+    /// `data-pine-popover-trigger="N"` stamp Trigger adds.
+    pub anchor: String,
+}
+
+#[handlers]
+impl PinePopoverContent {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            self.anchor = format!(
+                "[data-pine-popover-trigger=\"{}\"]",
+                root.scope_id().0
+            );
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(scope) = current_scope_id() else { return };
+        let Some(content) = refs::get_on(scope, "content") else { return };
+        let modal = inject::<Handle<PinePopoverRoot>>(ROOT_KEY)
+            .map(|r| r.with(|root| root.modal))
+            .unwrap_or(false);
+        overlay::activate(scope, &content, modal);
+
+        // Content is inside a teleported subtree; see the dialog
+        // equivalent. Watch root.open and deactivate when it
+        // flips false so focus + scroll lock release cleanly.
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, prev| {
+                if prev == Some(&true) && !is_open {
+                    overlay::deactivate(scope);
                 }
-            }
-            _ => {}
+            });
         }
     }
 
     pub fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
-            deactivate(scope);
+            overlay::deactivate(scope);
         }
     }
 
     pub fn on_outside(&mut self) {
-        if self.dismiss_on_outside {
-            self.open = false;
-            emit_from_host("pp:update:model", false);
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            let dismiss = root.with(|r| r.dismiss_on_outside);
+            if dismiss {
+                root.update(|r: &mut PinePopoverRoot| r.close());
+            }
         }
     }
 
     pub fn on_escape(&mut self) {
-        if self.dismiss_on_escape {
-            self.open = false;
-            emit_from_host("pp:update:model", false);
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            let dismiss = root.with(|r| r.dismiss_on_escape);
+            if dismiss {
+                root.update(|r: &mut PinePopoverRoot| r.close());
+            }
         }
     }
-
-    pub fn close(&mut self) {
-        self.open = false;
-        emit_from_host("pp:update:model", false);
-    }
 }
 
+// ── Close ─────────────────────────────────────────────────────────
 
-fn activate(scope: ScopeId) {
-    let saved = focus::save();
-    RUNTIME.with(|r| {
-        r.borrow_mut()
-            .insert(scope, PopoverRuntime { saved: Some(saved) });
-    });
-}
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePopoverClose.poco")]
+pub struct PinePopoverClose {}
 
-fn deactivate(scope: ScopeId) {
-    let Some(mut rt) = RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    // Restore focus to whatever had it before, unless focus already
-    // moved outside our popover (e.g. user clicked a different
-    // control to dismiss).
-    if let Some(saved) = rt.saved.take() {
-        focus::restore(saved);
+#[handlers]
+impl PinePopoverClose {
+    pub fn click(&mut self) {
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PinePopoverRoot| r.close());
+        }
     }
 }

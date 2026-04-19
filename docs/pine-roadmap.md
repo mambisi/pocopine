@@ -13,8 +13,8 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | Pine | Status | API notes |
 |---|---|---|
 | PineButton | stable | `variant` / `size` / `disabled` + `pp-as` |
-| PineDialog | stable | modal, focus trap, scroll lock, `pp-model:open` |
-| PinePopover | stable | non-modal, `pp-anchor`, `pp-model:open` |
+| PineDialog* (compound, 8 parts) | stable | Root/Trigger/Portal/Overlay/Content/Title/Description/Close |
+| PinePopover* (compound, 5 parts) | stable | Root/Trigger/Portal/Content/Close; auto-anchor via Trigger stamp |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
 | PineAccordion* (compound) | stable | Root/Item/Trigger/Content; `type="single\|multiple"`, `collapsible` |
@@ -230,8 +230,15 @@ Surfaces that hurt multiple components:
 
 ## 5. Compound-rewrite backlog
 
-v0 shipped monolithic. The substrate pieces needed for a Radix-
-style compound are now all in place:
+Monolithic → compound migration status:
+
+- ~~**Dialog**~~ → done (Root/Trigger/Portal/Overlay/Content/Title/Description/Close)
+- ~~**Popover**~~ → done (Root/Trigger/Portal/Content/Close)
+- **Tabs** — pending
+- **Tooltip** — pending
+
+The substrate pieces needed for a Radix-style compound are now
+all in place:
 
 - `provide` / `inject` — RFC-027
 - `watch_scope_field(scope_id, field, cb)` — cross-scope reactive

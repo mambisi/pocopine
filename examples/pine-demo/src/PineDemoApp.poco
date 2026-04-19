@@ -30,32 +30,49 @@
     </pine-button>
   </section>
 
-  <!-- PineDialog ─────────────────────────────────────────── -->
+  <!-- PineDialog — compound (Radix-style) ────────────────── -->
   <h2>Dialog</h2>
   <section class="row">
-    <pine-button variant="destructive" @click="dialog_open = true">Delete file</pine-button>
-    <pine-dialog pp-model:open="dialog_open">
-      <template pp-slot="title">Delete file?</template>
-      <template pp-slot="description">This action cannot be undone.</template>
-      <div class="row" style="margin-top:1rem;justify-content:flex-end">
-        <pine-button variant="ghost" @click="dialog_open = false">Cancel</pine-button>
-        <pine-button variant="destructive" @click="dialog_open = false">Delete</pine-button>
-      </div>
-    </pine-dialog>
+    <pine-dialog-root pp-model:open="dialog_open">
+      <pine-dialog-trigger>
+        <pine-button pp-as variant="destructive">
+          <button>Delete file</button>
+        </pine-button>
+      </pine-dialog-trigger>
+      <pine-dialog-portal>
+        <pine-dialog-overlay></pine-dialog-overlay>
+        <pine-dialog-content>
+          <pine-dialog-title>Delete file?</pine-dialog-title>
+          <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
+          <div class="row" style="margin-top:1rem;justify-content:flex-end">
+            <pine-dialog-close>
+              <pine-button pp-as variant="ghost"><button>Cancel</button></pine-button>
+            </pine-dialog-close>
+            <pine-dialog-close>
+              <pine-button pp-as variant="destructive"><button>Delete</button></pine-button>
+            </pine-dialog-close>
+          </div>
+        </pine-dialog-content>
+      </pine-dialog-portal>
+    </pine-dialog-root>
   </section>
 
-  <!-- PinePopover ────────────────────────────────────────── -->
+  <!-- PinePopover — compound (Radix-style) ───────────────── -->
   <h2>Popover</h2>
   <section class="row">
-    <pine-button id="pop-trig" @click="popover_open = !popover_open">
-      <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
-    </pine-button>
-    <pine-popover pp-model:open="popover_open" anchor="#pop-trig">
-      <p style="margin:0">Anchored to the trigger.</p>
-      <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
-        Click outside or press Escape to close.
-      </p>
-    </pine-popover>
+    <pine-popover-root pp-model:open="popover_open">
+      <pine-popover-trigger>
+        <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
+      </pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content>
+          <p style="margin:0">Anchored to the trigger.</p>
+          <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
+            Click outside or press Escape to close.
+          </p>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
   </section>
 
   <!-- PineDropdownMenu — compound (Radix-style) ──────────── -->

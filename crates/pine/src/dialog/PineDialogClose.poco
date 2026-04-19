@@ -1,0 +1,5 @@
+<button type="button"
+        class="pine-dialog-close"
+        @click="click">
+  <slot></slot>
+</button>

@@ -22,7 +22,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{inject, provide, watch_scope_field};
+use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
 /// Provide/inject key for the Root handle. Descendants (Trigger,
@@ -46,25 +46,33 @@ impl PineCollapsibleRoot {
         provide(ROOT_KEY, this::<Self>());
     }
 
-    #[watch(open)]
-    fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {
-        // Skip the initial-read emission (prev=None) so we don't
-        // clobber the parent's incoming bound value with the
-        // default on mount.
-        if prev.is_some() {
-            emit("pp:update:model", is_open);
+    pub fn open_self(&mut self) {
+        if !self.open {
+            self.open = true;
+            emit_from_self(true);
         }
     }
-
-    pub fn open_self(&mut self) {
-        self.open = true;
-    }
     pub fn close(&mut self) {
-        self.open = false;
+        if self.open {
+            self.open = false;
+            emit_from_self(false);
+        }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
+        emit_from_self(self.open);
     }
+}
+
+/// Emit from Root's own element — same pattern as Dialog /
+/// Popover. Collapsible doesn't teleport, so plain `emit` would
+/// also work here (current_el inside Trigger.click bubbles to
+/// Root's tag). Keeping the explicit emit-from-self for symmetry
+/// and to stay correct if someone wraps Content in a teleport.
+fn emit_from_self(open: bool) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    pocopine::emit_from(&root_el, "pp:update:model", open);
 }
 
 // ── Trigger ───────────────────────────────────────────────────────

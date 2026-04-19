@@ -1,0 +1,5 @@
+<button type="button"
+        class="pine-popover-close"
+        @click="click">
+  <slot></slot>
+</button>
