@@ -117,6 +117,20 @@ struct ScopedSlotHost {
 #[handlers]
 impl ScopedSlotHost {}
 
+// RFC-012 — template expression evaluator.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ExprHost.html")]
+struct ExprHost {
+    status: String,
+    loading: bool,
+    count: i32,
+    error: String,
+    warn: bool,
+}
+
+#[handlers]
+impl ExprHost {}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -158,6 +172,7 @@ fn register_all() {
     FallthroughRoot::register();
     NamedSlotHost::register();
     ScopedSlotHost::register();
+    ExprHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -658,4 +673,61 @@ fn cx_macro_emits_expected_strings() {
     );
     assert_eq!(out, "pine-btn pine-btn-primary");
 }
+
+// ─── RFC-012 expression evaluator ─────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn expressions_evaluate_through_directives() {
+    let host = mount("<expr-host></expr-host>");
+    tick().await;
+
+    let root = host.query_selector("expr-host").unwrap().unwrap();
+    let inner = root.first_element_child().unwrap();
+    let (_id, proxy) =
+        pocopine_core::walker::scope_of_element(&inner).expect("expr-host scope");
+
+    // Seed mixed state.
+    js_sys::Reflect::set(&proxy, &"status".into(), &JsValue::from_str("ok")).unwrap();
+    js_sys::Reflect::set(&proxy, &"loading".into(), &JsValue::from_bool(false)).unwrap();
+    js_sys::Reflect::set(&proxy, &"count".into(), &JsValue::from_f64(3.0)).unwrap();
+    js_sys::Reflect::set(&proxy, &"warn".into(), &JsValue::from_bool(true)).unwrap();
+    tick().await;
+
+    let text = |sel: &str| -> String {
+        let el = host.query_selector(sel).unwrap().unwrap();
+        let h: HtmlElement = el.dyn_into().unwrap();
+        h.inner_text().trim().to_string()
+    };
+    let visible = |sel: &str| -> bool {
+        let el = host.query_selector(sel).unwrap().unwrap();
+        let h: HtmlElement = el.dyn_into().unwrap();
+        h.style().get_property_value("display").unwrap_or_default() != "none"
+    };
+
+    // Ternary: status == 'ok' ? 'good' : 'bad'
+    assert_eq!(text(".eh-ternary"), "good");
+    // Ternary with relational: count >= 5 ? 'many' : 'few'
+    assert_eq!(text(".eh-cmp"), "few");
+    // String literal.
+    assert_eq!(text(".eh-literal"), "forty-two");
+
+    // loading && count > 0 → false && true → false
+    assert!(!visible(".eh-and"), "eh-and should be hidden");
+    // error || warn → "" (falsy) || true → true
+    assert!(visible(".eh-or"), "eh-or should be visible via ||");
+    // !loading → !false → true
+    assert!(visible(".eh-not"), "eh-not should be visible");
+
+    // Flip state: loading=true, count=10 → loading && count > 0 becomes true.
+    js_sys::Reflect::set(&proxy, &"loading".into(), &JsValue::from_bool(true)).unwrap();
+    js_sys::Reflect::set(&proxy, &"count".into(), &JsValue::from_f64(10.0)).unwrap();
+    js_sys::Reflect::set(&proxy, &"status".into(), &JsValue::from_str("err")).unwrap();
+    tick().await;
+
+    assert!(visible(".eh-and"), "eh-and now visible");
+    assert!(!visible(".eh-not"), "eh-not hidden when loading=true");
+    assert_eq!(text(".eh-ternary"), "bad"); // status != 'ok'
+    assert_eq!(text(".eh-cmp"), "many");    // count >= 5
+}
+
 

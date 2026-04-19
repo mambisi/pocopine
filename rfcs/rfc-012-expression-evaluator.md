@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-04-19 |
 | **Supersedes** | — (extends [`path::resolve_truthy`](../crates/pocopine-core/src/path.rs)) |

@@ -12,6 +12,7 @@ pub mod app;
 pub mod computed;
 pub mod devtools;
 pub mod directives;
+pub mod expr;
 pub mod fetch;
 pub mod handle;
 pub mod handler;

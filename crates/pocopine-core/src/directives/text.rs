@@ -1,9 +1,11 @@
-//! `pp-text="field"` — set `textContent` from a scope field, reactively.
+//! `pp-text="<expr>"` — set `textContent` from a template expression
+//! (RFC-012).
 
 use wasm_bindgen::JsValue;
+use web_sys::console;
 
 use super::DirectiveCall;
-use crate::path::resolve_path;
+use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
@@ -11,11 +13,20 @@ use crate::walker::track_effect_on;
 pub fn run(call: &DirectiveCall) {
     let el = call.el.clone();
     let proxy = call.proxy.clone();
-    let key = call.value.clone();
+    let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
+        Ok(a) => a,
+        Err(e) => {
+            console::error_1(&JsValue::from_str(&format!(
+                "pp-text: {} (at {}..{})",
+                e.message, e.span.start, e.span.end
+            )));
+            return;
+        }
+    };
     let id = effect(move || {
         let el_for_magic = el.clone();
         with_current_el(&el_for_magic, || {
-            let v = resolve_path(&proxy, &key);
+            let v = expr::evaluate(&ast, &proxy);
             el.set_text_content(Some(&js_to_string(&v)));
         });
     });

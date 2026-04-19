@@ -13,10 +13,10 @@
 use js_sys::{Object, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::Element;
+use web_sys::{console, Element};
 
 use super::DirectiveCall;
-use crate::path::resolve_path;
+use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::{child_component_proxy, track_effect_on};
@@ -25,7 +25,16 @@ pub fn run(call: &DirectiveCall) {
     let Some(attr) = call.arg.clone() else { return };
     let el = call.el.clone();
     let parent_proxy = call.proxy.clone();
-    let key = call.value.clone();
+    let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
+        Ok(a) => a,
+        Err(e) => {
+            console::error_1(&JsValue::from_str(&format!(
+                "pp-bind:{}: {} (at {}..{})",
+                attr, e.message, e.span.start, e.span.end
+            )));
+            return;
+        }
+    };
 
     // Capture whether the target is a child component at bind time. The
     // child's proxy is stable for the lifetime of the element.
@@ -33,7 +42,7 @@ pub fn run(call: &DirectiveCall) {
 
     let id = effect(move || {
         with_current_el(&el.clone(), || {
-            let v = resolve_path(&parent_proxy, &key);
+            let v = expr::evaluate(&ast, &parent_proxy);
             match &child_proxy {
                 Some(cp) => {
                     // Prop write — the set trap on the child's proxy

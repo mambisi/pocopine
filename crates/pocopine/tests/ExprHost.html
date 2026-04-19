@@ -1,0 +1,8 @@
+<div class="eh-host">
+  <span class="eh-ternary" pp-text="status == 'ok' ? 'good' : 'bad'"></span>
+  <span class="eh-and"     pp-show="loading &amp;&amp; count &gt; 0">loading-some</span>
+  <span class="eh-or"      pp-show="error || warn"               >has-message</span>
+  <span class="eh-not"     pp-show="!loading">idle</span>
+  <span class="eh-cmp"     pp-text="count &gt;= 5 ? 'many' : 'few'"></span>
+  <span class="eh-literal" pp-text="'forty-two'"></span>
+</div>

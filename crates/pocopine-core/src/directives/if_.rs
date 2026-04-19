@@ -29,7 +29,7 @@ use web_sys::{console, Element, HtmlTemplateElement, Node};
 use super::teleport;
 use super::transition;
 use super::DirectiveCall;
-use crate::path::resolve_truthy;
+use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::walker::{self, bind_borrowed_scope_to, track_effect_on};
 
@@ -45,8 +45,17 @@ pub fn run(call: &DirectiveCall) {
     };
 
     let parent_proxy = call.proxy.clone();
-    let expr = call.value.clone();
     let template_el: Element = call.el.clone();
+    let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
+        Ok(a) => a,
+        Err(e) => {
+            console::error_1(&JsValue::from_str(&format!(
+                "pp-if: {} (at {}..{})",
+                e.message, e.span.start, e.span.end
+            )));
+            return;
+        }
+    };
 
     // Resolve the teleport target + enclosing scope once at setup.
     // Both are stable for the lifetime of the template host.
@@ -63,7 +72,7 @@ pub fn run(call: &DirectiveCall) {
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 
     let effect_id = effect(move || {
-        let truthy = resolve_truthy(&parent_proxy, &expr);
+        let truthy = expr::evaluate_truthy(&ast, &parent_proxy);
 
         let existing = current.borrow().clone();
         match (truthy, existing) {
