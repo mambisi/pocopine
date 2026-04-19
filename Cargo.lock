@@ -979,9 +979,12 @@ dependencies = [
  "js-sys",
  "pocopine-core",
  "pocopine-macros",
+ "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
