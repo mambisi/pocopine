@@ -10,7 +10,6 @@
 //! snapshot approach keeps the reactive core untouched.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 
 use js_sys::Object;
 use wasm_bindgen::closure::Closure;
@@ -26,14 +25,25 @@ use crate::scope::Scope;
 const STYLE_ID: &str = "__pp_devtools_style";
 const ROOT_ID: &str = "__pp_devtools_root";
 const HIGHLIGHT_CLASS: &str = "__pp_dev_highlight";
-const SCOPES_CONTAINER_ID: &str = "__pp_dev_scopes";
+const TREE_ID: &str = "__pp_dev_tree";
+const DETAIL_ID: &str = "__pp_dev_detail";
 const META_ID: &str = "__pp_dev_meta";
 const INSPECT_BTN_ID: &str = "__pp_dev_btn_inspect";
-const FP_ATTR: &str = "data-fp";
 
 type RenderClosure = Closure<dyn FnMut()>;
 type KeyClosure = Closure<dyn FnMut(KeyboardEvent)>;
 type EventClosure = Closure<dyn FnMut(Event)>;
+
+/// Scope list layout. Toggle via the tree/flat segmented control in
+/// the panel header.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    /// Mirror the DOM hierarchy — a scope is indented under the
+    /// nearest ancestor element that also owns a scope.
+    Tree,
+    /// All scopes at depth 0, sorted by id. Original flat layout.
+    Flat,
+}
 
 thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
@@ -51,9 +61,13 @@ thread_local! {
 
     // Incremental render state — persistent across ticks.
     static SHELL_BUILT: Cell<bool> = const { Cell::new(false) };
-    static SECTIONS: RefCell<HashMap<ScopeId, Element>> = RefCell::new(HashMap::new());
     static LAST_META: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_INSPECT_RENDERED: Cell<bool> = const { Cell::new(false) };
+    static LAST_MODE_RENDERED: Cell<Option<ViewMode>> = const { Cell::new(None) };
+    static LAST_TREE_FP: RefCell<String> = const { RefCell::new(String::new()) };
+    static LAST_DETAIL_FP: RefCell<String> = const { RefCell::new(String::new()) };
+    static VIEW_MODE: Cell<ViewMode> = const { Cell::new(ViewMode::Tree) };
+    static SELECTED: Cell<Option<ScopeId>> = const { Cell::new(None) };
 }
 
 /// Install the devtools overlay. Idempotent — calling twice is a
@@ -142,17 +156,24 @@ fn render() {
 
     build_shell_once(&root);
 
-    // Header — only the inspect button state varies.
+    // Header — inspect button reflects INSPECT_MODE; mode toggle
+    // reflects VIEW_MODE.
     let inspect_on = INSPECT_MODE.with(|c| c.get());
     let prev_inspect = LAST_INSPECT_RENDERED.with(|c| c.get());
     if inspect_on != prev_inspect {
         update_inspect_button(&root, inspect_on);
         LAST_INSPECT_RENDERED.with(|c| c.set(inspect_on));
     }
+    let mode = VIEW_MODE.with(|c| c.get());
+    let prev_mode = LAST_MODE_RENDERED.with(|c| c.get());
+    if prev_mode != Some(mode) {
+        update_mode_buttons(&root, mode);
+        LAST_MODE_RENDERED.with(|c| c.set(Some(mode)));
+    }
 
     let scopes = Scope::all();
 
-    // Meta line — update only when the text changes.
+    // Meta line — rewrites only when the string changes.
     let meta_text = format!("{} scopes", scopes.len());
     let needs_meta_write = LAST_META.with(|c| {
         let mut cur = c.borrow_mut();
@@ -169,63 +190,69 @@ fn render() {
         }
     }
 
-    // Diff sections: reuse existing per-scope <section>s, rebuild
-    // their inner HTML only when the scope's fingerprint moved.
-    let scopes_container = match root
-        .query_selector(&format!("#{SCOPES_CONTAINER_ID}"))
-        .ok()
-        .flatten()
-    {
-        Some(c) => c,
-        None => return,
+    // Resolve the current selection: default to first scope; drop a
+    // stale id if the scope it pointed at is gone.
+    let selected = pick_selected(&scopes);
+
+    // Build the ordered scope list the tree pane iterates. Tree mode
+    // walks the DOM to derive `(id, depth)` tuples; flat mode just
+    // emits every scope at depth 0, id-sorted.
+    let rows = match mode {
+        ViewMode::Tree => build_tree_rows(&scopes),
+        ViewMode::Flat => scopes.iter().map(|s| (s.id, 0usize)).collect(),
     };
 
-    let current_ids: std::collections::HashSet<ScopeId> =
-        scopes.iter().map(|s| s.id).collect();
-
-    // Drop sections for scopes that are gone.
-    SECTIONS.with(|s| {
-        let mut map = s.borrow_mut();
-        map.retain(|id, el| {
-            if current_ids.contains(id) {
-                true
-            } else {
-                if let Some(parent) = el.parent_node() {
-                    let _ = parent.remove_child(el);
-                }
-                false
-            }
-        });
-    });
-
-    // Insert / update / reorder sections in scope-id order.
-    for scope in scopes.iter() {
-        let fp = section_fingerprint(scope);
-        let section = SECTIONS.with(|s| s.borrow().get(&scope.id).cloned());
-        let section = match section {
-            Some(el) => el,
-            None => {
-                let Ok(el) = doc.create_element("section") else { continue };
-                let _ = el.set_attribute("class", "__pp_dev_scope");
-                let _ = el.set_attribute("data-scope-id", &scope.id.0.to_string());
-                let _ = scopes_container.append_child(&el);
-                SECTIONS.with(|s| s.borrow_mut().insert(scope.id, el.clone()));
-                el
-            }
-        };
-        // Update section HTML only if fingerprint changed.
-        let prev_fp = section.get_attribute(FP_ATTR).unwrap_or_default();
-        if prev_fp != fp {
-            section.set_inner_html(&build_section_inner(scope));
-            let _ = section.set_attribute(FP_ATTR, &fp);
+    // Tree pane. Fingerprint covers layout + selection + per-row tag
+    // — regeneration only fires when the user-visible tree changes.
+    let tree_fp = tree_fingerprint(mode, &rows, selected, &scopes);
+    let needs_tree_write = LAST_TREE_FP.with(|c| {
+        let mut cur = c.borrow_mut();
+        if *cur != tree_fp {
+            *cur = tree_fp.clone();
+            true
+        } else {
+            false
         }
-        // Keep DOM order matching scope-id order. `append_child`
-        // of an already-attached node moves it to the end of its
-        // siblings — iterating in sorted order yields the desired
-        // final layout. Browsers no-op this when the node is
-        // already at the target position.
-        let _ = scopes_container.append_child(&section);
+    });
+    if needs_tree_write {
+        if let Some(container) = root.query_selector(&format!("#{TREE_ID}")).ok().flatten() {
+            container.set_inner_html(&build_tree_html(&rows, selected, &scopes));
+        }
     }
+
+    // Detail pane. Fingerprint covers selected id + its section
+    // fingerprint, so editing a single field only rewrites this one
+    // pane.
+    let detail_fp = detail_fingerprint(selected, &scopes);
+    let needs_detail_write = LAST_DETAIL_FP.with(|c| {
+        let mut cur = c.borrow_mut();
+        if *cur != detail_fp {
+            *cur = detail_fp.clone();
+            true
+        } else {
+            false
+        }
+    });
+    if needs_detail_write {
+        if let Some(detail) = root.query_selector(&format!("#{DETAIL_ID}")).ok().flatten() {
+            let html = selected
+                .and_then(|id| scopes.iter().find(|s| s.id == id).cloned())
+                .map(|s| build_detail_html(&s))
+                .unwrap_or_else(build_empty_detail_html);
+            detail.set_inner_html(&html);
+        }
+    }
+}
+
+fn pick_selected(scopes: &[Scope]) -> Option<ScopeId> {
+    let cur = SELECTED.with(|c| c.get());
+    let still_alive = cur.is_some_and(|id| scopes.iter().any(|s| s.id == id));
+    if still_alive {
+        return cur;
+    }
+    let next = scopes.first().map(|s| s.id);
+    SELECTED.with(|c| c.set(next));
+    next
 }
 
 /// Build the panel's static shell once. Subsequent renders update
@@ -238,6 +265,12 @@ fn build_shell_once(root: &Element) {
         "<header class=\"__pp_dev_header\">\
            <span>pocopine devtools</span>\
            <div class=\"__pp_dev_actions\">\
+             <div class=\"__pp_dev_seg\">\
+               <button class=\"__pp_dev_seg_btn __pp_dev_seg_tree\" \
+                 data-action=\"set-mode\" data-mode=\"tree\">tree</button>\
+               <button class=\"__pp_dev_seg_btn __pp_dev_seg_flat\" \
+                 data-action=\"set-mode\" data-mode=\"flat\">flat</button>\
+             </div>\
              <button id=\"{btn}\" class=\"__pp_dev_btn\" data-action=\"toggle-inspect\">\
                inspect\
              </button>\
@@ -245,10 +278,14 @@ fn build_shell_once(root: &Element) {
            </div>\
          </header>\
          <div id=\"{meta}\" class=\"__pp_dev_meta\"></div>\
-         <div id=\"{scopes}\" class=\"__pp_dev_scopes\"></div>",
+         <div class=\"__pp_dev_body\">\
+           <div id=\"{tree}\" class=\"__pp_dev_tree\"></div>\
+           <div id=\"{detail}\" class=\"__pp_dev_detail\"></div>\
+         </div>",
         btn = INSPECT_BTN_ID,
         meta = META_ID,
-        scopes = SCOPES_CONTAINER_ID,
+        tree = TREE_ID,
+        detail = DETAIL_ID,
     );
     root.set_inner_html(&shell);
     SHELL_BUILT.with(|c| c.set(true));
@@ -267,10 +304,162 @@ fn update_inspect_button(root: &Element, on: bool) {
     }
 }
 
-/// One-byte-per-field canonical string that flips whenever something
-/// the panel would render for this scope changes. Kept on the
-/// `<section>` element as `data-fp` so each tick is a single string
-/// compare.
+fn update_mode_buttons(root: &Element, mode: ViewMode) {
+    let mark = |cls: &str, active: bool| {
+        if let Some(btn) = root.query_selector(cls).ok().flatten() {
+            let base = "__pp_dev_seg_btn";
+            let active_cls = "__pp_dev_seg_btn_on";
+            let specifics = cls.trim_start_matches('.');
+            let mut classes = format!("{base} {specifics}");
+            if active {
+                classes.push(' ');
+                classes.push_str(active_cls);
+            }
+            let _ = btn.set_attribute("class", &classes);
+        }
+    };
+    mark(".__pp_dev_seg_tree", matches!(mode, ViewMode::Tree));
+    mark(".__pp_dev_seg_flat", matches!(mode, ViewMode::Flat));
+}
+
+/// Walk the DOM once, emitting `(scope_id, depth)` tuples for every
+/// element that owns a non-borrowed scope. Borrowed scopes (pp-teleport,
+/// pp-if's teleport path) are skipped — the real scope is counted at
+/// the element that owns it.
+fn build_tree_rows(scopes: &[Scope]) -> Vec<(ScopeId, usize)> {
+    let mut out: Vec<(ScopeId, usize)> = Vec::new();
+    let Some(doc) = window().and_then(|w| w.document()) else { return out };
+    let Some(body) = doc.body() else { return out };
+    let body_el: Element = body.into();
+    let mut depth: usize = 0;
+    walk_tree(&body_el, &mut depth, &mut out);
+
+    // Append "orphan" scopes — stores, or scopes whose element lives
+    // inside the devtools panel (excluded by `walk_tree`).
+    let seen: std::collections::HashSet<ScopeId> =
+        out.iter().map(|(id, _)| *id).collect();
+    for s in scopes {
+        if !seen.contains(&s.id) {
+            out.push((s.id, 0));
+        }
+    }
+    out
+}
+
+fn walk_tree(el: &Element, depth: &mut usize, out: &mut Vec<(ScopeId, usize)>) {
+    // Skip the panel's own subtree.
+    if el.id() == ROOT_ID {
+        return;
+    }
+    let scope_id = element_scope_id(el);
+    if let Some(id) = scope_id {
+        out.push((id, *depth));
+        *depth += 1;
+    }
+    let children = el.children();
+    for i in 0..children.length() {
+        if let Some(c) = children.item(i) {
+            walk_tree(&c, depth, out);
+        }
+    }
+    if scope_id.is_some() {
+        *depth -= 1;
+    }
+}
+
+/// Read the non-borrowed scope id pinned on `el`, if any.
+fn element_scope_id(el: &Element) -> Option<ScopeId> {
+    let id_num = js_sys::Reflect::get(el.as_ref(), &"__pp_scope_id".into())
+        .ok()?
+        .as_f64()?;
+    let borrowed = js_sys::Reflect::get(el.as_ref(), &"__pp_scope_borrowed".into())
+        .ok()
+        .map(|v| v.is_truthy())
+        .unwrap_or(false);
+    if borrowed {
+        return None;
+    }
+    Some(ScopeId(id_num as u64))
+}
+
+fn tree_fingerprint(
+    mode: ViewMode,
+    rows: &[(ScopeId, usize)],
+    selected: Option<ScopeId>,
+    scopes: &[Scope],
+) -> String {
+    let mut out = String::new();
+    out.push(match mode {
+        ViewMode::Tree => 't',
+        ViewMode::Flat => 'f',
+    });
+    out.push('|');
+    if let Some(id) = selected {
+        out.push_str(&id.0.to_string());
+    }
+    out.push('|');
+    for (id, depth) in rows {
+        let tag = scopes
+            .iter()
+            .find(|s| s.id == *id)
+            .map(|s| s.state.borrow().type_name().to_string())
+            .unwrap_or_else(|| "?".into());
+        out.push_str(&format!("{}:{}:{};", id.0, depth, tag));
+    }
+    out
+}
+
+fn build_tree_html(
+    rows: &[(ScopeId, usize)],
+    selected: Option<ScopeId>,
+    scopes: &[Scope],
+) -> String {
+    if rows.is_empty() {
+        return r#"<div class="__pp_dev_empty">no live scopes</div>"#.into();
+    }
+    let mut html = String::new();
+    for (id, depth) in rows {
+        let tag = scopes
+            .iter()
+            .find(|s| s.id == *id)
+            .map(|s| s.state.borrow().type_name().to_string())
+            .unwrap_or_else(|| "?".into());
+        let is_selected = selected == Some(*id);
+        let selected_cls = if is_selected {
+            " __pp_dev_tree_node_on"
+        } else {
+            ""
+        };
+        html.push_str(&format!(
+            "<div class=\"__pp_dev_tree_node{sel}\" \
+                  data-action=\"select-scope\" \
+                  data-scope-id=\"{id}\" \
+                  style=\"padding-left: {pad}px\">\
+               <span class=\"__pp_dev_tag\">&lt;{tag}&gt;</span>\
+               <span class=\"__pp_dev_id\">#{id}</span>\
+             </div>",
+            sel = selected_cls,
+            id = id.0,
+            pad = 6 + depth * 12,
+            tag = escape(&tag),
+        ));
+    }
+    html
+}
+
+fn detail_fingerprint(selected: Option<ScopeId>, scopes: &[Scope]) -> String {
+    match selected {
+        Some(id) => match scopes.iter().find(|s| s.id == id) {
+            Some(scope) => format!("{}|{}", id.0, section_fingerprint(scope)),
+            None => String::new(),
+        },
+        None => String::new(),
+    }
+}
+
+/// Canonical per-scope string used to decide whether to rewrite the
+/// detail pane. Covers tag, every declared field's raw value, and
+/// the ordered ref names registered against this scope.
 fn section_fingerprint(scope: &Scope) -> String {
     let mut out = String::new();
     {
@@ -299,16 +488,22 @@ fn section_fingerprint(scope: &Scope) -> String {
     out
 }
 
-fn build_section_inner(scope: &Scope) -> String {
+fn build_empty_detail_html() -> String {
+    r#"<div class="__pp_dev_empty __pp_dev_detail_empty">no scope selected</div>"#.into()
+}
+
+fn build_detail_html(scope: &Scope) -> String {
     let state = scope.state.borrow();
     let tag = escape(state.type_name());
     let keys = state.keys();
+
     let mut html = format!(
-        "<div class=\"__pp_dev_scope_hd\">\
-           <span class=\"__pp_dev_tag\">&lt;{tag}&gt;</span>\
-           <span class=\"__pp_dev_id\">#{id}</span>\
-         </div>\
-         <dl class=\"__pp_dev_kv\">",
+        "<section class=\"__pp_dev_scope\" data-scope-id=\"{id}\">\
+           <div class=\"__pp_dev_scope_hd\">\
+             <span class=\"__pp_dev_tag\">&lt;{tag}&gt;</span>\
+             <span class=\"__pp_dev_id\">#{id}</span>\
+           </div>\
+           <dl class=\"__pp_dev_kv\">",
         id = scope.id.0,
     );
     if keys.is_empty() {
@@ -329,8 +524,33 @@ fn build_section_inner(scope: &Scope) -> String {
             ));
         }
     }
+
+    // Full state as indented JSON — handy for large objects + a step
+    // toward the editable-state follow-up.
+    let mut payload = Object::new();
+    {
+        // `payload` is fine shadowed; the closure just below needs
+        // a fresh object each time.
+        for key in state.keys() {
+            let v = state.get(key);
+            let _ = js_sys::Reflect::set(&payload, &JsValue::from_str(key), &v);
+        }
+    }
+    let json = js_sys::JSON::stringify_with_replacer_and_space(
+        &payload,
+        &JsValue::NULL,
+        &JsValue::from_f64(2.0),
+    )
+    .ok()
+    .and_then(|s| s.as_string())
+    .unwrap_or_default();
+    // reset payload binding for lint; real state is in `json` now
+    payload = Object::new();
+    let _ = &payload;
+
     drop(state);
 
+    // Refs registered against this scope.
     let refs_obj = refs::as_object(scope.id);
     if let Ok(refs_obj) = refs_obj.dyn_into::<Object>() {
         let ref_keys = Object::keys(&refs_obj);
@@ -351,6 +571,18 @@ fn build_section_inner(scope: &Scope) -> String {
         }
     }
     html.push_str("</dl>");
+
+    html.push_str(&format!(
+        "<div class=\"__pp_dev_json\">\
+           <div class=\"__pp_dev_json_label\">json</div>\
+           <pre class=\"__pp_dev_json_content\" data-copy=\"{copy}\" \
+                title=\"click to copy\">{pretty}</pre>\
+         </div>",
+        copy = escape(&json),
+        pretty = escape(&json),
+    ));
+    html.push_str("</section>");
+
     html
 }
 
@@ -561,6 +793,24 @@ fn attach_copy_delegate(root: &Element) {
                         render();
                     }
                     "close" => toggle(),
+                    "set-mode" => {
+                        if let Some(m) = el.get_attribute("data-mode") {
+                            let mode = match m.as_str() {
+                                "flat" => ViewMode::Flat,
+                                _ => ViewMode::Tree,
+                            };
+                            VIEW_MODE.with(|c| c.set(mode));
+                            render();
+                        }
+                    }
+                    "select-scope" => {
+                        if let Some(id_str) = el.get_attribute("data-scope-id") {
+                            if let Ok(n) = id_str.parse::<u64>() {
+                                SELECTED.with(|c| c.set(Some(ScopeId(n))));
+                                render();
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 return;
@@ -709,15 +959,15 @@ fn escape(s: &str) -> String {
 }
 
 const STYLESHEET: &str = "\
-    #__pp_devtools_root{position:fixed;top:12px;right:12px;width:320px;max-height:70vh;\
-    overflow:auto;z-index:2147483647;font-family:ui-monospace,Menlo,Consolas,monospace;\
+    #__pp_devtools_root{position:fixed;top:12px;right:12px;width:540px;max-height:85vh;\
+    overflow:hidden;z-index:2147483647;font-family:ui-monospace,Menlo,Consolas,monospace;\
     font-size:11px;line-height:1.45;color:#e6e1d8;background:#181715;border:1px solid #2d2a24;\
-    border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5);}\
+    border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5);display:flex;flex-direction:column;}\
     #__pp_devtools_root *{box-sizing:border-box;}\
     .__pp_dev_header{display:flex;align-items:center;justify-content:space-between;\
-    padding:8px 12px;background:#252220;border-bottom:1px solid #2d2a24;position:sticky;top:0;\
-    color:#ff6600;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;}\
-    .__pp_dev_actions{display:flex;align-items:center;gap:4px;}\
+    padding:8px 12px;background:#252220;border-bottom:1px solid #2d2a24;\
+    color:#ff6600;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;flex:0 0 auto;}\
+    .__pp_dev_actions{display:flex;align-items:center;gap:6px;}\
     .__pp_dev_btn{background:none;border:1px solid transparent;color:#e6e1d8;font:inherit;\
     cursor:pointer;padding:2px 6px;border-radius:3px;letter-spacing:0.05em;\
     text-transform:uppercase;font-size:9px;}\
@@ -725,24 +975,45 @@ const STYLESHEET: &str = "\
     .__pp_dev_btn_on{background:#ff6600;color:#181715;}\
     .__pp_dev_btn_on:hover{border-color:#ff6600;color:#181715;}\
     .__pp_dev_close{font-size:14px;padding:0 6px;}\
-    .__pp_dev_meta{padding:6px 12px;color:#828282;border-bottom:1px solid #2d2a24;}\
-    .__pp_dev_scopes{padding:4px 8px;}\
-    .__pp_dev_scope{padding:6px 4px;border-bottom:1px dashed #2d2a24;}\
-    .__pp_dev_scope:last-child{border-bottom:none;}\
+    .__pp_dev_seg{display:inline-flex;border:1px solid #2d2a24;border-radius:3px;overflow:hidden;}\
+    .__pp_dev_seg_btn{background:none;border:none;color:#828282;font:inherit;\
+    cursor:pointer;padding:2px 8px;letter-spacing:0.05em;text-transform:uppercase;font-size:9px;}\
+    .__pp_dev_seg_btn:hover{color:#e6e1d8;}\
+    .__pp_dev_seg_btn_on{background:#ff6600;color:#181715;}\
+    .__pp_dev_seg_btn_on:hover{color:#181715;}\
+    .__pp_dev_meta{padding:6px 12px;color:#828282;border-bottom:1px solid #2d2a24;flex:0 0 auto;}\
+    .__pp_dev_body{display:flex;flex:1 1 auto;min-height:0;overflow:hidden;}\
+    .__pp_dev_tree{flex:0 0 200px;overflow:auto;border-right:1px solid #2d2a24;padding:4px 0;}\
+    .__pp_dev_tree_node{display:flex;justify-content:space-between;align-items:baseline;\
+    padding:2px 10px 2px 6px;cursor:pointer;gap:6px;white-space:nowrap;}\
+    .__pp_dev_tree_node:hover{background:#23211e;}\
+    .__pp_dev_tree_node_on{background:#322a1d;}\
+    .__pp_dev_tree_node_on:hover{background:#3a3021;}\
+    .__pp_dev_detail{flex:1 1 auto;overflow:auto;padding:4px 8px 10px;}\
+    .__pp_dev_detail_empty{padding:12px;}\
+    .__pp_dev_scope{padding:6px 4px;}\
     .__pp_dev_scope_hd{display:flex;justify-content:space-between;align-items:baseline;\
     padding:2px 4px;}\
     .__pp_dev_tag{color:#ff6600;}\
     .__pp_dev_id{color:#828282;font-size:10px;}\
-    .__pp_dev_kv{margin:2px 0 0;padding:0 4px;}\
+    .__pp_dev_kv{margin:6px 0 0;padding:0 4px;}\
     .__pp_dev_row{display:flex;gap:8px;padding:1px 0;}\
     .__pp_dev_row dt{color:#e6e1d8;flex:0 0 auto;min-width:7em;opacity:0.75;}\
     .__pp_dev_row dd{color:#c6e377;margin:0;word-break:break-all;cursor:pointer;}\
     .__pp_dev_row dd:hover{color:#fff;}\
     .__pp_dev_row dd.__pp_dev_copied{color:#181715;background:#ff6600;border-radius:2px;\
     padding:0 3px;}\
-    .__pp_dev_empty{color:#828282;font-style:italic;padding:2px 0;}\
-    .__pp_dev_refs{margin-top:4px;color:#828282;font-size:10px;padding:2px 4px;}\
+    .__pp_dev_empty{color:#828282;font-style:italic;padding:2px 4px;}\
+    .__pp_dev_refs{margin-top:6px;color:#828282;font-size:10px;padding:2px 4px;}\
     .__pp_dev_refs code{color:#c6e377;}\
+    .__pp_dev_json{margin-top:10px;border-top:1px dashed #2d2a24;padding-top:6px;}\
+    .__pp_dev_json_label{color:#828282;font-size:9px;text-transform:uppercase;\
+    letter-spacing:0.08em;margin-bottom:4px;padding:0 4px;}\
+    .__pp_dev_json_content{margin:0;padding:6px 8px;background:#131210;border:1px solid #2d2a24;\
+    color:#c6e377;white-space:pre-wrap;word-break:break-all;cursor:pointer;border-radius:3px;\
+    font-size:10.5px;max-height:40vh;overflow:auto;}\
+    .__pp_dev_json_content:hover{color:#fff;}\
+    .__pp_dev_json_content.__pp_dev_copied{color:#181715;background:#ff6600;}\
     .__pp_dev_highlight{outline:2px solid #ff6600 !important;}\
 ";
 
