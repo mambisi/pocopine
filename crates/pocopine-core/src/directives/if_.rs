@@ -63,11 +63,16 @@ pub fn run(call: &DirectiveCall) {
         .get_attribute("pp-teleport")
         .as_deref()
         .and_then(teleport::resolve_target);
-    let pinned_scope = if teleport_target.is_some() {
-        walker::enclosing_scope(&template_el)
-    } else {
-        None
-    };
+    // Pin the owning scope on every pp-if clone regardless of
+    // teleport. Without pinning, an inline clone's enclosing
+    // scope is resolved by the walker via DOM ancestry — which
+    // skips the `<template>` (the actual scope-carrying element
+    // for Pine components whose root directive is pp-if) and
+    // lands on whatever component contains the consumer. That
+    // breaks `<slot>` materialisation inside the clone (it
+    // matches a slot store on the wrong scope) and any
+    // directive that reads from the owning scope's proxy.
+    let pinned_scope = walker::enclosing_scope(&template_el);
 
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 

@@ -709,8 +709,8 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
     tick().await;
     tick().await;
 
-    // Initial: unchecked — aria-checked=false, indicator hidden
-    // via pp-show (element stays in DOM, display toggled off).
+    // Initial: unchecked — aria-checked=false, indicator absent
+    // from DOM (pp-if gated on `checked = false`).
     let item_li = doc()
         .query_selector(".ck-one li")
         .unwrap()
@@ -720,15 +720,9 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
         Some("false"),
         "initial aria-checked"
     );
-    let indicator = doc()
-        .query_selector(".pine-dm-item-indicator")
-        .unwrap()
-        .expect("indicator always in DOM via pp-show");
-    let indicator_html: HtmlElement = indicator.clone().dyn_into().unwrap();
-    assert_eq!(
-        indicator_html.style().get_property_value("display").unwrap_or_default(),
-        "none",
-        "indicator hidden initially — pp-show = false"
+    assert!(
+        doc().query_selector(".ck-dot").unwrap().is_none(),
+        "indicator unmounted when unchecked (pp-if false)"
     );
 
     // Click — toggles to "checked", menu stays open for demo
@@ -765,11 +759,12 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
         Some("checked"),
         "data-state reflects the tri-state value"
     );
-    // pp-show clears inline `display: none` when checked=true.
-    assert_ne!(
-        indicator_html.style().get_property_value("display").unwrap_or_default(),
-        "none",
-        "indicator shown when checked — pp-show reactive via ItemIndicator's watch"
+    // pp-if now mounts the indicator + materialises its slot
+    // against the right scope — so the user's `.ck-dot` span
+    // actually renders in the DOM.
+    assert!(
+        doc().query_selector(".ck-dot").unwrap().is_some(),
+        "indicator mounted + slot materialised when checked"
     );
 
     host.remove();

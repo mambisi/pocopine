@@ -1650,3 +1650,33 @@ async fn inline_expr_interpolation_splits_text_and_reactively_updates() {
 
     host.remove();
 }
+
+/// `emit_cancelable_from` fires a cancelable CustomEvent
+/// synchronously and returns whether `preventDefault` was
+/// called. Unlike `emit` (deferred via tick::next), the caller
+/// can branch on the returned bool immediately — needed for
+/// e.g. Pine's DropdownMenu Item "stay open if prevented" path.
+#[wasm_bindgen_test]
+async fn emit_cancelable_returns_prevented_flag() {
+    use wasm_bindgen::closure::Closure;
+
+    let body = doc().body().unwrap();
+    let el = doc().create_element("div").unwrap();
+    body.append_child(&el).unwrap();
+
+    // No listeners → not prevented.
+    let prevented = pocopine::emit_cancelable_from(&el, "pp:select", ());
+    assert!(!prevented, "no listeners → default not prevented");
+
+    // Install a listener that calls preventDefault.
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(|ev: web_sys::Event| ev.prevent_default()));
+    el.add_event_listener_with_callback("pp:select", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+
+    let prevented = pocopine::emit_cancelable_from(&el, "pp:select", ());
+    assert!(prevented, "listener's preventDefault() observed by caller");
+
+    el.remove();
+}

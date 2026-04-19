@@ -70,3 +70,36 @@ pub fn emit_from<T: Serialize>(el: &Element, name: &str, detail: T) {
         }
     });
 }
+
+/// Synchronous, cancelable counterpart to [`emit`]. Fires the
+/// event immediately (no tick::next defer) so the caller can
+/// read back whether a listener called `preventDefault`.
+/// Returns `true` when the event was prevented.
+///
+/// Trade-off vs [`emit`]: because this fires synchronously, any
+/// listener calling back into the caller's scope re-enters its
+/// active borrow. Safe for fire-and-observe patterns (menu item
+/// asks "can I close?") but not for pp-model-style mirror
+/// flows — use the deferred [`emit`] / [`emit_from`] there.
+pub fn emit_cancelable<T: Serialize>(name: &str, detail: T) -> bool {
+    let Some(el) = current_el() else { return false };
+    emit_cancelable_from(&el, name, detail)
+}
+
+/// Variant of [`emit_cancelable`] that dispatches from an
+/// explicit element. Returns `true` when `preventDefault` was
+/// called.
+pub fn emit_cancelable_from<T: Serialize>(el: &Element, name: &str, detail: T) -> bool {
+    let Ok(detail_js) = serde_wasm_bindgen::to_value(&detail) else {
+        return false;
+    };
+    let init = CustomEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_detail(&detail_js);
+    let Ok(ev) = CustomEvent::new_with_event_init_dict(name, &init) else {
+        return false;
+    };
+    let _ = el.dispatch_event(&ev);
+    ev.default_prevented()
+}

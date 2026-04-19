@@ -254,39 +254,35 @@ inside a card, which `pp-as` already mostly handles).
 
 ---
 
-## 6. Known substrate gaps
+## 6. Substrate gaps — closed
 
-Surfaced during compound-component work. None blocking, but
-worth revisiting when adjacent work lands.
+Surfaced during compound-component work. Both fixed in the
+post-radio-group round.
 
-### 6.1 `pp-if` without `pp-teleport` doesn't pin scope
+### 6.1 ~~`pp-if` without `pp-teleport` doesn't pin scope~~ — fixed
 
-`pp-if` on a `<template>` clones the body and inserts it before
-the template element when truthy. With `pp-teleport`, the clone
-gets the owning scope pinned via `bind_borrowed_scope_to` so
-directives inside (particularly `<slot>`) resolve correctly.
-Without teleport, the clone gets no explicit scope — the walker
-resolves via DOM ancestry, which works for *most* directives but
-breaks `<slot>` materialisation inside a component whose
-template's outer wrapper is a `<template pp-if>` (the component
-tag itself doesn't carry a scope key; only the inner template
-does).
+`pp-if` was only pinning the owning scope on its clone when the
+template also had `pp-teleport`. That meant inline clones of a
+`<template pp-if>` component-template root walked with no
+explicit scope, and nested `<slot>` elements materialised
+against the wrong scope (whatever DOM-ancestry happened to hit
+first). Fixed by unconditionally pinning
+`walker::enclosing_scope(&template_el)` onto the clone, so the
+walker sees the correct owning scope whether or not the subtree
+is teleported. ItemIndicator moved back from `pp-show` to
+`pp-if`.
 
-**Worked around** in ItemIndicator by switching to `pp-show`
-(element stays in DOM, CSS display toggles) instead of `pp-if`.
-Fine for small indicator elements; not a general substitute for
-conditional rendering that actually unmounts the subtree.
+### 6.2 ~~Cancelable `emit`~~ — fixed
 
-**Fix**: pin the owning scope on pp-if's clone always, not only
-when teleporting. ~5 lines in `directives/if_.rs`.
+`emit` / `emit_from` / `emit_from_host` stay fire-and-forget
+(deferred via tick::next — required for pp-model's mirror
+pattern). New synchronous counterparts handle the
+fire-and-observe case:
 
-### 6.2 Cancelable `emit` / `emit_from` / `emit_from_host`
+- `emit_cancelable(name, detail) -> bool`
+- `emit_cancelable_from(el, name, detail) -> bool`
 
-`emit` is fire-and-forget (deferred via tick::next, caller can't
-read back preventDefault). Pine's Item sidesteps this by
-constructing + dispatching the `pp:select` event manually via
-`CustomEventInit { cancelable: true }`. If other components need
-the preventable-emit pattern, lift the manual dispatch into
-`emit_cancelable(name, detail) -> bool` (returns whether
-default was prevented, fires synchronously so the caller can
-branch on it).
+They fire a `cancelable: true` CustomEvent *synchronously* and
+return whether a listener called `preventDefault()`. Pine's
+DropdownMenu Item uses the first to implement its
+"stay open on prevent" path in one line.

@@ -43,7 +43,9 @@ pub mod watch;
 pub use app::{App, Component};
 pub use computed::{computed, Computed};
 pub use context::{inject, provide};
-pub use emit::{emit, emit_from, emit_from_host};
+pub use emit::{
+    emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host,
+};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use magics::dispatch_event;

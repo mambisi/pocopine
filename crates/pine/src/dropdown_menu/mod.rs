@@ -27,10 +27,9 @@
 
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, inject, provide, refs, watch_scope_field};
-use pocopine_core::scope::current_el;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
-use web_sys::{CustomEvent, CustomEventInit, Element};
+use web_sys::Element;
 
 /// Provide/inject key for the Root handle.
 const ROOT_KEY: &str = "pine-dm-root";
@@ -212,18 +211,11 @@ impl PineDropdownMenuItem {
 }
 
 /// Dispatch a cancelable `pp:select` event from the current
-/// directive element. Returns `true` when a listener called
-/// `preventDefault` — caller should skip its default action.
+/// directive element via the substrate helper. Returns `true`
+/// when a listener called `preventDefault` — caller should skip
+/// its default action.
 fn dispatch_pp_select() -> bool {
-    let Some(el) = current_el() else { return false };
-    let init = CustomEventInit::new();
-    init.set_bubbles(true);
-    init.set_cancelable(true);
-    let Ok(ev) = CustomEvent::new_with_event_init_dict("pp:select", &init) else {
-        return false;
-    };
-    let _ = el.dispatch_event(&ev);
-    ev.default_prevented()
+    emit_cancelable("pp:select", ())
 }
 
 // ── Separator ─────────────────────────────────────────────────────

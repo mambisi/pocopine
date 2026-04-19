@@ -1,4 +1,5 @@
-<span class="pine-dm-item-indicator"
-      pp-show="checked">
-  <slot></slot>
-</span>
+<template pp-if="checked">
+  <span class="pine-dm-item-indicator">
+    <slot></slot>
+  </span>
+</template>
