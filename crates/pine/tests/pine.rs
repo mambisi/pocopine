@@ -172,6 +172,62 @@ async fn tabs_render_set_aria_selected_and_emit_update_model() {
     host.remove();
 }
 
+// ─── PineTooltip ──────────────────────────────────────────────────
+
+/// Focusing the trigger shows the tooltip immediately (no delay
+/// for keyboard users per WAI-ARIA); blurring hides it.
+#[wasm_bindgen_test]
+async fn tooltip_shows_on_focus_and_hides_on_blur() {
+    let host = mount(
+        "<button id=\"tt-trig\" class=\"trig\">hover me</button>\
+         <pine-tooltip trigger=\"#tt-trig\">Helpful tip.</pine-tooltip>",
+    );
+    tick().await;
+    tick().await;
+
+    let trigger = host
+        .query_selector("#tt-trig")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+
+    // No tooltip visible yet.
+    assert!(
+        doc()
+            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .unwrap()
+            .is_none(),
+        "tooltip starts hidden"
+    );
+
+    // Focus → shows (no delay).
+    trigger.focus().unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .unwrap()
+            .is_some(),
+        "tooltip visible after focus"
+    );
+
+    // Blur → hides.
+    trigger.blur().unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .unwrap()
+            .is_none(),
+        "tooltip gone after blur"
+    );
+
+    host.remove();
+}
+
 // ─── PineSwitch ───────────────────────────────────────────────────
 
 #[wasm_bindgen_test]
