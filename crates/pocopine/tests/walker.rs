@@ -217,6 +217,14 @@ impl ShortHost {
     }
 }
 
+// RFC-022 — pp-roving.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "RovingHost.html")]
+struct RovingHost {}
+
+#[handlers]
+impl RovingHost {}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -265,6 +273,7 @@ fn register_all() {
     IdHost::register();
     AsButton::register();
     ShortHost::register();
+    RovingHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1134,6 +1143,89 @@ async fn click_outside_fires_only_for_clicks_that_miss_the_host() {
     inside_btn_el.click();
     tick().await;
     assert_eq!(count_after(&host), 1, "sibling click fires outside handler");
+
+    host.remove();
+}
+
+/// RFC-022 — `pp-roving` initialises tabindex, manages arrow-key
+/// focus navigation, skips aria-disabled items, wraps at edges,
+/// and handles Home / End.
+#[wasm_bindgen_test]
+async fn roving_navigates_with_arrows_and_skips_disabled() {
+    let host = mount("<roving-host></roving-host>");
+    tick().await;
+
+    let container = host.query_selector(".rv-root").unwrap().unwrap();
+    let items = container.query_selector_all(".rv-item").unwrap();
+    let item = |idx: u32| items.item(idx).unwrap().dyn_into::<Element>().unwrap();
+    let a = item(0);
+    let b = item(1);
+    let _c = item(2); // disabled
+    let d = item(3);
+
+    // Initial tabindex: first non-disabled is 0, rest are -1.
+    assert_eq!(a.get_attribute("tabindex").as_deref(), Some("0"));
+    assert_eq!(b.get_attribute("tabindex").as_deref(), Some("-1"));
+    assert_eq!(d.get_attribute("tabindex").as_deref(), Some("-1"));
+
+    // Focus A, then ArrowDown → B.
+    a.clone().dyn_into::<HtmlElement>().unwrap().focus().unwrap();
+
+    fn send_arrow(target: &Element, key: &str) {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_bubbles(true);
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+                .unwrap();
+        let _ = target.dispatch_event(&ev).unwrap();
+    }
+
+    send_arrow(&a, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        b,
+        "ArrowDown moved focus from A to B"
+    );
+    assert_eq!(b.get_attribute("tabindex").as_deref(), Some("0"));
+    assert_eq!(a.get_attribute("tabindex").as_deref(), Some("-1"));
+
+    // From B, ArrowDown should skip aria-disabled C and land on D.
+    send_arrow(&b, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        d,
+        "ArrowDown skipped disabled C and landed on D"
+    );
+
+    // From D, ArrowDown wraps back to A.
+    send_arrow(&d, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        a,
+        "ArrowDown wrapped D → A"
+    );
+
+    // End jumps to last enabled.
+    send_arrow(&a, "End");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        d,
+        "End jumped to last enabled (D)"
+    );
+
+    // Home jumps to first enabled.
+    send_arrow(&d, "Home");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        a,
+        "Home jumped to first enabled (A)"
+    );
 
     host.remove();
 }

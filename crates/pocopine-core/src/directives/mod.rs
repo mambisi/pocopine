@@ -21,6 +21,7 @@ pub mod model;
 pub mod on;
 pub mod ref_;
 pub mod resize;
+pub mod roving;
 pub mod route;
 pub mod show;
 pub mod teleport;
@@ -62,6 +63,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("resize", resize::run);
         m.insert("intersect", intersect::run);
         m.insert("anchor", anchor::run);
+        m.insert("roving", roving::run);
         m
     })
 }

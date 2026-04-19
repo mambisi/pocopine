@@ -37,3 +37,4 @@ Conventions:
 | 019 | [`pp-as` polymorphic rendering](./rfc-019-pp-as.md) | Implemented |
 | 020 | [`:attr` / `@event` shorthand](./rfc-020-shorthand-prefixes.md) | Implemented |
 | 021 | [`scroll_lock` utility](./rfc-021-scroll-lock.md) | Implemented |
+| 022 | [`pp-roving` tabindex / arrow navigation](./rfc-022-pp-roving.md) | Implemented |
