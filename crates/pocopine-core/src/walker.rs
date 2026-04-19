@@ -462,10 +462,19 @@ fn capture_slots(el: &Element) -> SlotStore {
         None => return SlotStore { by_name: Default::default() },
     };
 
+    // Resolve the CALLER's scope — the parent template that's
+    // passing content. This scope is what the slot content's
+    // directives (`@click`, `pp-text`, …) should resolve against,
+    // regardless of where the slot is physically materialised
+    // (inside the child's template, possibly inside a teleport).
+    let (owner_scope_id, owner_proxy) = match enclosing_scope(el) {
+        Some(s) => s,
+        None => (ScopeId(0), JsValue::UNDEFINED),
+    };
+
     let mut by_name: std::collections::HashMap<String, UserSlot> =
         std::collections::HashMap::new();
     let default_fragment = doc.create_document_fragment();
-    let mut default_ident = String::new();
 
     let children = el.child_nodes();
     let mut to_consume: Vec<Node> = Vec::with_capacity(children.length() as usize);
@@ -485,7 +494,15 @@ fn capture_slots(el: &Element) -> SlotStore {
                         "pocopine: duplicate pp-slot=\"{name}\"; later wins"
                     )));
                 }
-                by_name.insert(name, UserSlot { source, ident });
+                by_name.insert(
+                    name,
+                    UserSlot {
+                        source,
+                        ident,
+                        owner_scope_id,
+                        owner_proxy: owner_proxy.clone(),
+                    },
+                );
                 continue;
             }
         }
@@ -494,15 +511,14 @@ fn capture_slots(el: &Element) -> SlotStore {
     }
 
     if default_fragment.child_nodes().length() > 0 {
-        by_name
-            .entry("default".to_string())
-            .or_insert(UserSlot {
-                source: default_fragment,
-                ident: default_ident.clone(),
-            });
-        // `default_ident` stays empty — default slot currently has no
-        // `pp-let` concept; scoped slots always use a named template.
-        let _ = &mut default_ident;
+        by_name.entry("default".to_string()).or_insert(UserSlot {
+            source: default_fragment,
+            // Default slot doesn't support `pp-let` scoping today;
+            // scoped slots always use a named `<template pp-slot>`.
+            ident: String::new(),
+            owner_scope_id,
+            owner_proxy,
+        });
     }
 
     SlotStore { by_name }
@@ -672,10 +688,18 @@ fn materialize_slot(slot_el: &Element) {
     // climbs parent chains to handle `<slot>` inside a `pp-for`
     // body (where `enclosing_scope` returns the LoopScope, which
     // doesn't own the slot store).
-    let (user_fragment, user_ident) =
+    //
+    // `slot_owner_*` below is the scope that *authored* the slot
+    // content (the caller's template) — distinct from
+    // `owner_scope_id` which is the scope the `<slot>` element
+    // lives inside. Directives in slot content need to resolve
+    // against the *caller* to match Vue/React conventions (and so
+    // `@click="parent_handler"` works from slot content rendered
+    // inside a teleported subtree).
+    let (user_fragment, user_ident, slot_owner_scope, slot_owner_proxy) =
         match find_slot_with_owner(owner_scope_id, &owner_proxy, &slot_name) {
-            Some(pair) => (Some(pair.0), pair.1),
-            None => (None, String::new()),
+            Some((frag, ident, owner_id, owner_p)) => (Some(frag), ident, owner_id, owner_p),
+            None => (None, String::new(), owner_scope_id, owner_proxy.clone()),
         };
 
     // Build the DocumentFragment we'll insert. User-provided content
@@ -720,20 +744,36 @@ fn materialize_slot(slot_el: &Element) {
     let _ = parent.remove_child(slot_el);
 
     // If the slot declared any :prop bindings and the user used
-    // pp-let, build a SlotScope and pin it on each inserted root.
-    // Bindings with no user pp-let still get a scope but the ident
-    // is empty — the scope's `get` never matches, so content behaves
-    // as an ordinary unbound slot.
+    // pp-let, build a SlotScope whose `owner` is the slot's
+    // authoring scope so `ident.prop` / fall-through both resolve
+    // against the caller. Otherwise pin the caller's scope
+    // directly — without this, content in a teleported slot would
+    // resolve its directives against the nearest DOM-ancestor's
+    // scope (the child component), breaking
+    // `@click="parent_handler"`.
     if !bindings.is_empty() && !user_ident.is_empty() {
         let slot_state = SlotScope {
             ident: user_ident,
             bindings,
-            owner: owner_proxy,
+            // `:prop="path"` binds evaluate in the scope that
+            // *declared* the slot — that's where `path` was
+            // authored, so sibling fields / magics resolve
+            // correctly there.
+            bind_source: owner_proxy.clone(),
+            // Fall-through reads (anything not matching the
+            // `pp-let` identifier) go to the *caller's* scope, so
+            // `@click="parent_handler"` works from inside the
+            // slot.
+            caller: slot_owner_proxy.clone(),
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
         let proxy = slot_scope.into_proxy();
         for el in &inserted {
             bind_borrowed_scope_to(el, slot_scope.id, &proxy);
+        }
+    } else {
+        for el in &inserted {
+            bind_borrowed_scope_to(el, slot_owner_scope, &slot_owner_proxy);
         }
     }
 
@@ -744,12 +784,13 @@ fn materialize_slot(slot_el: &Element) {
 
 /// Walk up the scope chain starting at `start_scope_id` to find the
 /// first component that captured a slot named `name`. Returns the
-/// cloned fragment + user's `pp-let` identifier if found.
+/// cloned fragment + user's `pp-let` ident + the slot's authoring
+/// (caller's) scope if found.
 fn find_slot_with_owner(
     start_scope_id: ScopeId,
     start_proxy: &JsValue,
     name: &str,
-) -> Option<(DocumentFragment, String)> {
+) -> Option<(DocumentFragment, String, ScopeId, JsValue)> {
     // First try the enclosing scope directly.
     if let Some(hit) = slots::lookup(start_scope_id, name) {
         return Some(hit);

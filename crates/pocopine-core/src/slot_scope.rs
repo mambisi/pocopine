@@ -21,12 +21,19 @@ pub struct SlotScope {
     /// The `pp-let` identifier (e.g. `"ctx"`).
     pub ident: String,
     /// Each `:prop="path"` pair declared on the `<slot>`. The prop
-    /// name lands under the ident's object; the path resolves on the
-    /// owner proxy at read time.
+    /// name lands under the ident's object; the path resolves on
+    /// [`Self::bind_source`] at read time.
     pub bindings: Vec<(String, String)>,
-    /// The enclosing component's (or pp-for loop's) proxy. Fall-through
-    /// reads + path resolution go through here.
-    pub owner: JsValue,
+    /// The scope whose template contains the `<slot>` element. Used
+    /// to resolve `:prop="path"` binding paths — `path` was
+    /// authored in that scope (e.g. `<slot :ctx="current">` reads
+    /// `current` from the component that declared the slot).
+    pub bind_source: JsValue,
+    /// The scope whose template *authored* the slot content. Used
+    /// for fall-through identifier reads — `@click="parent_handler"`
+    /// inside the slot has to resolve against the caller, not the
+    /// component that declared the slot.
+    pub caller: JsValue,
 }
 
 impl ComponentState for SlotScope {
@@ -34,14 +41,15 @@ impl ComponentState for SlotScope {
         if key == self.ident.as_str() {
             let obj = Object::new();
             for (prop, path) in &self.bindings {
-                let val = resolve_path(&self.owner, path);
+                let val = resolve_path(&self.bind_source, path);
                 let _ = Reflect::set(&obj, &JsValue::from_str(prop), &val);
             }
             return obj.into();
         }
-        // Fall through to the owner for everything else — magics,
-        // parent-scope fields, sibling slot identifiers.
-        Reflect::get(&self.owner, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+        // Fall through to the caller for everything else — handlers,
+        // parent-scope fields, magics. This is what makes
+        // `@click="parent_handler"` work inside a slot's template.
+        Reflect::get(&self.caller, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
     }
 
     fn set(&mut self, _key: &str, _value: JsValue) {

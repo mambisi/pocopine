@@ -11,6 +11,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use wasm_bindgen::JsValue;
 use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
@@ -20,6 +21,15 @@ pub struct UserSlot {
     /// `pp-let` identifier the user declared on the slot template.
     /// Empty when the user didn't write `pp-let`.
     pub ident: String,
+    /// Scope that *authored* this slot content (the parent
+    /// template, not the child component that declared the slot).
+    /// The walker's slot materialiser pins this as the borrowed
+    /// scope on inserted elements so `@click` / `pp-text` / etc.
+    /// inside the slot resolve against the caller — even when the
+    /// slot lives inside a teleported subtree whose DOM ancestors
+    /// point at a different scope.
+    pub owner_scope_id: ScopeId,
+    pub owner_proxy: JsValue,
 }
 
 pub struct SlotStore {
@@ -41,8 +51,12 @@ pub fn put(scope_id: ScopeId, store: SlotStore) {
 
 /// Look up a user-provided slot by name on `scope_id`. Returns a
 /// clone of the source fragment (ready to have its children moved
-/// out into the DOM).
-pub fn lookup(scope_id: ScopeId, name: &str) -> Option<(DocumentFragment, String)> {
+/// out into the DOM), the `pp-let` ident, and the owner scope id
+/// + proxy (for borrowed-scope binding on the inserted content).
+pub fn lookup(
+    scope_id: ScopeId,
+    name: &str,
+) -> Option<(DocumentFragment, String, ScopeId, JsValue)> {
     STORES.with(|s| {
         let stores = s.borrow();
         let store = stores.get(&scope_id)?;
@@ -53,7 +67,12 @@ pub fn lookup(scope_id: ScopeId, name: &str) -> Option<(DocumentFragment, String
             .ok()?
             .dyn_into::<DocumentFragment>()
             .ok()?;
-        Some((clone, slot.ident.clone()))
+        Some((
+            clone,
+            slot.ident.clone(),
+            slot.owner_scope_id,
+            slot.owner_proxy.clone(),
+        ))
     })
 }
 
