@@ -7,10 +7,10 @@
 pub use pocopine_core::{focus, id, refs, scroll_lock, tick};
 pub use pocopine_core::{
     batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
-    fetch, flush_sync, on_cleanup, release, run, run_now, rw_signal, set_auto_flush, signal,
-    store, this, trigger_scope, watch, watch_field, App, Component, ComponentState, Computed,
-    EffectId, EffectOptions, Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult,
-    Setter, Signal, SignalId, Store, StoreHandle,
+    fetch, flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
+    set_auto_flush, signal, store, this, trigger_scope, watch, watch_field, App, Component,
+    ComponentState, Computed, EffectId, EffectOptions, Handle, RwSignal, Scope, ScopeId,
+    ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle,
 };
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.

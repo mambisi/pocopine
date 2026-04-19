@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod computed;
+pub mod context;
 pub mod devtools;
 pub mod directives;
 pub mod expr;
@@ -40,6 +41,7 @@ pub mod watch;
 
 pub use app::{App, Component};
 pub use computed::{computed, Computed};
+pub use context::{inject, provide};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use magics::dispatch_event;

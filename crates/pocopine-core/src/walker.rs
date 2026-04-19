@@ -285,6 +285,13 @@ fn mount_component(el: &Element, tag: &str) {
     }
 
     let Some(scope) = instantiate(tag) else { return };
+    // Record the parent scope for RFC-027 `inject` chain-walks. The
+    // parent is whichever scope encloses the component tag in the
+    // DOM — which is the scope that *authored* the tag, regardless
+    // of teleport / slot rewrites later.
+    if let Some((parent_id, _)) = enclosing_scope(el) {
+        crate::context::set_parent(scope.id, parent_id);
+    }
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
@@ -343,6 +350,9 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     // 2. Instantiate scope + apply static props from the tag's own
     //    attributes (same as the normal path).
     let Some(scope) = instantiate(tag) else { return false };
+    if let Some((parent_id, _)) = enclosing_scope(el) {
+        crate::context::set_parent(scope.id, parent_id);
+    }
     apply_static_props(el, &scope);
     let proxy = scope.into_proxy();
 
@@ -790,6 +800,10 @@ fn materialize_slot(slot_el: &Element) {
             caller: slot_owner_proxy.clone(),
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
+        // For RFC-027 inject chain-walks: the slot scope's logical
+        // parent is the *caller* (the scope that authored the
+        // content), not the scope containing the `<slot>`.
+        crate::context::set_parent(slot_scope.id, slot_owner_scope);
         let proxy = slot_scope.into_proxy();
         for el in &inserted {
             bind_borrowed_scope_to(el, slot_scope.id, &proxy);

@@ -155,6 +155,7 @@ impl Scope {
         crate::refs::clear_scope(id);
         crate::slots::clear(id);
         crate::id::clear_scope(id);
+        crate::context::clear_scope(id);
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct

@@ -225,6 +225,36 @@ struct RovingHost {}
 #[handlers]
 impl RovingHost {}
 
+// RFC-027 — parent-scope context (provide + inject).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "CtxRoot.html")]
+struct CtxRoot {
+    hits: u32,
+}
+
+#[handlers]
+impl CtxRoot {
+    pub fn on_mount(&mut self) {
+        pocopine::provide("ctx-root", pocopine::this::<Self>());
+    }
+    pub fn bump(&mut self) {
+        self.hits += 1;
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "CtxChild.html")]
+struct CtxChild {}
+
+#[handlers]
+impl CtxChild {
+    pub fn bump(&mut self) {
+        if let Some(root) = pocopine::inject::<pocopine::Handle<CtxRoot>>("ctx-root") {
+            root.update(|r| r.bump());
+        }
+    }
+}
+
 // RFC-024 — expression-based @event values.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ExprOnHost.html")]
@@ -291,6 +321,8 @@ fn register_all() {
     ShortHost::register();
     RovingHost::register();
     ExprOnHost::register();
+    CtxRoot::register();
+    CtxChild::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1486,6 +1518,56 @@ async fn expr_values_in_pp_on_support_assign_call_and_seq() {
     tick().await;
     assert_eq!(read_text(".eo-bumped"), "2", "assign ran twice");
     assert_eq!(read_text(".eo-picked"), "seq", "call ran after assign");
+
+    host.remove();
+}
+
+/// RFC-027 — a child scope can `inject` a value `provide`d by an
+/// ancestor component, walking the scope-parent chain recorded at
+/// mount time. Clicks inside two nested `<ctx-child>` components
+/// resolve the parent `<ctx-root>`'s `Handle<Self>` and call its
+/// `bump` handler, which increments a reactive counter on the
+/// parent. The parent's `pp-text` span should reflect the updated
+/// count — proving provide/inject crosses the component boundary.
+#[wasm_bindgen_test]
+async fn provide_and_inject_cross_component_boundary() {
+    let host = mount("<ctx-root></ctx-root>");
+    tick().await;
+
+    let root_span = host.query_selector(".cr-parent-hits").unwrap().unwrap();
+    let read_hits = || {
+        root_span
+            .clone()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(read_hits(), "0", "initial hits = 0");
+
+    let buttons = host.query_selector_all(".cc-btn").unwrap();
+    assert_eq!(buttons.length(), 2, "two <ctx-child> buttons mounted");
+
+    let first: HtmlElement = buttons.item(0).unwrap().dyn_into().unwrap();
+    first.click();
+    tick().await;
+    assert_eq!(
+        read_hits(),
+        "1",
+        "first child's inject found root and bumped it"
+    );
+
+    let second: HtmlElement = buttons.item(1).unwrap().dyn_into().unwrap();
+    second.click();
+    tick().await;
+    second.click();
+    tick().await;
+    assert_eq!(
+        read_hits(),
+        "3",
+        "second child also resolves the same provided handle"
+    );
 
     host.remove();
 }

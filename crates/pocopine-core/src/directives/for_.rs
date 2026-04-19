@@ -54,6 +54,7 @@ pub fn run(call: &DirectiveCall) {
     };
 
     let parent_proxy = call.proxy.clone();
+    let parent_scope_id = call.scope_id;
     let template_el: Element = call.el.clone();
     let key_expr = template_el.get_attribute("pp-key");
 
@@ -63,10 +64,18 @@ pub fn run(call: &DirectiveCall) {
             items_expr,
             key,
             parent_proxy,
+            parent_scope_id,
             template,
             template_el,
         ),
-        _ => run_naive(item_name, items_expr, parent_proxy, template, template_el),
+        _ => run_naive(
+            item_name,
+            items_expr,
+            parent_proxy,
+            parent_scope_id,
+            template,
+            template_el,
+        ),
     };
 
     track_effect_on(call.el, effect_id);
@@ -78,6 +87,7 @@ fn run_naive(
     item_name: String,
     items_expr: String,
     parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
 ) -> crate::reactive::EffectId {
@@ -113,6 +123,7 @@ fn run_naive(
                 parent: parent_proxy.clone(),
             };
             let scope = Scope::new(Rc::new(RefCell::new(loop_state)));
+            crate::context::set_parent(scope.id, parent_scope_id);
             let proxy = scope.into_proxy();
 
             let Some(clone_root) = clone_template_body(&template) else {
@@ -153,6 +164,7 @@ fn run_keyed(
     items_expr: String,
     key_expr: String,
     parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
 ) -> crate::reactive::EffectId {
@@ -220,6 +232,7 @@ fn run_keyed(
                     parent: parent_proxy.clone(),
                 }));
                 let scope = Scope::new(loop_rc.clone());
+                crate::context::set_parent(scope.id, parent_scope_id);
                 let proxy = scope.into_proxy();
 
                 let Some(clone_root) = clone_template_body(&template) else {
