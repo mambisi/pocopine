@@ -160,24 +160,32 @@ decisions are in [`rfcs/`](./rfcs):
 
 ## Styling with Tailwind / DaisyUI
 
-Tailwind v4 drops in. `.poco` files aren't a recognised extension, but
-Tailwind's parser scans raw text and regex-matches class-name-shaped
-tokens, so a `@source` line in your stylesheet is all it takes:
+Tailwind v4 is a first-class option — opt in via `Cargo.toml` and
+`pocopine-cli` downloads the standalone Rust binary on first run,
+then spawns it alongside `wasm-pack`:
+
+```toml
+[package.metadata.pocopine.tailwind]
+input = "app.css"            # entry CSS
+output = "pkg/tailwind.css"  # compiled bundle
+# version = "v4.0.0"         # optional — pin the upstream release
+# binary = "./tailwindcss"   # optional — use your own binary instead
+```
+
+Your `app.css` is a normal Tailwind entry. `.poco` files aren't a
+recognised extension, but Tailwind's parser scans raw text, so a
+`@source` line is all it takes:
 
 ```css
-/* app.css */
 @import "tailwindcss";
 @source "./src/**/*.poco";
 ```
 
-Build the stylesheet alongside `wasm-pack`:
+`cargo run -p pocopine-cli -- dev --path examples/tailwind` does the
+whole dance: binary in `target/pocopine/bin/tailwindcss`, watch mode,
+compiled CSS at `/pkg/tailwind.css`. No Node, no `npm install`.
 
-```bash
-npx @tailwindcss/cli -i ./app.css -o ./tailwind.css --watch
-```
-
-Link the compiled file from `index.html` and you're done. DaisyUI is
-a plugin:
+DaisyUI is a plugin:
 
 ```css
 @import "tailwindcss";
@@ -187,10 +195,6 @@ a plugin:
 
 If your `pp-bind:class="..."` expressions live in Rust strings, expand
 the glob: `@source "./src/**/*.{poco,rs}";`.
-
-For a zero-setup demo, [`examples/tailwind`](./examples/tailwind)
-uses Tailwind v4's CDN build — open it in `pocopine-cli dev` and it
-works out of the box.
 
 ## Development
 

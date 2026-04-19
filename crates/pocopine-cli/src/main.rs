@@ -82,15 +82,81 @@ struct PocopineConfig {
     /// binds whatever it wants; pocopine does not override it.
     #[allow(dead_code)]
     port: Option<u16>,
+    /// Opt into bundled Tailwind. When present, `pocopine-cli` runs
+    /// the Tailwind standalone CLI alongside `wasm-pack` — one-shot
+    /// on `build`/`run`, watch mode on `dev`.
+    tailwind: Option<TailwindConfig>,
 }
+
+/// `[package.metadata.pocopine.tailwind]` — configure the bundled
+/// Tailwind build. All fields optional.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct TailwindConfig {
+    /// Entry CSS passed to `tailwindcss -i`. Defaults to `app.css` at
+    /// the project root.
+    #[serde(default = "default_tw_input")]
+    input: String,
+    /// Output CSS path passed to `tailwindcss -o`. Defaults to
+    /// `pkg/tailwind.css` so it sits alongside the wasm bundle.
+    #[serde(default = "default_tw_output")]
+    output: String,
+    /// Release tag on `tailwindlabs/tailwindcss` to download when the
+    /// binary isn't on `$PATH`. Defaults to [`DEFAULT_TW_VERSION`]. Only
+    /// consumed when pocopine-cli is built for a host target.
+    #[allow(dead_code)]
+    #[serde(default = "default_tw_version")]
+    version: String,
+    /// Explicit path to a Tailwind binary. When set, skips `$PATH`
+    /// lookup and auto-download entirely.
+    binary: Option<PathBuf>,
+}
+
+impl Default for TailwindConfig {
+    fn default() -> Self {
+        Self {
+            input: default_tw_input(),
+            output: default_tw_output(),
+            version: default_tw_version(),
+            binary: None,
+        }
+    }
+}
+
+fn default_tw_input() -> String {
+    "app.css".into()
+}
+fn default_tw_output() -> String {
+    "pkg/tailwind.css".into()
+}
+fn default_tw_version() -> String {
+    DEFAULT_TW_VERSION.into()
+}
+
+/// Tailwind standalone CLI version used when no `version` override is
+/// set in the project config. Bump when upstream cuts a release we
+/// want as the default.
+const DEFAULT_TW_VERSION: &str = "v4.0.0";
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Build(a) => build(&a.path, a.release),
+        Cmd::Build(a) => {
+            let cfg = load_config(&a.path)?;
+            build(&a.path, a.release)?;
+            if let Some(tw) = cfg.tailwind.as_ref() {
+                let project = a.path.canonicalize()?;
+                run_tailwind_once(&project, tw, a.release)?;
+            }
+            Ok(())
+        }
         Cmd::Run(a) => {
             let cfg = load_config(&a.path)?;
             build(&a.path, a.release)?;
+            if let Some(tw) = cfg.tailwind.as_ref() {
+                let project = a.path.canonicalize()?;
+                run_tailwind_once(&project, tw, a.release)?;
+            }
             match cfg.bin.as_deref() {
                 Some(bin) => spawn_bin(&a.path, bin, a.release)?.wait_for_exit(),
                 None => serve_static(&a.path, a.port),
@@ -132,6 +198,178 @@ fn load_config(path: &Path) -> Result<PocopineConfig> {
     let manifest: Manifest = toml::from_str(&text)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
     Ok(manifest.package.metadata.pocopine)
+}
+
+// ---------- tailwind ----------
+
+/// A running Tailwind watcher child. Dropped via [`TailwindChild::kill`]
+/// on CLI exit so the process doesn't outlive us.
+struct TailwindChild {
+    child: Child,
+}
+
+impl TailwindChild {
+    fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Resolve the Tailwind binary: first explicit config path, then
+/// `$PATH`, then `<target>/pocopine/bin/tailwindcss(.exe)` — downloading
+/// it from GitHub Releases if absent. Uses `version` from the config
+/// so projects can pin upstream independently.
+fn ensure_tailwind_binary(project: &Path, tw: &TailwindConfig) -> Result<PathBuf> {
+    if let Some(explicit) = tw.binary.as_ref() {
+        let resolved = if explicit.is_absolute() {
+            explicit.clone()
+        } else {
+            project.join(explicit)
+        };
+        if !resolved.exists() {
+            bail!(
+                "pocopine.tailwind.binary set to {}, but the file does not exist",
+                resolved.display()
+            );
+        }
+        return Ok(resolved);
+    }
+
+    if let Some(found) = which("tailwindcss") {
+        return Ok(found);
+    }
+
+    let bin_dir = project.join("target").join("pocopine").join("bin");
+    let bin_name = if cfg!(windows) { "tailwindcss.exe" } else { "tailwindcss" };
+    let bin_path = bin_dir.join(bin_name);
+    if bin_path.exists() {
+        return Ok(bin_path);
+    }
+
+    std::fs::create_dir_all(&bin_dir)
+        .with_context(|| format!("create {}", bin_dir.display()))?;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let asset = tailwind_asset_name()?;
+        let url = format!(
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/{version}/{asset}",
+            version = tw.version,
+            asset = asset,
+        );
+        println!("▶ downloading tailwindcss {} ({asset})", tw.version);
+        let bytes = reqwest::blocking::get(&url)
+            .with_context(|| format!("fetch {url}"))?
+            .error_for_status()
+            .with_context(|| format!("HTTP error fetching {url}"))?
+            .bytes()
+            .context("read tailwindcss download")?;
+        std::fs::write(&bin_path, &bytes)
+            .with_context(|| format!("write {}", bin_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&bin_path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bin_path, perms)?;
+        }
+        Ok(bin_path)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        bail!("tailwindcss not on $PATH and auto-download requires a host build of pocopine-cli");
+    }
+}
+
+/// Map the current host to the asset filename on
+/// `tailwindlabs/tailwindcss` releases.
+#[cfg(not(target_arch = "wasm32"))]
+fn tailwind_asset_name() -> Result<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("tailwindcss-linux-x64"),
+        ("linux", "aarch64") => Ok("tailwindcss-linux-arm64"),
+        ("macos", "x86_64") => Ok("tailwindcss-macos-x64"),
+        ("macos", "aarch64") => Ok("tailwindcss-macos-arm64"),
+        ("windows", "x86_64") => Ok("tailwindcss-windows-x64.exe"),
+        (os, arch) => bail!(
+            "no Tailwind standalone binary known for {os}/{arch} — set \
+             `pocopine.tailwind.binary` to a local path"
+        ),
+    }
+}
+
+/// Minimal `which` — walks `$PATH` for an executable by that name.
+fn which(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        {
+            let with_ext = dir.join(format!("{name}.exe"));
+            if with_ext.is_file() {
+                return Some(with_ext);
+            }
+        }
+    }
+    None
+}
+
+/// Run Tailwind once (used by `build` and `run`). `release` enables
+/// `--minify`.
+fn run_tailwind_once(project: &Path, tw: &TailwindConfig, release: bool) -> Result<()> {
+    let bin = ensure_tailwind_binary(project, tw)?;
+    let input = project.join(&tw.input);
+    let output = project.join(&tw.output);
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    println!(
+        "▶ tailwindcss {} → {}",
+        tw.input.trim_start_matches("./"),
+        tw.output.trim_start_matches("./")
+    );
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-i").arg(&input).arg("-o").arg(&output);
+    if release {
+        cmd.arg("--minify");
+    }
+    cmd.current_dir(project);
+    let status = cmd.status().context("invoke tailwindcss")?;
+    if !status.success() {
+        bail!("tailwindcss exited with {status}");
+    }
+    Ok(())
+}
+
+/// Spawn Tailwind in `--watch` mode for `dev`. The returned handle
+/// must be killed on CLI exit.
+fn spawn_tailwind_watch(project: &Path, tw: &TailwindConfig) -> Result<TailwindChild> {
+    let bin = ensure_tailwind_binary(project, tw)?;
+    let input = project.join(&tw.input);
+    let output = project.join(&tw.output);
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    println!(
+        "▶ tailwindcss --watch ({} → {})",
+        tw.input.trim_start_matches("./"),
+        tw.output.trim_start_matches("./")
+    );
+    let child = Command::new(&bin)
+        .arg("-i")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .arg("--watch")
+        .current_dir(project)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("spawn tailwindcss --watch")?;
+    Ok(TailwindChild { child })
 }
 
 // ---------- build ----------
@@ -315,6 +553,17 @@ fn dev(args: &ServeArgs) -> Result<()> {
     let cfg = load_config(&args.path)?;
     build(&project, args.release)?;
 
+    // Kick off Tailwind in watch mode *before* we start serving so
+    // the first page load already sees compiled CSS.
+    let tailwind_child = if let Some(tw) = cfg.tailwind.as_ref() {
+        // One-shot pre-build so pkg/tailwind.css exists before the
+        // watcher spins up and before the first HTTP request lands.
+        run_tailwind_once(&project, tw, args.release)?;
+        Some(spawn_tailwind_watch(&project, tw)?)
+    } else {
+        None
+    };
+
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
     let bin_child = match cfg.bin.as_deref() {
@@ -361,6 +610,9 @@ fn dev(args: &ServeArgs) -> Result<()> {
     };
 
     if let Some(child) = bin_child {
+        child.kill();
+    }
+    if let Some(child) = tailwind_child {
         child.kill();
     }
     result

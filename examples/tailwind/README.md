@@ -1,67 +1,45 @@
 # pocopine + Tailwind CSS
 
-Minimal pocopine app styled entirely with Tailwind utility classes.
-Two build modes are supported.
+Minimal pocopine app styled with Tailwind utility classes, compiled
+locally by `pocopine-cli`.
 
-## 1. CDN mode (the default here — zero setup)
-
-`index.html` loads Tailwind v4's browser build via
-`https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4`, which scans the
-live DOM at runtime and generates CSS on the fly. Run:
+## Run
 
 ```bash
 cargo run -p pocopine-cli -- dev --path examples/tailwind
 ```
 
-Open the URL it prints. That's the whole story — no `npm install`,
-no separate CSS build step. Good for demos and prototypes.
+On the first run, `pocopine-cli` downloads the Tailwind standalone
+CLI to `target/pocopine/bin/tailwindcss` and spawns it in watch mode
+alongside `wasm-pack`. Subsequent runs reuse the cached binary.
 
-## 2. Local build (production)
+## Config
 
-The CDN build is convenient but ships the Tailwind engine to every
-visitor. For production, run the Tailwind CLI locally and link the
-compiled CSS.
+The Tailwind integration is opt-in per project via
+`Cargo.toml`:
 
-### Install the standalone CLI
-
-```bash
-npm install -D tailwindcss @tailwindcss/cli
+```toml
+[package.metadata.pocopine.tailwind]
+input = "app.css"          # entry CSS
+output = "pkg/tailwind.css" # compiled bundle
+# version = "v4.0.0"        # optional, pins the upstream release
+# binary = "./tailwindcss"  # optional, uses a local binary instead
 ```
 
-(or download the
-[standalone binary](https://github.com/tailwindlabs/tailwindcss/releases)
-if you want to stay off npm — same flags).
-
-### Point Tailwind at your templates
-
-`app.css`:
+`app.css` is a normal Tailwind entry:
 
 ```css
 @import "tailwindcss";
 @source "./src/**/*.poco";
 ```
 
-The `@source` line teaches Tailwind to scan `.poco` files. Tailwind
-parses raw text and regex-matches class-name-shaped tokens, so the
-extension doesn't matter as long as it's in a source glob.
-
-### Build the stylesheet
-
-```bash
-npx @tailwindcss/cli -i ./app.css -o ./tailwind.css --watch
-```
-
-Swap the CDN `<script>` tag in `index.html` for:
-
-```html
-<link rel="stylesheet" href="/tailwind.css" />
-```
-
-Now ship just the utilities your templates actually use.
+`@source` teaches Tailwind to scan `.poco` templates (Tailwind
+parses raw text, so the extension doesn't matter — only the glob
+does).
 
 ## DaisyUI
 
-Once Tailwind is in, DaisyUI is one line:
+Add one line to `app.css`:
 
 ```css
 @import "tailwindcss";
@@ -69,17 +47,11 @@ Once Tailwind is in, DaisyUI is one line:
 @source "./src/**/*.poco";
 ```
 
-`<button class="btn btn-primary">` then works the same way any
-utility does.
+`<button class="btn btn-primary">` then works the same as any other
+utility.
 
-## What to scan
+## What about Node?
 
-pocopine writes class names in three places:
-
-- **`.poco` templates** — most classes.
-- **`.rs` handlers** — e.g. `pp-bind:class="classes_for_row"` where
-  the string comes out of a handler. Scan these too:
-  ```css
-  @source "./src/**/*.{poco,rs}";
-  ```
-- **`index.html`** — classes on the root element. Scanned by default.
+You don't need it. Tailwind v4 ships a Rust-backed standalone
+binary; `pocopine-cli` downloads it on demand. If you'd rather manage
+the binary yourself, set `binary = "..."` in the config.
