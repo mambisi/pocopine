@@ -43,10 +43,10 @@ pub trait ComponentState: 'static {
     /// `mount()` returns. Takes `&self` (not `&mut self`) so
     /// proxy-reading code inside the hook (watches, refs, etc.)
     /// doesn't clash with the scope's state borrow. Mutation in
-    /// post_mount goes through `pocopine::this::<Self>().update(...)`.
-    /// Default no-op; `#[component]` wires the user's `post_mount`
-    /// when one exists. See RFC-026.
-    fn post_mount(&self) {}
+    /// on_ready goes through `pocopine::this::<Self>().update(...)`.
+    /// Default no-op; `#[component]` wires the user's `on_ready`
+    /// when one exists. See RFC-026 / RFC-029.
+    fn on_ready(&self) {}
 
     /// Lifecycle — called once just before the component is torn down.
     /// Default no-op; `#[component]` wires the user's `on_unmount`
@@ -62,10 +62,10 @@ pub trait ComponentState: 'static {
         false
     }
 
-    /// True iff the component has a user-defined `post_mount` hook.
+    /// True iff the component has a user-defined `on_ready` hook.
     /// Walker uses this to decide whether to schedule a microtask
     /// after mount — components without the hook pay nothing.
-    fn has_post_mount(&self) -> bool {
+    fn has_on_ready(&self) -> bool {
         false
     }
 

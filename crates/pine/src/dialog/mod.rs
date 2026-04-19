@@ -65,7 +65,7 @@ impl Default for PineDialog {
 #[handlers]
 impl PineDialog {
     /// Reacts to `open` transitions. RFC-026's `#[watch]` sugar —
-    /// the `#[handlers]` macro generates an auto `post_mount` that
+    /// the `#[handlers]` macro generates an auto `on_ready` that
     /// calls `watch_field::<bool, _>("open", …)` for us.
     #[watch(open)]
     fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {

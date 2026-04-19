@@ -25,9 +25,9 @@ pub trait HandlerDispatch {
     /// Called once, scheduled via `tick::next` AFTER `mount()` returns.
     /// Takes `&self` so proxy-reading helpers (`watch_field`, refs,
     /// `$event`) called from inside don't clash with an active
-    /// `borrow_mut`. Mutation in post_mount goes via
-    /// `pocopine::this::<Self>().update(...)`. See RFC-026.
-    fn post_mount(&self) {}
+    /// `borrow_mut`. Mutation in on_ready goes via
+    /// `pocopine::this::<Self>().update(...)`. See RFC-026 / RFC-029.
+    fn on_ready(&self) {}
 
     /// Called once just before the component unmounts, while the
     /// state is still mutable and the scope is still in the registry.
@@ -43,10 +43,10 @@ pub trait HandlerDispatch {
         false
     }
 
-    /// True iff the component author actually wrote a `post_mount`
+    /// True iff the component author actually wrote an `on_ready`
     /// method. The walker uses this to decide whether to schedule
     /// the post-mount tick — components without the hook pay nothing.
-    fn has_post_mount(&self) -> bool {
+    fn has_on_ready(&self) -> bool {
         false
     }
 

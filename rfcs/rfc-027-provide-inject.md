@@ -230,7 +230,7 @@ items find the root via the scope chain.
 - **Inject before parent has provided.** `on_mount` on a child
   can fire before its parent's `on_mount` (children mount first
   in pocopine's pre-order walk). Inject returns `None`.
-  Workaround: call inject from `post_mount` (RFC-026) — fires
+  Workaround: call inject from `on_ready` (RFC-026/029) — fires
   post-walk, parent's `on_mount` has run.
 - **Circular provide/inject.** Not possible by construction:
   parent chain is a tree (each scope has at most one parent).

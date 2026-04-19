@@ -149,10 +149,10 @@ fn fire_mount_hook(el: &Element) {
 
     // Snapshot both hook flags before borrowing — `has_on_mount`
     // reads through an immutable borrow, `mount()` needs a mutable
-    // one, and we want to check `has_post_mount` without racing.
-    let (has_mount, has_post) = {
+    // one, and we want to check `has_on_ready` without racing.
+    let (has_mount, has_ready) = {
         let s = scope.state.borrow();
-        (s.has_on_mount(), s.has_post_mount())
+        (s.has_on_mount(), s.has_on_ready())
     };
 
     if has_mount {
@@ -162,9 +162,9 @@ fn fire_mount_hook(el: &Element) {
         crate::reactive::trigger_scope(id);
     }
 
-    if has_post {
-        // RFC-026: defer `post_mount` to the next microtask so the
-        // surrounding walker frame has unwound and pp-if /
+    if has_ready {
+        // RFC-026/029: defer `on_ready` to the next microtask so
+        // the surrounding walker frame has unwound and pp-if /
         // pp-teleport children have had a chance to commit. The
         // hook is invoked through an IMMUTABLE borrow — proxy reads
         // inside the hook (watch_field, refs::get_on that touches
@@ -173,7 +173,7 @@ fn fire_mount_hook(el: &Element) {
         crate::tick::next(move || {
             let Some(scope) = Scope::find(id) else { return };
             crate::scope::with_current_scope_id(id, || {
-                scope.state.borrow().post_mount();
+                scope.state.borrow().on_ready();
             });
         });
     }

@@ -67,7 +67,7 @@ where
 ///
 /// The actual `effect` install is deferred to the next microtask
 /// so the initial read doesn't clash with the caller's active
-/// `&mut self` borrow (the common case — `post_mount(&mut self)`
+/// `&mut self` borrow (the common case — `on_mount(&mut self)`
 /// calling `watch_field` while the walker still holds the mutable
 /// borrow on state). The effect's `get`-trap read needs an
 /// *immutable* borrow of state; without the defer, that reentry

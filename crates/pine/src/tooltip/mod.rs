@@ -67,13 +67,13 @@ impl Default for PineTooltip {
 
 #[handlers]
 impl PineTooltip {
-    pub fn post_mount(&self) {
-        // RFC-026: runs AFTER on_mount's borrow releases AND after
-        // a microtask — the trigger resolved via `refs`/selector
-        // is definitely in the DOM by now. No reactive watcher
-        // needed: the trigger listeners mutate state imperatively
-        // and pp-if does the rest.
-        let scope = current_scope_id().expect("post_mount within scope");
+    pub fn on_ready(&self) {
+        // RFC-026/029: runs AFTER on_mount's borrow releases AND
+        // after a microtask — the trigger resolved via
+        // `refs`/selector is definitely in the DOM by now. No
+        // reactive watcher needed: the trigger listeners mutate
+        // state imperatively and pp-if does the rest.
+        let scope = current_scope_id().expect("on_ready within scope");
         install_trigger_listeners(scope);
     }
 

@@ -227,8 +227,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn mount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::mount(self);
             }
-            fn post_mount(&self) {
-                <Self as ::pocopine::__private::HandlerDispatch>::post_mount(self);
+            fn on_ready(&self) {
+                <Self as ::pocopine::__private::HandlerDispatch>::on_ready(self);
             }
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
@@ -236,8 +236,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn has_on_mount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_mount(self)
             }
-            fn has_post_mount(&self) -> bool {
-                <Self as ::pocopine::__private::HandlerDispatch>::has_post_mount(self)
+            fn has_on_ready(&self) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::has_on_ready(self)
             }
             fn has_on_unmount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_unmount(self)
@@ -285,10 +285,10 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut arms = Vec::new();
     let mut has_on_mount = false;
-    let mut has_post_mount = false;
+    let mut has_on_ready = false;
     let mut has_on_unmount = false;
     // (method_ident, field_ident, value_type) for each `#[watch(f)]`
-    // method. The macro auto-generates a `post_mount` that wires a
+    // method. The macro auto-generates an `on_ready` that wires a
     // `watch_field` per entry.
     let mut watches: Vec<(syn::Ident, syn::Ident, syn::Type)> = Vec::new();
 
@@ -332,8 +332,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let name = ident.to_string();
         match name.as_str() {
             "on_mount" => has_on_mount = true,
-            "post_mount" => {
-                has_post_mount = true;
+            "on_ready" => {
+                has_on_ready = true;
                 continue; // lifecycle; don't emit an invoke arm
             }
             "on_unmount" => has_on_unmount = true,
@@ -341,7 +341,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // `#[watch(field)]`-decorated methods are called by the
-        // auto-generated post_mount, never as a named handler.
+        // auto-generated on_ready, never as a named handler.
         if methods_to_skip_in_arms.contains(&name) {
             continue;
         }
@@ -394,7 +394,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
     // Build the list of watch_field registration statements for the
-    // auto-generated post_mount. Each `#[watch(field)]` method
+    // auto-generated on_ready. Each `#[watch(field)]` method
     // becomes:
     //
     //   let __scope = current_scope_id().expect(…);
@@ -411,7 +411,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     //
     // `Handle::new` + `update` acquires a fresh mutable borrow via
     // the captured scope id. This sidesteps two things at once:
-    // (1) the &self / &mut self mismatch between post_mount and the
+    // (1) the &self / &mut self mismatch between on_ready and the
     // decorated method, and (2) the fact that `this::<Self>()`
     // depends on the thread-local `CURRENT_SCOPE_ID`, which isn't
     // set during most watch callback re-runs (triggers come from
@@ -440,33 +440,33 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     });
     let has_watches = !watches.is_empty();
 
-    // User wrote their own `post_mount` explicitly: use it. If they
-    // didn't but there's at least one `#[watch]`, generate a
-    // post_mount that calls `pine_auto_post_mount`. If they wrote
-    // BOTH, merge — user's body runs first, then watch setup.
-    let post_mount_impl = if has_post_mount {
+    // User wrote their own `on_ready` explicitly: use it. If they
+    // didn't but there's at least one `#[watch]`, generate an
+    // on_ready that wires up every watch. If they wrote BOTH,
+    // merge — user's body runs first, then watch setup.
+    let on_ready_impl = if has_on_ready {
         if has_watches {
             quote! {
-                fn post_mount(&self) {
-                    Self::post_mount(self);
+                fn on_ready(&self) {
+                    Self::on_ready(self);
                     #(#watch_installs)*
                 }
-                fn has_post_mount(&self) -> bool { true }
+                fn has_on_ready(&self) -> bool { true }
             }
         } else {
             quote! {
-                fn post_mount(&self) {
-                    Self::post_mount(self);
+                fn on_ready(&self) {
+                    Self::on_ready(self);
                 }
-                fn has_post_mount(&self) -> bool { true }
+                fn has_on_ready(&self) -> bool { true }
             }
         }
     } else if has_watches {
         quote! {
-            fn post_mount(&self) {
+            fn on_ready(&self) {
                 #(#watch_installs)*
             }
-            fn has_post_mount(&self) -> bool { true }
+            fn has_on_ready(&self) -> bool { true }
         }
     } else {
         quote! {}
@@ -495,7 +495,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
             #mount_impl
-            #post_mount_impl
+            #on_ready_impl
             #unmount_impl
         }
     };
