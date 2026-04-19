@@ -87,18 +87,25 @@ impl PinePopover {
     pub fn on_outside(&mut self) {
         if self.dismiss_on_outside {
             self.open = false;
+            emit_open_changed(false);
         }
     }
 
     pub fn on_escape(&mut self) {
         if self.dismiss_on_escape {
             self.open = false;
+            emit_open_changed(false);
         }
     }
 
     pub fn close(&mut self) {
         self.open = false;
+        emit_open_changed(false);
     }
+}
+
+fn emit_open_changed(open: bool) {
+    pocopine::dispatch_event("pp:update:model", &JsValue::from_bool(open));
 }
 
 fn read_open(scope: ScopeId) -> bool {

@@ -70,6 +70,7 @@ impl PineDropdownMenu {
 
     pub fn close(&mut self) {
         self.open = false;
+        pocopine::dispatch_event("pp:update:model", &JsValue::from_bool(false));
     }
 }
 

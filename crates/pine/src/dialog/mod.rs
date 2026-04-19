@@ -96,6 +96,7 @@ impl PineDialog {
     pub fn on_overlay_click(&mut self) {
         if self.dismiss_on_overlay {
             self.open = false;
+            emit_open_changed(false);
         }
     }
 
@@ -103,6 +104,7 @@ impl PineDialog {
     pub fn on_escape(&mut self) {
         if self.dismiss_on_escape {
             self.open = false;
+            emit_open_changed(false);
         }
     }
 
@@ -110,7 +112,17 @@ impl PineDialog {
     /// button inside the dialog.
     pub fn close(&mut self) {
         self.open = false;
+        emit_open_changed(false);
     }
+}
+
+/// Fire `pp:update:model` so `pp-model="open"` on the parent
+/// picks up the internally-driven close.
+fn emit_open_changed(open: bool) {
+    pocopine::dispatch_event(
+        "pp:update:model",
+        &wasm_bindgen::JsValue::from_bool(open),
+    );
 }
 
 /// Reactive read of the `open` field on `scope`. Goes through the

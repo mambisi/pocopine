@@ -981,6 +981,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pine-demo"
+version = "0.1.0"
+dependencies = [
+ "pine",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

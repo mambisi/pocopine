@@ -1,0 +1,96 @@
+<div>
+  <h1>Pine</h1>
+  <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
+
+  <!-- PineButton ─────────────────────────────────────────── -->
+  <h2>Button</h2>
+  <section class="row">
+    <pine-button variant="primary" @click="bump">
+      <span>Primary · </span><span pp-text="clicks"></span>
+    </pine-button>
+    <pine-button variant="destructive">Destructive</pine-button>
+    <pine-button variant="ghost">Ghost</pine-button>
+    <pine-button disabled="true">Disabled</pine-button>
+    <pine-button pp-as variant="ghost">
+      <a href="https://github.com/mambisi/pocopine">Repo ↗</a>
+    </pine-button>
+  </section>
+
+  <!-- PineDialog ─────────────────────────────────────────── -->
+  <h2>Dialog</h2>
+  <section class="row">
+    <pine-button variant="destructive" @click="open_dialog">Delete file</pine-button>
+    <pine-dialog pp-model="dialog_open">
+      <template pp-slot="title">Delete file?</template>
+      <template pp-slot="description">This action cannot be undone.</template>
+      <div class="row" style="margin-top:1rem;justify-content:flex-end">
+        <pine-button variant="ghost" @click="close_dialog">Cancel</pine-button>
+        <pine-button variant="destructive" @click="close_dialog">Delete</pine-button>
+      </div>
+    </pine-dialog>
+  </section>
+
+  <!-- PinePopover ────────────────────────────────────────── -->
+  <h2>Popover</h2>
+  <section class="row">
+    <pine-button id="pop-trig" @click="toggle_popover">
+      <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
+    </pine-button>
+    <pine-popover pp-model="popover_open" anchor="#pop-trig">
+      <p style="margin:0">Anchored to the trigger.</p>
+      <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
+        Click outside or press Escape to close.
+      </p>
+    </pine-popover>
+  </section>
+
+  <!-- PineDropdownMenu ───────────────────────────────────── -->
+  <h2>Dropdown menu</h2>
+  <section class="row">
+    <pine-button id="menu-trig" @click="toggle_menu">Account ▾</pine-button>
+    <pine-dropdown-menu pp-model="menu_open" anchor="#menu-trig" @click="close_menu">
+      <li role="menuitem" tabindex="-1">Profile</li>
+      <li role="menuitem" tabindex="-1">Settings</li>
+      <li role="menuitem" tabindex="-1" aria-disabled="true">Team (disabled)</li>
+      <li role="menuitem" tabindex="-1">Sign out</li>
+    </pine-dropdown-menu>
+  </section>
+
+  <!-- PineTabs ───────────────────────────────────────────── -->
+  <h2>Tabs</h2>
+  <section>
+    <pine-tabs pp-model="tab" pp-bind:tabs="tabs"></pine-tabs>
+    <div role="tabpanel" pp-show="tab == 'account'">
+      <strong>Account</strong> — manage your profile and auth.
+    </div>
+    <div role="tabpanel" pp-show="tab == 'notifications'">
+      <strong>Notifications</strong> — email and push preferences.
+    </div>
+    <div role="tabpanel" pp-show="tab == 'billing'">
+      <strong>Billing</strong> — invoices and payment methods.
+    </div>
+  </section>
+
+  <!-- PineTooltip ────────────────────────────────────────── -->
+  <h2>Tooltip</h2>
+  <section class="row">
+    <pine-button id="save-btn" variant="primary">Save</pine-button>
+    <pine-tooltip trigger="#save-btn">Saves your work.</pine-tooltip>
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      Hover or focus the Save button.
+    </span>
+  </section>
+
+  <!-- PineSwitch + PineCheckbox ──────────────────────────── -->
+  <h2>Switch &amp; Checkbox</h2>
+  <section>
+    <div class="row" style="margin-bottom:0.75rem">
+      <pine-switch pp-model="dark_mode"></pine-switch>
+      <span>Dark mode: <strong pp-text="dark_mode ? 'on' : 'off'"></strong></span>
+    </div>
+    <div class="row">
+      <pine-checkbox pp-model="agree_state"></pine-checkbox>
+      <span>I agree — state: <strong pp-text="agree_state"></strong></span>
+    </div>
+  </section>
+</div>

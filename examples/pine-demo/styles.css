@@ -1,0 +1,223 @@
+/* pine-demo — hand-written demo CSS for the Pine primitives.
+ * Shows one opinionated styling approach. Authors using Pine
+ * will bring their own stylesheet; nothing here ships with the
+ * `pine` crate.
+ */
+
+:root {
+  --fg: #111;
+  --fg-muted: #666;
+  --bg: #fff;
+  --bg-subtle: #f4f4f5;
+  --bg-hover: #e4e4e7;
+  --border: #d4d4d8;
+  --brand: #0070f3;
+  --brand-fg: #fff;
+  --destructive: #dc2626;
+  --destructive-fg: #fff;
+  --radius: 6px;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+pine-demo-app {
+  display: block;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+}
+
+h1 { font-size: 2rem; margin: 0 0 0.5rem; }
+h2 { font-size: 1.25rem; margin: 2.5rem 0 0.75rem; }
+p  { margin: 0 0 1rem; color: var(--fg-muted); }
+.lead { color: var(--fg); font-size: 1.1rem; }
+
+section {
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  background: var(--bg);
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ─── PineButton ──────────────────────────────────────────────── */
+
+.pine-btn {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  transition: background 0.15s;
+}
+.pine-btn:hover { background: var(--bg-hover); }
+.pine-btn[data-variant="primary"]     { background: var(--brand); color: var(--brand-fg); border-color: var(--brand); }
+.pine-btn[data-variant="primary"]:hover { filter: brightness(1.1); }
+.pine-btn[data-variant="destructive"] { background: var(--destructive); color: var(--destructive-fg); border-color: var(--destructive); }
+.pine-btn[data-variant="ghost"]       { border-color: transparent; background: transparent; }
+.pine-btn[data-variant="ghost"]:hover { background: var(--bg-subtle); }
+.pine-btn[data-size="sm"]  { padding: 0.25rem 0.625rem; font-size: 0.875rem; }
+.pine-btn[data-disabled]   { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── PineDialog ──────────────────────────────────────────────── */
+
+.pine-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.pine-dialog-content {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  max-width: 420px;
+  width: 90vw;
+  box-shadow: var(--shadow);
+}
+.pine-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
+.pine-dialog-description { color: var(--fg-muted); margin: 0 0 1rem; }
+
+/* ─── PinePopover ─────────────────────────────────────────────── */
+
+.pine-popover-content {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  min-width: 220px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+}
+
+/* ─── PineDropdownMenu ────────────────────────────────────────── */
+
+.pine-menu {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 180px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+}
+.pine-menu li[role="menuitem"] {
+  padding: 0.375rem 0.625rem;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+}
+.pine-menu li[role="menuitem"]:hover,
+.pine-menu li[role="menuitem"]:focus { background: var(--bg-hover); }
+.pine-menu li[role="menuitem"][aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── PineTabs ────────────────────────────────────────────────── */
+
+.pine-tabs-list {
+  display: inline-flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+.pine-tabs-trigger {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.5rem 0.875rem;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.pine-tabs-trigger[data-state="active"] {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+.pine-tabs-trigger[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── PineTooltip ─────────────────────────────────────────────── */
+
+.pine-tooltip {
+  background: #111;
+  color: #fff;
+  padding: 0.375rem 0.625rem;
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  z-index: 40;
+}
+
+/* ─── PineSwitch ──────────────────────────────────────────────── */
+
+.pine-switch {
+  appearance: none;
+  padding: 0;
+  border: none;
+  background: var(--bg-hover);
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pine-switch[data-state="checked"] { background: var(--brand); }
+.pine-switch-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.pine-switch-thumb[data-state="checked"] { transform: translateX(16px); }
+.pine-switch[data-disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── PineCheckbox ────────────────────────────────────────────── */
+
+.pine-checkbox {
+  appearance: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  width: 18px; height: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pine-checkbox[data-state="checked"],
+.pine-checkbox[data-state="indeterminate"] {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.pine-checkbox-indicator {
+  width: 10px; height: 10px;
+  color: #fff;
+  display: none;
+}
+.pine-checkbox-indicator[data-state="checked"]       { display: block; background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="white"><path d="M13 4l-7 7-3-3 1-1 2 2 6-6z"/></svg>') no-repeat center; }
+.pine-checkbox-indicator[data-state="indeterminate"] { display: block; background: #fff; height: 2px; }
