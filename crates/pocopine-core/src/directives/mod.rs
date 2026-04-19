@@ -19,6 +19,7 @@ pub mod model;
 pub mod on;
 pub mod route;
 pub mod show;
+pub mod teleport;
 pub mod text;
 pub mod transition;
 
@@ -52,6 +53,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("route", route::run);
         m.insert("for", for_::run);
         m.insert("if", if_::run);
+        m.insert("teleport", teleport::run);
         m
     })
 }

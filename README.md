@@ -60,7 +60,7 @@ That's the whole counter. No virtual DOM, no build step beyond
 
 * **Directives:** `pp-text`, `pp-html`, `pp-bind:<attr>`, `pp-on:<event>`,
   `pp-show`, `pp-model`, `pp-init`, `pp-for`, `pp-if`, `pp-cloak`,
-  `pp-transition:*`, `pp-route`.
+  `pp-transition:*`, `pp-teleport`, `pp-route`.
 * **Tag-based components.** Declare a struct, drop `<my-thing>` in
   HTML, done. Props bind by attribute name (kebab → snake), slots via
   `<slot>`.
@@ -150,6 +150,7 @@ decisions are in [`rfcs/`](./rfcs):
 | 003 | [Client-side SPA router](./rfcs/rfc-003-router.md) |
 | 004 | [`pp-for` list iteration](./rfcs/rfc-004-pp-for.md) |
 | 005 | [`pp-transition` enter/leave animations](./rfcs/rfc-005-pp-transition.md) |
+| 006 | [`pp-teleport` dialogs / popovers / portals](./rfcs/rfc-006-pp-teleport.md) |
 
 ## Development
 

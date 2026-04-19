@@ -12,6 +12,12 @@
 //! enter sequence plays after insert and the remove is deferred until
 //! the leave sequence finishes. A re-flip to truthy mid-leave cancels
 //! the pending unmount and resumes enter on the same clone.
+//!
+//! If the template has `pp-teleport`, the insert location is the
+//! teleport target instead of "before the template." The clone still
+//! binds against the template's enclosing scope (pinned on the clone
+//! root) so its `pp-*` directives resolve the intended proxy even
+//! after the DOM move.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,11 +26,12 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
 
+use super::teleport;
 use super::transition;
 use super::DirectiveCall;
 use crate::path::resolve_truthy;
 use crate::reactive::effect;
-use crate::walker::{self, track_effect_on};
+use crate::walker::{self, bind_scope_to, track_effect_on};
 
 pub fn run(call: &DirectiveCall) {
     let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
@@ -41,6 +48,18 @@ pub fn run(call: &DirectiveCall) {
     let expr = call.value.clone();
     let template_el: Element = call.el.clone();
 
+    // Resolve the teleport target + enclosing scope once at setup.
+    // Both are stable for the lifetime of the template host.
+    let teleport_target: Option<Element> = template_el
+        .get_attribute("pp-teleport")
+        .as_deref()
+        .and_then(teleport::resolve_target);
+    let pinned_scope = if teleport_target.is_some() {
+        walker::enclosing_scope(&template_el)
+    } else {
+        None
+    };
+
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 
     let effect_id = effect(move || {
@@ -55,15 +74,29 @@ pub fn run(call: &DirectiveCall) {
                     ));
                     return;
                 };
-                if let Some(parent_node) = template_el.parent_node() {
-                    if parent_node
-                        .insert_before(clone_root.as_ref(), Some(template_el.as_ref()))
-                        .is_ok()
-                    {
-                        walker::walk(&clone_root);
-                        *current.borrow_mut() = Some(clone_root.clone());
-                        transition::enter(&clone_root, || {});
-                    }
+
+                // Pin the owning scope onto the clone BEFORE walking
+                // so teleported content still resolves directives
+                // against the intended proxy.
+                if let Some((scope_id, proxy)) = pinned_scope.as_ref() {
+                    bind_scope_to(&clone_root, *scope_id, proxy);
+                }
+
+                let inserted = match teleport_target.as_ref() {
+                    Some(target) => target.append_child(clone_root.as_ref()).is_ok(),
+                    None => template_el
+                        .parent_node()
+                        .map(|p| {
+                            p.insert_before(clone_root.as_ref(), Some(template_el.as_ref()))
+                                .is_ok()
+                        })
+                        .unwrap_or(false),
+                };
+
+                if inserted {
+                    walker::walk(&clone_root);
+                    *current.borrow_mut() = Some(clone_root.clone());
+                    transition::enter(&clone_root, || {});
                 }
             }
             (true, Some(clone)) => {

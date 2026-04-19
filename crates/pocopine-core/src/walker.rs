@@ -335,6 +335,7 @@ fn release_subtree(node: &Node) {
             Scope::remove(ScopeId(id as u64));
         }
         crate::directives::transition::release(&el);
+        crate::directives::teleport::release(&el);
     }
 }
 

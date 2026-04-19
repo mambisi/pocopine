@@ -5,6 +5,7 @@
       <a href="/" pp-route>top</a>
       <a href="https://news.ycombinator.com/" target="_blank" rel="noopener">hn</a>
       <a href="https://github.com/mambisi/pocopine">github</a>
+      <a href="#" pp-on:click.prevent="open_about">about</a>
     </nav>
   </header>
   <main>
@@ -13,4 +14,32 @@
   <footer>
     <span class="mono">pocopine hn · fetched live from hn.algolia.com</span>
   </footer>
+
+  <template pp-teleport="body"
+            pp-if="about_open"
+            pp-transition:enter="pp-fade-enter"
+            pp-transition:enter-start="pp-fade-enter-start"
+            pp-transition:enter-end="pp-fade-enter-end"
+            pp-transition:leave="pp-fade-leave"
+            pp-transition:leave-start="pp-fade-leave-start"
+            pp-transition:leave-end="pp-fade-leave-end">
+    <div class="dialog-backdrop" pp-on:click.self="close_about">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <h2>about pocopine hn</h2>
+        <p>
+          A demo Hacker News reader built with
+          <strong>pocopine</strong> — a Rust/WASM runtime in the
+          spirit of Alpine.js. Stories come live from
+          <code>hn.algolia.com</code>.
+        </p>
+        <p class="mono muted">
+          This dialog is teleported to <code>&lt;body&gt;</code> via
+          <code>pp-teleport</code>.
+        </p>
+        <div class="dialog__actions">
+          <button pp-on:click="close_about">close</button>
+        </div>
+      </div>
+    </div>
+  </template>
 </div>
