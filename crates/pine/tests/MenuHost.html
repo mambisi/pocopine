@@ -1,12 +1,24 @@
 <div>
-  <pine-dropdown-menu-root>
-    <pine-dropdown-menu-trigger class="mh-trigger">open</pine-dropdown-menu-trigger>
-    <pine-dropdown-menu-portal>
-      <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
-        <pine-dropdown-menu-item class="mh-item-a" @click="bump">A</pine-dropdown-menu-item>
-        <pine-dropdown-menu-item class="mh-item-b">B</pine-dropdown-menu-item>
-      </pine-dropdown-menu-content>
-    </pine-dropdown-menu-portal>
-  </pine-dropdown-menu-root>
+  <section class="state-panel" aria-label="Live state">
+    <dl>
+      <dt>Bumps</dt><dd pp-text="bumps"></dd>
+    </dl>
+  </section>
+
+  <h2>Dropdown menu</h2>
+  <section class="row">
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger class="mh-trigger">Actions</pine-dropdown-menu-trigger>
+      <span class="mh-between" style="font-size:0.875rem">
+        bumps: <strong>{bumps}</strong>
+      </span>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
+          <pine-dropdown-menu-item class="mh-item-a" @click="bump">A</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item class="mh-item-b">B</pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+  </section>
   <span class="mh-bumps" pp-text="bumps"></span>
 </div>
