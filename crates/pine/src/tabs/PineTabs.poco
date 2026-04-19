@@ -1,0 +1,1 @@
+<div class="pine-tabs"><slot></slot></div>

@@ -1,0 +1,34 @@
+[package]
+name = "pine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unstyled, accessible UI components for pocopine — headless primitives (Button, Dialog, Popover, …) ready to style."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocopine = { path = "../pocopine" }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+serde = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Element",
+    "Event",
+    "EventTarget",
+    "FocusEvent",
+    "HtmlElement",
+    "KeyboardEvent",
+    "MouseEvent",
+    "Window",
+    "console",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen-futures = { workspace = true }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/pine",
     "crates/pocopine",
     "crates/pocopine-cli",
     "crates/pocopine-core",
