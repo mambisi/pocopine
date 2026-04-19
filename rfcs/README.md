@@ -38,3 +38,4 @@ Conventions:
 | 020 | [`:attr` / `@event` shorthand](./rfc-020-shorthand-prefixes.md) | Implemented |
 | 021 | [`scroll_lock` utility](./rfc-021-scroll-lock.md) | Implemented |
 | 022 | [`pp-roving` tabindex / arrow navigation](./rfc-022-pp-roving.md) | Implemented |
+| 023 | [Pine MVP — 8 unstyled UI primitives](./rfc-023-pine-mvp.md) | Implemented |
