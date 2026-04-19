@@ -132,6 +132,30 @@
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>
 
+    <!-- Third instance — Arrow + Sub + Content config props
+         (side="top") all on one menu. -->
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger>File ▾</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content side="top" align="start" side_offset="8">
+          <pine-dropdown-menu-arrow></pine-dropdown-menu-arrow>
+          <pine-dropdown-menu-item @click="action_bump">New file</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="action_bump">Open…</pine-dropdown-menu-item>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-sub>
+            <pine-dropdown-menu-sub-trigger>Share to ▸</pine-dropdown-menu-sub-trigger>
+            <pine-dropdown-menu-sub-content>
+              <pine-dropdown-menu-item @click="action_bump">Email…</pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="action_bump">Slack…</pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="action_bump">Copy link</pine-dropdown-menu-item>
+            </pine-dropdown-menu-sub-content>
+          </pine-dropdown-menu-sub>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-item @click="action_reset">Quit</pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+
     <span style="font-size:0.875rem;color:var(--fg-muted)">
       actions fired: <strong>{actions_fired}</strong>
     </span>

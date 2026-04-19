@@ -163,6 +163,10 @@ pine-dropdown-menu-portal { display: contents; }
   min-width: 180px;
   box-shadow: var(--shadow);
   z-index: 40;
+  /* Needed so an absolutely-positioned `.pine-dm-arrow` child
+     anchors to the content box. */
+  position: fixed; /* pp-anchor sets this; declare for Arrow's
+                      positioning context regardless. */
 }
 .pine-dm-item {
   padding: 0.375rem 0.625rem;
@@ -228,6 +232,64 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-dm-radio-item:hover,
 .pine-dm-radio-item:focus { background: var(--bg-hover); }
 .pine-dm-radio-item[data-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+/* Arrow — CSS-drawn triangle pointed at the trigger. The `side`
+   data-attr tells us which edge of the content the arrow sits on
+   and therefore which direction it points. */
+.pine-dm-arrow {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.pine-dm-arrow[data-side="top"] {
+  bottom: -6px; left: 12px;
+  border-top: 0; border-left: 0;
+}
+.pine-dm-arrow[data-side="bottom"] {
+  top: -6px; left: 12px;
+  border-bottom: 0; border-right: 0;
+}
+.pine-dm-arrow[data-side="left"] {
+  right: -6px; top: 12px;
+  border-left: 0; border-bottom: 0;
+}
+.pine-dm-arrow[data-side="right"] {
+  left: -6px; top: 12px;
+  border-right: 0; border-top: 0;
+}
+
+/* Sub — display:contents so SubTrigger (a menu `<li>`) and the
+   teleported SubContent participate in layout as if Sub weren't
+   there. */
+.pine-dm-sub { display: contents; }
+
+.pine-dm-sub-trigger {
+  padding: 0.375rem 0.625rem;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  list-style: none;
+}
+.pine-dm-sub-trigger:hover,
+.pine-dm-sub-trigger:focus { background: var(--bg-hover); }
+.pine-dm-sub-trigger[data-state="open"] { background: var(--bg-hover); }
+
+.pine-dm-sub-portal { /* teleport wrapper, no layout of its own */ }
+
+.pine-dm-sub-content {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 160px;
+  box-shadow: var(--shadow);
+  z-index: 41;
+}
 
 /* ─── PineCollapsible ─────────────────────────────────────────── */
 
