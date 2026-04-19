@@ -4,7 +4,7 @@
 use pocopine::prelude::*;
 use pocopine::refs;
 use serde::{Deserialize, Serialize};
-use web_sys::HtmlInputElement;
+use web_sys::{HtmlInputElement, InputEvent};
 
 use crate::shared::Story;
 use crate::{extract_domain, humanize_age, performance_now, search_stories};
@@ -54,6 +54,22 @@ impl StoryList {
     /// Triggered by the search form (pp-on:submit.prevent) or any
     /// button that wants to re-run the current query.
     pub fn search(&mut self) {
+        self.run_search();
+    }
+
+    /// Debounced keystroke handler. Pulls the value off the event's
+    /// target, stores it, and kicks off a search. Replaces the
+    /// older `pp-model="query"` + `pp-on:input.debounce` pair —
+    /// single event-driven path now that RFC-008 lets handlers
+    /// receive the raw `InputEvent`.
+    pub fn on_search_input(&mut self, ev: InputEvent) {
+        let Some(input) = ev
+            .target()
+            .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        self.query = input.value();
         self.run_search();
     }
 
