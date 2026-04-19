@@ -131,11 +131,13 @@ impl Scope {
     }
 
     /// Remove a scope from the registry. Called when its element is
-    /// unmounted. Also drops any refs registered against this scope so
-    /// we don't leak element handles.
+    /// unmounted. Also drops any refs + captured slot content
+    /// registered against this scope so we don't leak element
+    /// handles.
     pub fn remove(id: ScopeId) {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
         crate::refs::clear_scope(id);
+        crate::slots::clear(id);
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct

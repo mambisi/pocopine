@@ -17,6 +17,8 @@ pub mod handle;
 pub mod handler;
 pub mod loop_scope;
 pub mod magics;
+pub mod slot_scope;
+pub mod slots;
 pub mod path;
 pub mod reactive;
 pub mod refs;

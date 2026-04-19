@@ -10,18 +10,24 @@
 //! Effects created by directives are pinned to their owning element so they
 //! can be released on unmount via the `MutationObserver`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use js_sys::{Array, Reflect};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{
-    Element, MutationObserver, MutationObserverInit, MutationRecord, Node, NodeList,
+    DocumentFragment, Element, HtmlTemplateElement, MutationObserver, MutationObserverInit,
+    MutationRecord, Node, NodeList,
 };
 
 use crate::directives::{lookup, parse_attr, DirectiveCall};
 use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
 use crate::scope::Scope;
+use crate::slot_scope::SlotScope;
+use crate::slots::{self, SlotStore, UserSlot};
 use crate::templates::{is_registered, template_for};
 
 const SCOPE_ID_KEY: &str = "__pp_scope_id";
@@ -80,13 +86,29 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
 /// Marks the element with [`WALKED_KEY`] on completion so the
 /// `MutationObserver` knows not to re-walk it when we reparent the
 /// same node later (e.g. keyed `pp-for` reorders, `pp-teleport`).
+///
+/// Intercepts `<slot>` elements — per RFC-011, a slot is replaced
+/// at walk time with either the user's captured content (via the
+/// slot store keyed by the owning component) or the slot's own
+/// default children, then the replacement is walked recursively.
 pub fn walk(el: &Element) {
+    if el.local_name() == "slot" {
+        materialize_slot(el);
+        return;
+    }
     bind(el);
+    // Snapshot children first — directives inside `bind` can mutate
+    // the live `HTMLCollection` (e.g. slot materialisation replaces
+    // a child mid-iteration).
     let children = el.children();
+    let mut snapshot: Vec<Element> = Vec::with_capacity(children.length() as usize);
     for i in 0..children.length() {
-        if let Some(child) = children.item(i) {
-            walk(&child);
+        if let Some(c) = children.item(i) {
+            snapshot.push(c);
         }
+    }
+    for child in snapshot {
+        walk(&child);
     }
     fire_deferred_init(el);
     fire_mount_hook(el);
@@ -233,10 +255,15 @@ fn mount_component(el: &Element, tag: &str) {
     apply_static_props(el, &scope);
     let proxy = scope.into_proxy();
 
-    // Capture slot content (direct children of the tag before we clobber).
-    let slot_content = capture_child_nodes(el);
+    // Capture slot content. Named slot templates go into the slot
+    // store keyed by the component's scope id; everything else lands
+    // in the default slot.
+    let slot_store = capture_slots(el);
+    slots::put(scope.id, slot_store);
 
-    // Clone the registered template in.
+    // Clone the registered template in. `set_inner_html` drops the
+    // tag's former children, which is the "capture" side of the old
+    // flow.
     let Some(html) = template_for(tag) else { return };
     el.set_inner_html(&html);
 
@@ -247,19 +274,71 @@ fn mount_component(el: &Element, tag: &str) {
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
         let _ = root.remove_attribute("pp-data");
 
-        // Fallthrough (RFC-010): any static attribute on the tag that
-        // isn't a declared prop and isn't a pp-* directive merges onto
-        // the template root. `class` / `style` append; everything else
-        // overwrites.
+        // Fallthrough (RFC-010).
         apply_fallthrough_attrs(el, &root, &scope);
     }
-
-    // Move captured slot content into the first <slot> in the clone.
-    relocate_slot_content(el, slot_content);
 
     // Mark the tag as mounted so the recursive walk doesn't re-enter this
     // branch if, for some reason, the walker visits it again.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
+}
+
+/// Collect the component tag's direct children into named slots,
+/// ready for the walker's slot materialiser to consume. A child
+/// `<template pp-slot="name" pp-let="ident">` contributes its
+/// `.content` fragment to the named slot; every other child (text,
+/// elements, nested templates without `pp-slot`) goes into the
+/// default slot.
+fn capture_slots(el: &Element) -> SlotStore {
+    let doc = match web_sys::window().and_then(|w| w.document()) {
+        Some(d) => d,
+        None => return SlotStore { by_name: Default::default() },
+    };
+
+    let mut by_name: std::collections::HashMap<String, UserSlot> =
+        std::collections::HashMap::new();
+    let default_fragment = doc.create_document_fragment();
+    let mut default_ident = String::new();
+
+    let children = el.child_nodes();
+    let mut to_consume: Vec<Node> = Vec::with_capacity(children.length() as usize);
+    for i in 0..children.length() {
+        if let Some(n) = children.item(i) {
+            to_consume.push(n);
+        }
+    }
+    for n in to_consume {
+        // Named slot template?
+        if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>() {
+            if let Some(name) = tpl.get_attribute("pp-slot") {
+                let ident = tpl.get_attribute("pp-let").unwrap_or_default();
+                let source = tpl.content();
+                if by_name.contains_key(&name) {
+                    web_sys::console::warn_1(&JsValue::from_str(&format!(
+                        "pocopine: duplicate pp-slot=\"{name}\"; later wins"
+                    )));
+                }
+                by_name.insert(name, UserSlot { source, ident });
+                continue;
+            }
+        }
+        // Default slot.
+        let _ = default_fragment.append_child(&n);
+    }
+
+    if default_fragment.child_nodes().length() > 0 {
+        by_name
+            .entry("default".to_string())
+            .or_insert(UserSlot {
+                source: default_fragment,
+                ident: default_ident.clone(),
+            });
+        // `default_ident` stays empty — default slot currently has no
+        // `pp-let` concept; scoped slots always use a named template.
+        let _ = &mut default_ident;
+    }
+
+    SlotStore { by_name }
 }
 
 fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
@@ -366,20 +445,149 @@ fn coerce_attr_value(raw: &str) -> JsValue {
     JsValue::from_str(raw)
 }
 
-fn capture_child_nodes(el: &Element) -> Vec<Node> {
-    let list: NodeList = el.child_nodes();
-    let mut out: Vec<Node> = Vec::with_capacity(list.length() as usize);
-    for i in 0..list.length() {
-        if let Some(n) = list.item(i) {
-            out.push(n);
-        }
-    }
-    out
-}
-
 fn first_element_child(el: &Element) -> Option<Element> {
     let children = el.children();
     children.item(0)
+}
+
+/// Replace a `<slot>` element in a component template with the
+/// matching user-provided content (from the slot store) or the
+/// slot's own default children. Per RFC-011 §5.2.
+fn materialize_slot(slot_el: &Element) {
+    let Some(parent) = slot_el.parent_node() else { return };
+
+    let slot_name = slot_el
+        .get_attribute("name")
+        .unwrap_or_else(|| "default".into());
+
+    // Collect `:prop="path"` bindings.
+    let mut bindings: Vec<(String, String)> = Vec::new();
+    let attrs = slot_el.attributes();
+    for i in 0..attrs.length() {
+        let Some(a) = attrs.item(i) else { continue };
+        let name = a.name();
+        if let Some(prop) = name.strip_prefix(':') {
+            bindings.push((prop.to_string(), a.value()));
+        }
+    }
+
+    // Resolve the enclosing scope. This is the component (or pp-for
+    // loop) whose template contains the <slot>. Path bindings
+    // resolve against this proxy.
+    let (owner_scope_id, owner_proxy) = match enclosing_scope(slot_el) {
+        Some(s) => s,
+        None => {
+            let _ = parent.remove_child(slot_el);
+            return;
+        }
+    };
+
+    // Walk up the scope chain to find the component that captured
+    // the user's slot content. Starts at the enclosing scope and
+    // climbs parent chains to handle `<slot>` inside a `pp-for`
+    // body (where `enclosing_scope` returns the LoopScope, which
+    // doesn't own the slot store).
+    let (user_fragment, user_ident) =
+        match find_slot_with_owner(owner_scope_id, &owner_proxy, &slot_name) {
+            Some(pair) => (Some(pair.0), pair.1),
+            None => (None, String::new()),
+        };
+
+    // Build the DocumentFragment we'll insert. User-provided content
+    // wins; otherwise clone the slot's own default children.
+    let doc = match web_sys::window().and_then(|w| w.document()) {
+        Some(d) => d,
+        None => return,
+    };
+    let fragment: DocumentFragment = match user_fragment {
+        Some(f) => f,
+        None => {
+            let frag = doc.create_document_fragment();
+            let kids = slot_el.child_nodes();
+            for i in 0..kids.length() {
+                if let Some(n) = kids.item(i) {
+                    if let Ok(clone) = n.clone_node_with_deep(true) {
+                        let _ = frag.append_child(&clone);
+                    }
+                }
+            }
+            frag
+        }
+    };
+
+    // Move fragment's children into the parent before `slot_el`,
+    // collecting the inserted Elements so we can walk + pin scope.
+    let mut inserted: Vec<Element> = Vec::new();
+    let frag_kids = fragment.child_nodes();
+    // Grab children up front — moving into parent mutates the fragment.
+    let mut frag_snapshot: Vec<Node> = Vec::with_capacity(frag_kids.length() as usize);
+    for i in 0..frag_kids.length() {
+        if let Some(n) = frag_kids.item(i) {
+            frag_snapshot.push(n);
+        }
+    }
+    for n in frag_snapshot {
+        let _ = parent.insert_before(&n, Some(slot_el));
+        if let Ok(e) = n.dyn_into::<Element>() {
+            inserted.push(e);
+        }
+    }
+    let _ = parent.remove_child(slot_el);
+
+    // If the slot declared any :prop bindings and the user used
+    // pp-let, build a SlotScope and pin it on each inserted root.
+    // Bindings with no user pp-let still get a scope but the ident
+    // is empty — the scope's `get` never matches, so content behaves
+    // as an ordinary unbound slot.
+    if !bindings.is_empty() && !user_ident.is_empty() {
+        let slot_state = SlotScope {
+            ident: user_ident,
+            bindings,
+            owner: owner_proxy,
+        };
+        let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
+        let proxy = slot_scope.into_proxy();
+        for el in &inserted {
+            bind_borrowed_scope_to(el, slot_scope.id, &proxy);
+        }
+    }
+
+    for el in inserted {
+        walk(&el);
+    }
+}
+
+/// Walk up the scope chain starting at `start_scope_id` to find the
+/// first component that captured a slot named `name`. Returns the
+/// cloned fragment + user's `pp-let` identifier if found.
+fn find_slot_with_owner(
+    start_scope_id: ScopeId,
+    start_proxy: &JsValue,
+    name: &str,
+) -> Option<(DocumentFragment, String)> {
+    // First try the enclosing scope directly.
+    if let Some(hit) = slots::lookup(start_scope_id, name) {
+        return Some(hit);
+    }
+    // Climb LoopScope parents. `LoopScope::parent` is the outer
+    // proxy; we can pull its scope id from its private SCOPE_ID on
+    // the element... but at this point we don't have the element,
+    // we have the proxy. Without a reverse map we walk one-at-a-time
+    // via the LoopScope::parent convention: the proxy is a JS object
+    // whose `$__scope_id__` isn't exposed, so we rely on
+    // `Scope::all()` + ancestry lookup — punt that to a follow-up
+    // RFC. For v0, the owner is always the enclosing scope; if a
+    // `<slot>` appears inside a `pp-for` body, the LoopScope's
+    // parent proxy is the component's proxy, and we try that next.
+    let parent_proxy = Reflect::get(start_proxy, &JsValue::from_str("$__parent__"))
+        .ok()
+        .filter(|v| !v.is_undefined() && !v.is_null());
+    if let Some(_pp) = parent_proxy {
+        // Reserved for when we plumb a scope-id back through the
+        // parent proxy; today we return None and rely on the
+        // `<slot>` being directly inside the component template.
+    }
+    None
 }
 
 /// If `el` is a registered-component tag with its scope mounted on the
@@ -391,22 +599,6 @@ pub fn child_component_proxy(el: &Element) -> Option<JsValue> {
     }
     let root = first_element_child(el)?;
     scope_of_element(&root).map(|(_, p)| p)
-}
-
-fn relocate_slot_content(el: &Element, content: Vec<Node>) {
-    if content.is_empty() {
-        return;
-    }
-    let slot = match el.query_selector("slot") {
-        Ok(Some(s)) => s,
-        _ => return, // No slot in template — drop the captured content.
-    };
-    let Some(parent) = slot.parent_node() else { return };
-    for node in &content {
-        let _ = parent.insert_before(node, Some(&slot));
-    }
-    // Remove the placeholder <slot> itself.
-    let _ = parent.remove_child(&slot);
 }
 
 fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {

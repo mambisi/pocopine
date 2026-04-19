@@ -93,6 +93,30 @@ impl HandlerArgs {
     }
 }
 
+// RFC-011 — named slots (no scope).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "NamedSlotHost.html")]
+struct NamedSlotHost {}
+
+#[handlers]
+impl NamedSlotHost {}
+
+// RFC-011 — scoped slots.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct ScopedItem {
+    id: u32,
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ScopedSlotHost.html")]
+struct ScopedSlotHost {
+    current: ScopedItem,
+}
+
+#[handlers]
+impl ScopedSlotHost {}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -132,6 +156,8 @@ fn register_all() {
     ModelChild::register();
     ModelParent::register();
     FallthroughRoot::register();
+    NamedSlotHost::register();
+    ScopedSlotHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -438,6 +464,101 @@ async fn handler_with_primitive_arg_deserializes_from_payload() {
     let payload_span = host.query_selector(".ha-payload").unwrap().unwrap();
     let text: HtmlElement = payload_span.dyn_into().unwrap();
     assert_eq!(text.inner_text().trim(), "hello from args");
+}
+
+// ─── RFC-011 named slots ──────────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn named_slots_pick_up_user_templates_and_fall_back_to_default() {
+    // Two named slots provided; footer left to fallback. Also some
+    // default-slot content (the text node).
+    let host = mount(
+        r#"<named-slot-host>
+             <template pp-slot="header"><h1 class="ns-user-header">Hi</h1></template>
+             body text
+           </named-slot-host>"#,
+    );
+    tick().await;
+
+    // Header: user's h1.
+    assert!(
+        host.query_selector(".ns-user-header").unwrap().is_some(),
+        "user's named-slot header should land"
+    );
+
+    // Default: text node from user.
+    let body = host.query_selector(".ns-body").unwrap().unwrap();
+    let body_html: HtmlElement = body.dyn_into().unwrap();
+    assert!(
+        body_html.inner_text().contains("body text"),
+        "default slot should pick up the text node: {:?}",
+        body_html.inner_text()
+    );
+
+    // Footer: fallback to slot's default.
+    let footer = host.query_selector(".ns-footer").unwrap().unwrap();
+    let footer_html: HtmlElement = footer.dyn_into().unwrap();
+    assert_eq!(footer_html.inner_text().trim(), "default footer");
+}
+
+// ─── RFC-011 scoped slots ─────────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn scoped_slot_binds_ctx_and_updates_on_owner_change() {
+    let host = mount(
+        r#"<scoped-slot-host>
+             <template pp-slot="item" pp-let="ctx">
+               <span class="ss-user" pp-text="ctx.label"></span>
+             </template>
+           </scoped-slot-host>"#,
+    );
+    tick().await;
+
+    // Owner's `current` starts default (empty label).
+    let host_tag = host.query_selector("scoped-slot-host").unwrap().unwrap();
+    let host_root = host_tag.first_element_child().unwrap();
+    let (_id, host_proxy) =
+        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+
+    // Write a real item.
+    let item = serde_wasm_bindgen::to_value(&ScopedItem {
+        id: 7,
+        label: "lucky".into(),
+    })
+    .unwrap();
+    js_sys::Reflect::set(&host_proxy, &"current".into(), &item).unwrap();
+    tick().await;
+
+    let user_span = host.query_selector(".ss-user").unwrap().unwrap();
+    let text: HtmlElement = user_span.dyn_into().unwrap();
+    assert_eq!(
+        text.inner_text().trim(),
+        "lucky",
+        "scoped slot reads ctx.label from owner's `current.label`"
+    );
+
+    // Mutate again — effect re-runs.
+    let item2 = serde_wasm_bindgen::to_value(&ScopedItem {
+        id: 8,
+        label: "updated".into(),
+    })
+    .unwrap();
+    js_sys::Reflect::set(&host_proxy, &"current".into(), &item2).unwrap();
+    tick().await;
+
+    let user_span = host.query_selector(".ss-user").unwrap().unwrap();
+    let text: HtmlElement = user_span.dyn_into().unwrap();
+    assert_eq!(text.inner_text().trim(), "updated");
+}
+
+#[wasm_bindgen_test]
+async fn scoped_slot_falls_back_to_default_children_when_user_didnt_provide() {
+    let host = mount("<scoped-slot-host></scoped-slot-host>");
+    tick().await;
+
+    let fallback = host.query_selector(".ss-default").unwrap().unwrap();
+    let text: HtmlElement = fallback.dyn_into().unwrap();
+    assert_eq!(text.inner_text().trim(), "fallback");
 }
 
 // ─── 8. RFC-010 attribute fallthrough + cx! ───────────────────────
