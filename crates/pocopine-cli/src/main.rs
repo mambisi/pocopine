@@ -134,9 +134,11 @@ fn default_tw_version() -> String {
 }
 
 /// Tailwind standalone CLI version used when no `version` override is
-/// set in the project config. Bump when upstream cuts a release we
-/// want as the default.
-const DEFAULT_TW_VERSION: &str = "v4.0.0";
+/// set in the project config. `"latest"` resolves via GitHub's
+/// `/releases/latest/download/` redirect, so we pick up new releases
+/// without a code change. Users who need a reproducible build can pin
+/// a concrete tag like `"v4.1.2"` in their `Cargo.toml`.
+const DEFAULT_TW_VERSION: &str = "latest";
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -240,8 +242,15 @@ fn ensure_tailwind_binary(project: &Path, tw: &TailwindConfig) -> Result<PathBuf
     }
 
     let bin_dir = project.join("target").join("pocopine").join("bin");
-    let bin_name = if cfg!(windows) { "tailwindcss.exe" } else { "tailwindcss" };
-    let bin_path = bin_dir.join(bin_name);
+    // Version-suffix the cached binary so bumping the pinned version
+    // in Cargo.toml (or `latest` resolving to a new release) forces a
+    // fresh download instead of silently running a stale binary.
+    let bin_name = if cfg!(windows) {
+        format!("tailwindcss-{}.exe", tw.version)
+    } else {
+        format!("tailwindcss-{}", tw.version)
+    };
+    let bin_path = bin_dir.join(&bin_name);
     if bin_path.exists() {
         return Ok(bin_path);
     }
@@ -252,11 +261,17 @@ fn ensure_tailwind_binary(project: &Path, tw: &TailwindConfig) -> Result<PathBuf
     #[cfg(not(target_arch = "wasm32"))]
     {
         let asset = tailwind_asset_name()?;
-        let url = format!(
-            "https://github.com/tailwindlabs/tailwindcss/releases/download/{version}/{asset}",
-            version = tw.version,
-            asset = asset,
-        );
+        let url = if tw.version == "latest" {
+            format!(
+                "https://github.com/tailwindlabs/tailwindcss/releases/latest/download/{asset}"
+            )
+        } else {
+            format!(
+                "https://github.com/tailwindlabs/tailwindcss/releases/download/{version}/{asset}",
+                version = tw.version,
+                asset = asset,
+            )
+        };
         println!("▶ downloading tailwindcss {} ({asset})", tw.version);
         let bytes = reqwest::blocking::get(&url)
             .with_context(|| format!("fetch {url}"))?
