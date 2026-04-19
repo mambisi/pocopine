@@ -4,8 +4,6 @@
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
-use web_sys::Element;
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDemoApp.poco")]
@@ -16,9 +14,12 @@ pub struct PineDemoApp {
     pub popover_open: bool,
     pub menu_open: bool,
 
-    /// Last menu item the user picked. Shown in the demo so
-    /// selection actually looks like it did something.
-    pub last_menu_pick: String,
+    /// Running count of menu actions fired — dropdown menus are
+    /// for actions (Copy, Refresh, Sign out), not for selection.
+    /// This counter goes up every time the user picks any menu
+    /// action; individual handlers also have side-effects on
+    /// other demo state so the action's reach is visible.
+    pub actions_fired: u32,
 
     pub tab: String,
     pub tabs: Vec<pine::TabDef>,
@@ -32,7 +33,6 @@ impl PineDemoApp {
     pub fn on_mount(&mut self) {
         self.tab = "account".into();
         self.agree_state = "unchecked".into();
-        self.last_menu_pick = "none".into();
         self.tabs = vec![
             pine::TabDef {
                 value: "account".into(),
@@ -70,22 +70,38 @@ impl PineDemoApp {
         self.menu_open = !self.menu_open;
     }
 
-    /// Delegated click handler for the menu — reads the selected
-    /// item's label off `data-label` and records it, then closes
-    /// the menu.
-    pub fn pick_menu(&mut self, ev: web_sys::Event) {
-        let Some(t) = ev.target() else { return };
-        let Ok(start) = t.dyn_into::<Element>() else { return };
-        let Ok(Some(item)) = start.closest("[data-label]") else {
-            self.menu_open = false;
-            return;
-        };
-        if item.get_attribute("aria-disabled").as_deref() == Some("true") {
-            return;
-        }
-        if let Some(label) = item.get_attribute("data-label") {
-            self.last_menu_pick = label;
-        }
+    // ── Menu actions ─────────────────────────────────────────
+    //
+    // Dropdown menus are for *actions* (not selection). Each
+    // handler does something real so clicking feels like a
+    // command, not a state pick. All actions also close the menu.
+
+    /// "Increment clicks" — bumps the PineButton demo counter.
+    pub fn action_bump(&mut self) {
+        self.clicks += 1;
+        self.actions_fired += 1;
+        self.menu_open = false;
+    }
+
+    /// "Toggle dark mode" — demonstrates a menu action mutating
+    /// other demo state.
+    pub fn action_toggle_dark(&mut self) {
+        self.dark_mode = !self.dark_mode;
+        self.actions_fired += 1;
+        self.menu_open = false;
+    }
+
+    /// "Reset" — clears counters + brings everything back to
+    /// defaults. Classic destructive menu action.
+    pub fn action_reset(&mut self) {
+        self.clicks = 0;
+        self.actions_fired += 1; // counted before reset? decision:
+                                 // keep actions_fired visible after
+                                 // Reset so the user sees the click
+                                 // registered. Reset everything *else*.
+        self.tab = "account".into();
+        self.dark_mode = false;
+        self.agree_state = "unchecked".into();
         self.menu_open = false;
     }
 }

@@ -10,7 +10,7 @@
       <dt>Dialog</dt>        <dd pp-text="dialog_open ? 'open' : 'closed'"></dd>
       <dt>Popover</dt>       <dd pp-text="popover_open ? 'open' : 'closed'"></dd>
       <dt>Menu</dt>          <dd pp-text="menu_open ? 'open' : 'closed'"></dd>
-      <dt>Last menu pick</dt><dd pp-text="last_menu_pick"></dd>
+      <dt>Menu actions fired</dt><dd pp-text="actions_fired"></dd>
       <dt>Current tab</dt>   <dd pp-text="tab"></dd>
       <dt>Dark mode</dt>     <dd pp-text="dark_mode ? 'on' : 'off'"></dd>
       <dt>Agree</dt>         <dd pp-text="agree_state"></dd>
@@ -62,15 +62,15 @@
   <!-- PineDropdownMenu ───────────────────────────────────── -->
   <h2>Dropdown menu</h2>
   <section class="row">
-    <pine-button id="menu-trig" @click="toggle_menu">Account ▾</pine-button>
+    <pine-button id="menu-trig" @click="toggle_menu">Actions ▾</pine-button>
     <span style="font-size:0.875rem;color:var(--fg-muted)">
-      last pick: <strong pp-text="last_menu_pick"></strong>
+      actions fired: <strong pp-text="actions_fired"></strong>
     </span>
-    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig" @click="pick_menu">
-      <li role="menuitem" tabindex="-1" data-label="Profile">Profile</li>
-      <li role="menuitem" tabindex="-1" data-label="Settings">Settings</li>
-      <li role="menuitem" tabindex="-1" data-label="Team" aria-disabled="true">Team (disabled)</li>
-      <li role="menuitem" tabindex="-1" data-label="Sign out">Sign out</li>
+    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig">
+      <li role="menuitem" tabindex="-1" @click="action_bump">Increment click count</li>
+      <li role="menuitem" tabindex="-1" @click="action_toggle_dark">Toggle dark mode</li>
+      <li role="menuitem" tabindex="-1" aria-disabled="true">Export (disabled)</li>
+      <li role="menuitem" tabindex="-1" @click="action_reset">Reset demo</li>
     </pine-dropdown-menu>
   </section>
 
