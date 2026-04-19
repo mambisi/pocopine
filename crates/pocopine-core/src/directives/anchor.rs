@@ -191,10 +191,17 @@ pub fn release(el: &Element) {
     let state = unsafe { Box::from_raw(ptr) };
 
     // Remove listeners before dropping the closures that back them.
+    // The `scroll` listener was installed with `capture: true`;
+    // `removeEventListener` only matches if we pass the same
+    // capture flag, otherwise the DOM keeps the listener attached
+    // and the closure is invoked after its Rust backing memory
+    // has been freed — "closure invoked recursively or after being
+    // dropped" on every subsequent scroll.
     let target = state.window_target.clone();
-    let _ = target.remove_event_listener_with_callback(
+    let _ = target.remove_event_listener_with_callback_and_bool(
         "scroll",
         state.event_closure.as_ref().unchecked_ref(),
+        true,
     );
     let _ = target.remove_event_listener_with_callback(
         "resize",
