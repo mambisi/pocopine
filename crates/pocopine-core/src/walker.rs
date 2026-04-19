@@ -358,6 +358,32 @@ pub fn scope_of_element(el: &Element) -> Option<(ScopeId, JsValue)> {
     Some((ScopeId(id_num as u64), proxy))
 }
 
+/// Find the DOM element that has `scope_id` pinned onto it. Walks
+/// from `<body>` downward — O(n) in the number of elements, fine for
+/// devtools hover lookups but not for hot paths.
+pub fn find_element_for_scope(scope_id: ScopeId) -> Option<Element> {
+    let body = web_sys::window()?.document()?.body()?;
+    let root: Element = body.into();
+    find_in_subtree(&root, scope_id)
+}
+
+fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
+    if let Some(id_num) = get_private(root, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
+        if id_num as u64 == scope_id.0 {
+            return Some(root.clone());
+        }
+    }
+    let children = root.children();
+    for i in 0..children.length() {
+        if let Some(child) = children.item(i) {
+            if let Some(found) = find_in_subtree(&child, scope_id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
 /// Attach an effect id to an element so it can be released on unmount.
 pub fn track_effect_on(el: &Element, id: EffectId) {
     let list = match get_private(el, EFFECTS_KEY) {

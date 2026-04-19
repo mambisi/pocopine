@@ -15,7 +15,9 @@ use js_sys::Object;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{window, Document, Element, Event, HtmlElement, KeyboardEvent};
+use web_sys::{window, Document, Element, Event, HtmlElement, KeyboardEvent, Node};
+
+use crate::reactive::ScopeId;
 
 use crate::refs;
 use crate::scope::Scope;
@@ -26,7 +28,7 @@ const HIGHLIGHT_CLASS: &str = "__pp_dev_highlight";
 
 type RenderClosure = Closure<dyn FnMut()>;
 type KeyClosure = Closure<dyn FnMut(KeyboardEvent)>;
-type ClickClosure = Closure<dyn FnMut(Event)>;
+type EventClosure = Closure<dyn FnMut(Event)>;
 
 thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
@@ -34,7 +36,10 @@ thread_local! {
     static INTERVAL_ID: Cell<Option<i32>> = const { Cell::new(None) };
     static RENDER_CB: RefCell<Option<RenderClosure>> = RefCell::new(None);
     static KEY_CB: RefCell<Option<KeyClosure>> = RefCell::new(None);
-    static CLICK_CB: RefCell<Option<ClickClosure>> = RefCell::new(None);
+    static CLICK_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
+    static OVER_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
+    static LEAVE_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
+    static HIGHLIGHTED: RefCell<Option<Element>> = const { RefCell::new(None) };
 }
 
 /// Install the devtools overlay. Idempotent — calling twice is a
@@ -200,7 +205,80 @@ fn ensure_root(doc: &Document) -> Element {
         let _ = body.append_child(&el);
     }
     attach_copy_delegate(&el);
+    attach_hover_delegate(&el);
     el
+}
+
+/// Mouseover on the panel highlights the DOM element that owns the
+/// scope the pointer is currently hovering. Mouseleave clears. Both
+/// listeners stay on the root across `set_inner_html` rewrites.
+fn attach_hover_delegate(root: &Element) {
+    let over: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
+        let Some(target) = ev.target() else { return };
+        let Ok(start) = target.dyn_into::<Element>() else { return };
+        let mut cur = Some(start);
+        while let Some(el) = cur {
+            if let Some(id_str) = el.get_attribute("data-scope-id") {
+                if let Ok(n) = id_str.parse::<u64>() {
+                    set_highlight(Some(ScopeId(n)));
+                    return;
+                }
+            }
+            cur = el.parent_element();
+        }
+    }));
+    let _ = root.add_event_listener_with_callback("mouseover", over.as_ref().unchecked_ref());
+    OVER_CB.with(|c| *c.borrow_mut() = Some(over));
+
+    let leave: EventClosure = Closure::wrap(Box::new(move |_ev: Event| {
+        set_highlight(None);
+    }));
+    let _ = root.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
+    LEAVE_CB.with(|c| *c.borrow_mut() = Some(leave));
+}
+
+/// Apply the outline class to the element owning `scope_id`, or
+/// clear it entirely when `None`. Idempotent across rapid pointer
+/// moves — only writes the DOM when the highlighted element actually
+/// changes.
+fn set_highlight(scope_id: Option<ScopeId>) {
+    let next = scope_id.and_then(crate::walker::find_element_for_scope);
+    let prev = HIGHLIGHTED.with(|h| h.borrow().clone());
+    let same = match (&prev, &next) {
+        (Some(a), Some(b)) => {
+            let b_node: &Node = b.as_ref();
+            a.is_same_node(Some(b_node))
+        }
+        (None, None) => true,
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    if let Some(el) = prev {
+        remove_highlight_class(&el);
+    }
+    if let Some(ref el) = next {
+        add_highlight_class(el);
+    }
+    HIGHLIGHTED.with(|h| *h.borrow_mut() = next);
+}
+
+fn add_highlight_class(el: &Element) {
+    let cls = el.class_name();
+    if !cls.split_whitespace().any(|c| c == HIGHLIGHT_CLASS) {
+        el.set_class_name(format!("{cls} {HIGHLIGHT_CLASS}").trim());
+    }
+}
+
+fn remove_highlight_class(el: &Element) {
+    let kept: String = el
+        .class_name()
+        .split_whitespace()
+        .filter(|c| *c != HIGHLIGHT_CLASS)
+        .collect::<Vec<_>>()
+        .join(" ");
+    el.set_class_name(&kept);
 }
 
 /// One click listener on the root handles the whole panel via
@@ -208,7 +286,7 @@ fn ensure_root(doc: &Document) -> Element {
 /// per-row listeners would leak fast. Any element with a
 /// `data-copy="..."` attribute forwards its value to the clipboard.
 fn attach_copy_delegate(root: &Element) {
-    let cb: ClickClosure = Closure::wrap(Box::new(move |ev: Event| {
+    let cb: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
         let Some(target) = ev.target() else { return };
         let Ok(start) = target.dyn_into::<Element>() else { return };
         let mut cur = Some(start);
@@ -388,6 +466,3 @@ const STYLESHEET: &str = "\
     .__pp_dev_highlight{outline:2px solid #ff6600 !important;}\
 ";
 
-// Silence unused-const warning.
-#[allow(dead_code)]
-const _H: &str = HIGHLIGHT_CLASS;
