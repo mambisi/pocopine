@@ -37,7 +37,7 @@ pub struct BlogPost {
 
 #[handlers]
 impl BlogPost {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         // Stand-in for a data fetch — mirrors the `id` path param into
         // a user-visible string. A real app would `dispatch!` a
         // `#[server]` call here.

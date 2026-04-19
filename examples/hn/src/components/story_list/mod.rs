@@ -39,7 +39,7 @@ pub struct StoryList {
 
 #[handlers]
 impl StoryList {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         // Focus the search input on mount — imperative DOM reach via
         // pp-ref="search" on the <input>.
         if let Some(input) = refs::get_as::<HtmlInputElement>("search") {

@@ -64,6 +64,9 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Tag-based components.** Declare a struct, drop `<my-thing>` in
   HTML, done. Props bind by attribute name (kebab → snake), slots via
   `<slot>`.
+* **Lifecycle hooks.** Write `pub fn on_mount(&mut self)` /
+  `pub fn on_unmount(&mut self)` and the macro auto-wires them; no
+  `pp-init` attribute needed.
 * **Reactive core.** `signal()` / `computed()` / `watch()` compose with
   components through a `js_sys::Proxy` — same semantics as Vue 3's
   reactivity.

@@ -33,6 +33,16 @@ pub trait ComponentState: 'static {
     /// Invoke a named method on `&mut self` with JS-land arguments.
     /// Returns a JsValue (or `JsValue::UNDEFINED` for void methods).
     fn invoke(&mut self, key: &str, args: &Array) -> JsValue;
+
+    /// Lifecycle — called once after the component's subtree is fully
+    /// bound. Default no-op; `#[component]` wires the user's
+    /// `on_mount` when one exists.
+    fn mount(&mut self) {}
+
+    /// Lifecycle — called once just before the component is torn down.
+    /// Default no-op; `#[component]` wires the user's `on_unmount`
+    /// when one exists.
+    fn unmount(&mut self) {}
 }
 
 /// A live component instance bound to a DOM element.

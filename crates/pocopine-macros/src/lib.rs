@@ -224,6 +224,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
             }
+            fn mount(&mut self) {
+                <Self as ::pocopine::__private::HandlerDispatch>::mount(self);
+            }
+            fn unmount(&mut self) {
+                <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
+            }
         }
 
         impl #struct_ident {
@@ -263,6 +269,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let ty = input.self_ty.clone();
 
     let mut arms = Vec::new();
+    let mut has_on_mount = false;
+    let mut has_on_unmount = false;
     for item in &input.items {
         let ImplItem::Fn(method) = item else { continue };
         let Some(_receiver) = method.sig.receiver() else {
@@ -280,6 +288,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         let ident = method.sig.ident.clone();
         let name = ident.to_string();
+        match name.as_str() {
+            "on_mount" => has_on_mount = true,
+            "on_unmount" => has_on_unmount = true,
+            _ => {}
+        }
         arms.push(quote! {
             #name => {
                 Self::#ident(self);
@@ -287,6 +300,23 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
     }
+
+    // Only override the trait's default if the user actually defined
+    // the hook — keeps the "no lifecycle code" path a real no-op.
+    let mount_impl = has_on_mount.then(|| {
+        quote! {
+            fn mount(&mut self) {
+                Self::on_mount(self);
+            }
+        }
+    });
+    let unmount_impl = has_on_unmount.then(|| {
+        quote! {
+            fn unmount(&mut self) {
+                Self::on_unmount(self);
+            }
+        }
+    });
 
     let out = quote! {
         #input
@@ -302,6 +332,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => ::pocopine::__private::JsValue::UNDEFINED,
                 }
             }
+            #mount_impl
+            #unmount_impl
         }
     };
 

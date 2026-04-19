@@ -1475,6 +1475,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tailwind-demo"
+version = "0.1.0"
+dependencies = [
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

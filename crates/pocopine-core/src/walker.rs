@@ -84,6 +84,7 @@ pub fn walk(el: &Element) {
         }
     }
     fire_deferred_init(el);
+    fire_mount_hook(el);
 }
 
 fn fire_deferred_init(el: &Element) {
@@ -93,6 +94,29 @@ fn fire_deferred_init(el: &Element) {
     let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
     let Some((scope_id, proxy)) = enclosing_scope(el) else { return };
     dispatch(el, &proxy, scope_id, "pp-init", &value);
+}
+
+/// Fire the component-level `on_mount` lifecycle hook on elements
+/// that own a (non-borrowed) scope. Runs post-order so the handler
+/// sees the fully-bound subtree (refs included). `trigger_scope`
+/// fires afterwards so any field mutation in `on_mount` is picked up
+/// by already-subscribed effects.
+fn fire_mount_hook(el: &Element) {
+    let Some(id_num) = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) else {
+        return;
+    };
+    let borrowed = get_private(el, SCOPE_BORROWED_KEY)
+        .map(|v| v.is_truthy())
+        .unwrap_or(false);
+    if borrowed {
+        return;
+    }
+    let id = ScopeId(id_num as u64);
+    let Some(scope) = Scope::find(id) else { return };
+    crate::scope::with_current_scope_id(id, || {
+        scope.state.borrow_mut().mount();
+    });
+    crate::reactive::trigger_scope(id);
 }
 
 fn bind(el: &Element) {
@@ -370,7 +394,15 @@ fn release_subtree(node: &Node) {
                 .map(|v| v.is_truthy())
                 .unwrap_or(false);
             if !borrowed {
-                Scope::remove(ScopeId(id as u64));
+                let scope_id = ScopeId(id as u64);
+                // Fire the `on_unmount` lifecycle hook while the scope
+                // and its state are still valid.
+                if let Some(scope) = Scope::find(scope_id) {
+                    crate::scope::with_current_scope_id(scope_id, || {
+                        scope.state.borrow_mut().unmount();
+                    });
+                }
+                Scope::remove(scope_id);
             }
         }
         crate::directives::transition::release(&el);

@@ -14,7 +14,7 @@ pub struct TodoList {
 
 #[handlers]
 impl TodoList {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         if self.title.is_empty() {
             self.title = "Things to do".into();
         }

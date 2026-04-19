@@ -55,7 +55,7 @@ pub struct Counter {
 
 #[handlers]
 impl Counter {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         self.count = 0;
     }
     pub fn increment(&mut self) {

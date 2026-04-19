@@ -27,7 +27,7 @@ pub struct StoryDetail {
 
 #[handlers]
 impl StoryDetail {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         self.loading = true;
         let id = self.id;
         let start = performance_now();

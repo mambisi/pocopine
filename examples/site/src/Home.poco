@@ -39,7 +39,7 @@ impl Counter {
       </figure>
       <figure>
         <figcaption>Counter.poco</figcaption>
-<pre>&lt;div pp-init="init"&gt;
+<pre>&lt;div&gt;
   &lt;button pp-on:click="increment"&gt;+&lt;/button&gt;
   &lt;span pp-text="count"&gt;&lt;/span&gt;
 &lt;/div&gt;

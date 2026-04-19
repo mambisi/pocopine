@@ -1,4 +1,4 @@
-<article pp-init="init">
+<article>
   <p><a href="/" pp-route>← top</a></p>
 
   <p pp-show="loading" class="status"><em>Loading…</em></p>

@@ -1,4 +1,4 @@
-<article pp-init="init">
+<article>
   <p pp-show="loading"><em>Loading post #<span pp-text="post_id"></span>&hellip;</em></p>
   <p pp-show="error" style="color:#b22"><span pp-text="error"></span></p>
   <header><h2 pp-text="title"></h2></header>

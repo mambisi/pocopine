@@ -10,7 +10,7 @@ pub struct Counter {
 
 #[handlers]
 impl Counter {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         if self.label.is_empty() {
             self.label = "clicks".into();
         }

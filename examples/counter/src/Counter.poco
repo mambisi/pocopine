@@ -1,4 +1,4 @@
-<div pp-init="init">
+<div>
   <p>
     <span class="count" pp-text="count"></span>
     <span pp-text="label"></span>

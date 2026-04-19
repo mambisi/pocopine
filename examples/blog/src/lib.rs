@@ -46,7 +46,7 @@ pub struct BlogPost {
 
 #[handlers]
 impl BlogPost {
-    pub fn init(&mut self) {
+    pub fn on_mount(&mut self) {
         self.loading = true;
         let post_id = self.post_id;
         dispatch!(
@@ -69,7 +69,7 @@ impl BlogPost {
 
     pub fn refresh(&mut self) {
         // Re-run the same load path.
-        self.init();
+        self.on_mount();
     }
 }
 

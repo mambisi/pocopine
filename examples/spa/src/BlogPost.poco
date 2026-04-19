@@ -1,4 +1,4 @@
-<article pp-init="init">
+<article>
   <h2>Post #<span pp-text="id"></span></h2>
   <p pp-text="body"></p>
   <p><small>

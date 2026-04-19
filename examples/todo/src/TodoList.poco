@@ -1,4 +1,4 @@
-<div pp-init="init">
+<div>
   <h2 pp-text="title"></h2>
 
   <p>

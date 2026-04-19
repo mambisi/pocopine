@@ -1,4 +1,4 @@
-<section pp-init="init">
+<section>
   <form class="search" pp-on:submit.prevent="search">
     <input
       class="search__input"
