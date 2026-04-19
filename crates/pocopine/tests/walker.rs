@@ -93,6 +93,17 @@ impl HandlerArgs {
     }
 }
 
+// RFC-010 — attribute fallthrough.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "FallthroughRoot.html")]
+struct FallthroughRoot {
+    // `variant` is declared → flows into the prop path, NOT fallthrough.
+    variant: String,
+}
+
+#[handlers]
+impl FallthroughRoot {}
+
 // RFC-009 — pp-model across a component boundary.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ModelChild.html")]
@@ -120,6 +131,7 @@ fn register_all() {
     HandlerArgs::register();
     ModelChild::register();
     ModelParent::register();
+    FallthroughRoot::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -427,3 +439,102 @@ async fn handler_with_primitive_arg_deserializes_from_payload() {
     let text: HtmlElement = payload_span.dyn_into().unwrap();
     assert_eq!(text.inner_text().trim(), "hello from args");
 }
+
+// ─── 8. RFC-010 attribute fallthrough + cx! ───────────────────────
+
+#[wasm_bindgen_test]
+async fn fallthrough_merges_class_and_style_onto_template_root() {
+    // `variant` is a declared prop → prop path; `class`, `style`,
+    // `id`, `data-testid`, `aria-label` aren't → fallthrough.
+    let host = mount(
+        r#"<fallthrough-root
+               variant="primary"
+               class="extra-1 extra-2"
+               style="background: blue"
+               id="my-id"
+               data-testid="tid"
+               aria-label="lbl"
+           ></fallthrough-root>"#,
+    );
+    tick().await;
+
+    let root = host
+        .query_selector("fallthrough-root > .ft-base")
+        .unwrap()
+        .unwrap();
+
+    // class merged (base + user extras).
+    let class = root.get_attribute("class").unwrap_or_default();
+    assert!(class.contains("ft-base"), "base class preserved: {class:?}");
+    assert!(class.contains("extra-1"), "user class appended: {class:?}");
+    assert!(class.contains("extra-2"), "both user classes: {class:?}");
+
+    // style merged (base kept, user appended with `;`).
+    let style = root.get_attribute("style").unwrap_or_default();
+    assert!(style.contains("color"), "base style preserved: {style:?}");
+    assert!(style.contains("background"), "user style appended: {style:?}");
+
+    // Non-class/style: overwrite semantics — assigned to root.
+    assert_eq!(root.get_attribute("id"), Some("my-id".into()));
+    assert_eq!(root.get_attribute("data-testid"), Some("tid".into()));
+    assert_eq!(root.get_attribute("aria-label"), Some("lbl".into()));
+
+    // Declared prop did NOT fall through — variant lives on the state,
+    // rendered via pp-text.
+    let variant_span = host.query_selector(".ft-variant").unwrap().unwrap();
+    let text: HtmlElement = variant_span.dyn_into().unwrap();
+    assert_eq!(text.inner_text().trim(), "primary");
+    // And no `variant=...` attr leaked onto the root.
+    assert!(root.get_attribute("variant").is_none());
+}
+
+#[wasm_bindgen_test]
+async fn fallthrough_works_when_root_has_no_base_class_or_style() {
+    // Template root has no `class`/`style`; user's values land straight on.
+    let host = mount(
+        r#"<fallthrough-root variant="" class="only-user" style="margin: 4px"></fallthrough-root>"#,
+    );
+    tick().await;
+
+    let root = host
+        .query_selector("fallthrough-root > .ft-base")
+        .unwrap()
+        .unwrap();
+    let class = root.get_attribute("class").unwrap_or_default();
+    assert!(class.contains("ft-base"));
+    assert!(class.contains("only-user"));
+
+    let style = root.get_attribute("style").unwrap_or_default();
+    assert!(style.contains("margin"));
+}
+
+#[wasm_bindgen_test]
+fn cx_macro_emits_expected_strings() {
+    use pocopine::cx;
+
+    // All literal — simple concat.
+    assert_eq!(cx!("a", "b", "c"), "a b c");
+
+    // Conditional: truthy branch emits, falsy skipped.
+    assert_eq!(cx!("base", true => "on", false => "off"), "base on");
+
+    // Bare expression: non-empty emits, empty skips.
+    let extra = "user";
+    let empty = String::new();
+    assert_eq!(cx!("base", &extra, &empty), "base user");
+
+    // Empty invocation → empty string.
+    assert_eq!(cx!(), "");
+
+    // Mixed typical call.
+    let variant = "primary";
+    let disabled = false;
+    let out = cx!(
+        "pine-btn",
+        variant == "primary" => "pine-btn-primary",
+        variant == "destructive" => "pine-btn-destructive",
+        disabled => "is-disabled",
+    );
+    assert_eq!(out, "pine-btn pine-btn-primary");
+}
+

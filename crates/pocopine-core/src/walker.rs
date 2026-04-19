@@ -224,6 +224,7 @@ fn bind(el: &Element) {
 ///  * apply static attribute props to the scope,
 ///  * clone the registered template into `el`,
 ///  * bind the scope to the template's root and strip its `pp-data`,
+///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * move captured children into the first `<slot>` within the template.
 fn mount_component(el: &Element, tag: &str) {
     let Some(scope) = instantiate(tag) else { return };
@@ -245,6 +246,12 @@ fn mount_component(el: &Element, tag: &str) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
         let _ = root.remove_attribute("pp-data");
+
+        // Fallthrough (RFC-010): any static attribute on the tag that
+        // isn't a declared prop and isn't a pp-* directive merges onto
+        // the template root. `class` / `style` append; everything else
+        // overwrites.
+        apply_fallthrough_attrs(el, &root, &scope);
     }
 
     // Move captured slot content into the first <slot> in the clone.
@@ -253,6 +260,68 @@ fn mount_component(el: &Element, tag: &str) {
     // Mark the tag as mounted so the recursive walk doesn't re-enter this
     // branch if, for some reason, the walker visits it again.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
+}
+
+fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
+    use std::collections::HashSet;
+
+    let declared: HashSet<String> = scope
+        .state
+        .borrow()
+        .keys()
+        .iter()
+        .map(|k| (*k).to_string())
+        .collect();
+
+    let attrs = tag.attributes();
+    for i in 0..attrs.length() {
+        let Some(a) = attrs.item(i) else { continue };
+        let name = a.name();
+        if name.starts_with("pp-") || name.starts_with("__pp_") {
+            continue;
+        }
+        // HTML kebab-case → Rust snake_case; matches the prop path in
+        // `apply_static_props`.
+        let field = name.replace('-', "_");
+        if declared.contains(&field) {
+            continue;
+        }
+        let val = a.value();
+        match name.as_str() {
+            "class" => {
+                let existing = root.get_attribute("class").unwrap_or_default();
+                let merged = merge_space(&existing, &val);
+                let _ = root.set_attribute("class", &merged);
+            }
+            "style" => {
+                let existing = root.get_attribute("style").unwrap_or_default();
+                let merged = merge_semicolon(&existing, &val);
+                let _ = root.set_attribute("style", &merged);
+            }
+            _ => {
+                let _ = root.set_attribute(&name, &val);
+            }
+        }
+    }
+}
+
+fn merge_space(a: &str, b: &str) -> String {
+    match (a.is_empty(), b.is_empty()) {
+        (true, _) => b.to_string(),
+        (_, true) => a.to_string(),
+        _ => format!("{a} {b}"),
+    }
+}
+
+fn merge_semicolon(a: &str, b: &str) -> String {
+    match (a.is_empty(), b.is_empty()) {
+        (true, _) => b.to_string(),
+        (_, true) => a.to_string(),
+        _ => {
+            let trimmed = a.trim_end_matches(|c: char| c.is_whitespace() || c == ';');
+            format!("{trimmed}; {b}")
+        }
+    }
 }
 
 fn apply_static_props(el: &Element, scope: &Scope) {

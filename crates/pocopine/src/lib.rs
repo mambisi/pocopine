@@ -18,9 +18,10 @@ pub use pocopine_macros::{component, handlers, server, store};
 
 pub mod prelude {
     pub use crate::{
-        batch, component, computed, dispatch, dispatch_event, effect, handlers, on_cleanup,
-        run, rw_signal, signal, store, this, watch, App, Component, ComponentState, Computed,
-        Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        batch, component, computed, cx, dispatch, dispatch_event, effect, handlers,
+        on_cleanup, run, rw_signal, signal, store, this, watch, App, Component,
+        ComponentState, Computed, Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult,
+        Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
@@ -90,4 +91,71 @@ macro_rules! dispatch {
             __pocopine_handle.update(|$s| $update);
         });
     }};
+}
+
+/// Build a space-separated class string from a mix of constants and
+/// conditional classes. See [`rfc-010`](../../../rfcs/rfc-010-attribute-fallthrough.md).
+///
+/// Each comma-separated argument is one of:
+///
+/// * a string literal — always appended,
+/// * `cond => "class"` — appended when `cond` is truthy,
+/// * any `&str` / `String` expression — appended when non-empty.
+///
+/// # Example
+///
+/// ```ignore
+/// let class = cx!(
+///     "pine-btn",
+///     self.variant == "primary"     => "pine-btn-primary",
+///     self.variant == "destructive" => "pine-btn-destructive",
+///     self.size == "sm"             => "pine-btn-sm",
+///     self.disabled                 => "is-disabled",
+///     &self.icon_class,
+/// );
+/// ```
+#[macro_export]
+macro_rules! cx {
+    () => { ::std::string::String::new() };
+    ( $($rest:tt)+ ) => {{
+        let mut __cx = ::std::string::String::new();
+        $crate::__cx_push!(__cx; $($rest)+);
+        __cx
+    }};
+}
+
+/// Internal helper for [`cx!`]. Walks the argument list recursively,
+/// appending each matching case to `$out`. Three arms handle `cond =>
+/// "lit"`, bare literal, and arbitrary `&str`/`String` expression.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __cx_push {
+    ($out:ident;) => {};
+    // cond => "class-literal"
+    ($out:ident; $cond:expr => $cls:literal $(, $($rest:tt)*)?) => {
+        if $cond {
+            if !$out.is_empty() { $out.push(' '); }
+            $out.push_str($cls);
+        }
+        $( $crate::__cx_push!($out; $($rest)*); )?
+    };
+    // bare "class-literal"
+    ($out:ident; $cls:literal $(, $($rest:tt)*)?) => {
+        if !$out.is_empty() { $out.push(' '); }
+        $out.push_str($cls);
+        $( $crate::__cx_push!($out; $($rest)*); )?
+    };
+    // runtime expression (`&str` / `String` / `&String`) — emitted
+    // when non-empty. Must come after the literal arms; macro_rules!
+    // tries arms top-down.
+    ($out:ident; $expr:expr $(, $($rest:tt)*)?) => {
+        {
+            let __s: &str = &$expr;
+            if !__s.is_empty() {
+                if !$out.is_empty() { $out.push(' '); }
+                $out.push_str(__s);
+            }
+        }
+        $( $crate::__cx_push!($out; $($rest)*); )?
+    };
 }
