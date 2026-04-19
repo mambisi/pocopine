@@ -22,7 +22,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{AddEventListenerOptions, Event, EventTarget, KeyboardEvent, Node};
 
 use super::DirectiveCall;
-use crate::scope::invoke_handler;
+use crate::scope::{invoke_handler, with_current_el};
 
 pub fn run(call: &DirectiveCall) {
     let Some(event) = call.arg.clone() else { return };
@@ -48,12 +48,15 @@ pub fn run(call: &DirectiveCall) {
     let invoke_fn: Function = {
         let handler = handler.clone();
         let last_event = last_event.clone();
+        let el_for_debounce = el.clone();
         let c = Closure::wrap(Box::new(move || {
             let args = Array::new();
             if let Some(ev) = last_event.borrow().as_ref() {
                 args.push(ev.as_ref());
             }
-            invoke_handler(scope_id, &handler, &args);
+            with_current_el(&el_for_debounce, || {
+                invoke_handler(scope_id, &handler, &args);
+            });
         }) as Box<dyn FnMut()>);
         let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
         c.forget();
@@ -136,7 +139,9 @@ pub fn run(call: &DirectiveCall) {
             } else {
                 let args = Array::new();
                 args.push(ev.as_ref());
-                invoke_handler(scope_id, &handler, &args);
+                with_current_el(&el_for_closure, || {
+                    invoke_handler(scope_id, &handler, &args);
+                });
             }
         }
     }) as Box<dyn FnMut(Event)>);
