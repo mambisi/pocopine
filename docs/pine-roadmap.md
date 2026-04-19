@@ -78,24 +78,16 @@ RadioGroup, RadioItem, Sub, SubTrigger, SubContent, Filter.
 ### 2.7 Priority additions (next round)
 In this order:
 
-1. ~~**Auto-anchor**~~ — done (shipped via `on_setup` hook;
-   commit `af9bf20`). Unlocks multi-instance menus.
-2. **Group / Label / Separator**. Visual primitives, ~30
-   lines each. Do these first — they give every remaining item
-   variant (CheckboxItem, RadioItem) a sibling to reference in
-   examples and tests. Prove the non-stateful compound parts
-   before the stateful ones.
-3. **Item `select` event with preventDefault**. Aligns with reka;
-   lets authors keep the menu open after an action. Needs
-   `emit`-returnable semantics (currently `emit` is fire-and-forget)
-   OR a different mechanism: Item fires `select` *synchronously* on
-   the li (custom event `pp:select`), author listens with
-   `@pp:select.prevent` to veto close, Item checks if default was
-   prevented before calling `root.close()`. Simpler.
-4. **CheckboxItem / RadioItem / RadioGroup / ItemIndicator**.
-   Stateful items — each compound part uses `on_setup` to
-   subscribe to the state (checkbox value, radio group value).
-   Pattern is now well-trodden.
+1. ~~**Auto-anchor**~~ — done (`af9bf20`).
+2. ~~**Group / Label / Separator**~~ — done (`78c49d5`).
+3. ~~**Item `select` event with preventDefault**~~ — done
+   (`57c9303`). Implementation matched the roadmap's simpler
+   path: cancelable `pp:select` CustomEvent + defaultPrevented
+   check. No substrate change.
+4. ~~**CheckboxItem / RadioItem / RadioGroup / ItemIndicator**~~
+   — done (`1bc4202` + `d428c1a`). ItemIndicator switched from
+   `pp-if` to `pp-show` due to a pp-if-without-teleport scope-
+   pinning gap (see §6).
 5. **Arrow**. Small. Needs `pp-anchor` to expose its final side/
    align so the arrow can orient itself — adds a tiny data-attr.
 6. **Sub/SubTrigger/SubContent**. Submenu flyouts — requires:
@@ -259,3 +251,42 @@ Any of these can now be refactored to compound:
 Not urgent — the monolithic shape works. Do it when a consumer's
 layout needs the ceded control (e.g. putting the trigger deep
 inside a card, which `pp-as` already mostly handles).
+
+---
+
+## 6. Known substrate gaps
+
+Surfaced during compound-component work. None blocking, but
+worth revisiting when adjacent work lands.
+
+### 6.1 `pp-if` without `pp-teleport` doesn't pin scope
+
+`pp-if` on a `<template>` clones the body and inserts it before
+the template element when truthy. With `pp-teleport`, the clone
+gets the owning scope pinned via `bind_borrowed_scope_to` so
+directives inside (particularly `<slot>`) resolve correctly.
+Without teleport, the clone gets no explicit scope — the walker
+resolves via DOM ancestry, which works for *most* directives but
+breaks `<slot>` materialisation inside a component whose
+template's outer wrapper is a `<template pp-if>` (the component
+tag itself doesn't carry a scope key; only the inner template
+does).
+
+**Worked around** in ItemIndicator by switching to `pp-show`
+(element stays in DOM, CSS display toggles) instead of `pp-if`.
+Fine for small indicator elements; not a general substitute for
+conditional rendering that actually unmounts the subtree.
+
+**Fix**: pin the owning scope on pp-if's clone always, not only
+when teleporting. ~5 lines in `directives/if_.rs`.
+
+### 6.2 Cancelable `emit` / `emit_from` / `emit_from_host`
+
+`emit` is fire-and-forget (deferred via tick::next, caller can't
+read back preventDefault). Pine's Item sidesteps this by
+constructing + dispatching the `pp:select` event manually via
+`CustomEventInit { cancelable: true }`. If other components need
+the preventable-emit pattern, lift the manual dispatch into
+`emit_cancelable(name, detail) -> bool` (returns whether
+default was prevented, fires synchronously so the caller can
+branch on it).
