@@ -365,7 +365,16 @@ fn parse_offset(modifiers: &[String]) -> f64 {
     0.0
 }
 
-/// Resolve the anchor: ref name first, CSS selector fallback.
+/// Resolve the anchor. Order:
+///
+/// 1. `raw` as a `pp-ref` name on the current scope.
+/// 2. `raw` as a CSS selector on the document.
+/// 3. If `raw` is an identifier and resolves to a string scope
+///    field, treat that string as selector (recursively through
+///    steps 2). Lets Pine components pass a `anchor` prop and
+///    reference it in the template as `pp-anchor="anchor"` without
+///    needing the substrate to special-case reactive directive
+///    values.
 fn resolve_anchor(call: &DirectiveCall) -> Option<Element> {
     let raw = call.value.trim();
     if raw.is_empty() {
@@ -377,7 +386,28 @@ fn resolve_anchor(call: &DirectiveCall) -> Option<Element> {
         }
     }
     let doc = web_sys::window()?.document()?;
-    doc.query_selector(raw).ok().flatten()
+    if let Some(el) = doc.query_selector(raw).ok().flatten() {
+        return Some(el);
+    }
+    // Scope-field fallback — resolve `raw` as a field on the
+    // current scope's proxy; if it's a non-empty string, try it as
+    // a ref / selector.
+    if is_identifier(raw) {
+        let v = Reflect::get(call.proxy, &JsValue::from_str(raw))
+            .unwrap_or(JsValue::UNDEFINED);
+        if let Some(s) = v.as_string() {
+            let s = s.trim();
+            if !s.is_empty() {
+                if is_identifier(s) {
+                    if let Some(el) = refs::get_on(call.scope_id, s) {
+                        return Some(el);
+                    }
+                }
+                return doc.query_selector(s).ok().flatten();
+            }
+        }
+    }
+    None
 }
 
 fn is_identifier(s: &str) -> bool {

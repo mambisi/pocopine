@@ -1,1 +1,11 @@
-<div class="pine-popover"><slot></slot></div>
+<template pp-teleport="body" pp-if="open">
+  <div role="dialog"
+       class="pine-popover-content"
+       pp-ref="content"
+       data-state="open"
+       pp-anchor:bottom-start.offset.4.flip="anchor"
+       @click.outside="on_outside"
+       @keydown.escape.prevent="on_escape">
+    <slot></slot>
+  </div>
+</template>

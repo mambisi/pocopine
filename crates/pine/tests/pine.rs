@@ -3,6 +3,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
 
@@ -88,6 +89,63 @@ async fn button_pp_as_hoists_author_element() {
         "template class merged onto <a>"
     );
     assert_eq!(root.get_attribute("data-variant").as_deref(), Some("ghost"));
+
+    host.remove();
+}
+
+// ─── PinePopover ──────────────────────────────────────────────────
+
+/// Popover opens on `open=true`, anchors to the trigger via a
+/// CSS selector prop, teleports to `<body>`, and closes on
+/// Escape (restoring focus to the trigger).
+#[wasm_bindgen_test]
+async fn popover_opens_anchors_and_closes_on_escape() {
+    let host = mount(
+        "<div><button id=\"trigger-popover\" class=\"trig\">open</button>\
+         <pine-popover open=\"true\" anchor=\"#trigger-popover\">\
+           <button class=\"popover-btn\">OK</button>\
+         </pine-popover></div>",
+    );
+    // Two ticks: pp-if / pp-teleport + activate's tick::next.
+    tick().await;
+    tick().await;
+
+    let popover = doc()
+        .query_selector("[role=\"dialog\"].pine-popover-content")
+        .unwrap()
+        .expect("popover teleported to body");
+    // pp-anchor sets position: fixed on the floater.
+    assert_eq!(
+        popover
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .style()
+            .get_property_value("position")
+            .unwrap(),
+        "fixed",
+        "pp-anchor applied position: fixed"
+    );
+
+    // Escape closes.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    let popover_el = doc()
+        .query_selector("[role=\"dialog\"].pine-popover-content")
+        .unwrap()
+        .unwrap();
+    popover_el.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_none(),
+        "popover gone after Escape"
+    );
 
     host.remove();
 }
