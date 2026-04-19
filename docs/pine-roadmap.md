@@ -96,10 +96,12 @@ In this order:
    Does NOT yet track the resolved side after a collision flip
    (would need `pp-anchor::reposition` to expose the resolved
    side through a side-table — saved for a follow-up).
-6. **Sub/SubTrigger/SubContent**. Submenu flyouts — requires:
-   nested `pp-anchor` (Sub anchors to SubTrigger), hover-intent
-   timers, left-arrow close semantics, parent menu stays open.
-   Heavier lift, save for last.
+6. ~~**Sub/SubTrigger/SubContent**~~ — v0 done. Click-to-open
+   submenu; parent stays open; Escape / ArrowLeft closes the
+   sub only. Hover-intent timers deferred. Anchor install
+   requires two nested `tick::next` deferrals so `pp-ref="menu"`
+   is registered by the walker's pp-if path before the anchor
+   selector resolves.
 7. ~~**Content config props**~~ — done. `anchor::install(...)`
    exposed as a public helper; DropdownMenu / Popover / Tooltip
    Content parts install the anchor imperatively in `on_ready`

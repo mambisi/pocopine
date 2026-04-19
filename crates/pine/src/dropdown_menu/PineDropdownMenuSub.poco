@@ -1,0 +1,4 @@
+<div class="pine-dm-sub"
+     :data-state="open ? 'open' : 'closed'">
+  <slot></slot>
+</div>

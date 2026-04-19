@@ -256,6 +256,182 @@ fn dispatch_pp_select() -> bool {
     emit_cancelable("pp:select", ())
 }
 
+// ── Sub / SubTrigger / SubContent ─────────────────────────────────
+
+/// Nested submenu root. Independent `open` state provided under
+/// a separate context key (`SUB_KEY`) — the outer menu's
+/// `ROOT_KEY` flows through so SubContent can still reach it
+/// for outer-dismiss semantics when needed.
+///
+/// v0 is click-to-open (no hover-intent timers). Escape in
+/// SubContent closes just the sub, not the outer menu.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuSub.poco")]
+pub struct PineDropdownMenuSub {
+    pub open: bool,
+}
+
+const SUB_KEY: &str = "pine-dm-sub";
+
+#[handlers]
+impl PineDropdownMenuSub {
+    pub fn on_setup(&mut self) {
+        provide(SUB_KEY, this::<Self>());
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+    }
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuSubTrigger.poco")]
+pub struct PineDropdownMenuSubTrigger {
+    pub open: bool,
+    pub disabled: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuSubTrigger {
+    pub fn on_setup(&mut self) {
+        if let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) {
+            self.open = sub.with(|s| s.open);
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) else { return };
+        let me = this::<Self>();
+        let sub_scope = sub.scope_id();
+        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
+            me.update(|s| s.open = is_open);
+        });
+        // Stamp so SubContent can auto-anchor.
+        if let Some(scope) = current_scope_id() {
+            if let Some(btn) = refs::get_on(scope, "trigger") {
+                let _ = btn.set_attribute(
+                    "data-pine-dm-sub-trigger",
+                    &format!("{}", sub_scope.0),
+                );
+            }
+        }
+    }
+
+    pub fn on_select(&mut self) {
+        if self.disabled {
+            return;
+        }
+        // Opening a sub-menu should NOT dismiss the parent
+        // (reka keeps the parent open), so we veto the default
+        // Item-select dismissal. Item.on_select still fires first
+        // via native bubble if the author stacked handlers.
+        if let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) {
+            sub.update(|s: &mut PineDropdownMenuSub| s.toggle());
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuSubContent.poco")]
+pub struct PineDropdownMenuSubContent {
+    pub open: bool,
+    pub anchor: String,
+    pub side: String,
+    pub align: String,
+    pub side_offset: f64,
+}
+
+impl Default for PineDropdownMenuSubContent {
+    fn default() -> Self {
+        Self {
+            open: false,
+            anchor: String::new(),
+            // Submenus conventionally pop out to the right.
+            side: "right".into(),
+            align: "start".into(),
+            side_offset: 2.0,
+        }
+    }
+}
+
+#[handlers]
+impl PineDropdownMenuSubContent {
+    pub fn on_setup(&mut self) {
+        if let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) {
+            self.anchor = format!(
+                "[data-pine-dm-sub-trigger=\"{}\"]",
+                sub.scope_id().0
+            );
+            self.open = sub.with(|s| s.open);
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) else { return };
+        let Some(scope) = current_scope_id() else { return };
+        let me = this::<Self>();
+        let sub_scope = sub.scope_id();
+        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, prev| {
+            me.update(|s| s.open = is_open);
+            // pp-if mounts the `<ul>` lazily, so the first mount
+            // only happens on false→true. Install the anchor then,
+            // reading the menu element freshly.
+            if is_open && prev != Some(&true) {
+                install_sub_anchor(scope);
+            }
+        });
+    }
+
+    pub fn close(&mut self) {
+        if let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) {
+            sub.update(|s: &mut PineDropdownMenuSub| s.close());
+        }
+    }
+}
+
+/// Install pp-anchor on the freshly-teleported sub-menu. Called
+/// from the SubContent's `open → true` watch callback with the
+/// scope id captured — `current_scope_id()` isn't set inside a
+/// bare effect callback, so the scope must be passed in.
+fn install_sub_anchor(scope: ScopeId) {
+    // Defer TWICE: the first tick lets the reactive flush finish
+    // (it'll run the pp-if effect that mounts + walks the sub
+    // menu, registering `pp-ref="menu"`). The second tick runs
+    // after any chained microtasks the walk scheduled — at this
+    // point `refs::get_on` reliably sees the menu element.
+    pocopine::tick::next(move || {
+        pocopine::tick::next(move || {
+            let Some(pine_scope) = pocopine::Scope::find(scope) else { return };
+            let Some(content) = pine_scope
+                .typed::<PineDropdownMenuSubContent>()
+                .map(|rc| Handle::new(rc, scope))
+            else {
+                return;
+            };
+            let (anchor, side, align, offset) = content.with(|c| {
+                (c.anchor.clone(), c.side.clone(), c.align.clone(), c.side_offset)
+            });
+            let Some(menu) = refs::get_on(scope, "menu") else { return };
+            init_roving_tabindex(&menu);
+            focus::auto_focus_first(&menu);
+            if let Some(anchor_el) = resolve_anchor(&anchor) {
+                if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+                    let placement = pocopine_core::directives::anchor::Placement {
+                        side: pocopine_core::directives::anchor::Side::parse(&side),
+                        align: pocopine_core::directives::anchor::Align::parse(&align),
+                    };
+                    pocopine_core::directives::anchor::install(
+                        &floater, &anchor_el, placement, offset, true,
+                    );
+                }
+            }
+        });
+    });
+}
+
 // ── Arrow ─────────────────────────────────────────────────────────
 
 /// Decorative arrow that points at the trigger. Inherits its

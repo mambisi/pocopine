@@ -1,0 +1,13 @@
+<template pp-if="open" pp-teleport="body">
+  <div class="pine-dm-sub-portal">
+    <ul role="menu"
+        class="pine-dm-sub-content"
+        pp-ref="menu"
+        data-state="open"
+        pp-roving
+        @keydown.escape.prevent="close"
+        @keydown.arrow-left.prevent="close">
+      <slot></slot>
+    </ul>
+  </div>
+</template>

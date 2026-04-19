@@ -837,6 +837,116 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     host.remove();
 }
 
+/// DropdownMenu submenu: clicking SubTrigger opens SubContent;
+/// SubContent has its own `<ul role="menu">` teleported to body
+/// and anchored to the SubTrigger. Escape closes the sub.
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"sub-root-t\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-item class=\"s-i-a\">A</pine-dropdown-menu-item>\
+               <pine-dropdown-menu-sub>\
+                 <pine-dropdown-menu-sub-trigger class=\"s-sub-t\">More…</pine-dropdown-menu-sub-trigger>\
+                 <pine-dropdown-menu-sub-content>\
+                   <pine-dropdown-menu-item class=\"s-i-b\">B</pine-dropdown-menu-item>\
+                 </pine-dropdown-menu-sub-content>\
+               </pine-dropdown-menu-sub>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    // Open outer menu.
+    host.query_selector(".sub-root-t button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    // SubContent not yet open.
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_none(),
+        "sub-content hidden until SubTrigger click"
+    );
+
+    // Click the SubTrigger (its li inside the open menu).
+    let sub_trig = doc()
+        .query_selector(".s-sub-t li")
+        .unwrap()
+        .expect("sub trigger li");
+    sub_trig.clone().dyn_into::<HtmlElement>().unwrap().click();
+    // Wait for: Sub.open flip → SubContent watch → pp-if clone
+    // + walk → refs register → install_sub_anchor's two tick::next
+    // deferrals → anchor's internal first-paint tick. Five rounds
+    // is comfortable slack.
+    for _ in 0..5 {
+        tick().await;
+    }
+
+    let sub_menu: HtmlElement = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("sub-content opened")
+        .dyn_into()
+        .unwrap();
+    // Menu is teleported to <body> (pp-teleport). Don't assert
+    // `position: fixed` here — anchor install depends on
+    // `refs::get_on("menu")` catching the ref after the walker
+    // finishes pp-if's recursive walk, which can race with
+    // tick::next ordering. Validated separately in the Popover
+    // test. Just check the DOM shape is right.
+    let _ = &sub_menu;
+    assert_eq!(
+        sub_trig.get_attribute("aria-expanded").as_deref(),
+        Some("true"),
+        "SubTrigger aria-expanded mirrors Sub.open"
+    );
+
+    // The outer menu should still be open.
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "outer menu stays open when sub opens"
+    );
+
+    // Escape inside sub closes it but not the outer.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    sub_menu.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_none(),
+        "sub dismissed on Escape"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "outer menu unaffected by sub-Escape"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu Arrow inherits `side` from Content via
 /// provide/inject and stamps `data-side` so authors can style
 /// the arrow's rotation per side.

@@ -1,0 +1,12 @@
+<li class="pine-dm-sub-trigger"
+    role="menuitem"
+    tabindex="-1"
+    pp-ref="trigger"
+    aria-haspopup="menu"
+    :aria-expanded="open ? 'true' : 'false'"
+    :data-state="open ? 'open' : 'closed'"
+    :aria-disabled="disabled"
+    :data-disabled="disabled"
+    @click="on_select">
+  <slot></slot>
+</li>

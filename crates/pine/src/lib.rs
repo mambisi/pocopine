@@ -52,6 +52,7 @@ pub use dropdown_menu::{
     PineDropdownMenuGroup, PineDropdownMenuItem, PineDropdownMenuItemIndicator,
     PineDropdownMenuLabel, PineDropdownMenuPortal, PineDropdownMenuRadioGroup,
     PineDropdownMenuRadioItem, PineDropdownMenuRoot, PineDropdownMenuSeparator,
+    PineDropdownMenuSub, PineDropdownMenuSubContent, PineDropdownMenuSubTrigger,
     PineDropdownMenuTrigger,
 };
 pub use popover::{
@@ -103,6 +104,9 @@ pub fn register_all() {
     PineDropdownMenuRadioGroup::register();
     PineDropdownMenuRadioItem::register();
     PineDropdownMenuArrow::register();
+    PineDropdownMenuSub::register();
+    PineDropdownMenuSubTrigger::register();
+    PineDropdownMenuSubContent::register();
     PineTabsRoot::register();
     PineTabsList::register();
     PineTabsTrigger::register();
