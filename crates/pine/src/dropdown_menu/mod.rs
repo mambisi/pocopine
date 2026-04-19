@@ -266,6 +266,124 @@ impl PineDropdownMenuGroup {
     }
 }
 
+// ── CheckboxItem ──────────────────────────────────────────────────
+
+/// Toggleable menu item. `role="menuitemcheckbox"`, tri-state via
+/// the inherited PineCheckbox state machine
+/// (`"checked"`/`"unchecked"`/`"indeterminate"`), two-way
+/// bindable through `pp-model:state`. Emits the same cancelable
+/// `pp:select` as Item so the menu can be kept open.
+///
+/// Inside a CheckboxItem, a `<pine-dropdown-menu-item-indicator>`
+/// renders its slot only when `checked != "unchecked"` (matches
+/// reka-ui semantics).
+#[derive(Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuCheckboxItem.poco")]
+pub struct PineDropdownMenuCheckboxItem {
+    pub state: String,
+    pub disabled: bool,
+    /// Computed mirror of `state != "unchecked"` for
+    /// ItemIndicator's pp-if. Kept as a bool so
+    /// `watch_scope_field::<bool>` in ItemIndicator stays simple.
+    pub checked: bool,
+}
+
+impl Default for PineDropdownMenuCheckboxItem {
+    fn default() -> Self {
+        Self {
+            state: "unchecked".into(),
+            disabled: false,
+            checked: false,
+        }
+    }
+}
+
+/// Provide/inject key for a Checkbox or Radio item's scope id —
+/// an ItemIndicator's subscription point. The value is the
+/// owner's `ScopeId`; ItemIndicator's `on_ready` uses it with
+/// `watch_scope_field` to mirror `checked`.
+const CHECKED_OWNER_KEY: &str = "pine-dm-checked-owner";
+
+#[handlers]
+impl PineDropdownMenuCheckboxItem {
+    pub fn on_setup(&mut self) {
+        // Derive the initial `checked` bool from `state` so
+        // ItemIndicator's pp-if sees the right value on first
+        // bind (before the `#[watch(state)]` below fires).
+        self.checked = self.state != "unchecked";
+        // Provide in on_setup, NOT on_mount: on_setup fires
+        // before the template's children walk, so nested
+        // ItemIndicator(s) can inject during their own
+        // on_setup. on_mount fires post-children which would be
+        // too late.
+        if let Some(scope) = current_scope_id() {
+            provide(CHECKED_OWNER_KEY, scope);
+        }
+    }
+
+    /// Mirror `state` → `checked` reactively so any nested
+    /// ItemIndicator's pp-if re-evaluates on state changes.
+    #[watch(state)]
+    fn on_state_change(&mut self, state: String, _prev: Option<String>) {
+        self.checked = state != "unchecked";
+    }
+
+    pub fn on_select(&mut self) {
+        if self.disabled {
+            return;
+        }
+        // Cycle: unchecked → checked → unchecked; indeterminate → checked.
+        self.state = match self.state.as_str() {
+            "checked" => "unchecked".into(),
+            _ => "checked".into(),
+        };
+        emit("pp:update:model", self.state.clone());
+
+        let prevented = dispatch_pp_select();
+        if prevented {
+            return;
+        }
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PineDropdownMenuRoot| r.close());
+        }
+    }
+}
+
+// ── ItemIndicator ─────────────────────────────────────────────────
+
+/// Renders its slot only when the enclosing CheckboxItem /
+/// RadioItem is currently checked. Injects the owner's scope id
+/// and mirrors its `checked` field through
+/// `watch_scope_field`, so any state change in the parent item
+/// reactively shows/hides this indicator.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuItemIndicator.poco")]
+pub struct PineDropdownMenuItemIndicator {
+    pub checked: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuItemIndicator {
+    pub fn on_setup(&mut self) {
+        // Read the parent item's initial `checked` synchronously
+        // so the first pp-show evaluation sees the right value.
+        if let Some(owner) = inject::<ScopeId>(CHECKED_OWNER_KEY) {
+            if let Some(scope) = Scope::find(owner) {
+                let v = scope.state.borrow().get("checked");
+                self.checked = v.as_bool().unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(owner) = inject::<ScopeId>(CHECKED_OWNER_KEY) else { return };
+        let me = this::<Self>();
+        watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
+            me.update(|s| s.checked = c);
+        });
+    }
+}
+
 // ── Label ─────────────────────────────────────────────────────────
 
 /// Labelled heading for a Group. Injects the group's label id and

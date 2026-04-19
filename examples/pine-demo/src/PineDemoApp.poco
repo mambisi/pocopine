@@ -80,14 +80,21 @@
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>
 
-    <!-- Second instance — verifies auto-anchor gives each menu
-         its own trigger target via the injected root scope id. -->
+    <!-- Second instance — verifies auto-anchor + demonstrates
+         checkbox-items with ItemIndicator. -->
     <pine-dropdown-menu-root>
-      <pine-dropdown-menu-trigger>More ▾</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-trigger>View ▾</pine-dropdown-menu-trigger>
       <pine-dropdown-menu-portal>
         <pine-dropdown-menu-content>
-          <pine-dropdown-menu-item @click="action_bump">Also bump</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item @click="action_toggle_dark">Also toggle dark</pine-dropdown-menu-item>
+          <pine-dropdown-menu-label>Show</pine-dropdown-menu-label>
+          <pine-dropdown-menu-checkbox-item pp-model:state="show_muted">
+            <pine-dropdown-menu-item-indicator>✓</pine-dropdown-menu-item-indicator>
+            Muted items
+          </pine-dropdown-menu-checkbox-item>
+          <pine-dropdown-menu-checkbox-item pp-model:state="show_archived">
+            <pine-dropdown-menu-item-indicator>✓</pine-dropdown-menu-item-indicator>
+            Archived
+          </pine-dropdown-menu-checkbox-item>
         </pine-dropdown-menu-content>
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>

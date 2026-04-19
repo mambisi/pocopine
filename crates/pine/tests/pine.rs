@@ -593,6 +593,106 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     host.remove();
 }
 
+/// DropdownMenu CheckboxItem + ItemIndicator round-trip: clicking
+/// the item toggles its tri-state, emits pp:update:model, and the
+/// nested ItemIndicator reactively renders via pp-if on the
+/// mirrored `checked` bool. Matches reka-ui's CheckboxItem +
+/// ItemIndicator pairing.
+#[wasm_bindgen_test]
+async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"ck-trig\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-checkbox-item class=\"ck-one\">\
+                 <pine-dropdown-menu-item-indicator>\
+                   <span class=\"ck-dot\">✓</span>\
+                 </pine-dropdown-menu-item-indicator>\
+                 One\
+               </pine-dropdown-menu-checkbox-item>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    // Open the menu.
+    host.query_selector(".ck-trig button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    // Initial: unchecked — aria-checked=false, indicator hidden
+    // via pp-show (element stays in DOM, display toggled off).
+    let item_li = doc()
+        .query_selector(".ck-one li")
+        .unwrap()
+        .expect("checkbox item li");
+    assert_eq!(
+        item_li.get_attribute("aria-checked").as_deref(),
+        Some("false"),
+        "initial aria-checked"
+    );
+    let indicator = doc()
+        .query_selector(".pine-dm-item-indicator")
+        .unwrap()
+        .expect("indicator always in DOM via pp-show");
+    let indicator_html: HtmlElement = indicator.clone().dyn_into().unwrap();
+    assert_eq!(
+        indicator_html.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "indicator hidden initially — pp-show = false"
+    );
+
+    // Click — toggles to "checked", menu stays open for demo
+    // purposes is *not* what we do here (default behaviour is
+    // to dismiss on select, matching Item), so veto it first.
+    use wasm_bindgen::closure::Closure;
+    let veto: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(|ev: web_sys::Event| ev.prevent_default()));
+    item_li
+        .add_event_listener_with_callback("pp:select", veto.as_ref().unchecked_ref())
+        .unwrap();
+    veto.forget();
+
+    item_li.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    // Menu still open (veto worked), item now checked, indicator
+    // rendered.
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "menu still open after veto"
+    );
+    assert_eq!(
+        item_li.get_attribute("aria-checked").as_deref(),
+        Some("true"),
+        "aria-checked flipped on click"
+    );
+    assert_eq!(
+        item_li.get_attribute("data-state").as_deref(),
+        Some("checked"),
+        "data-state reflects the tri-state value"
+    );
+    // pp-show clears inline `display: none` when checked=true.
+    assert_ne!(
+        indicator_html.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "indicator shown when checked — pp-show reactive via ItemIndicator's watch"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
 /// render correct ARIA wiring. Separator has `role="separator"`
 /// and `aria-orientation="horizontal"`. Group + Label link via

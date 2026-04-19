@@ -1,0 +1,4 @@
+<span class="pine-dm-item-indicator"
+      pp-show="checked">
+  <slot></slot>
+</span>

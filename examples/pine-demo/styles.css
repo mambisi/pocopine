@@ -194,6 +194,27 @@ pine-dropdown-menu-portal { display: contents; }
   color: var(--fg-muted);
 }
 
+.pine-dm-checkbox-item {
+  padding: 0.375rem 0.625rem 0.375rem 1.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  list-style: none;
+  position: relative;
+}
+.pine-dm-checkbox-item:hover,
+.pine-dm-checkbox-item:focus { background: var(--bg-hover); }
+.pine-dm-checkbox-item[data-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+.pine-dm-item-indicator {
+  position: absolute;
+  left: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.875rem;
+  color: var(--fg);
+}
+
 /* ─── PineTabs ────────────────────────────────────────────────── */
 
 .pine-tabs-list {

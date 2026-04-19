@@ -25,6 +25,12 @@ pub struct PineDemoApp {
 
     pub dark_mode: bool,
     pub agree_state: String,
+
+    /// Toggled by checkbox-items in the second dropdown menu.
+    /// Bound via `pp-model:state` so the tri-state String flows
+    /// both ways through the compound's pp:update:model event.
+    pub show_muted: String,
+    pub show_archived: String,
 }
 
 #[handlers]
@@ -32,6 +38,8 @@ impl PineDemoApp {
     pub fn on_mount(&mut self) {
         self.tab = "account".into();
         self.agree_state = "unchecked".into();
+        self.show_muted = "unchecked".into();
+        self.show_archived = "unchecked".into();
         self.tabs = vec![
             pine::TabDef {
                 value: "account".into(),
