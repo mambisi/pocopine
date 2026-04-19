@@ -2,6 +2,21 @@
   <h1>Pine</h1>
   <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
 
+  <!-- Live selection state — every component's current value is
+       visible here so interactions have obvious feedback. -->
+  <section class="state-panel" aria-label="Live state">
+    <dl>
+      <dt>Button clicks</dt> <dd pp-text="clicks"></dd>
+      <dt>Dialog</dt>        <dd pp-text="dialog_open ? 'open' : 'closed'"></dd>
+      <dt>Popover</dt>       <dd pp-text="popover_open ? 'open' : 'closed'"></dd>
+      <dt>Menu</dt>          <dd pp-text="menu_open ? 'open' : 'closed'"></dd>
+      <dt>Last menu pick</dt><dd pp-text="last_menu_pick"></dd>
+      <dt>Current tab</dt>   <dd pp-text="tab"></dd>
+      <dt>Dark mode</dt>     <dd pp-text="dark_mode ? 'on' : 'off'"></dd>
+      <dt>Agree</dt>         <dd pp-text="agree_state"></dd>
+    </dl>
+  </section>
+
   <!-- PineButton ─────────────────────────────────────────── -->
   <h2>Button</h2>
   <section class="row">
@@ -48,11 +63,14 @@
   <h2>Dropdown menu</h2>
   <section class="row">
     <pine-button id="menu-trig" @click="toggle_menu">Account ▾</pine-button>
-    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig" @click="close_menu">
-      <li role="menuitem" tabindex="-1">Profile</li>
-      <li role="menuitem" tabindex="-1">Settings</li>
-      <li role="menuitem" tabindex="-1" aria-disabled="true">Team (disabled)</li>
-      <li role="menuitem" tabindex="-1">Sign out</li>
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      last pick: <strong pp-text="last_menu_pick"></strong>
+    </span>
+    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig" @click="pick_menu">
+      <li role="menuitem" tabindex="-1" data-label="Profile">Profile</li>
+      <li role="menuitem" tabindex="-1" data-label="Settings">Settings</li>
+      <li role="menuitem" tabindex="-1" data-label="Team" aria-disabled="true">Team (disabled)</li>
+      <li role="menuitem" tabindex="-1" data-label="Sign out">Sign out</li>
     </pine-dropdown-menu>
   </section>
 

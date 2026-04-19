@@ -988,6 +988,7 @@ dependencies = [
  "pocopine",
  "serde",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

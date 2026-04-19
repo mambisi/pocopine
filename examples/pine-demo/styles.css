@@ -49,6 +49,23 @@ section {
   background: var(--bg);
 }
 
+/* Sticky-ish live-state readout at the top of the demo. */
+.state-panel {
+  background: var(--bg-subtle);
+  position: sticky;
+  top: 1rem;
+  z-index: 10;
+}
+.state-panel dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.875rem;
+}
+.state-panel dt { color: var(--fg-muted); }
+.state-panel dd { margin: 0; font-weight: 600; }
+
 .row {
   display: flex;
   gap: 0.75rem;
