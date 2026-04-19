@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use js_sys::Array;
+use js_sys::{Array, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
@@ -184,22 +184,7 @@ fn run_keyed(
 
         for i in 0..total {
             let item = arr.get(i as u32);
-
-            // Derive the key for this item. Build a minimal one-shot
-            // loop-scope proxy so the key expression can reach item /
-            // $index / $first / $last / parent — same resolution as
-            // any other directive inside the loop.
-            let probe_state = LoopScope {
-                item_name: item_name.clone(),
-                item: item.clone(),
-                index: i,
-                total,
-                parent: parent_proxy.clone(),
-            };
-            let probe_scope = Scope::new(Rc::new(RefCell::new(probe_state)));
-            let probe_proxy = probe_scope.into_proxy();
-            let key_val = resolve_path(&probe_proxy, &key_expr);
-            Scope::remove(probe_scope.id);
+            let key_val = resolve_key(&item_name, &item, i, &parent_proxy, &key_expr);
             let raw_key = stringify_key(&key_val);
 
             // Make sure duplicate keys in one pass don't collapse
@@ -287,6 +272,46 @@ fn run_keyed(
 
         *prior.borrow_mut() = fresh;
     })
+}
+
+/// Resolve the `pp-key` expression for one iteration without
+/// creating a throw-away `Scope` + proxy. Handles the three forms
+/// we actually see in practice:
+///
+/// * `"<item_name>"` → the raw item.
+/// * `"<item_name>.<path>"` → walk `path` segments on the item via
+///   `Reflect::get`. Non-tracked, matches the per-iteration read we
+///   want — we don't subscribe the outer pp-for effect to any of
+///   the item's own fields.
+/// * `"$index"` → the current index.
+/// * anything else → fall through to a normal `resolve_path` against
+///   the parent proxy so keys like `"$store.selected_id"` still work.
+fn resolve_key(
+    item_name: &str,
+    item: &JsValue,
+    index: usize,
+    parent_proxy: &JsValue,
+    expr: &str,
+) -> JsValue {
+    let trimmed = expr.trim();
+    if trimmed == "$index" {
+        return JsValue::from_f64(index as f64);
+    }
+    if trimmed == item_name {
+        return item.clone();
+    }
+    let prefix = format!("{item_name}.");
+    if let Some(rest) = trimmed.strip_prefix(&prefix) {
+        return rest.split('.').fold(item.clone(), |acc, segment| {
+            if segment.is_empty() {
+                acc
+            } else {
+                Reflect::get(&acc, &JsValue::from_str(segment))
+                    .unwrap_or(JsValue::UNDEFINED)
+            }
+        });
+    }
+    resolve_path(parent_proxy, trimmed)
 }
 
 /// Canonicalise a key value to a string. Strings come through

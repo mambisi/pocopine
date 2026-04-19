@@ -230,6 +230,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
             }
+            fn has_on_mount(&self) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::has_on_mount(self)
+            }
+            fn has_on_unmount(&self) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::has_on_unmount(self)
+            }
             fn type_name(&self) -> &'static str {
                 #name_str
             }
@@ -311,6 +317,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn mount(&mut self) {
                 Self::on_mount(self);
             }
+            fn has_on_mount(&self) -> bool { true }
         }
     });
     let unmount_impl = has_on_unmount.then(|| {
@@ -318,6 +325,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn unmount(&mut self) {
                 Self::on_unmount(self);
             }
+            fn has_on_unmount(&self) -> bool { true }
         }
     });
 

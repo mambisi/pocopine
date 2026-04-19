@@ -98,9 +98,14 @@ fn fire_deferred_init(el: &Element) {
 
 /// Fire the component-level `on_mount` lifecycle hook on elements
 /// that own a (non-borrowed) scope. Runs post-order so the handler
-/// sees the fully-bound subtree (refs included). `trigger_scope`
-/// fires afterwards so any field mutation in `on_mount` is picked up
-/// by already-subscribed effects.
+/// sees the fully-bound subtree (refs included).
+///
+/// `trigger_scope` fires afterwards **only when the component
+/// actually defined `on_mount`** — otherwise the hook is a no-op
+/// and the sweep would cascade through the subtree for nothing. For
+/// recursive component trees (e.g. `<hn-comment>` in a comment
+/// thread), a blanket sweep per mount amplifies to O(depth × nodes)
+/// effect re-runs during initial render.
 fn fire_mount_hook(el: &Element) {
     let Some(id_num) = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) else {
         return;
@@ -113,6 +118,10 @@ fn fire_mount_hook(el: &Element) {
     }
     let id = ScopeId(id_num as u64);
     let Some(scope) = Scope::find(id) else { return };
+    let has_hook = scope.state.borrow().has_on_mount();
+    if !has_hook {
+        return;
+    }
     crate::scope::with_current_scope_id(id, || {
         scope.state.borrow_mut().mount();
     });

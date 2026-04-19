@@ -44,6 +44,21 @@ pub trait ComponentState: 'static {
     /// when one exists.
     fn unmount(&mut self) {}
 
+    /// True iff the component actually has a user-defined `on_mount`.
+    /// Lets the walker skip the post-mount `trigger_scope` sweep for
+    /// components that don't need it — critical for recursive
+    /// children, where a blanket sweep would cascade through the
+    /// whole subtree.
+    fn has_on_mount(&self) -> bool {
+        false
+    }
+
+    /// Symmetric with [`has_on_mount`]. Kept for parity; reserved
+    /// for future devtools coverage displays.
+    fn has_on_unmount(&self) -> bool {
+        false
+    }
+
     /// Human-readable tag / type name used by devtools. Default
     /// `"?"`; `#[component]` / `#[store]` override with the concrete
     /// kebab-case name.
