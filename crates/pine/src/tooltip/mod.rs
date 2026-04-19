@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use js_sys::Reflect;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, tick, watch, Handle, Scope, ScopeId};
+use pocopine::{current_scope_id, Handle, Scope, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -67,23 +67,14 @@ impl Default for PineTooltip {
 
 #[handlers]
 impl PineTooltip {
-    pub fn on_mount(&mut self) {
-        let scope = current_scope_id().expect("on_mount within scope");
-        // Install listeners on the trigger + a watch for open
-        // transitions, deferred so the trigger is reachable and
-        // on_mount's `&mut self` borrow is released.
-        tick::next(move || {
-            install_trigger_listeners(scope);
-            watch(
-                move || read_open(scope),
-                move |_is_open, _| {
-                    // No side-effects beyond the template's
-                    // pp-if; the listeners manipulate state
-                    // directly. Kept for symmetry / future
-                    // animation hooks.
-                },
-            );
-        });
+    pub fn post_mount(&self) {
+        // RFC-026: runs AFTER on_mount's borrow releases AND after
+        // a microtask — the trigger resolved via `refs`/selector
+        // is definitely in the DOM by now. No reactive watcher
+        // needed: the trigger listeners mutate state imperatively
+        // and pp-if does the rest.
+        let scope = current_scope_id().expect("post_mount within scope");
+        install_trigger_listeners(scope);
     }
 
     pub fn on_unmount(&mut self) {
@@ -91,13 +82,6 @@ impl PineTooltip {
             teardown(scope);
         }
     }
-}
-
-fn read_open(scope: ScopeId) -> bool {
-    let Some(s) = Scope::find(scope) else { return false };
-    let proxy = s.into_proxy();
-    let v = Reflect::get(&proxy, &JsValue::from_str("open")).unwrap_or(JsValue::FALSE);
-    !v.is_falsy()
 }
 
 fn install_trigger_listeners(scope: ScopeId) {

@@ -146,14 +146,37 @@ fn fire_mount_hook(el: &Element) {
     }
     let id = ScopeId(id_num as u64);
     let Some(scope) = Scope::find(id) else { return };
-    let has_hook = scope.state.borrow().has_on_mount();
-    if !has_hook {
-        return;
+
+    // Snapshot both hook flags before borrowing — `has_on_mount`
+    // reads through an immutable borrow, `mount()` needs a mutable
+    // one, and we want to check `has_post_mount` without racing.
+    let (has_mount, has_post) = {
+        let s = scope.state.borrow();
+        (s.has_on_mount(), s.has_post_mount())
+    };
+
+    if has_mount {
+        crate::scope::with_current_scope_id(id, || {
+            scope.state.borrow_mut().mount();
+        });
+        crate::reactive::trigger_scope(id);
     }
-    crate::scope::with_current_scope_id(id, || {
-        scope.state.borrow_mut().mount();
-    });
-    crate::reactive::trigger_scope(id);
+
+    if has_post {
+        // RFC-026: defer `post_mount` to the next microtask so the
+        // surrounding walker frame has unwound and pp-if /
+        // pp-teleport children have had a chance to commit. The
+        // hook is invoked through an IMMUTABLE borrow — proxy reads
+        // inside the hook (watch_field, refs::get_on that touches
+        // the proxy, `$event`) require state.borrow() on the get
+        // trap, which is compatible with other immutable borrows.
+        crate::tick::next(move || {
+            let Some(scope) = Scope::find(id) else { return };
+            crate::scope::with_current_scope_id(id, || {
+                scope.state.borrow().post_mount();
+            });
+        });
+    }
 }
 
 fn bind(el: &Element) {

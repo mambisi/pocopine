@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, refs, tick, watch, Scope, ScopeId};
+use pocopine::{current_scope_id, focus, refs, tick, ScopeId};
 use serde::{Deserialize, Serialize};
 
 use js_sys::Reflect;
@@ -43,23 +43,24 @@ pub struct PineDropdownMenu {
 
 #[handlers]
 impl PineDropdownMenu {
-    pub fn on_mount(&mut self) {
-        let scope = current_scope_id().expect("on_mount within scope");
-        tick::next(move || {
-            watch(
-                move || read_open(scope),
-                move |is_open, prev| match (prev, *is_open) {
-                    (None, true) | (Some(false), true) => {
-                        // Wait one tick so pp-if/pp-teleport commit
-                        // the menu into <body> before we grab the
-                        // ref and auto-focus its first item.
-                        tick::next(move || activate(scope));
-                    }
-                    (Some(true), false) => deactivate(scope),
-                    _ => {}
-                },
-            );
-        });
+    #[watch(open)]
+    fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {
+        match (prev, is_open) {
+            (None, true) | (Some(false), true) => {
+                // Wait one tick so pp-if/pp-teleport commit the
+                // menu into <body> before we auto-focus its first
+                // item via `refs::get_on("menu")`.
+                if let Some(scope) = current_scope_id() {
+                    tick::next(move || activate(scope));
+                }
+            }
+            (Some(true), false) => {
+                if let Some(scope) = current_scope_id() {
+                    deactivate(scope);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn on_unmount(&mut self) {
@@ -107,13 +108,6 @@ fn find_host_element() -> Option<Element> {
         cur = el.parent_element();
     }
     None
-}
-
-fn read_open(scope: ScopeId) -> bool {
-    let Some(s) = Scope::find(scope) else { return false };
-    let proxy = s.into_proxy();
-    let v = Reflect::get(&proxy, &JsValue::from_str("open")).unwrap_or(JsValue::FALSE);
-    !v.is_falsy()
 }
 
 fn activate(scope: ScopeId) {

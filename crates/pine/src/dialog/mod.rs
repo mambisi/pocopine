@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use js_sys::Reflect;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, refs, scroll_lock, tick, watch, Scope, ScopeId};
+use pocopine::{current_scope_id, focus, refs, scroll_lock, tick, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -64,27 +64,25 @@ impl Default for PineDialog {
 
 #[handlers]
 impl PineDialog {
-    pub fn on_mount(&mut self) {
-        let scope = current_scope_id().expect("on_mount within scope");
-        // Install the watcher *after* on_mount returns so the
-        // initial read doesn't clash with on_mount's active
-        // `&mut self` borrow. Also gives pp-if's template mount a
-        // chance to commit the content element before we query
-        // refs::get_on during activate.
-        tick::next(move || {
-            watch(
-                move || read_open(scope),
-                move |is_open, prev| match (prev, *is_open) {
-                    (None, true) | (Some(false), true) => {
-                        tick::next(move || activate(scope));
-                    }
-                    (Some(true), false) => {
-                        deactivate(scope);
-                    }
-                    _ => {}
-                },
-            );
-        });
+    /// Reacts to `open` transitions. RFC-026's `#[watch]` sugar —
+    /// the `#[handlers]` macro generates an auto `post_mount` that
+    /// calls `watch_field::<bool, _>("open", …)` for us.
+    #[watch(open)]
+    fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {
+        match (prev, is_open) {
+            (None, true) | (Some(false), true) => {
+                let Some(scope) = current_scope_id() else { return };
+                // Give pp-if's teleport clone a tick to mount so
+                // refs::get_on("content") resolves inside activate.
+                tick::next(move || activate(scope));
+            }
+            (Some(true), false) => {
+                if let Some(scope) = current_scope_id() {
+                    deactivate(scope);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn on_unmount(&mut self) {
@@ -167,16 +165,6 @@ fn find_host_element() -> Option<Element> {
         cur = el.parent_element();
     }
     None
-}
-
-/// Reactive read of the `open` field on `scope`. Goes through the
-/// scope's proxy get trap so the enclosing effect subscribes — a
-/// direct `me.with(|s| s.open)` would skip reactivity entirely.
-fn read_open(scope: ScopeId) -> bool {
-    let Some(s) = Scope::find(scope) else { return false };
-    let proxy = s.into_proxy();
-    let v = Reflect::get(&proxy, &JsValue::from_str("open")).unwrap_or(JsValue::FALSE);
-    !v.is_falsy()
 }
 
 fn activate(scope: ScopeId) {

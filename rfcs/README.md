@@ -40,3 +40,4 @@ Conventions:
 | 022 | [`pp-roving` tabindex / arrow navigation](./rfc-022-pp-roving.md) | Implemented |
 | 023 | [Pine MVP — 8 unstyled UI primitives](./rfc-023-pine-mvp.md) | Implemented |
 | 024 | [Expression-based directive values](./rfc-024-expression-values.md) | Implemented |
+| 026 | [`post_mount` lifecycle + `#[watch(field)]` sugar](./rfc-026-post-mount-watch-field.md) | Implemented |

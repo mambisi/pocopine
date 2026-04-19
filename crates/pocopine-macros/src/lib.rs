@@ -227,11 +227,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn mount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::mount(self);
             }
+            fn post_mount(&self) {
+                <Self as ::pocopine::__private::HandlerDispatch>::post_mount(self);
+            }
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
             }
             fn has_on_mount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_mount(self)
+            }
+            fn has_post_mount(&self) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::has_post_mount(self)
             }
             fn has_on_unmount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_unmount(self)
@@ -274,12 +280,49 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemImpl);
+    let mut input = parse_macro_input!(item as ItemImpl);
     let ty = input.self_ty.clone();
 
     let mut arms = Vec::new();
     let mut has_on_mount = false;
+    let mut has_post_mount = false;
     let mut has_on_unmount = false;
+    // (method_ident, field_ident, value_type) for each `#[watch(f)]`
+    // method. The macro auto-generates a `post_mount` that wires a
+    // `watch_field` per entry.
+    let mut watches: Vec<(syn::Ident, syn::Ident, syn::Type)> = Vec::new();
+
+    // First pass: collect watch metadata while the `#[watch(...)]`
+    // attribute is still on each method. Strip the attribute in the
+    // same loop so the compiler doesn't see an unknown attr on the
+    // rewritten output.
+    let mut methods_to_skip_in_arms: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for impl_item in input.items.iter_mut() {
+        let ImplItem::Fn(method) = impl_item else { continue };
+        let mut watch_field: Option<syn::Ident> = None;
+        method.attrs.retain(|attr| {
+            if attr.path().is_ident("watch") {
+                if let Ok(ident) = attr.parse_args::<syn::Ident>() {
+                    watch_field = Some(ident);
+                }
+                false // strip
+            } else {
+                true
+            }
+        });
+        if let Some(field_ident) = watch_field {
+            // Extract V from the method's first typed arg.
+            let v_ty = method.sig.inputs.iter().find_map(|arg| match arg {
+                FnArg::Typed(PatType { ty, .. }) => Some((**ty).clone()),
+                _ => None,
+            });
+            let Some(v_ty) = v_ty else { continue };
+            methods_to_skip_in_arms.insert(method.sig.ident.to_string());
+            watches.push((method.sig.ident.clone(), field_ident, v_ty));
+        }
+    }
+
     for item in &input.items {
         let ImplItem::Fn(method) = item else { continue };
         let Some(_receiver) = method.sig.receiver() else {
@@ -289,8 +332,18 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let name = ident.to_string();
         match name.as_str() {
             "on_mount" => has_on_mount = true,
+            "post_mount" => {
+                has_post_mount = true;
+                continue; // lifecycle; don't emit an invoke arm
+            }
             "on_unmount" => has_on_unmount = true,
             _ => {}
+        }
+
+        // `#[watch(field)]`-decorated methods are called by the
+        // auto-generated post_mount, never as a named handler.
+        if methods_to_skip_in_arms.contains(&name) {
+            continue;
         }
 
         // Collect typed arg positions after `&mut self`. Per RFC-008,
@@ -340,6 +393,84 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn has_on_mount(&self) -> bool { true }
         }
     });
+    // Build the list of watch_field registration statements for the
+    // auto-generated post_mount. Each `#[watch(field)]` method
+    // becomes:
+    //
+    //   let __scope = current_scope_id().expect(…);
+    //   pocopine::watch_field::<V, _>("field", move |new, prev| {
+    //       let new_v = new.clone();
+    //       let prev_v = prev.cloned();
+    //       if let Some(scope) = pocopine::Scope::find(__scope) {
+    //           if let Some(inner) = scope.typed::<Self>() {
+    //               pocopine::Handle::new(inner, __scope)
+    //                   .update(|s| s.<method>(new_v, prev_v));
+    //           }
+    //       }
+    //   });
+    //
+    // `Handle::new` + `update` acquires a fresh mutable borrow via
+    // the captured scope id. This sidesteps two things at once:
+    // (1) the &self / &mut self mismatch between post_mount and the
+    // decorated method, and (2) the fact that `this::<Self>()`
+    // depends on the thread-local `CURRENT_SCOPE_ID`, which isn't
+    // set during most watch callback re-runs (triggers come from
+    // the parent's effect chain, not a fresh `Scope::invoke`).
+    let watch_installs = watches.iter().map(|(method_ident, field_ident, v_ty)| {
+        let field_name = field_ident.to_string();
+        let ty = ty.clone();
+        quote! {
+            {
+                let __scope = ::pocopine::current_scope_id()
+                    .expect("watch_field installed outside a lifecycle context");
+                ::pocopine::watch_field::<#v_ty, _>(#field_name, move |new, prev| {
+                    let new_v: #v_ty = new.clone();
+                    let prev_v: ::core::option::Option<#v_ty> = prev.cloned();
+                    if let Some(scope) = ::pocopine::Scope::find(__scope) {
+                        if let Some(inner) = scope.typed::<#ty>() {
+                            ::pocopine::Handle::new(inner, __scope)
+                                .update(|s| {
+                                    s.#method_ident(new_v, prev_v);
+                                });
+                        }
+                    }
+                });
+            }
+        }
+    });
+    let has_watches = !watches.is_empty();
+
+    // User wrote their own `post_mount` explicitly: use it. If they
+    // didn't but there's at least one `#[watch]`, generate a
+    // post_mount that calls `pine_auto_post_mount`. If they wrote
+    // BOTH, merge — user's body runs first, then watch setup.
+    let post_mount_impl = if has_post_mount {
+        if has_watches {
+            quote! {
+                fn post_mount(&self) {
+                    Self::post_mount(self);
+                    #(#watch_installs)*
+                }
+                fn has_post_mount(&self) -> bool { true }
+            }
+        } else {
+            quote! {
+                fn post_mount(&self) {
+                    Self::post_mount(self);
+                }
+                fn has_post_mount(&self) -> bool { true }
+            }
+        }
+    } else if has_watches {
+        quote! {
+            fn post_mount(&self) {
+                #(#watch_installs)*
+            }
+            fn has_post_mount(&self) -> bool { true }
+        }
+    } else {
+        quote! {}
+    };
     let unmount_impl = has_on_unmount.then(|| {
         quote! {
             fn unmount(&mut self) {
@@ -364,6 +495,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
             #mount_impl
+            #post_mount_impl
             #unmount_impl
         }
     };
