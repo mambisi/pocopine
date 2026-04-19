@@ -1,44 +1,27 @@
 //! Magics — `$el`, `$refs`, `$dispatch`. Resolved by the proxy's `get` trap
 //! whenever a key starting with `$` is read.
 
-use js_sys::{Array, Function, Object, Reflect};
+use js_sys::{Array, Function};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{CustomEvent, CustomEventInit, Element};
+use web_sys::{CustomEvent, CustomEventInit};
 
 use crate::reactive::ScopeId;
+use crate::refs;
 use crate::router::route_proxy;
 use crate::scope::current_el;
 use crate::store::stores_object;
 
-pub fn resolve(key: &str, _scope_id: ScopeId) -> JsValue {
+pub fn resolve(key: &str, scope_id: ScopeId) -> JsValue {
     match key {
         "$el" => current_el().map(JsValue::from).unwrap_or(JsValue::UNDEFINED),
-        "$refs" => build_refs(),
+        "$refs" => refs::as_object(scope_id),
         "$dispatch" => build_dispatch(),
         "$store" => stores_object(),
         "$route" => route_proxy(),
         _ => JsValue::UNDEFINED,
     }
-}
-
-fn build_refs() -> JsValue {
-    let obj = Object::new();
-    let Some(el) = current_el() else { return obj.into() };
-    // Walk descendants and collect pp-ref="name".
-    let nodes = match el.query_selector_all("[pp-ref]") {
-        Ok(n) => n,
-        Err(_) => return obj.into(),
-    };
-    for i in 0..nodes.length() {
-        let Some(n) = nodes.get(i) else { continue };
-        let Ok(e) = n.dyn_into::<Element>() else { continue };
-        if let Some(name) = e.get_attribute("pp-ref") {
-            let _ = Reflect::set(&obj, &name.into(), &e.into());
-        }
-    }
-    obj.into()
 }
 
 fn build_dispatch() -> JsValue {

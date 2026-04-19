@@ -60,7 +60,7 @@ That's the whole counter. No virtual DOM, no build step beyond
 
 * **Directives:** `pp-text`, `pp-html`, `pp-bind:<attr>`, `pp-on:<event>`,
   `pp-show`, `pp-model`, `pp-init`, `pp-for`, `pp-if`, `pp-cloak`,
-  `pp-transition:*`, `pp-teleport`, `pp-route`.
+  `pp-transition:*`, `pp-teleport`, `pp-ref`, `pp-route`.
 * **Tag-based components.** Declare a struct, drop `<my-thing>` in
   HTML, done. Props bind by attribute name (kebab → snake), slots via
   `<slot>`.

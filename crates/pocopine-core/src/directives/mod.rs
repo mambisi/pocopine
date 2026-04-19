@@ -17,6 +17,7 @@ pub mod if_;
 pub mod init;
 pub mod model;
 pub mod on;
+pub mod ref_;
 pub mod route;
 pub mod show;
 pub mod teleport;
@@ -54,6 +55,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("for", for_::run);
         m.insert("if", if_::run);
         m.insert("teleport", teleport::run);
+        m.insert("ref", ref_::run);
         m
     })
 }

@@ -28,6 +28,7 @@ const SCOPE_ID_KEY: &str = "__pp_scope_id";
 const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
+const INIT_PENDING_KEY: &str = "__pp_init_pending";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
 pub fn start_on_body() {
@@ -69,9 +70,11 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
     set_private(el, SCOPE_BORROWED_KEY, &JsValue::TRUE);
 }
 
-/// Pre-order walk: bind this element, then recurse into its children.
-/// Public so the router can walk the custom-element tag it creates
-/// inside an `<pp-outlet>`.
+/// Walk a subtree. Non-`pp-init` directives bind pre-order; `pp-init`
+/// fires **post-order** — after every descendant has been walked — so
+/// init handlers see a fully-bound subtree (children's refs, effects,
+/// etc.). Public so the router can walk the custom-element tag it
+/// creates inside an `<pp-outlet>`.
 pub fn walk(el: &Element) {
     bind(el);
     let children = el.children();
@@ -80,6 +83,16 @@ pub fn walk(el: &Element) {
             walk(&child);
         }
     }
+    fire_deferred_init(el);
+}
+
+fn fire_deferred_init(el: &Element) {
+    let Some(value) = get_private(el, INIT_PENDING_KEY).and_then(|v| v.as_string()) else {
+        return;
+    };
+    let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
+    let Some((scope_id, proxy)) = enclosing_scope(el) else { return };
+    dispatch(el, &proxy, scope_id, "pp-init", &value);
 }
 
 fn bind(el: &Element) {
@@ -133,8 +146,10 @@ fn bind(el: &Element) {
         None => return,
     };
 
-    // Second pass: everything except pp-data. `pp-init` is handled last so
-    // it sees the fully-bound element.
+    // Second pass: everything except pp-data and pp-init. pp-init is
+    // stashed on the element and fired post-order in `walk` — by then
+    // descendants have been bound so init handlers see refs, child
+    // scopes, etc.
     let mut init_value: Option<String> = None;
     for (name, value) in &pp_attrs {
         if name == "pp-data" {
@@ -147,8 +162,12 @@ fn bind(el: &Element) {
         dispatch(el, &proxy, scope_id, name, value);
     }
     if let Some(v) = init_value {
-        dispatch(el, &proxy, scope_id, "pp-init", &v);
+        set_private(el, INIT_PENDING_KEY, &JsValue::from_str(&v));
     }
+    // Silence the unused-`proxy` warning — the deferred init path looks
+    // it up again via `enclosing_scope` at fire time.
+    let _ = &proxy;
+    let _ = scope_id;
 
     // `pp-cloak` only exists to hide the element until binding completes.
     // Drop it now that directives have run so the global cloak CSS rule

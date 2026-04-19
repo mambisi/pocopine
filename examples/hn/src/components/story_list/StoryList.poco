@@ -6,6 +6,7 @@
       placeholder="search stories on hacker news…"
       pp-model="query"
       pp-on:input.debounce.300="search"
+      pp-ref="search"
       autocomplete="off"
       spellcheck="false"
     />

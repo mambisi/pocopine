@@ -2,7 +2,9 @@
 //! and renders each hit through `pp-for` against a `Vec<StoryView>`.
 
 use pocopine::prelude::*;
+use pocopine::refs;
 use serde::{Deserialize, Serialize};
+use web_sys::HtmlInputElement;
 
 use crate::shared::Story;
 use crate::{extract_domain, humanize_age, performance_now, search_stories};
@@ -38,6 +40,11 @@ pub struct StoryList {
 #[handlers]
 impl StoryList {
     pub fn init(&mut self) {
+        // Focus the search input on mount — imperative DOM reach via
+        // pp-ref="search" on the <input>.
+        if let Some(input) = refs::get_as::<HtmlInputElement>("search") {
+            let _ = input.focus();
+        }
         if self.count > 0 {
             return;
         }

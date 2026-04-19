@@ -18,6 +18,7 @@ pub mod loop_scope;
 pub mod magics;
 pub mod path;
 pub mod reactive;
+pub mod refs;
 pub mod registry;
 pub mod router;
 pub mod scope;
