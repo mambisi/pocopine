@@ -1,0 +1,3 @@
+<div class="pine-dm-root">
+  <slot></slot>
+</div>

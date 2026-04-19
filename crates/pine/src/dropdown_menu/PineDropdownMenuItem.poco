@@ -1,0 +1,8 @@
+<li class="pine-dm-item"
+    role="menuitem"
+    tabindex="-1"
+    :aria-disabled="disabled"
+    :data-disabled="disabled"
+    @click="on_select">
+  <slot></slot>
+</li>

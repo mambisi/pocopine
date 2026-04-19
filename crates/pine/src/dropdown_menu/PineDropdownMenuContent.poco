@@ -1,0 +1,10 @@
+<ul role="menu"
+    class="pine-dm-content"
+    pp-ref="menu"
+    data-state="open"
+    :pp-anchor:bottom-start.offset.4.flip="trigger_selector"
+    pp-roving
+    @click.outside="close"
+    @keydown.escape.prevent="close">
+  <slot></slot>
+</ul>

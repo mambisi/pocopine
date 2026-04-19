@@ -1,0 +1,9 @@
+<button type="button"
+        class="pine-dm-trigger"
+        pp-ref="trigger"
+        :aria-expanded="open ? 'true' : 'false'"
+        aria-haspopup="menu"
+        :data-state="open ? 'open' : 'closed'"
+        @click="toggle">
+  <slot></slot>
+</button>

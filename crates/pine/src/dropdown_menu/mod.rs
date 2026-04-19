@@ -1,96 +1,182 @@
-//! `PineDropdownMenu` — menu overlay.
+//! `<pine-dropdown-menu-*>` — compound menu primitive.
 //!
-//! Composes Popover + `pp-roving` + `role="menu"`. On open,
-//! auto-focuses the first menu item; arrow keys cycle; Escape
-//! and click-outside close.
+//! Radix-style anatomy: state owned by `Root`, rendered via named
+//! sub-parts (Trigger, Portal, Content, Item) that talk to Root via
+//! RFC-027 `provide`/`inject`. Every sub-part has its own scope and
+//! ARIA role; Root has no DOM of its own (pure state container).
 //!
 //! ```html
-//! <button pp-ref="menu-trigger" @click="open = !open">More</button>
-//! <pine-dropdown-menu :open="open" anchor="#menu-trigger">
-//!   <li role="menuitem" tabindex="-1" @click="copy">Copy</li>
-//!   <li role="menuitem" tabindex="-1" @click="paste">Paste</li>
-//!   <li role="menuitem" tabindex="-1" aria-disabled="true">Delete</li>
-//! </pine-dropdown-menu>
+//! <pine-dropdown-menu-root>
+//!   <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
+//!   <pine-dropdown-menu-portal>
+//!     <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
+//!       <pine-dropdown-menu-item @click="bump">Bump</pine-dropdown-menu-item>
+//!       <pine-dropdown-menu-item disabled>Export</pine-dropdown-menu-item>
+//!     </pine-dropdown-menu-content>
+//!   </pine-dropdown-menu-portal>
+//! </pine-dropdown-menu-root>
 //! ```
-
-use std::cell::RefCell;
-use std::collections::HashMap;
+//!
+//! Author-provided `anchor` on Content is a CSS selector (or
+//! ref name). Trigger sets `data-pine-dm-trigger` on its button
+//! so the author can target it via attribute selector; nothing
+//! forces them to — they can also anchor to a custom element in
+//! the surrounding layout.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, refs, tick, ScopeId};
+use pocopine::{current_scope_id, focus, inject, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
-
 use wasm_bindgen::JsCast;
 use web_sys::Element;
 
-thread_local! {
-    static RUNTIME: RefCell<HashMap<ScopeId, MenuRuntime>> =
-        RefCell::new(HashMap::new());
-}
+/// Provide/inject key for the Root handle.
+const ROOT_KEY: &str = "pine-dm-root";
 
-#[derive(Default)]
-struct MenuRuntime {
-    saved: Option<focus::Saved>,
-}
+// ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenu.poco")]
-pub struct PineDropdownMenu {
+#[component(template = "PineDropdownMenuRoot.poco")]
+pub struct PineDropdownMenuRoot {
+    /// Open state. Two-way bindable via `pp-model:open="current"`
+    /// on the tag.
     pub open: bool,
-    pub anchor: String,
 }
 
 #[handlers]
-impl PineDropdownMenu {
-    #[watch(open)]
-    fn on_open_change(&mut self, is_open: bool, prev: Option<bool>) {
-        match (prev, is_open) {
-            (None, true) | (Some(false), true) => {
-                // Wait one tick so pp-if/pp-teleport commit the
-                // menu into <body> before we auto-focus its first
-                // item via `refs::get_on("menu")`.
-                if let Some(scope) = current_scope_id() {
-                    tick::next(move || activate(scope));
-                }
-            }
-            (Some(true), false) => {
-                if let Some(scope) = current_scope_id() {
-                    deactivate(scope);
-                }
-            }
-            _ => {}
-        }
+impl PineDropdownMenuRoot {
+    pub fn on_mount(&mut self) {
+        provide(ROOT_KEY, this::<Self>());
     }
 
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            deactivate(scope);
-        }
+    pub fn open_menu(&mut self) {
+        self.open = true;
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        emit_from_host("pp:update:model", false);
+    }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
     }
 }
 
-fn activate(scope: ScopeId) {
-    let saved = focus::save();
-    if let Some(menu) = refs::get_on(scope, "menu") {
-        // pp-roving installs on the <ul> at bind time, but at
-        // bind time the <slot> hasn't been materialised yet — so
-        // the items aren't in the DOM and tabindex initialisation
-        // runs on an empty list. Set up tabindex ourselves now
-        // that the slot content is live.
+// ── Trigger ───────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuTrigger.poco")]
+pub struct PineDropdownMenuTrigger {
+    /// Mirrored from Root.open so the template's `:aria-expanded`
+    /// and `:data-state` bindings fire reactively.
+    pub open: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuTrigger {
+    pub fn on_ready(&self) {
+        let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) else {
+            return;
+        };
+        let root_scope = root.scope_id();
+        let me = this::<Self>();
+        watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
+            me.update(|s| s.open = is_open);
+        });
+        if let Some(scope) = current_scope_id() {
+            if let Some(btn) = refs::get_on(scope, "trigger") {
+                let _ = btn.set_attribute("data-pine-dm-trigger", "");
+            }
+        }
+    }
+
+    pub fn toggle(&self) {
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PineDropdownMenuRoot| r.toggle());
+        }
+    }
+}
+
+// ── Portal ────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuPortal.poco")]
+pub struct PineDropdownMenuPortal {
+    /// Mirrored from Root.open so the template's `pp-if` fires the
+    /// teleport when Root opens / closes.
+    pub open: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuPortal {
+    pub fn on_ready(&self) {
+        let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) else {
+            return;
+        };
+        let me = this::<Self>();
+        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
+            me.update(|s| s.open = is_open);
+        });
+    }
+}
+
+// ── Content ───────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuContent.poco")]
+pub struct PineDropdownMenuContent {
+    /// CSS selector or ref name identifying the trigger element.
+    /// Required — author-provided on the tag.
+    pub anchor: String,
+}
+
+#[handlers]
+impl PineDropdownMenuContent {
+    pub fn on_ready(&self) {
+        // Auto-focus the first menuitem once the teleported clone
+        // has committed. Items live in the slot which only
+        // materialises after Portal flips `pp-if` on, so this is
+        // the first point we can see them.
+        let Some(scope) = current_scope_id() else { return };
+        let Some(menu) = refs::get_on(scope, "menu") else { return };
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
     }
-    RUNTIME.with(|r| {
-        r.borrow_mut()
-            .insert(scope, MenuRuntime { saved: Some(saved) });
-    });
+
+    pub fn close(&mut self) {
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PineDropdownMenuRoot| r.close());
+        }
+    }
 }
 
+// ── Item ──────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuItem.poco")]
+pub struct PineDropdownMenuItem {
+    pub disabled: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuItem {
+    pub fn on_select(&mut self) {
+        if self.disabled {
+            return;
+        }
+        // Author's `@click` on the tag fires via native bubble;
+        // our responsibility is to dismiss the menu.
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PineDropdownMenuRoot| r.close());
+        }
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────
+
+/// Set `tabindex=-1` on every menuitem and promote the first
+/// non-disabled one to `tabindex=0` — the starting cursor for
+/// `pp-roving`. Runs after the slot materialises so the items
+/// are in the DOM.
 fn init_roving_tabindex(menu: &Element) {
     let Ok(items) = menu.query_selector_all(
         "[role=\"menuitem\"], [role=\"menuitemradio\"], [role=\"menuitemcheckbox\"]",
@@ -110,14 +196,5 @@ fn init_roving_tabindex(menu: &Element) {
     }
     if let Some(el) = first_enabled {
         let _ = el.set_attribute("tabindex", "0");
-    }
-}
-
-fn deactivate(scope: ScopeId) {
-    let Some(mut rt) = RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    if let Some(saved) = rt.saved.take() {
-        focus::restore(saved);
     }
 }

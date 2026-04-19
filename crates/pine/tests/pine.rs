@@ -309,46 +309,82 @@ async fn checkbox_tri_state_maps_aria_checked_correctly() {
     host.remove();
 }
 
-// ─── PineDropdownMenu ─────────────────────────────────────────────
+// ─── PineDropdownMenu — compound (Radix-style) ────────────────────
 
-/// Opening a menu teleports it to body, sets first menuitem's
-/// tabindex=0, auto-focuses it, cycles on arrow keys, and closes
-/// on Escape.
+/// Opening a menu via the trigger teleports Content to body, sets
+/// the first menuitem's tabindex=0, auto-focuses it, cycles on
+/// arrow keys, and closes on Escape. Exercises the full compound
+/// chain: Root (state) → Trigger (toggle) → Portal (pp-if +
+/// teleport) → Content (anchor + roving + escape) → Item.
 #[wasm_bindgen_test]
-async fn menu_auto_focuses_cycles_arrows_and_closes_on_escape() {
+async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
     let host = mount(
-        "<div><button id=\"menu-trig\">open</button>\
-         <pine-dropdown-menu open=\"true\" anchor=\"#menu-trig\">\
-           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-a\">A</li>\
-           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-b\">B</li>\
-           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-c\">C</li>\
-         </pine-dropdown-menu></div>",
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger>open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content anchor=\"[data-pine-dm-trigger]\">\
+               <pine-dropdown-menu-item class=\"m-a\">A</pine-dropdown-menu-item>\
+               <pine-dropdown-menu-item class=\"m-b\">B</pine-dropdown-menu-item>\
+               <pine-dropdown-menu-item class=\"m-c\">C</pine-dropdown-menu-item>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
     );
+    // Three ticks: initial render, on_ready (mirrors Root.open),
+    // and the pp-if commit after Trigger clicks.
+    tick().await;
+
+    // Trigger renders a <button> inside the custom tag.
+    let trigger = host
+        .query_selector("pine-dropdown-menu-trigger button")
+        .unwrap()
+        .expect("trigger button rendered");
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false"),
+        "aria-expanded mirrors Root.open = false"
+    );
+    assert_eq!(
+        trigger.get_attribute("data-pine-dm-trigger").as_deref(),
+        Some(""),
+        "trigger stamped so Content's anchor selector resolves"
+    );
+
+    // Click the trigger → Root.open = true → Portal's mirror
+    // effect fires → pp-if flips → Content teleports to <body>.
+    let trigger_html: HtmlElement = trigger.clone().dyn_into().unwrap();
+    trigger_html.click();
     tick().await;
     tick().await;
 
     let menu = doc()
-        .query_selector("ul[role=\"menu\"].pine-menu")
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
         .unwrap()
-        .expect("menu teleported to body");
+        .expect("menu teleported to body after trigger click");
     let a = menu.query_selector(".m-a").unwrap().unwrap();
     let b = menu.query_selector(".m-b").unwrap().unwrap();
 
-    // pp-roving initialised: first item tabindex=0.
-    assert_eq!(a.get_attribute("tabindex").as_deref(), Some("0"));
-    // auto_focus_first moved real focus to A.
-    assert_eq!(doc().active_element().unwrap(), a, "first item focused");
+    // Content's on_ready initialised roving tabindex.
+    let a_li = a.query_selector("li").unwrap().unwrap_or(a.clone());
+    let b_li = b.query_selector("li").unwrap().unwrap_or(b.clone());
+    assert_eq!(
+        a_li.get_attribute("tabindex").as_deref(),
+        Some("0"),
+        "first item tabindex=0"
+    );
+    // auto_focus_first moved real focus to A's menuitem.
+    assert_eq!(doc().active_element().unwrap(), a_li, "first item focused");
 
-    // ArrowDown → B.
+    // ArrowDown → B's menuitem.
     let init = web_sys::KeyboardEventInit::new();
     init.set_key("ArrowDown");
     init.set_bubbles(true);
     let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
-    a.dispatch_event(&ev).unwrap();
+    a_li.dispatch_event(&ev).unwrap();
     tick().await;
-    assert_eq!(doc().active_element().unwrap(), b, "ArrowDown → B");
+    assert_eq!(doc().active_element().unwrap(), b_li, "ArrowDown → B");
 
-    // Escape closes.
+    // Escape routes through Content.close() → Root.close() → pp-if flips off.
     let init = web_sys::KeyboardEventInit::new();
     init.set_key("Escape");
     init.set_bubbles(true);
@@ -356,12 +392,19 @@ async fn menu_auto_focuses_cycles_arrows_and_closes_on_escape() {
     menu.dispatch_event(&ev).unwrap();
     tick().await;
     tick().await;
+    tick().await;
+    tick().await;
     assert!(
         doc()
-            .query_selector("ul[role=\"menu\"].pine-menu")
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
             .unwrap()
             .is_none(),
         "menu gone after Escape"
+    );
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false"),
+        "aria-expanded mirrors back to closed"
     );
 
     host.remove();

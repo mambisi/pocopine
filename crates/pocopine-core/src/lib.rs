@@ -62,7 +62,7 @@ pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use styles::inject_style;
 pub use templates::{inject_pp_data, is_registered, register_template, template_for};
 pub use walker::{start, start_on_body};
-pub use watch::{watch, watch_field};
+pub use watch::{watch, watch_field, watch_scope_field};
 
 /// Convenience re-export alias so `pocopine_core::run()` reads well.
 pub fn run() {

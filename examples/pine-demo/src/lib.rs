@@ -12,7 +12,6 @@ pub struct PineDemoApp {
 
     pub dialog_open: bool,
     pub popover_open: bool,
-    pub menu_open: bool,
 
     /// Running count of menu actions fired — dropdown menus are
     /// for actions (Copy, Refresh, Sign out), not for selection.
@@ -63,10 +62,11 @@ impl PineDemoApp {
     // command, not a state pick. All actions also close the menu.
 
     /// "Increment clicks" — bumps the PineButton demo counter.
+    /// Pine's DropdownMenu Item closes the menu on click; these
+    /// handlers only manage the author's own demo state.
     pub fn action_bump(&mut self) {
         self.clicks += 1;
         self.actions_fired += 1;
-        self.menu_open = false;
     }
 
     /// "Toggle dark mode" — demonstrates a menu action mutating
@@ -74,21 +74,16 @@ impl PineDemoApp {
     pub fn action_toggle_dark(&mut self) {
         self.dark_mode = !self.dark_mode;
         self.actions_fired += 1;
-        self.menu_open = false;
     }
 
     /// "Reset" — clears counters + brings everything back to
     /// defaults. Classic destructive menu action.
     pub fn action_reset(&mut self) {
         self.clicks = 0;
-        self.actions_fired += 1; // counted before reset? decision:
-                                 // keep actions_fired visible after
-                                 // Reset so the user sees the click
-                                 // registered. Reset everything *else*.
+        self.actions_fired += 1;
         self.tab = "account".into();
         self.dark_mode = false;
         self.agree_state = "unchecked".into();
-        self.menu_open = false;
     }
 }
 

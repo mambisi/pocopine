@@ -9,7 +9,6 @@
       <dt>Button clicks</dt> <dd pp-text="clicks"></dd>
       <dt>Dialog</dt>        <dd pp-text="dialog_open ? 'open' : 'closed'"></dd>
       <dt>Popover</dt>       <dd pp-text="popover_open ? 'open' : 'closed'"></dd>
-      <dt>Menu</dt>          <dd pp-text="menu_open ? 'open' : 'closed'"></dd>
       <dt>Menu actions fired</dt><dd pp-text="actions_fired"></dd>
       <dt>Current tab</dt>   <dd pp-text="tab"></dd>
       <dt>Dark mode</dt>     <dd pp-text="dark_mode ? 'on' : 'off'"></dd>
@@ -59,19 +58,23 @@
     </pine-popover>
   </section>
 
-  <!-- PineDropdownMenu ───────────────────────────────────── -->
+  <!-- PineDropdownMenu — compound (Radix-style) ──────────── -->
   <h2>Dropdown menu</h2>
   <section class="row">
-    <pine-button id="menu-trig" @click="menu_open = !menu_open">Actions ▾</pine-button>
-    <span style="font-size:0.875rem;color:var(--fg-muted)">
-      actions fired: <strong pp-text="actions_fired"></strong>
-    </span>
-    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig">
-      <li role="menuitem" tabindex="-1" @click="action_bump">Increment click count</li>
-      <li role="menuitem" tabindex="-1" @click="action_toggle_dark">Toggle dark mode</li>
-      <li role="menuitem" tabindex="-1" aria-disabled="true">Export (disabled)</li>
-      <li role="menuitem" tabindex="-1" @click="action_reset">Reset demo</li>
-    </pine-dropdown-menu>
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
+      <span style="font-size:0.875rem;color:var(--fg-muted)">
+        actions fired: <strong>{actions_fired}</strong>
+      </span>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
+          <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="action_reset">Reset demo</pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
   </section>
 
   <!-- PineTabs ───────────────────────────────────────────── -->

@@ -14,11 +14,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use js_sys::Reflect;
 use serde::de::DeserializeOwned;
-use wasm_bindgen::JsValue;
 
-use crate::reactive::{effect, EffectId};
+use crate::reactive::{effect, track, EffectId, ScopeId};
 use crate::scope::{current_scope_id, Scope};
 
 /// Watch `source` and call `cb` whenever its value changes.
@@ -82,15 +80,29 @@ where
 {
     let scope_id = current_scope_id()
         .expect("watch_field called outside a handler / lifecycle context");
+    watch_scope_field(scope_id, field, cb);
+}
+
+/// Like [`watch_field`] but observes a named field on an explicit
+/// scope — used by compound-component children (provide/inject per
+/// RFC-027) to mirror a parent's reactive state into their own.
+///
+/// Reads via `track` + a direct `state.borrow().get(field)` rather
+/// than constructing a proxy each rerun; the proxy path leaks its
+/// closures via `.forget()` and runs with each re-evaluation.
+pub fn watch_scope_field<V, C>(scope_id: ScopeId, field: &'static str, cb: C)
+where
+    V: Clone + PartialEq + Default + DeserializeOwned + 'static,
+    C: Fn(&V, Option<&V>) + 'static,
+{
     crate::tick::next(move || {
         watch(
             move || {
+                track(scope_id, field);
                 let Some(scope) = Scope::find(scope_id) else {
                     return V::default();
                 };
-                let proxy = scope.into_proxy();
-                let v = Reflect::get(&proxy, &JsValue::from_str(field))
-                    .unwrap_or(JsValue::UNDEFINED);
+                let v = scope.state.borrow().get(field);
                 serde_wasm_bindgen::from_value::<V>(v).unwrap_or_default()
             },
             cb,

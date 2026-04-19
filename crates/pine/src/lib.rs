@@ -35,7 +35,10 @@ pub mod tooltip;
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use dialog::PineDialog;
-pub use dropdown_menu::PineDropdownMenu;
+pub use dropdown_menu::{
+    PineDropdownMenuContent, PineDropdownMenuItem, PineDropdownMenuPortal,
+    PineDropdownMenuRoot, PineDropdownMenuTrigger,
+};
 pub use popover::PinePopover;
 pub use switch::PineSwitch;
 pub use tabs::{PineTabs, TabDef};
@@ -47,7 +50,11 @@ pub fn register_all() {
     PineButton::register();
     PineDialog::register();
     PinePopover::register();
-    PineDropdownMenu::register();
+    PineDropdownMenuRoot::register();
+    PineDropdownMenuTrigger::register();
+    PineDropdownMenuPortal::register();
+    PineDropdownMenuContent::register();
+    PineDropdownMenuItem::register();
     PineTabs::register();
     PineTooltip::register();
     PineSwitch::register();
