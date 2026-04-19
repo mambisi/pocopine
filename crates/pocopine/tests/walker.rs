@@ -188,6 +188,20 @@ struct IdHost {}
 #[handlers]
 impl IdHost {}
 
+// RFC-019 — `pp-as` polymorphic rendering.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "AsButton.html")]
+struct AsButton {
+    clicks: u32,
+}
+
+#[handlers]
+impl AsButton {
+    pub fn on_click(&mut self) {
+        self.clicks += 1;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -234,6 +248,7 @@ fn register_all() {
     AnchorHost::register();
     OutsideHost::register();
     IdHost::register();
+    AsButton::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1142,6 +1157,59 @@ async fn id_magic_is_unique_per_instance_and_composes_via_plus() {
     assert_eq!(for1, format!("{base1}-input"));
     assert_eq!(id1, format!("{base1}-input"));
     assert_eq!(for1, id1, "label[for] and input[id] resolve identically");
+
+    host.remove();
+}
+
+/// `pp-as` hoists the user's single child element as the rendered
+/// root, discards the template's wrapper, and merges template
+/// attrs. The template's `pp-on:click` fires on the hoisted root
+/// so author-chosen tags (like `<a>`) get the component's behaviour
+/// without a wrapping `<button>`.
+#[wasm_bindgen_test]
+async fn pp_as_hoists_user_element_and_merges_template_attrs() {
+    // `href="#"` so the click doesn't navigate the test page
+    // even before `.prevent` on the template runs. Belt + braces.
+    let host = mount(
+        "<as-button pp-as><a href=\"#\" class=\"mine\">Read</a></as-button>",
+    );
+    tick().await;
+
+    // The tag should now contain an <a> — NOT a <button>.
+    let as_tag = host.query_selector("as-button").unwrap().unwrap();
+    let children = as_tag.children();
+    assert_eq!(
+        children.length(),
+        1,
+        "component tag has exactly one child"
+    );
+    let root = children.item(0).unwrap();
+    assert_eq!(
+        root.local_name(),
+        "a",
+        "hoisted root is <a>, not <button>"
+    );
+
+    // Attrs merge: user's `mine` plus template's `as-btn`.
+    let cls = root.get_attribute("class").unwrap_or_default();
+    assert!(
+        cls.split_whitespace().any(|c| c == "mine")
+            && cls.split_whitespace().any(|c| c == "as-btn"),
+        "class merge expected to contain both `mine` and `as-btn`, got {cls:?}"
+    );
+
+    // User's `href` is preserved; template's `data-tpl` copied in.
+    assert_eq!(root.get_attribute("href").as_deref(), Some("#"));
+    assert_eq!(root.get_attribute("data-tpl").as_deref(), Some("yes"));
+
+    // Clicking the hoisted root fires the template's pp-on:click.
+    // Template used `.prevent` so the default anchor navigation
+    // never runs and the test page stays put.
+    let root_html: HtmlElement = root.clone().dyn_into().unwrap();
+    root_html.click();
+    tick().await;
+    root_html.click();
+    tick().await;
 
     host.remove();
 }

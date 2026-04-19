@@ -249,6 +249,14 @@ fn bind(el: &Element) {
 ///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * move captured children into the first `<slot>` within the template.
 fn mount_component(el: &Element, tag: &str) {
+    // RFC-019 — `pp-as` hoists the user's single child element as
+    // the rendered root, discarding the template's wrapper. Only
+    // engages when all the structural constraints hold; otherwise
+    // falls through to the normal mount path.
+    if el.has_attribute("pp-as") && try_mount_component_as(el, tag) {
+        return;
+    }
+
     let Some(scope) = instantiate(tag) else { return };
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
@@ -281,6 +289,161 @@ fn mount_component(el: &Element, tag: &str) {
     // Mark the tag as mounted so the recursive walk doesn't re-enter this
     // branch if, for some reason, the walker visits it again.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
+}
+
+/// Attempt to mount `tag` on `el` in `pp-as` mode: hoist the tag's
+/// single child element as the rendered root, merging the template
+/// root's attributes onto it.
+///
+/// Returns `true` on success. Returns `false` when structural
+/// constraints fail (not exactly one user element child, or the
+/// template root isn't a simple `<tag><slot></slot></tag>` wrapper)
+/// — caller falls back to the normal mount path.
+fn try_mount_component_as(el: &Element, tag: &str) -> bool {
+    // 1. Find the user's single element child. Text / comment nodes
+    //    around it are ignored. Named-slot <template> elements are
+    //    dropped.
+    let user_root = match find_single_child_element_skipping_slot_templates(el) {
+        Some(e) => e,
+        None => {
+            web_sys::console::warn_1(&JsValue::from_str(
+                "pocopine: pp-as requires exactly one child element; ignoring",
+            ));
+            return false;
+        }
+    };
+
+    // 2. Instantiate scope + apply static props from the tag's own
+    //    attributes (same as the normal path).
+    let Some(scope) = instantiate(tag) else { return false };
+    apply_static_props(el, &scope);
+    let proxy = scope.into_proxy();
+
+    // 3. Clone the template into a throwaway container to extract
+    //    root attrs without touching `el` yet.
+    let Some(html) = template_for(tag) else { return false };
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return false;
+    };
+    let sandbox = match doc.create_element("div") {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    sandbox.set_inner_html(&html);
+    let tpl_root = match first_element_child(&sandbox) {
+        Some(r) => r,
+        None => return false,
+    };
+
+    // 4. Verify the template is a trivial wrapper: exactly one
+    //    `<slot>` child and no other element children.
+    if !is_trivial_slot_wrapper(&tpl_root) {
+        web_sys::console::warn_1(&JsValue::from_str(
+            "pocopine: pp-as only supports trivial <slot>-wrapping templates; ignoring",
+        ));
+        return false;
+    }
+
+    // 5. Replace the tag's children with the user's element.
+    el.set_inner_html("");
+    if el.append_child(user_root.as_ref()).is_err() {
+        return false;
+    }
+
+    // 6. Merge template-root attrs onto the user root per §4 of the RFC.
+    merge_template_attrs_as(&tpl_root, &user_root);
+
+    // 7. Pin scope on the user root. This is what makes `$el`,
+    //    `pp-ref`, and fallthrough directives all resolve against
+    //    the user's real element.
+    set_private(&user_root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
+    set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
+    let _ = user_root.remove_attribute("pp-data");
+
+    // 8. Fallthrough from the tag's own attrs (RFC-010).
+    apply_fallthrough_attrs(el, &user_root, &scope);
+
+    // 9. No <slot> materialisation under pp-as — the user's element
+    //    IS the content. Install an empty slot store just to keep
+    //    lifecycle symmetry with the normal path.
+    slots::put(scope.id, SlotStore { by_name: Default::default() });
+
+    // 10. Drop the marker so the component author's own code in the
+    //     template (if they forwarded `pp-as` onto the user root, say)
+    //     doesn't double-fire. Also mark the tag mounted.
+    let _ = el.remove_attribute("pp-as");
+    set_private(el, "__pp_mounted", &JsValue::TRUE);
+
+    true
+}
+
+/// Walk the tag's direct children. Return `Some(el)` when exactly
+/// one non-slot-template element is present among them. Named-slot
+/// `<template pp-slot="…">` children are silently skipped — they
+/// don't compose with `pp-as`.
+fn find_single_child_element_skipping_slot_templates(tag: &Element) -> Option<Element> {
+    let children = tag.child_nodes();
+    let mut found: Option<Element> = None;
+    for i in 0..children.length() {
+        let Some(node) = children.item(i) else { continue };
+        let Ok(el) = node.dyn_into::<Element>() else { continue };
+        if let Some(tpl) = el.dyn_ref::<HtmlTemplateElement>() {
+            if tpl.has_attribute("pp-slot") {
+                continue;
+            }
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(el);
+    }
+    found
+}
+
+/// Template root is a trivial wrapper iff its only element child
+/// is a single `<slot>`. Text / comment siblings are ignored.
+fn is_trivial_slot_wrapper(tpl_root: &Element) -> bool {
+    let children = tpl_root.children();
+    if children.length() != 1 {
+        return false;
+    }
+    match children.item(0) {
+        Some(c) => c.local_name() == "slot",
+        None => false,
+    }
+}
+
+/// Copy attrs from `tpl_root` onto `user_root` per RFC-019 §4.
+/// `class` / `style` join; everything else writes only when absent
+/// on the user element (user wins on conflict). Internal markers
+/// (`pp-data`, `pp-as`) are dropped.
+fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
+    let attrs = tpl_root.attributes();
+    for i in 0..attrs.length() {
+        let Some(a) = attrs.item(i) else { continue };
+        let name = a.name();
+        if name == "pp-data" || name == "pp-as" {
+            continue;
+        }
+        let val = a.value();
+        match name.as_str() {
+            "class" => {
+                let existing = user_root.get_attribute("class").unwrap_or_default();
+                let merged = merge_space(&existing, &val);
+                let _ = user_root.set_attribute("class", &merged);
+            }
+            "style" => {
+                let existing = user_root.get_attribute("style").unwrap_or_default();
+                let merged = merge_semicolon(&existing, &val);
+                let _ = user_root.set_attribute("style", &merged);
+            }
+            _ => {
+                if !user_root.has_attribute(&name) {
+                    let _ = user_root.set_attribute(&name, &val);
+                }
+            }
+        }
+    }
 }
 
 /// Collect the component tag's direct children into named slots,

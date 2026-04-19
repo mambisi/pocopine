@@ -34,3 +34,4 @@ Conventions:
 | 016 | [`pp-resize` and `pp-intersect`](./rfc-016-pp-resize-pp-intersect.md) | Implemented |
 | 017 | [`pp-on:click.outside`](./rfc-017-click-outside.md) | Implemented |
 | 018 | [`$id` magic (unique IDs)](./rfc-018-id-magic.md) | Implemented |
+| 019 | [`pp-as` polymorphic rendering](./rfc-019-pp-as.md) | Implemented |
