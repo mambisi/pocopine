@@ -14,6 +14,7 @@ pub mod devtools;
 pub mod directives;
 pub mod expr;
 pub mod fetch;
+pub mod focus;
 pub mod handle;
 pub mod handler;
 pub mod loop_scope;
@@ -31,6 +32,7 @@ pub mod signal;
 pub mod store;
 pub mod styles;
 pub mod templates;
+pub mod tick;
 pub mod walker;
 pub mod watch;
 

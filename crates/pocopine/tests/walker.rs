@@ -802,4 +802,110 @@ async fn key_modifiers_filter_handlers() {
     assert_eq!(k_html.inner_text().trim(), "1", "plain k doesn't fire ctrl.k");
 }
 
+// ─── RFC-014: focus + tick utilities ──────────────────────────────
 
+/// `auto_focus_first` walks the DOM for the first focusable and
+/// calls `.focus()` on it. `save`/`restore` round-trips preserve
+/// the previously-focused element across an overlay's lifetime.
+#[wasm_bindgen_test]
+fn focus_utilities_save_restore_and_auto_focus() {
+    use pocopine::focus;
+
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html(concat!(
+        "<input id='outside' />",
+        "<div id='overlay'>",
+        "  <button id='ok'>ok</button>",
+        "  <button id='cancel'>cancel</button>",
+        "</div>"
+    ));
+    doc().body().unwrap().append_child(&host).unwrap();
+
+    let outside = host
+        .query_selector("#outside")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    outside.focus().unwrap();
+
+    let saved = focus::save();
+
+    let overlay = host.query_selector("#overlay").unwrap().unwrap();
+    let focused_any = focus::auto_focus_first(&overlay);
+    assert!(focused_any, "overlay has focusable children");
+
+    let ok = host.query_selector("#ok").unwrap().unwrap();
+    assert_eq!(
+        doc().active_element().unwrap(),
+        ok,
+        "first focusable (ok button) gets focus"
+    );
+
+    focus::restore(saved);
+    assert_eq!(
+        doc()
+            .active_element()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap(),
+        outside,
+        "restore returned focus to the element that had it before"
+    );
+
+    host.remove();
+}
+
+/// `blur` removes focus from the active element; running it when the
+/// body is the active element is a safe no-op.
+#[wasm_bindgen_test]
+fn focus_blur_clears_active_element() {
+    use pocopine::focus;
+
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html("<input id='typed' />");
+    doc().body().unwrap().append_child(&host).unwrap();
+
+    let input = host
+        .query_selector("#typed")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    input.focus().unwrap();
+    let input_el: Element = input.clone().into();
+    assert_eq!(doc().active_element().unwrap(), input_el);
+
+    focus::blur();
+    // After blur, active element is either body or null — both count as
+    // "nothing focused" for our purposes.
+    if let Some(el) = doc().active_element() {
+        assert_eq!(el, doc().body().unwrap().dyn_into::<Element>().unwrap());
+    }
+
+    // Second blur is a no-op and does not panic.
+    focus::blur();
+
+    host.remove();
+}
+
+/// `tick::next` schedules work on the microtask queue — the callback
+/// fires before a subsequent `await` yields to a macrotask.
+#[wasm_bindgen_test]
+async fn tick_next_runs_on_microtask_queue() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let fired = Rc::new(Cell::new(false));
+    let f = fired.clone();
+    pocopine::tick::next(move || f.set(true));
+
+    // Before the microtask yields, nothing has fired yet.
+    assert!(!fired.get(), "sync path has not run the callback yet");
+
+    // Yield one microtask — `tick::next`'s closure runs.
+    let p = js_sys::Promise::resolve(&JsValue::NULL);
+    let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+
+    assert!(fired.get(), "callback fired after microtask yield");
+}

@@ -29,3 +29,4 @@ Conventions:
 | 011 | [Scoped slots](./rfc-011-scoped-slots.md) | Implemented |
 | 012 | [Template expression evaluator](./rfc-012-expression-evaluator.md) | Implemented |
 | 013 | [Key modifiers on `pp-on`](./rfc-013-pp-on-key-modifiers.md) | Implemented |
+| 014 | [Focus & timing utilities](./rfc-014-focus-utilities.md) | Implemented |
