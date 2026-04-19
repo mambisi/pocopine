@@ -19,7 +19,7 @@ use std::rc::Rc;
 use js_sys::{Array, Function};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{AddEventListenerOptions, Event, EventTarget};
+use web_sys::{AddEventListenerOptions, Event, EventTarget, KeyboardEvent};
 
 use super::DirectiveCall;
 use crate::scope::invoke_handler;
@@ -62,6 +62,14 @@ pub fn run(call: &DirectiveCall) {
     let window = web_sys::window().expect("window");
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
+    // Key modifiers (RFC-013). Cloned into the closure below.
+    let key_modifiers: Vec<String> = call
+        .modifiers
+        .iter()
+        .filter(|m| is_key_modifier(m))
+        .cloned()
+        .collect();
+
     let el_for_closure = el.clone();
     let closure = Closure::wrap(Box::new({
         let handler = handler.clone();
@@ -75,6 +83,9 @@ pub fn run(call: &DirectiveCall) {
             }
             if stop {
                 ev.stop_propagation();
+            }
+            if !key_modifiers.is_empty() && !key_filter_matches(&ev, &key_modifiers) {
+                return;
             }
             if self_only {
                 if let Some(target) = ev.target() {
@@ -140,4 +151,70 @@ fn parse_debounce(modifiers: &[String]) -> Option<u32> {
         }
     }
     None
+}
+
+/// Modifiers that participate in the RFC-013 key filter. Everything
+/// else (`prevent`, `stop`, `self`, `once`, `window`, `document`,
+/// `debounce`, numeric debounce args) is handled elsewhere.
+fn is_key_modifier(m: &str) -> bool {
+    matches!(
+        m,
+        "ctrl" | "shift" | "alt" | "meta"
+    ) || named_key_for(m).is_some()
+        || m.len() == 1  // single-letter key shortcut (e.g. `.k`, `.a`)
+        || is_word_key(m)
+}
+
+/// Is this a named keyboard event modifier? Returns the
+/// lowercase `KeyboardEvent.key` we expect to see.
+fn named_key_for(m: &str) -> Option<&'static str> {
+    Some(match m {
+        "escape" | "esc" => "escape",
+        "enter" => "enter",
+        "tab" => "tab",
+        "space" => " ",
+        "backspace" => "backspace",
+        "delete" | "del" => "delete",
+        "arrow-up" | "up" => "arrowup",
+        "arrow-down" | "down" => "arrowdown",
+        "arrow-left" | "left" => "arrowleft",
+        "arrow-right" | "right" => "arrowright",
+        "home" => "home",
+        "end" => "end",
+        "page-up" => "pageup",
+        "page-down" => "pagedown",
+        _ => return None,
+    })
+}
+
+/// Word-shaped key names that literally match the lowercased key
+/// (so `.slash` could match `"/"` — but no built-in symbol aliases
+/// today; extend here if needed).
+fn is_word_key(m: &str) -> bool {
+    !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Return true iff the event passes every key modifier. Non-keyboard
+/// events fail any key modifier check.
+fn key_filter_matches(ev: &Event, modifiers: &[String]) -> bool {
+    let Ok(ke) = ev.clone().dyn_into::<KeyboardEvent>() else {
+        return false;
+    };
+    let key = ke.key().to_lowercase();
+    for m in modifiers {
+        match m.as_str() {
+            "ctrl" if !ke.ctrl_key() => return false,
+            "shift" if !ke.shift_key() => return false,
+            "alt" if !ke.alt_key() => return false,
+            "meta" if !ke.meta_key() => return false,
+            "ctrl" | "shift" | "alt" | "meta" => continue,
+            _ => {
+                let want = named_key_for(m).unwrap_or(m);
+                if key != want {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }

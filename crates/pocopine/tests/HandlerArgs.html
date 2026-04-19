@@ -1,5 +1,10 @@
 <div>
-  <input class="ha-input" pp-on:keydown="on_key" />
+  <input class="ha-input"
+         pp-on:keydown="on_key"
+         pp-on:keydown.escape="on_escape"
+         pp-on:keydown.ctrl.k="on_ctrl_k" />
   <span class="ha-key" pp-text="last_key"></span>
   <span class="ha-payload" pp-text="payload"></span>
+  <span class="ha-escaped" pp-text="escaped_count"></span>
+  <span class="ha-ctrl-k" pp-text="ctrl_k_count"></span>
 </div>

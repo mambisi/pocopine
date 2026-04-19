@@ -79,6 +79,8 @@ impl WithoutMount {}
 struct HandlerArgs {
     last_key: String,
     payload: String,
+    escaped_count: u32,
+    ctrl_k_count: u32,
 }
 
 #[handlers]
@@ -90,6 +92,13 @@ impl HandlerArgs {
     // Primitive arg via $dispatch payload.
     pub fn set_payload(&mut self, value: String) {
         self.payload = value;
+    }
+    // Key modifiers (RFC-013).
+    pub fn on_escape(&mut self) {
+        self.escaped_count += 1;
+    }
+    pub fn on_ctrl_k(&mut self) {
+        self.ctrl_k_count += 1;
     }
 }
 
@@ -728,6 +737,69 @@ async fn expressions_evaluate_through_directives() {
     assert!(!visible(".eh-not"), "eh-not hidden when loading=true");
     assert_eq!(text(".eh-ternary"), "bad"); // status != 'ok'
     assert_eq!(text(".eh-cmp"), "many");    // count >= 5
+}
+
+// ─── RFC-013 key modifiers ────────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn key_modifiers_filter_handlers() {
+    let host = mount("<handler-args></handler-args>");
+    tick().await;
+
+    let input = host.query_selector(".ha-input").unwrap().unwrap();
+
+    fn dispatch_keydown(
+        el: &Element,
+        key: &str,
+        ctrl: bool,
+        meta: bool,
+    ) {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_ctrl_key(ctrl);
+        init.set_meta_key(meta);
+        init.set_bubbles(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(
+            "keydown", &init,
+        )
+        .unwrap();
+        let _ = el.dispatch_event(&ev).unwrap();
+    }
+
+    // Escape → on_escape fires, on_key also fires (no key modifier)
+    dispatch_keydown(&input, "Escape", false, false);
+    tick().await;
+
+    let escaped = host.query_selector(".ha-escaped").unwrap().unwrap();
+    let ctrl_k = host.query_selector(".ha-ctrl-k").unwrap().unwrap();
+    let e_html: HtmlElement = escaped.dyn_into().unwrap();
+    let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
+    assert_eq!(e_html.inner_text().trim(), "1");
+    assert_eq!(k_html.inner_text().trim(), "0");
+
+    // `a` key (no ctrl) → neither modifier-filtered handler fires.
+    dispatch_keydown(&input, "a", false, false);
+    tick().await;
+    let escaped = host.query_selector(".ha-escaped").unwrap().unwrap();
+    let ctrl_k = host.query_selector(".ha-ctrl-k").unwrap().unwrap();
+    let e_html: HtmlElement = escaped.dyn_into().unwrap();
+    let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
+    assert_eq!(e_html.inner_text().trim(), "1", "escape unchanged on `a`");
+    assert_eq!(k_html.inner_text().trim(), "0", "ctrl+k unchanged on plain a");
+
+    // Ctrl+k → on_ctrl_k fires.
+    dispatch_keydown(&input, "k", true, false);
+    tick().await;
+    let ctrl_k = host.query_selector(".ha-ctrl-k").unwrap().unwrap();
+    let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
+    assert_eq!(k_html.inner_text().trim(), "1");
+
+    // k WITHOUT ctrl → should NOT fire on_ctrl_k.
+    dispatch_keydown(&input, "k", false, false);
+    tick().await;
+    let ctrl_k = host.query_selector(".ha-ctrl-k").unwrap().unwrap();
+    let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
+    assert_eq!(k_html.inner_text().trim(), "1", "plain k doesn't fire ctrl.k");
 }
 
 
