@@ -26,6 +26,7 @@ use crate::templates::{is_registered, template_for};
 
 const SCOPE_ID_KEY: &str = "__pp_scope_id";
 const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
+const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
@@ -48,12 +49,24 @@ pub fn start(root: &Element) {
 }
 
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
-/// through it. Used by `pp-for` when cloning the template body: the loop
-/// scope has to be bound before `walk()` descends so child directives
-/// see the per-item proxy instead of the parent's.
+/// through it. The element is assumed to **own** this scope — when the
+/// element unmounts, `release_subtree` removes the scope from the
+/// registry. Used by `pp-for`, which mints a fresh `LoopScope` per item.
 pub fn bind_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) {
     set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
     set_private(el, SCOPE_PROXY_KEY, proxy);
+}
+
+/// Pin a **borrowed** scope. Same lookup semantics as `bind_scope_to`,
+/// but `release_subtree` will leave the scope alone when this element
+/// unmounts — the real owner is elsewhere. Used by `pp-teleport` and
+/// the teleport path of `pp-if` to keep the enclosing component's
+/// scope reachable from a clone that lives outside the component's
+/// subtree.
+pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) {
+    set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
+    set_private(el, SCOPE_PROXY_KEY, proxy);
+    set_private(el, SCOPE_BORROWED_KEY, &JsValue::TRUE);
 }
 
 /// Pre-order walk: bind this element, then recurse into its children.
@@ -332,7 +345,14 @@ fn release_subtree(node: &Node) {
             }
         }
         if let Some(id) = get_private(&el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
-            Scope::remove(ScopeId(id as u64));
+            // Borrowed scopes belong to some other element — don't
+            // evict them from the registry when a borrower unmounts.
+            let borrowed = get_private(&el, SCOPE_BORROWED_KEY)
+                .map(|v| v.is_truthy())
+                .unwrap_or(false);
+            if !borrowed {
+                Scope::remove(ScopeId(id as u64));
+            }
         }
         crate::directives::transition::release(&el);
         crate::directives::teleport::release(&el);

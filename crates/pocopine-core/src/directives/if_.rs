@@ -31,7 +31,7 @@ use super::transition;
 use super::DirectiveCall;
 use crate::path::resolve_truthy;
 use crate::reactive::effect;
-use crate::walker::{self, bind_scope_to, track_effect_on};
+use crate::walker::{self, bind_borrowed_scope_to, track_effect_on};
 
 pub fn run(call: &DirectiveCall) {
     let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
@@ -77,9 +77,10 @@ pub fn run(call: &DirectiveCall) {
 
                 // Pin the owning scope onto the clone BEFORE walking
                 // so teleported content still resolves directives
-                // against the intended proxy.
+                // against the intended proxy. Borrow-mode: removing
+                // the clone must not evict the component's scope.
                 if let Some((scope_id, proxy)) = pinned_scope.as_ref() {
-                    bind_scope_to(&clone_root, *scope_id, proxy);
+                    bind_borrowed_scope_to(&clone_root, *scope_id, proxy);
                 }
 
                 let inserted = match teleport_target.as_ref() {

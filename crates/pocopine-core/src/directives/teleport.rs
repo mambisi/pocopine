@@ -19,7 +19,7 @@ use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
 
 use super::DirectiveCall;
-use crate::walker::{self, bind_scope_to};
+use crate::walker::{self, bind_borrowed_scope_to};
 
 const TELEPORTED_KEY: &str = "__pp_teleported";
 
@@ -57,9 +57,11 @@ pub fn run(call: &DirectiveCall) {
     };
 
     // Pin the owning scope onto the clone so directives inside still
-    // resolve the intended proxy after the DOM move.
+    // resolve the intended proxy after the DOM move. The scope is
+    // borrowed — removing the clone must not evict the owning
+    // component's scope from the registry.
     if let Some((scope_id, proxy)) = walker::enclosing_scope(call.el) {
-        bind_scope_to(&clone_root, scope_id, &proxy);
+        bind_borrowed_scope_to(&clone_root, scope_id, &proxy);
     }
 
     if target.append_child(clone_root.as_ref()).is_ok() {
