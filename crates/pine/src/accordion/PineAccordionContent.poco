@@ -1,0 +1,7 @@
+<template pp-if="open">
+  <div class="pine-accordion-content"
+       role="region"
+       data-state="open">
+    <slot></slot>
+  </div>
+</template>

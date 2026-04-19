@@ -909,6 +909,86 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
     host.remove();
 }
 
+// ─── PineAccordion ────────────────────────────────────────────────
+
+/// Accordion type="single" + collapsible: clicking an Item's
+/// Trigger opens it; clicking the open one closes it. Opening
+/// one closes any other.
+#[wasm_bindgen_test]
+async fn accordion_single_collapsible_exclusive_toggle() {
+    let host = mount(
+        "<pine-accordion-root type=\"single\" collapsible=\"true\">\
+           <pine-accordion-item value=\"a\">\
+             <pine-accordion-trigger class=\"ac-t-a\">A</pine-accordion-trigger>\
+             <pine-accordion-content><p class=\"ac-body-a\">Body A</p></pine-accordion-content>\
+           </pine-accordion-item>\
+           <pine-accordion-item value=\"b\">\
+             <pine-accordion-trigger class=\"ac-t-b\">B</pine-accordion-trigger>\
+             <pine-accordion-content><p class=\"ac-body-b\">Body B</p></pine-accordion-content>\
+           </pine-accordion-item>\
+         </pine-accordion-root>",
+    );
+    tick().await;
+
+    let trig_a = host.query_selector(".ac-t-a button").unwrap().unwrap();
+    let trig_b = host.query_selector(".ac-t-b button").unwrap().unwrap();
+
+    // Start: nothing open.
+    assert!(
+        host.query_selector(".ac-body-a").unwrap().is_none(),
+        "A closed initially"
+    );
+    assert!(
+        host.query_selector(".ac-body-b").unwrap().is_none(),
+        "B closed initially"
+    );
+
+    // Click A → A opens.
+    trig_a
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        host.query_selector(".ac-body-a").unwrap().is_some(),
+        "A opens on click"
+    );
+    assert_eq!(
+        trig_a.get_attribute("aria-expanded").as_deref(),
+        Some("true")
+    );
+
+    // Click B → B opens, A closes (single mode).
+    trig_b
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        host.query_selector(".ac-body-b").unwrap().is_some(),
+        "B opens"
+    );
+    assert!(
+        host.query_selector(".ac-body-a").unwrap().is_none(),
+        "A closed by single-mode exclusivity"
+    );
+
+    // Click B again → B closes (collapsible=true).
+    trig_b.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        host.query_selector(".ac-body-b").unwrap().is_none(),
+        "B closes on second click when collapsible"
+    );
+
+    host.remove();
+}
+
 // ─── PineCollapsible ──────────────────────────────────────────────
 
 /// Collapsible's Trigger toggles Root.open; Content is gated on

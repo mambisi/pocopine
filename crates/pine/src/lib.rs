@@ -23,6 +23,7 @@
 //! tag so authors can drop `<pine-dialog>`, `<pine-button>` etc.
 //! into their templates without enumerating the library.
 
+pub mod accordion;
 pub mod button;
 pub mod checkbox;
 pub mod collapsible;
@@ -33,6 +34,9 @@ pub mod switch;
 pub mod tabs;
 pub mod tooltip;
 
+pub use accordion::{
+    PineAccordionContent, PineAccordionItem, PineAccordionRoot, PineAccordionTrigger,
+};
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
@@ -51,6 +55,10 @@ pub use tooltip::PineTooltip;
 /// Register every Pine custom-element tag. Call once at app startup
 /// before mounting.
 pub fn register_all() {
+    PineAccordionRoot::register();
+    PineAccordionItem::register();
+    PineAccordionTrigger::register();
+    PineAccordionContent::register();
     PineButton::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();

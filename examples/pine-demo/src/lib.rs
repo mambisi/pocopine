@@ -40,6 +40,10 @@ pub struct PineDemoApp {
     /// Collapsible open state — bound two-way via
     /// `pp-model:open` on `<pine-collapsible-root>`.
     pub faq_open: bool,
+
+    /// Accordion single-mode value — which FAQ item is open
+    /// (or `""` when all collapsed).
+    pub faq_item: String,
 }
 
 #[handlers]

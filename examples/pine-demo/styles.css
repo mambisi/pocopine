@@ -253,6 +253,35 @@ pine-dropdown-menu-portal { display: contents; }
   border-radius: var(--radius);
 }
 
+/* ─── PineAccordion ───────────────────────────────────────────── */
+
+.pine-accordion-root {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.pine-accordion-item { border-bottom: 1px solid var(--border); }
+.pine-accordion-item:last-child { border-bottom: 0; }
+
+.pine-accordion-trigger {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 0;
+  padding: 0.625rem 0.875rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.pine-accordion-trigger:hover { background: var(--bg-hover); }
+.pine-accordion-trigger[data-state="open"] { background: var(--bg-hover); }
+
+.pine-accordion-content {
+  padding: 0.5rem 0.875rem 0.875rem;
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
 /* ─── PineTabs ────────────────────────────────────────────────── */
 
 .pine-tabs-list {

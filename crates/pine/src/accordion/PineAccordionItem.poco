@@ -1,0 +1,5 @@
+<div class="pine-accordion-item"
+     :data-state="open ? 'open' : 'closed'"
+     :data-disabled="disabled">
+  <slot></slot>
+</div>

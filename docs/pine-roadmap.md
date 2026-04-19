@@ -17,6 +17,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PinePopover | stable | non-modal, `pp-anchor`, `pp-model:open` |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
+| PineAccordion* (compound) | stable | Root/Item/Trigger/Content; `type="single\|multiple"`, `collapsible` |
 | PineTabs | stable | tablist-only; panels author-owned |
 | PineTooltip | stable | hover/focus + delay |
 | PineSwitch | stable | `role="switch"`, `pp-model:checked` |
@@ -193,7 +194,7 @@ After DropdownMenu's core is fleshed out:
 | # | Component | Why |
 |---|---|---|
 | 1 | ~~**Collapsible**~~ | Done — second compound validated the pattern. |
-| 2 | **Accordion** | Wraps Collapsible + lifts single-vs-multiple state. Layout staple. |
+| 2 | ~~**Accordion**~~ | Done — Root/Item/Trigger/Content with `type="single\|multiple"` + `collapsible`. |
 | 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
 | 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
 | 5 | **Avatar** | Root/Image/Fallback — simple compound that exercises `pp-if` for fallback. Independent of any overlay. |
