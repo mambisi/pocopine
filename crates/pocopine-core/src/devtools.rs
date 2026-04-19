@@ -1087,6 +1087,18 @@ const STYLESHEET: &str = "\
     #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_meta,\
     #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_body{display:none;}\
     #__pp_devtools_root *{box-sizing:border-box;}\
+    #__pp_devtools_root,#__pp_devtools_root *{scrollbar-width:thin;\
+    scrollbar-color:#3a3631 transparent;}\
+    #__pp_devtools_root ::-webkit-scrollbar,\
+    #__pp_devtools_root::-webkit-scrollbar{width:6px;height:6px;}\
+    #__pp_devtools_root ::-webkit-scrollbar-track,\
+    #__pp_devtools_root::-webkit-scrollbar-track{background:transparent;}\
+    #__pp_devtools_root ::-webkit-scrollbar-thumb,\
+    #__pp_devtools_root::-webkit-scrollbar-thumb{background:#3a3631;border-radius:3px;}\
+    #__pp_devtools_root ::-webkit-scrollbar-thumb:hover,\
+    #__pp_devtools_root::-webkit-scrollbar-thumb:hover{background:#ff6600;}\
+    #__pp_devtools_root ::-webkit-scrollbar-corner,\
+    #__pp_devtools_root::-webkit-scrollbar-corner{background:transparent;}\
     .__pp_dev_header{display:flex;align-items:center;justify-content:space-between;\
     padding:8px 12px;background:#252220;border-bottom:1px solid #2d2a24;\
     color:#ff6600;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;flex:0 0 auto;}\
