@@ -9,3 +9,6 @@ target/
 .DS_Store
 *.swp
 *.swo
+
+# Reference checkouts / scratch space (git clones, notes, etc.)
+/tmp
