@@ -15,9 +15,11 @@ pub mod for_;
 pub mod html;
 pub mod if_;
 pub mod init;
+pub mod intersect;
 pub mod model;
 pub mod on;
 pub mod ref_;
+pub mod resize;
 pub mod route;
 pub mod show;
 pub mod teleport;
@@ -56,6 +58,8 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("if", if_::run);
         m.insert("teleport", teleport::run);
         m.insert("ref", ref_::run);
+        m.insert("resize", resize::run);
+        m.insert("intersect", intersect::run);
         m
     })
 }

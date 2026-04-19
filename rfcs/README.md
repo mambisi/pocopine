@@ -30,3 +30,4 @@ Conventions:
 | 012 | [Template expression evaluator](./rfc-012-expression-evaluator.md) | Implemented |
 | 013 | [Key modifiers on `pp-on`](./rfc-013-pp-on-key-modifiers.md) | Implemented |
 | 014 | [Focus & timing utilities](./rfc-014-focus-utilities.md) | Implemented |
+| 016 | [`pp-resize` and `pp-intersect`](./rfc-016-pp-resize-pp-intersect.md) | Implemented |

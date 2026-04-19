@@ -140,6 +140,24 @@ struct ExprHost {
 #[handlers]
 impl ExprHost {}
 
+// RFC-016 — pp-resize.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ResizeHost.html")]
+struct ResizeHost {
+    w: f64,
+    h: f64,
+    fires: u32,
+}
+
+#[handlers]
+impl ResizeHost {
+    pub fn on_resize(&mut self, w: f64, h: f64) {
+        self.w = w;
+        self.h = h;
+        self.fires += 1;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -182,6 +200,7 @@ fn register_all() {
     NamedSlotHost::register();
     ScopedSlotHost::register();
     ExprHost::register();
+    ResizeHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -908,4 +927,66 @@ async fn tick_next_runs_on_microtask_queue() {
     let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
     assert!(fired.get(), "callback fired after microtask yield");
+}
+
+/// Wait for `ResizeObserver` to fire. Unlike the `MutationObserver`
+/// `tick` helper above, ResizeObserver dispatches its first batch
+/// on the next animation frame, so polling microtasks alone is
+/// insufficient — we yield an RAF-equivalent delay.
+async fn raf_tick() {
+    let window = window().unwrap();
+    // `setTimeout(resolve, 16)` ~= one animation frame; waiting twice
+    // ensures ResizeObserver's internal queue has flushed in every
+    // tested browser.
+    for _ in 0..3 {
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                &resolve, 16,
+            );
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+}
+
+/// `pp-resize` installs a `ResizeObserver` and fires the named
+/// handler with `(f64, f64)` args — the element's content-box
+/// dimensions.
+#[wasm_bindgen_test]
+async fn pp_resize_fires_handler_on_initial_observe_and_on_size_change() {
+    let host = mount(
+        "<resize-host style=\"display: block; width: 300px; height: 50px\"></resize-host>",
+    );
+    // First: ResizeObserver's synthetic initial entry must fire.
+    raf_tick().await;
+
+    let fires_el = host.query_selector(".rh-fires").unwrap().unwrap();
+    let fires: HtmlElement = fires_el.dyn_into().unwrap();
+    let fires_value: u32 = fires.inner_text().trim().parse().unwrap_or(0);
+    assert!(fires_value >= 1, "initial observe fires at least once");
+
+    let w_el = host.query_selector(".rh-w").unwrap().unwrap();
+    let w_html: HtmlElement = w_el.dyn_into().unwrap();
+    let w_before: f64 = w_html.inner_text().trim().parse().unwrap_or(0.0);
+    assert!(w_before > 0.0, "width reported > 0 after initial observe");
+
+    // Resize the tag root: the directive is on whatever root the
+    // template installed, so pick that up via querySelector.
+    let root = host.query_selector(".rh-root").unwrap().unwrap();
+    let root_html: HtmlElement = root.clone().dyn_into().unwrap();
+    root_html
+        .style()
+        .set_property("width", "600px")
+        .unwrap();
+
+    raf_tick().await;
+
+    let w_el = host.query_selector(".rh-w").unwrap().unwrap();
+    let w_html: HtmlElement = w_el.dyn_into().unwrap();
+    let w_after: f64 = w_html.inner_text().trim().parse().unwrap_or(0.0);
+    assert!(
+        w_after > w_before,
+        "width updates after inline style change ({w_before} → {w_after})"
+    );
+
+    host.remove();
 }
