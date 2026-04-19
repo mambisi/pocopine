@@ -23,6 +23,7 @@ version = "0.3"
 features = [
     "AddEventListenerOptions",
     "Attr",
+    "Clipboard",
     "CssStyleDeclaration",
     "CustomEvent",
     "CustomEventInit",
@@ -46,6 +47,7 @@ features = [
     "MutationObserver",
     "MutationObserverInit",
     "MutationRecord",
+    "Navigator",
     "Location",
     "MouseEvent",
     "NamedNodeMap",
