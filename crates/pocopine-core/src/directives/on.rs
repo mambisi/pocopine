@@ -19,7 +19,7 @@ use std::rc::Rc;
 use js_sys::{Array, Function};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{AddEventListenerOptions, Event, EventTarget, KeyboardEvent};
+use web_sys::{AddEventListenerOptions, Event, EventTarget, KeyboardEvent, Node};
 
 use super::DirectiveCall;
 use crate::scope::invoke_handler;
@@ -36,6 +36,7 @@ pub fn run(call: &DirectiveCall) {
     let once = call.modifiers.iter().any(|m| m == "once");
     let on_window = call.modifiers.iter().any(|m| m == "window");
     let on_document = call.modifiers.iter().any(|m| m == "document");
+    let outside = call.modifiers.iter().any(|m| m == "outside");
     let debounce_ms: Option<u32> = parse_debounce(&call.modifiers);
 
     // Persistent closure used by `setTimeout` in the debounce branch.
@@ -78,7 +79,26 @@ pub fn run(call: &DirectiveCall) {
         let timer = timer.clone();
         let last_event = last_event.clone();
         move |ev: Event| {
-            if prevent {
+            // `outside` runs before `prevent` so an outside click on
+            // a real link still navigates (preventing default on a
+            // document-level click listener would break the page).
+            if outside {
+                let host_node: &Node = el_for_closure.as_ref();
+                if !host_node.is_connected() {
+                    return;
+                }
+                match ev.target() {
+                    Some(t) => match t.dyn_into::<Node>() {
+                        Ok(node) => {
+                            if el_for_closure.contains(Some(&node)) {
+                                return;
+                            }
+                        }
+                        Err(_) => return,
+                    },
+                    None => return,
+                }
+            } else if prevent {
                 ev.prevent_default();
             }
             if stop {
@@ -88,6 +108,11 @@ pub fn run(call: &DirectiveCall) {
                 return;
             }
             if self_only {
+                if outside {
+                    // `.self` + `.outside` is contradictory by
+                    // definition — never fire.
+                    return;
+                }
                 if let Some(target) = ev.target() {
                     if target != *el_for_closure.as_ref() {
                         return;
@@ -116,19 +141,25 @@ pub fn run(call: &DirectiveCall) {
         }
     }) as Box<dyn FnMut(Event)>);
 
-    let target: EventTarget = if on_window {
-        web_sys::window().expect("window").into()
-    } else if on_document {
+    let target: EventTarget = if outside || on_document {
         web_sys::window()
             .and_then(|w| w.document())
             .expect("document")
             .into()
+    } else if on_window {
+        web_sys::window().expect("window").into()
     } else {
         el.clone().into()
     };
 
     let opts = AddEventListenerOptions::new();
     opts.set_once(once);
+    if outside {
+        // Capture so this runs before descendants can stop the
+        // event — otherwise a child's `@click.stop` hides the
+        // outside click from us.
+        opts.set_capture(true);
+    }
     let _ = target.add_event_listener_with_callback_and_add_event_listener_options(
         &event,
         closure.as_ref().unchecked_ref(),
@@ -155,12 +186,19 @@ fn parse_debounce(modifiers: &[String]) -> Option<u32> {
 
 /// Modifiers that participate in the RFC-013 key filter. Everything
 /// else (`prevent`, `stop`, `self`, `once`, `window`, `document`,
-/// `debounce`, numeric debounce args) is handled elsewhere.
+/// `debounce`, `outside`, numeric debounce args) is handled elsewhere
+/// and must be explicitly excluded so a directive like
+/// `pp-on:click.outside` doesn't accidentally treat `outside` as a
+/// keyboard key name and filter out every non-keyboard event.
 fn is_key_modifier(m: &str) -> bool {
-    matches!(
+    if matches!(
         m,
-        "ctrl" | "shift" | "alt" | "meta"
-    ) || named_key_for(m).is_some()
+        "prevent" | "stop" | "self" | "once" | "window" | "document" | "debounce" | "outside"
+    ) {
+        return false;
+    }
+    matches!(m, "ctrl" | "shift" | "alt" | "meta")
+        || named_key_for(m).is_some()
         || m.len() == 1  // single-letter key shortcut (e.g. `.k`, `.a`)
         || is_word_key(m)
 }

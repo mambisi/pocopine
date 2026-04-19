@@ -166,6 +166,20 @@ struct AnchorHost {}
 #[handlers]
 impl AnchorHost {}
 
+// RFC-017 — click.outside.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "OutsideHost.html")]
+struct OutsideHost {
+    outside_count: u32,
+}
+
+#[handlers]
+impl OutsideHost {
+    pub fn on_outside(&mut self) {
+        self.outside_count += 1;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -210,6 +224,7 @@ fn register_all() {
     ExprHost::register();
     ResizeHost::register();
     AnchorHost::register();
+    OutsideHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1041,6 +1056,44 @@ async fn pp_anchor_positions_floater_under_trigger() {
         "fixed",
         "pp-anchor sets position: fixed"
     );
+
+    host.remove();
+}
+
+/// `pp-on:click.outside` fires only when the click target is not a
+/// descendant of the host element.
+#[wasm_bindgen_test]
+async fn click_outside_fires_only_for_clicks_that_miss_the_host() {
+    let host = mount("<outside-host></outside-host>");
+    tick().await;
+
+    let panel = host.query_selector(".oh-panel").unwrap().unwrap();
+    let panel_el: HtmlElement = panel.clone().dyn_into().unwrap();
+    let inside_btn = host.query_selector(".oh-inside").unwrap().unwrap();
+    let inside_btn_el: HtmlElement = inside_btn.dyn_into().unwrap();
+    let child_btn = host.query_selector(".oh-child").unwrap().unwrap();
+    let child_btn_el: HtmlElement = child_btn.dyn_into().unwrap();
+
+    fn count_after(host: &Element) -> u32 {
+        let span = host.query_selector(".oh-count").unwrap().unwrap();
+        let html: HtmlElement = span.dyn_into().unwrap();
+        html.inner_text().trim().parse().unwrap_or(0)
+    }
+
+    // Click on a *descendant* of the panel — should NOT fire.
+    child_btn_el.click();
+    tick().await;
+    assert_eq!(count_after(&host), 0, "descendant click does not fire");
+
+    // Click on the panel itself — still inside, should NOT fire.
+    panel_el.click();
+    tick().await;
+    assert_eq!(count_after(&host), 0, "click on host itself does not fire");
+
+    // Click on a sibling outside the panel — SHOULD fire.
+    inside_btn_el.click();
+    tick().await;
+    assert_eq!(count_after(&host), 1, "sibling click fires outside handler");
 
     host.remove();
 }
