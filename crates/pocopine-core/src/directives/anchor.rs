@@ -25,25 +25,48 @@ const STATE_KEY: &str = "__pp_anchor_state";
 
 /// Which side of the anchor the floater sits on.
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum Side {
+pub enum Side {
     Top,
     Bottom,
     Left,
     Right,
 }
 
+impl Side {
+    /// Parse a string (case-insensitive) into a `Side`. Returns
+    /// [`Side::Bottom`] on unrecognised input.
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "top" => Side::Top,
+            "left" => Side::Left,
+            "right" => Side::Right,
+            _ => Side::Bottom,
+        }
+    }
+}
+
 /// Cross-axis alignment of the floater against the anchor.
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum Align {
+pub enum Align {
     Start,
     Center,
     End,
 }
 
+impl Align {
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "start" => Align::Start,
+            "end" => Align::End,
+            _ => Align::Center,
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
-struct Placement {
-    side: Side,
-    align: Align,
+pub struct Placement {
+    pub side: Side,
+    pub align: Align,
 }
 
 impl Placement {
@@ -73,6 +96,32 @@ pub fn run(call: &DirectiveCall) {
     let placement = parse_placement(call.arg.as_deref());
     let offset = parse_offset(&call.modifiers);
     let flip = call.modifiers.iter().any(|m| m == "flip");
+
+    install(&floater, &anchor, placement, offset, flip);
+}
+
+/// Install the anchor positioning state machine on `floater`,
+/// keyed to `anchor`. Public so component authors can position
+/// a floating element programmatically (from `on_ready` / etc.)
+/// when the directive syntax is too restrictive — e.g. Pine's
+/// compound Content parts driving side/align/offset from props.
+///
+/// Call [`release`] on the floater element when done; the
+/// walker does this automatically on unmount for directive-
+/// installed anchors.
+pub fn install(
+    floater: &HtmlElement,
+    anchor: &Element,
+    placement: Placement,
+    offset: f64,
+    flip: bool,
+) {
+    // If this element already has an anchor installed (e.g. the
+    // pp-anchor directive fired, then component code re-installs
+    // with different config), tear down the old one first.
+    release(floater.as_ref());
+    let floater = floater.clone();
+    let anchor = anchor.clone();
 
     // Hold everything the recompute path needs in one Rc<RefCell<_>>
     // so closures can share state without juggling multiple Rcs.

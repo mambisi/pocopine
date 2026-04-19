@@ -97,9 +97,11 @@ In this order:
    nested `pp-anchor` (Sub anchors to SubTrigger), hover-intent
    timers, left-arrow close semantics, parent menu stays open.
    Heavier lift, save for last.
-7. **Content config props** (`side`, `sideOffset`, `align`,
-   `alignOffset`). Prop plumbing over `pp-anchor`'s modifier
-   syntax; no substrate work.
+7. ~~**Content config props**~~ — done. `anchor::install(...)`
+   exposed as a public helper; DropdownMenu / Popover / Tooltip
+   Content parts install the anchor imperatively in `on_ready`
+   using `side` / `align` / `side_offset` props. pp-anchor
+   directive form still works for non-compound use.
 
 ---
 

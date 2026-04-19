@@ -1,6 +1,6 @@
 <div role="tooltip"
      class="pine-tooltip-content"
-     data-state="open"
-     pp-anchor:top.offset.6.flip="anchor">
+     pp-ref="content"
+     data-state="open">
   <slot></slot>
 </div>

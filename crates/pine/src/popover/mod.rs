@@ -29,6 +29,18 @@ use crate::overlay;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsCast;
+use web_sys::Element;
+
+/// Resolve a selector string to an `Element` — used by Content's
+/// programmatic anchor install.
+fn resolve_anchor(selector: &str) -> Option<Element> {
+    let s = selector.trim();
+    if s.is_empty() {
+        return None;
+    }
+    web_sys::window()?.document()?.query_selector(s).ok().flatten()
+}
 
 const ROOT_KEY: &str = "pine-popover-root";
 
@@ -152,13 +164,27 @@ impl PinePopoverPortal {
 
 // ── Content ───────────────────────────────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[component(template = "PinePopoverContent.poco")]
 pub struct PinePopoverContent {
     /// Computed in `on_setup` from the injected root scope id —
-    /// per-instance selector for pp-anchor. Matches the
+    /// per-instance selector for anchor. Matches the
     /// `data-pine-popover-trigger="N"` stamp Trigger adds.
     pub anchor: String,
+    pub side: String,
+    pub align: String,
+    pub side_offset: f64,
+}
+
+impl Default for PinePopoverContent {
+    fn default() -> Self {
+        Self {
+            anchor: String::new(),
+            side: "bottom".into(),
+            align: "start".into(),
+            side_offset: 4.0,
+        }
+    }
 }
 
 #[handlers]
@@ -179,6 +205,21 @@ impl PinePopoverContent {
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(false);
         overlay::activate(scope, &content, modal);
+
+        // Program-install the anchor so side/align/side_offset
+        // props flow through (pp-anchor's modifier syntax is
+        // parsed statically at bind time).
+        if let Some(anchor_el) = resolve_anchor(&self.anchor) {
+            if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
+                let placement = pocopine_core::directives::anchor::Placement {
+                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
+                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
+                };
+                pocopine_core::directives::anchor::install(
+                    &floater, &anchor_el, placement, self.side_offset, true,
+                );
+            }
+        }
 
         // Content is inside a teleported subtree; see the dialog
         // equivalent. Watch root.open and deactivate when it

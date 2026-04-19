@@ -130,7 +130,7 @@ impl PineDropdownMenuPortal {
 
 // ── Content ───────────────────────────────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuContent.poco")]
 pub struct PineDropdownMenuContent {
     /// Computed in `on_setup` from the injected root scope id —
@@ -138,6 +138,26 @@ pub struct PineDropdownMenuContent {
     /// button. Authors never write it; Content resolves it
     /// automatically via context.
     pub anchor: String,
+    /// Which side of the trigger the content sits on —
+    /// `"top"` / `"bottom"` / `"left"` / `"right"`. Default
+    /// `"bottom"`.
+    pub side: String,
+    /// Cross-axis alignment — `"start"` / `"center"` / `"end"`.
+    /// Default `"start"`.
+    pub align: String,
+    /// Pixel offset from the trigger. Default `4`.
+    pub side_offset: f64,
+}
+
+impl Default for PineDropdownMenuContent {
+    fn default() -> Self {
+        Self {
+            anchor: String::new(),
+            side: "bottom".into(),
+            align: "start".into(),
+            side_offset: 4.0,
+        }
+    }
 }
 
 #[handlers]
@@ -165,6 +185,22 @@ impl PineDropdownMenuContent {
         let Some(menu) = refs::get_on(scope, "menu") else { return };
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
+
+        // Anchor the menu to the trigger programmatically so we
+        // can honour the author's side/align/side_offset props
+        // (the pp-anchor directive form parses modifiers
+        // statically at bind time).
+        if let Some(anchor) = resolve_anchor(&self.anchor) {
+            if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+                let placement = pocopine_core::directives::anchor::Placement {
+                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
+                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
+                };
+                pocopine_core::directives::anchor::install(
+                    &floater, &anchor, placement, self.side_offset, true,
+                );
+            }
+        }
     }
 
     pub fn close(&mut self) {
@@ -506,6 +542,16 @@ impl PineDropdownMenuLabel {
 }
 
 // ── helpers ───────────────────────────────────────────────────────
+
+/// Resolve a selector string to an `Element`. Used by Content's
+/// programmatic anchor install.
+fn resolve_anchor(selector: &str) -> Option<Element> {
+    let s = selector.trim();
+    if s.is_empty() {
+        return None;
+    }
+    web_sys::window()?.document()?.query_selector(s).ok().flatten()
+}
 
 /// Set `tabindex=-1` on every menuitem and promote the first
 /// non-disabled one to `tabindex=0` — the starting cursor for
