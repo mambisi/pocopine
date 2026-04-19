@@ -4,8 +4,9 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::components::Comment;
 use crate::shared::ItemNode;
-use crate::{extract_domain, get_item_tree, html_escape, humanize_age, performance_now};
+use crate::{extract_domain, get_item_tree, humanize_age, performance_now};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(style = "story_detail.css")]
@@ -18,7 +19,7 @@ pub struct StoryDetail {
     pub domain: String,
     pub age: String,
     pub text: String,
-    pub comments_html: String,
+    pub comments: Vec<Comment>,
     pub comment_count: u32,
     pub loading: bool,
     pub error: String,
@@ -44,8 +45,8 @@ impl StoryDetail {
                     s.url = url;
                     s.age = humanize_age(item.created_at_i);
                     s.text = item.text.clone().unwrap_or_default();
-                    s.comment_count = count_comments(&item) as u32;
-                    s.comments_html = render_comment_tree(&item.children, 0);
+                    s.comments = build_comments(&item.children);
+                    s.comment_count = count_comments(&s.comments) as u32;
                     s.error.clear();
                 }
                 Err(e) => s.error = e.to_string(),
@@ -54,39 +55,23 @@ impl StoryDetail {
     }
 }
 
-fn render_comment_tree(nodes: &[ItemNode], depth: usize) -> String {
-    let live: Vec<&ItemNode> = nodes
+/// Convert wire-shape `ItemNode` (HN Algolia) to the client-side
+/// `Comment` display shape. Filters out dead / deleted nodes and
+/// pre-formats the age so the template stays declarative.
+fn build_comments(nodes: &[ItemNode]) -> Vec<Comment> {
+    nodes
         .iter()
         .filter(|n| n.author.is_some() && n.text.is_some())
-        .collect();
-    if live.is_empty() {
-        return String::new();
-    }
-    let depth_class = if depth == 0 { "" } else { " comments--nested" };
-    let mut out = format!("<ul class=\"comments{depth_class}\">");
-    for c in live {
-        let author = c.author.clone().unwrap_or_default();
-        let age = humanize_age(c.created_at_i);
-        out.push_str(&format!(
-            "<li class=\"comment\">\
-                <div class=\"comment__meta\">\
-                    <span class=\"comment__author\">{author}</span>\
-                    <span class=\"sep\">·</span>\
-                    <span class=\"age\">{age}</span>\
-                </div>\
-                <div class=\"comment__body\">{body}</div>\
-                {children}\
-            </li>",
-            author = html_escape(&author),
-            age = html_escape(&age),
-            body = c.text.clone().unwrap_or_default(),
-            children = render_comment_tree(&c.children, depth + 1),
-        ));
-    }
-    out.push_str("</ul>");
-    out
+        .map(|n| Comment {
+            id: n.id,
+            author: n.author.clone().unwrap_or_default(),
+            age: humanize_age(n.created_at_i),
+            body: n.text.clone().unwrap_or_default(),
+            children: build_comments(&n.children),
+        })
+        .collect()
 }
 
-fn count_comments(node: &ItemNode) -> usize {
-    node.children.iter().map(|c| 1 + count_comments(c)).sum()
+fn count_comments(nodes: &[Comment]) -> usize {
+    nodes.iter().map(|c| 1 + count_comments(&c.children)).sum()
 }

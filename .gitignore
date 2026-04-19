@@ -1,8 +1,9 @@
 # Rust
 /target
 
-# wasm-pack output
+# wasm-pack output (also written under per-example target/)
 pkg/
+target/
 
 # Editor / OS
 .DS_Store

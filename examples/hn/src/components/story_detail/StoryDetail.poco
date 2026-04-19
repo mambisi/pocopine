@@ -27,13 +27,17 @@
          pp-transition:enter-end="pp-fade-enter-end"></div>
   </template>
 
-  <template pp-if="comments_html">
+  <template pp-if="comments.length">
     <section class="comments-wrap"
              pp-transition:enter="pp-fade-enter"
              pp-transition:enter-start="pp-fade-enter-start"
              pp-transition:enter-end="pp-fade-enter-end">
       <h2>Comments</h2>
-      <div pp-html="comments_html"></div>
+      <ul class="comments">
+        <template pp-for="c in comments">
+          <hn-comment pp-bind:comment="c"></hn-comment>
+        </template>
+      </ul>
     </section>
   </template>
 </article>

@@ -1,0 +1,16 @@
+<li class="comment">
+  <div class="comment__meta">
+    <span class="comment__author" pp-text="comment.author"></span>
+    <span class="sep">·</span>
+    <span class="age" pp-text="comment.age"></span>
+  </div>
+  <div class="comment__body" pp-html="comment.body"></div>
+
+  <template pp-if="comment.children.length">
+    <ul class="comments comments--nested">
+      <template pp-for="child in comment.children">
+        <hn-comment pp-bind:comment="child"></hn-comment>
+      </template>
+    </ul>
+  </template>
+</li>

@@ -131,19 +131,6 @@ fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn html_escape(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '&' => "&amp;".into(),
-            '<' => "&lt;".into(),
-            '>' => "&gt;".into(),
-            '"' => "&quot;".into(),
-            '\'' => "&#39;".into(),
-            _ => c.to_string(),
-        })
-        .collect()
-}
-
 pub fn performance_now() -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
