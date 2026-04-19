@@ -10,6 +10,7 @@
 //! snapshot approach keeps the reactive core untouched.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use js_sys::Object;
 use wasm_bindgen::closure::Closure;
@@ -25,6 +26,10 @@ use crate::scope::Scope;
 const STYLE_ID: &str = "__pp_devtools_style";
 const ROOT_ID: &str = "__pp_devtools_root";
 const HIGHLIGHT_CLASS: &str = "__pp_dev_highlight";
+const SCOPES_CONTAINER_ID: &str = "__pp_dev_scopes";
+const META_ID: &str = "__pp_dev_meta";
+const INSPECT_BTN_ID: &str = "__pp_dev_btn_inspect";
+const FP_ATTR: &str = "data-fp";
 
 type RenderClosure = Closure<dyn FnMut()>;
 type KeyClosure = Closure<dyn FnMut(KeyboardEvent)>;
@@ -43,6 +48,12 @@ thread_local! {
     static DOC_OVER_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
     static DOC_CLICK_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
     static HIGHLIGHTED: RefCell<Option<Element>> = const { RefCell::new(None) };
+
+    // Incremental render state — persistent across ticks.
+    static SHELL_BUILT: Cell<bool> = const { Cell::new(false) };
+    static SECTIONS: RefCell<HashMap<ScopeId, Element>> = RefCell::new(HashMap::new());
+    static LAST_META: RefCell<String> = const { RefCell::new(String::new()) };
+    static LAST_INSPECT_RENDERED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Install the devtools overlay. Idempotent — calling twice is a
@@ -125,85 +136,222 @@ fn render() {
     if !VISIBLE.with(|c| c.get()) {
         let _ = html_el.style().set_property("display", "none");
         return;
+    } else {
+        let _ = html_el.style().remove_property("display");
+    }
+
+    build_shell_once(&root);
+
+    // Header — only the inspect button state varies.
+    let inspect_on = INSPECT_MODE.with(|c| c.get());
+    let prev_inspect = LAST_INSPECT_RENDERED.with(|c| c.get());
+    if inspect_on != prev_inspect {
+        update_inspect_button(&root, inspect_on);
+        LAST_INSPECT_RENDERED.with(|c| c.set(inspect_on));
     }
 
     let scopes = Scope::all();
-    let inspect_on = INSPECT_MODE.with(|c| c.get());
-    let inspect_cls = if inspect_on { " __pp_dev_btn_on" } else { "" };
-    let inspect_label = if inspect_on { "inspecting…" } else { "inspect" };
-    let mut html = format!(
+
+    // Meta line — update only when the text changes.
+    let meta_text = format!("{} scopes", scopes.len());
+    let needs_meta_write = LAST_META.with(|c| {
+        let mut cur = c.borrow_mut();
+        if *cur != meta_text {
+            *cur = meta_text.clone();
+            true
+        } else {
+            false
+        }
+    });
+    if needs_meta_write {
+        if let Some(meta) = root.query_selector(&format!("#{META_ID}")).ok().flatten() {
+            meta.set_text_content(Some(&meta_text));
+        }
+    }
+
+    // Diff sections: reuse existing per-scope <section>s, rebuild
+    // their inner HTML only when the scope's fingerprint moved.
+    let scopes_container = match root
+        .query_selector(&format!("#{SCOPES_CONTAINER_ID}"))
+        .ok()
+        .flatten()
+    {
+        Some(c) => c,
+        None => return,
+    };
+
+    let current_ids: std::collections::HashSet<ScopeId> =
+        scopes.iter().map(|s| s.id).collect();
+
+    // Drop sections for scopes that are gone.
+    SECTIONS.with(|s| {
+        let mut map = s.borrow_mut();
+        map.retain(|id, el| {
+            if current_ids.contains(id) {
+                true
+            } else {
+                if let Some(parent) = el.parent_node() {
+                    let _ = parent.remove_child(el);
+                }
+                false
+            }
+        });
+    });
+
+    // Insert / update / reorder sections in scope-id order.
+    for scope in scopes.iter() {
+        let fp = section_fingerprint(scope);
+        let section = SECTIONS.with(|s| s.borrow().get(&scope.id).cloned());
+        let section = match section {
+            Some(el) => el,
+            None => {
+                let Ok(el) = doc.create_element("section") else { continue };
+                let _ = el.set_attribute("class", "__pp_dev_scope");
+                let _ = el.set_attribute("data-scope-id", &scope.id.0.to_string());
+                let _ = scopes_container.append_child(&el);
+                SECTIONS.with(|s| s.borrow_mut().insert(scope.id, el.clone()));
+                el
+            }
+        };
+        // Update section HTML only if fingerprint changed.
+        let prev_fp = section.get_attribute(FP_ATTR).unwrap_or_default();
+        if prev_fp != fp {
+            section.set_inner_html(&build_section_inner(scope));
+            let _ = section.set_attribute(FP_ATTR, &fp);
+        }
+        // Keep DOM order matching scope-id order. `append_child`
+        // of an already-attached node moves it to the end of its
+        // siblings — iterating in sorted order yields the desired
+        // final layout. Browsers no-op this when the node is
+        // already at the target position.
+        let _ = scopes_container.append_child(&section);
+    }
+}
+
+/// Build the panel's static shell once. Subsequent renders update
+/// specific sub-elements in place.
+fn build_shell_once(root: &Element) {
+    if SHELL_BUILT.with(|c| c.get()) {
+        return;
+    }
+    let shell = format!(
         "<header class=\"__pp_dev_header\">\
            <span>pocopine devtools</span>\
            <div class=\"__pp_dev_actions\">\
-             <button class=\"__pp_dev_btn{inspect_cls}\" data-action=\"toggle-inspect\">\
-               {inspect_label}\
+             <button id=\"{btn}\" class=\"__pp_dev_btn\" data-action=\"toggle-inspect\">\
+               inspect\
              </button>\
              <button class=\"__pp_dev_btn __pp_dev_close\" data-action=\"close\">×</button>\
            </div>\
          </header>\
-         <div class=\"__pp_dev_meta\">"
+         <div id=\"{meta}\" class=\"__pp_dev_meta\"></div>\
+         <div id=\"{scopes}\" class=\"__pp_dev_scopes\"></div>",
+        btn = INSPECT_BTN_ID,
+        meta = META_ID,
+        scopes = SCOPES_CONTAINER_ID,
     );
-    html.push_str(&format!("{} scopes", scopes.len()));
-    html.push_str("</div><div class=\"__pp_dev_scopes\">");
+    root.set_inner_html(&shell);
+    SHELL_BUILT.with(|c| c.set(true));
+}
 
-    for scope in scopes.iter() {
-        let state = scope.state.borrow();
-        let tag = escape(state.type_name());
-        let keys = state.keys();
-        html.push_str(&format!(
-            "<section class=\"__pp_dev_scope\" data-scope-id=\"{id}\">\
-               <div class=\"__pp_dev_scope_hd\">\
-                 <span class=\"__pp_dev_tag\">&lt;{tag}&gt;</span>\
-                 <span class=\"__pp_dev_id\">#{id}</span>\
-               </div>\
-               <dl class=\"__pp_dev_kv\">",
-            id = scope.id.0,
-            tag = tag,
-        ));
-        if keys.is_empty() {
-            html.push_str("<div class=\"__pp_dev_empty\">no declared fields</div>");
-        } else {
-            for key in keys {
-                let v = state.get(key);
-                let display = stringify(&v);
-                let full = raw_value(&v);
-                html.push_str(&format!(
-                    "<div class=\"__pp_dev_row\">\
-                       <dt>{k}</dt>\
-                       <dd data-copy=\"{full}\" title=\"click to copy\">{display}</dd>\
-                     </div>",
-                    k = escape(key),
-                    full = escape(&full),
-                    display = escape(&display),
-                ));
-            }
-        }
-        drop(state);
-
-        // Refs registered against this scope.
-        let refs_obj = refs::as_object(scope.id);
-        if let Ok(refs_obj) = refs_obj.dyn_into::<Object>() {
-            let ref_keys = Object::keys(&refs_obj);
-            if ref_keys.length() > 0 {
-                html.push_str("<div class=\"__pp_dev_refs\"><span>refs:</span> ");
-                for i in 0..ref_keys.length() {
-                    if i > 0 {
-                        html.push_str(", ");
-                    }
-                    if let Some(name) = ref_keys.get(i).as_string() {
-                        html.push_str(&format!(
-                            "<code>{}</code>",
-                            escape(&name)
-                        ));
-                    }
-                }
-                html.push_str("</div>");
-            }
-        }
-        html.push_str("</dl></section>");
+fn update_inspect_button(root: &Element, on: bool) {
+    let Some(btn) = root.query_selector(&format!("#{INSPECT_BTN_ID}")).ok().flatten() else {
+        return;
+    };
+    if on {
+        let _ = btn.set_attribute("class", "__pp_dev_btn __pp_dev_btn_on");
+        btn.set_text_content(Some("inspecting…"));
+    } else {
+        let _ = btn.set_attribute("class", "__pp_dev_btn");
+        btn.set_text_content(Some("inspect"));
     }
-    html.push_str("</div>");
-    root.set_inner_html(&html);
+}
+
+/// One-byte-per-field canonical string that flips whenever something
+/// the panel would render for this scope changes. Kept on the
+/// `<section>` element as `data-fp` so each tick is a single string
+/// compare.
+fn section_fingerprint(scope: &Scope) -> String {
+    let mut out = String::new();
+    {
+        let state = scope.state.borrow();
+        out.push_str(state.type_name());
+        out.push('\u{1}');
+        for key in state.keys() {
+            let v = state.get(key);
+            out.push_str(key);
+            out.push('=');
+            out.push_str(&raw_value(&v));
+            out.push('\u{1}');
+        }
+    }
+    let refs_obj = refs::as_object(scope.id);
+    if let Ok(refs_obj) = refs_obj.dyn_into::<Object>() {
+        let keys = Object::keys(&refs_obj);
+        out.push_str("refs=");
+        for i in 0..keys.length() {
+            if let Some(name) = keys.get(i).as_string() {
+                out.push_str(&name);
+                out.push(',');
+            }
+        }
+    }
+    out
+}
+
+fn build_section_inner(scope: &Scope) -> String {
+    let state = scope.state.borrow();
+    let tag = escape(state.type_name());
+    let keys = state.keys();
+    let mut html = format!(
+        "<div class=\"__pp_dev_scope_hd\">\
+           <span class=\"__pp_dev_tag\">&lt;{tag}&gt;</span>\
+           <span class=\"__pp_dev_id\">#{id}</span>\
+         </div>\
+         <dl class=\"__pp_dev_kv\">",
+        id = scope.id.0,
+    );
+    if keys.is_empty() {
+        html.push_str("<div class=\"__pp_dev_empty\">no declared fields</div>");
+    } else {
+        for key in keys {
+            let v = state.get(key);
+            let display = stringify(&v);
+            let full = raw_value(&v);
+            html.push_str(&format!(
+                "<div class=\"__pp_dev_row\">\
+                   <dt>{k}</dt>\
+                   <dd data-copy=\"{full}\" title=\"click to copy\">{display}</dd>\
+                 </div>",
+                k = escape(key),
+                full = escape(&full),
+                display = escape(&display),
+            ));
+        }
+    }
+    drop(state);
+
+    let refs_obj = refs::as_object(scope.id);
+    if let Ok(refs_obj) = refs_obj.dyn_into::<Object>() {
+        let ref_keys = Object::keys(&refs_obj);
+        if ref_keys.length() > 0 {
+            html.push_str("<div class=\"__pp_dev_refs\"><span>refs:</span> ");
+            for i in 0..ref_keys.length() {
+                if i > 0 {
+                    html.push_str(", ");
+                }
+                if let Some(name) = ref_keys.get(i).as_string() {
+                    html.push_str(&format!(
+                        "<code>{}</code>",
+                        escape(&name)
+                    ));
+                }
+            }
+            html.push_str("</div>");
+        }
+    }
+    html.push_str("</dl>");
+    html
 }
 
 fn ensure_root(doc: &Document) -> Element {
