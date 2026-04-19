@@ -33,12 +33,15 @@ type EventClosure = Closure<dyn FnMut(Event)>;
 thread_local! {
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
     static VISIBLE: Cell<bool> = const { Cell::new(true) };
+    static INSPECT_MODE: Cell<bool> = const { Cell::new(false) };
     static INTERVAL_ID: Cell<Option<i32>> = const { Cell::new(None) };
     static RENDER_CB: RefCell<Option<RenderClosure>> = RefCell::new(None);
     static KEY_CB: RefCell<Option<KeyClosure>> = RefCell::new(None);
     static CLICK_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
     static OVER_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
     static LEAVE_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
+    static DOC_OVER_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
+    static DOC_CLICK_CB: RefCell<Option<EventClosure>> = RefCell::new(None);
     static HIGHLIGHTED: RefCell<Option<Element>> = const { RefCell::new(None) };
 }
 
@@ -125,12 +128,20 @@ fn render() {
     }
 
     let scopes = Scope::all();
-    let mut html = String::from(
-        r#"<header class="__pp_dev_header">
-             <span>pocopine devtools</span>
-             <button class="__pp_dev_close" onclick="this.parentElement.parentElement.style.display='none'">×</button>
-           </header>
-           <div class="__pp_dev_meta">"#,
+    let inspect_on = INSPECT_MODE.with(|c| c.get());
+    let inspect_cls = if inspect_on { " __pp_dev_btn_on" } else { "" };
+    let inspect_label = if inspect_on { "inspecting…" } else { "inspect" };
+    let mut html = format!(
+        "<header class=\"__pp_dev_header\">\
+           <span>pocopine devtools</span>\
+           <div class=\"__pp_dev_actions\">\
+             <button class=\"__pp_dev_btn{inspect_cls}\" data-action=\"toggle-inspect\">\
+               {inspect_label}\
+             </button>\
+             <button class=\"__pp_dev_btn __pp_dev_close\" data-action=\"close\">×</button>\
+           </div>\
+         </header>\
+         <div class=\"__pp_dev_meta\">"
     );
     html.push_str(&format!("{} scopes", scopes.len()));
     html.push_str("</div><div class=\"__pp_dev_scopes\">");
@@ -243,6 +254,12 @@ fn attach_hover_delegate(root: &Element) {
 /// changes.
 fn set_highlight(scope_id: Option<ScopeId>) {
     let next = scope_id.and_then(crate::walker::find_element_for_scope);
+    apply_highlight(next);
+}
+
+/// Lower-level: highlight exactly this element (inspect mode hovers
+/// arbitrary DOM elements, not just component roots).
+fn apply_highlight(next: Option<Element>) {
     let prev = HIGHLIGHTED.with(|h| h.borrow().clone());
     let same = match (&prev, &next) {
         (Some(a), Some(b)) => {
@@ -262,6 +279,104 @@ fn set_highlight(scope_id: Option<ScopeId>) {
         add_highlight_class(el);
     }
     HIGHLIGHTED.with(|h| *h.borrow_mut() = next);
+}
+
+fn is_inside_panel(el: &Element) -> bool {
+    let Some(root) = panel_root() else { return false };
+    let root_node: &Node = root.as_ref();
+    let el_node: &Node = el.as_ref();
+    root_node.contains(Some(el_node))
+}
+
+/// Flip the "pick an element on the page" mode. When active, any
+/// mouseover on the document outlines the element under the cursor
+/// and a click picks it — the panel then scrolls to and flashes the
+/// owning scope row, and inspect turns itself off.
+fn toggle_inspect() {
+    let next = !INSPECT_MODE.with(|c| c.get());
+    INSPECT_MODE.with(|c| c.set(next));
+    if next {
+        attach_inspect_listeners();
+    } else {
+        detach_inspect_listeners();
+        apply_highlight(None);
+    }
+}
+
+fn attach_inspect_listeners() {
+    let Some(doc) = window().and_then(|w| w.document()) else { return };
+
+    let over: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
+        if !INSPECT_MODE.with(|c| c.get()) {
+            return;
+        }
+        let Some(target) = ev.target() else { return };
+        let Ok(el) = target.dyn_into::<Element>() else { return };
+        if is_inside_panel(&el) {
+            return;
+        }
+        apply_highlight(Some(el));
+    }));
+    let _ = doc.add_event_listener_with_callback("mouseover", over.as_ref().unchecked_ref());
+    DOC_OVER_CB.with(|c| *c.borrow_mut() = Some(over));
+
+    // Capture-phase click: we want to swallow the click before any
+    // app handler runs while the user is picking.
+    let click: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
+        if !INSPECT_MODE.with(|c| c.get()) {
+            return;
+        }
+        let Some(target) = ev.target() else { return };
+        let Ok(start) = target.dyn_into::<Element>() else { return };
+        if is_inside_panel(&start) {
+            return;
+        }
+        ev.prevent_default();
+        ev.stop_propagation();
+
+        if let Some((scope_id, _)) = crate::walker::enclosing_scope(&start) {
+            scroll_panel_to_scope(scope_id);
+            set_highlight(Some(scope_id));
+        } else {
+            apply_highlight(None);
+        }
+
+        INSPECT_MODE.with(|c| c.set(false));
+        detach_inspect_listeners();
+        render();
+    }));
+    let _ = doc.add_event_listener_with_callback_and_bool(
+        "click",
+        click.as_ref().unchecked_ref(),
+        true,
+    );
+    DOC_CLICK_CB.with(|c| *c.borrow_mut() = Some(click));
+}
+
+fn detach_inspect_listeners() {
+    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    if let Some(cb) = DOC_OVER_CB.with(|c| c.borrow_mut().take()) {
+        let _ = doc.remove_event_listener_with_callback(
+            "mouseover",
+            cb.as_ref().unchecked_ref(),
+        );
+    }
+    if let Some(cb) = DOC_CLICK_CB.with(|c| c.borrow_mut().take()) {
+        let _ = doc.remove_event_listener_with_callback_and_bool(
+            "click",
+            cb.as_ref().unchecked_ref(),
+            true,
+        );
+    }
+}
+
+fn scroll_panel_to_scope(scope_id: ScopeId) {
+    let Some(root) = panel_root() else { return };
+    let sel = format!("[data-scope-id=\"{}\"]", scope_id.0);
+    if let Ok(Some(row)) = root.query_selector(&sel) {
+        row.scroll_into_view();
+        flash_copied(&row);
+    }
 }
 
 fn add_highlight_class(el: &Element) {
@@ -291,6 +406,17 @@ fn attach_copy_delegate(root: &Element) {
         let Ok(start) = target.dyn_into::<Element>() else { return };
         let mut cur = Some(start);
         while let Some(el) = cur {
+            if let Some(action) = el.get_attribute("data-action") {
+                match action.as_str() {
+                    "toggle-inspect" => {
+                        toggle_inspect();
+                        render();
+                    }
+                    "close" => toggle(),
+                    _ => {}
+                }
+                return;
+            }
             if let Some(value) = el.get_attribute("data-copy") {
                 copy_to_clipboard(&value);
                 flash_copied(&el);
@@ -443,8 +569,14 @@ const STYLESHEET: &str = "\
     .__pp_dev_header{display:flex;align-items:center;justify-content:space-between;\
     padding:8px 12px;background:#252220;border-bottom:1px solid #2d2a24;position:sticky;top:0;\
     color:#ff6600;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;}\
-    .__pp_dev_close{background:none;border:none;color:#e6e1d8;font-size:16px;line-height:1;\
-    cursor:pointer;padding:0 4px;}\
+    .__pp_dev_actions{display:flex;align-items:center;gap:4px;}\
+    .__pp_dev_btn{background:none;border:1px solid transparent;color:#e6e1d8;font:inherit;\
+    cursor:pointer;padding:2px 6px;border-radius:3px;letter-spacing:0.05em;\
+    text-transform:uppercase;font-size:9px;}\
+    .__pp_dev_btn:hover{border-color:#ff6600;color:#ff6600;}\
+    .__pp_dev_btn_on{background:#ff6600;color:#181715;}\
+    .__pp_dev_btn_on:hover{border-color:#ff6600;color:#181715;}\
+    .__pp_dev_close{font-size:14px;padding:0 6px;}\
     .__pp_dev_meta{padding:6px 12px;color:#828282;border-bottom:1px solid #2d2a24;}\
     .__pp_dev_scopes{padding:4px 8px;}\
     .__pp_dev_scope{padding:6px 4px;border-bottom:1px dashed #2d2a24;}\
