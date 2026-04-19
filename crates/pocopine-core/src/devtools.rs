@@ -11,7 +11,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use js_sys::Object;
+use js_sys::{Array, Object};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
@@ -68,6 +68,8 @@ thread_local! {
     static LAST_DETAIL_FP: RefCell<String> = const { RefCell::new(String::new()) };
     static VIEW_MODE: Cell<ViewMode> = const { Cell::new(ViewMode::Tree) };
     static SELECTED: Cell<Option<ScopeId>> = const { Cell::new(None) };
+    static COLLAPSED: Cell<bool> = const { Cell::new(false) };
+    static LAST_COLLAPSED_RENDERED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 /// Install the devtools overlay. Idempotent — calling twice is a
@@ -169,6 +171,17 @@ fn render() {
     if prev_mode != Some(mode) {
         update_mode_buttons(&root, mode);
         LAST_MODE_RENDERED.with(|c| c.set(Some(mode)));
+    }
+
+    let collapsed = COLLAPSED.with(|c| c.get());
+    let prev_collapsed = LAST_COLLAPSED_RENDERED.with(|c| c.get());
+    if prev_collapsed != Some(collapsed) {
+        update_collapse_state(&root, collapsed);
+        LAST_COLLAPSED_RENDERED.with(|c| c.set(Some(collapsed)));
+    }
+    if collapsed {
+        // When collapsed the body isn't visible; skip the heavy work.
+        return;
     }
 
     let scopes = Scope::all();
@@ -274,6 +287,8 @@ fn build_shell_once(root: &Element) {
              <button id=\"{btn}\" class=\"__pp_dev_btn\" data-action=\"toggle-inspect\">\
                inspect\
              </button>\
+             <button class=\"__pp_dev_btn __pp_dev_collapse\" data-action=\"toggle-collapse\" \
+                     title=\"collapse\">−</button>\
              <button class=\"__pp_dev_btn __pp_dev_close\" data-action=\"close\">×</button>\
            </div>\
          </header>\
@@ -289,6 +304,21 @@ fn build_shell_once(root: &Element) {
     );
     root.set_inner_html(&shell);
     SHELL_BUILT.with(|c| c.set(true));
+}
+
+fn update_collapse_state(root: &Element, collapsed: bool) {
+    if collapsed {
+        let _ = root.set_attribute("data-collapsed", "true");
+    } else {
+        let _ = root.remove_attribute("data-collapsed");
+    }
+    if let Some(btn) = root.query_selector(".__pp_dev_collapse").ok().flatten() {
+        btn.set_text_content(Some(if collapsed { "+" } else { "−" }));
+        let _ = btn.set_attribute(
+            "title",
+            if collapsed { "expand" } else { "collapse" },
+        );
+    }
 }
 
 fn update_inspect_button(root: &Element, on: bool) {
@@ -525,28 +555,14 @@ fn build_detail_html(scope: &Scope) -> String {
         }
     }
 
-    // Full state as indented JSON — handy for large objects + a step
-    // toward the editable-state follow-up.
-    let mut payload = Object::new();
-    {
-        // `payload` is fine shadowed; the closure just below needs
-        // a fresh object each time.
-        for key in state.keys() {
-            let v = state.get(key);
-            let _ = js_sys::Reflect::set(&payload, &JsValue::from_str(key), &v);
-        }
+    // Assemble the state as a JS object so we can render it as a
+    // tree and (later) let the user edit leaf values.
+    let payload = Object::new();
+    for key in state.keys() {
+        let v = state.get(key);
+        let _ = js_sys::Reflect::set(&payload, &JsValue::from_str(key), &v);
     }
-    let json = js_sys::JSON::stringify_with_replacer_and_space(
-        &payload,
-        &JsValue::NULL,
-        &JsValue::from_f64(2.0),
-    )
-    .ok()
-    .and_then(|s| s.as_string())
-    .unwrap_or_default();
-    // reset payload binding for lint; real state is in `json` now
-    payload = Object::new();
-    let _ = &payload;
+    let json_tree = build_json_view(&payload.into(), true);
 
     drop(state);
 
@@ -574,16 +590,113 @@ fn build_detail_html(scope: &Scope) -> String {
 
     html.push_str(&format!(
         "<div class=\"__pp_dev_json\">\
-           <div class=\"__pp_dev_json_label\">json</div>\
-           <pre class=\"__pp_dev_json_content\" data-copy=\"{copy}\" \
-                title=\"click to copy\">{pretty}</pre>\
-         </div>",
-        copy = escape(&json),
-        pretty = escape(&json),
+           <div class=\"__pp_dev_json_label\">state</div>\
+           <div class=\"__pp_jv\">{json_tree}</div>\
+         </div>"
     ));
     html.push_str("</section>");
 
     html
+}
+
+/// Render a `JsValue` as a collapsible HTML tree. Uses native
+/// `<details>` / `<summary>` so no per-node JavaScript is needed —
+/// the browser owns the expand/collapse state. Primitives stay
+/// clickable via `data-copy` so any leaf can be copied.
+///
+/// Future: swap each primitive `<span>` for a `<span contenteditable>`
+/// that writes back through the scope's proxy. The classification
+/// branches here already commit the tree to a shape that supports it.
+fn build_json_view(v: &JsValue, is_root: bool) -> String {
+    if v.is_undefined() {
+        return r#"<span class="__pp_jv_null" data-copy="undefined">undefined</span>"#.into();
+    }
+    if v.is_null() {
+        return r#"<span class="__pp_jv_null" data-copy="null">null</span>"#.into();
+    }
+    if let Some(s) = v.as_string() {
+        return format!(
+            "<span class=\"__pp_jv_string\" data-copy=\"{}\">\"{}\"</span>",
+            escape(&s),
+            escape(&s)
+        );
+    }
+    if let Some(n) = v.as_f64() {
+        let n_str = n.to_string();
+        return format!(
+            "<span class=\"__pp_jv_number\" data-copy=\"{n_str}\">{n_str}</span>"
+        );
+    }
+    if let Some(b) = v.as_bool() {
+        let b_str = b.to_string();
+        return format!(
+            "<span class=\"__pp_jv_bool\" data-copy=\"{b_str}\">{b_str}</span>"
+        );
+    }
+    if Array::is_array(v) {
+        let arr = Array::from(v);
+        let len = arr.length();
+        if len == 0 {
+            return r#"<span class="__pp_jv_empty">[ ]</span>"#.into();
+        }
+        let open = if is_root { " open" } else { "" };
+        let mut rows = String::new();
+        for i in 0..len {
+            let item = arr.get(i);
+            rows.push_str(&format!(
+                "<div class=\"__pp_jv_row\">\
+                   <span class=\"__pp_jv_key\">{i}</span>\
+                   <span class=\"__pp_jv_colon\">:</span> {val}\
+                 </div>",
+                val = build_json_view(&item, false)
+            ));
+        }
+        return format!(
+            "<details class=\"__pp_jv_group\"{open}>\
+               <summary class=\"__pp_jv_summary\">\
+                 <span class=\"__pp_jv_bracket\">[</span>\
+                 <span class=\"__pp_jv_meta\">{len} items</span>\
+                 <span class=\"__pp_jv_bracket\">]</span>\
+               </summary>\
+               <div class=\"__pp_jv_body\">{rows}</div>\
+             </details>"
+        );
+    }
+    if v.is_object() {
+        let obj: Object = v.clone().unchecked_into();
+        let keys = Object::keys(&obj);
+        let n = keys.length();
+        if n == 0 {
+            return r#"<span class="__pp_jv_empty">{ }</span>"#.into();
+        }
+        let open = if is_root { " open" } else { "" };
+        let mut rows = String::new();
+        for i in 0..n {
+            let key = keys.get(i);
+            let key_str = key.as_string().unwrap_or_default();
+            let value =
+                js_sys::Reflect::get(&obj, &key).unwrap_or(JsValue::UNDEFINED);
+            rows.push_str(&format!(
+                "<div class=\"__pp_jv_row\">\
+                   <span class=\"__pp_jv_key\">{k}</span>\
+                   <span class=\"__pp_jv_colon\">:</span> {val}\
+                 </div>",
+                k = escape(&key_str),
+                val = build_json_view(&value, false)
+            ));
+        }
+        return format!(
+            "<details class=\"__pp_jv_group\"{open}>\
+               <summary class=\"__pp_jv_summary\">\
+                 <span class=\"__pp_jv_bracket\">{{</span>\
+                 <span class=\"__pp_jv_meta\">{n} keys</span>\
+                 <span class=\"__pp_jv_bracket\">}}</span>\
+               </summary>\
+               <div class=\"__pp_jv_body\">{rows}</div>\
+             </details>"
+        );
+    }
+    r#"<span class="__pp_jv_null">?</span>"#.into()
 }
 
 fn ensure_root(doc: &Document) -> Element {
@@ -811,6 +924,10 @@ fn attach_copy_delegate(root: &Element) {
                             }
                         }
                     }
+                    "toggle-collapse" => {
+                        COLLAPSED.with(|c| c.set(!c.get()));
+                        render();
+                    }
                     _ => {}
                 }
                 return;
@@ -961,12 +1078,19 @@ fn escape(s: &str) -> String {
 const STYLESHEET: &str = "\
     #__pp_devtools_root{position:fixed;top:12px;right:12px;width:540px;max-height:85vh;\
     overflow:hidden;z-index:2147483647;font-family:ui-monospace,Menlo,Consolas,monospace;\
-    font-size:11px;line-height:1.45;color:#e6e1d8;background:#181715;border:1px solid #2d2a24;\
-    border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5);display:flex;flex-direction:column;}\
+    font-size:11px;line-height:1.45;color:#e6e1d8;background:rgba(24,23,21,0.72);\
+    border:1px solid #2d2a24;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5);\
+    display:flex;flex-direction:column;opacity:0.35;backdrop-filter:blur(6px);\
+    transition:opacity 0.15s ease-out, background 0.15s ease-out;}\
+    #__pp_devtools_root:hover,#__pp_devtools_root:focus-within{opacity:1;background:#181715;}\
+    #__pp_devtools_root[data-collapsed=\"true\"]{max-height:none;}\
+    #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_meta,\
+    #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_body{display:none;}\
     #__pp_devtools_root *{box-sizing:border-box;}\
     .__pp_dev_header{display:flex;align-items:center;justify-content:space-between;\
     padding:8px 12px;background:#252220;border-bottom:1px solid #2d2a24;\
     color:#ff6600;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;flex:0 0 auto;}\
+    #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_header{border-bottom:none;}\
     .__pp_dev_actions{display:flex;align-items:center;gap:6px;}\
     .__pp_dev_btn{background:none;border:1px solid transparent;color:#e6e1d8;font:inherit;\
     cursor:pointer;padding:2px 6px;border-radius:3px;letter-spacing:0.05em;\
@@ -975,6 +1099,7 @@ const STYLESHEET: &str = "\
     .__pp_dev_btn_on{background:#ff6600;color:#181715;}\
     .__pp_dev_btn_on:hover{border-color:#ff6600;color:#181715;}\
     .__pp_dev_close{font-size:14px;padding:0 6px;}\
+    .__pp_dev_collapse{font-size:14px;padding:0 6px;}\
     .__pp_dev_seg{display:inline-flex;border:1px solid #2d2a24;border-radius:3px;overflow:hidden;}\
     .__pp_dev_seg_btn{background:none;border:none;color:#828282;font:inherit;\
     cursor:pointer;padding:2px 8px;letter-spacing:0.05em;text-transform:uppercase;font-size:9px;}\
@@ -1009,11 +1134,33 @@ const STYLESHEET: &str = "\
     .__pp_dev_json{margin-top:10px;border-top:1px dashed #2d2a24;padding-top:6px;}\
     .__pp_dev_json_label{color:#828282;font-size:9px;text-transform:uppercase;\
     letter-spacing:0.08em;margin-bottom:4px;padding:0 4px;}\
-    .__pp_dev_json_content{margin:0;padding:6px 8px;background:#131210;border:1px solid #2d2a24;\
-    color:#c6e377;white-space:pre-wrap;word-break:break-all;cursor:pointer;border-radius:3px;\
-    font-size:10.5px;max-height:40vh;overflow:auto;}\
-    .__pp_dev_json_content:hover{color:#fff;}\
-    .__pp_dev_json_content.__pp_dev_copied{color:#181715;background:#ff6600;}\
+    .__pp_jv{padding:4px 6px;background:#131210;border:1px solid #2d2a24;border-radius:3px;\
+    max-height:48vh;overflow:auto;}\
+    .__pp_jv_group{margin:0;}\
+    .__pp_jv_summary{cursor:pointer;list-style:none;padding:1px 0;outline:none;}\
+    .__pp_jv_summary::-webkit-details-marker{display:none;}\
+    .__pp_jv_summary::marker{content:\"\";}\
+    .__pp_jv_summary::before{content:\"▸\";display:inline-block;width:1em;color:#828282;\
+    font-size:9px;transform:translateY(-1px);}\
+    .__pp_jv_group[open] > .__pp_jv_summary::before{content:\"▾\";}\
+    .__pp_jv_body{padding-left:14px;border-left:1px dashed #2d2a24;margin-left:4px;}\
+    .__pp_jv_row{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}\
+    .__pp_jv_key{color:#9ecbff;}\
+    .__pp_jv_colon{color:#828282;margin:0 3px 0 1px;}\
+    .__pp_jv_bracket{color:#e6e1d8;}\
+    .__pp_jv_meta{color:#828282;margin:0 4px;font-style:italic;}\
+    .__pp_jv_empty{color:#828282;font-style:italic;}\
+    .__pp_jv_string{color:#c6e377;cursor:pointer;}\
+    .__pp_jv_string:hover{color:#fff;}\
+    .__pp_jv_number{color:#ff92c2;cursor:pointer;}\
+    .__pp_jv_number:hover{color:#fff;}\
+    .__pp_jv_bool{color:#ffb86c;cursor:pointer;}\
+    .__pp_jv_bool:hover{color:#fff;}\
+    .__pp_jv_null{color:#828282;cursor:pointer;}\
+    .__pp_jv_null:hover{color:#fff;}\
+    .__pp_jv_string.__pp_dev_copied,.__pp_jv_number.__pp_dev_copied,\
+    .__pp_jv_bool.__pp_dev_copied,.__pp_jv_null.__pp_dev_copied{\
+    background:#ff6600;color:#181715;border-radius:2px;padding:0 3px;}\
     .__pp_dev_highlight{outline:2px solid #ff6600 !important;}\
 ";
 
