@@ -93,6 +93,64 @@ async fn button_pp_as_hoists_author_element() {
     host.remove();
 }
 
+// ─── PineDropdownMenu ─────────────────────────────────────────────
+
+/// Opening a menu teleports it to body, sets first menuitem's
+/// tabindex=0, auto-focuses it, cycles on arrow keys, and closes
+/// on Escape.
+#[wasm_bindgen_test]
+async fn menu_auto_focuses_cycles_arrows_and_closes_on_escape() {
+    let host = mount(
+        "<div><button id=\"menu-trig\">open</button>\
+         <pine-dropdown-menu open=\"true\" anchor=\"#menu-trig\">\
+           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-a\">A</li>\
+           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-b\">B</li>\
+           <li role=\"menuitem\" tabindex=\"-1\" class=\"m-c\">C</li>\
+         </pine-dropdown-menu></div>",
+    );
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-menu")
+        .unwrap()
+        .expect("menu teleported to body");
+    let a = menu.query_selector(".m-a").unwrap().unwrap();
+    let b = menu.query_selector(".m-b").unwrap().unwrap();
+
+    // pp-roving initialised: first item tabindex=0.
+    assert_eq!(a.get_attribute("tabindex").as_deref(), Some("0"));
+    // auto_focus_first moved real focus to A.
+    assert_eq!(doc().active_element().unwrap(), a, "first item focused");
+
+    // ArrowDown → B.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("ArrowDown");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    a.dispatch_event(&ev).unwrap();
+    tick().await;
+    assert_eq!(doc().active_element().unwrap(), b, "ArrowDown → B");
+
+    // Escape closes.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    menu.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-menu")
+            .unwrap()
+            .is_none(),
+        "menu gone after Escape"
+    );
+
+    host.remove();
+}
+
 // ─── PinePopover ──────────────────────────────────────────────────
 
 /// Popover opens on `open=true`, anchors to the trigger via a
