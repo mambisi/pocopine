@@ -225,6 +225,22 @@ struct RovingHost {}
 #[handlers]
 impl RovingHost {}
 
+// RFC-024 — expression-based @event values.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ExprOnHost.html")]
+struct ExprOnHost {
+    open: bool,
+    picked: String,
+    bumped: u32,
+}
+
+#[handlers]
+impl ExprOnHost {
+    pub fn pick(&mut self, value: String) {
+        self.picked = value;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -274,6 +290,7 @@ fn register_all() {
     AsButton::register();
     ShortHost::register();
     RovingHost::register();
+    ExprOnHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1409,6 +1426,66 @@ async fn pp_as_hoists_user_element_and_merges_template_attrs() {
     tick().await;
     root_html.click();
     tick().await;
+
+    host.remove();
+}
+
+/// RFC-024 — @event values can be inline assignments, handler
+/// calls with arguments, and statement sequences.
+#[wasm_bindgen_test]
+async fn expr_values_in_pp_on_support_assign_call_and_seq() {
+    let host = mount("<expr-on-host></expr-on-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".eo-toggle").unwrap().unwrap();
+    let pick_a = host.query_selector(".eo-pick-a").unwrap().unwrap();
+    let pick_b = host.query_selector(".eo-pick-b").unwrap().unwrap();
+    let seq = host.query_selector(".eo-seq").unwrap().unwrap();
+
+    let read_text = |sel: &str| -> String {
+        let el = host.query_selector(sel).unwrap().unwrap();
+        el.dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+
+    assert_eq!(read_text(".eo-open"), "off");
+    assert_eq!(read_text(".eo-picked"), "");
+    assert_eq!(read_text(".eo-bumped"), "0");
+
+    // Inline assignment: `open = !open`.
+    toggle
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(read_text(".eo-open"), "on", "assignment flipped open");
+    toggle
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(read_text(".eo-open"), "off", "second click toggled back");
+
+    // Call with a literal string arg: `pick('a')`.
+    pick_a.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(read_text(".eo-picked"), "a");
+    pick_b.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(read_text(".eo-picked"), "b");
+
+    // Statement sequence: `bumped = bumped + 1; pick('seq')`.
+    let seq_html: HtmlElement = seq.dyn_into().unwrap();
+    seq_html.click();
+    tick().await;
+    seq_html.click();
+    tick().await;
+    assert_eq!(read_text(".eo-bumped"), "2", "assign ran twice");
+    assert_eq!(read_text(".eo-picked"), "seq", "call ran after assign");
 
     host.remove();
 }

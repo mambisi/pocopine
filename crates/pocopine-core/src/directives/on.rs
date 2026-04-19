@@ -16,19 +16,21 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use js_sys::{Array, Function};
+use js_sys::Function;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{AddEventListenerOptions, Event, EventTarget, KeyboardEvent, Node};
+use web_sys::{console, AddEventListenerOptions, Event, EventTarget, KeyboardEvent, Node};
 
 use super::DirectiveCall;
-use crate::scope::{invoke_handler, with_current_el};
+use crate::expr::{self, Expr, Spanned};
+use crate::magics::with_current_event;
+use crate::scope::with_current_el;
 
 pub fn run(call: &DirectiveCall) {
     let Some(event) = call.arg.clone() else { return };
-    let handler = call.value.clone();
     let scope_id = call.scope_id;
     let el = call.el.clone();
+    let proxy = call.proxy.clone();
 
     let prevent = call.modifiers.iter().any(|m| m == "prevent");
     let stop = call.modifiers.iter().any(|m| m == "stop");
@@ -39,23 +41,50 @@ pub fn run(call: &DirectiveCall) {
     let outside = call.modifiers.iter().any(|m| m == "outside");
     let debounce_ms: Option<u32> = parse_debounce(&call.modifiers);
 
+    // Parse the directive value as an expression at bind time
+    // (RFC-024). Call-and-assign statements + sequences land here;
+    // plain handler names (`@click="on_click"`) parse to a bare
+    // `Expr::Path(["on_click"])` and get rewritten to the
+    // compatibility shape `on_click($event)` so existing
+    // single-identifier handlers keep receiving the event as
+    // their first arg.
+    let ast: Rc<Spanned<Expr>> = match expr::parse(&call.value) {
+        Ok(a) => Rc::new(backfill_legacy_call(a)),
+        Err(e) => {
+            console::error_1(&JsValue::from_str(&format!(
+                "pp-on:{}: {} (at {}..{})",
+                event, e.message, e.span.start, e.span.end
+            )));
+            return;
+        }
+    };
+
     // Persistent closure used by `setTimeout` in the debounce branch.
     // Built once per listener so rapid events don't allocate a fresh
     // JS closure each time. Pulls the most recent event out of the
-    // shared slot so handlers declared with `(&mut self, ev: Event)`
-    // still see event data even after a debounce delay.
+    // shared slot so the expression still sees `$event` after a
+    // debounce delay.
     let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
     let invoke_fn: Function = {
-        let handler = handler.clone();
+        let ast = ast.clone();
         let last_event = last_event.clone();
         let el_for_debounce = el.clone();
+        let proxy_for_debounce = proxy.clone();
         let c = Closure::wrap(Box::new(move || {
-            let args = Array::new();
-            if let Some(ev) = last_event.borrow().as_ref() {
-                args.push(ev.as_ref());
-            }
+            let ev = last_event.borrow().clone();
+            let ev_js: JsValue = match &ev {
+                Some(e) => {
+                    let r: &JsValue = e.as_ref();
+                    r.clone()
+                }
+                None => JsValue::UNDEFINED,
+            };
             with_current_el(&el_for_debounce, || {
-                invoke_handler(scope_id, &handler, &args);
+                crate::scope::with_current_scope_id(scope_id, || {
+                    with_current_event(&ev_js, || {
+                        expr::evaluate(&ast, &proxy_for_debounce);
+                    });
+                });
             });
         }) as Box<dyn FnMut()>);
         let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
@@ -76,7 +105,8 @@ pub fn run(call: &DirectiveCall) {
 
     let el_for_closure = el.clone();
     let closure = Closure::wrap(Box::new({
-        let handler = handler.clone();
+        let ast = ast.clone();
+        let proxy = proxy.clone();
         let invoke_fn = invoke_fn.clone();
         let window = window.clone();
         let timer = timer.clone();
@@ -137,10 +167,16 @@ pub fn run(call: &DirectiveCall) {
                     .unwrap_or(0);
                 timer.set(Some(handle));
             } else {
-                let args = Array::new();
-                args.push(ev.as_ref());
+                let ev_js: JsValue = {
+                    let r: &JsValue = ev.as_ref();
+                    r.clone()
+                };
                 with_current_el(&el_for_closure, || {
-                    invoke_handler(scope_id, &handler, &args);
+                    crate::scope::with_current_scope_id(scope_id, || {
+                        with_current_event(&ev_js, || {
+                            expr::evaluate(&ast, &proxy);
+                        });
+                    });
                 });
             }
         }
@@ -171,6 +207,29 @@ pub fn run(call: &DirectiveCall) {
         &opts,
     );
     closure.forget();
+}
+
+/// Backward-compat: a directive value that's a single identifier
+/// (`@click="on_click"`, `@submit="save"`) is rewritten to a
+/// one-arg call of `on_click($event)`. Keeps every existing handler
+/// that declared `(&mut self, ev: Event)` working unchanged without
+/// the author having to write `@click="on_click($event)"`.
+fn backfill_legacy_call(ast: Spanned<Expr>) -> Spanned<Expr> {
+    match ast.value {
+        Expr::Path(ref segs) if segs.len() == 1 => {
+            let name = segs[0].clone();
+            let span = ast.span.clone();
+            let event_arg = Spanned {
+                value: Expr::Path(vec!["$event".to_string()]),
+                span: span.clone(),
+            };
+            Spanned {
+                value: Expr::Call(name, vec![event_arg]),
+                span,
+            }
+        }
+        _ => ast,
+    }
 }
 
 /// Scan the modifier list for `debounce` and the optional numeric

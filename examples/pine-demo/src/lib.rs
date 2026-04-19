@@ -56,20 +56,6 @@ impl PineDemoApp {
         self.clicks += 1;
     }
 
-    pub fn open_dialog(&mut self) {
-        self.dialog_open = true;
-    }
-    pub fn close_dialog(&mut self) {
-        self.dialog_open = false;
-    }
-
-    pub fn toggle_popover(&mut self) {
-        self.popover_open = !self.popover_open;
-    }
-    pub fn toggle_menu(&mut self) {
-        self.menu_open = !self.menu_open;
-    }
-
     // ── Menu actions ─────────────────────────────────────────
     //
     // Dropdown menus are for *actions* (not selection). Each

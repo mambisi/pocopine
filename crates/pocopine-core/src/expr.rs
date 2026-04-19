@@ -54,6 +54,18 @@ pub enum Expr {
         Box<Spanned<Expr>>,
         Box<Spanned<Expr>>,
     ),
+    /// `ident(arg, arg, ...)` — invokes a handler on the scope.
+    /// RFC-024. Handlers resolve via `invoke_handler`; the name is
+    /// a single identifier, not a path.
+    Call(String, Vec<Spanned<Expr>>),
+    /// `path = expr` — writes `expr` through the scope proxy's
+    /// set trap at `path`. RFC-024. `path` is one or more dotted
+    /// identifiers.
+    Assign(Vec<String>, Box<Spanned<Expr>>),
+    /// `a; b; c` — evaluated left-to-right; result is the last
+    /// statement's value. RFC-024. Top-level form for `pp-on`
+    /// values containing multiple statements.
+    Seq(Vec<Spanned<Expr>>),
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +119,13 @@ enum Tok {
     Question,
     Colon,
     Dot,
+    /// `,` — separates call arguments.
+    Comma,
+    /// `;` — separates statements in a `pp-on` value.
+    Semi,
+    /// Single `=` — assignment, per RFC-024. Distinct from
+    /// `EqEq` (the equality check).
+    Eq,
     Ident(String),
     StringLit(String),
     NumberLit(f64),
@@ -149,6 +168,8 @@ impl<'a> Lexer<'a> {
         let tok = match c {
             b'(' => { self.pos += 1; Tok::LParen }
             b')' => { self.pos += 1; Tok::RParen }
+            b',' => { self.pos += 1; Tok::Comma }
+            b';' => { self.pos += 1; Tok::Semi }
             b'+' => { self.pos += 1; Tok::Plus }
             b'?' => { self.pos += 1; Tok::Question }
             b':' => { self.pos += 1; Tok::Colon }
@@ -158,15 +179,16 @@ impl<'a> Lexer<'a> {
                 if self.peek(0) == Some(b'=') { self.pos += 1; Tok::BangEq } else { Tok::Bang }
             }
             b'=' => {
-                if self.peek(1) != Some(b'=') {
-                    return Err(self.err(
-                        start..start + 1,
-                        "expected `==`",
-                        Some("single `=` isn't an operator; use `==`"),
-                    ));
+                // `==` wins over `=` — peek the next byte before
+                // committing. Single `=` is assignment (RFC-024);
+                // `==` is equality (RFC-012).
+                if self.peek(1) == Some(b'=') {
+                    self.pos += 2;
+                    Tok::EqEq
+                } else {
+                    self.pos += 1;
+                    Tok::Eq
                 }
-                self.pos += 2;
-                Tok::EqEq
             }
             b'&' => {
                 if self.peek(1) != Some(b'&') {
@@ -332,7 +354,7 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let e = self.parse_expr_top()?;
+        let e = self.parse_stmt_seq()?;
         if self.peek().0 != Tok::Eof {
             let span = self.peek().1.clone();
             return Err(ParseError {
@@ -342,6 +364,60 @@ impl Parser {
             });
         }
         Ok(e)
+    }
+
+    /// One or more statements separated by `;`. A single-statement
+    /// value (the overwhelmingly common case) returns the inner
+    /// AST directly; two or more fold into `Expr::Seq`. Trailing
+    /// `;` is tolerated.
+    fn parse_stmt_seq(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let first = self.parse_stmt()?;
+        if !matches!(self.peek().0, Tok::Semi) {
+            return Ok(first);
+        }
+        let mut stmts = vec![first];
+        while self.eat(&Tok::Semi) {
+            if matches!(self.peek().0, Tok::Eof) {
+                break; // trailing `;`
+            }
+            stmts.push(self.parse_stmt()?);
+        }
+        let start = stmts.first().map(|s| s.span.start).unwrap_or(0);
+        let end = stmts.last().map(|s| s.span.end).unwrap_or(0);
+        Ok(Spanned {
+            value: Expr::Seq(stmts),
+            span: start..end,
+        })
+    }
+
+    /// Either `path = expr` (assignment, RFC-024) or a plain
+    /// expression. Assignment is recognised by a look-ahead: if the
+    /// token after a `Path` primary is `=` (single `=`, not `==`),
+    /// treat the path as an l-value and consume the RHS.
+    fn parse_stmt(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let lhs = self.parse_expr_top()?;
+        if !matches!(self.peek().0, Tok::Eq) {
+            return Ok(lhs);
+        }
+        // Assignment. LHS must be a plain path.
+        let Expr::Path(segments) = lhs.value else {
+            let span = self.peek().1.clone();
+            return Err(ParseError {
+                message: "left side of `=` must be a path".to_string(),
+                span,
+                hint: Some(
+                    "only dotted identifiers like `foo` or `foo.bar` are assignable"
+                        .to_string(),
+                ),
+            });
+        };
+        self.pos += 1; // consume `=`
+        let rhs = self.parse_expr_top()?;
+        let span = lhs.span.start..rhs.span.end;
+        Ok(Spanned {
+            value: Expr::Assign(segments, Box::new(rhs)),
+            span,
+        })
     }
 
     fn parse_expr_top(&mut self) -> Result<Spanned<Expr>, ParseError> {
@@ -487,8 +563,31 @@ impl Parser {
             }
             Tok::Ident(first) => {
                 self.pos += 1;
-                let mut segments = vec![first];
                 let start = span.start;
+                // `ident(` → call. Only plain identifiers can be
+                // called; `foo.bar(…)` is not supported in v0
+                // (handlers are scope methods, not properties on
+                // sub-objects).
+                if matches!(self.peek().0, Tok::LParen) {
+                    self.pos += 1; // consume `(`
+                    let mut args = Vec::new();
+                    if !matches!(self.peek().0, Tok::RParen) {
+                        loop {
+                            args.push(self.parse_expr_top()?);
+                            if self.eat(&Tok::Comma) {
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    let end = self.peek().1.end;
+                    self.expect(&Tok::RParen, "expected `)` closing call arguments")?;
+                    return Ok(Spanned {
+                        value: Expr::Call(first, args),
+                        span: start..end,
+                    });
+                }
+                let mut segments = vec![first];
                 let mut end = span.end;
                 while self.eat(&Tok::Dot) {
                     let (tok, s) = self.peek().clone();
@@ -602,7 +701,66 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
                 evaluate(else_e, scope)
             }
         }
+        Expr::Call(name, args) => {
+            // Evaluate args left-to-right into a JS Array that
+            // `invoke_handler` can pass through `FromHandlerArg`.
+            let arr = js_sys::Array::new();
+            for a in args {
+                arr.push(&evaluate(a, scope));
+            }
+            match scope_id_for(scope) {
+                Some(id) => crate::scope::invoke_handler(id, name, &arr),
+                None => JsValue::UNDEFINED,
+            }
+        }
+        Expr::Assign(path, rhs) => {
+            let v = evaluate(rhs, scope);
+            write_assign_path(scope, path, &v);
+            v
+        }
+        Expr::Seq(stmts) => {
+            let mut last = JsValue::UNDEFINED;
+            for s in stmts {
+                last = evaluate(s, scope);
+            }
+            last
+        }
     }
+}
+
+/// Route `Expr::Call` to `invoke_handler` via the thread-local
+/// scope id set by directives around their `evaluate` call. We
+/// avoid threading scope_id through every evaluator site by
+/// reading the already-ambient `CURRENT_SCOPE_ID` — directives
+/// like `pp-on` that actually support call syntax wrap evaluation
+/// in `with_current_scope_id`.
+fn scope_id_for(_proxy: &JsValue) -> Option<crate::reactive::ScopeId> {
+    crate::scope::current_scope_id()
+}
+
+/// Apply an assignment to a scope. Single-segment paths go through
+/// the scope's `set` trap (full reactivity). Multi-segment paths
+/// read the penultimate object (subscribing reads along the way)
+/// and set the final segment in place — reactivity fires on the
+/// outer object's `set` only if the author surfaces the write by
+/// rewriting the field, per RFC-024 §7.
+fn write_assign_path(proxy: &JsValue, segments: &[String], value: &JsValue) {
+    if segments.is_empty() {
+        return;
+    }
+    if segments.len() == 1 {
+        let _ = Reflect::set(proxy, &JsValue::from_str(&segments[0]), value);
+        return;
+    }
+    let mut cur = proxy.clone();
+    for seg in &segments[..segments.len() - 1] {
+        cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+        if !cur.is_object() {
+            return;
+        }
+    }
+    let last = &segments[segments.len() - 1];
+    let _ = Reflect::set(&cur, &JsValue::from_str(last), value);
 }
 
 fn lit_to_js(l: &Literal) -> JsValue {
@@ -755,9 +913,69 @@ mod tests {
         }
     }
 
+    // RFC-024: `a = b` is now a valid assignment statement.
     #[test]
-    fn rejects_assignment() {
-        parse_err("a = b");
+    fn parses_assignment() {
+        let e = parse_ok("open = true");
+        match e.value {
+            Expr::Assign(ref path, ref rhs) => {
+                assert_eq!(path, &vec!["open".to_string()]);
+                assert!(matches!(rhs.value, Expr::Literal(Literal::Bool(true))));
+            }
+            other => panic!("expected Assign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_call_zero_args() {
+        let e = parse_ok("close()");
+        match e.value {
+            Expr::Call(name, args) => {
+                assert_eq!(name, "close");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_call_with_args() {
+        let e = parse_ok("select(item.value, 42)");
+        match e.value {
+            Expr::Call(name, args) => {
+                assert_eq!(name, "select");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0].value, Expr::Path(_)));
+                assert!(matches!(args[1].value, Expr::Literal(Literal::Number(_))));
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_statement_sequence() {
+        let e = parse_ok("copy($event); close()");
+        match e.value {
+            Expr::Seq(ref stmts) => {
+                assert_eq!(stmts.len(), 2);
+                assert!(matches!(stmts[0].value, Expr::Call(_, _)));
+                assert!(matches!(stmts[1].value, Expr::Call(_, _)));
+            }
+            other => panic!("expected Seq, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assignment_rhs_can_be_expression() {
+        // `open = !open` parses with `!open` as the RHS.
+        let e = parse_ok("open = !open");
+        match e.value {
+            Expr::Assign(path, rhs) => {
+                assert_eq!(path, vec!["open".to_string()]);
+                assert!(matches!(rhs.value, Expr::Not(_)));
+            }
+            other => panic!("expected Assign, got {other:?}"),
+        }
     }
 
     #[test]

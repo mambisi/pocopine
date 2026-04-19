@@ -1,5 +1,7 @@
-//! Magics — `$el`, `$refs`, `$dispatch`. Resolved by the proxy's `get` trap
-//! whenever a key starting with `$` is read.
+//! Magics — `$el`, `$refs`, `$dispatch`, `$event`. Resolved by the
+//! proxy's `get` trap whenever a key starting with `$` is read.
+
+use std::cell::RefCell;
 
 use js_sys::{Array, Function};
 use wasm_bindgen::closure::Closure;
@@ -14,6 +16,14 @@ use crate::router::route_proxy;
 use crate::scope::current_el;
 use crate::store::stores_object;
 
+thread_local! {
+    /// `$event` inside a `pp-on` value resolves to whatever this
+    /// cell holds. `directives::on` sets it before evaluating the
+    /// expression and clears it after via [`with_current_event`].
+    /// Outside a pp-on dispatch, reads resolve to `undefined`.
+    static CURRENT_EVENT: RefCell<Option<JsValue>> = const { RefCell::new(None) };
+}
+
 pub fn resolve(key: &str, scope_id: ScopeId) -> JsValue {
     match key {
         "$el" => current_el().map(JsValue::from).unwrap_or(JsValue::UNDEFINED),
@@ -22,8 +32,22 @@ pub fn resolve(key: &str, scope_id: ScopeId) -> JsValue {
         "$store" => stores_object(),
         "$route" => route_proxy(),
         "$id" => JsValue::from_str(&id::generate(scope_id)),
+        "$event" => CURRENT_EVENT
+            .with(|c| c.borrow().clone())
+            .unwrap_or(JsValue::UNDEFINED),
         _ => JsValue::UNDEFINED,
     }
+}
+
+/// Run `f` with `$event` resolving to `ev`. Mirrors
+/// [`crate::scope::with_current_el`] / `with_current_scope_id` —
+/// the previous value is saved + restored so nested `pp-on`
+/// dispatches don't clobber each other.
+pub fn with_current_event<R>(ev: &JsValue, f: impl FnOnce() -> R) -> R {
+    let prev = CURRENT_EVENT.with(|c| c.replace(Some(ev.clone())));
+    let out = f();
+    CURRENT_EVENT.with(|c| *c.borrow_mut() = prev);
+    out
 }
 
 fn build_dispatch() -> JsValue {

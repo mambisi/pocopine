@@ -34,13 +34,13 @@
   <!-- PineDialog ─────────────────────────────────────────── -->
   <h2>Dialog</h2>
   <section class="row">
-    <pine-button variant="destructive" @click="open_dialog">Delete file</pine-button>
+    <pine-button variant="destructive" @click="dialog_open = true">Delete file</pine-button>
     <pine-dialog pp-model:open="dialog_open">
       <template pp-slot="title">Delete file?</template>
       <template pp-slot="description">This action cannot be undone.</template>
       <div class="row" style="margin-top:1rem;justify-content:flex-end">
-        <pine-button variant="ghost" @click="close_dialog">Cancel</pine-button>
-        <pine-button variant="destructive" @click="close_dialog">Delete</pine-button>
+        <pine-button variant="ghost" @click="dialog_open = false">Cancel</pine-button>
+        <pine-button variant="destructive" @click="dialog_open = false">Delete</pine-button>
       </div>
     </pine-dialog>
   </section>
@@ -48,7 +48,7 @@
   <!-- PinePopover ────────────────────────────────────────── -->
   <h2>Popover</h2>
   <section class="row">
-    <pine-button id="pop-trig" @click="toggle_popover">
+    <pine-button id="pop-trig" @click="popover_open = !popover_open">
       <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
     </pine-button>
     <pine-popover pp-model:open="popover_open" anchor="#pop-trig">
@@ -62,7 +62,7 @@
   <!-- PineDropdownMenu ───────────────────────────────────── -->
   <h2>Dropdown menu</h2>
   <section class="row">
-    <pine-button id="menu-trig" @click="toggle_menu">Actions ▾</pine-button>
+    <pine-button id="menu-trig" @click="menu_open = !menu_open">Actions ▾</pine-button>
     <span style="font-size:0.875rem;color:var(--fg-muted)">
       actions fired: <strong pp-text="actions_fired"></strong>
     </span>

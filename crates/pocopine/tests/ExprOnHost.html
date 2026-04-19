@@ -1,0 +1,9 @@
+<div>
+  <button class="eo-toggle" pp-on:click="open = !open"></button>
+  <button class="eo-pick-a" pp-on:click="pick('a')"></button>
+  <button class="eo-pick-b" pp-on:click="pick('b')"></button>
+  <button class="eo-seq" pp-on:click="bumped = bumped + 1; pick('seq')"></button>
+  <span class="eo-open" pp-text="open ? 'on' : 'off'"></span>
+  <span class="eo-picked" pp-text="picked"></span>
+  <span class="eo-bumped" pp-text="bumped"></span>
+</div>
