@@ -55,6 +55,7 @@ pub struct App {
     routes: Vec<&'static str>,
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
+    devtools: bool,
 }
 
 impl App {
@@ -102,6 +103,15 @@ impl App {
         self
     }
 
+    /// Install the devtools overlay on `run()`. The panel lists every
+    /// live scope, its current state, and its registered refs. Toggle
+    /// visibility with `Ctrl+Shift+D`. Keep this off in release builds
+    /// — the poll loop is cheap but not free.
+    pub fn with_devtools(mut self) -> Self {
+        self.devtools = true;
+        self
+    }
+
     /// Fire pre-mount hooks, start the walker, initialise the router
     /// (if any routes were registered), then fire post-mount hooks.
     pub fn run(self) {
@@ -111,6 +121,9 @@ impl App {
         walker::start_on_body();
         if !self.routes.is_empty() {
             router::init();
+        }
+        if self.devtools {
+            crate::devtools::install();
         }
         let after = self.after_mount;
         if !after.is_empty() {

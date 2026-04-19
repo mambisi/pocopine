@@ -11,5 +11,6 @@ pub fn main() {
         .route::<StoryList>("/")
         .route::<StoryDetail>("/item/:id")
         .route::<NotFound>("*")
+        .with_devtools()
         .run();
 }

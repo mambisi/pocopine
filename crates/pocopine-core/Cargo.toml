@@ -42,6 +42,7 @@ features = [
     "HtmlSelectElement",
     "HtmlTemplateElement",
     "HtmlTextAreaElement",
+    "KeyboardEvent",
     "MutationObserver",
     "MutationObserverInit",
     "MutationRecord",

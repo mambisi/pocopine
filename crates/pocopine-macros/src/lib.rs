@@ -230,6 +230,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
             }
+            fn type_name(&self) -> &'static str {
+                #name_str
+            }
         }
 
         impl #struct_ident {
@@ -442,6 +445,9 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
                 args: &::pocopine::__private::js_sys::Array,
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
+            }
+            fn type_name(&self) -> &'static str {
+                #name_str
             }
         }
 

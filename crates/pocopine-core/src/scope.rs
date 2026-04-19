@@ -43,6 +43,13 @@ pub trait ComponentState: 'static {
     /// Default no-op; `#[component]` wires the user's `on_unmount`
     /// when one exists.
     fn unmount(&mut self) {}
+
+    /// Human-readable tag / type name used by devtools. Default
+    /// `"?"`; `#[component]` / `#[store]` override with the concrete
+    /// kebab-case name.
+    fn type_name(&self) -> &'static str {
+        "?"
+    }
 }
 
 /// A live component instance bound to a DOM element.
@@ -96,6 +103,16 @@ impl Scope {
     /// Look up a live scope by id.
     pub fn find(id: ScopeId) -> Option<Scope> {
         SCOPES.with(|s| s.borrow().get(&id).cloned())
+    }
+
+    /// Snapshot of every live scope, sorted by id. Devtools reads this
+    /// to render the scope list.
+    pub fn all() -> Vec<Scope> {
+        SCOPES.with(|s| {
+            let mut out: Vec<Scope> = s.borrow().values().cloned().collect();
+            out.sort_by_key(|sc| sc.id.0);
+            out
+        })
     }
 
     /// Remove a scope from the registry. Called when its element is
