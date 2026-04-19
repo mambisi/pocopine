@@ -271,6 +271,25 @@ impl ExprOnHost {
     }
 }
 
+// RFC-025 — inline `{expr}` text interpolation.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "InterpHost.html")]
+struct InterpHost {
+    name: String,
+    count: u32,
+}
+
+#[handlers]
+impl InterpHost {
+    pub fn on_mount(&mut self) {
+        self.name = "Ada".into();
+        self.count = 3;
+    }
+    pub fn bump(&mut self) {
+        self.count += 1;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -321,6 +340,7 @@ fn register_all() {
     ShortHost::register();
     RovingHost::register();
     ExprOnHost::register();
+    InterpHost::register();
     CtxRoot::register();
     CtxChild::register();
 }
@@ -1568,6 +1588,65 @@ async fn provide_and_inject_cross_component_boundary() {
         "3",
         "second child also resolves the same provided handle"
     );
+
+    host.remove();
+}
+
+/// RFC-025 — inline `{expr}` text interpolation:
+/// - multiple segments in one text node
+/// - static literal between dynamic segments is preserved
+/// - `\{` / `\}` escapes pass through as literal braces
+/// - nested element inside a host with other interpolation works
+///   (each text node scans independently)
+/// - updates rerun only the affected segment
+#[wasm_bindgen_test]
+async fn inline_expr_interpolation_splits_text_and_reactively_updates() {
+    let host = mount("<interp-host></interp-host>");
+    tick().await;
+
+    let read = |sel: &str| -> String {
+        let el = host.query_selector(sel).unwrap().unwrap();
+        el.dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+
+    // Two segments in one text node, plus surrounding statics.
+    assert_eq!(read(".ih-greeting"), "Hello, Ada! You have 3 new.");
+
+    // Escaped braces survive as literal `{` / `}`; real `{count}`
+    // still binds alongside them.
+    assert_eq!(read(".ih-escape"), "{literal} 3");
+
+    // Single-segment line — no surrounding literal.
+    assert_eq!(read(".ih-only"), "3");
+
+    // A text node that brackets a child element gets split on
+    // both sides of the element.
+    assert_eq!(read(".ih-nested"), "outer 3 mid Ada tail");
+    assert_eq!(read(".ih-em"), "Ada");
+
+    // Update count → only the count segments rerun. Ada stays.
+    let ih_root = host.query_selector(".ih-root").unwrap().unwrap();
+    let scope_id = {
+        let key = JsValue::from_str("__pp_scope_id");
+        js_sys::Reflect::get(ih_root.as_ref(), &key)
+            .ok()
+            .and_then(|v| v.as_f64())
+            .map(|n| pocopine::ScopeId(n as u64))
+            .expect(".ih-root has scope id")
+    };
+    if let Some(scope) = pocopine::Scope::find(scope_id) {
+        scope.invoke("bump", &js_sys::Array::new());
+    }
+    tick().await;
+
+    assert_eq!(read(".ih-greeting"), "Hello, Ada! You have 4 new.");
+    assert_eq!(read(".ih-escape"), "{literal} 4");
+    assert_eq!(read(".ih-only"), "4");
+    assert_eq!(read(".ih-nested"), "outer 4 mid Ada tail");
 
     host.remove();
 }

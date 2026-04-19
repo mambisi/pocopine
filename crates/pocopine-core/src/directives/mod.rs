@@ -16,6 +16,7 @@ pub mod for_;
 pub mod html;
 pub mod if_;
 pub mod init;
+pub mod interp;
 pub mod intersect;
 pub mod model;
 pub mod on;

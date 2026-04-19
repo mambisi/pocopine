@@ -258,8 +258,12 @@ fn bind(el: &Element) {
     }
     // Silence the unused-`proxy` warning — the deferred init path looks
     // it up again via `enclosing_scope` at fire time.
-    let _ = &proxy;
     let _ = scope_id;
+
+    // RFC-025: scan direct text-node children for `{expr}` pairs and
+    // install per-segment effects. Must run after directives bind so
+    // `pp-text`-owned elements are already flagged and skipped.
+    crate::directives::interp::scan_children(el, &proxy);
 
     // `pp-cloak` only exists to hide the element until binding completes.
     // Drop it now that directives have run so the global cloak CSS rule
