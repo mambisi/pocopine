@@ -1,0 +1,5 @@
+<template pp-if="open" pp-teleport="body">
+  <div class="pine-tooltip-portal">
+    <slot></slot>
+  </div>
+</template>

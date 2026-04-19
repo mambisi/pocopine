@@ -222,11 +222,17 @@
     </pine-tabs-root>
   </section>
 
-  <!-- PineTooltip ────────────────────────────────────────── -->
+  <!-- PineTooltip — compound (Radix-style) ───────────────── -->
   <h2>Tooltip</h2>
   <section class="row">
-    <pine-button id="save-btn" variant="primary">Save</pine-button>
-    <pine-tooltip trigger="#save-btn">Saves your work.</pine-tooltip>
+    <pine-tooltip-root>
+      <pine-tooltip-trigger>
+        <pine-button pp-as variant="primary"><button>Save</button></pine-button>
+      </pine-tooltip-trigger>
+      <pine-tooltip-portal>
+        <pine-tooltip-content>Saves your work.</pine-tooltip-content>
+      </pine-tooltip-portal>
+    </pine-tooltip-root>
     <span style="font-size:0.875rem;color:var(--fg-muted)">
       Hover or focus the Save button.
     </span>

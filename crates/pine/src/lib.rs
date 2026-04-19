@@ -57,10 +57,10 @@ pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
 pub use switch::PineSwitch;
-pub use tabs::{
-    PineTabs, PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger, TabDef,
+pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
+pub use tooltip::{
+    PineTooltipContent, PineTooltipPortal, PineTooltipRoot, PineTooltipTrigger,
 };
-pub use tooltip::PineTooltip;
 
 /// Register every Pine custom-element tag. Call once at app startup
 /// before mounting.
@@ -105,8 +105,10 @@ pub fn register_all() {
     PineTabsList::register();
     PineTabsTrigger::register();
     PineTabsContent::register();
-    PineTabs::register();
-    PineTooltip::register();
+    PineTooltipRoot::register();
+    PineTooltipTrigger::register();
+    PineTooltipPortal::register();
+    PineTooltipContent::register();
     PineSwitch::register();
     PineCheckbox::register();
 }

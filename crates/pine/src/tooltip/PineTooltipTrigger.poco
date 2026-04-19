@@ -1,0 +1,4 @@
+<span class="pine-tooltip-trigger"
+      pp-ref="trigger">
+  <slot></slot>
+</span>

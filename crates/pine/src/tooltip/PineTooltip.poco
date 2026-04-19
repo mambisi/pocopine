@@ -1,8 +1,0 @@
-<template pp-teleport="body" pp-if="open">
-  <div role="tooltip"
-       class="pine-tooltip"
-       data-state="open"
-       pp-anchor:top.offset.6.flip="trigger">
-    <slot></slot>
-  </div>
-</template>

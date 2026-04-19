@@ -32,10 +32,6 @@ use serde::{Deserialize, Serialize};
 
 const ROOT_KEY: &str = "pine-tabs-root";
 
-// Legacy monolithic API preserved for the old tests + demo —
-// deprecated once the compound settles. Defined below the new
-// parts at the bottom of this file.
-
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
@@ -181,46 +177,3 @@ impl PineTabsContent {
     }
 }
 
-// ── Legacy monolithic API ─────────────────────────────────────────
-
-/// Legacy monolithic `<pine-tabs>` — kept for back-compat with
-/// callers that pass a `Vec<TabDef>` programmatically. Prefer
-/// the compound `pine-tabs-root` / `pine-tabs-list` / `pine-tabs-
-/// trigger` / `pine-tabs-content` for new code.
-use wasm_bindgen::JsCast;
-use web_sys::Element;
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub struct TabDef {
-    pub value: String,
-    pub label: String,
-    pub disabled: bool,
-}
-
-#[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTabs.poco")]
-pub struct PineTabs {
-    pub tabs: Vec<TabDef>,
-    pub value: String,
-}
-
-#[handlers]
-impl PineTabs {
-    pub fn on_click(&mut self, ev: web_sys::Event) {
-        let Some(t) = ev.target() else { return };
-        let Ok(start) = t.dyn_into::<Element>() else { return };
-        let Ok(Some(btn)) = start.closest("[data-value]") else { return };
-        let Some(value) = btn.get_attribute("data-value") else { return };
-        if btn.get_attribute("aria-disabled").as_deref() == Some("true")
-            || btn.has_attribute("disabled")
-        {
-            return;
-        }
-        self.select(value);
-    }
-
-    pub fn select(&mut self, value: String) {
-        self.value = value.clone();
-        emit("pp:update:model", value);
-    }
-}

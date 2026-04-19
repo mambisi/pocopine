@@ -168,99 +168,25 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
     host.remove();
 }
 
-// ─── PineTabs (legacy monolithic) ─────────────────────────────────
-
-// Host component that supplies `tabs` / `current` to the
-// pine-tabs tag and updates `current` from the component's
-// pp:update:model event.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
-#[component(template = "TabsHost.html")]
-struct TabsHost {
-    tabs: Vec<pine::TabDef>,
-    current: String,
-}
-
-#[handlers]
-impl TabsHost {
-    pub fn on_mount(&mut self) {
-        self.tabs = vec![
-            pine::TabDef {
-                value: "a".into(),
-                label: "A".into(),
-                disabled: false,
-            },
-            pine::TabDef {
-                value: "b".into(),
-                label: "B".into(),
-                disabled: false,
-            },
-            pine::TabDef {
-                value: "c".into(),
-                label: "C".into(),
-                disabled: true,
-            },
-        ];
-        self.current = "a".into();
-    }
-    pub fn on_change(&mut self, ev: web_sys::CustomEvent) {
-        if let Some(v) = ev.detail().as_string() {
-            self.current = v;
-        }
-    }
-}
-
-/// Tabs render from the `tabs` prop, aria-selected reflects the
-/// current `value`, clicking a tab updates `value` and fires
-/// `pp:update:model`.
-#[wasm_bindgen_test]
-async fn tabs_render_set_aria_selected_and_emit_update_model() {
-    TabsHost::register();
-    let host = mount("<tabs-host></tabs-host>");
-    tick().await;
-    tick().await;
-
-    let buttons = host.query_selector_all("button[role=\"tab\"]").unwrap();
-    assert_eq!(buttons.length(), 3, "three tab buttons rendered");
-
-    let a = buttons.item(0).unwrap().dyn_into::<Element>().unwrap();
-    let b = buttons.item(1).unwrap().dyn_into::<Element>().unwrap();
-    let c = buttons.item(2).unwrap().dyn_into::<Element>().unwrap();
-    assert_eq!(a.get_attribute("aria-selected").as_deref(), Some("true"));
-    assert_eq!(b.get_attribute("aria-selected").as_deref(), Some("false"));
-    assert!(c.has_attribute("disabled"), "disabled tab renders disabled attr");
-
-    // Click `B`.
-    b.clone().dyn_into::<HtmlElement>().unwrap().click();
-    tick().await;
-    tick().await;
-
-    // Host's `current` moved to `b` via the emitted pp:update:model.
-    let current = host.query_selector(".th-current").unwrap().unwrap();
-    let html: HtmlElement = current.dyn_into().unwrap();
-    assert_eq!(
-        html.inner_text().trim(),
-        "b",
-        "host's current updated via pp:update:model"
-    );
-
-    host.remove();
-}
-
 // ─── PineTooltip ──────────────────────────────────────────────────
 
 /// Focusing the trigger shows the tooltip immediately (no delay
 /// for keyboard users per WAI-ARIA); blurring hides it.
 #[wasm_bindgen_test]
-async fn tooltip_shows_on_focus_and_hides_on_blur() {
+async fn tooltip_compound_shows_on_focus_and_hides_on_blur() {
     let host = mount(
-        "<button id=\"tt-trig\" class=\"trig\">hover me</button>\
-         <pine-tooltip trigger=\"#tt-trig\">Helpful tip.</pine-tooltip>",
+        "<pine-tooltip-root>\
+           <pine-tooltip-trigger><button id=\"tt-c-trig\">hover me</button></pine-tooltip-trigger>\
+           <pine-tooltip-portal>\
+             <pine-tooltip-content>Helpful tip.</pine-tooltip-content>\
+           </pine-tooltip-portal>\
+         </pine-tooltip-root>",
     );
     tick().await;
     tick().await;
 
     let trigger = host
-        .query_selector("#tt-trig")
+        .query_selector("#tt-c-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -269,7 +195,7 @@ async fn tooltip_shows_on_focus_and_hides_on_blur() {
     // No tooltip visible yet.
     assert!(
         doc()
-            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .query_selector("[role=\"tooltip\"].pine-tooltip-content")
             .unwrap()
             .is_none(),
         "tooltip starts hidden"
@@ -281,7 +207,7 @@ async fn tooltip_shows_on_focus_and_hides_on_blur() {
     tick().await;
     assert!(
         doc()
-            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .query_selector("[role=\"tooltip\"].pine-tooltip-content")
             .unwrap()
             .is_some(),
         "tooltip visible after focus"
@@ -293,10 +219,10 @@ async fn tooltip_shows_on_focus_and_hides_on_blur() {
     tick().await;
     assert!(
         doc()
-            .query_selector("[role=\"tooltip\"].pine-tooltip")
+            .query_selector("[role=\"tooltip\"].pine-tooltip-content")
             .unwrap()
             .is_none(),
-        "tooltip gone after blur"
+        "tooltip hidden after blur"
     );
 
     host.remove();
