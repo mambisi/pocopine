@@ -202,6 +202,21 @@ impl AsButton {
     }
 }
 
+// RFC-020 — `:attr` / `@event` shorthand.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ShortHost.html")]
+struct ShortHost {
+    variant: String,
+    count: u32,
+}
+
+#[handlers]
+impl ShortHost {
+    pub fn bump(&mut self) {
+        self.count += 1;
+    }
+}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -249,6 +264,7 @@ fn register_all() {
     OutsideHost::register();
     IdHost::register();
     AsButton::register();
+    ShortHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1118,6 +1134,43 @@ async fn click_outside_fires_only_for_clicks_that_miss_the_host() {
     inside_btn_el.click();
     tick().await;
     assert_eq!(count_after(&host), 1, "sibling click fires outside handler");
+
+    host.remove();
+}
+
+/// RFC-020 — `:class="…"` and `@click="…"` shorthand bind the same
+/// way as the long `pp-bind:class` / `pp-on:click` forms.
+#[wasm_bindgen_test]
+async fn shorthand_colon_and_at_bind_same_as_long_form() {
+    let host = mount("<short-host variant=\"primary\"></short-host>");
+    tick().await;
+
+    let btn = host
+        .query_selector("[data-testid=\"btn\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        btn.get_attribute("class").as_deref(),
+        Some("primary"),
+        ":class shorthand wrote the variant value"
+    );
+
+    let btn_html: HtmlElement = btn.clone().dyn_into().unwrap();
+    btn_html.click();
+    tick().await;
+    btn_html.click();
+    tick().await;
+
+    let count = host
+        .query_selector("[data-testid=\"count\"]")
+        .unwrap()
+        .unwrap();
+    let count_html: HtmlElement = count.dyn_into().unwrap();
+    assert_eq!(
+        count_html.inner_text().trim(),
+        "2",
+        "@click shorthand dispatched handler twice"
+    );
 
     host.remove();
 }

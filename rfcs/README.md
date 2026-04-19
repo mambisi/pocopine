@@ -35,3 +35,4 @@ Conventions:
 | 017 | [`pp-on:click.outside`](./rfc-017-click-outside.md) | Implemented |
 | 018 | [`$id` magic (unique IDs)](./rfc-018-id-magic.md) | Implemented |
 | 019 | [`pp-as` polymorphic rendering](./rfc-019-pp-as.md) | Implemented |
+| 020 | [`:attr` / `@event` shorthand](./rfc-020-shorthand-prefixes.md) | Implemented |

@@ -181,11 +181,15 @@ fn bind(el: &Element) {
 
     // Snapshot all pp-* attributes — some directives mutate the element
     // (e.g. `set_attribute`) which would invalidate a live NamedNodeMap.
+    //
+    // Normalise RFC-020 shorthand (`:attr` → `pp-bind:attr`, `@event`
+    // → `pp-on:event`) before the `pp-*` filter so authors can pick
+    // either spelling — same directive dispatch either way.
     let mut pp_attrs: Vec<(String, String)> = Vec::new();
     let attrs = el.attributes();
     for i in 0..attrs.length() {
         let Some(a) = attrs.item(i) else { continue };
-        let name = a.name();
+        let name = normalise_shorthand_attr(&a.name());
         if name.starts_with("pp-") {
             pp_attrs.push((name, a.value()));
         }
@@ -611,6 +615,24 @@ fn coerce_attr_value(raw: &str) -> JsValue {
 fn first_element_child(el: &Element) -> Option<Element> {
     let children = el.children();
     children.item(0)
+}
+
+/// Expand RFC-020 shorthand prefixes. `:foo` → `pp-bind:foo`,
+/// `@foo` → `pp-on:foo`. Anything else — including a bare `:` or
+/// `@` with no tail — is returned unchanged so the normal pp-*
+/// filter can drop it.
+fn normalise_shorthand_attr(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix(':') {
+        if !rest.is_empty() {
+            return format!("pp-bind:{rest}");
+        }
+    }
+    if let Some(rest) = name.strip_prefix('@') {
+        if !rest.is_empty() {
+            return format!("pp-on:{rest}");
+        }
+    }
+    name.to_string()
 }
 
 /// Replace a `<slot>` element in a component template with the
