@@ -1138,6 +1138,60 @@ async fn click_outside_fires_only_for_clicks_that_miss_the_host() {
     host.remove();
 }
 
+/// RFC-021 — scroll_lock::{lock,unlock} is ref-counted and toggles
+/// body.style.overflow on the 0↔1 transitions.
+#[wasm_bindgen_test]
+fn scroll_lock_refcounts_and_toggles_body_overflow() {
+    use pocopine::scroll_lock;
+
+    let body = doc().body().unwrap();
+    let style = body.style();
+
+    // Sanity: baseline depth should be 0 at the top of the test.
+    // Earlier tests can leave depth untouched (no test locks scroll).
+    assert_eq!(scroll_lock::depth(), 0);
+    let before = style.get_property_value("overflow").unwrap_or_default();
+
+    scroll_lock::lock();
+    assert_eq!(scroll_lock::depth(), 1);
+    assert_eq!(
+        style.get_property_value("overflow").unwrap_or_default(),
+        "hidden",
+        "first lock sets overflow hidden"
+    );
+
+    // Nested lock — depth bumps, style unchanged.
+    scroll_lock::lock();
+    assert_eq!(scroll_lock::depth(), 2);
+    assert_eq!(
+        style.get_property_value("overflow").unwrap_or_default(),
+        "hidden",
+        "second lock keeps overflow hidden"
+    );
+
+    // Inner unlock doesn't release the outer one.
+    scroll_lock::unlock();
+    assert_eq!(scroll_lock::depth(), 1);
+    assert_eq!(
+        style.get_property_value("overflow").unwrap_or_default(),
+        "hidden",
+        "overflow still hidden while outer still held"
+    );
+
+    // Outer unlock restores.
+    scroll_lock::unlock();
+    assert_eq!(scroll_lock::depth(), 0);
+    assert_eq!(
+        style.get_property_value("overflow").unwrap_or_default(),
+        before,
+        "overflow restored when depth returns to 0"
+    );
+
+    // Stray unlock when already at 0 is a no-op.
+    scroll_lock::unlock();
+    assert_eq!(scroll_lock::depth(), 0);
+}
+
 /// RFC-020 — `:class="…"` and `@click="…"` shorthand bind the same
 /// way as the long `pp-bind:class` / `pp-on:click` forms.
 #[wasm_bindgen_test]

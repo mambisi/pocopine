@@ -36,3 +36,4 @@ Conventions:
 | 018 | [`$id` magic (unique IDs)](./rfc-018-id-magic.md) | Implemented |
 | 019 | [`pp-as` polymorphic rendering](./rfc-019-pp-as.md) | Implemented |
 | 020 | [`:attr` / `@event` shorthand](./rfc-020-shorthand-prefixes.md) | Implemented |
+| 021 | [`scroll_lock` utility](./rfc-021-scroll-lock.md) | Implemented |

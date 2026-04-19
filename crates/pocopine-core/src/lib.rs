@@ -28,6 +28,7 @@ pub mod refs;
 pub mod registry;
 pub mod router;
 pub mod scope;
+pub mod scroll_lock;
 pub mod server;
 pub mod signal;
 pub mod store;

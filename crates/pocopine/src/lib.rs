@@ -4,7 +4,7 @@
 //! `#[handlers]` attribute macros from `pocopine-macros`. App code should
 //! depend on `pocopine` and pull everything from `pocopine::prelude::*`.
 
-pub use pocopine_core::{focus, id, refs, tick};
+pub use pocopine_core::{focus, id, refs, scroll_lock, tick};
 pub use pocopine_core::{
     batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
     fetch, flush_sync, on_cleanup, release, run, run_now, rw_signal, set_auto_flush, signal,
