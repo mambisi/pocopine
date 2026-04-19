@@ -6,7 +6,9 @@
 //! element, auto-focus the first focusable inside a freshly-mounted
 //! container.
 
+use js_sys::{Function, Object, Reflect};
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, FocusEvent, HtmlElement, KeyboardEvent, Node};
 
@@ -35,7 +37,30 @@ pub fn restore(saved: Saved) {
     if !node.is_connected() {
         return;
     }
-    let _ = el.focus();
+    focus_no_scroll(&el);
+}
+
+/// Programmatic focus that does not scroll the element into view.
+///
+/// Default `Element.focus()` calls `scrollIntoView` if the focused
+/// element isn't already visible — but browsers can also scroll
+/// the page *even when the target is visible* (rounding errors,
+/// stacking-context edges). For keyboard / click-driven focus
+/// transfers inside overlays (trap, auto-focus, roving arrow
+/// navigation), we never want the page to jump. This calls
+/// `el.focus({ preventScroll: true })` unconditionally.
+pub fn focus_no_scroll(el: &HtmlElement) {
+    let opts = Object::new();
+    let _ = Reflect::set(&opts, &JsValue::from_str("preventScroll"), &JsValue::TRUE);
+    let Ok(v) = Reflect::get(el.as_ref(), &JsValue::from_str("focus")) else {
+        let _ = el.focus();
+        return;
+    };
+    let Ok(f) = v.dyn_into::<Function>() else {
+        let _ = el.focus();
+        return;
+    };
+    let _ = f.call1(el.as_ref(), &opts);
 }
 
 /// Blur whatever currently has focus. No-op when nothing is focused
@@ -64,7 +89,7 @@ pub fn auto_focus_first(container: &Element) -> bool {
         return false;
     };
     if let Ok(html) = first.dyn_into::<HtmlElement>() {
-        let _ = html.focus();
+        focus_no_scroll(&html);
         return true;
     }
     false
@@ -106,7 +131,7 @@ pub fn trap(container: &Element) -> TrapHandle {
                 (true, Some(i)) => i - 1,
             };
             ev.prevent_default();
-            let _ = focusables[next_idx].focus();
+            focus_no_scroll(&focusables[next_idx]);
         }) as Box<dyn FnMut(KeyboardEvent)>);
 
     let container_for_in = container.clone();
@@ -126,7 +151,7 @@ pub fn trap(container: &Element) -> TrapHandle {
             }
             let focusables = collect_focusables(container);
             if let Some(first) = focusables.first() {
-                let _ = first.focus();
+                focus_no_scroll(first);
             }
         }) as Box<dyn FnMut(FocusEvent)>);
 

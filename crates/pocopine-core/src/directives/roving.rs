@@ -146,7 +146,7 @@ fn install_roving(
                 );
             }
             if let Ok(html) = enabled[target_idx].clone().dyn_into::<HtmlElement>() {
-                let _ = html.focus();
+                crate::focus::focus_no_scroll(&html);
             }
         }
     }) as Box<dyn FnMut(KeyboardEvent)>);
@@ -223,7 +223,7 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
                     );
                 }
                 if let Ok(html) = t.clone().dyn_into::<HtmlElement>() {
-                    let _ = html.focus();
+                    crate::focus::focus_no_scroll(&html);
                 }
             }
         }
