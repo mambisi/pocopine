@@ -282,6 +282,36 @@ pine-dropdown-menu-portal { display: contents; }
   color: var(--fg-muted);
 }
 
+/* ─── PineAvatar ──────────────────────────────────────────────── */
+
+.pine-avatar-root {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: 0.875rem;
+  user-select: none;
+}
+.pine-avatar-image-wrap,
+.pine-avatar-image-wrap img {
+  width: 100%;
+  height: 100%;
+}
+.pine-avatar-image { object-fit: cover; }
+.pine-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
 /* ─── PineTabs ────────────────────────────────────────────────── */
 
 .pine-tabs-list {

@@ -24,6 +24,7 @@
 //! into their templates without enumerating the library.
 
 pub mod accordion;
+pub mod avatar;
 pub mod button;
 pub mod checkbox;
 pub mod collapsible;
@@ -37,6 +38,7 @@ pub mod tooltip;
 pub use accordion::{
     PineAccordionContent, PineAccordionItem, PineAccordionRoot, PineAccordionTrigger,
 };
+pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
@@ -59,6 +61,9 @@ pub fn register_all() {
     PineAccordionItem::register();
     PineAccordionTrigger::register();
     PineAccordionContent::register();
+    PineAvatarRoot::register();
+    PineAvatarImage::register();
+    PineAvatarFallback::register();
     PineButton::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();

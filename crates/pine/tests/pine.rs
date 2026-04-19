@@ -909,6 +909,59 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
     host.remove();
 }
 
+// ─── PineAvatar ───────────────────────────────────────────────────
+
+/// Avatar starts with Fallback visible (Root.loaded=false). When
+/// the browser fires `load` on the `<img>`, Image.on_load flips
+/// Root.loaded=true → Fallback's `pp-show="!loaded"` hides it.
+/// Uses a tiny 1x1 `data:` URL so the load fires deterministically.
+#[wasm_bindgen_test]
+async fn avatar_fallback_hides_after_image_loads() {
+    let host = mount(
+        "<pine-avatar-root><pine-avatar-image src=\"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=\" alt=\"tiny\"></pine-avatar-image><pine-avatar-fallback><span class=\"av-fb\">AB</span></pine-avatar-fallback></pine-avatar-root>",
+    );
+    tick().await;
+
+    let fallback: HtmlElement = host
+        .query_selector(".pine-avatar-fallback")
+        .unwrap()
+        .expect("fallback root rendered")
+        .dyn_into()
+        .unwrap();
+    assert_ne!(
+        fallback.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "fallback visible while image not-yet-loaded"
+    );
+
+    // Wait for the browser's async image-load event — fires on
+    // a macrotask, not a microtask, so plain `tick()` (a chain
+    // of Promise.resolve awaits) is insufficient. Yield via a
+    // real setTimeout each iteration.
+    for _ in 0..20 {
+        let p = js_sys::Promise::new(&mut |resolve, _| {
+            let _ = window()
+                .unwrap()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    &resolve, 0,
+                );
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+        tick().await;
+        if fallback.style().get_property_value("display").unwrap_or_default() == "none" {
+            break;
+        }
+    }
+
+    assert_eq!(
+        fallback.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "fallback hidden once the image load fired"
+    );
+
+    host.remove();
+}
+
 // ─── PineAccordion ────────────────────────────────────────────────
 
 /// Accordion type="single" + collapsible: clicking an Item's

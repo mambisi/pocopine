@@ -18,6 +18,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
 | PineAccordion* (compound) | stable | Root/Item/Trigger/Content; `type="single\|multiple"`, `collapsible` |
+| PineAvatar* (compound) | stable | Root/Image/Fallback; `pp-show`-gated fallback during load |
 | PineTabs | stable | tablist-only; panels author-owned |
 | PineTooltip | stable | hover/focus + delay |
 | PineSwitch | stable | `role="switch"`, `pp-model:checked` |
@@ -197,7 +198,7 @@ After DropdownMenu's core is fleshed out:
 | 2 | ~~**Accordion**~~ | Done — Root/Item/Trigger/Content with `type="single\|multiple"` + `collapsible`. |
 | 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
 | 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
-| 5 | **Avatar** | Root/Image/Fallback — simple compound that exercises `pp-if` for fallback. Independent of any overlay. |
+| 5 | ~~**Avatar**~~ | Done — Root/Image/Fallback compound. |
 | 6 | **AlertDialog** | ~30 lines layered on Dialog (forbid dismiss-on-outside, `role="alertdialog"`). |
 | 7 | **HoverCard** | Popover + hover delay timers (copy Tooltip's timing). |
 | 8 | **ContextMenu** | DropdownMenu + pointer-coord anchor. Free once Sub lands. |
