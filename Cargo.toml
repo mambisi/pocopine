@@ -11,6 +11,7 @@ members = [
     "examples/hn",
     "examples/site",
     "examples/spa",
+    "examples/tailwind",
     "examples/todo",
 ]
 

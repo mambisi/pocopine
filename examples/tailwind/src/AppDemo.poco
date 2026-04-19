@@ -1,0 +1,66 @@
+<div class="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+  <div class="w-full max-w-md bg-white rounded-2xl shadow-xl ring-1 ring-slate-900/5 p-6 space-y-5">
+
+    <header class="space-y-1">
+      <p class="text-[0.7rem] font-mono uppercase tracking-widest text-rose-600">pocopine + tailwind</p>
+      <h1 class="text-2xl font-semibold text-slate-900">It just works</h1>
+      <p class="text-sm text-slate-600">
+        Every class on this page is a Tailwind utility, scanned out of
+        the <code class="font-mono text-rose-600">.poco</code> template at runtime.
+      </p>
+    </header>
+
+    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
+      <button
+        class="size-9 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition active:scale-95"
+        pp-on:click="decrement"
+        aria-label="decrement"
+      >−</button>
+      <span class="text-3xl font-semibold tabular-nums text-slate-900" pp-text="count"></span>
+      <button
+        class="size-9 rounded-lg bg-rose-600 text-white hover:bg-rose-500 transition active:scale-95"
+        pp-on:click="increment"
+        aria-label="increment"
+      >+</button>
+    </div>
+
+    <div class="flex gap-2">
+      <button
+        class="flex-1 rounded-lg border border-slate-300 bg-white py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+        pp-on:click="reset"
+      >reset</button>
+      <button
+        class="flex-1 rounded-lg bg-slate-900 py-2 text-sm font-medium text-white hover:bg-slate-700 transition"
+        pp-on:click="toggle_details"
+      >
+        <span pp-show="!show_details">show details</span>
+        <span pp-show="show_details">hide details</span>
+      </button>
+    </div>
+
+    <template
+      pp-if="show_details"
+      pp-transition:enter="transition-all duration-200 ease-out"
+      pp-transition:enter-start="opacity-0 -translate-y-1"
+      pp-transition:enter-end="opacity-100 translate-y-0"
+      pp-transition:leave="transition-all duration-150 ease-in"
+      pp-transition:leave-start="opacity-100 translate-y-0"
+      pp-transition:leave-end="opacity-0 -translate-y-1"
+    >
+      <div class="rounded-xl border border-dashed border-slate-300 p-4 space-y-2">
+        <p class="text-sm text-slate-600">
+          That toggle above is a <code class="font-mono text-rose-600">pp-if</code> with
+          <code class="font-mono text-rose-600">pp-transition</code> classes —
+          pure Tailwind utilities driving the enter/leave animation.
+        </p>
+        <p class="text-sm text-slate-600">
+          Swap in DaisyUI by adding <code class="font-mono text-rose-600">@plugin "daisyui"</code>
+          to <code class="font-mono text-rose-600">app.css</code> and the
+          <code class="font-mono text-rose-600">btn</code> / <code class="font-mono text-rose-600">card</code>
+          component classes become available.
+        </p>
+      </div>
+    </template>
+
+  </div>
+</div>

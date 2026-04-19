@@ -112,6 +112,7 @@ cargo run -p pocopine-cli -- dev --path examples/spa
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
 | [`site`](./examples/site) | The marketing page, dogfooded |
+| [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (CDN-mode for demo) |
 
 ## Repository layout
 
@@ -151,6 +152,40 @@ decisions are in [`rfcs/`](./rfcs):
 | 004 | [`pp-for` list iteration](./rfcs/rfc-004-pp-for.md) |
 | 005 | [`pp-transition` enter/leave animations](./rfcs/rfc-005-pp-transition.md) |
 | 006 | [`pp-teleport` dialogs / popovers / portals](./rfcs/rfc-006-pp-teleport.md) |
+
+## Styling with Tailwind / DaisyUI
+
+Tailwind v4 drops in. `.poco` files aren't a recognised extension, but
+Tailwind's parser scans raw text and regex-matches class-name-shaped
+tokens, so a `@source` line in your stylesheet is all it takes:
+
+```css
+/* app.css */
+@import "tailwindcss";
+@source "./src/**/*.poco";
+```
+
+Build the stylesheet alongside `wasm-pack`:
+
+```bash
+npx @tailwindcss/cli -i ./app.css -o ./tailwind.css --watch
+```
+
+Link the compiled file from `index.html` and you're done. DaisyUI is
+a plugin:
+
+```css
+@import "tailwindcss";
+@plugin "daisyui";
+@source "./src/**/*.poco";
+```
+
+If your `pp-bind:class="..."` expressions live in Rust strings, expand
+the glob: `@source "./src/**/*.{poco,rs}";`.
+
+For a zero-setup demo, [`examples/tailwind`](./examples/tailwind)
+uses Tailwind v4's CDN build — open it in `pocopine-cli dev` and it
+works out of the box.
 
 ## Development
 

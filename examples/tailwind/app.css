@@ -1,0 +1,10 @@
+/* Tailwind v4 browser build reads this file (or a /*! @source ... */
+   directive) to know which files to scan for class names. The CDN
+   scans the DOM after load, so .poco templates get picked up once
+   their clones are in the document. For production builds, the
+   local CLI needs explicit content globs in tailwind.config.js. */
+
+@import "tailwindcss";
+
+/* Tell Tailwind to scan .poco templates next to the Rust sources. */
+@source "./src/**/*.poco";
