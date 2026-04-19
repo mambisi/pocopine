@@ -6,11 +6,11 @@
 
 pub use pocopine_core::refs;
 pub use pocopine_core::{
-    batch, computed, current_effect, current_scope_id, effect, effect_with, fetch, flush_sync,
-    on_cleanup, release, run, run_now, rw_signal, set_auto_flush, signal, store, this,
-    trigger_scope, watch, App, Component, ComponentState, Computed, EffectId, EffectOptions,
-    Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, SignalId,
-    Store, StoreHandle,
+    batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
+    fetch, flush_sync, on_cleanup, release, run, run_now, rw_signal, set_auto_flush, signal,
+    store, this, trigger_scope, watch, App, Component, ComponentState, Computed, EffectId,
+    EffectOptions, Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal,
+    SignalId, Store, StoreHandle,
 };
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
@@ -18,9 +18,9 @@ pub use pocopine_macros::{component, handlers, server, store};
 
 pub mod prelude {
     pub use crate::{
-        batch, component, computed, dispatch, effect, handlers, on_cleanup, run, rw_signal,
-        signal, store, this, watch, App, Component, ComponentState, Computed, Handle,
-        RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        batch, component, computed, dispatch, dispatch_event, effect, handlers, on_cleanup,
+        run, rw_signal, signal, store, this, watch, App, Component, ComponentState, Computed,
+        Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

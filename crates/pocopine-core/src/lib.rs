@@ -35,6 +35,7 @@ pub use app::{App, Component};
 pub use computed::{computed, Computed};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
+pub use magics::dispatch_event;
 pub use server::{Result as ServerResult, ServerError};
 pub use store::{
     register_store_scope, store, store_scope, stores_object, Store, StoreHandle,

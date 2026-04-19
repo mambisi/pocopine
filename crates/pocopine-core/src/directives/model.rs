@@ -1,23 +1,77 @@
 //! `pp-model="field"` — two-way input binding.
 //!
-//! Covers `<input>`, `<textarea>`, `<select>`, and checkbox/radio inputs. The
-//! read side is an effect that updates the DOM element's value when the
-//! field changes; the write side listens for `input`/`change` and sets the
-//! field on the proxy so a `trigger` fires.
+//! Two code paths:
+//!
+//! * **Native input** (`<input>`, `<textarea>`, `<select>`). Effect
+//!   writes element value from `proxy[key]`; `input`/`change`
+//!   listener writes element value back through `write_path`.
+//! * **Registered component tag** (`<pine-input pp-model="name">`).
+//!   Per [RFC-009](../../../../rfcs/rfc-009-pp-model-components.md):
+//!   effect mirrors parent's `proxy[key]` into the child's `model`
+//!   prop; listener on `pp:update:model` writes `event.detail` back
+//!   to `proxy[key]`.
 
-use js_sys::Array;
+use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
+use web_sys::{CustomEvent, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 
 use super::DirectiveCall;
 use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::track_effect_on;
+use crate::walker::{child_component_proxy, track_effect_on};
 
 pub fn run(call: &DirectiveCall) {
+    if let Some(child_proxy) = child_component_proxy(call.el) {
+        run_component(call, child_proxy);
+    } else {
+        run_native(call);
+    }
+}
+
+// ─── component-boundary path (RFC-009) ────────────────────────────
+
+fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
+    let parent_proxy = call.proxy.clone();
+    let key = call.value.clone();
+    let el = call.el.clone();
+
+    // Parent → child: mirror proxy[key] into the child's `model`.
+    // Same shape as pp-bind's child-prop path.
+    let parent_r = parent_proxy.clone();
+    let key_r = key.clone();
+    let child_r = child_proxy.clone();
+    let el_for_track = el.clone();
+    let id = effect(move || {
+        with_current_el(&el_for_track.clone(), || {
+            let v = resolve_path(&parent_r, &key_r);
+            let _ = Reflect::set(&child_r, &JsValue::from_str("model"), &v);
+        });
+    });
+    track_effect_on(call.el, id);
+
+    // Child → parent: `pp:update:model` custom event. `event.detail`
+    // is the new value. Write it back through `write_path` so dotted
+    // keys (`$store.foo.bar`) continue to work.
+    let parent_w = parent_proxy;
+    let key_w = key;
+    let listener = Closure::wrap(Box::new(move |ev: Event| {
+        let Ok(ce) = ev.dyn_into::<CustomEvent>() else { return };
+        let detail = ce.detail();
+        let _ = write_path(&parent_w, &key_w, &detail);
+    }) as Box<dyn FnMut(Event)>);
+    let _ = el.add_event_listener_with_callback(
+        "pp:update:model",
+        listener.as_ref().unchecked_ref(),
+    );
+    listener.forget();
+}
+
+// ─── native input path ────────────────────────────────────────────
+
+fn run_native(call: &DirectiveCall) {
     let proxy = call.proxy.clone();
     let key = call.value.clone();
     let el = call.el.clone();
@@ -42,18 +96,12 @@ pub fn run(call: &DirectiveCall) {
     let el_w = el.clone();
     let handler = Closure::wrap(Box::new(move |_ev: Event| {
         let v = read_from_element(&el_w, number);
-        // Route through the final proxy's set trap via write_path so
-        // dotted keys (`$store.prefs.theme`) work and trigger fires.
         let _ = write_path(&proxy_w, &key_w, &v);
     }) as Box<dyn FnMut(Event)>);
 
     let event_name = if lazy { "change" } else { "input" };
     let _ = el.add_event_listener_with_callback(event_name, handler.as_ref().unchecked_ref());
     handler.forget();
-
-    // Suppress unused-import warning if `Array` stops being used when the
-    // branch below gets specialized.
-    let _ = Array::new;
 }
 
 fn write_to_element(el: &web_sys::Element, v: &JsValue) {

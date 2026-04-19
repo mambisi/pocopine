@@ -28,19 +28,28 @@ fn build_dispatch() -> JsValue {
     // $dispatch(name, detail?) -> void; dispatches a bubbling CustomEvent
     // from the current element.
     let closure = Closure::wrap(Box::new(move |name: JsValue, detail: JsValue| {
-        let Some(el) = current_el() else { return };
         let Some(name) = name.as_string() else { return };
-        let init = CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&detail);
-        if let Ok(ev) = CustomEvent::new_with_event_init_dict(&name, &init) {
-            let _ = el.dispatch_event(&ev);
-        }
+        dispatch_event(&name, &detail);
     }) as Box<dyn Fn(JsValue, JsValue)>);
     let f: Function = closure.as_ref().unchecked_ref::<Function>().clone();
     // Leaked intentionally — the scope holds the reference implicitly.
     closure.forget();
     f.into()
+}
+
+/// Rust-facing version of `$dispatch` — fires a bubbling
+/// `CustomEvent(name, { detail })` from the current directive
+/// element. Handlers use this to signal up through the component
+/// boundary (notably for `pp-model`'s `pp:update:model` event, per
+/// RFC-009).
+pub fn dispatch_event(name: &str, detail: &JsValue) {
+    let Some(el) = current_el() else { return };
+    let init = CustomEventInit::new();
+    init.set_bubbles(true);
+    init.set_detail(detail);
+    if let Ok(ev) = CustomEvent::new_with_event_init_dict(name, &init) {
+        let _ = el.dispatch_event(&ev);
+    }
 }
 
 // Silence unused-import warning if the `Array` import drifts; the magics

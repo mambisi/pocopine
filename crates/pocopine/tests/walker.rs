@@ -93,12 +93,33 @@ impl HandlerArgs {
     }
 }
 
+// RFC-009 — pp-model across a component boundary.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ModelChild.html")]
+struct ModelChild {
+    model: String,
+}
+
+#[handlers]
+impl ModelChild {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ModelParent.html")]
+struct ModelParent {
+    email: String,
+}
+
+#[handlers]
+impl ModelParent {}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
     WithMount::register();
     WithoutMount::register();
     HandlerArgs::register();
+    ModelChild::register();
+    ModelParent::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -338,6 +359,53 @@ async fn handler_with_typed_event_arg_receives_the_event() {
     let key_span = host.query_selector(".ha-key").unwrap().unwrap();
     let key_text: HtmlElement = key_span.dyn_into().unwrap();
     assert_eq!(key_text.inner_text().trim(), "Enter");
+}
+
+// ─── 7. RFC-009 pp-model on components ────────────────────────────
+
+#[wasm_bindgen_test]
+async fn pp_model_parent_to_child_mirrors_prop() {
+    let host = mount("<model-parent></model-parent>");
+    tick().await;
+
+    // Set the parent's `email` field; the child's `model` prop
+    // must reflect it via pp-model's parent→child effect.
+    let parent = host.query_selector("model-parent").unwrap().unwrap();
+    let parent_root = parent.first_element_child().unwrap();
+    let (_id, parent_proxy) =
+        pocopine_core::walker::scope_of_element(&parent_root).expect("parent scope");
+    js_sys::Reflect::set(
+        &parent_proxy,
+        &"email".into(),
+        &JsValue::from_str("alice@example.com"),
+    )
+    .unwrap();
+    tick().await;
+
+    let child_shown = host.query_selector(".mc-shown").unwrap().unwrap();
+    let txt: HtmlElement = child_shown.dyn_into().unwrap();
+    assert_eq!(txt.inner_text().trim(), "alice@example.com");
+}
+
+#[wasm_bindgen_test]
+async fn pp_model_child_to_parent_via_update_event() {
+    let host = mount("<model-parent></model-parent>");
+    tick().await;
+
+    // Child emits `pp:update:model` — the directive must write
+    // `event.detail` back into the parent's bound field.
+    let child = host.query_selector("model-child").unwrap().unwrap();
+    let init = web_sys::CustomEventInit::new();
+    init.set_bubbles(true);
+    init.set_detail(&JsValue::from_str("bob@example.com"));
+    let ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
+        .unwrap();
+    let _ = child.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    let parent_shown = host.query_selector(".mp-shown").unwrap().unwrap();
+    let txt: HtmlElement = parent_shown.dyn_into().unwrap();
+    assert_eq!(txt.inner_text().trim(), "bob@example.com");
 }
 
 #[wasm_bindgen_test]

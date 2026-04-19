@@ -18,8 +18,11 @@ serde-wasm-bindgen = { workspace = true }
 wasm-bindgen-test = "0.3"
 serde = { workspace = true }
 web-sys = { version = "0.3", features = [
+    "CustomEvent",
+    "CustomEventInit",
     "Document",
     "Element",
+    "EventTarget",
     "HtmlElement",
     "KeyboardEvent",
     "KeyboardEventInit",
