@@ -340,7 +340,7 @@ async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
         "<pine-dropdown-menu-root>\
            <pine-dropdown-menu-trigger>open</pine-dropdown-menu-trigger>\
            <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content anchor=\"[data-pine-dm-trigger]\">\
+             <pine-dropdown-menu-content>\
                <pine-dropdown-menu-item class=\"m-a\">A</pine-dropdown-menu-item>\
                <pine-dropdown-menu-item class=\"m-b\">B</pine-dropdown-menu-item>\
                <pine-dropdown-menu-item class=\"m-c\">C</pine-dropdown-menu-item>\
@@ -362,10 +362,12 @@ async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
         Some("false"),
         "aria-expanded mirrors Root.open = false"
     );
-    assert_eq!(
-        trigger.get_attribute("data-pine-dm-trigger").as_deref(),
-        Some(""),
-        "trigger stamped so Content's anchor selector resolves"
+    assert!(
+        trigger
+            .get_attribute("data-pine-dm-trigger")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "trigger stamped with its root's scope id so Content's anchor selector resolves"
     );
 
     // Click the trigger → Root.open = true → Portal's mirror
@@ -513,6 +515,78 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
             .is_none(),
         "menu dismissed by Item.on_select → Root.close"
     );
+
+    host.remove();
+}
+
+/// Two DropdownMenus side-by-side must each anchor to their own
+/// Trigger — not all share-the-first via a common selector. The
+/// `on_setup` hook (runs pre-children-walk) computes Content's
+/// `anchor` selector from the injected root's scope id, so every
+/// menu instance's `pp-anchor` resolves to a distinct trigger
+/// button.
+#[wasm_bindgen_test]
+async fn two_dropdown_menus_anchor_to_their_own_triggers() {
+    let host = mount(
+        "<div>\
+           <pine-dropdown-menu-root>\
+             <pine-dropdown-menu-trigger class=\"t1\">one</pine-dropdown-menu-trigger>\
+             <pine-dropdown-menu-portal>\
+               <pine-dropdown-menu-content>\
+                 <pine-dropdown-menu-item class=\"i1\">A</pine-dropdown-menu-item>\
+               </pine-dropdown-menu-content>\
+             </pine-dropdown-menu-portal>\
+           </pine-dropdown-menu-root>\
+           <pine-dropdown-menu-root>\
+             <pine-dropdown-menu-trigger class=\"t2\">two</pine-dropdown-menu-trigger>\
+             <pine-dropdown-menu-portal>\
+               <pine-dropdown-menu-content>\
+                 <pine-dropdown-menu-item class=\"i2\">B</pine-dropdown-menu-item>\
+               </pine-dropdown-menu-content>\
+             </pine-dropdown-menu-portal>\
+           </pine-dropdown-menu-root>\
+         </div>",
+    );
+    tick().await;
+
+    // Each Trigger stamps its button with its root scope id —
+    // distinct per instance. Pre-`on_setup`, the stamp was a
+    // shared empty string and both menus' Content anchored to
+    // the first trigger in the document.
+    let b1 = host.query_selector(".t1 button").unwrap().unwrap();
+    let b2 = host.query_selector(".t2 button").unwrap().unwrap();
+    let id1 = b1
+        .get_attribute("data-pine-dm-trigger")
+        .unwrap_or_default();
+    let id2 = b2
+        .get_attribute("data-pine-dm-trigger")
+        .unwrap_or_default();
+    assert!(!id1.is_empty(), "trigger 1 stamped");
+    assert!(!id2.is_empty(), "trigger 2 stamped");
+    assert_ne!(id1, id2, "each menu gets its own trigger id");
+
+    // Open menu 2 via its trigger. Only one menu should be in
+    // body, and its anchor should be targeting trigger 2.
+    b2.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("menu 2 open");
+    let menu_html: HtmlElement = menu.clone().dyn_into().unwrap();
+    assert_eq!(
+        menu_html.style().get_property_value("position").unwrap_or_default(),
+        "fixed",
+        "pp-anchor positioned the menu"
+    );
+
+    // Menu 1 should stay closed — no second teleported menu in body.
+    let menus_open = doc()
+        .query_selector_all("ul[role=\"menu\"].pine-dm-content")
+        .unwrap();
+    assert_eq!(menus_open.length(), 1, "exactly one menu open");
 
     host.remove();
 }

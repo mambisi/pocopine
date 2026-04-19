@@ -315,6 +315,18 @@ fn mount_component(el: &Element, tag: &str) {
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
+    // RFC-030: fire `on_setup` — the component's pre-children-walk
+    // hook where fields can be initialised from injected context.
+    // Runs with CURRENT_SCOPE_ID bound so `inject` / `this` resolve.
+    // The parent chain is already wired up above, and static props
+    // are applied; template hasn't been cloned yet, so anything the
+    // hook writes into the scope is visible on the first directive
+    // bind.
+    if scope.state.borrow().has_setup() {
+        crate::scope::with_current_scope_id(scope.id, || {
+            scope.state.borrow_mut().setup();
+        });
+    }
     let proxy = scope.into_proxy();
 
     // Capture slot content. Named slot templates go into the slot
@@ -378,6 +390,11 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
+    if scope.state.borrow().has_setup() {
+        crate::scope::with_current_scope_id(scope.id, || {
+            scope.state.borrow_mut().setup();
+        });
+    }
     let proxy = scope.into_proxy();
 
     // 3. Clone the template into a throwaway container to extract

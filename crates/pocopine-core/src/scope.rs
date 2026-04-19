@@ -34,6 +34,14 @@ pub trait ComponentState: 'static {
     /// Returns a JsValue (or `JsValue::UNDEFINED` for void methods).
     fn invoke(&mut self, key: &str, args: &Array) -> JsValue;
 
+    /// Lifecycle — called once right after the scope is minted and
+    /// its RFC-027 parent is set, *before* the template's children
+    /// walk. Lets compound-component children initialise fields
+    /// from injected context so directives in their template see
+    /// the populated values on first bind. Default no-op;
+    /// `#[component]` wires the user's `on_setup` when one exists.
+    fn setup(&mut self) {}
+
     /// Lifecycle — called once after the component's subtree is fully
     /// bound. Default no-op; `#[component]` wires the user's
     /// `on_mount` when one exists.
@@ -52,6 +60,13 @@ pub trait ComponentState: 'static {
     /// Default no-op; `#[component]` wires the user's `on_unmount`
     /// when one exists.
     fn unmount(&mut self) {}
+
+    /// True iff the component has a user-defined `on_setup`.
+    /// `mount_component` uses this to skip the setup call for
+    /// components without the hook.
+    fn has_setup(&self) -> bool {
+        false
+    }
 
     /// True iff the component actually has a user-defined `on_mount`.
     /// Lets the walker skip the post-mount `trigger_scope` sweep for

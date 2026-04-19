@@ -82,9 +82,16 @@ impl PineDropdownMenuTrigger {
         watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
             me.update(|s| s.open = is_open);
         });
+        // Stamp the trigger's button with its root scope id. Every
+        // Pine dropdown on the page gets a unique value so multiple
+        // menus don't collide on the shared selector. Content mirrors
+        // the same id into its own `anchor` field in `on_setup`.
         if let Some(scope) = current_scope_id() {
             if let Some(btn) = refs::get_on(scope, "trigger") {
-                let _ = btn.set_attribute("data-pine-dm-trigger", "");
+                let _ = btn.set_attribute(
+                    "data-pine-dm-trigger",
+                    &format!("{}", root_scope.0),
+                );
             }
         }
     }
@@ -124,13 +131,29 @@ impl PineDropdownMenuPortal {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuContent.poco")]
 pub struct PineDropdownMenuContent {
-    /// CSS selector or ref name identifying the trigger element.
-    /// Required — author-provided on the tag.
+    /// Computed in `on_setup` from the injected root scope id —
+    /// a per-instance selector targeting this root's Trigger
+    /// button. Authors never write it; Content resolves it
+    /// automatically via context.
     pub anchor: String,
 }
 
 #[handlers]
 impl PineDropdownMenuContent {
+    /// Runs before the template walks, so pp-anchor sees the
+    /// computed selector on first bind. Uses the root's scope id
+    /// so every menu instance on the page has its own anchor —
+    /// matching the unique `data-pine-dm-trigger="N"` Trigger
+    /// stamped in its `on_ready`.
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            self.anchor = format!(
+                "[data-pine-dm-trigger=\"{}\"]",
+                root.scope_id().0
+            );
+        }
+    }
+
     pub fn on_ready(&self) {
         // Auto-focus the first menuitem once the teleported clone
         // has committed. Items live in the slot which only

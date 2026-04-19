@@ -63,11 +63,8 @@
   <section class="row">
     <pine-dropdown-menu-root>
       <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
-      <span style="font-size:0.875rem;color:var(--fg-muted)">
-        actions fired: <strong>{actions_fired}</strong>
-      </span>
       <pine-dropdown-menu-portal>
-        <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
+        <pine-dropdown-menu-content>
           <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
           <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
           <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
@@ -76,25 +73,21 @@
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>
 
-
-
-
+    <!-- Second instance — verifies auto-anchor gives each menu
+         its own trigger target via the injected root scope id. -->
     <pine-dropdown-menu-root>
-      <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
-      <span style="font-size:0.875rem;color:var(--fg-muted)">
-        actions fired: <strong>{actions_fired}</strong>
-      </span>
+      <pine-dropdown-menu-trigger>More ▾</pine-dropdown-menu-trigger>
       <pine-dropdown-menu-portal>
-        <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
-          <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item @click="action_reset">Reset demo</pine-dropdown-menu-item>
+        <pine-dropdown-menu-content>
+          <pine-dropdown-menu-item @click="action_bump">Also bump</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="action_toggle_dark">Also toggle dark</pine-dropdown-menu-item>
         </pine-dropdown-menu-content>
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>
 
-    
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      actions fired: <strong>{actions_fired}</strong>
+    </span>
   </section>
 
   <!-- PineTabs ───────────────────────────────────────────── -->

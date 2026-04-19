@@ -224,6 +224,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
             }
+            fn setup(&mut self) {
+                <Self as ::pocopine::__private::HandlerDispatch>::setup(self);
+            }
             fn mount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::mount(self);
             }
@@ -232,6 +235,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
+            }
+            fn has_setup(&self) -> bool {
+                <Self as ::pocopine::__private::HandlerDispatch>::has_setup(self)
             }
             fn has_on_mount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_mount(self)
@@ -284,6 +290,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let ty = input.self_ty.clone();
 
     let mut arms = Vec::new();
+    let mut has_on_setup = false;
     let mut has_on_mount = false;
     let mut has_on_ready = false;
     let mut has_on_unmount = false;
@@ -331,6 +338,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let ident = method.sig.ident.clone();
         let name = ident.to_string();
         match name.as_str() {
+            "on_setup" => has_on_setup = true,
             "on_mount" => has_on_mount = true,
             "on_ready" => {
                 has_on_ready = true;
@@ -385,6 +393,14 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Only override the trait's default if the user actually defined
     // the hook — keeps the "no lifecycle code" path a real no-op.
+    let setup_impl = has_on_setup.then(|| {
+        quote! {
+            fn setup(&mut self) {
+                Self::on_setup(self);
+            }
+            fn has_setup(&self) -> bool { true }
+        }
+    });
     let mount_impl = has_on_mount.then(|| {
         quote! {
             fn mount(&mut self) {
@@ -494,6 +510,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     _ => ::pocopine::__private::JsValue::UNDEFINED,
                 }
             }
+            #setup_impl
             #mount_impl
             #on_ready_impl
             #unmount_impl
