@@ -13,7 +13,7 @@
 //! | `document`         | attach to `document` instead of `el`                  |
 //! | `debounce[.<ms>]`  | wait `ms` (default 300) of quiet after the last event |
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::{Array, Function};
@@ -40,11 +40,19 @@ pub fn run(call: &DirectiveCall) {
 
     // Persistent closure used by `setTimeout` in the debounce branch.
     // Built once per listener so rapid events don't allocate a fresh
-    // JS closure each time.
+    // JS closure each time. Pulls the most recent event out of the
+    // shared slot so handlers declared with `(&mut self, ev: Event)`
+    // still see event data even after a debounce delay.
+    let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
     let invoke_fn: Function = {
         let handler = handler.clone();
+        let last_event = last_event.clone();
         let c = Closure::wrap(Box::new(move || {
-            invoke_handler(scope_id, &handler, &Array::new());
+            let args = Array::new();
+            if let Some(ev) = last_event.borrow().as_ref() {
+                args.push(ev.as_ref());
+            }
+            invoke_handler(scope_id, &handler, &args);
         }) as Box<dyn FnMut()>);
         let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
         c.forget();
@@ -60,6 +68,7 @@ pub fn run(call: &DirectiveCall) {
         let invoke_fn = invoke_fn.clone();
         let window = window.clone();
         let timer = timer.clone();
+        let last_event = last_event.clone();
         move |ev: Event| {
             if prevent {
                 ev.prevent_default();
@@ -75,7 +84,9 @@ pub fn run(call: &DirectiveCall) {
                 }
             }
             if let Some(ms) = debounce_ms {
-                // Cancel any pending fire from a prior keystroke.
+                // Remember the most recent event so the delayed
+                // callback can still pass it to the handler.
+                *last_event.borrow_mut() = Some(ev);
                 if let Some(prev) = timer.take() {
                     window.clear_timeout_with_handle(prev);
                 }
@@ -88,7 +99,7 @@ pub fn run(call: &DirectiveCall) {
                 timer.set(Some(handle));
             } else {
                 let args = Array::new();
-                args.push(&ev);
+                args.push(ev.as_ref());
                 invoke_handler(scope_id, &handler, &args);
             }
         }

@@ -1,9 +1,18 @@
 //! `HandlerDispatch` — the indirection the `#[component]` and `#[handlers]`
 //! macros use to coordinate. `#[component]` emits a `ComponentState::invoke`
 //! that delegates here; `#[handlers]` emits the actual match-by-name body.
+//!
+//! [`FromHandlerArg`] bridges `JsValue` → typed handler parameters.
+//! Per RFC-008; the `#[handlers]` macro emits a conversion call per
+//! arg using this trait, so method authors can write
+//! `(&mut self, ev: InputEvent)` or `(&mut self, value: String)`
+//! directly.
 
 use js_sys::Array;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
+use web_sys::{
+    CustomEvent, Event, FocusEvent, InputEvent, KeyboardEvent, MouseEvent, UiEvent,
+};
 
 pub trait HandlerDispatch {
     fn invoke_handler(&mut self, key: &str, args: &Array) -> JsValue;
@@ -35,3 +44,100 @@ pub trait HandlerDispatch {
         false
     }
 }
+
+/// Convert a raw `JsValue` into the handler-argument type the author
+/// declared. Returning `None` causes the `#[handlers]` macro to drop
+/// the invocation — same silent-fail shape as "unknown key" in
+/// `invoke_handler`.
+///
+/// Built-in impls cover:
+/// * `JsValue` (identity),
+/// * `Option<T>` — `None` when the slot is undefined / null,
+/// * `String`, `bool`, `f64`, `f32`, `i32`, `i64`, `u32`, `u64`,
+///   `usize`, `isize`,
+/// * the common `web_sys::*Event` types (`Event`, `MouseEvent`,
+///   `KeyboardEvent`, `InputEvent`, `FocusEvent`, `CustomEvent`,
+///   `UiEvent`).
+///
+/// User types can participate by implementing the trait directly —
+/// two lines for a `Deserialize` struct:
+///
+/// ```ignore
+/// impl FromHandlerArg for MyThing {
+///     fn from_handler_arg(v: JsValue) -> Option<Self> {
+///         serde_wasm_bindgen::from_value(v).ok()
+///     }
+/// }
+/// ```
+pub trait FromHandlerArg: Sized {
+    fn from_handler_arg(v: JsValue) -> Option<Self>;
+}
+
+impl FromHandlerArg for JsValue {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        Some(v)
+    }
+}
+
+impl<T: FromHandlerArg> FromHandlerArg for Option<T> {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        if v.is_undefined() || v.is_null() {
+            return Some(None);
+        }
+        Some(T::from_handler_arg(v))
+    }
+}
+
+impl FromHandlerArg for String {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        v.as_string()
+    }
+}
+
+impl FromHandlerArg for bool {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        v.as_bool()
+    }
+}
+
+impl FromHandlerArg for f64 {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        v.as_f64()
+    }
+}
+
+impl FromHandlerArg for f32 {
+    fn from_handler_arg(v: JsValue) -> Option<Self> {
+        v.as_f64().map(|n| n as f32)
+    }
+}
+
+macro_rules! impl_int_handler_arg {
+    ($($t:ty),*) => {$(
+        impl FromHandlerArg for $t {
+            fn from_handler_arg(v: JsValue) -> Option<Self> {
+                v.as_f64().map(|n| n as $t)
+            }
+        }
+    )*};
+}
+impl_int_handler_arg!(i32, i64, u32, u64, isize, usize);
+
+macro_rules! impl_event_handler_arg {
+    ($($t:ty),*) => {$(
+        impl FromHandlerArg for $t {
+            fn from_handler_arg(v: JsValue) -> Option<Self> {
+                v.dyn_into::<$t>().ok()
+            }
+        }
+    )*};
+}
+impl_event_handler_arg!(
+    Event,
+    UiEvent,
+    MouseEvent,
+    KeyboardEvent,
+    InputEvent,
+    FocusEvent,
+    CustomEvent
+);

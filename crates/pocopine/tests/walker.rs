@@ -74,11 +74,31 @@ struct WithoutMount {
 #[handlers]
 impl WithoutMount {}
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "HandlerArgs.html")]
+struct HandlerArgs {
+    last_key: String,
+    payload: String,
+}
+
+#[handlers]
+impl HandlerArgs {
+    // Typed Event arg (RFC-008 §5.1).
+    pub fn on_key(&mut self, ev: web_sys::KeyboardEvent) {
+        self.last_key = ev.key();
+    }
+    // Primitive arg via $dispatch payload.
+    pub fn set_payload(&mut self, value: String) {
+        self.payload = value;
+    }
+}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
     WithMount::register();
     WithoutMount::register();
+    HandlerArgs::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -290,4 +310,52 @@ async fn without_on_mount_renders_initial_state_cleanly() {
     // no-hook case without throwing.
     assert_eq!(with_text.inner_text().trim(), "1");
     assert_eq!(without_text.inner_text().trim(), "0");
+}
+
+// ─── 6. RFC-008 handler args ──────────────────────────────────────
+
+#[wasm_bindgen_test]
+async fn handler_with_typed_event_arg_receives_the_event() {
+    let host = mount("<handler-args></handler-args>");
+    tick().await;
+
+    let root = host.query_selector("handler-args").unwrap().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root.first_element_child().unwrap())
+            .expect("scope");
+
+    // Synthesize a keydown event, set its `.key` via the init dict,
+    // and invoke the handler directly — same path pp-on uses.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Enter");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+        .unwrap();
+    let args = js_sys::Array::new();
+    args.push(ev.as_ref());
+    pocopine_core::scope::invoke_handler(scope_id, "on_key", &args);
+    tick().await;
+
+    let key_span = host.query_selector(".ha-key").unwrap().unwrap();
+    let key_text: HtmlElement = key_span.dyn_into().unwrap();
+    assert_eq!(key_text.inner_text().trim(), "Enter");
+}
+
+#[wasm_bindgen_test]
+async fn handler_with_primitive_arg_deserializes_from_payload() {
+    let host = mount("<handler-args></handler-args>");
+    tick().await;
+
+    let root = host.query_selector("handler-args").unwrap().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root.first_element_child().unwrap())
+            .expect("scope");
+
+    let args = js_sys::Array::new();
+    args.push(&JsValue::from_str("hello from args"));
+    pocopine_core::scope::invoke_handler(scope_id, "set_payload", &args);
+    tick().await;
+
+    let payload_span = host.query_selector(".ha-payload").unwrap().unwrap();
+    let text: HtmlElement = payload_span.dyn_into().unwrap();
+    assert_eq!(text.inner_text().trim(), "hello from args");
 }

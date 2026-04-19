@@ -285,16 +285,6 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let Some(_receiver) = method.sig.receiver() else {
             continue;
         };
-        let extra = method.sig.inputs.len().saturating_sub(1);
-        if extra > 0 {
-            return syn::Error::new_spanned(
-                &method.sig,
-                "pocopine handlers currently support (&mut self) with no additional parameters; \
-                 event args will be wired in a later milestone",
-            )
-            .to_compile_error()
-            .into();
-        }
         let ident = method.sig.ident.clone();
         let name = ident.to_string();
         match name.as_str() {
@@ -302,9 +292,39 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             "on_unmount" => has_on_unmount = true,
             _ => {}
         }
+
+        // Collect typed arg positions after `&mut self`. Per RFC-008,
+        // each arg's type must implement `FromHandlerArg`; the macro
+        // emits the per-arg conversion call.
+        let typed_args: Vec<(syn::Ident, syn::Type)> = method
+            .sig
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, arg)| match arg {
+                FnArg::Typed(PatType { ty, .. }) => {
+                    let ident = format_ident!("_arg{}", i);
+                    Some((ident, (**ty).clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let conversions = typed_args.iter().enumerate().map(|(i, (bind, ty))| {
+            let idx = i as u32;
+            quote! {
+                let #bind: #ty = match <#ty as ::pocopine::__private::FromHandlerArg>::from_handler_arg(
+                    _args.get(#idx),
+                ) {
+                    Some(v) => v,
+                    None => return ::pocopine::__private::JsValue::UNDEFINED,
+                };
+            }
+        });
+        let bindings = typed_args.iter().map(|(bind, _)| quote!(#bind));
         arms.push(quote! {
             #name => {
-                Self::#ident(self);
+                #(#conversions)*
+                Self::#ident(self #(, #bindings)*);
                 ::pocopine::__private::JsValue::UNDEFINED
             }
         });

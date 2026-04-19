@@ -23,5 +23,5 @@ Conventions:
 | 005 | [`pp-transition` (enter / leave animations)](./rfc-005-pp-transition.md) | Implemented |
 | 006 | [`pp-teleport` (dialogs, popovers, portals)](./rfc-006-pp-teleport.md) | Implemented |
 | 007 | [`pp-for` keyed iteration](./rfc-007-pp-for-keys.md) | Implemented |
-| 008 | [event handler arguments](./rfc-008-event-handler-args.md) | Accepted |
+| 008 | [event handler arguments](./rfc-008-event-handler-args.md) | Implemented |
 | 009 | [`pp-model` on components](./rfc-009-pp-model-components.md) | Accepted |

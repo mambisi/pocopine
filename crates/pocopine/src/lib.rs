@@ -31,8 +31,8 @@ pub mod __private {
     pub use js_sys;
     pub use pocopine_core::{
         inject_pp_data, inject_style, register_component, register_store_scope,
-        register_template, store_scope, Component, ComponentState, Handle, HandlerDispatch,
-        Scope, Store,
+        register_template, store_scope, Component, ComponentState, FromHandlerArg, Handle,
+        HandlerDispatch, Scope, Store,
     };
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;
