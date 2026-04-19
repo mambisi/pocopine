@@ -20,7 +20,7 @@
   <h2>Dialog</h2>
   <section class="row">
     <pine-button variant="destructive" @click="open_dialog">Delete file</pine-button>
-    <pine-dialog pp-model="dialog_open">
+    <pine-dialog pp-model:open="dialog_open">
       <template pp-slot="title">Delete file?</template>
       <template pp-slot="description">This action cannot be undone.</template>
       <div class="row" style="margin-top:1rem;justify-content:flex-end">
@@ -36,7 +36,7 @@
     <pine-button id="pop-trig" @click="toggle_popover">
       <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
     </pine-button>
-    <pine-popover pp-model="popover_open" anchor="#pop-trig">
+    <pine-popover pp-model:open="popover_open" anchor="#pop-trig">
       <p style="margin:0">Anchored to the trigger.</p>
       <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
         Click outside or press Escape to close.
@@ -48,7 +48,7 @@
   <h2>Dropdown menu</h2>
   <section class="row">
     <pine-button id="menu-trig" @click="toggle_menu">Account ▾</pine-button>
-    <pine-dropdown-menu pp-model="menu_open" anchor="#menu-trig" @click="close_menu">
+    <pine-dropdown-menu pp-model:open="menu_open" anchor="#menu-trig" @click="close_menu">
       <li role="menuitem" tabindex="-1">Profile</li>
       <li role="menuitem" tabindex="-1">Settings</li>
       <li role="menuitem" tabindex="-1" aria-disabled="true">Team (disabled)</li>
@@ -59,7 +59,7 @@
   <!-- PineTabs ───────────────────────────────────────────── -->
   <h2>Tabs</h2>
   <section>
-    <pine-tabs pp-model="tab" pp-bind:tabs="tabs"></pine-tabs>
+    <pine-tabs pp-model:value="tab" pp-bind:tabs="tabs"></pine-tabs>
     <div role="tabpanel" pp-show="tab == 'account'">
       <strong>Account</strong> — manage your profile and auth.
     </div>
@@ -85,11 +85,11 @@
   <h2>Switch &amp; Checkbox</h2>
   <section>
     <div class="row" style="margin-bottom:0.75rem">
-      <pine-switch pp-model="dark_mode"></pine-switch>
+      <pine-switch pp-model:checked="dark_mode"></pine-switch>
       <span>Dark mode: <strong pp-text="dark_mode ? 'on' : 'off'"></strong></span>
     </div>
     <div class="row">
-      <pine-checkbox pp-model="agree_state"></pine-checkbox>
+      <pine-checkbox pp-model:state="agree_state"></pine-checkbox>
       <span>I agree — state: <strong pp-text="agree_state"></strong></span>
     </div>
   </section>

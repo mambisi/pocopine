@@ -1,4 +1,4 @@
-//! `pp-model="field"` — two-way input binding.
+//! `pp-model[:<child-field>]="field"` — two-way input binding.
 //!
 //! Two code paths:
 //!
@@ -7,9 +7,13 @@
 //!   listener writes element value back through `write_path`.
 //! * **Registered component tag** (`<pine-input pp-model="name">`).
 //!   Per [RFC-009](../../../../rfcs/rfc-009-pp-model-components.md):
-//!   effect mirrors parent's `proxy[key]` into the child's `model`
-//!   prop; listener on `pp:update:model` writes `event.detail` back
-//!   to `proxy[key]`.
+//!   effect mirrors parent's `proxy[key]` into the child's
+//!   `<child-field>` prop (default: `model`); listener on
+//!   `pp:update:model` writes `event.detail` back to `proxy[key]`.
+//!
+//! `pp-model:open="dialog_open"` writes parent's `dialog_open` to
+//! child's `open` field — Vue-3-style `v-model:prop` shape. Without
+//! the arg, the child field is `model` for backward compatibility.
 
 use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
@@ -37,17 +41,21 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
     let parent_proxy = call.proxy.clone();
     let key = call.value.clone();
     let el = call.el.clone();
+    // Directive arg picks the child's target field; defaults to
+    // `model` so plain `pp-model="name"` keeps working unchanged.
+    let child_field = call.arg.clone().unwrap_or_else(|| "model".into());
 
-    // Parent → child: mirror proxy[key] into the child's `model`.
-    // Same shape as pp-bind's child-prop path.
+    // Parent → child: mirror proxy[key] into the child's
+    // `<child_field>` prop. Same shape as pp-bind's child-prop path.
     let parent_r = parent_proxy.clone();
     let key_r = key.clone();
     let child_r = child_proxy.clone();
     let el_for_track = el.clone();
+    let child_field_w = child_field.clone();
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
             let v = resolve_path(&parent_r, &key_r);
-            let _ = Reflect::set(&child_r, &JsValue::from_str("model"), &v);
+            let _ = Reflect::set(&child_r, &JsValue::from_str(&child_field_w), &v);
         });
     });
     track_effect_on(call.el, id);

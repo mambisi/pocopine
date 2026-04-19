@@ -21,11 +21,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, tick, watch, Scope, ScopeId};
+use pocopine::{current_scope_id, focus, refs, tick, watch, Scope, ScopeId};
 use serde::{Deserialize, Serialize};
 
 use js_sys::Reflect;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
+use web_sys::Element;
 
 thread_local! {
     static RUNTIME: RefCell<HashMap<ScopeId, PopoverRuntime>> =
@@ -104,8 +106,40 @@ impl PinePopover {
     }
 }
 
+/// Fire `pp:update:model` through the `<pine-popover>` host tag so
+/// `pp-model:open` on the parent picks up an internally-driven
+/// close. See `PineDialog::emit_open_changed` for the rationale
+/// behind deferring + walking back through the teleport origin.
 fn emit_open_changed(open: bool) {
-    pocopine::dispatch_event("pp:update:model", &JsValue::from_bool(open));
+    let Some(host) = find_host_element() else { return };
+    tick::next(move || {
+        let init = web_sys::CustomEventInit::new();
+        init.set_bubbles(true);
+        init.set_detail(&JsValue::from_bool(open));
+        if let Ok(ev) =
+            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
+        {
+            let _ = host.dispatch_event(&ev);
+        }
+    });
+}
+
+fn find_host_element() -> Option<Element> {
+    let scope = current_scope_id()?;
+    let mut cur: Option<Element> = refs::get_on(scope, "content");
+    let origin_key = JsValue::from_str(
+        pocopine_core::directives::teleport::TELEPORT_ORIGIN_KEY,
+    );
+    while let Some(el) = cur {
+        let v = Reflect::get(el.as_ref(), &origin_key).ok()?;
+        if !v.is_undefined() && !v.is_null() {
+            if let Ok(template) = v.dyn_into::<Element>() {
+                return template.parent_element();
+            }
+        }
+        cur = el.parent_element();
+    }
+    None
 }
 
 fn read_open(scope: ScopeId) -> bool {

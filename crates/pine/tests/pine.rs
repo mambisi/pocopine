@@ -424,6 +424,95 @@ async fn popover_opens_anchors_and_closes_on_escape() {
     host.remove();
 }
 
+// ─── PineDialog (pp-model:open round-trip) ────────────────────────
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template = "DialogHost.html")]
+struct DialogHost {
+    dialog_open: bool,
+}
+
+#[handlers]
+impl DialogHost {
+    pub fn open_it(&mut self) {
+        self.dialog_open = true;
+    }
+}
+
+/// pp-model:open="dialog_open" flows the parent's field into the
+/// dialog's `open` prop; Escape inside the dialog fires
+/// pp:update:model which writes back to the parent, so the parent's
+/// state reflects the internal close.
+#[wasm_bindgen_test]
+async fn dialog_pp_model_open_round_trips_through_parent() {
+    DialogHost::register();
+    let host = mount("<dialog-host></dialog-host>");
+    tick().await;
+
+    let state_text = |host: &Element| -> String {
+        host.query_selector(".dh-state")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(state_text(&host), "closed");
+
+    // Click "open" on the parent — sets dialog_open=true, which
+    // flows through pp-model:open into the child.
+    let open_btn = host
+        .query_selector(".dh-open")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    open_btn.click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_some(),
+        "dialog mounted after parent set open=true"
+    );
+    assert_eq!(state_text(&host), "open");
+
+    // Escape on the dialog closes it. The child fires
+    // pp:update:model with false, which pp-model writes back to
+    // the parent's `dialog_open`.
+    let dialog = doc()
+        .query_selector("[role=\"dialog\"].pine-dialog-content")
+        .unwrap()
+        .unwrap();
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    dialog.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        state_text(&host),
+        "closed",
+        "parent's dialog_open flipped back to false via pp-model"
+    );
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "dialog torn down after close"
+    );
+
+    host.remove();
+}
+
 // ─── PineDialog ───────────────────────────────────────────────────
 
 /// Mounting a dialog with `open=true` teleports the content into

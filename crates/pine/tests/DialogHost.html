@@ -1,0 +1,9 @@
+<div>
+  <button class="dh-open" @click="open_it">open</button>
+  <span class="dh-state" pp-text="dialog_open ? 'open' : 'closed'"></span>
+  <pine-dialog pp-model:open="dialog_open">
+    <template pp-slot="title">Hello</template>
+    <template pp-slot="description">World</template>
+    <button class="dh-inside">OK</button>
+  </pine-dialog>
+</div>

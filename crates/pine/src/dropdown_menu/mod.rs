@@ -70,8 +70,43 @@ impl PineDropdownMenu {
 
     pub fn close(&mut self) {
         self.open = false;
-        pocopine::dispatch_event("pp:update:model", &JsValue::from_bool(false));
+        emit_open_changed();
     }
+}
+
+/// See `PineDialog::emit_open_changed` for rationale. DropdownMenu
+/// uses `pp-ref="menu"` on the teleported root, so we walk from
+/// that ref back to the host tag.
+fn emit_open_changed() {
+    let Some(host) = find_host_element() else { return };
+    tick::next(move || {
+        let init = web_sys::CustomEventInit::new();
+        init.set_bubbles(true);
+        init.set_detail(&JsValue::from_bool(false));
+        if let Ok(ev) =
+            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
+        {
+            let _ = host.dispatch_event(&ev);
+        }
+    });
+}
+
+fn find_host_element() -> Option<Element> {
+    let scope = current_scope_id()?;
+    let mut cur: Option<Element> = refs::get_on(scope, "menu");
+    let origin_key = JsValue::from_str(
+        pocopine_core::directives::teleport::TELEPORT_ORIGIN_KEY,
+    );
+    while let Some(el) = cur {
+        let v = Reflect::get(el.as_ref(), &origin_key).ok()?;
+        if !v.is_undefined() && !v.is_null() {
+            if let Ok(template) = v.dyn_into::<Element>() {
+                return template.parent_element();
+            }
+        }
+        cur = el.parent_element();
+    }
+    None
 }
 
 fn read_open(scope: ScopeId) -> bool {

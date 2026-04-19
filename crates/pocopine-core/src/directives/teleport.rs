@@ -22,6 +22,11 @@ use super::DirectiveCall;
 use crate::walker::{self, bind_borrowed_scope_to};
 
 const TELEPORTED_KEY: &str = "__pp_teleported";
+/// Backpointer stored on the teleported clone → the original
+/// `<template pp-teleport>` element. Lets consumers of a teleported
+/// subtree (e.g. Pine overlays that need to dispatch events up
+/// through the parent scope) walk back to the host-scope DOM.
+pub const TELEPORT_ORIGIN_KEY: &str = "__pp_teleport_origin";
 
 pub fn run(call: &DirectiveCall) {
     // When `pp-if` is also present, that directive owns the mount
@@ -65,6 +70,13 @@ pub fn run(call: &DirectiveCall) {
     }
 
     if target.append_child(clone_root.as_ref()).is_ok() {
+        // Back-link the clone to its origin template so consumers
+        // can walk from inside the teleport back to the host scope.
+        let _ = Reflect::set(
+            clone_root.as_ref(),
+            &TELEPORT_ORIGIN_KEY.into(),
+            call.el.as_ref(),
+        );
         walker::walk(&clone_root);
         stash_teleported(call.el, &clone_root);
     }

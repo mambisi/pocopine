@@ -104,6 +104,16 @@ pub fn run(call: &DirectiveCall) {
                 };
 
                 if inserted {
+                    // Back-link teleport clones to their origin so
+                    // consumers (e.g. Pine overlays) can walk from
+                    // inside the clone to the host's template slot.
+                    if teleport_target.is_some() {
+                        let _ = js_sys::Reflect::set(
+                            clone_root.as_ref(),
+                            &teleport::TELEPORT_ORIGIN_KEY.into(),
+                            template_el.as_ref(),
+                        );
+                    }
                     walker::walk(&clone_root);
                     *current.borrow_mut() = Some(clone_root.clone());
                     transition::enter(&clone_root, || {});
