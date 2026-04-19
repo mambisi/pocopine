@@ -36,6 +36,15 @@ const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 const INIT_PENDING_KEY: &str = "__pp_init_pending";
 const WALKED_KEY: &str = "__pp_walked";
+/// Explicit inject-chain parent for RFC-027. Stamped on
+/// slot-materialised elements so their scopes chain to the slot-
+/// *owning* component (the one whose template contains the
+/// `<slot>`), not the *caller* that authored the slot content.
+/// Needed for compound components — e.g. Radix-style DropdownMenu
+/// where `<Trigger>` authored inside `<Root>` must inject from
+/// `<Root>`, regardless of where the user's enclosing template
+/// scope points.
+const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
 pub fn start_on_body() {
@@ -289,11 +298,18 @@ fn mount_component(el: &Element, tag: &str) {
     }
 
     let Some(scope) = instantiate(tag) else { return };
-    // Record the parent scope for RFC-027 `inject` chain-walks. The
-    // parent is whichever scope encloses the component tag in the
-    // DOM — which is the scope that *authored* the tag, regardless
-    // of teleport / slot rewrites later.
-    if let Some((parent_id, _)) = enclosing_scope(el) {
+    // Record the parent scope for RFC-027 `inject` chain-walks.
+    // Prefer the explicit `CTX_PARENT_KEY` stamp — set by slot
+    // materialisation on slot-inserted elements so compound-
+    // component children chain to the slot *owner* (the component
+    // whose template contained the `<slot>`), not the caller that
+    // authored the content. Falls back to the DOM enclosing scope
+    // for normally-placed tags.
+    let ctx_parent = get_private(el, CTX_PARENT_KEY)
+        .and_then(|v| v.as_f64())
+        .map(|n| ScopeId(n as u64))
+        .or_else(|| enclosing_scope(el).map(|(id, _)| id));
+    if let Some(parent_id) = ctx_parent {
         crate::context::set_parent(scope.id, parent_id);
     }
     // Apply static props BEFORE building the proxy so trigger doesn't fire
@@ -354,7 +370,11 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     // 2. Instantiate scope + apply static props from the tag's own
     //    attributes (same as the normal path).
     let Some(scope) = instantiate(tag) else { return false };
-    if let Some((parent_id, _)) = enclosing_scope(el) {
+    let ctx_parent = get_private(el, CTX_PARENT_KEY)
+        .and_then(|v| v.as_f64())
+        .map(|n| ScopeId(n as u64))
+        .or_else(|| enclosing_scope(el).map(|(id, _)| id));
+    if let Some(parent_id) = ctx_parent {
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
@@ -577,6 +597,16 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
         let Some(a) = attrs.item(i) else { continue };
         let name = a.name();
         if name.starts_with("pp-") || name.starts_with("__pp_") {
+            continue;
+        }
+        // RFC-020 shorthand (`@event` / `:attr`) is a directive,
+        // not a plain attribute. Fallthrough would clobber the
+        // template's own `@click="my_handler"` and re-bind the
+        // user's handler against the child scope — where the name
+        // never resolves. The handler is already bound on the tag
+        // itself in the parent's scope, which is the intended
+        // "event on the component" semantic. Skip.
+        if name.starts_with('@') || name.starts_with(':') {
             continue;
         }
         // HTML kebab-case → Rust snake_case; matches the prop path in
@@ -804,10 +834,12 @@ fn materialize_slot(slot_el: &Element) {
             caller: slot_owner_proxy.clone(),
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
-        // For RFC-027 inject chain-walks: the slot scope's logical
-        // parent is the *caller* (the scope that authored the
-        // content), not the scope containing the `<slot>`.
-        crate::context::set_parent(slot_scope.id, slot_owner_scope);
+        // RFC-027 inject chain: the slot scope lives inside the
+        // slot-*owning* component's template — children inject
+        // against that component, not the caller. Directive
+        // resolution still uses the caller (above) for RFC-011
+        // semantics.
+        crate::context::set_parent(slot_scope.id, owner_scope_id);
         let proxy = slot_scope.into_proxy();
         for el in &inserted {
             bind_borrowed_scope_to(el, slot_scope.id, &proxy);
@@ -815,6 +847,15 @@ fn materialize_slot(slot_el: &Element) {
     } else {
         for el in &inserted {
             bind_borrowed_scope_to(el, slot_owner_scope, &slot_owner_proxy);
+            // Stamp explicit inject-chain parent so a later
+            // mount_component on this element chains to the slot
+            // owner for inject, not to whatever its borrowed-DOM
+            // scope happens to be.
+            set_private(
+                el,
+                CTX_PARENT_KEY,
+                &JsValue::from_f64(owner_scope_id.0 as f64),
+            );
         }
     }
 

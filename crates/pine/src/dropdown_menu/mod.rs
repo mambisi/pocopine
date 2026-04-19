@@ -89,7 +89,7 @@ impl PineDropdownMenuTrigger {
         }
     }
 
-    pub fn toggle(&self) {
+    pub fn toggle(&mut self) {
         if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
             root.update(|r: &mut PineDropdownMenuRoot| r.toggle());
         }
@@ -163,8 +163,6 @@ impl PineDropdownMenuItem {
         if self.disabled {
             return;
         }
-        // Author's `@click` on the tag fires via native bubble;
-        // our responsibility is to dismiss the menu.
         if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }

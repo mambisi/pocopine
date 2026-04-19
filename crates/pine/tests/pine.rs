@@ -311,6 +311,24 @@ async fn checkbox_tri_state_maps_aria_checked_correctly() {
 
 // ─── PineDropdownMenu — compound (Radix-style) ────────────────────
 
+// Outer-scope host used by the compound-menu regression test
+// below. The menu nests inside this component's template so its
+// RFC-027 inject chain has to cross the slot-materialisation
+// boundary correctly — matching the demo's layout, not the
+// degenerate "menu at the root of the mount" shape.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template = "MenuHost.html")]
+struct MenuHost {
+    bumps: u32,
+}
+
+#[handlers]
+impl MenuHost {
+    pub fn bump(&mut self) {
+        self.bumps += 1;
+    }
+}
+
 /// Opening a menu via the trigger teleports Content to body, sets
 /// the first menuitem's tabindex=0, auto-focuses it, cycles on
 /// arrow keys, and closes on Escape. Exercises the full compound
@@ -405,6 +423,69 @@ async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
         trigger.get_attribute("aria-expanded").as_deref(),
         Some("false"),
         "aria-expanded mirrors back to closed"
+    );
+
+    host.remove();
+}
+
+/// Regression: the compound menu is usually nested inside a user
+/// component (PineDemoApp in the demo, MenuHost here), not mounted
+/// bare at the document root. That changes the slot-materialisation
+/// path — Trigger / Portal / Content get a non-null caller scope as
+/// their DOM-borrowed scope, so the RFC-027 inject chain has to
+/// walk to Root via the slot *owner*, not the caller. This test
+/// fails the chain if that plumbing regresses.
+#[wasm_bindgen_test]
+async fn compound_menu_injects_through_slot_owner_when_nested() {
+    MenuHost::register();
+    let host = mount("<menu-host></menu-host>");
+    tick().await;
+
+    let trigger = host
+        .query_selector(".mh-trigger button")
+        .unwrap()
+        .expect("trigger button rendered");
+
+    // Open via trigger click — if inject failed, Root.toggle never
+    // runs and the menu never teleports.
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "menu opened via trigger when nested inside an outer scope"
+    );
+
+    // Click the first item's rendered `<li>` — clicking the inner
+    // element bubbles through both Item's own `@click="on_select"`
+    // (installed on the li) and the author's `@click="bump"` on
+    // the outer tag. Dispatching on the tag directly would skip
+    // the inner li listener entirely.
+    let item_li = doc()
+        .query_selector(".mh-item-a .pine-dm-item, .mh-item-a li")
+        .unwrap()
+        .expect("item li rendered");
+    item_li.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert_eq!(
+        host.query_selector(".mh-bumps")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap_or_default(),
+        "1",
+        "author's @click on Item ran via native bubble"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "menu dismissed by Item.on_select → Root.close"
     );
 
     host.remove();

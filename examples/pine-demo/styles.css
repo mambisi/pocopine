@@ -128,9 +128,32 @@ section {
   z-index: 40;
 }
 
-/* ─── PineDropdownMenu ────────────────────────────────────────── */
+/* ─── PineDropdownMenu (compound) ─────────────────────────────── */
 
-.pine-menu {
+/* Root is a pure state container — let its children participate
+   in the surrounding flex / grid context directly. */
+pine-dropdown-menu-root,
+.pine-dm-root { display: contents; }
+pine-dropdown-menu-portal { display: contents; }
+
+.pine-dm-trigger {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+}
+.pine-dm-trigger:hover { background: var(--bg-hover); }
+.pine-dm-trigger[data-state="open"] { background: var(--bg-hover); }
+
+.pine-dm-portal {
+  /* Teleport wrapper — Portal's pp-if tracker. No layout of its
+     own; Content inside handles positioning via pp-anchor. */
+}
+
+.pine-dm-content {
   list-style: none;
   margin: 0;
   padding: 0.25rem;
@@ -141,15 +164,16 @@ section {
   box-shadow: var(--shadow);
   z-index: 40;
 }
-.pine-menu li[role="menuitem"] {
+.pine-dm-item {
   padding: 0.375rem 0.625rem;
   border-radius: 4px;
   cursor: pointer;
   outline: none;
+  list-style: none;
 }
-.pine-menu li[role="menuitem"]:hover,
-.pine-menu li[role="menuitem"]:focus { background: var(--bg-hover); }
-.pine-menu li[role="menuitem"][aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.pine-dm-item:hover,
+.pine-dm-item:focus { background: var(--bg-hover); }
+.pine-dm-item[data-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── PineTabs ────────────────────────────────────────────────── */
 
