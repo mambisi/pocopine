@@ -36,8 +36,9 @@ pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use dialog::PineDialog;
 pub use dropdown_menu::{
-    PineDropdownMenuContent, PineDropdownMenuItem, PineDropdownMenuPortal,
-    PineDropdownMenuRoot, PineDropdownMenuTrigger,
+    PineDropdownMenuContent, PineDropdownMenuGroup, PineDropdownMenuItem,
+    PineDropdownMenuLabel, PineDropdownMenuPortal, PineDropdownMenuRoot,
+    PineDropdownMenuSeparator, PineDropdownMenuTrigger,
 };
 pub use popover::PinePopover;
 pub use switch::PineSwitch;
@@ -55,6 +56,9 @@ pub fn register_all() {
     PineDropdownMenuPortal::register();
     PineDropdownMenuContent::register();
     PineDropdownMenuItem::register();
+    PineDropdownMenuSeparator::register();
+    PineDropdownMenuGroup::register();
+    PineDropdownMenuLabel::register();
     PineTabs::register();
     PineTooltip::register();
     PineSwitch::register();

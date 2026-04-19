@@ -519,6 +519,73 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     host.remove();
 }
 
+/// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
+/// render correct ARIA wiring. Separator has `role="separator"`
+/// and `aria-orientation="horizontal"`. Group + Label link via
+/// `aria-labelledby` → `id` with a unique per-Group id so multiple
+/// groups don't collide.
+#[wasm_bindgen_test]
+async fn dropdown_menu_group_label_separator_wire_aria() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"gl-trig\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-group class=\"gl-group\">\
+                 <pine-dropdown-menu-label>Actions</pine-dropdown-menu-label>\
+                 <pine-dropdown-menu-item class=\"gl-a\">A</pine-dropdown-menu-item>\
+               </pine-dropdown-menu-group>\
+               <pine-dropdown-menu-separator class=\"gl-sep\"></pine-dropdown-menu-separator>\
+               <pine-dropdown-menu-item class=\"gl-b\">B</pine-dropdown-menu-item>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    // Click trigger to open.
+    let trigger = host.query_selector(".gl-trig button").unwrap().unwrap();
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    // Separator: role + orientation on the inner li.
+    let sep = doc()
+        .query_selector(".gl-sep li")
+        .unwrap()
+        .expect("separator li rendered");
+    assert_eq!(sep.get_attribute("role").as_deref(), Some("separator"));
+    assert_eq!(
+        sep.get_attribute("aria-orientation").as_deref(),
+        Some("horizontal")
+    );
+
+    // Group + Label: group's aria-labelledby points at the
+    // rendered Label's id; the id is non-empty + instance-unique
+    // (derived from the Group's scope id).
+    let group_root = doc()
+        .query_selector(".gl-group div[role=\"group\"]")
+        .unwrap()
+        .expect("group role element");
+    let label_el = doc()
+        .query_selector(".pine-dm-label")
+        .unwrap()
+        .expect("label rendered");
+    let label_id = label_el.get_attribute("id").unwrap_or_default();
+    assert!(!label_id.is_empty(), "label has id");
+    assert!(
+        label_id.starts_with("pine-dm-group-label-"),
+        "label id namespaced"
+    );
+    assert_eq!(
+        group_root.get_attribute("aria-labelledby").as_deref(),
+        Some(label_id.as_str()),
+        "group aria-labelledby → label id"
+    );
+
+    host.remove();
+}
+
 /// Two DropdownMenus side-by-side must each anchor to their own
 /// Trigger — not all share-the-first via a common selector. The
 /// `on_setup` hook (runs pre-children-walk) computes Content's

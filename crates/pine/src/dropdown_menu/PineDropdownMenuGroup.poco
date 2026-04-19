@@ -1,0 +1,5 @@
+<div class="pine-dm-group"
+     role="group"
+     :aria-labelledby="label_id">
+  <slot></slot>
+</div>

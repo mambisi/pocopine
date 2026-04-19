@@ -175,6 +175,25 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-dm-item:focus { background: var(--bg-hover); }
 .pine-dm-item[data-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
+.pine-dm-separator {
+  display: block;
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--border);
+  list-style: none;
+}
+
+.pine-dm-group { display: block; }
+
+.pine-dm-label {
+  padding: 0.375rem 0.625rem 0.125rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
 /* ─── PineTabs ────────────────────────────────────────────────── */
 
 .pine-tabs-list {

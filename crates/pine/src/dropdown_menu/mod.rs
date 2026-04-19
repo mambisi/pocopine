@@ -9,19 +9,21 @@
 //! <pine-dropdown-menu-root>
 //!   <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
 //!   <pine-dropdown-menu-portal>
-//!     <pine-dropdown-menu-content anchor="[data-pine-dm-trigger]">
-//!       <pine-dropdown-menu-item @click="bump">Bump</pine-dropdown-menu-item>
-//!       <pine-dropdown-menu-item disabled>Export</pine-dropdown-menu-item>
+//!     <pine-dropdown-menu-content>
+//!       <pine-dropdown-menu-group>
+//!         <pine-dropdown-menu-label>Actions</pine-dropdown-menu-label>
+//!         <pine-dropdown-menu-item @click="bump">Bump</pine-dropdown-menu-item>
+//!         <pine-dropdown-menu-item disabled>Export</pine-dropdown-menu-item>
+//!       </pine-dropdown-menu-group>
+//!       <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+//!       <pine-dropdown-menu-item @click="reset">Reset</pine-dropdown-menu-item>
 //!     </pine-dropdown-menu-content>
 //!   </pine-dropdown-menu-portal>
 //! </pine-dropdown-menu-root>
 //! ```
 //!
-//! Author-provided `anchor` on Content is a CSS selector (or
-//! ref name). Trigger sets `data-pine-dm-trigger` on its button
-//! so the author can target it via attribute selector; nothing
-//! forces them to — they can also anchor to a custom element in
-//! the surrounding layout.
+//! Content auto-anchors to its Trigger via RFC-027 inject + the
+//! `on_setup` lifecycle — no selector required.
 
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, inject, provide, refs, watch_scope_field};
@@ -188,6 +190,67 @@ impl PineDropdownMenuItem {
         }
         if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
+        }
+    }
+}
+
+// ── Separator ─────────────────────────────────────────────────────
+
+/// Visual divider between groups of menu items. No state, no
+/// focus, no interaction — pure `role="separator"` +
+/// `aria-orientation`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuSeparator.poco")]
+pub struct PineDropdownMenuSeparator {}
+
+#[handlers]
+impl PineDropdownMenuSeparator {}
+
+// ── Group ─────────────────────────────────────────────────────────
+
+/// ARIA group wrapper. Its `on_setup` mints a `label_id` from its
+/// own scope id (unique per instance) and provides it to any
+/// nested Label so their ids match up for `aria-labelledby`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuGroup.poco")]
+pub struct PineDropdownMenuGroup {
+    /// Computed — id of the Label inside this group, for
+    /// `aria-labelledby` on the group's root. Populated in
+    /// `on_setup`; authors never set it.
+    pub label_id: String,
+}
+
+/// Provide/inject key for a Group's label id. Only meaningful
+/// inside a Group's subtree.
+const GROUP_LABEL_KEY: &str = "pine-dm-group-label-id";
+
+#[handlers]
+impl PineDropdownMenuGroup {
+    pub fn on_setup(&mut self) {
+        let Some(scope) = current_scope_id() else { return };
+        let label_id = format!("pine-dm-group-label-{}", scope.0);
+        self.label_id = label_id.clone();
+        provide(GROUP_LABEL_KEY, label_id);
+    }
+}
+
+// ── Label ─────────────────────────────────────────────────────────
+
+/// Labelled heading for a Group. Injects the group's label id and
+/// renders it as the element's `id` so the enclosing Group's
+/// `aria-labelledby` resolves. Does not render a `role` — it's
+/// styling-only (matches reka-ui / Radix).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuLabel.poco")]
+pub struct PineDropdownMenuLabel {
+    pub label_id: String,
+}
+
+#[handlers]
+impl PineDropdownMenuLabel {
+    pub fn on_setup(&mut self) {
+        if let Some(id) = inject::<String>(GROUP_LABEL_KEY) {
+            self.label_id = id;
         }
     }
 }

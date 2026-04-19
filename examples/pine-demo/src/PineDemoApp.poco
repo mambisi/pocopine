@@ -65,10 +65,17 @@
       <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
       <pine-dropdown-menu-portal>
         <pine-dropdown-menu-content>
-          <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
-          <pine-dropdown-menu-item @click="action_reset">Reset demo</pine-dropdown-menu-item>
+          <pine-dropdown-menu-group>
+            <pine-dropdown-menu-label>Counters</pine-dropdown-menu-label>
+            <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
+          </pine-dropdown-menu-group>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-group>
+            <pine-dropdown-menu-label>Danger zone</pine-dropdown-menu-label>
+            <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_reset">Reset demo</pine-dropdown-menu-item>
+          </pine-dropdown-menu-group>
         </pine-dropdown-menu-content>
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>

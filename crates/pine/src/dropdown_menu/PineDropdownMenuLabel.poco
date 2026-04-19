@@ -1,0 +1,4 @@
+<div class="pine-dm-label"
+     :id="label_id">
+  <slot></slot>
+</div>
