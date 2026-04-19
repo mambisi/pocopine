@@ -827,8 +827,9 @@ fn attach_inspect_listeners() {
         ev.prevent_default();
         ev.stop_propagation();
 
-        if let Some((scope_id, _)) = crate::walker::enclosing_scope(&start) {
-            scroll_panel_to_scope(scope_id);
+        let maybe_scope = crate::walker::enclosing_scope(&start).map(|(id, _)| id);
+        if let Some(scope_id) = maybe_scope {
+            SELECTED.with(|c| c.set(Some(scope_id)));
             set_highlight(Some(scope_id));
         } else {
             apply_highlight(None);
@@ -837,6 +838,12 @@ fn attach_inspect_listeners() {
         INSPECT_MODE.with(|c| c.set(false));
         detach_inspect_listeners();
         render();
+
+        // After render() the tree pane reflects the new selection —
+        // scroll and flash the freshly-written row.
+        if let Some(scope_id) = maybe_scope {
+            scroll_panel_to_scope(scope_id);
+        }
     }));
     let _ = doc.add_event_listener_with_callback_and_bool(
         "click",
@@ -1078,11 +1085,9 @@ fn escape(s: &str) -> String {
 const STYLESHEET: &str = "\
     #__pp_devtools_root{position:fixed;top:12px;right:12px;width:540px;max-height:85vh;\
     overflow:hidden;z-index:2147483647;font-family:ui-monospace,Menlo,Consolas,monospace;\
-    font-size:11px;line-height:1.45;color:#e6e1d8;background:rgba(24,23,21,0.92);\
+    font-size:11px;line-height:1.45;color:#e6e1d8;background:#181715;\
     border:1px solid #2d2a24;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5);\
-    display:flex;flex-direction:column;opacity:0.7;backdrop-filter:blur(8px);\
-    transition:opacity 0.15s ease-out, background 0.15s ease-out;}\
-    #__pp_devtools_root:hover,#__pp_devtools_root:focus-within{opacity:1;background:#181715;}\
+    display:flex;flex-direction:column;}\
     #__pp_devtools_root[data-collapsed=\"true\"]{max-height:none;}\
     #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_meta,\
     #__pp_devtools_root[data-collapsed=\"true\"] .__pp_dev_body{display:none;}\
