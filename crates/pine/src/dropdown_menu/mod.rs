@@ -27,9 +27,10 @@
 
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, inject, provide, refs, watch_scope_field};
+use pocopine_core::scope::current_el;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
-use web_sys::Element;
+use web_sys::{CustomEvent, CustomEventInit, Element};
 
 /// Provide/inject key for the Root handle.
 const ROOT_KEY: &str = "pine-dm-root";
@@ -184,14 +185,45 @@ pub struct PineDropdownMenuItem {
 
 #[handlers]
 impl PineDropdownMenuItem {
+    /// Fires on the inner `<li>`'s click. Two-step dismiss:
+    ///
+    /// 1. Dispatch a cancelable `pp:select` CustomEvent
+    ///    synchronously on the element. Authors can listen with
+    ///    `@pp:select.prevent="…"` on the tag to veto the
+    ///    auto-close — the menu stays open while their action
+    ///    still runs via the native click bubble.
+    /// 2. If no listener called `preventDefault()`, close the
+    ///    menu via the injected root.
+    ///
+    /// Matches reka-ui's `DropdownMenuItem` select-emits-with-
+    /// preventable semantic.
     pub fn on_select(&mut self) {
         if self.disabled {
+            return;
+        }
+        let prevented = dispatch_pp_select();
+        if prevented {
             return;
         }
         if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
+}
+
+/// Dispatch a cancelable `pp:select` event from the current
+/// directive element. Returns `true` when a listener called
+/// `preventDefault` — caller should skip its default action.
+fn dispatch_pp_select() -> bool {
+    let Some(el) = current_el() else { return false };
+    let init = CustomEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let Ok(ev) = CustomEvent::new_with_event_init_dict("pp:select", &init) else {
+        return false;
+    };
+    let _ = el.dispatch_event(&ev);
+    ev.default_prevented()
 }
 
 // ── Separator ─────────────────────────────────────────────────────

@@ -519,6 +519,80 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     host.remove();
 }
 
+/// Item dispatches a cancelable `pp:select` CustomEvent. A
+/// listener that calls `preventDefault()` vetoes the auto-close;
+/// matches reka-ui's preventable DropdownMenuItem.select.
+#[wasm_bindgen_test]
+async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
+    use wasm_bindgen::closure::Closure;
+
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"pv-trig\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-item class=\"pv-keep\">Keep open</pine-dropdown-menu-item>\
+               <pine-dropdown-menu-item class=\"pv-close\">Normal close</pine-dropdown-menu-item>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    let trigger = host.query_selector(".pv-trig button").unwrap().unwrap();
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    // Attach a plain JS `pp:select` listener that vetoes only
+    // for the "keep open" item. Stands in for what an author
+    // would write with `@pp:select.prevent` or an event handler.
+    let keep_li = doc()
+        .query_selector(".pv-keep .pine-dm-item")
+        .unwrap()
+        .expect("keep-open item rendered");
+    let prevent_cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(|ev: web_sys::Event| ev.prevent_default()));
+    keep_li
+        .add_event_listener_with_callback("pp:select", prevent_cb.as_ref().unchecked_ref())
+        .unwrap();
+    prevent_cb.forget();
+
+    // Click the vetoing item — menu should stay open.
+    keep_li
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "menu stays open when a pp:select listener calls preventDefault"
+    );
+
+    // Click the plain item — no listener → menu dismisses.
+    let close_li = doc()
+        .query_selector(".pv-close .pine-dm-item")
+        .unwrap()
+        .expect("close item rendered");
+    close_li.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "menu dismisses when nothing prevents pp:select"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
 /// render correct ARIA wiring. Separator has `role="separator"`
 /// and `aria-orientation="horizontal"`. Group + Label link via
