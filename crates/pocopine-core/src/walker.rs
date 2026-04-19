@@ -458,8 +458,24 @@ fn release_subtree(node: &Node) {
 fn install_observer(root: &Element) {
     let cb = Closure::wrap(Box::new(move |records: JsValue, _obs: JsValue| {
         let Ok(arr) = records.dyn_into::<Array>() else { return };
+        // Re-read every callback — devtools mounts after `start`, so
+        // the panel root isn't present when the observer installs.
+        let panel_root = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("__pp_devtools_root"));
+
         for i in 0..arr.length() {
             let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else { continue };
+
+            // Devtools replaces its own innerHTML on a 200ms poll.
+            // Those records aren't app state — skip the whole record
+            // when its target is the panel (or inside it) so we don't
+            // release_subtree + re-walk the whole panel every tick.
+            if let (Some(panel), Some(target)) = (panel_root.as_ref(), rec.target()) {
+                if panel.contains(Some(&target)) {
+                    continue;
+                }
+            }
 
             // "Removed" records report nodes detached from *this*
             // parent. When we reparent an element (a keyed `pp-for`
