@@ -12,7 +12,9 @@
 //! ```
 
 use pocopine::prelude::*;
+use pocopine::tick;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 
 /// Initial state defaults to `"unchecked"` (via our manual Default
 /// impl; the macro-generated `#[derive(Default)]` would produce an
@@ -43,9 +45,20 @@ impl PineCheckbox {
             "checked" => "unchecked".into(),
             _ => "checked".into(), // unchecked OR indeterminate → checked
         };
-        pocopine::dispatch_event(
-            "pp:update:model",
-            &wasm_bindgen::JsValue::from_str(&self.state),
-        );
+        emit_state_changed(self.state.clone());
     }
+}
+
+fn emit_state_changed(state: String) {
+    let Some(el) = pocopine_core::scope::current_el() else { return };
+    tick::next(move || {
+        let init = web_sys::CustomEventInit::new();
+        init.set_bubbles(true);
+        init.set_detail(&JsValue::from_str(&state));
+        if let Ok(ev) =
+            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
+        {
+            let _ = el.dispatch_event(&ev);
+        }
+    });
 }
