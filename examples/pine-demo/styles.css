@@ -94,18 +94,28 @@ section {
 .pine-btn[data-size="sm"]  { padding: 0.25rem 0.625rem; font-size: 0.875rem; }
 .pine-btn[data-disabled]   { opacity: 0.5; cursor: not-allowed; }
 
-/* ─── PineDialog ──────────────────────────────────────────────── */
+/* ─── PineDialog (compound) ───────────────────────────────────── */
+
+/* Portal wraps Overlay + Content as siblings in <body>.  Kept
+   layout-transparent so each child positions against the
+   viewport directly. */
+.pine-dialog-portal { display: contents; }
+.pine-dialog-root   { display: contents; }
 
 .pine-dialog-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   z-index: 50;
 }
+/* Content is a sibling of Overlay now (not nested inside).
+   Center it against the viewport manually. */
 .pine-dialog-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 51;
   background: var(--bg);
   border-radius: var(--radius);
   padding: 1.5rem;
@@ -116,7 +126,10 @@ section {
 .pine-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
 .pine-dialog-description { color: var(--fg-muted); margin: 0 0 1rem; }
 
-/* ─── PinePopover ─────────────────────────────────────────────── */
+/* ─── PinePopover (compound) ──────────────────────────────────── */
+
+.pine-popover-root   { display: contents; }
+.pine-popover-portal { display: contents; }
 
 .pine-popover-content {
   background: var(--bg);
@@ -163,10 +176,10 @@ pine-dropdown-menu-portal { display: contents; }
   min-width: 180px;
   box-shadow: var(--shadow);
   z-index: 40;
-  /* Needed so an absolutely-positioned `.pine-dm-arrow` child
-     anchors to the content box. */
-  position: fixed; /* pp-anchor sets this; declare for Arrow's
-                      positioning context regardless. */
+  /* pp-anchor sets `position: fixed` at runtime, which already
+     gives Arrow (position: absolute) a containing block. No
+     need to declare here — avoids a redundant style that might
+     confuse authors reading the CSS. */
 }
 .pine-dm-item {
   padding: 0.375rem 0.625rem;
@@ -398,9 +411,16 @@ pine-dropdown-menu-portal { display: contents; }
 }
 .pine-tabs-trigger[disabled] { opacity: 0.4; cursor: not-allowed; }
 
-/* ─── PineTooltip ─────────────────────────────────────────────── */
+/* ─── PineTooltip (compound) ──────────────────────────────────── */
 
-.pine-tooltip {
+/* Root's `<span>` wraps Trigger + Portal. Portal teleports its
+   body out to <body>, so Root just participates inline in the
+   surrounding layout. */
+.pine-tooltip-root    { display: inline; }
+.pine-tooltip-portal  { display: contents; }
+.pine-tooltip-trigger { display: inline-block; }
+
+.pine-tooltip-content {
   background: #111;
   color: #fff;
   padding: 0.375rem 0.625rem;
