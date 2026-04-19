@@ -29,6 +29,7 @@ const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 const INIT_PENDING_KEY: &str = "__pp_init_pending";
+const WALKED_KEY: &str = "__pp_walked";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
 pub fn start_on_body() {
@@ -75,6 +76,10 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
 /// init handlers see a fully-bound subtree (children's refs, effects,
 /// etc.). Public so the router can walk the custom-element tag it
 /// creates inside an `<pp-outlet>`.
+///
+/// Marks the element with [`WALKED_KEY`] on completion so the
+/// `MutationObserver` knows not to re-walk it when we reparent the
+/// same node later (e.g. keyed `pp-for` reorders, `pp-teleport`).
 pub fn walk(el: &Element) {
     bind(el);
     let children = el.children();
@@ -85,6 +90,7 @@ pub fn walk(el: &Element) {
     }
     fire_deferred_init(el);
     fire_mount_hook(el);
+    set_private(el, WALKED_KEY, &JsValue::TRUE);
 }
 
 fn fire_deferred_init(el: &Element) {
@@ -454,18 +460,37 @@ fn install_observer(root: &Element) {
         let Ok(arr) = records.dyn_into::<Array>() else { return };
         for i in 0..arr.length() {
             let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else { continue };
+
+            // "Removed" records report nodes detached from *this*
+            // parent. When we reparent an element (a keyed `pp-for`
+            // reorder, `pp-teleport`, anything similar), it still ends
+            // up connected to the document — the DOM just reports the
+            // detach-then-attach as separate records. Those must not
+            // tear down the element's scope; only nodes that are
+            // genuinely gone should release.
+            let removed: NodeList = rec.removed_nodes();
+            for j in 0..removed.length() {
+                if let Some(n) = removed.get(j) {
+                    if n.is_connected() {
+                        continue;
+                    }
+                    release_subtree(&n);
+                }
+            }
+
+            // Symmetric for "added" — anything we already walked
+            // (including the element on the other end of a reparent)
+            // carries WALKED_KEY. Re-walking it would create duplicate
+            // effects subscribed to the same deps.
             let added: NodeList = rec.added_nodes();
             for j in 0..added.length() {
                 if let Some(n) = added.get(j) {
                     if let Ok(e) = n.dyn_into::<Element>() {
+                        if get_private(&e, WALKED_KEY).is_some() {
+                            continue;
+                        }
                         walk(&e);
                     }
-                }
-            }
-            let removed: NodeList = rec.removed_nodes();
-            for j in 0..removed.length() {
-                if let Some(n) = removed.get(j) {
-                    release_subtree(&n);
                 }
             }
         }
