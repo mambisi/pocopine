@@ -2,7 +2,7 @@
     class="pine-dm-content"
     pp-ref="menu"
     data-state="open"
-    :pp-anchor:bottom-start.offset.4.flip="trigger_selector"
+    pp-anchor:bottom-start.offset.4.flip="anchor"
     pp-roving
     @click.outside="close"
     @keydown.escape.prevent="close">

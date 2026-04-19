@@ -451,12 +451,38 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
+    let menu_el = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("menu opened via trigger when nested inside an outer scope");
+
+    // pp-anchor should have positioned the menu: `position: fixed`
+    // + a non-empty `top` + `left`. Without this, the menu lands at
+    // (0, 0) from browser defaults — exactly the "at the bottom of
+    // the page, not relative to the trigger" failure mode.
+    let menu_style = menu_el
+        .clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .style();
+    assert_eq!(
+        menu_style.get_property_value("position").unwrap_or_default(),
+        "fixed",
+        "pp-anchor applied position: fixed"
+    );
     assert!(
-        doc()
-            .query_selector("ul[role=\"menu\"].pine-dm-content")
-            .unwrap()
-            .is_some(),
-        "menu opened via trigger when nested inside an outer scope"
+        !menu_style
+            .get_property_value("top")
+            .unwrap_or_default()
+            .is_empty(),
+        "pp-anchor wrote a `top` — menu is anchored, not dumped at the page root"
+    );
+    assert!(
+        !menu_style
+            .get_property_value("left")
+            .unwrap_or_default()
+            .is_empty(),
+        "pp-anchor wrote a `left` — menu is anchored to the trigger"
     );
 
     // Click the first item's rendered `<li>` — clicking the inner
