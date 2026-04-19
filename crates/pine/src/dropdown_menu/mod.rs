@@ -174,6 +174,8 @@ impl PineDropdownMenuContent {
                 root.scope_id().0
             );
         }
+        // Expose `side` to any nested Arrow.
+        provide(CONTENT_SIDE_KEY, self.side.clone());
     }
 
     pub fn on_ready(&self) {
@@ -252,6 +254,37 @@ impl PineDropdownMenuItem {
 /// its default action.
 fn dispatch_pp_select() -> bool {
     emit_cancelable("pp:select", ())
+}
+
+// ── Arrow ─────────────────────────────────────────────────────────
+
+/// Decorative arrow that points at the trigger. Inherits its
+/// orientation from Content's `side` prop via inject + mirror.
+///
+/// v0 limitation: the arrow reflects the *configured* side, not
+/// the resolved side after a collision flip. For tooltips that
+/// never flip (`flip=false`) or menus authored with known space,
+/// this is correct. Adding runtime-flip awareness would require
+/// `pp-anchor::reposition` to expose the resolved side through
+/// a side-table — saved for a follow-up.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuArrow.poco")]
+pub struct PineDropdownMenuArrow {
+    pub side: String,
+}
+
+/// Provide/inject key for Content's `side` — Arrow subscribes to
+/// this to render its own `data-side`. Content writes its value
+/// in `on_setup`.
+const CONTENT_SIDE_KEY: &str = "pine-dm-content-side";
+
+#[handlers]
+impl PineDropdownMenuArrow {
+    pub fn on_setup(&mut self) {
+        if let Some(side) = inject::<String>(CONTENT_SIDE_KEY) {
+            self.side = side;
+        }
+    }
 }
 
 // ── Separator ─────────────────────────────────────────────────────

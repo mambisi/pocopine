@@ -837,6 +837,50 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     host.remove();
 }
 
+/// DropdownMenu Arrow inherits `side` from Content via
+/// provide/inject and stamps `data-side` so authors can style
+/// the arrow's rotation per side.
+#[wasm_bindgen_test]
+async fn dropdown_menu_arrow_mirrors_content_side() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"ar-trig\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content side=\"top\">\
+               <pine-dropdown-menu-arrow class=\"ar-arrow\"></pine-dropdown-menu-arrow>\
+               <pine-dropdown-menu-item>A</pine-dropdown-menu-item>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+    host.query_selector(".ar-trig button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let arrow = doc()
+        .query_selector(".ar-arrow span")
+        .unwrap()
+        .expect("arrow rendered");
+    assert_eq!(
+        arrow.get_attribute("data-side").as_deref(),
+        Some("top"),
+        "arrow's data-side mirrors Content's side prop"
+    );
+    assert_eq!(
+        arrow.get_attribute("aria-hidden").as_deref(),
+        Some("true"),
+        "arrow is decorative"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu Content accepts `side` / `align` / `side_offset`
 /// props that drive the programmatic pp-anchor install. Validates
 /// that non-default values actually reach the positioning state

@@ -48,10 +48,11 @@ pub use dialog::{
     PineDialogPortal, PineDialogRoot, PineDialogTitle, PineDialogTrigger,
 };
 pub use dropdown_menu::{
-    PineDropdownMenuCheckboxItem, PineDropdownMenuContent, PineDropdownMenuGroup,
-    PineDropdownMenuItem, PineDropdownMenuItemIndicator, PineDropdownMenuLabel,
-    PineDropdownMenuPortal, PineDropdownMenuRadioGroup, PineDropdownMenuRadioItem,
-    PineDropdownMenuRoot, PineDropdownMenuSeparator, PineDropdownMenuTrigger,
+    PineDropdownMenuArrow, PineDropdownMenuCheckboxItem, PineDropdownMenuContent,
+    PineDropdownMenuGroup, PineDropdownMenuItem, PineDropdownMenuItemIndicator,
+    PineDropdownMenuLabel, PineDropdownMenuPortal, PineDropdownMenuRadioGroup,
+    PineDropdownMenuRadioItem, PineDropdownMenuRoot, PineDropdownMenuSeparator,
+    PineDropdownMenuTrigger,
 };
 pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
@@ -101,6 +102,7 @@ pub fn register_all() {
     PineDropdownMenuItemIndicator::register();
     PineDropdownMenuRadioGroup::register();
     PineDropdownMenuRadioItem::register();
+    PineDropdownMenuArrow::register();
     PineTabsRoot::register();
     PineTabsList::register();
     PineTabsTrigger::register();

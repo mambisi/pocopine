@@ -91,8 +91,11 @@ In this order:
    — done (`1bc4202` + `d428c1a`). ItemIndicator switched from
    `pp-if` to `pp-show` due to a pp-if-without-teleport scope-
    pinning gap (see §6).
-5. **Arrow**. Small. Needs `pp-anchor` to expose its final side/
-   align so the arrow can orient itself — adds a tiny data-attr.
+5. ~~**Arrow**~~ — done. Minimal v0: Content provides its `side`
+   via a context key, Arrow mirrors it for `data-side` styling.
+   Does NOT yet track the resolved side after a collision flip
+   (would need `pp-anchor::reposition` to expose the resolved
+   side through a side-table — saved for a follow-up).
 6. **Sub/SubTrigger/SubContent**. Submenu flyouts — requires:
    nested `pp-anchor` (Sub anchors to SubTrigger), hover-intent
    timers, left-arrow close semantics, parent menu stays open.
