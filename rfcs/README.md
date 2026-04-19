@@ -43,4 +43,5 @@ Conventions:
 | 025 | [Inline `{expr}` text interpolation](./rfc-025-text-interpolation.md) | Implemented |
 | 026 | [`post_mount` lifecycle + `#[watch(field)]` sugar](./rfc-026-post-mount-watch-field.md) | Implemented |
 | 027 | [Parent-scope context (`provide` / `inject`)](./rfc-027-provide-inject.md) | Implemented |
+| 028 | [`emit` / `emit_from` helpers](./rfc-028-emit.md) | Implemented |
 | 029 | [Rename `post_mount` → `on_ready`](./rfc-029-on-ready-rename.md) | Implemented |

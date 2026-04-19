@@ -117,32 +117,13 @@ impl PineDialog {
 }
 
 /// Fire `pp:update:model` so `pp-model:open` on the parent picks
-/// up the internally-driven close.
-///
-/// Two non-obvious pieces here:
-///
-/// 1. **Deferred**: firing synchronously from inside a handler's
-///    `&mut self` would re-enter the scope's state via pp-model's
-///    parent→child mirror write and panic on `borrow_mut`. A
-///    `tick::next` lets the borrow release first.
-/// 2. **Dispatched from the host `<pine-dialog>` tag**, not from
-///    inside the teleported content. Teleport moves the dialog
-///    DOM to `<body>`, so bubbling events from the teleported
-///    subtree never reach the host tag where pp-model's listener
-///    sits. We walk back via `__pp_teleport_origin` to find the
-///    host.
+/// up the internally-driven close. Dispatched from the host
+/// `<pine-dialog>` tag (not the teleported content) because
+/// bubbling from `<body>` wouldn't reach the host's listener.
+/// RFC-028's `emit_from` handles the deferral.
 fn emit_open_changed(open: bool) {
     let Some(host) = find_host_element() else { return };
-    tick::next(move || {
-        let init = web_sys::CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&JsValue::from_bool(open));
-        if let Ok(ev) =
-            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
-        {
-            let _ = host.dispatch_event(&ev);
-        }
-    });
+    emit_from(&host, "pp:update:model", open);
 }
 
 /// Walk from the dialog's `content` ref up through the teleported

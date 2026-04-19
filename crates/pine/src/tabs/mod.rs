@@ -18,10 +18,8 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::tick;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
-use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 /// A single tab entry. `value` is the identifier used by
@@ -64,20 +62,6 @@ impl PineTabs {
     /// `on_click`; external callers can also invoke directly.
     pub fn select(&mut self, value: String) {
         self.value = value.clone();
-        emit_value_changed(value);
+        emit("pp:update:model", value);
     }
-}
-
-fn emit_value_changed(value: String) {
-    let Some(el) = pocopine_core::scope::current_el() else { return };
-    tick::next(move || {
-        let init = web_sys::CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&JsValue::from_str(&value));
-        if let Ok(ev) =
-            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
-        {
-            let _ = el.dispatch_event(&ev);
-        }
-    });
 }

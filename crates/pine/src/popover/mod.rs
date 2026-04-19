@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, refs, tick, ScopeId};
+use pocopine::{current_scope_id, focus, refs, ScopeId};
 use serde::{Deserialize, Serialize};
 
 use js_sys::Reflect;
@@ -112,19 +112,10 @@ impl PinePopover {
 /// Fire `pp:update:model` through the `<pine-popover>` host tag so
 /// `pp-model:open` on the parent picks up an internally-driven
 /// close. See `PineDialog::emit_open_changed` for the rationale
-/// behind deferring + walking back through the teleport origin.
+/// behind walking back through the teleport origin.
 fn emit_open_changed(open: bool) {
     let Some(host) = find_host_element() else { return };
-    tick::next(move || {
-        let init = web_sys::CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&JsValue::from_bool(open));
-        if let Ok(ev) =
-            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
-        {
-            let _ = host.dispatch_event(&ev);
-        }
-    });
+    emit_from(&host, "pp:update:model", open);
 }
 
 fn find_host_element() -> Option<Element> {

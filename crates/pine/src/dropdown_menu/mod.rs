@@ -80,16 +80,7 @@ impl PineDropdownMenu {
 /// that ref back to the host tag.
 fn emit_open_changed() {
     let Some(host) = find_host_element() else { return };
-    tick::next(move || {
-        let init = web_sys::CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&JsValue::from_bool(false));
-        if let Ok(ev) =
-            web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
-        {
-            let _ = host.dispatch_event(&ev);
-        }
-    });
+    emit_from(&host, "pp:update:model", false);
 }
 
 fn find_host_element() -> Option<Element> {
