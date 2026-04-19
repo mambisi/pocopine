@@ -4,6 +4,7 @@
         class="pine-dm-sub-content"
         pp-ref="menu"
         data-state="open"
+        pp-anchor:right-start.offset.2.flip="anchor"
         pp-roving
         @keydown.escape.prevent="close"
         @keydown.arrow-left.prevent="close">

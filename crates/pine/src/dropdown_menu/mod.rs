@@ -371,16 +371,16 @@ impl PineDropdownMenuSubContent {
 
     pub fn on_ready(&self) {
         let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) else { return };
-        let Some(scope) = current_scope_id() else { return };
         let me = this::<Self>();
         let sub_scope = sub.scope_id();
-        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, prev| {
+        // Watch for the sub's open transitions so roving-focus +
+        // auto-focus can run when the menu mounts. pp-anchor is
+        // handled declaratively in the template; we only need to
+        // forward `open` into self.
+        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
             me.update(|s| s.open = is_open);
-            // pp-if mounts the `<ul>` lazily, so the first mount
-            // only happens on false→true. Install the anchor then,
-            // reading the menu element freshly.
-            if is_open && prev != Some(&true) {
-                install_sub_anchor(scope);
+            if is_open {
+                focus_first_sub_item();
             }
         });
     }
@@ -392,43 +392,16 @@ impl PineDropdownMenuSubContent {
     }
 }
 
-/// Install pp-anchor on the freshly-teleported sub-menu. Called
-/// from the SubContent's `open → true` watch callback with the
-/// scope id captured — `current_scope_id()` isn't set inside a
-/// bare effect callback, so the scope must be passed in.
-fn install_sub_anchor(scope: ScopeId) {
-    // Defer TWICE: the first tick lets the reactive flush finish
-    // (it'll run the pp-if effect that mounts + walks the sub
-    // menu, registering `pp-ref="menu"`). The second tick runs
-    // after any chained microtasks the walk scheduled — at this
-    // point `refs::get_on` reliably sees the menu element.
-    pocopine::tick::next(move || {
-        pocopine::tick::next(move || {
-            let Some(pine_scope) = pocopine::Scope::find(scope) else { return };
-            let Some(content) = pine_scope
-                .typed::<PineDropdownMenuSubContent>()
-                .map(|rc| Handle::new(rc, scope))
-            else {
-                return;
-            };
-            let (anchor, side, align, offset) = content.with(|c| {
-                (c.anchor.clone(), c.side.clone(), c.align.clone(), c.side_offset)
-            });
-            let Some(menu) = refs::get_on(scope, "menu") else { return };
-            init_roving_tabindex(&menu);
-            focus::auto_focus_first(&menu);
-            if let Some(anchor_el) = resolve_anchor(&anchor) {
-                if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
-                    let placement = pocopine_core::directives::anchor::Placement {
-                        side: pocopine_core::directives::anchor::Side::parse(&side),
-                        align: pocopine_core::directives::anchor::Align::parse(&align),
-                    };
-                    pocopine_core::directives::anchor::install(
-                        &floater, &anchor_el, placement, offset, true,
-                    );
-                }
-            }
-        });
+/// Give keyboard focus to the first enabled item in the sub
+/// menu once it mounts. Runs via `tick::next` so pp-if has
+/// actually cloned + walked the teleported subtree before we
+/// query for the menu ref.
+fn focus_first_sub_item() {
+    pocopine::tick::next(|| {
+        let Some(scope) = current_scope_id() else { return };
+        let Some(menu) = refs::get_on(scope, "menu") else { return };
+        init_roving_tabindex(&menu);
+        focus::auto_focus_first(&menu);
     });
 }
 

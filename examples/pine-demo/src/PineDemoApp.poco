@@ -34,10 +34,8 @@
   <h2>Dialog</h2>
   <section class="row">
     <pine-dialog-root pp-model:open="dialog_open">
-      <pine-dialog-trigger>
-        <pine-button pp-as variant="destructive">
-          <button>Delete file</button>
-        </pine-button>
+      <pine-dialog-trigger pp-as>
+        <button class="pine-btn" data-variant="destructive">Delete file</button>
       </pine-dialog-trigger>
       <pine-dialog-portal>
         <pine-dialog-overlay></pine-dialog-overlay>
@@ -45,11 +43,11 @@
           <pine-dialog-title>Delete file?</pine-dialog-title>
           <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
           <div class="row" style="margin-top:1rem;justify-content:flex-end">
-            <pine-dialog-close>
-              <pine-button pp-as variant="ghost"><button>Cancel</button></pine-button>
+            <pine-dialog-close pp-as>
+              <button class="pine-btn" data-variant="ghost">Cancel</button>
             </pine-dialog-close>
-            <pine-dialog-close>
-              <pine-button pp-as variant="destructive"><button>Delete</button></pine-button>
+            <pine-dialog-close pp-as>
+              <button class="pine-btn" data-variant="destructive">Delete</button>
             </pine-dialog-close>
           </div>
         </pine-dialog-content>
@@ -251,7 +249,7 @@
   <section class="row">
     <pine-tooltip-root>
       <pine-tooltip-trigger>
-        <pine-button pp-as variant="primary"><button>Save</button></pine-button>
+        <button class="pine-btn" data-variant="primary">Save</button>
       </pine-tooltip-trigger>
       <pine-tooltip-portal>
         <pine-tooltip-content>Saves your work.</pine-tooltip-content>

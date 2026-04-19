@@ -1,4 +1,5 @@
-<button type="button"
+<button pp-as
+        type="button"
         class="pine-dialog-trigger"
         :aria-expanded="open ? 'true' : 'false'"
         aria-haspopup="dialog"
