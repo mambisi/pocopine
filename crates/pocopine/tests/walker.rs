@@ -180,6 +180,14 @@ impl OutsideHost {
     }
 }
 
+// RFC-018 — `$id` magic.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "IdHost.html")]
+struct IdHost {}
+
+#[handlers]
+impl IdHost {}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -225,6 +233,7 @@ fn register_all() {
     ResizeHost::register();
     AnchorHost::register();
     OutsideHost::register();
+    IdHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -1094,6 +1103,45 @@ async fn click_outside_fires_only_for_clicks_that_miss_the_host() {
     inside_btn_el.click();
     tick().await;
     assert_eq!(count_after(&host), 1, "sibling click fires outside handler");
+
+    host.remove();
+}
+
+/// `$id` returns a unique per-instance string; two sibling
+/// `<id-host>`s get distinct IDs, and the `+` operator composes
+/// sub-IDs like `pp-1-input`.
+#[wasm_bindgen_test]
+async fn id_magic_is_unique_per_instance_and_composes_via_plus() {
+    let host = mount("<id-host></id-host><id-host></id-host>");
+    tick().await;
+
+    let roots = host.query_selector_all(".idh-root").unwrap();
+    assert_eq!(roots.length(), 2, "two IdHost instances mounted");
+
+    let get_text = |root: Element, sel: &str| -> String {
+        let el = root.query_selector(sel).unwrap().unwrap();
+        el.dyn_into::<HtmlElement>().unwrap().inner_text().trim().to_string()
+    };
+    let get_attr = |root: Element, sel: &str, name: &str| -> String {
+        let el = root.query_selector(sel).unwrap().unwrap();
+        el.get_attribute(name).unwrap_or_default()
+    };
+
+    let root1 = roots.item(0).unwrap().dyn_into::<Element>().unwrap();
+    let root2 = roots.item(1).unwrap().dyn_into::<Element>().unwrap();
+
+    let base1 = get_text(root1.clone(), ".idh-base");
+    let base2 = get_text(root2.clone(), ".idh-base");
+    assert!(base1.starts_with("pp-"), "base id is pp-prefixed, got {base1:?}");
+    assert!(base2.starts_with("pp-"), "base id is pp-prefixed, got {base2:?}");
+    assert_ne!(base1, base2, "two instances get distinct ids");
+
+    // `+` composition: label[for] === input[id] === `{base}-input`.
+    let for1 = get_attr(root1.clone(), ".idh-label", "for");
+    let id1 = get_attr(root1.clone(), ".idh-input", "id");
+    assert_eq!(for1, format!("{base1}-input"));
+    assert_eq!(id1, format!("{base1}-input"));
+    assert_eq!(for1, id1, "label[for] and input[id] resolve identically");
 
     host.remove();
 }

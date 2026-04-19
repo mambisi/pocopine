@@ -17,6 +17,7 @@ pub mod fetch;
 pub mod focus;
 pub mod handle;
 pub mod handler;
+pub mod id;
 pub mod loop_scope;
 pub mod magics;
 pub mod slot_scope;

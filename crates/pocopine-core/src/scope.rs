@@ -138,6 +138,7 @@ impl Scope {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
         crate::refs::clear_scope(id);
         crate::slots::clear(id);
+        crate::id::clear_scope(id);
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct

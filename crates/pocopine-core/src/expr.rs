@@ -74,6 +74,11 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+    /// `+` — string concatenation when either operand is a string;
+    /// numeric addition when both coerce to `f64`; empty string
+    /// otherwise. Matches JS coercion closely enough for templates
+    /// that compose IDs like `$id + '-title'`.
+    Plus,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +103,7 @@ enum Tok {
     Le,
     Gt,
     Ge,
+    Plus,
     Question,
     Colon,
     Dot,
@@ -143,6 +149,7 @@ impl<'a> Lexer<'a> {
         let tok = match c {
             b'(' => { self.pos += 1; Tok::LParen }
             b')' => { self.pos += 1; Tok::RParen }
+            b'+' => { self.pos += 1; Tok::Plus }
             b'?' => { self.pos += 1; Tok::Question }
             b':' => { self.pos += 1; Tok::Colon }
             b'.' => { self.pos += 1; Tok::Dot }
@@ -402,7 +409,7 @@ impl Parser {
     }
 
     fn parse_relation(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let mut lhs = self.parse_unary()?;
+        let mut lhs = self.parse_additive()?;
         loop {
             let op = match self.peek().0 {
                 Tok::Le => BinOp::Le,
@@ -412,10 +419,23 @@ impl Parser {
                 _ => break,
             };
             self.pos += 1;
-            let rhs = self.parse_unary()?;
+            let rhs = self.parse_additive()?;
             let span = lhs.span.start..rhs.span.end;
             lhs = Spanned {
                 value: Expr::BinOp(op, Box::new(lhs), Box::new(rhs)),
+                span,
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_additive(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut lhs = self.parse_unary()?;
+        while self.eat(&Tok::Plus) {
+            let rhs = self.parse_unary()?;
+            let span = lhs.span.start..rhs.span.end;
+            lhs = Spanned {
+                value: Expr::BinOp(BinOp::Plus, Box::new(lhs), Box::new(rhs)),
                 span,
             };
         }
@@ -561,6 +581,19 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
                     _ => JsValue::from_bool(false),
                 }
             }
+            BinOp::Plus => {
+                let l = evaluate(lhs, scope);
+                let r = evaluate(rhs, scope);
+                if l.as_string().is_some() || r.as_string().is_some() {
+                    let ls = js_to_string(&l);
+                    let rs = js_to_string(&r);
+                    JsValue::from_str(&format!("{ls}{rs}"))
+                } else if let (Some(a), Some(b)) = (l.as_f64(), r.as_f64()) {
+                    JsValue::from_f64(a + b)
+                } else {
+                    JsValue::from_str("")
+                }
+            }
         },
         Expr::Ternary(cond, then_e, else_e) => {
             if !evaluate(cond, scope).is_falsy() {
@@ -587,6 +620,33 @@ fn resolve_segments(root: &JsValue, segments: &[String]) -> JsValue {
         cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
     }
     cur
+}
+
+/// Loose string coercion used by `BinOp::Plus` when either operand
+/// is a string. Handles the common primitives; for objects, returns
+/// `"[object Object]"` (the default JS `toString()` shape).
+fn js_to_string(v: &JsValue) -> String {
+    if let Some(s) = v.as_string() {
+        return s;
+    }
+    if let Some(n) = v.as_f64() {
+        // Strip the `.0` for integers so `$id + '-' + 3` reads
+        // `pp-1-3`, not `pp-1-3.0`.
+        if n.fract() == 0.0 && n.is_finite() {
+            return format!("{}", n as i64);
+        }
+        return n.to_string();
+    }
+    if let Some(b) = v.as_bool() {
+        return if b { "true".into() } else { "false".into() };
+    }
+    if v.is_null() {
+        return "null".into();
+    }
+    if v.is_undefined() {
+        return "undefined".into();
+    }
+    "[object Object]".into()
 }
 
 /// Strict equality — primitive types compare by value, everything
@@ -864,5 +924,51 @@ mod tests {
     fn comparison_with_string_literal() {
         let e = parse_ok("role == 'admin' || role == \"editor\"");
         assert!(matches!(e.value, Expr::BinOp(BinOp::Or, _, _)));
+    }
+
+    // ─── RFC-018 — `+` operator ─────────────────────────────────
+
+    #[test]
+    fn plus_chains_left_to_right() {
+        let e = parse_ok("a + b + c");
+        // (a + b) + c
+        match e.value {
+            Expr::BinOp(BinOp::Plus, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::BinOp(BinOp::Plus, _, _)));
+                assert!(matches!(rhs.value, Expr::Path(_)));
+            }
+            other => panic!("expected BinOp Plus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plus_binds_tighter_than_comparison() {
+        let e = parse_ok("a + b == 'foo-bar'");
+        match e.value {
+            Expr::BinOp(BinOp::Eq, lhs, _) => {
+                assert!(matches!(lhs.value, Expr::BinOp(BinOp::Plus, _, _)));
+            }
+            other => panic!("expected equality, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plus_binds_looser_than_unary_not() {
+        // `!a + !b` should parse as `(!a) + (!b)` — i.e. `+` is
+        // outside, `!` is inside.
+        let e = parse_ok("!a + !b");
+        match e.value {
+            Expr::BinOp(BinOp::Plus, lhs, rhs) => {
+                assert!(matches!(lhs.value, Expr::Not(_)));
+                assert!(matches!(rhs.value, Expr::Not(_)));
+            }
+            other => panic!("expected plus at root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plus_with_string_literal_parses() {
+        let e = parse_ok("$id + '-title'");
+        assert!(matches!(e.value, Expr::BinOp(BinOp::Plus, _, _)));
     }
 }
