@@ -80,8 +80,8 @@
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>
 
-    <!-- Second instance — verifies auto-anchor + demonstrates
-         checkbox-items with ItemIndicator. -->
+    <!-- Second instance — showcases checkbox-items, radio-group,
+         and ItemIndicator sharing one compound surface. -->
     <pine-dropdown-menu-root>
       <pine-dropdown-menu-trigger>View ▾</pine-dropdown-menu-trigger>
       <pine-dropdown-menu-portal>
@@ -95,6 +95,22 @@
             <pine-dropdown-menu-item-indicator>✓</pine-dropdown-menu-item-indicator>
             Archived
           </pine-dropdown-menu-checkbox-item>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-label>Density</pine-dropdown-menu-label>
+          <pine-dropdown-menu-radio-group pp-model:value="density">
+            <pine-dropdown-menu-radio-item value="compact">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Compact
+            </pine-dropdown-menu-radio-item>
+            <pine-dropdown-menu-radio-item value="comfortable">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Comfortable
+            </pine-dropdown-menu-radio-item>
+            <pine-dropdown-menu-radio-item value="spacious">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Spacious
+            </pine-dropdown-menu-radio-item>
+          </pine-dropdown-menu-radio-group>
         </pine-dropdown-menu-content>
       </pine-dropdown-menu-portal>
     </pine-dropdown-menu-root>

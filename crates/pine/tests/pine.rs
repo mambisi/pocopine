@@ -593,6 +593,88 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     host.remove();
 }
 
+/// DropdownMenu RadioGroup + RadioItem exclusive selection:
+/// clicking a RadioItem updates the group's `value`, flips
+/// `aria-checked` on the clicked item to `"true"` and the
+/// previously-selected one to `"false"`, and nested
+/// ItemIndicators mirror accordingly.
+#[wasm_bindgen_test]
+async fn dropdown_menu_radio_group_exclusive_selection() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"rg-trig\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-radio-group value=\"a\">\
+                 <pine-dropdown-menu-radio-item class=\"rg-a\" value=\"a\">\
+                   <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>\
+                   A\
+                 </pine-dropdown-menu-radio-item>\
+                 <pine-dropdown-menu-radio-item class=\"rg-b\" value=\"b\">\
+                   <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>\
+                   B\
+                 </pine-dropdown-menu-radio-item>\
+               </pine-dropdown-menu-radio-group>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    host.query_selector(".rg-trig button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    // Initial: A is selected (group.value=\"a\"). aria-checked
+    // reflects that — and the indicator inside A is visible.
+    let a_li = doc().query_selector(".rg-a li").unwrap().unwrap();
+    let b_li = doc().query_selector(".rg-b li").unwrap().unwrap();
+    assert_eq!(
+        a_li.get_attribute("aria-checked").as_deref(),
+        Some("true"),
+        "A starts selected"
+    );
+    assert_eq!(
+        b_li.get_attribute("aria-checked").as_deref(),
+        Some("false"),
+        "B starts unselected"
+    );
+
+    // Veto menu dismissal so we can keep asserting on the
+    // teleported DOM after the click.
+    use wasm_bindgen::closure::Closure;
+    let veto: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(|ev: web_sys::Event| ev.prevent_default()));
+    b_li
+        .add_event_listener_with_callback("pp:select", veto.as_ref().unchecked_ref())
+        .unwrap();
+    veto.forget();
+
+    // Click B — group.value flips to "b", both items' aria-checked
+    // mirrors update reactively via the watch_scope_field install
+    // in RadioItem.on_ready.
+    b_li.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert_eq!(
+        a_li.get_attribute("aria-checked").as_deref(),
+        Some("false"),
+        "A deselected after clicking B"
+    );
+    assert_eq!(
+        b_li.get_attribute("aria-checked").as_deref(),
+        Some("true"),
+        "B now selected"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu CheckboxItem + ItemIndicator round-trip: clicking
 /// the item toggles its tri-state, emits pp:update:model, and the
 /// nested ItemIndicator reactively renders via pp-if on the

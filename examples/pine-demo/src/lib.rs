@@ -31,6 +31,11 @@ pub struct PineDemoApp {
     /// both ways through the compound's pp:update:model event.
     pub show_muted: String,
     pub show_archived: String,
+
+    /// Exclusive radio-group value. `pp-model:value` on the
+    /// RadioGroup tag keeps this in sync with whichever RadioItem
+    /// is currently selected.
+    pub density: String,
 }
 
 #[handlers]
@@ -40,6 +45,7 @@ impl PineDemoApp {
         self.agree_state = "unchecked".into();
         self.show_muted = "unchecked".into();
         self.show_archived = "unchecked".into();
+        self.density = "comfortable".into();
         self.tabs = vec![
             pine::TabDef {
                 value: "account".into(),

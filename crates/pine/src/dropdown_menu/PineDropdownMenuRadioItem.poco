@@ -1,0 +1,10 @@
+<li class="pine-dm-radio-item"
+    role="menuitemradio"
+    tabindex="-1"
+    :aria-checked="checked ? 'true' : 'false'"
+    :data-state="checked ? 'checked' : 'unchecked'"
+    :aria-disabled="disabled"
+    :data-disabled="disabled"
+    @click="on_select">
+  <slot></slot>
+</li>

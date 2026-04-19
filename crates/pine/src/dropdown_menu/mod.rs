@@ -384,6 +384,114 @@ impl PineDropdownMenuItemIndicator {
     }
 }
 
+// ── RadioGroup ────────────────────────────────────────────────────
+
+/// Exclusive-selection container for `PineDropdownMenuRadioItem`s.
+/// Owns a shared `value: String`; each RadioItem is "checked"
+/// when its own `value` equals the group's. `pp-model:value`
+/// flows changes both ways via `pp:update:model` bubbling up
+/// from RadioItem clicks.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuRadioGroup.poco")]
+pub struct PineDropdownMenuRadioGroup {
+    pub value: String,
+}
+
+/// Provide/inject key for a RadioGroup's scope id. RadioItems
+/// inside use it to read the group's `value` (for their own
+/// `checked` mirror) and write to it on click.
+const RADIO_GROUP_KEY: &str = "pine-dm-radio-group";
+
+#[handlers]
+impl PineDropdownMenuRadioGroup {
+    pub fn on_setup(&mut self) {
+        if let Some(scope) = current_scope_id() {
+            provide(RADIO_GROUP_KEY, scope);
+        }
+    }
+}
+
+// ── RadioItem ─────────────────────────────────────────────────────
+
+/// Radio-selection menu item. `role="menuitemradio"`. Its
+/// `checked` bool mirrors `group.value == self.value`, updated
+/// reactively via `watch_scope_field` on the injected group.
+/// Also provides `CHECKED_OWNER_KEY` so nested ItemIndicators
+/// work identically to CheckboxItem.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineDropdownMenuRadioItem.poco")]
+pub struct PineDropdownMenuRadioItem {
+    /// Author-provided — the value this item represents.
+    pub value: String,
+    /// Mirrored from the group. Only used to derive `checked`.
+    pub group_value: String,
+    /// Computed: `group_value == value`. Drives aria-checked +
+    /// ItemIndicator visibility.
+    pub checked: bool,
+    pub disabled: bool,
+}
+
+#[handlers]
+impl PineDropdownMenuRadioItem {
+    pub fn on_setup(&mut self) {
+        // Seed initial group_value + checked from the group,
+        // and provide to ItemIndicator.
+        if let Some(group) = inject::<ScopeId>(RADIO_GROUP_KEY) {
+            if let Some(scope) = Scope::find(group) {
+                let v = scope.state.borrow().get("value");
+                self.group_value = v.as_string().unwrap_or_default();
+                self.checked = self.group_value == self.value;
+            }
+        }
+        if let Some(scope) = current_scope_id() {
+            provide(CHECKED_OWNER_KEY, scope);
+        }
+    }
+
+    pub fn on_ready(&self) {
+        let Some(group) = inject::<ScopeId>(RADIO_GROUP_KEY) else { return };
+        let me = this::<Self>();
+        watch_scope_field::<String, _>(group, "value", move |new, _| {
+            let new_v = new.clone();
+            me.update(|s| {
+                s.group_value = new_v.clone();
+                s.checked = s.group_value == s.value;
+            });
+        });
+    }
+
+    pub fn on_select(&mut self) {
+        if self.disabled {
+            return;
+        }
+        // Write the new value into the group; the group's
+        // pp-model-bound parent picks this up via the
+        // pp:update:model event we emit next.
+        if let Some(group) = inject::<ScopeId>(RADIO_GROUP_KEY) {
+            if let Some(scope) = Scope::find(group) {
+                let new_value = self.value.clone();
+                let handle = scope
+                    .typed::<PineDropdownMenuRadioGroup>()
+                    .map(|rc| Handle::new(rc, group));
+                if let Some(h) = handle {
+                    h.update(|g: &mut PineDropdownMenuRadioGroup| {
+                        g.value = new_value;
+                    });
+                }
+            }
+        }
+        emit("pp:update:model", self.value.clone());
+
+        let prevented = dispatch_pp_select();
+        if prevented {
+            return;
+        }
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(ROOT_KEY) {
+            root.update(|r: &mut PineDropdownMenuRoot| r.close());
+        }
+    }
+}
+
 // ── Label ─────────────────────────────────────────────────────────
 
 /// Labelled heading for a Group. Injects the group's label id and
