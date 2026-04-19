@@ -1,1 +1,20 @@
-<div class="pine-dialog"><slot></slot></div>
+<template pp-teleport="body" pp-if="open">
+  <div class="pine-dialog-overlay" data-state="open" @click.self="on_overlay_click">
+    <div role="dialog"
+         aria-modal="true"
+         class="pine-dialog-content"
+         pp-ref="content"
+         data-state="open"
+         :aria-labelledby="$id + '-title'"
+         :aria-describedby="$id + '-description'"
+         @keydown.escape.prevent="on_escape">
+      <h2 class="pine-dialog-title" :id="$id + '-title'">
+        <slot name="title"></slot>
+      </h2>
+      <p class="pine-dialog-description" :id="$id + '-description'">
+        <slot name="description"></slot>
+      </p>
+      <slot></slot>
+    </div>
+  </div>
+</template>

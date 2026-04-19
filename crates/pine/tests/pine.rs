@@ -92,6 +92,84 @@ async fn button_pp_as_hoists_author_element() {
     host.remove();
 }
 
+// ─── PineDialog ───────────────────────────────────────────────────
+
+/// Mounting a dialog with `open=true` teleports the content into
+/// `<body>` with the right ARIA wiring, locks body scroll, and
+/// moves focus inside. Escape closes it, restoring focus and
+/// unlocking scroll.
+#[wasm_bindgen_test]
+async fn dialog_teleports_traps_focus_and_locks_scroll() {
+    use pocopine::scroll_lock;
+
+    // Host with a trigger button we can use as the pre-open
+    // focus target.
+    let host = mount(
+        "<div><button class=\"trigger\">open</button>\
+         <pine-dialog open=\"true\">\
+           <template pp-slot=\"title\">Hi</template>\
+           <template pp-slot=\"description\">Body</template>\
+           <button class=\"inner-1\">A</button>\
+           <button class=\"inner-2\">B</button>\
+         </pine-dialog></div>",
+    );
+    tick().await;
+    // Two ticks — first for pp-if/pp-teleport commit, second for
+    // the tick::next-deferred activate() inside PineDialog::on_mount.
+    tick().await;
+
+    // Dialog content ended up in <body>, NOT inside `host`.
+    let dialog = doc()
+        .query_selector("[role=\"dialog\"].pine-dialog-content")
+        .unwrap()
+        .expect("dialog role element rendered");
+    assert!(
+        dialog
+            .parent_element()
+            .map(|p| p.local_name() == "div")
+            .unwrap_or(false),
+        "teleported into body's overlay wrapper, not inner pine-dialog tag"
+    );
+
+    // ARIA wiring lines up: aria-labelledby and aria-describedby
+    // point at the rendered <h2>/<p>.
+    let labelledby = dialog.get_attribute("aria-labelledby").unwrap_or_default();
+    let title = doc().get_element_by_id(&labelledby).expect("title id resolves");
+    assert!(title.inner_html().contains("Hi"));
+
+    // Scroll lock held.
+    assert!(scroll_lock::depth() >= 1, "scroll lock engaged");
+
+    // Focus landed on the first focusable inside the dialog.
+    let active = doc().active_element().unwrap();
+    assert_eq!(
+        active.get_attribute("class").as_deref(),
+        Some("inner-1"),
+        "auto_focus_first moved focus to first button inside content"
+    );
+
+    // Escape closes. Dispatch a keydown on the dialog.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    dialog.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    // Dialog gone from document.
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "dialog removed after Escape"
+    );
+    assert_eq!(scroll_lock::depth(), 0, "scroll lock released on close");
+
+    host.remove();
+}
+
 /// Clicks on the inner `<button>` bubble up through the
 /// `<pine-button>` custom element tag — so `@click` (or any
 /// directly-attached listener) on the tag catches them. This is
