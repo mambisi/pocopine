@@ -10,6 +10,7 @@ use web_sys::Element;
 
 use crate::reactive::ScopeId;
 
+pub mod anchor;
 pub mod bind;
 pub mod for_;
 pub mod html;
@@ -60,6 +61,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("ref", ref_::run);
         m.insert("resize", resize::run);
         m.insert("intersect", intersect::run);
+        m.insert("anchor", anchor::run);
         m
     })
 }

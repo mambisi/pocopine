@@ -158,6 +158,14 @@ impl ResizeHost {
     }
 }
 
+// RFC-015 — pp-anchor.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "AnchorHost.html")]
+struct AnchorHost {}
+
+#[handlers]
+impl AnchorHost {}
+
 // RFC-010 — attribute fallthrough.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "FallthroughRoot.html")]
@@ -201,6 +209,7 @@ fn register_all() {
     ScopedSlotHost::register();
     ExprHost::register();
     ResizeHost::register();
+    AnchorHost::register();
 }
 
 // ─── helpers ──────────────────────────────────────────────────────
@@ -986,6 +995,51 @@ async fn pp_resize_fires_handler_on_initial_observe_and_on_size_change() {
     assert!(
         w_after > w_before,
         "width updates after inline style change ({w_before} → {w_after})"
+    );
+
+    host.remove();
+}
+
+/// `pp-anchor:bottom-start.offset.8` positions the floater directly
+/// below the anchor's left edge with an 8px gap.
+#[wasm_bindgen_test]
+async fn pp_anchor_positions_floater_under_trigger() {
+    // `AnchorHost` places the trigger at position (100, 200) sized
+    // 120 × 40; the popover should land at top = 200+40+8 = 248,
+    // left = 100 (bottom-start alignment).
+    let host = mount("<anchor-host></anchor-host>");
+    raf_tick().await;
+
+    let popover = host
+        .query_selector(".ah-popover")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    let rect = popover.get_bounding_client_rect();
+
+    // Because these are fixed-position coords, the browser might
+    // add a sub-pixel offset for devicePixelRatio. Use a loose
+    // tolerance.
+    let epsilon = 2.0;
+    assert!(
+        (rect.left() - 100.0).abs() < epsilon,
+        "popover left {} should be ~100",
+        rect.left()
+    );
+    assert!(
+        (rect.top() - 248.0).abs() < epsilon,
+        "popover top {} should be ~248 (trigger bottom + 8px offset)",
+        rect.top()
+    );
+
+    // Confirm the directive set `position: fixed` so the floater is
+    // pinned to the viewport rather than the document flow.
+    let style = popover.style();
+    assert_eq!(
+        style.get_property_value("position").unwrap(),
+        "fixed",
+        "pp-anchor sets position: fixed"
     );
 
     host.remove();

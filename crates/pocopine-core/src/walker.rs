@@ -715,6 +715,7 @@ fn release_subtree(node: &Node) {
         crate::directives::teleport::release(&el);
         crate::directives::resize::release(&el);
         crate::directives::intersect::release(&el);
+        crate::directives::anchor::release(&el);
     }
 }
 
