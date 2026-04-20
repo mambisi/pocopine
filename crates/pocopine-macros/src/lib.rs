@@ -66,6 +66,7 @@ struct ComponentArgs {
     name: Option<LitStr>,
     template: Option<LitStr>,
     style: Option<LitStr>,
+    role: Option<LitStr>,
 }
 
 impl Parse for ComponentArgs {
@@ -89,14 +90,35 @@ impl Parse for ComponentArgs {
                 args.template = Some(lit);
             } else if kv.path.is_ident("style") {
                 args.style = Some(lit);
+            } else if kv.path.is_ident("role") {
+                args.role = Some(lit);
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
-                    "unknown key — expected one of: name, template, style",
+                    "unknown key — expected one of: name, template, style, role",
                 ));
             }
         }
         Ok(args)
+    }
+}
+
+/// RFC-033 — canonical primitive-role → default-element map.
+/// A role picks the semantically-correct root tag for a primitive
+/// template (mirrors Reka UI's Primitive convention) and emits a
+/// `data-pine-role="<role>"` CSS hook on the root. Templates with
+/// a role must use the placeholder `<root>...</root>` pair for
+/// their root element; the registrar rewrites it at compile time.
+fn role_to_tag(role: &str) -> Option<&'static str> {
+    match role {
+        "visual" => Some("span"),
+        "interactive" => Some("button"),
+        "link" => Some("a"),
+        "media" => Some("img"),
+        "panel" => Some("div"),
+        "scope" => Some("div"),
+        "surface" => Some("div"),
+        _ => None,
     }
 }
 
@@ -208,13 +230,37 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { matches!(key, #(#prop_field_names)|*) }
     };
 
+    // Resolve `role = "..."` → canonical HTML tag name. An unknown
+    // role is a compile-time error; an explicitly-omitted role
+    // keeps the classic `inject_pp_data`-only path so non-primitive
+    // components don't need a placeholder root.
+    let role_arg: proc_macro2::TokenStream = match args.role.as_ref() {
+        Some(lit) => {
+            let role_name = lit.value();
+            let Some(tag) = role_to_tag(&role_name) else {
+                return syn::Error::new_spanned(
+                    lit,
+                    format!(
+                        "unknown primitive role `{role_name}` — expected one of: \
+                         visual, interactive, link, media, panel, scope, surface"
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            };
+            quote! { Some((#tag, #role_name)) }
+        }
+        None => quote! { None },
+    };
+
     let register_template_stmt = quote! {
         const _: &str = include_str!(#template_path);
         ::pocopine::__private::register_template(
             #name_str,
-            ::pocopine::__private::inject_pp_data(
+            ::pocopine::__private::compile_template(
                 include_str!(#template_path),
                 #name_str,
+                #role_arg,
             ),
         );
     };

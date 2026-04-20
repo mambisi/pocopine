@@ -26,7 +26,7 @@ inject_key!(ROOT: Handle<PineAvatarRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAvatarRoot.poco")]
+#[component(template = "PineAvatarRoot.poco", role = "visual")]
 pub struct PineAvatarRoot {
     pub loaded: bool,
 }
@@ -79,7 +79,7 @@ impl PineAvatarImage {
 // ── Fallback ──────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAvatarFallback.poco")]
+#[component(template = "PineAvatarFallback.poco", role = "visual")]
 pub struct PineAvatarFallback {
     /// Mirrored from Root. Fallback's `pp-if="!loaded"` reads it
     /// — present during load, unmounted once the image lands.

@@ -1234,6 +1234,45 @@ async fn avatar_fallback_hides_after_image_loads() {
     host.remove();
 }
 
+// ─── RFC-033 primitive roles ──────────────────────────────────────
+
+/// Role-annotated components render with the role's default tag and
+/// carry `data-pine-role="<role>"` on the root. Avatar Root/Fallback
+/// are both `role = "visual"` → `<span data-pine-role="visual">`.
+#[wasm_bindgen_test]
+async fn avatar_root_carries_data_pine_role_visual() {
+    let host = mount(
+        "<pine-avatar-root><pine-avatar-fallback><span class=\"fb\">AB</span></pine-avatar-fallback></pine-avatar-root>",
+    );
+    tick().await;
+
+    let root = host
+        .query_selector(".pine-avatar-root")
+        .unwrap()
+        .expect("avatar root rendered");
+    assert_eq!(
+        root.tag_name().to_ascii_lowercase(),
+        "span",
+        "role='visual' → <span> default"
+    );
+    assert_eq!(
+        root.get_attribute("data-pine-role").as_deref(),
+        Some("visual"),
+        "role attribute on the root"
+    );
+
+    let fallback = host
+        .query_selector(".pine-avatar-fallback")
+        .unwrap()
+        .expect("fallback rendered");
+    assert_eq!(
+        fallback.get_attribute("data-pine-role").as_deref(),
+        Some("visual"),
+    );
+
+    host.remove();
+}
+
 // ─── PineAccordion ────────────────────────────────────────────────
 
 /// Accordion type="single" + collapsible: clicking an Item's

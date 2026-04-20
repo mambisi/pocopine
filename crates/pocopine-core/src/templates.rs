@@ -27,6 +27,114 @@ pub fn is_registered(name: &str) -> bool {
     TEMPLATES.with(|t| t.borrow().contains_key(name))
 }
 
+/// Full template compilation entry-point for the macro.
+///
+/// - `role = None` → just injects `pp-data` (the classic path).
+/// - `role = Some((tag, role_name))` → treats the template root as a
+///   `<root>` placeholder (see [RFC-033](../../rfcs/rfc-033-primitive-roles.md)),
+///   rewrites `<root>` / `</root>` to `<tag>` / `</tag>`, injects
+///   `data-pine-role="<role_name>"` on the root, and — when `tag == "button"`
+///   — injects `type="button"` so interactive primitives don't
+///   accidentally submit a surrounding `<form>`.
+pub fn compile_template(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
+    let Some((tag, role_name)) = role else {
+        return inject_pp_data(raw, name);
+    };
+    let renamed = rewrite_root_placeholder(raw, tag);
+    let mut extra = format!(r#"data-pine-role="{role_name}""#);
+    if tag == "button" && !first_tag_has_attr(&renamed, "type") {
+        extra.push_str(r#" type="button""#);
+    }
+    inject_root_attrs(&renamed, name, &extra)
+}
+
+/// Rewrite the `<root>` / `</root>` placeholder tag pair to the given
+/// real tag name. `root` isn't a real HTML element, so every occurrence
+/// in a `.poco` file is unambiguously the placeholder.
+fn rewrite_root_placeholder(raw: &str, tag: &str) -> String {
+    let step1 = raw.replace("<root>", &format!("<{tag}>"));
+    let step2 = step1.replace("<root ", &format!("<{tag} "));
+    let step3 = step2.replace("<root/>", &format!("<{tag}/>"));
+    step3.replace("</root>", &format!("</{tag}>"))
+}
+
+/// True when the first opening tag of `raw` has an attribute named
+/// `needle` (case-insensitive boolean match, doesn't parse the value).
+fn first_tag_has_attr(raw: &str, needle: &str) -> bool {
+    let bytes = raw.as_bytes();
+    let Some(tag_start) = find_byte(bytes, 0, b'<') else {
+        return false;
+    };
+    let Some(close) = find_tag_end(bytes, tag_start) else {
+        return false;
+    };
+    let tag_slice = &raw[tag_start + 1..close];
+    // Split into whitespace-delimited chunks; look at attr names.
+    for chunk in tag_slice.split_ascii_whitespace().skip(1) {
+        let name_end = chunk.find('=').unwrap_or(chunk.len());
+        if chunk[..name_end].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Like [`inject_pp_data`] but also splices `extra_attrs` (raw attribute
+/// string) into the first opening tag, before `pp-data`. Caller guarantees
+/// `extra_attrs` is safe HTML.
+fn inject_root_attrs(raw: &str, name: &str, extra_attrs: &str) -> String {
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+        if bytes[i] != b'<' {
+            return raw.to_owned();
+        }
+        if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
+            if let Some(end) = find_seq(bytes, i + 4, b"-->") {
+                i = end + 3;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        if i + 2 <= len && bytes[i + 1] == b'!' {
+            if let Some(end) = find_byte(bytes, i, b'>') {
+                i = end + 1;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        if i + 2 <= len && bytes[i + 1] == b'?' {
+            if let Some(end) = find_seq(bytes, i + 2, b"?>") {
+                i = end + 2;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        let Some(close) = find_tag_end(bytes, i) else {
+            return raw.to_owned();
+        };
+        let self_closing = close > 0 && bytes[close - 1] == b'/';
+        let insert_at = if self_closing { close - 1 } else { close };
+        let suffix = format!(r#" {extra_attrs} pp-data="{name}""#);
+        let mut out = String::with_capacity(raw.len() + suffix.len());
+        out.push_str(&raw[..insert_at]);
+        if !out.ends_with(char::is_whitespace) {
+            out.push(' ');
+        }
+        out.push_str(suffix.trim_start());
+        out.push_str(&raw[insert_at..]);
+        return out;
+    }
+    raw.to_owned()
+}
+
 /// Insert `pp-data="<name>"` into the first element's opening tag of
 /// `raw`. The caller guarantees the template has a real element root;
 /// comments, doctypes, and leading whitespace are skipped.
@@ -139,7 +247,7 @@ fn find_tag_end(bytes: &[u8], tag_start: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::inject_pp_data;
+    use super::{compile_template, inject_pp_data};
 
     #[test]
     fn basic_root_gets_attr() {
@@ -172,5 +280,77 @@ mod tests {
     fn tolerates_gt_in_attr_value() {
         let out = inject_pp_data("<div title=\"a > b\">x</div>", "n");
         assert_eq!(out, r#"<div title="a > b" pp-data="n">x</div>"#);
+    }
+
+    // ── compile_template + role rewriting ─────────────────────────
+
+    #[test]
+    fn compile_template_no_role_matches_inject_pp_data() {
+        let out = compile_template("<div>hi</div>", "c", None);
+        assert_eq!(out, r#"<div pp-data="c">hi</div>"#);
+    }
+
+    #[test]
+    fn role_visual_rewrites_root_to_span() {
+        let out = compile_template(
+            "<root class=\"pine-avatar-root\"><slot></slot></root>",
+            "pine-avatar-root",
+            Some(("span", "visual")),
+        );
+        assert_eq!(
+            out,
+            r#"<span class="pine-avatar-root" data-pine-role="visual" pp-data="pine-avatar-root"><slot></slot></span>"#
+        );
+    }
+
+    #[test]
+    fn role_interactive_injects_type_button() {
+        let out = compile_template(
+            "<root class=\"pine-switch\"><slot/></root>",
+            "pine-switch",
+            Some(("button", "interactive")),
+        );
+        assert!(out.starts_with(r#"<button class="pine-switch""#));
+        assert!(out.contains(r#"data-pine-role="interactive""#));
+        assert!(out.contains(r#"type="button""#));
+        assert!(out.ends_with("</button>"));
+    }
+
+    #[test]
+    fn role_interactive_respects_existing_type() {
+        let out = compile_template(
+            "<root type=\"submit\" class=\"x\"><slot/></root>",
+            "c",
+            Some(("button", "interactive")),
+        );
+        // Only one `type=` should appear — the original submit wins.
+        assert_eq!(out.matches("type=").count(), 1);
+        assert!(out.contains(r#"type="submit""#));
+    }
+
+    #[test]
+    fn role_panel_rewrites_to_div() {
+        let out = compile_template(
+            "<root><slot/></root>",
+            "p",
+            Some(("div", "panel")),
+        );
+        assert_eq!(
+            out,
+            r#"<div data-pine-role="panel" pp-data="p"><slot/></div>"#
+        );
+    }
+
+    #[test]
+    fn role_with_self_closing_root() {
+        // Self-closing placeholder: `<root/>` → `<img .../>`.
+        let out = compile_template(
+            "<root :src=\"src\"/>",
+            "pine-avatar-image",
+            Some(("img", "media")),
+        );
+        assert!(out.contains(r#"data-pine-role="media""#));
+        assert!(out.contains(r#"pp-data="pine-avatar-image""#));
+        assert!(out.ends_with("/>"));
     }
 }

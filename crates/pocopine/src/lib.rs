@@ -38,7 +38,7 @@ pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
     pub use pocopine_core::{
-        inject_pp_data, inject_style, register_component, register_store_scope,
+        compile_template, inject_pp_data, inject_style, register_component, register_store_scope,
         register_template, store_scope, Component, ComponentState, FromHandlerArg, Handle,
         HandlerDispatch, LifecycleContext, Scope, Store,
     };
