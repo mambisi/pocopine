@@ -1,0 +1,5 @@
+<span class="pine-hover-card-trigger"
+      pp-ref="trigger"
+      style="display:inline-block">
+  <slot></slot>
+</span>

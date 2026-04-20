@@ -277,6 +277,38 @@
     </pine-tabs-root>
   </section>
 
+  <!-- PineHoverCard — hover-opened floating card ────────── -->
+  <h2>Hover card</h2>
+  <section class="row">
+    <pine-hover-card-root open_delay="200" close_delay="200">
+      <pine-hover-card-trigger>
+        <a href="#ada" class="hc-link">@ada</a>
+      </pine-hover-card-trigger>
+      <pine-hover-card-portal>
+        <pine-hover-card-content>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <pine-avatar-root>
+              <pine-avatar-image src="https://i.pravatar.cc/48?u=ada" alt="Ada"></pine-avatar-image>
+              <pine-avatar-fallback>AL</pine-avatar-fallback>
+            </pine-avatar-root>
+            <div>
+              <strong style="display:block">Ada Lovelace</strong>
+              <span style="color:var(--fg-muted);font-size:0.875rem">
+                Mathematician · @ada
+              </span>
+            </div>
+          </div>
+          <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
+            Counted as the first programmer.
+          </p>
+        </pine-hover-card-content>
+      </pine-hover-card-portal>
+    </pine-hover-card-root>
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      Hover or focus the link.
+    </span>
+  </section>
+
   <!-- PineTooltip — compound (Radix-style) ───────────────── -->
   <h2>Tooltip</h2>
   <section class="row">

@@ -33,6 +33,18 @@ async fn tick() {
     }
 }
 
+/// Yield to the browser's task queue (not just the microtask
+/// queue) for `ms` milliseconds. Needed to let `setTimeout`-based
+/// deferrals like HoverCard's open/close timers run.
+async fn sleep_ms(ms: i32) {
+    let p = js_sys::Promise::new(&mut |resolve: js_sys::Function, _reject| {
+        let w = web_sys::window().unwrap();
+        let _ = w
+            .set_timeout_with_callback_and_timeout_and_arguments_0(resolve.unchecked_ref(), ms);
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+}
+
 // ─── PineButton ───────────────────────────────────────────────────
 
 /// Variants and size props flow onto `data-*` attributes; the
@@ -1819,6 +1831,65 @@ async fn dialog_trigger_composes_pine_button() {
             .unwrap()
             .is_none(),
         "dialog closed via composed pine-button close"
+    );
+
+    host.remove();
+}
+
+// ─── PineHoverCard ────────────────────────────────────────────────
+
+/// Hover on the Trigger with a zero open-delay opens the card;
+/// leaving and letting the close-delay elapse closes it. We drop
+/// the delays to 0 so the test doesn't need to wait real time.
+#[wasm_bindgen_test]
+async fn hover_card_hover_opens_and_leave_closes() {
+    let host = mount(
+        "<pine-hover-card-root open_delay=\"0\" close_delay=\"0\">\
+           <pine-hover-card-trigger>\
+             <a class=\"hc-a\" href=\"#\">@ada</a>\
+           </pine-hover-card-trigger>\
+           <pine-hover-card-portal>\
+             <pine-hover-card-content>\
+               Ada Lovelace\
+             </pine-hover-card-content>\
+           </pine-hover-card-portal>\
+         </pine-hover-card-root>",
+    );
+    tick().await;
+
+    // mouseenter doesn't bubble per spec, so dispatch directly on
+    // the trigger span where the listener lives.
+    let trig_span = host
+        .query_selector(".pine-hover-card-trigger")
+        .unwrap()
+        .unwrap();
+    let enter = web_sys::Event::new("mouseenter").unwrap();
+    trig_span.dispatch_event(&enter).unwrap();
+    // setTimeout(0) schedules on the task queue, which only runs
+    // after our microtasks drain — a real yield is required.
+    sleep_ms(5).await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-hover-card-content")
+            .unwrap()
+            .is_some(),
+        "card mounted after hover open"
+    );
+
+    // Leave the trigger → close timer fires (0 delay).
+    let leave = web_sys::Event::new("mouseleave").unwrap();
+    trig_span.dispatch_event(&leave).unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-hover-card-content")
+            .unwrap()
+            .is_none(),
+        "card torn down after mouseleave on trigger"
     );
 
     host.remove();

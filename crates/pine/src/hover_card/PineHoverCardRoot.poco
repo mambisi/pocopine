@@ -1,0 +1,5 @@
+<div class="pine-hover-card-root"
+     pp-ref="root"
+     :data-state="open ? 'open' : 'closed'">
+  <slot></slot>
+</div>

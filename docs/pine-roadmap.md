@@ -18,6 +18,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineRadioGroup* (compound, 3 parts) | stable | Root/Item/Indicator; `role="radiogroup"`, `pp-roving.both`, `pp-model:value` |
 | PineToggle | stable | Single `aria-pressed` button, `pp-model:pressed` |
 | PineToggleGroup* (compound, 2 parts) | stable | Root/Item; `type="single\|multiple"`, `pp-roving.both` |
+| PineHoverCard* (compound, 4 parts) | stable | Root/Trigger/Portal/Content; `open_delay` + `close_delay`, shared timer so pointer can move trigger→content without close |
 | PinePopover* (compound, 5 parts) | stable | Root/Trigger/Portal/Content/Close; auto-anchor via Trigger stamp |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
@@ -211,7 +212,7 @@ After DropdownMenu's core is fleshed out:
 | 4 | ~~**Toggle / ToggleGroup**~~ | Done — standalone `<pine-toggle>` (single `aria-pressed` button, `pp-model:pressed`) + 2-part ToggleGroup (Root/Item) with `type="single\|multiple"` selection and `pp-roving.both`. |
 | 5 | ~~**Avatar**~~ | Done — Root/Image/Fallback compound. |
 | 6 | ~~**AlertDialog**~~ | Done — 9-part compound: Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel. Content renders `role="alertdialog"`; `dismiss_on_overlay` defaults `false`. Author's side-effect handler goes on the `<pine-alert-dialog-action>` tag (fallthrough skips `@`) so it fires alongside the framework's own `close()`. |
-| 7 | **HoverCard** | Popover + hover delay timers (copy Tooltip's timing). |
+| 7 | ~~**HoverCard**~~ | Done — 4-part compound (Root/Trigger/Portal/Content). `open_delay` + `close_delay` on Root; Content tracks its own mouseenter/mouseleave to cancel the close timer, so users can move the pointer from Trigger across the gap into Content without the card vanishing. Focus opens immediately (no delay) per Radix. |
 | 8 | **ContextMenu** | DropdownMenu + pointer-coord anchor. Free once Sub lands. |
 | 9 | **Tooltip provider** | Radix's single-open policy across a subtree (compound-rewrite territory). |
 

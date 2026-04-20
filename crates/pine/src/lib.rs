@@ -31,6 +31,7 @@ pub mod checkbox;
 pub mod collapsible;
 pub mod dialog;
 pub mod dropdown_menu;
+pub mod hover_card;
 pub mod overlay;
 pub mod popover;
 pub mod radio_group;
@@ -63,6 +64,9 @@ pub use dropdown_menu::{
     PineDropdownMenuRadioItem, PineDropdownMenuRoot, PineDropdownMenuSeparator,
     PineDropdownMenuSub, PineDropdownMenuSubContent, PineDropdownMenuSubTrigger,
     PineDropdownMenuTrigger,
+};
+pub use hover_card::{
+    PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
 };
 pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
@@ -131,6 +135,10 @@ pub fn register_all() {
     PineDropdownMenuSub::register();
     PineDropdownMenuSubTrigger::register();
     PineDropdownMenuSubContent::register();
+    PineHoverCardRoot::register();
+    PineHoverCardTrigger::register();
+    PineHoverCardPortal::register();
+    PineHoverCardContent::register();
     PineTabsRoot::register();
     PineTabsList::register();
     PineTabsTrigger::register();

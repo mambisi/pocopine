@@ -186,6 +186,23 @@ section {
 .pine-radio-group-item[data-disabled] { opacity: 0.5; cursor: not-allowed; }
 .pine-radio-group-indicator { display: inline-flex; color: var(--brand); }
 
+/* ─── PineHoverCard (compound) ────────────────────────────────
+   Floating, interactive card. Shares the overlay z-index band
+   with dialogs / popovers; renders as a standard pop panel. */
+.pine-hover-card-root   { display: contents; }
+.pine-hover-card-portal { display: contents; }
+.pine-hover-card-content {
+  position: fixed;
+  z-index: 45;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  max-width: 320px;
+  box-shadow: var(--shadow);
+}
+.hc-link { color: var(--brand); text-decoration: underline; cursor: pointer; }
+
 /* ─── PineToggle + PineToggleGroup ───────────────────────────── */
 
 .pine-toggle,
