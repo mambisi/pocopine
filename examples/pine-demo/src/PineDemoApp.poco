@@ -538,4 +538,41 @@
       <span>I agree — state: <strong pp-text="agree_state"></strong></span>
     </div>
   </section>
+
+  <!-- PineOtpField ───────────────────────────────────────── -->
+  <h2>OTP field</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Enter the 6-digit code we sent to your inbox. Auto-advance,
+      Backspace walks back, paste spreads across slots.
+    </p>
+    <pine-otp-field length="6"
+                    type="numeric"
+                    pp-model:value="otp_code"
+                    label="Verification code"></pine-otp-field>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Code so far: <strong pp-text="otp_code || '(empty)'"></strong>
+    </p>
+  </section>
+
+  <!-- PineSlider ─────────────────────────────────────────── -->
+  <h2>Slider</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Drag the thumb, click the track, or focus and use
+      arrows / Home / End / PageUp / PageDown.
+    </p>
+    <pine-slider-root min="0"
+                      max="100"
+                      step="5"
+                      pp-model:value="volume">
+      <pine-slider-track>
+        <pine-slider-range></pine-slider-range>
+      </pine-slider-track>
+      <pine-slider-thumb></pine-slider-thumb>
+    </pine-slider-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Volume: <strong pp-text="volume"></strong>
+    </p>
+  </section>
 </div>

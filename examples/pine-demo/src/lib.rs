@@ -60,6 +60,15 @@ pub struct PineDemoApp {
     /// Accordion single-mode value — which FAQ item is open
     /// (or `""` when all collapsed).
     pub faq_item: String,
+
+    /// OTP Field demo — the verification code the user has
+    /// typed so far. Bound two-way via `pp-model:value` on
+    /// `<pine-otp-field>`.
+    pub otp_code: String,
+
+    /// Slider demo — current volume 0..100, bound two-way via
+    /// `pp-model:value` on `<pine-slider-root>`.
+    pub volume: f64,
 }
 
 #[handlers]
@@ -72,6 +81,7 @@ impl PineDemoApp {
         self.density = "comfortable".into();
         self.plan = "free".into();
         self.align = "left".into();
+        self.volume = 40.0;
     }
 
     pub fn bump(&mut self) {
