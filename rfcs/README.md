@@ -45,3 +45,4 @@ Conventions:
 | 027 | [Parent-scope context (`provide` / `inject`)](./rfc-027-provide-inject.md) | Implemented |
 | 028 | [`emit` / `emit_from` helpers](./rfc-028-emit.md) | Implemented |
 | 029 | [Rename `post_mount` → `on_ready`](./rfc-029-on-ready-rename.md) | Implemented |
+| 030 | [Typed `InjectKey` (Symbol-style provide/inject)](./rfc-030-inject-key-symbols.md) | Draft |
