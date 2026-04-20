@@ -118,6 +118,12 @@ pub fn run(call: &DirectiveCall) {
                             &teleport::TELEPORT_ORIGIN_KEY.into(),
                             template_el.as_ref(),
                         );
+                        // Record the clone on the template so
+                        // release_subtree finds and removes it when
+                        // the template's enclosing subtree is torn
+                        // down (e.g. a parent pp-if clone containing
+                        // this template gets removed from body).
+                        teleport::stash(&template_el, &clone_root);
                     }
                     walker::walk(&clone_root);
                     *current.borrow_mut() = Some(clone_root.clone());
@@ -138,10 +144,27 @@ pub fn run(call: &DirectiveCall) {
                 }
                 let clone_cap = clone.clone();
                 let slot_cap = current.clone();
+                let template_cap = template_el.clone();
+                let teleported = teleport_target.is_some();
                 transition::leave(&clone, move || {
                     if let Some(parent) = clone_cap.parent_node() {
                         let _ = parent.remove_child(&clone_cap);
                     }
+                    // We removed the clone ourselves; drop the
+                    // teleport stash so a later release_subtree
+                    // doesn't try to remove an already-detached node.
+                    if teleported {
+                        teleport::clear_stash(&template_cap);
+                    }
+                    // Explicitly release the subtree we created. The
+                    // root MutationObserver may not cover the teleport
+                    // target (e.g. we inserted into `<body>` but the
+                    // observer is rooted at an embedded host), so
+                    // relying on it would orphan nested teleported
+                    // clones inside this one. Direct release fires
+                    // scope unmount hooks and cascades teleport::release
+                    // on every descendant deterministically.
+                    walker::release_subtree(clone_cap.as_ref());
                     // Only clear the slot if it still points to this
                     // clone — a rapid re-mount could have replaced it.
                     let mut slot = slot_cap.borrow_mut();

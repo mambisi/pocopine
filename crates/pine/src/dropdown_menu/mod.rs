@@ -361,10 +361,8 @@ impl Default for PineDropdownMenuSubContent {
 impl PineDropdownMenuSubContent {
     pub fn on_setup(&mut self) {
         if let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(SUB_KEY) {
-            self.anchor = format!(
-                "[data-pine-dm-sub-trigger=\"{}\"]",
-                sub.scope_id().0
-            );
+            let sid = sub.scope_id().0;
+            self.anchor = format!("[data-pine-dm-sub-trigger=\"{}\"]", sid);
             self.open = sub.with(|s| s.open);
         }
     }

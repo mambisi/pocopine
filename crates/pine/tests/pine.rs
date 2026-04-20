@@ -947,6 +947,67 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
     host.remove();
 }
 
+/// Closing the outer menu while a sub is open must NOT leak its
+/// teleported portal in `<body>`. Prior bug: Sub's DOM was
+/// inside the outer portal, so outer close destroyed Sub's
+/// scope without SubContent's pp-if running its removal — the
+/// sub's teleported clone stayed in body and accumulated per
+/// cycle.
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_cleanup_on_outer_close() {
+    let host = mount(
+        "<pine-dropdown-menu-root>\
+           <pine-dropdown-menu-trigger class=\"sc-root-t\">open</pine-dropdown-menu-trigger>\
+           <pine-dropdown-menu-portal>\
+             <pine-dropdown-menu-content>\
+               <pine-dropdown-menu-sub>\
+                 <pine-dropdown-menu-sub-trigger class=\"sc-sub-t\">More…</pine-dropdown-menu-sub-trigger>\
+                 <pine-dropdown-menu-sub-content>\
+                   <pine-dropdown-menu-item>X</pine-dropdown-menu-item>\
+                 </pine-dropdown-menu-sub-content>\
+               </pine-dropdown-menu-sub>\
+             </pine-dropdown-menu-content>\
+           </pine-dropdown-menu-portal>\
+         </pine-dropdown-menu-root>",
+    );
+    tick().await;
+
+    // Open outer, open sub, close outer. Repeat — without the
+    // cleanup, each cycle adds an orphan `.pine-dm-sub-portal`
+    // to body. Close via a body click (outer Content's
+    // `@click.outside` fires) rather than re-clicking the
+    // trigger — a trigger-click-while-open races with its own
+    // `@click.outside` closer and nets to no state change.
+    let body = doc().body().unwrap();
+    for _ in 0..3 {
+        let outer_trig = host.query_selector(".sc-root-t button").unwrap().unwrap();
+        outer_trig.dyn_into::<HtmlElement>().unwrap().click();
+        tick().await;
+        tick().await;
+        let sub_trig = doc()
+            .query_selector(".sc-sub-t li")
+            .unwrap()
+            .expect("sub trigger li");
+        sub_trig.dyn_into::<HtmlElement>().unwrap().click();
+        tick().await;
+        tick().await;
+        body.clone().dyn_into::<HtmlElement>().unwrap().click();
+        tick().await;
+        tick().await;
+    }
+
+    let portals = doc()
+        .query_selector_all(".pine-dm-sub-portal")
+        .unwrap();
+    assert_eq!(
+        portals.length(),
+        0,
+        "no orphan sub portals leaked across open/close cycles"
+    );
+
+    host.remove();
+}
+
 /// DropdownMenu Arrow inherits `side` from Content via
 /// provide/inject and stamps `data-side` so authors can style
 /// the arrow's rotation per side.
@@ -1532,6 +1593,233 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
         "dialog removed after Escape"
     );
     assert_eq!(scroll_lock::depth(), 0, "scroll lock released on close");
+
+    host.remove();
+}
+
+/// `<pine-dialog-trigger pp-as>` hoists the author's `<button>` as
+/// the rendered root. The template's `@click="toggle"` must still
+/// fire on the hoisted element — otherwise the dialog never opens.
+#[wasm_bindgen_test]
+async fn dialog_trigger_pp_as_click_opens_dialog() {
+    let host = mount(
+        "<pine-dialog-root>\
+           <pine-dialog-trigger pp-as>\
+             <button class=\"user-trig\">Go</button>\
+           </pine-dialog-trigger>\
+           <pine-dialog-portal>\
+             <pine-dialog-content>\
+               <pine-dialog-title>Hi</pine-dialog-title>\
+               <pine-dialog-close pp-as>\
+                 <button class=\"user-close\">Close</button>\
+               </pine-dialog-close>\
+             </pine-dialog-content>\
+           </pine-dialog-portal>\
+         </pine-dialog-root>",
+    );
+    tick().await;
+
+    let trigger = host
+        .query_selector(".user-trig")
+        .unwrap()
+        .expect("user trigger button in host");
+    assert!(
+        trigger.get_attribute("class").unwrap_or_default().contains("pine-dialog-trigger"),
+        "template class merged onto user root"
+    );
+
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_some(),
+        "dialog opened after pp-as trigger click"
+    );
+
+    // Close via pp-as Close button — verifies the pp-as path on
+    // Close component also wires @click="click" correctly.
+    let close = doc()
+        .query_selector(".user-close")
+        .unwrap()
+        .expect("Close user button teleported with dialog");
+    close.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "dialog closed after pp-as close click"
+    );
+
+    host.remove();
+}
+
+/// Close buttons wrapped in a non-component element (e.g. a
+/// `<div class="row">` layout helper) inside Content's slot must
+/// still find the compound Root via `inject`. The bug this
+/// guards: slot materialisation pins `SCOPE_ID_KEY` to the slot
+/// *author* (e.g. the app root) and `CTX_PARENT_KEY` to the slot
+/// *owner* (Content) on direct slot children only. A nested
+/// `<pine-dialog-close>` that falls through to an ancestor's
+/// `SCOPE_ID_KEY` wired its inject parent to the app root,
+/// skipping the dialog compound entirely — Close.click got
+/// `inject<Root>() = None` and the dialog stayed open.
+#[wasm_bindgen_test]
+async fn dialog_pp_as_close_siblings_both_fire() {
+    let host = mount(
+        "<pine-dialog-root pp-model:open=\"dialog_open\">\
+           <pine-dialog-trigger pp-as>\
+             <button class=\"tw-trig pine-btn\" data-variant=\"destructive\">Delete file</button>\
+           </pine-dialog-trigger>\
+           <pine-dialog-portal>\
+             <pine-dialog-overlay></pine-dialog-overlay>\
+             <pine-dialog-content>\
+               <pine-dialog-title>Delete file?</pine-dialog-title>\
+               <pine-dialog-description>This action cannot be undone.</pine-dialog-description>\
+               <div class=\"row\">\
+                 <pine-dialog-close pp-as>\
+                   <button class=\"tw-cancel pine-btn\" data-variant=\"ghost\">Cancel</button>\
+                 </pine-dialog-close>\
+                 <pine-dialog-close pp-as>\
+                   <button class=\"tw-delete pine-btn\" data-variant=\"destructive\">Delete</button>\
+                 </pine-dialog-close>\
+               </div>\
+             </pine-dialog-content>\
+           </pine-dialog-portal>\
+         </pine-dialog-root>",
+    );
+    tick().await;
+
+    host.query_selector(".tw-trig")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_some(),
+        "dialog opened"
+    );
+
+    // Click Cancel (first sibling) — should close.
+    doc()
+        .query_selector(".tw-cancel")
+        .unwrap()
+        .expect("Cancel button")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "Cancel closed the dialog"
+    );
+
+    // Reopen, click Delete (second sibling) — should also close.
+    host.query_selector(".tw-trig")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    doc()
+        .query_selector(".tw-delete")
+        .unwrap()
+        .expect("Delete button")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "Delete closed the dialog"
+    );
+
+    host.remove();
+}
+
+/// `<pine-dialog-trigger pp-as><pine-button>...</pine-button></...>`
+/// — the compound variant that composes Pine's Button primitive as
+/// the rendered root instead of a raw `<button class="pine-btn">`.
+/// Click on the inner native button bubbles through `<pine-button>`
+/// which the merged `@click="toggle"` then catches.
+#[wasm_bindgen_test]
+async fn dialog_trigger_composes_pine_button() {
+    let host = mount(
+        "<pine-dialog-root>\
+           <pine-dialog-trigger pp-as>\
+             <pine-button variant=\"destructive\" class=\"user-trig\">Open</pine-button>\
+           </pine-dialog-trigger>\
+           <pine-dialog-portal>\
+             <pine-dialog-content>\
+               <pine-dialog-title>Hi</pine-dialog-title>\
+               <pine-dialog-close pp-as>\
+                 <pine-button variant=\"ghost\" class=\"user-close\">Cancel</pine-button>\
+               </pine-dialog-close>\
+             </pine-dialog-content>\
+           </pine-dialog-portal>\
+         </pine-dialog-root>",
+    );
+    tick().await;
+
+    // Click the INNER rendered button — Pine's Button template
+    // renders `<button class=\"pine-btn\">` inside the pine-button
+    // custom element.
+    host.query_selector(".user-trig button.pine-btn")
+        .unwrap()
+        .expect("pine-button rendered native button")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_some(),
+        "dialog opened via composed pine-button trigger"
+    );
+
+    doc()
+        .query_selector(".user-close button.pine-btn")
+        .unwrap()
+        .expect("close pine-button rendered")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-dialog-content")
+            .unwrap()
+            .is_none(),
+        "dialog closed via composed pine-button close"
+    );
 
     host.remove();
 }

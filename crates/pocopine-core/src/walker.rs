@@ -303,12 +303,15 @@ fn mount_component(el: &Element, tag: &str) {
     // materialisation on slot-inserted elements so compound-
     // component children chain to the slot *owner* (the component
     // whose template contained the `<slot>`), not the caller that
-    // authored the content. Falls back to the DOM enclosing scope
-    // for normally-placed tags.
+    // authored the content. Falls back to the DOM ancestry via
+    // `enclosing_inject_parent`, which in turn prefers an ancestor's
+    // `CTX_PARENT_KEY` over its `SCOPE_ID_KEY` — required for tags
+    // nested *inside* a slot wrapper (e.g. `<pine-dialog-close>`
+    // inside a `<div class="row">` inside Content's slot).
     let ctx_parent = get_private(el, CTX_PARENT_KEY)
         .and_then(|v| v.as_f64())
         .map(|n| ScopeId(n as u64))
-        .or_else(|| enclosing_scope(el).map(|(id, _)| id));
+        .or_else(|| enclosing_inject_parent(el));
     if let Some(parent_id) = ctx_parent {
         crate::context::set_parent(scope.id, parent_id);
     }
@@ -380,12 +383,15 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     };
 
     // 2. Instantiate scope + apply static props from the tag's own
-    //    attributes (same as the normal path).
+    //    attributes (same as the normal path). Parent lookup for
+    //    RFC-027 inject prefers `CTX_PARENT_KEY` (slot owner) over
+    //    `SCOPE_ID_KEY` (slot author) — see `enclosing_inject_parent`
+    //    for the rationale.
     let Some(scope) = instantiate(tag) else { return false };
     let ctx_parent = get_private(el, CTX_PARENT_KEY)
         .and_then(|v| v.as_f64())
         .map(|n| ScopeId(n as u64))
-        .or_else(|| enclosing_scope(el).map(|(id, _)| id));
+        .or_else(|| enclosing_inject_parent(el));
     if let Some(parent_id) = ctx_parent {
         crate::context::set_parent(scope.id, parent_id);
     }
@@ -954,6 +960,32 @@ pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     None
 }
 
+/// Walk the DOM ancestor chain looking for the nearest scope that
+/// should own `el` for RFC-027 `inject` purposes. Prefers
+/// `CTX_PARENT_KEY` (stamped by slot materialisation to point at the
+/// slot *owner* — the component whose template contains the `<slot>`)
+/// over `SCOPE_ID_KEY` (which slot materialisation binds to the
+/// *author* scope so caller-side directive resolution still works).
+///
+/// Without this preference, a deeply nested tag inside slotted
+/// content — e.g. `<pine-dialog-close>` inside a `<div class="row">`
+/// inside Content's slot — falls through to the nearest ancestor
+/// with `SCOPE_ID_KEY` (the slot author's scope) and misses the
+/// compound's provide/inject chain entirely.
+fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {
+    let mut cur: Option<Element> = el.parent_element();
+    while let Some(e) = cur {
+        if let Some(id) = get_private(&e, CTX_PARENT_KEY).and_then(|v| v.as_f64()) {
+            return Some(ScopeId(id as u64));
+        }
+        if let Some(id) = get_private(&e, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
+            return Some(ScopeId(id as u64));
+        }
+        cur = e.parent_element();
+    }
+    None
+}
+
 /// If `el` itself owns a scope (i.e. it's a component root), return it.
 /// Used by directives (e.g. `pp-bind:`) that need to decide whether they're
 /// writing to an HTML attribute or to a child-component prop.
@@ -1000,7 +1032,7 @@ pub fn track_effect_on(el: &Element, id: EffectId) {
     set_private(el, EFFECTS_KEY, &list);
 }
 
-fn release_subtree(node: &Node) {
+pub(crate) fn release_subtree(node: &Node) {
     // Recurse through children first so leaves are cleaned before roots.
     if let Ok(el) = node.clone().dyn_into::<Element>() {
         let children = el.children();

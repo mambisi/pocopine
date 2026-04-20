@@ -122,16 +122,45 @@ pub fn resolve_target(selector: &str) -> Option<Element> {
 
 /// Called by `walker::release_subtree` on every released element. If
 /// this element is a template host with a teleported clone, remove
-/// the clone so the MutationObserver picks up its subtree cleanup.
+/// the clone and release its subtree deterministically — a root-
+/// MutationObserver may not cover the teleport target (e.g. tests
+/// observe a mount host inside `<body>`, but the clone lives on
+/// `<body>` itself), so relying on the observer would leak the
+/// clone's scopes + effects.
 pub fn release(el: &Element) {
     let Some(clone) = take_teleported(el) else { return };
     if let Some(parent) = clone.parent_node() {
         let _ = parent.remove_child(&clone);
     }
+    walker::release_subtree(clone.as_ref());
 }
 
 fn stash_teleported(template: &Element, clone: &Element) {
     let _ = Reflect::set(template.as_ref(), &TELEPORTED_KEY.into(), clone.as_ref());
+}
+
+/// Public stash hook for `pp-if` templates that own their own mount
+/// cycle but still teleport the clone. Recording the clone here lets
+/// [`release`] remove it when the template's enclosing subtree is
+/// torn down — without this, a nested `pp-if+pp-teleport` inside a
+/// parent `pp-if` clone gets orphaned in the teleport target when
+/// the parent clone is removed (the parent's body-removal triggers
+/// scope/effect release on the nested template, but the nested
+/// clone itself, living separately in the teleport target, has no
+/// other hook to trip its removal).
+pub(crate) fn stash(template: &Element, clone: &Element) {
+    stash_teleported(template, clone);
+}
+
+/// Clear a previously stashed clone. Called by `pp-if` when its own
+/// leave callback successfully removes the clone, so a subsequent
+/// [`release`] doesn't try to remove an already-detached element.
+pub(crate) fn clear_stash(template: &Element) {
+    let _ = Reflect::set(
+        template.as_ref(),
+        &TELEPORTED_KEY.into(),
+        &JsValue::UNDEFINED,
+    );
 }
 
 fn take_teleported(template: &Element) -> Option<Element> {
