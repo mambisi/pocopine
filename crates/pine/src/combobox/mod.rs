@@ -36,7 +36,9 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{
+    current_scope_id, emit_model, inject, inject_key, provide, refs, watch_scope_field,
+};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -102,7 +104,7 @@ impl PineComboboxRoot {
     pub fn select_value(&mut self, value: String, label: String) {
         if self.value != value {
             self.value = value.clone();
-            emit_value_update(value);
+            emit_model(value);
         }
         // Reflect the picked label in the input so the user
         // sees what they selected.
@@ -115,12 +117,6 @@ impl PineComboboxRoot {
             self.has_matches = any_visible;
         }
     }
-}
-
-fn emit_value_update(value: String) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
 // ── Input ─────────────────────────────────────────────────────────
@@ -277,7 +273,7 @@ fn install_outside_dismiss(
     root: Handle<PineComboboxRoot>,
 ) {
     use wasm_bindgen::closure::Closure;
-    let cb = Closure::once_into_js(Box::new(move || {
+    pocopine::tick::after_flush(move || {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
@@ -328,10 +324,7 @@ fn install_outside_dismiss(
         // `listener_holder` so it can remove itself from the
         // document listener list when Content detaches.
         std::mem::forget(listener_holder);
-    }) as Box<dyn FnOnce()>);
-    if let Some(w) = web_sys::window() {
-        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
+    });
 }
 
 /// Install `pp-roving.virtual` on the input when the listbox
@@ -345,11 +338,10 @@ fn schedule_install_virtual(
     listbox_id: String,
     installed: Rc<Cell<bool>>,
 ) {
-    use wasm_bindgen::closure::Closure;
     if installed.get() {
         return;
     }
-    let cb = Closure::once_into_js(Box::new(move || {
+    pocopine::tick::after_flush(move || {
         if installed.get() {
             return;
         }
@@ -366,10 +358,7 @@ fn schedule_install_virtual(
             None,
         );
         installed.set(true);
-    }) as Box<dyn FnOnce()>);
-    if let Some(w) = web_sys::window() {
-        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
+    });
 }
 
 // ── Portal ────────────────────────────────────────────────────────
@@ -629,13 +618,9 @@ fn find_input_scope(_root_scope: pocopine::ScopeId) -> Option<pocopine::ScopeId>
 }
 
 fn schedule_match_refresh(root: Handle<PineComboboxRoot>) {
-    use wasm_bindgen::closure::Closure;
-    let cb = Closure::once_into_js(Box::new(move || {
+    pocopine::tick::after_flush(move || {
         refresh_match_state(&root);
-    }) as Box<dyn FnOnce()>);
-    if let Some(w) = web_sys::window() {
-        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
+    });
 }
 
 fn refresh_match_state(root: &Handle<PineComboboxRoot>) {

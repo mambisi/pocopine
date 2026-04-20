@@ -27,7 +27,7 @@
 
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
@@ -77,28 +77,19 @@ impl PinePopoverRoot {
     pub fn open_popover(&mut self) {
         if !self.open {
             self.open = true;
-            emit_from_self(true);
+            emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_from_self(false);
+            emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_from_self(self.open);
+        emit_model(self.open);
     }
-}
-
-/// Emit `pp:update:model` from Root's element (via `pp-ref="root"`)
-/// so the parent's pp-model listener catches it even when the
-/// change was initiated from Content (teleported to `<body>`).
-fn emit_from_self(open: bool) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", open);
 }
 
 // ── Trigger ───────────────────────────────────────────────────────

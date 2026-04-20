@@ -45,7 +45,7 @@ pub use app::{App, Component};
 pub use computed::{computed, Computed};
 pub use context::{inject, provide, InjectKey};
 pub use emit::{
-    emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host,
+    emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
 };
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};

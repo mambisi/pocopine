@@ -7,8 +7,8 @@
 pub use pocopine_core::{focus, id, refs, scroll_lock, tick};
 pub use pocopine_core::{
     batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
-    emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, fetch,
-    flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
+    emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
+    fetch, flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
     set_auto_flush, signal, store, this, trigger_scope, watch, watch_field,
     watch_scope_field, App, Body, Component, ComponentState, Computed, Doc, EffectId,
     EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported, LifecycleContext,
@@ -25,10 +25,10 @@ pub use pocopine_macros::{component, handlers, server, store};
 pub mod prelude {
     pub use crate::{
         batch, component, computed, cx, dispatch, dispatch_event, effect, emit,
-        emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, handlers,
-        inject_key, on_cleanup, run, rw_signal, signal, store, this, watch, App, Component,
-        ComponentState, Computed, Handle, InjectKey, RwSignal, Scope, ScopeId, ServerError,
-        ServerResult, Setter, Signal, Store,
+        emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
+        handlers, inject_key, on_cleanup, run, rw_signal, signal, store, this, watch,
+        App, Component, ComponentState, Computed, Handle, InjectKey, RwSignal, Scope,
+        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

@@ -40,7 +40,9 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{
+    current_scope_id, emit_model, focus, inject, inject_key, provide, refs, watch_scope_field,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
@@ -121,19 +123,10 @@ impl PineSelectRoot {
     pub fn select_value(&mut self, value: String) {
         if self.value != value {
             self.value = value.clone();
-            emit_value_update(value);
+            emit_model(value);
         }
         self.open = false;
     }
-}
-
-/// Emit `pp:update:model` from Root's own element so
-/// `pp-model:value` on the parent catches the change even when
-/// the call originates from Content (teleported to `<body>`).
-fn emit_value_update(value: String) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
 // ── Trigger ───────────────────────────────────────────────────────
@@ -373,12 +366,10 @@ fn resolve_anchor(selector: &str) -> Option<web_sys::Element> {
         .flatten()
 }
 
-/// Move focus back to the Trigger after close. Deferred via
-/// `setTimeout(_, 0)` so reactive flush finishes before `.focus()`.
+/// Move focus back to the Trigger after close. Deferred so the
+/// reactive flush finishes before `.focus()`.
 fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
-    use wasm_bindgen::closure::Closure;
-    use wasm_bindgen::JsCast;
-    let cb = Closure::once_into_js(Box::new(move || {
+    pocopine::tick::after_flush(move || {
         let Some(trigger) = refs::get_on(root_scope, "trigger") else {
             return;
         };
@@ -396,10 +387,7 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
                 let _ = html.focus();
             }
         }
-    }) as Box<dyn FnOnce()>);
-    if let Some(w) = web_sys::window() {
-        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
+    });
 }
 
 // ── Item ──────────────────────────────────────────────────────────

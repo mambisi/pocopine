@@ -237,17 +237,14 @@ impl PineOtpField {
 /// any reactive flush from a preceding `Handle::update` has
 /// finished walking the template.
 fn schedule_focus(root: web_sys::Element, target: u32) {
-    let cb = Closure::once_into_js(Box::new(move || {
+    pocopine::tick::after_flush(move || {
         let selector = format!("input[data-index=\"{target}\"]");
         if let Some(found) = root.query_selector(&selector).ok().flatten() {
             if let Ok(html) = found.dyn_into::<HtmlElement>() {
                 let _ = html.focus();
             }
         }
-    }) as Box<dyn FnOnce()>);
-    if let Some(w) = web_sys::window() {
-        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
+    });
 }
 
 // ── Non-handler helpers ───────────────────────────────────────────

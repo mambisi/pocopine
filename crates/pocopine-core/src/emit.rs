@@ -20,7 +20,8 @@ use serde::Serialize;
 use wasm_bindgen::JsValue;
 use web_sys::{CustomEvent, CustomEventInit, Element};
 
-use crate::scope::current_el;
+use crate::refs;
+use crate::scope::{current_el, current_scope_id};
 use crate::tick;
 
 /// Serialize `detail` and fire a bubbling `CustomEvent(name)`
@@ -48,6 +49,17 @@ pub fn emit_from_host<T: Serialize>(name: &str, detail: T) {
         return;
     };
     emit_from(&host, name, detail);
+}
+
+/// Emit `pp:update:model` from the current scope's `pp-ref="root"`
+/// element with `value` as detail. No-op outside a handler context
+/// or when no `root` ref is registered. Replaces the per-Root
+/// `emit_from_self` / `emit_value_update` helper every compound
+/// root used to duplicate.
+pub fn emit_model<T: Serialize>(value: T) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    emit_from(&root_el, "pp:update:model", value);
 }
 
 /// Variant of [`emit`] that dispatches from an explicit element.
