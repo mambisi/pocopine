@@ -27,6 +27,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field, ScopeId};
 use pocopine_core::scope::Scope;
@@ -34,6 +35,8 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget};
+
+const SLUG: &str = "tooltip";
 
 inject_key!(ROOT: Handle<PineTooltipRoot>);
 // Provider → descendants. Defaults + singleton policy live on the
@@ -228,10 +231,7 @@ impl PineTooltipTrigger {
         // resolves to it. `pp-ref="trigger"` points at the
         // wrapper the template renders around the author's slot.
         if let Some(el) = refs.get("trigger") {
-            let _ = el.set_attribute(
-                "data-pine-tooltip-trigger",
-                &format!("{}", root.scope_id().0),
-            );
+            compound::stamp_trigger(&el, root.scope_id(), SLUG);
             install_trigger_listeners(scope, el, root);
         }
     }
@@ -412,36 +412,25 @@ impl Default for PineTooltipContent {
 impl PineTooltipContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.anchor = format!(
-                "[data-pine-tooltip-trigger=\"{}\"]",
-                root.scope_id().0
-            );
+            self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(content) = refs.get("content") else { return };
-        if let Some(anchor_el) = resolve_anchor(&self.anchor) {
-            if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
-                let placement = pocopine_core::directives::anchor::Placement {
-                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
-                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
-                };
-                pocopine_core::directives::anchor::install(
-                    &floater, &anchor_el, placement, self.side_offset, true,
+        if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
+            if let Some(root) = inject::<Handle<PineTooltipRoot>>(&ROOT) {
+                compound::install_anchor_to_trigger(
+                    &floater,
+                    root.scope_id(),
+                    SLUG,
+                    &self.side,
+                    &self.align,
+                    self.side_offset,
+                    true,
                 );
             }
         }
     }
-}
-
-/// Resolve a CSS selector to an Element. Content uses this to
-/// find its trigger before programmatic-installing pp-anchor.
-fn resolve_anchor(selector: &str) -> Option<web_sys::Element> {
-    let s = selector.trim();
-    if s.is_empty() {
-        return None;
-    }
-    web_sys::window()?.document()?.query_selector(s).ok().flatten()
 }
 

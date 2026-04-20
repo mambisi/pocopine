@@ -25,11 +25,15 @@
 //! Content auto-anchors to its Trigger via RFC-027 inject + the
 //! `on_setup` lifecycle — no selector required.
 
+use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
+
+const SLUG: &str = "dm";
+const SUB_SLUG: &str = "dm-sub";
 
 // Provide/inject key for the Root handle.
 inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
@@ -83,15 +87,13 @@ impl PineDropdownMenuTrigger {
         watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
-        // Stamp the trigger's button with its root scope id. Every
-        // Pine dropdown on the page gets a unique value so multiple
-        // menus don't collide on the shared selector. Content mirrors
-        // the same id into its own `anchor` field in `on_setup`.
+        // Stamp the trigger's button with its root scope id.
+        // Every Pine dropdown on the page gets a unique value so
+        // multiple menus don't collide on the shared selector.
+        // Content mirrors the same id into its own `anchor`
+        // field in `on_setup`.
         if let Some(btn) = refs.get("trigger") {
-            let _ = btn.set_attribute(
-                "data-pine-dm-trigger",
-                &format!("{}", root_scope.0),
-            );
+            compound::stamp_trigger(&btn, root_scope, SLUG);
         }
     }
 
@@ -165,10 +167,7 @@ impl PineDropdownMenuContent {
     /// stamped in its `on_ready`.
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.anchor = format!(
-                "[data-pine-dm-trigger=\"{}\"]",
-                root.scope_id().0
-            );
+            self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
         // Expose `side` to any nested Arrow.
         provide(&CONTENT_SIDE, self.side.clone());
@@ -187,14 +186,16 @@ impl PineDropdownMenuContent {
         // can honour the author's side/align/side_offset props
         // (the pp-anchor directive form parses modifiers
         // statically at bind time).
-        if let Some(anchor) = resolve_anchor(&self.anchor) {
-            if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
-                let placement = pocopine_core::directives::anchor::Placement {
-                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
-                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
-                };
-                pocopine_core::directives::anchor::install(
-                    &floater, &anchor, placement, self.side_offset, true,
+        if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+            if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) {
+                compound::install_anchor_to_trigger(
+                    &floater,
+                    root.scope_id(),
+                    SLUG,
+                    &self.side,
+                    &self.align,
+                    self.side_offset,
+                    true,
                 );
             }
         }
@@ -305,10 +306,7 @@ impl PineDropdownMenuSubTrigger {
         });
         // Stamp so SubContent can auto-anchor.
         if let Some(btn) = refs.get("trigger") {
-            let _ = btn.set_attribute(
-                "data-pine-dm-sub-trigger",
-                &format!("{}", sub_scope.0),
-            );
+            compound::stamp_trigger(&btn, sub_scope, SUB_SLUG);
         }
     }
 
@@ -353,8 +351,7 @@ impl Default for PineDropdownMenuSubContent {
 impl PineDropdownMenuSubContent {
     pub fn on_setup(&mut self) {
         if let Some(sub) = inject(&SUB) {
-            let sid = sub.scope_id().0;
-            self.anchor = format!("[data-pine-dm-sub-trigger=\"{}\"]", sid);
+            self.anchor = compound::trigger_selector(sub.scope_id(), SUB_SLUG);
             self.open = sub.with(|s| s.open);
         }
     }
@@ -711,16 +708,6 @@ impl PineDropdownMenuLabel {
 }
 
 // ── helpers ───────────────────────────────────────────────────────
-
-/// Resolve a selector string to an `Element`. Used by Content's
-/// programmatic anchor install.
-fn resolve_anchor(selector: &str) -> Option<Element> {
-    let s = selector.trim();
-    if s.is_empty() {
-        return None;
-    }
-    web_sys::window()?.document()?.query_selector(s).ok().flatten()
-}
 
 /// Set `tabindex=-1` on every menuitem and promote the first
 /// non-disabled one to `tabindex=0` — the starting cursor for

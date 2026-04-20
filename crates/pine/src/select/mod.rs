@@ -39,6 +39,7 @@
 //! </pine-select-root>
 //! ```
 
+use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{
     current_scope_id, emit_model, focus, inject, inject_key, provide, refs, watch_scope_field,
@@ -47,6 +48,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
+
+const SLUG: &str = "select";
 
 inject_key!(ROOT: Handle<PineSelectRoot>);
 
@@ -173,14 +176,11 @@ impl PineSelectTrigger {
             h.update(|s| s.value = v);
         });
 
-        // Stamp the trigger with its root scope id so Content can
-        // anchor to `[data-pine-select-trigger="<id>"]` without
-        // the author coordinating a selector.
+        // Stamp the trigger with its root scope id so Content
+        // can anchor to it without the author coordinating a
+        // selector.
         if let Some(btn) = refs.get("trigger") {
-            let _ = btn.set_attribute(
-                "data-pine-select-trigger",
-                &format!("{}", root_scope.0),
-            );
+            compound::stamp_trigger(&btn, root_scope, SLUG);
         }
     }
 
@@ -288,8 +288,8 @@ impl Default for PineSelectContent {
 impl PineSelectContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
-            let (scope_id, lb) = root.with(|r| (root.scope_id().0, r.listbox_id.clone()));
-            self.anchor = format!("[data-pine-select-trigger=\"{scope_id}\"]");
+            let (scope, lb) = root.with(|r| (root.scope_id(), r.listbox_id.clone()));
+            self.anchor = compound::trigger_selector(scope, SLUG);
             self.listbox_id = lb;
         }
     }
@@ -329,16 +329,14 @@ impl PineSelectContent {
         // Programmatic anchor install — same pattern as Popover
         // + DropdownMenu so author-authored placement / offset
         // flow through.
-        if let Some(trigger) = resolve_anchor(&self.anchor) {
-            if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
-                let placement = pocopine_core::directives::anchor::Placement {
-                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
-                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
-                };
-                pocopine_core::directives::anchor::install(
+        if let Ok(floater) = menu.dyn_into::<HtmlElement>() {
+            if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+                compound::install_anchor_to_trigger(
                     &floater,
-                    &trigger,
-                    placement,
+                    root.scope_id(),
+                    SLUG,
+                    &self.side,
+                    &self.align,
                     self.side_offset,
                     true,
                 );
@@ -354,18 +352,6 @@ impl PineSelectContent {
     }
 }
 
-fn resolve_anchor(selector: &str) -> Option<web_sys::Element> {
-    let s = selector.trim();
-    if s.is_empty() {
-        return None;
-    }
-    web_sys::window()?
-        .document()?
-        .query_selector(s)
-        .ok()
-        .flatten()
-}
-
 /// Move focus back to the Trigger after close. Deferred so the
 /// reactive flush finishes before `.focus()`.
 fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
@@ -378,11 +364,7 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
         // container only. So look up Trigger by its data-*
         // stamp instead.
         let _ = trigger;
-        let selector = format!("[data-pine-select-trigger=\"{}\"]", root_scope.0);
-        if let Some(el) = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.query_selector(&selector).ok().flatten())
-        {
+        if let Some(el) = compound::resolve_trigger(root_scope, SLUG) {
             if let Ok(html) = el.dyn_into::<HtmlElement>() {
                 let _ = html.focus();
             }

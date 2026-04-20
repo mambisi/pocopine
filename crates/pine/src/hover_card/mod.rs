@@ -43,12 +43,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{inject, inject_key, provide, refs, watch_scope_field, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget};
+
+const SLUG: &str = "hover-card";
 
 inject_key!(ROOT: Handle<PineHoverCardRoot>);
 
@@ -124,7 +127,7 @@ impl PineHoverCardTrigger {
         // Stamp the trigger element with the Root's scope id so
         // Content's anchor selector resolves to it.
         if let Some(el) = refs::get_on(root_id, "trigger").or_else(|| refs.get("trigger")) {
-            let _ = el.set_attribute("data-pine-hover-card-trigger", &format!("{}", root_id.0));
+            compound::stamp_trigger(&el, root_id, SLUG);
             install_trigger_listeners(root_id, el, root);
         }
     }
@@ -359,10 +362,7 @@ impl Default for PineHoverCardContent {
 impl PineHoverCardContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.anchor = format!(
-                "[data-pine-hover-card-trigger=\"{}\"]",
-                root.scope_id().0
-            );
+            self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
@@ -374,16 +374,16 @@ impl PineHoverCardContent {
         // Anchor to the Trigger — same programmatic install path
         // as Tooltip / Popover so the side/align/side_offset props
         // flow through.
-        if let Some(anchor_el) = resolve_anchor(&self.anchor) {
-            if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
-                let placement = pocopine_core::directives::anchor::Placement {
-                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
-                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
-                };
-                pocopine_core::directives::anchor::install(
-                    &floater, &anchor_el, placement, self.side_offset, true,
-                );
-            }
+        if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
+            compound::install_anchor_to_trigger(
+                &floater,
+                root_id,
+                SLUG,
+                &self.side,
+                &self.align,
+                self.side_offset,
+                true,
+            );
         }
 
         // Content also tracks hover — cancel close when pointer
@@ -442,12 +442,3 @@ fn teardown_content(root_id: ScopeId) {
     });
 }
 
-/// Resolve a CSS selector to an Element — same helper as Tooltip's,
-/// kept local to avoid a cross-module pub for a three-line utility.
-fn resolve_anchor(selector: &str) -> Option<web_sys::Element> {
-    let s = selector.trim();
-    if s.is_empty() {
-        return None;
-    }
-    web_sys::window()?.document()?.query_selector(s).ok().flatten()
-}

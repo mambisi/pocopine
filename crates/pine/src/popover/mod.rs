@@ -25,22 +25,14 @@
 //! </pine-popover-root>
 //! ```
 
+use crate::compound;
 use crate::overlay;
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
-use web_sys::Element;
 
-/// Resolve a selector string to an `Element` — used by Content's
-/// programmatic anchor install.
-fn resolve_anchor(selector: &str) -> Option<Element> {
-    let s = selector.trim();
-    if s.is_empty() {
-        return None;
-    }
-    web_sys::window()?.document()?.query_selector(s).ok().flatten()
-}
+const SLUG: &str = "popover";
 
 inject_key!(ROOT: Handle<PinePopoverRoot>);
 
@@ -117,10 +109,7 @@ impl PinePopoverTrigger {
         // Stamp the button so Content's pp-anchor can target it
         // uniquely, mirroring DropdownMenu's auto-anchor scheme.
         if let Some(btn) = refs.get("trigger") {
-            let _ = btn.set_attribute(
-                "data-pine-popover-trigger",
-                &format!("{}", root_scope.0),
-            );
+            compound::stamp_trigger(&btn, root_scope, SLUG);
         }
     }
 
@@ -178,10 +167,7 @@ impl Default for PinePopoverContent {
 impl PinePopoverContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.anchor = format!(
-                "[data-pine-popover-trigger=\"{}\"]",
-                root.scope_id().0
-            );
+            self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
@@ -195,14 +181,16 @@ impl PinePopoverContent {
         // Program-install the anchor so side/align/side_offset
         // props flow through (pp-anchor's modifier syntax is
         // parsed statically at bind time).
-        if let Some(anchor_el) = resolve_anchor(&self.anchor) {
-            if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
-                let placement = pocopine_core::directives::anchor::Placement {
-                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
-                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
-                };
-                pocopine_core::directives::anchor::install(
-                    &floater, &anchor_el, placement, self.side_offset, true,
+        if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
+            if let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) {
+                compound::install_anchor_to_trigger(
+                    &floater,
+                    root.scope_id(),
+                    SLUG,
+                    &self.side,
+                    &self.align,
+                    self.side_offset,
+                    true,
                 );
             }
         }

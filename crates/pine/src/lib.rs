@@ -23,6 +23,7 @@
 //! tag so authors can drop `<pine-dialog>`, `<pine-button>` etc.
 //! into their templates without enumerating the library.
 
+pub mod compound;
 pub mod accordion;
 pub mod alert_dialog;
 pub mod aspect_ratio;
