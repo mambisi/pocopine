@@ -197,7 +197,7 @@ gives, why it's worth it, and what it'd cost to ship.
 | `HostEl<'a>` | newtype over `&'a Element` | the custom-element tag (parent of `El`) — useful when you need to dispatch events from it | one `parent_element()` call |
 | `IsTeleported` | `bool` | whether `El` is inside a teleported subtree (via `TELEPORT_ORIGIN_KEY` ancestry walk) | tree-walk once per hook |
 
-#### Tier 4 — speculative, skip v1 unless a use case surfaces
+#### Tier 4 — speculative but shipping in v1
 
 | Extractor | Type | What it gives | Cost |
 |---|---|---|---|
@@ -693,22 +693,36 @@ give the typed-extractor benefits of §4.3.
   work happens (install listeners, stamp attributes); `on_ready`
   is more about "wait for subtree" than "touch my own
   element." Counter-argument: consistency is cheap.
-- **What built-in extractors ship in v1.** See §4.3 for the
-  full proposed catalogue — four tiers from "obvious yes" to
-  "speculative." Council picks which tiers land in v1.
-  Current draft target: Tier 1 + Tier 2, skipping the Window /
-  Document / Body ones if the win is marginal. Tier 3's
-  `Refs<'a>` is the biggest open call — it's a real
-  productivity boost but introduces a new walker-adjacent
-  view type.
-- **Naming.** `HookCtx` vs `LifecycleCtx` vs `MountCtx`. Single
-  `HookCtx` for both hooks keeps the type count down;
-  per-hook structs would let us add fields that only make
-  sense in one (e.g. a "walk epoch" on mount but not ready).
-  v1 ships one `HookCtx` for simplicity. `El` vs `Elem` vs
-  `Element` for the rendered-root newtype — go with `El` for
-  brevity since the template is a typed param (`el: El`
-  reads naturally).
+- **What built-in extractors ship in v1.** All four tiers per
+  §4.3 — pay-for-what-you-use means unused extractors cost
+  authors nothing. Tier 4 entries that require new walker
+  state (`MountEpoch`, `Slots<'a>`) still need their runtime
+  piece plumbed; `Provider<K>` / `Injected<T, K>` is blocked on
+  const-string generics and lands as a placeholder that errors
+  at compile time until stable. See §4.3 for the full list.
+- **Naming.** A small shopping list for the carrier type —
+  the trait name (`FromHookCtx` / `FromMountCtx` / …) tracks
+  whatever the carrier ends up being.
+
+  | Name | Pros | Cons |
+  |---|---|---|
+  | **`HookCtx`** (current) | Compact, matches Rust's `Ctx` convention (`AppCtx`, `CompileCtx`, etc.). "Hook" maps to the user's mental model of React `useEffect` / Vue `onMounted`. | "Hook" has overloaded meaning — pocopine already uses "hook" for hook scripts elsewhere. Slightly jargon-heavy for newcomers. |
+  | **`LifecycleCtx`** | Most explicit — "this is the thing your lifecycle hook gets." Reads without context. | Long at the callsite — `_ctx: LifecycleCtx`. |
+  | **`MountCtx`** | Short, lifecycle-adjacent terminology. | "Mount" suggests it's only for `on_mount`; `on_ready` gets the same type. Reader confusion likely. |
+  | **`ScopeCtx`** | Aligns with the `Scope` concept that already owns reactive state + provides + refs. The carrier is literally a read-only view over the scope's mount info. | Could be mistaken for the `Scope` type itself. |
+  | **`ComponentCtx`** | Author-facing — "the context of my component." | Long, and the carrier is more transient than "the component." |
+  | **`El`** alone | Dead simple: `fn on_ready(&self, el: El)`. | Only one field's worth — we lose the non-exhaustive future-field story unless we reuse the struct. |
+  | **`HostCtx`** | "Host" is the RFC's term for the custom-element tag; it's that element's context. | Slightly off — the carrier's `el` is the *rendered root*, not the host tag; `HostEl` is the extractor that gives the host. |
+  | **`Env`** | Tiny, borrowed from Reagent / Compiler contexts. | Too generic; loses the "lifecycle" signal. |
+
+  **Recommendation.** Stick with `HookCtx` — it pairs with
+  `FromHookCtx` as a familiar "pull this typed thing from the
+  hook's context" idiom, matches axum's `FromRequest` /
+  `Request` tradition, and stays short at the callsite in the
+  rare places authors name it directly (most handlers use
+  extractors instead and never mention the carrier). If the
+  pocopine-wide "hook" overload bothers us, `LifecycleCtx`
+  paired with `FromLifecycle` is the safest alternative.
 - **Panic policy for custom extractors.** Do we recommend
   `Option<T>` returning impls, or panic-on-missing? The
   built-ins can't fail; author extractors might want either.
