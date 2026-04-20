@@ -1,5 +1,5 @@
 <template pp-if="open" pp-teleport="body">
-  <div class="pine-hover-card-portal">
+  <root class="pine-hover-card-portal">
     <slot></slot>
-  </div>
+  </root>
 </template>

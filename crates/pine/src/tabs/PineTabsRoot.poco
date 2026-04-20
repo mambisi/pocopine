@@ -1,5 +1,5 @@
-<div class="pine-tabs-root"
-     pp-ref="root"
-     :data-orientation="orientation">
+<root class="pine-tabs-root"
+      pp-ref="root"
+      :data-orientation="orientation">
   <slot></slot>
-</div>
+</root>

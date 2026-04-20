@@ -1,5 +1,5 @@
 <template pp-if="open" pp-teleport="body">
-  <div class="pine-alert-dialog-portal">
+  <root class="pine-alert-dialog-portal">
     <slot></slot>
-  </div>
+  </root>
 </template>

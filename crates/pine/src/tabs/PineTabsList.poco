@@ -1,6 +1,6 @@
-<div role="tablist"
-     class="pine-tabs-list"
-     :aria-orientation="orientation"
-     pp-roving.horizontal>
+<root role="tablist"
+      class="pine-tabs-list"
+      :aria-orientation="orientation"
+      pp-roving.horizontal>
   <slot></slot>
-</div>
+</root>

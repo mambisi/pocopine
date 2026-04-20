@@ -47,7 +47,7 @@ inject_key!(DESCRIPTION_ID: String);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineAlertDialogRoot.poco")]
+#[component(template = "PineAlertDialogRoot.poco", role = "scope")]
 pub struct PineAlertDialogRoot {
     #[prop] pub open: bool,
     /// Alert dialogs are modal by definition — kept as a prop for
@@ -113,7 +113,7 @@ fn emit_from_self(open: bool) {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogTrigger.poco")]
+#[component(template = "PineAlertDialogTrigger.poco", role = "interactive")]
 pub struct PineAlertDialogTrigger {
     pub open: bool,
 }
@@ -143,7 +143,7 @@ impl PineAlertDialogTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogPortal.poco")]
+#[component(template = "PineAlertDialogPortal.poco", role = "scope")]
 pub struct PineAlertDialogPortal {
     pub open: bool,
 }
@@ -161,7 +161,7 @@ impl PineAlertDialogPortal {
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogOverlay.poco")]
+#[component(template = "PineAlertDialogOverlay.poco", role = "panel")]
 pub struct PineAlertDialogOverlay {}
 
 #[handlers]
@@ -179,7 +179,7 @@ impl PineAlertDialogOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogContent.poco")]
+#[component(template = "PineAlertDialogContent.poco", role = "panel")]
 pub struct PineAlertDialogContent {
     pub title_id: String,
     pub description_id: String,
@@ -231,7 +231,7 @@ impl PineAlertDialogContent {
 // ── Title ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogTitle.poco")]
+#[component(template = "PineAlertDialogTitle.poco", role = "heading")]
 pub struct PineAlertDialogTitle {
     pub title_id: String,
 }
@@ -248,7 +248,7 @@ impl PineAlertDialogTitle {
 // ── Description ───────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogDescription.poco")]
+#[component(template = "PineAlertDialogDescription.poco", role = "text")]
 pub struct PineAlertDialogDescription {
     pub description_id: String,
 }
@@ -269,7 +269,7 @@ impl PineAlertDialogDescription {
 /// actual side effect via their own `@click` on the hoisted
 /// element (with `pp-as`) or on a child.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogAction.poco")]
+#[component(template = "PineAlertDialogAction.poco", role = "interactive")]
 pub struct PineAlertDialogAction {}
 
 #[handlers]
@@ -288,7 +288,7 @@ impl PineAlertDialogAction {
 /// naturally since Cancel is typically the first focusable inside
 /// Content.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogCancel.poco")]
+#[component(template = "PineAlertDialogCancel.poco", role = "interactive")]
 pub struct PineAlertDialogCancel {}
 
 #[handlers]

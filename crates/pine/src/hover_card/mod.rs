@@ -82,7 +82,7 @@ struct RootRuntime {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineHoverCardRoot.poco")]
+#[component(template = "PineHoverCardRoot.poco", role = "scope")]
 pub struct PineHoverCardRoot {
     #[prop] pub open: bool,
     /// Delay (ms) before the card appears on hover / focus.
@@ -113,7 +113,7 @@ impl PineHoverCardRoot {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineHoverCardTrigger.poco")]
+#[component(template = "PineHoverCardTrigger.poco", role = "panel")]
 pub struct PineHoverCardTrigger {}
 
 #[handlers]
@@ -318,7 +318,7 @@ fn teardown_trigger(root_id: ScopeId) {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineHoverCardPortal.poco")]
+#[component(template = "PineHoverCardPortal.poco", role = "scope")]
 pub struct PineHoverCardPortal {
     pub open: bool,
 }
@@ -336,7 +336,7 @@ impl PineHoverCardPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineHoverCardContent.poco")]
+#[component(template = "PineHoverCardContent.poco", role = "panel")]
 pub struct PineHoverCardContent {
     pub anchor: String,
     #[prop] pub side: String,

@@ -1,6 +1,6 @@
-<div role="dialog"
-     class="pine-hover-card-content"
-     pp-ref="content"
-     data-state="open">
+<root role="dialog"
+      class="pine-hover-card-content"
+      pp-ref="content"
+      data-state="open">
   <slot></slot>
-</div>
+</root>

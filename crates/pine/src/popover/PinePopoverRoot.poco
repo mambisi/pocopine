@@ -1,5 +1,5 @@
-<div class="pine-popover-root"
-     pp-ref="root"
-     :data-state="open ? 'open' : 'closed'">
+<root class="pine-popover-root"
+      pp-ref="root"
+      :data-state="open ? 'open' : 'closed'">
   <slot></slot>
-</div>
+</root>

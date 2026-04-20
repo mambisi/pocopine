@@ -39,7 +39,7 @@ inject_key!(ROOT: Handle<PinePasswordToggleFieldRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePasswordToggleFieldRoot.poco")]
+#[component(template = "PinePasswordToggleFieldRoot.poco", role = "panel")]
 pub struct PinePasswordToggleFieldRoot {
     /// Whether the password is currently shown. Two-way
     /// bindable via `pp-model:visible`.
@@ -61,7 +61,7 @@ impl PinePasswordToggleFieldRoot {
 // ── Input ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePasswordToggleFieldInput.poco")]
+#[component(template = "PinePasswordToggleFieldInput.poco", role = "scope")]
 pub struct PinePasswordToggleFieldInput {}
 
 #[handlers]
@@ -84,7 +84,7 @@ impl PinePasswordToggleFieldInput {
 // ── Toggle ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePasswordToggleFieldToggle.poco")]
+#[component(template = "PinePasswordToggleFieldToggle.poco", role = "interactive")]
 pub struct PinePasswordToggleFieldToggle {
     /// Mirrored from Root for `:aria-pressed` + `:data-state`.
     pub visible: bool,

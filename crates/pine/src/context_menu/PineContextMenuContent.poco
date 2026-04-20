@@ -1,10 +1,10 @@
-<ul role="menu"
-    class="pine-context-menu-content"
-    pp-ref="menu"
-    pp-roving
-    data-state="open"
-    :style="'position:fixed;top:' + pointer_y + 'px;left:' + pointer_x + 'px;'"
-    @click.outside="close"
-    @keydown.escape.prevent="close">
+<root role="menu"
+      class="pine-context-menu-content"
+      pp-ref="menu"
+      pp-roving
+      data-state="open"
+      :style="'position:fixed;top:' + pointer_y + 'px;left:' + pointer_x + 'px;'"
+      @click.outside="close"
+      @keydown.escape.prevent="close">
   <slot></slot>
-</ul>
+</root>

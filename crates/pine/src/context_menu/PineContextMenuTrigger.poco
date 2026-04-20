@@ -1,5 +1,5 @@
-<div class="pine-context-menu-trigger"
-     pp-ref="trigger"
-     style="display:contents">
+<root class="pine-context-menu-trigger"
+      pp-ref="trigger"
+      style="display:contents">
   <slot></slot>
-</div>
+</root>

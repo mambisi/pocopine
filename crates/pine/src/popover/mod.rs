@@ -47,7 +47,7 @@ inject_key!(ROOT: Handle<PinePopoverRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PinePopoverRoot.poco")]
+#[component(template = "PinePopoverRoot.poco", role = "scope")]
 pub struct PinePopoverRoot {
     #[prop] pub open: bool,
     /// Non-modal by default — matches reka-ui. Set `true` to get
@@ -104,7 +104,7 @@ fn emit_from_self(open: bool) {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePopoverTrigger.poco")]
+#[component(template = "PinePopoverTrigger.poco", role = "interactive")]
 pub struct PinePopoverTrigger {
     pub open: bool,
 }
@@ -143,7 +143,7 @@ impl PinePopoverTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePopoverPortal.poco")]
+#[component(template = "PinePopoverPortal.poco", role = "scope")]
 pub struct PinePopoverPortal {
     pub open: bool,
 }
@@ -161,7 +161,7 @@ impl PinePopoverPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PinePopoverContent.poco")]
+#[component(template = "PinePopoverContent.poco", role = "panel")]
 pub struct PinePopoverContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// per-instance selector for anchor. Matches the
@@ -256,7 +256,7 @@ impl PinePopoverContent {
 // ── Close ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinePopoverClose.poco")]
+#[component(template = "PinePopoverClose.poco", role = "interactive")]
 pub struct PinePopoverClose {}
 
 #[handlers]

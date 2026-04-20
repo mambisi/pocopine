@@ -1,5 +1,5 @@
-<div class="pine-hover-card-trigger"
-     pp-ref="trigger"
-     style="display:inline-block">
+<root class="pine-hover-card-trigger"
+      pp-ref="trigger"
+      style="display:inline-block">
   <slot></slot>
-</div>
+</root>

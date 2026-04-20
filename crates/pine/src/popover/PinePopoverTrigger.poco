@@ -1,10 +1,9 @@
-<button pp-as
-        type="button"
-        class="pine-popover-trigger"
-        pp-ref="trigger"
-        :aria-expanded="open ? 'true' : 'false'"
-        aria-haspopup="dialog"
-        :data-state="open ? 'open' : 'closed'"
-        @click="toggle">
+<root pp-as
+      class="pine-popover-trigger"
+      pp-ref="trigger"
+      :aria-expanded="open ? 'true' : 'false'"
+      aria-haspopup="dialog"
+      :data-state="open ? 'open' : 'closed'"
+      @click="toggle">
   <slot></slot>
-</button>
+</root>

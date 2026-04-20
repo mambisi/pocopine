@@ -1,7 +1,7 @@
-<div role="tabpanel"
-     class="pine-tabs-content"
-     :data-state="selected ? 'active' : 'inactive'"
-     :aria-labelledby="trigger_id"
-     pp-show="selected">
+<root role="tabpanel"
+      class="pine-tabs-content"
+      :data-state="selected ? 'active' : 'inactive'"
+      :aria-labelledby="trigger_id"
+      pp-show="selected">
   <slot></slot>
-</div>
+</root>

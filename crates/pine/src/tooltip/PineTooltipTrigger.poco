@@ -1,5 +1,5 @@
-<div class="pine-tooltip-trigger"
-     pp-ref="trigger"
-     style="display:inline-block">
+<root class="pine-tooltip-trigger"
+      pp-ref="trigger"
+      style="display:inline-block">
   <slot></slot>
-</div>
+</root>

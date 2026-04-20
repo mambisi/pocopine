@@ -1,10 +1,10 @@
-<div role="dialog"
-     aria-modal="true"
-     class="pine-dialog-content"
-     pp-ref="content"
-     data-state="open"
-     :aria-labelledby="title_id"
-     :aria-describedby="description_id"
-     @keydown.escape.prevent="on_escape">
+<root role="dialog"
+      aria-modal="true"
+      class="pine-dialog-content"
+      pp-ref="content"
+      data-state="open"
+      :aria-labelledby="title_id"
+      :aria-describedby="description_id"
+      @keydown.escape.prevent="on_escape">
   <slot></slot>
-</div>
+</root>

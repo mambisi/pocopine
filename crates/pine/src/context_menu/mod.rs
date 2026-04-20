@@ -57,7 +57,7 @@ inject_key!(ROOT: Handle<PineContextMenuRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineContextMenuRoot.poco")]
+#[component(template = "PineContextMenuRoot.poco", role = "scope")]
 pub struct PineContextMenuRoot {
     #[prop] pub open: bool,
     /// Viewport-relative pointer coordinates captured at the last
@@ -97,7 +97,7 @@ impl PineContextMenuRoot {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuTrigger.poco")]
+#[component(template = "PineContextMenuTrigger.poco", role = "scope")]
 pub struct PineContextMenuTrigger {}
 
 #[handlers]
@@ -133,7 +133,7 @@ impl PineContextMenuTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuPortal.poco")]
+#[component(template = "PineContextMenuPortal.poco", role = "scope")]
 pub struct PineContextMenuPortal {
     pub open: bool,
 }
@@ -151,7 +151,7 @@ impl PineContextMenuPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuContent.poco")]
+#[component(template = "PineContextMenuContent.poco", role = "list")]
 pub struct PineContextMenuContent {
     /// Mirrored from Root on open so the template's inline style
     /// positions this panel at the captured pointer. Read once at
@@ -213,7 +213,7 @@ fn init_roving_tabindex(menu: &web_sys::Element) {
 /// calls `preventDefault()`, the menu stays open (useful for a
 /// "keep menu open while I do an async thing" pattern).
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuItem.poco")]
+#[component(template = "PineContextMenuItem.poco", role = "item")]
 pub struct PineContextMenuItem {
     #[prop] pub disabled: bool,
 }
@@ -237,7 +237,7 @@ impl PineContextMenuItem {
 // ── Separator ─────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuSeparator.poco")]
+#[component(template = "PineContextMenuSeparator.poco", role = "item")]
 pub struct PineContextMenuSeparator {}
 
 #[handlers]

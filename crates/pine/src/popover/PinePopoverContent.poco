@@ -1,8 +1,8 @@
-<div role="dialog"
-     class="pine-popover-content"
-     pp-ref="content"
-     data-state="open"
-     @click.outside="on_outside"
-     @keydown.escape.prevent="on_escape">
+<root role="dialog"
+      class="pine-popover-content"
+      pp-ref="content"
+      data-state="open"
+      @click.outside="on_outside"
+      @keydown.escape.prevent="on_escape">
   <slot></slot>
-</div>
+</root>

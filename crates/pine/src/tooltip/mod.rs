@@ -66,7 +66,7 @@ inject_key!(PROVIDER: Handle<PineTooltipProvider>);
 /// </pine-tooltip-provider>
 /// ```
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTooltipProvider.poco")]
+#[component(template = "PineTooltipProvider.poco", role = "scope")]
 pub struct PineTooltipProvider {
     /// Default `delay_duration` inherited by descendants. Authors
     /// can still set `delay_duration` on an individual Root to
@@ -124,7 +124,7 @@ struct TriggerRuntime {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTooltipRoot.poco")]
+#[component(template = "PineTooltipRoot.poco", role = "scope")]
 pub struct PineTooltipRoot {
     #[prop] pub open: bool,
     /// Delay (ms) before the tooltip appears on hover. Focus
@@ -217,7 +217,7 @@ fn singleton_release(root_id: ScopeId, prov_id: ScopeId) {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTooltipTrigger.poco")]
+#[component(template = "PineTooltipTrigger.poco", role = "panel")]
 pub struct PineTooltipTrigger {}
 
 #[handlers]
@@ -371,7 +371,7 @@ fn teardown(scope: ScopeId) {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTooltipPortal.poco")]
+#[component(template = "PineTooltipPortal.poco", role = "scope")]
 pub struct PineTooltipPortal {
     pub open: bool,
 }
@@ -389,7 +389,7 @@ impl PineTooltipPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTooltipContent.poco")]
+#[component(template = "PineTooltipContent.poco", role = "panel")]
 pub struct PineTooltipContent {
     pub anchor: String,
     #[prop] pub side: String,

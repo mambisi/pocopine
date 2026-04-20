@@ -1,4 +1,4 @@
-<h2 class="pine-dialog-title"
-    :id="title_id">
+<root class="pine-dialog-title"
+      :id="title_id">
   <slot></slot>
-</h2>
+</root>

@@ -35,7 +35,7 @@ inject_key!(ROOT: Handle<PineTabsRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTabsRoot.poco")]
+#[component(template = "PineTabsRoot.poco", role = "panel")]
 pub struct PineTabsRoot {
     #[prop] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Flows into
@@ -79,7 +79,7 @@ fn emit_from_self(value: String) {
 // ── List ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTabsList.poco")]
+#[component(template = "PineTabsList.poco", role = "panel")]
 pub struct PineTabsList {
     pub orientation: String,
 }
@@ -96,7 +96,7 @@ impl PineTabsList {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTabsTrigger.poco")]
+#[component(template = "PineTabsTrigger.poco", role = "interactive")]
 pub struct PineTabsTrigger {
     /// Author-set id of the tab this trigger activates.
     #[prop] pub value: String,
@@ -145,7 +145,7 @@ impl PineTabsTrigger {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTabsContent.poco")]
+#[component(template = "PineTabsContent.poco", role = "panel")]
 pub struct PineTabsContent {
     #[prop] pub value: String,
     /// Mirrored.

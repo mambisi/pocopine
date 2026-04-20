@@ -42,7 +42,7 @@ inject_key!(DESCRIPTION_ID: String);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDialogRoot.poco")]
+#[component(template = "PineDialogRoot.poco", role = "scope")]
 pub struct PineDialogRoot {
     #[prop] pub open: bool,
     #[prop] pub modal: bool,
@@ -114,7 +114,7 @@ fn emit_from_self(open: bool) {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogTrigger.poco")]
+#[component(template = "PineDialogTrigger.poco", role = "interactive")]
 pub struct PineDialogTrigger {
     pub open: bool,
 }
@@ -144,7 +144,7 @@ impl PineDialogTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogPortal.poco")]
+#[component(template = "PineDialogPortal.poco", role = "scope")]
 pub struct PineDialogPortal {
     pub open: bool,
 }
@@ -162,7 +162,7 @@ impl PineDialogPortal {
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogOverlay.poco")]
+#[component(template = "PineDialogOverlay.poco", role = "panel")]
 pub struct PineDialogOverlay {}
 
 #[handlers]
@@ -180,7 +180,7 @@ impl PineDialogOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogContent.poco")]
+#[component(template = "PineDialogContent.poco", role = "panel")]
 pub struct PineDialogContent {
     pub title_id: String,
     pub description_id: String,
@@ -242,7 +242,7 @@ impl PineDialogContent {
 // ── Title ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogTitle.poco")]
+#[component(template = "PineDialogTitle.poco", role = "heading")]
 pub struct PineDialogTitle {
     pub title_id: String,
 }
@@ -259,7 +259,7 @@ impl PineDialogTitle {
 // ── Description ───────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogDescription.poco")]
+#[component(template = "PineDialogDescription.poco", role = "text")]
 pub struct PineDialogDescription {
     pub description_id: String,
 }
@@ -276,7 +276,7 @@ impl PineDialogDescription {
 // ── Close ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogClose.poco")]
+#[component(template = "PineDialogClose.poco", role = "interactive")]
 pub struct PineDialogClose {}
 
 #[handlers]
