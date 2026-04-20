@@ -1,0 +1,19 @@
+<root class="pine-otp-field"
+      role="group"
+      pp-ref="root"
+      :aria-label="label"
+      :data-disabled="disabled">
+  <template pp-for="slot in slots" pp-key="slot.index">
+    <input class="pine-otp-field-slot"
+           type="text"
+           maxlength="1"
+           autocomplete="one-time-code"
+           :data-index="slot.index"
+           :data-filled="slot.filled"
+           :value="slot.display"
+           :inputmode="input_mode"
+           :pattern="pattern"
+           :aria-label="slot.aria_label"
+           :disabled="disabled">
+  </template>
+</root>

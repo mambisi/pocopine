@@ -35,6 +35,7 @@ pub mod dialog;
 pub mod dropdown_menu;
 pub mod hover_card;
 pub mod label;
+pub mod otp_field;
 pub mod overlay;
 pub mod password_toggle_field;
 pub mod popover;
@@ -86,6 +87,7 @@ pub use dropdown_menu::{
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
 };
+pub use otp_field::PineOtpField;
 pub use password_toggle_field::{
     PinePasswordToggleFieldInput, PinePasswordToggleFieldRoot, PinePasswordToggleFieldToggle,
 };
@@ -193,4 +195,5 @@ pub fn register_all() {
     PinePasswordToggleFieldRoot::register();
     PinePasswordToggleFieldInput::register();
     PinePasswordToggleFieldToggle::register();
+    PineOtpField::register();
 }

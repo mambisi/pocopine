@@ -6,7 +6,7 @@
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element, HtmlElement};
+use web_sys::{window, Element, HtmlElement, HtmlInputElement};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -2817,6 +2817,135 @@ async fn password_toggle_field_toggle_flips_input_type() {
         input.get_attribute("type").as_deref(),
         Some("password"),
         "toggle masks again"
+    );
+
+    host.remove();
+}
+
+// ─── PineOtpField ─────────────────────────────────────────────────
+
+/// OTP Field renders N slots matching `length`, types advance
+/// focus, and the accumulated value fires `pp:update:model` on
+/// each keystroke. Numeric filter drops non-digit input.
+#[wasm_bindgen_test]
+async fn otp_field_types_digits_and_emits_value_updates() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount("<pine-otp-field length=\"4\" type=\"numeric\"></pine-otp-field>");
+    tick().await;
+
+    // Four slots rendered.
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slots = tag
+        .query_selector_all("input.pine-otp-field-slot")
+        .unwrap();
+    assert_eq!(slots.length(), 4, "4 slots for length=4");
+
+    // Listen for pp:update:model bubbling from the OTP field.
+    let last_value: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let last = last_value.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *last.borrow_mut() = ce.detail().as_string().unwrap_or_default();
+    }));
+    let target: &web_sys::EventTarget = tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Helper: simulate typing `ch` into the slot at `index`.
+    // `input` events from real keystrokes bubble; our test-synthesised
+    // one needs bubbles=true explicitly so it reaches the delegation
+    // listener on the pine-otp-field root.
+    let type_into = |index: u32, ch: &str| {
+        let sel = format!("input.pine-otp-field-slot[data-index=\"{index}\"]");
+        let input: HtmlInputElement = tag
+            .query_selector(&sel)
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap();
+        input.set_value(ch);
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        let ev = web_sys::Event::new_with_event_init_dict("input", &init).unwrap();
+        input.dispatch_event(&ev).unwrap();
+    };
+
+    type_into(0, "1");
+    tick().await;
+    assert_eq!(&*last_value.borrow(), "1", "first digit lands");
+
+    type_into(1, "2");
+    tick().await;
+    type_into(2, "3");
+    tick().await;
+    type_into(3, "4");
+    tick().await;
+    assert_eq!(&*last_value.borrow(), "1234", "full code accumulated");
+
+    // Non-digit is filtered when type="numeric".
+    type_into(3, "a");
+    tick().await;
+    assert_eq!(
+        &*last_value.borrow(),
+        "1234",
+        "alphabetic typing is rejected by numeric filter"
+    );
+
+    host.remove();
+}
+
+/// Backspace on an empty slot walks focus back and clears the
+/// previously-filled slot. Auto-advance means a completed-then-
+/// backspaced field leaves focus in the correct place.
+#[wasm_bindgen_test]
+async fn otp_field_backspace_walks_back_and_clears() {
+    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slot = |i: u32| -> HtmlInputElement {
+        tag.query_selector(&format!(
+            "input.pine-otp-field-slot[data-index=\"{i}\"]"
+        ))
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+    };
+
+    // Fill slot 0 + slot 1.
+    for i in 0..2 {
+        let el = slot(i);
+        el.set_value(&i.to_string());
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        el.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+    }
+    tick().await;
+
+    // Backspace-on-empty slot 2: pops slot 1's value, focuses slot 1.
+    let s2 = slot(2);
+    // Slot 2 is empty after auto-advance.
+    assert_eq!(s2.value(), "", "slot 2 starts empty");
+    let kd_init = web_sys::KeyboardEventInit::new();
+    kd_init.set_bubbles(true);
+    kd_init.set_cancelable(true);
+    kd_init.set_key("Backspace");
+    let ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kd_init).unwrap();
+    s2.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    assert_eq!(
+        slot(1).value(),
+        "",
+        "slot 1 cleared after backspace from empty slot 2"
     );
 
     host.remove();
