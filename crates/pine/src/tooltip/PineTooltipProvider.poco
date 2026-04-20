@@ -1,0 +1,3 @@
+<div class="pine-tooltip-provider" style="display:contents">
+  <slot></slot>
+</div>

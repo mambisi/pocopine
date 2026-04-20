@@ -332,16 +332,27 @@
   <!-- PineTooltip — compound (Radix-style) ───────────────── -->
   <h2>Tooltip</h2>
   <section class="row">
-    <pine-tooltip-root>
-      <pine-tooltip-trigger>
-        <pine-button variant="primary">Save</pine-button>
-      </pine-tooltip-trigger>
-      <pine-tooltip-portal>
-        <pine-tooltip-content>Saves your work.</pine-tooltip-content>
-      </pine-tooltip-portal>
-    </pine-tooltip-root>
+    <pine-tooltip-provider delay_duration="250">
+      <pine-tooltip-root>
+        <pine-tooltip-trigger>
+          <pine-button variant="primary">Save</pine-button>
+        </pine-tooltip-trigger>
+        <pine-tooltip-portal>
+          <pine-tooltip-content>Saves your work.</pine-tooltip-content>
+        </pine-tooltip-portal>
+      </pine-tooltip-root>
+      <pine-tooltip-root>
+        <pine-tooltip-trigger>
+          <pine-button variant="ghost">Undo</pine-button>
+        </pine-tooltip-trigger>
+        <pine-tooltip-portal>
+          <pine-tooltip-content>Undoes the last action.</pine-tooltip-content>
+        </pine-tooltip-portal>
+      </pine-tooltip-root>
+    </pine-tooltip-provider>
     <span style="font-size:0.875rem;color:var(--fg-muted)">
-      Hover or focus the Save button.
+      Hover Save, then move to Undo — Save's tooltip closes (one
+      open at a time via Provider).
     </span>
   </section>
 

@@ -82,7 +82,8 @@ pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
 pub use tooltip::{
-    PineTooltipContent, PineTooltipPortal, PineTooltipRoot, PineTooltipTrigger,
+    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot,
+    PineTooltipTrigger,
 };
 
 /// Register every Pine custom-element tag. Call once at app startup
@@ -157,6 +158,7 @@ pub fn register_all() {
     PineToggle::register();
     PineToggleGroupRoot::register();
     PineToggleGroupItem::register();
+    PineTooltipProvider::register();
     PineTooltipRoot::register();
     PineTooltipTrigger::register();
     PineTooltipPortal::register();

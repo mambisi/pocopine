@@ -1836,6 +1836,81 @@ async fn dialog_trigger_composes_pine_button() {
     host.remove();
 }
 
+// ─── PineTooltipProvider ──────────────────────────────────────────
+
+/// Provider enforces singleton: opening the second tooltip closes
+/// the first. Both live under one Provider with a 0-ms delay; we
+/// hover A, wait for the timer to fire, then hover B and assert
+/// that A's Content disappears when B's mounts.
+#[wasm_bindgen_test]
+async fn tooltip_provider_singleton_evicts_previous() {
+    let host = mount(
+        "<pine-tooltip-provider delay_duration=\"0\">\
+           <pine-tooltip-root>\
+             <pine-tooltip-trigger class=\"tp-a-trig\"><button>A</button></pine-tooltip-trigger>\
+             <pine-tooltip-portal><pine-tooltip-content class=\"tp-a-content\">A body</pine-tooltip-content></pine-tooltip-portal>\
+           </pine-tooltip-root>\
+           <pine-tooltip-root>\
+             <pine-tooltip-trigger class=\"tp-b-trig\"><button>B</button></pine-tooltip-trigger>\
+             <pine-tooltip-portal><pine-tooltip-content class=\"tp-b-content\">B body</pine-tooltip-content></pine-tooltip-portal>\
+           </pine-tooltip-root>\
+         </pine-tooltip-provider>",
+    );
+    tick().await;
+
+    // Hover A — `pp-ref="trigger"` points at the <span> Trigger
+    // template renders around the author's button, so the
+    // Trigger's mouseenter listener lives on the span. The class
+    // `tp-a-trig` is on the custom element tag; the span inside
+    // carries `class="pine-tooltip-trigger"` plus the fallthrough
+    // class, so we reach it via the inner span.
+    let a_span = host
+        .query_selector(".tp-a-trig span")
+        .unwrap()
+        .expect("A trigger span");
+    a_span
+        .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert!(
+        doc().query_selector(".tp-a-content").unwrap().is_some(),
+        "A opens after hover"
+    );
+
+    // Hover B — Provider should evict A.
+    let b_span = host
+        .query_selector(".tp-b-trig span")
+        .unwrap()
+        .expect("B trigger span");
+    b_span
+        .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert!(
+        doc().query_selector(".tp-b-content").unwrap().is_some(),
+        "B opens"
+    );
+    assert!(
+        doc().query_selector(".tp-a-content").unwrap().is_none(),
+        "A evicted when B opened (Provider singleton)"
+    );
+
+    // Close B before host.remove() — the teleported portal lives
+    // in body, so without this the next tooltip test sees a
+    // stale `[role="tooltip"]` element.
+    b_span
+        .dispatch_event(&web_sys::Event::new("mouseleave").unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    host.remove();
+}
+
 // ─── PineContextMenu ──────────────────────────────────────────────
 
 /// A `contextmenu` event on the Trigger captures pointer coords,

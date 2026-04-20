@@ -26,7 +26,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineAccordion* (compound) | stable | Root/Item/Trigger/Content; `type="single\|multiple"`, `collapsible` |
 | PineAvatar* (compound) | stable | Root/Image/Fallback; `pp-show`-gated fallback during load |
 | PineTabs* (compound, 4 parts) | stable | Root/List/Trigger/Content |
-| PineTooltip* (compound, 4 parts) | stable | Root/Trigger/Portal/Content; focusin/focusout bubble to wrapper |
+| PineTooltip* (compound, 5 parts) | stable | Provider/Root/Trigger/Portal/Content; Provider enforces singleton policy + default delay |
 | PineSwitch | stable | `role="switch"`, `pp-model:checked` |
 | PineCheckbox | stable | tri-state, `pp-model:state` |
 
@@ -215,7 +215,7 @@ After DropdownMenu's core is fleshed out:
 | 6 | ~~**AlertDialog**~~ | Done — 9-part compound: Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel. Content renders `role="alertdialog"`; `dismiss_on_overlay` defaults `false`. Author's side-effect handler goes on the `<pine-alert-dialog-action>` tag (fallthrough skips `@`) so it fires alongside the framework's own `close()`. |
 | 7 | ~~**HoverCard**~~ | Done — 4-part compound (Root/Trigger/Portal/Content). `open_delay` + `close_delay` on Root; Content tracks its own mouseenter/mouseleave to cancel the close timer, so users can move the pointer from Trigger across the gap into Content without the card vanishing. Focus opens immediately (no delay) per Radix. |
 | 8 | ~~**ContextMenu**~~ | v0 done — 6-part compound (Root/Trigger/Portal/Content/Item/Separator). `contextmenu` event captures pointer (clientX, clientY); Content positions itself absolutely at those coords, not anchored to Trigger. Richer parts (Sub, CheckboxItem, RadioGroup) can follow. |
-| 9 | **Tooltip provider** | Radix's single-open policy across a subtree (compound-rewrite territory). |
+| 9 | ~~**Tooltip provider**~~ | Done — `<pine-tooltip-provider>` wraps a subtree; descendants inherit its `delay_duration` default and obey a singleton policy (only one tooltip open at a time — opening a second evicts the first via `Handle::update`). |
 
 ### 4.3 Substrate gaps worth filling opportunistically
 
