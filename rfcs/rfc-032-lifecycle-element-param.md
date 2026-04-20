@@ -88,11 +88,12 @@ Three costs of the status quo:
   down; the hook's job is to release side-table entries, not
   poke DOM. `on_unmount(&mut self)` stays unchanged — if an
   author really needs the element, `refs::get_on` still works.
-- **Passing named refs by position.** This RFC adds *one*
-  parameter: the rendered root. Additional refs (`content`,
-  `menu`, …) stay on the `pp-ref` + `refs::get_on` path. A
-  future RFC could expose a map/struct of refs to handlers;
-  out of scope here.
+- **Replacing `pp-ref` with typed positional params.** Authors
+  still reach specific named refs through the built-in
+  `Refs<'a>` extractor (tier 3) or a per-ref newtype extractor
+  they define themselves (§4.6). This RFC doesn't try to
+  inject refs by their template-side *name* alone — that
+  would need const-string generics.
 - **Changing the template's "root element" semantics.** The
   rendered root is still whatever the macro pins
   `SCOPE_ID_KEY` / `SCOPE_PROXY_KEY` onto — `first_element_child`
@@ -163,7 +164,174 @@ impl<'a> FromHookCtx<'a> for HookCtx<'a> {
 }
 ```
 
-### 4.3 Author-defined extractors
+### 4.3 Proposed built-in extractors — shopping list
+
+Aggressive brainstorm. Council prunes. Each entry says what it
+gives, why it's worth it, and what it'd cost to ship.
+
+#### Tier 1 — obvious yes, ships in v1
+
+| Extractor | Type | What it gives | Cost |
+|---|---|---|---|
+| `El<'a>` | newtype over `&'a Element` | rendered root | ~0; already in `ctx` |
+| `ScopeId` | `u64` wrapper | own scope id | ~0 |
+| `HookCtx<'a>` | the carrier itself | escape hatch | ~0 |
+
+#### Tier 2 — strongly useful, ships in v1
+
+| Extractor | Type | What it gives | Cost |
+|---|---|---|---|
+| `Me<T>` | typed handle to self | `Handle<T>` to own scope — replaces `this::<Self>()` in hooks | macro substitutes `T = SelfType` |
+| `ParentId` | `Option<ScopeId>` | RFC-027 parent scope id via `context::parent_of` | one HashMap lookup |
+| `Document` | `web_sys::Document` | shared shortcut (pocopine never exposes it as a singleton) | `web_sys::window().unwrap().document().unwrap()` |
+| `Window` | `web_sys::Window` | same, at window level | `web_sys::window().unwrap()` |
+| `Body<'a>` | newtype over `&'a HtmlElement` | document body — useful for teleport-adjacent listener install | cached per call |
+| `TagName` | `&'static str` | the component's registered custom-element tag (`"pine-dialog-root"`) | read from a macro-generated const |
+
+#### Tier 3 — domain-useful, ship in v1 if cheap
+
+| Extractor | Type | What it gives | Cost |
+|---|---|---|---|
+| `Refs<'a>` | map-like accessor | `refs.get("menu")` / `refs.get_as::<HtmlButtonElement>("trigger")` — wraps `refs::get_on(scope, name)` with typed casting | tiny view struct over existing refs registry |
+| `TypedEl<'a, T: JsCast>` | `&'a T` | rendered root pre-cast via `dyn_into::<T>()` (panics on mismatch — author's contract) | one `dyn_ref` call |
+| `HostEl<'a>` | newtype over `&'a Element` | the custom-element tag (parent of `El`) — useful when you need to dispatch events from it | one `parent_element()` call |
+| `IsTeleported` | `bool` | whether `El` is inside a teleported subtree (via `TELEPORT_ORIGIN_KEY` ancestry walk) | tree-walk once per hook |
+
+#### Tier 4 — speculative, skip v1 unless a use case surfaces
+
+| Extractor | Type | What it gives | Cost |
+|---|---|---|---|
+| `ScopePath` | `Vec<ScopeId>` | full chain from current scope to root | linear walk; rarely needed — injection already handles the common cases |
+| `TeleportHost<'a>` | `Option<&'a Element>` | original host of a teleport (via `teleport::host_of`) | ancestry walk; only useful in teleported code |
+| `MountEpoch` | `u64` | monotonic counter bumped each walk — authors can distinguish re-mounts from re-renders | counter state in walker |
+| `Provider<K>` / `Injected<T, K>` | typed inject result | resolves `inject(&KEY)` automatically | needs named const-generic keys, or const-string generics (unstable) |
+| `Slots<'a>` | map of slot names → fragments | rarely needed directly; templates already handle slots | walker-side exposure |
+| `Elapsed` | `Duration` | time since the scope was created | two `performance.now()` calls cached |
+
+### 4.4 Rough shapes for each
+
+Enough to see how they compose with `FromHookCtx`:
+
+```rust
+// Tier 1
+pub struct El<'a>(pub &'a web_sys::Element);
+impl<'a> Deref for El<'a> { type Target = Element; fn deref(&self) -> &Element { self.0 } }
+impl<'a> FromHookCtx<'a> for El<'a> { fn from_hook_ctx(c: HookCtx<'a>) -> Self { El(c.el) } }
+
+// Tier 2
+pub struct Me<T: 'static>(pub Handle<T>);
+// Generated via the `#[handlers]` macro — it knows the current
+// component type, so `Me<Self>` at the hook-param site gets
+// substituted with the component's concrete type.
+// Not a blanket FromHookCtx impl; see §5.2 for how the macro
+// wires this one.
+
+pub struct ParentId(pub Option<ScopeId>);
+impl<'a> FromHookCtx<'a> for ParentId {
+    fn from_hook_ctx(c: HookCtx<'a>) -> Self { ParentId(context::parent_of(c.scope_id)) }
+}
+
+pub struct Document(pub web_sys::Document);
+impl<'a> FromHookCtx<'a> for Document {
+    fn from_hook_ctx(_c: HookCtx<'a>) -> Self {
+        Document(web_sys::window().unwrap().document().unwrap())
+    }
+}
+
+pub struct Window(pub web_sys::Window);
+// similar
+
+pub struct Body<'a>(pub &'a web_sys::HtmlElement);
+// cache in a thread-local per hook call; see §5.3
+
+pub struct TagName(pub &'static str);
+// macro-generated — each component knows its own tag at compile time,
+// so Me and TagName are macro-synthesized for the component in
+// question rather than read from ctx
+
+// Tier 3
+pub struct Refs<'a> {
+    scope_id: ScopeId,
+    _m: PhantomData<&'a ()>,
+}
+impl<'a> Refs<'a> {
+    pub fn get(&self, name: &str) -> Option<web_sys::Element> {
+        pocopine_core::refs::get_on(self.scope_id, name)
+    }
+    pub fn get_as<T: JsCast>(&self, name: &str) -> Option<T> {
+        self.get(name).and_then(|el| el.dyn_into().ok())
+    }
+}
+impl<'a> FromHookCtx<'a> for Refs<'a> {
+    fn from_hook_ctx(c: HookCtx<'a>) -> Self {
+        Refs { scope_id: c.scope_id, _m: PhantomData }
+    }
+}
+
+pub struct TypedEl<'a, T: JsCast>(pub &'a T, PhantomData<T>);
+// panic on mismatch — author's contract
+
+pub struct HostEl<'a>(pub &'a web_sys::Element);
+impl<'a> FromHookCtx<'a> for HostEl<'a> {
+    fn from_hook_ctx(c: HookCtx<'a>) -> Self {
+        HostEl(c.el.parent_element().as_ref().unwrap_or(c.el))
+    }
+}
+
+pub struct IsTeleported(pub bool);
+// walks ancestors checking TELEPORT_ORIGIN_KEY
+
+// Tier 4 — sketches only, not for v1.
+```
+
+### 4.5 Worked handler signatures — how the tiers read
+
+```rust
+// Dialog Content today — four lines of lookup + mutation guard.
+pub fn on_ready(&self) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(content) = refs::get_on(scope, "content") else { return };
+    let modal = inject(&ROOT).map(|r| r.with(|root| root.modal)).unwrap_or(true);
+    overlay::activate(scope, &content, modal);
+}
+
+// With Tier 1 alone — already half the size.
+pub fn on_ready(&self, el: El, scope: ScopeId) {
+    let modal = inject(&ROOT).map(|r| r.with(|root| root.modal)).unwrap_or(true);
+    overlay::activate(scope, &el, modal);
+}
+
+// With Tier 2 adding Me<Self> — watch_scope_field chains get
+// their Handle from the extractor, not a `this::<Self>()` line.
+pub fn on_ready(&self, el: El, scope: ScopeId, me: Me<Self>) {
+    // … use me.0 inside closures instead of cloning `this::<Self>()`.
+}
+
+// Author-defined typed ref — one impl per "ref I use a lot."
+pub fn on_ready(&self, MenuRef(menu): MenuRef, scope: ScopeId) {
+    init_roving_tabindex(&menu);
+    focus::auto_focus_first(&menu);
+}
+
+// Tier 3 Refs — typed access without a per-ref newtype.
+pub fn on_ready(&self, scope: ScopeId, refs: Refs) {
+    if let Some(menu) = refs.get_as::<HtmlUListElement>("menu") {
+        init_roving_tabindex(&menu);
+    }
+}
+
+// Tier 3 TypedEl — the rendered root already typed.
+pub fn on_ready(&self, el: TypedEl<HtmlButtonElement>) {
+    let _ = el.0.focus();
+}
+
+// Tier 2 Document — no `web_sys::window().unwrap().document().unwrap()`.
+pub fn on_mount(&mut self, doc: Document) {
+    let _ = doc.0.add_event_listener_with_callback(/* … */);
+}
+```
+
+### 4.6 Author-defined extractors
 
 Because `FromHookCtx` is open, authors add their own when a
 pattern repeats. Example — a typed menu ref that looks up
@@ -190,7 +358,14 @@ fn on_ready(&self, MenuRef(menu): MenuRef) {
 A panicking extractor is an author choice — the built-in ones
 don't panic (the element is guaranteed by the walker).
 
-### 4.4 Supported handler signatures
+With the Tier 3 `Refs<'a>` built-in, most typed-ref author
+extractors collapse to a single line at the call site —
+`refs.get_as::<HtmlUListElement>("menu")` — so authors only
+define their own when they want the type hint to show up in
+the handler signature (e.g. `MenuRef(menu): MenuRef` is more
+self-documenting than `refs.get_as("menu").unwrap()`).
+
+### 4.7 Supported handler signatures
 
 The `#[handlers]` macro accepts any of these for `on_mount` /
 `on_ready`:
@@ -218,7 +393,7 @@ rustc trait-bound error: *"the trait `FromHookCtx<'_>` is not
 implemented for …"* — same shape as axum's "not a valid
 extractor" compile error.
 
-### 4.2 `on_setup` / `on_unmount` — unchanged
+### 4.8 `on_setup` / `on_unmount` — unchanged
 
 ```rust
 fn on_setup(&mut self) { … }
@@ -518,20 +693,14 @@ give the typed-extractor benefits of §4.3.
   work happens (install listeners, stamp attributes); `on_ready`
   is more about "wait for subtree" than "touch my own
   element." Counter-argument: consistency is cheap.
-- **What built-in extractors ship in v1.** Candidates:
-  - `El<'a>` — rendered root. (Obvious yes.)
-  - `ScopeId` — own scope. (Obvious yes.)
-  - `HookCtx<'a>` — escape hatch. (Obvious yes.)
-  - `ParentId(ScopeId)` — injected parent. Maybe — most
-    compounds want `Handle<Root>` via `inject::<>`, not the
-    raw parent.
-  - `Handle<T>` — resolves `inject(&KEY)` automatically.
-    Tempting but needs a key to know *which* handle; probably
-    a custom extractor thing.
-  - `Refs<'a>` — map-like accessor over `pp-ref` entries:
-    `refs.get("menu")`. Nice but adds a walker-side data
-    structure.
-  v1 ships the three "obvious yes" extractors only.
+- **What built-in extractors ship in v1.** See §4.3 for the
+  full proposed catalogue — four tiers from "obvious yes" to
+  "speculative." Council picks which tiers land in v1.
+  Current draft target: Tier 1 + Tier 2, skipping the Window /
+  Document / Body ones if the win is marginal. Tier 3's
+  `Refs<'a>` is the biggest open call — it's a real
+  productivity boost but introduces a new walker-adjacent
+  view type.
 - **Naming.** `HookCtx` vs `LifecycleCtx` vs `MountCtx`. Single
   `HookCtx` for both hooks keeps the type count down;
   per-hook structs would let us add fields that only make
