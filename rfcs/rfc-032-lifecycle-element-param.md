@@ -13,7 +13,7 @@
 Let `on_mount` and `on_ready` accept a **variable list of
 extractor parameters** — axum / bevy-system style. Authors
 declare the types they want and `#[handlers]` wires each one
-from a common `HookCtx` carrier via the `FromHookCtx` trait.
+from a common `LifecycleContext` carrier via the `FromLifecycleContext` trait.
 
 Today those hooks get `&self` / `&mut self` only; to touch the
 DOM they re-derive the scope id + element by hand —
@@ -39,10 +39,10 @@ pub fn on_mount(&mut self, _el: El) {
 }
 ```
 
-The `FromHookCtx` trait is open — authors define their own
+The `FromLifecycleContext` trait is open — authors define their own
 extractors (typed `<ul>` ref, `Handle<ParentRoot>`, …) the same
 way axum lets you extend `FromRequest`. Each parameter is a
-zero-cost projection of the walker-supplied `HookCtx`; handlers
+zero-cost projection of the walker-supplied `LifecycleContext`; handlers
 pay only for what they use.
 
 Parameters are **optional at the call site** — `#[handlers]`
@@ -103,7 +103,7 @@ Three costs of the status quo:
 
 ## 4. Surface
 
-### 4.1 The `HookCtx` carrier
+### 4.1 The `LifecycleContext` carrier
 
 Private-ish — authors rarely name it directly. It's the blob
 the walker hands to the macro-generated forwarder; extractors
@@ -116,17 +116,17 @@ read from it.
 /// add fields without breaking existing extractor impls.
 #[non_exhaustive]
 #[derive(Clone, Copy)]
-pub struct HookCtx<'a> {
+pub struct LifecycleContext<'a> {
     pub el: &'a web_sys::Element,
     pub scope_id: ScopeId,
 }
 ```
 
-### 4.2 The `FromHookCtx` trait — the extractor shape
+### 4.2 The `FromLifecycleContext` trait — the extractor shape
 
 ```rust
-pub trait FromHookCtx<'a>: Sized {
-    fn from_hook_ctx(ctx: HookCtx<'a>) -> Self;
+pub trait FromLifecycleContext<'a>: Sized {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self;
 }
 ```
 
@@ -136,7 +136,7 @@ Built-in impls (live in `pocopine-core`):
 |---|---|
 | `El<'a>` (newtype over `&'a Element`) | the rendered root |
 | `ScopeId` | the component's scope id |
-| `HookCtx<'a>` | the full carrier (for the escape hatch) |
+| `LifecycleContext<'a>` | the full carrier (for the escape hatch) |
 
 `El<'a>` is a thin newtype instead of a bare `&Element` because
 rustc can't infer `&'a Element` as a generic extractor type
@@ -151,16 +151,16 @@ impl<'a> std::ops::Deref for El<'a> {
     fn deref(&self) -> &Self::Target { self.0 }
 }
 
-impl<'a> FromHookCtx<'a> for El<'a> {
-    fn from_hook_ctx(ctx: HookCtx<'a>) -> Self { El(ctx.el) }
+impl<'a> FromLifecycleContext<'a> for El<'a> {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { El(ctx.el) }
 }
 
-impl<'a> FromHookCtx<'a> for ScopeId {
-    fn from_hook_ctx(ctx: HookCtx<'a>) -> Self { ctx.scope_id }
+impl<'a> FromLifecycleContext<'a> for ScopeId {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { ctx.scope_id }
 }
 
-impl<'a> FromHookCtx<'a> for HookCtx<'a> {
-    fn from_hook_ctx(ctx: HookCtx<'a>) -> Self { ctx }
+impl<'a> FromLifecycleContext<'a> for LifecycleContext<'a> {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { ctx }
 }
 ```
 
@@ -175,7 +175,7 @@ gives, why it's worth it, and what it'd cost to ship.
 |---|---|---|---|
 | `El<'a>` | newtype over `&'a Element` | rendered root | ~0; already in `ctx` |
 | `ScopeId` | `u64` wrapper | own scope id | ~0 |
-| `HookCtx<'a>` | the carrier itself | escape hatch | ~0 |
+| `LifecycleContext<'a>` | the carrier itself | escape hatch | ~0 |
 
 #### Tier 2 — strongly useful, ships in v1
 
@@ -210,30 +210,30 @@ gives, why it's worth it, and what it'd cost to ship.
 
 ### 4.4 Rough shapes for each
 
-Enough to see how they compose with `FromHookCtx`:
+Enough to see how they compose with `FromLifecycleContext`:
 
 ```rust
 // Tier 1
 pub struct El<'a>(pub &'a web_sys::Element);
 impl<'a> Deref for El<'a> { type Target = Element; fn deref(&self) -> &Element { self.0 } }
-impl<'a> FromHookCtx<'a> for El<'a> { fn from_hook_ctx(c: HookCtx<'a>) -> Self { El(c.el) } }
+impl<'a> FromLifecycleContext<'a> for El<'a> { fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self { El(c.el) } }
 
 // Tier 2
 pub struct Me<T: 'static>(pub Handle<T>);
 // Generated via the `#[handlers]` macro — it knows the current
 // component type, so `Me<Self>` at the hook-param site gets
 // substituted with the component's concrete type.
-// Not a blanket FromHookCtx impl; see §5.2 for how the macro
+// Not a blanket FromLifecycleContext impl; see §5.2 for how the macro
 // wires this one.
 
 pub struct ParentId(pub Option<ScopeId>);
-impl<'a> FromHookCtx<'a> for ParentId {
-    fn from_hook_ctx(c: HookCtx<'a>) -> Self { ParentId(context::parent_of(c.scope_id)) }
+impl<'a> FromLifecycleContext<'a> for ParentId {
+    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self { ParentId(context::parent_of(c.scope_id)) }
 }
 
 pub struct Document(pub web_sys::Document);
-impl<'a> FromHookCtx<'a> for Document {
-    fn from_hook_ctx(_c: HookCtx<'a>) -> Self {
+impl<'a> FromLifecycleContext<'a> for Document {
+    fn from_lifecycle_context(_c: LifecycleContext<'a>) -> Self {
         Document(web_sys::window().unwrap().document().unwrap())
     }
 }
@@ -262,8 +262,8 @@ impl<'a> Refs<'a> {
         self.get(name).and_then(|el| el.dyn_into().ok())
     }
 }
-impl<'a> FromHookCtx<'a> for Refs<'a> {
-    fn from_hook_ctx(c: HookCtx<'a>) -> Self {
+impl<'a> FromLifecycleContext<'a> for Refs<'a> {
+    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self {
         Refs { scope_id: c.scope_id, _m: PhantomData }
     }
 }
@@ -272,8 +272,8 @@ pub struct TypedEl<'a, T: JsCast>(pub &'a T, PhantomData<T>);
 // panic on mismatch — author's contract
 
 pub struct HostEl<'a>(pub &'a web_sys::Element);
-impl<'a> FromHookCtx<'a> for HostEl<'a> {
-    fn from_hook_ctx(c: HookCtx<'a>) -> Self {
+impl<'a> FromLifecycleContext<'a> for HostEl<'a> {
+    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self {
         HostEl(c.el.parent_element().as_ref().unwrap_or(c.el))
     }
 }
@@ -333,15 +333,15 @@ pub fn on_mount(&mut self, doc: Document) {
 
 ### 4.6 Author-defined extractors
 
-Because `FromHookCtx` is open, authors add their own when a
+Because `FromLifecycleContext` is open, authors add their own when a
 pattern repeats. Example — a typed menu ref that looks up
 `pp-ref="menu"`:
 
 ```rust
 pub struct MenuRef(pub web_sys::HtmlElement);
 
-impl<'a> FromHookCtx<'a> for MenuRef {
-    fn from_hook_ctx(ctx: HookCtx<'a>) -> Self {
+impl<'a> FromLifecycleContext<'a> for MenuRef {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self {
         let el = pocopine::refs::get_on(ctx.scope_id, "menu")
             .expect("pp-ref=\"menu\" on template root");
         MenuRef(el.dyn_into().unwrap())
@@ -375,21 +375,21 @@ The `#[handlers]` macro accepts any of these for `on_mount` /
 fn on_mount(&mut self) { … }
 fn on_ready(&self) { … }
 
-// Any number, any order — each param implements FromHookCtx.
+// Any number, any order — each param implements FromLifecycleContext.
 fn on_ready(&self, el: El) { … }
 fn on_ready(&self, el: El, scope: ScopeId) { … }
-fn on_ready(&self, scope: ScopeId, ctx: HookCtx) { … }
+fn on_ready(&self, scope: ScopeId, ctx: LifecycleContext) { … }
 fn on_ready(&self, MenuRef(menu): MenuRef) { … }
 ```
 
 The macro doesn't constrain order or count. The only
 constraint is that `&self` / `&mut self` is the first
 receiver; every subsequent parameter must implement
-`FromHookCtx<'_>`. rustc enforces the latter via the generated
+`FromLifecycleContext<'_>`. rustc enforces the latter via the generated
 forwarder.
 
-Non-`FromHookCtx` types in the signature produce a normal
-rustc trait-bound error: *"the trait `FromHookCtx<'_>` is not
+Non-`FromLifecycleContext` types in the signature produce a normal
+rustc trait-bound error: *"the trait `FromLifecycleContext<'_>` is not
 implemented for …"* — same shape as axum's "not a valid
 extractor" compile error.
 
@@ -424,8 +424,8 @@ makes it the default rather than opt-in.
 ```rust
 pub trait ComponentState: 'static {
     // …
-    fn mount(&mut self, ctx: HookCtx) {}
-    fn on_ready(&self, ctx: HookCtx) {}
+    fn mount(&mut self, ctx: LifecycleContext) {}
+    fn on_ready(&self, ctx: LifecycleContext) {}
     // …
 }
 ```
@@ -438,12 +438,12 @@ Default impls ignore the ctx, so non-component
 ### 5.1 Walker call sites
 
 `walker::fire_mount_hook(el)` already has `el` in scope — it's
-the rendered root it walked. Build a `HookCtx` and hand it to
+the rendered root it walked. Build a `LifecycleContext` and hand it to
 the trait method:
 
 ```rust
 // In fire_mount_hook (walker.rs ~line 165):
-let ctx = HookCtx { el, scope_id: id };
+let ctx = LifecycleContext { el, scope_id: id };
 if has_mount {
     scope::with_current_scope_id(id, || {
         scope.state.borrow_mut().mount(ctx);
@@ -454,37 +454,37 @@ if has_ready {
     tick::next(move || {
         if let Some(sc) = Scope::find(id) {
             scope::with_current_scope_id(id, || {
-                sc.state.borrow().on_ready(HookCtx { el: &el_owned, scope_id: id });
+                sc.state.borrow().on_ready(LifecycleContext { el: &el_owned, scope_id: id });
             });
         }
     });
 }
 ```
 
-The ComponentState trait methods receive a single `HookCtx`
+The ComponentState trait methods receive a single `LifecycleContext`
 argument; the `#[handlers]`-generated forwarder destructures it
-through `FromHookCtx::from_hook_ctx` per parameter.
+through `FromLifecycleContext::from_lifecycle_context` per parameter.
 
 `tick::next` fires after the microtask queue drains; we clone
 `el` into the closure so the call site owns it, then re-borrow
-through a fresh `HookCtx` at invoke time. Cheap — `Element` is
+through a fresh `LifecycleContext` at invoke time. Cheap — `Element` is
 a wasm-bindgen JsValue handle, so clone is a ref bump.
 
 ### 5.2 `#[handlers]` macro
 
 For each handler with extractor parameters, generate a forwarder
-that extracts each one via `FromHookCtx`:
+that extracts each one via `FromLifecycleContext`:
 
 ```rust
 // User writes:
 fn on_ready(&self, el: El, scope: ScopeId) { … }
 
 // Macro generates (inside the HandlerDispatch impl):
-fn on_ready(&self, __ctx: HookCtx) {
+fn on_ready(&self, __ctx: LifecycleContext) {
     Self::on_ready(
         self,
-        <El as FromHookCtx>::from_hook_ctx(__ctx),
-        <ScopeId as FromHookCtx>::from_hook_ctx(__ctx),
+        <El as FromLifecycleContext>::from_lifecycle_context(__ctx),
+        <ScopeId as FromLifecycleContext>::from_lifecycle_context(__ctx),
     );
 }
 ```
@@ -500,12 +500,12 @@ let params: Vec<_> = user_method.sig.inputs.iter()
             FnArg::Typed(p) => p,
             FnArg::Receiver(_) => unreachable!(),
         };
-        quote! { <#ty as ::pocopine::FromHookCtx>::from_hook_ctx(__ctx) }
+        quote! { <#ty as ::pocopine::FromLifecycleContext>::from_lifecycle_context(__ctx) }
     })
     .collect();
 
 quote! {
-    fn on_ready(&self, __ctx: ::pocopine::HookCtx) {
+    fn on_ready(&self, __ctx: ::pocopine::LifecycleContext) {
         Self::on_ready(self, #(#params),*);
     }
 }
@@ -556,7 +556,7 @@ Dialog's `PineDialogContent.poco` would drop the redundant
 `<ul>` ref:
 
 ```rust
-pub fn on_ready(&self, MenuRef(menu): MenuRef, ctx: HookCtx) {
+pub fn on_ready(&self, MenuRef(menu): MenuRef, ctx: LifecycleContext) {
     init_roving_tabindex(&menu);
     focus::auto_focus_first(&menu);
     if let Some(anchor) = resolve_anchor(&self.anchor) {
@@ -608,11 +608,11 @@ across every compound that ships a menu.
   author's contract, not the framework's. The built-ins never
   panic.
 - **Extractor ordering.** Order in the handler signature
-  controls call order — each `FromHookCtx::from_hook_ctx` runs
+  controls call order — each `FromLifecycleContext::from_lifecycle_context` runs
   left to right. For stateless built-ins that's irrelevant;
   author extractors that mutate side tables (rare) should
   document their ordering expectations.
-- **`#[non_exhaustive]` on `HookCtx`.** Constructing `HookCtx`
+- **`#[non_exhaustive]` on `LifecycleContext`.** Constructing `LifecycleContext`
   outside pocopine-core is impossible (by design — only the
   walker mints them), so the attribute costs authors nothing.
   New fields are purely additive.
@@ -631,21 +631,21 @@ authors who want scope id or a typed ref write
 as today. Also locks the surface: adding a "parent scope id"
 later would need another RFC.
 
-### 8.2 Single `HookCtx` struct
+### 8.2 Single `LifecycleContext` struct
 
 ```rust
-fn on_ready(&self, ctx: HookCtx) { … }
+fn on_ready(&self, ctx: LifecycleContext) { … }
 ```
 
 Bundles element + scope id. Better than 8.1 because adding
-`HookCtx` fields is non-breaking. Worse than the extractor
+`LifecycleContext` fields is non-breaking. Worse than the extractor
 approach because:
 
 - Every site reads `ctx.el` / `ctx.scope_id` — more noise at
   the callsite than named typed params.
 - Author-defined types aren't addressable directly (a typed
   `MenuRef` would need to be wrapped in an inherent method on
-  `HookCtx`, or resolved inline from `ctx`).
+  `LifecycleContext`, or resolved inline from `ctx`).
 - Doesn't scale to future additions like a refs map without
   authors plumbing `ctx.refs.get("menu").unwrap().dyn_into::
   <HtmlButtonElement>().unwrap()` every time.
@@ -671,7 +671,7 @@ smell, magic to explain, vs visible typed params.
 ### 8.5 Opt-in via trait method override
 
 Have two trait methods — `on_ready(&self)` and
-`on_ready_with_ctx(&self, ctx: HookCtx)` — and let the user
+`on_ready_with_ctx(&self, ctx: LifecycleContext)` — and let the user
 implement whichever. Clutters the trait surface and doesn't
 give the typed-extractor benefits of §4.3.
 
@@ -700,29 +700,21 @@ give the typed-extractor benefits of §4.3.
   piece plumbed; `Provider<K>` / `Injected<T, K>` is blocked on
   const-string generics and lands as a placeholder that errors
   at compile time until stable. See §4.3 for the full list.
-- **Naming.** A small shopping list for the carrier type —
-  the trait name (`FromHookCtx` / `FromMountCtx` / …) tracks
-  whatever the carrier ends up being.
-
-  | Name | Pros | Cons |
-  |---|---|---|
-  | **`HookCtx`** (current) | Compact, matches Rust's `Ctx` convention (`AppCtx`, `CompileCtx`, etc.). "Hook" maps to the user's mental model of React `useEffect` / Vue `onMounted`. | "Hook" has overloaded meaning — pocopine already uses "hook" for hook scripts elsewhere. Slightly jargon-heavy for newcomers. |
-  | **`LifecycleCtx`** | Most explicit — "this is the thing your lifecycle hook gets." Reads without context. | Long at the callsite — `_ctx: LifecycleCtx`. |
-  | **`MountCtx`** | Short, lifecycle-adjacent terminology. | "Mount" suggests it's only for `on_mount`; `on_ready` gets the same type. Reader confusion likely. |
-  | **`ScopeCtx`** | Aligns with the `Scope` concept that already owns reactive state + provides + refs. The carrier is literally a read-only view over the scope's mount info. | Could be mistaken for the `Scope` type itself. |
-  | **`ComponentCtx`** | Author-facing — "the context of my component." | Long, and the carrier is more transient than "the component." |
-  | **`El`** alone | Dead simple: `fn on_ready(&self, el: El)`. | Only one field's worth — we lose the non-exhaustive future-field story unless we reuse the struct. |
-  | **`HostCtx`** | "Host" is the RFC's term for the custom-element tag; it's that element's context. | Slightly off — the carrier's `el` is the *rendered root*, not the host tag; `HostEl` is the extractor that gives the host. |
-  | **`Env`** | Tiny, borrowed from Reagent / Compiler contexts. | Too generic; loses the "lifecycle" signal. |
-
-  **Recommendation.** Stick with `HookCtx` — it pairs with
-  `FromHookCtx` as a familiar "pull this typed thing from the
-  hook's context" idiom, matches axum's `FromRequest` /
-  `Request` tradition, and stays short at the callsite in the
-  rare places authors name it directly (most handlers use
-  extractors instead and never mention the carrier). If the
-  pocopine-wide "hook" overload bothers us, `LifecycleCtx`
-  paired with `FromLifecycle` is the safest alternative.
+- **Naming — settled on `LifecycleContext`** +
+  `FromLifecycleContext`. Rejected alternatives: `HookCtx`
+  (overloaded with pocopine's other "hook" uses), `MountCtx`
+  (misleads — `on_ready` shares the type), `ScopeCtx`
+  (collides with the `Scope` type), `ComponentCtx` (verbose,
+  and the carrier is more transient than a component), bare
+  `El` (closes off future fields), `HostCtx` (misreads — the
+  carrier's `el` is the rendered root, not the host tag),
+  `Env` (too generic, loses the lifecycle signal). Spelling it
+  out over `LifecycleCtx` trades a handful of keystrokes at
+  the rare site where authors name the carrier for immediate
+  readability everywhere — and since ~all callsites use
+  extractors directly (`fn on_ready(&self, el: El, scope:
+  ScopeId)`), the carrier name shows up in docs and the
+  escape-hatch `ctx: LifecycleContext` only.
 - **Panic policy for custom extractors.** Do we recommend
   `Option<T>` returning impls, or panic-on-missing? The
   built-ins can't fail; author extractors might want either.
