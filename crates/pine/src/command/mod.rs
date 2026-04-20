@@ -249,20 +249,11 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandPortal.poco", role = "scope")]
 pub struct PineCommandPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineCommandPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineCommandRoot>>(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&v, _| {
-            handle.update(|s| s.open = v);
-        });
-    }
-}
+impl PineCommandPortal {}
 
 // ── Overlay ───────────────────────────────────────────────────────
 
@@ -317,36 +308,17 @@ impl PineCommandContent {
 pub struct PineCommandInput {
     #[prop]
     pub placeholder: String,
-    pub open: bool,
-    pub listbox_id: String,
+    #[mirror(via = ROOT)] pub open: bool,
+    #[mirror(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
 impl PineCommandInput {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.open = r.open;
-                self.listbox_id = r.listbox_id.clone();
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject::<Handle<PineCommandRoot>>(&ROOT) else {
             return;
         };
         let root_scope = root.scope_id();
-
-        let h = handle.clone();
-        watch_scope_field::<bool, _>(root_scope, "open", move |&v, _| {
-            h.update(|s| s.open = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<String, _>(root_scope, "listbox_id", move |v, _| {
-            let v = v.clone();
-            h.update(|s| s.listbox_id = v);
-        });
 
         // Install pp-roving.virtual on the input EXACTLY ONCE.
         // Guarded by a shared flag so repeated open→close→open
@@ -374,7 +346,6 @@ impl PineCommandInput {
                 );
             });
         }
-        let _ = handle;
     }
 
     pub fn on_input(&mut self) {
@@ -486,17 +457,11 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandList.poco", role = "list")]
 pub struct PineCommandList {
-    pub listbox_id: String,
+    #[mirror(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
-impl PineCommandList {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.listbox_id = root.with(|r| r.listbox_id.clone());
-        }
-    }
-}
+impl PineCommandList {}
 
 // ── Item ──────────────────────────────────────────────────────────
 

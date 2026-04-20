@@ -74,26 +74,22 @@ impl PineDropdownMenuRoot {
 pub struct PineDropdownMenuTrigger {
     /// Mirrored from Root.open so the template's `:aria-expanded`
     /// and `:data-state` bindings fire reactively.
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
 impl PineDropdownMenuTrigger {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
-        let Some(root) = inject(&ROOT) else {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) else {
             return;
         };
-        let root_scope = root.scope_id();
-        watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
         // Stamp the trigger's button with its root scope id.
         // Every Pine dropdown on the page gets a unique value so
         // multiple menus don't collide on the shared selector.
         // Content mirrors the same id into its own `anchor`
         // field in `on_setup`.
         if let Some(btn) = refs.get("trigger") {
-            compound::stamp_trigger(&btn, root_scope, SLUG);
+            compound::stamp_trigger(&btn, root.scope_id(), SLUG);
         }
     }
 
@@ -111,20 +107,11 @@ impl PineDropdownMenuTrigger {
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineDropdownMenuPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineDropdownMenuPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 
@@ -286,27 +273,17 @@ impl PineDropdownMenuSub {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuSubTrigger.poco", role = "item")]
 pub struct PineDropdownMenuSubTrigger {
-    pub open: bool,
+    #[mirror(via = SUB)] pub open: bool,
     #[prop] pub disabled: bool,
 }
 
 #[handlers]
 impl PineDropdownMenuSubTrigger {
-    pub fn on_setup(&mut self) {
-        if let Some(sub) = inject(&SUB) {
-            self.open = sub.with(|s| s.open);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
-        let Some(sub) = inject(&SUB) else { return };
-        let sub_scope = sub.scope_id();
-        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(&SUB) else { return };
         // Stamp so SubContent can auto-anchor.
         if let Some(btn) = refs.get("trigger") {
-            compound::stamp_trigger(&btn, sub_scope, SUB_SLUG);
+            compound::stamp_trigger(&btn, sub.scope_id(), SUB_SLUG);
         }
     }
 

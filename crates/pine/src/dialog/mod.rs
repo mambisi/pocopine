@@ -32,7 +32,7 @@
 
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineDialogRoot>);
@@ -87,28 +87,19 @@ impl PineDialogRoot {
     pub fn open_dialog(&mut self) {
         if !self.open {
             self.open = true;
-            emit_from_self(true);
+            pocopine::emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_from_self(false);
+            pocopine::emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_from_self(self.open);
+        pocopine::emit_model(self.open);
     }
-}
-
-/// Emit `pp:update:model` from Root's own element (looked up
-/// via `pp-ref="root"` on its template). See doc on the handlers
-/// for why we can't use plain `emit`.
-fn emit_from_self(open: bool) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", open);
 }
 
 // ── Trigger ───────────────────────────────────────────────────────
@@ -116,24 +107,11 @@ fn emit_from_self(open: bool) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogTrigger.poco", role = "interactive")]
 pub struct PineDialogTrigger {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
 impl PineDialogTrigger {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.open = root.with(|r| r.open);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-
     pub fn toggle(&mut self) {
         if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineDialogRoot| r.toggle());
@@ -146,18 +124,11 @@ impl PineDialogTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogPortal.poco", role = "scope")]
 pub struct PineDialogPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineDialogPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineDialogPortal {}
 
 // ── Overlay ───────────────────────────────────────────────────────
 

@@ -32,7 +32,7 @@
 //! range sliders wait for a follow-up.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -323,80 +323,25 @@ fn value_from_pointer(
 #[component(template = "PineSliderTrack.poco", role = "panel")]
 pub struct PineSliderTrack {
     /// Mirrored for the `data-orientation` / `data-disabled` attrs.
-    pub orientation: String,
-    pub disabled: bool,
+    #[mirror(via = ROOT)] pub orientation: String,
+    #[mirror(via = ROOT)] pub disabled: bool,
 }
 
 #[handlers]
-impl PineSliderTrack {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.orientation = r.orientation.clone();
-                self.disabled = r.disabled;
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineSliderRoot>>(&ROOT) else {
-            return;
-        };
-        let h1 = handle.clone();
-        watch_scope_field::<String, _>(root.scope_id(), "orientation", move |v, _| {
-            let v = v.clone();
-            h1.update(|s| s.orientation = v);
-        });
-        let h2 = handle;
-        watch_scope_field::<bool, _>(root.scope_id(), "disabled", move |&v, _| {
-            h2.update(|s| s.disabled = v);
-        });
-    }
-}
+impl PineSliderTrack {}
 
 // ── Range ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSliderRange.poco", role = "visual")]
 pub struct PineSliderRange {
-    pub orientation: String,
-    pub disabled: bool,
-    pub percent: f64,
+    #[mirror(via = ROOT)] pub orientation: String,
+    #[mirror(via = ROOT)] pub disabled: bool,
+    #[mirror(via = ROOT)] pub percent: f64,
 }
 
 #[handlers]
-impl PineSliderRange {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.orientation = r.orientation.clone();
-                self.disabled = r.disabled;
-                self.percent = r.percent;
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineSliderRoot>>(&ROOT) else {
-            return;
-        };
-        let root_scope = root.scope_id();
-
-        let h1 = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "percent", move |&p, _| {
-            h1.update(|s| s.percent = p);
-        });
-        let h2 = handle.clone();
-        watch_scope_field::<String, _>(root_scope, "orientation", move |v, _| {
-            let v = v.clone();
-            h2.update(|s| s.orientation = v);
-        });
-        let h3 = handle;
-        watch_scope_field::<bool, _>(root_scope, "disabled", move |&v, _| {
-            h3.update(|s| s.disabled = v);
-        });
-    }
-}
+impl PineSliderRange {}
 
 // ── Thumb ─────────────────────────────────────────────────────────
 
@@ -404,61 +349,16 @@ impl PineSliderRange {
 #[component(template = "PineSliderThumb.poco", role = "interactive")]
 pub struct PineSliderThumb {
     /// Mirrored from Root for ARIA + positioning.
-    pub value: f64,
-    pub min: f64,
-    pub max: f64,
-    pub percent: f64,
-    pub orientation: String,
-    pub disabled: bool,
+    #[mirror(via = ROOT)] pub value: f64,
+    #[mirror(via = ROOT)] pub min: f64,
+    #[mirror(via = ROOT)] pub max: f64,
+    #[mirror(via = ROOT)] pub percent: f64,
+    #[mirror(via = ROOT)] pub orientation: String,
+    #[mirror(via = ROOT)] pub disabled: bool,
 }
 
 #[handlers]
 impl PineSliderThumb {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.value = r.value;
-                self.min = r.min;
-                self.max = r.max;
-                self.percent = r.percent;
-                self.orientation = r.orientation.clone();
-                self.disabled = r.disabled;
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineSliderRoot>>(&ROOT) else {
-            return;
-        };
-        let root_scope = root.scope_id();
-        let h = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "value", move |&v, _| {
-            h.update(|s| s.value = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "percent", move |&p, _| {
-            h.update(|s| s.percent = p);
-        });
-        let h = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "min", move |&v, _| {
-            h.update(|s| s.min = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "max", move |&v, _| {
-            h.update(|s| s.max = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<String, _>(root_scope, "orientation", move |v, _| {
-            let v = v.clone();
-            h.update(|s| s.orientation = v);
-        });
-        let h = handle;
-        watch_scope_field::<bool, _>(root_scope, "disabled", move |&v, _| {
-            h.update(|s| s.disabled = v);
-        });
-    }
-
     // Keyboard moves: the `@keydown.*.prevent` bindings in the
     // template route each recognised key to one of these handlers.
     // Direction for Up / Right matches WAI-ARIA "slider" advice:

@@ -27,7 +27,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{emit_model, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineTabsRoot>);
@@ -62,18 +62,13 @@ impl PineTabsRoot {
     pub fn select(&mut self, value: String) {
         if self.value != value {
             self.value = value.clone();
-            emit_from_self(value);
+            // pp-model always listens for `pp:update:model`; the
+            // `:field` arg on `pp-model:value="…"` only picks the
+            // child prop on parent→child, not the event name on
+            // child→parent.
+            emit_model(value);
         }
     }
-}
-
-fn emit_from_self(value: String) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    // pp-model always listens for `pp:update:model`; the `:field`
-    // arg on `pp-model:value="…"` only picks the child prop on
-    // parent→child, not the event name on child→parent.
-    pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
 // ── List ──────────────────────────────────────────────────────────
@@ -81,17 +76,11 @@ fn emit_from_self(value: String) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsList.poco", role = "panel")]
 pub struct PineTabsList {
-    pub orientation: String,
+    #[mirror(via = ROOT)] pub orientation: String,
 }
 
 #[handlers]
-impl PineTabsList {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.orientation = root.with(|r| r.orientation.clone());
-        }
-    }
-}
+impl PineTabsList {}
 
 // ── Trigger ───────────────────────────────────────────────────────
 

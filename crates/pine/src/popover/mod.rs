@@ -89,27 +89,17 @@ impl PinePopoverRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverTrigger.poco", role = "interactive")]
 pub struct PinePopoverTrigger {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
 impl PinePopoverTrigger {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.open = root.with(|r| r.open);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
-        let Some(root) = inject(&ROOT) else { return };
-        let root_scope = root.scope_id();
-        watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) else { return };
         // Stamp the button so Content's pp-anchor can target it
         // uniquely, mirroring DropdownMenu's auto-anchor scheme.
         if let Some(btn) = refs.get("trigger") {
-            compound::stamp_trigger(&btn, root_scope, SLUG);
+            compound::stamp_trigger(&btn, root.scope_id(), SLUG);
         }
     }
 
@@ -125,18 +115,11 @@ impl PinePopoverTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverPortal.poco", role = "scope")]
 pub struct PinePopoverPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PinePopoverPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PinePopoverPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 

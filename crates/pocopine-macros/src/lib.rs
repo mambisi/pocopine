@@ -26,8 +26,23 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr, MetaNameValue,
-    Pat, PatType, Token,
+    Pat, Path, PatType, Token, Type,
 };
+
+/// Parsed `#[mirror(via = KEY [, field = "name"])]` attribute —
+/// RFC-036. Each entry emits a `watch_scope_field` install that
+/// writes back into `field_ident` whenever the parent's
+/// `field_name_on_root` changes, plus a seed read during setup.
+struct MirrorEntry {
+    field_ident: syn::Ident,
+    field_ty: Type,
+    /// Name of the field on the injected root. Defaults to
+    /// `field_ident.to_string()` when `field = "..."` was absent.
+    field_name_on_root: String,
+    /// Path to the `InjectKey` used to resolve the root — matches
+    /// what the author passed as `via = …`.
+    key_path: Path,
+}
 
 /// HTML Living Standard element names. A struct whose kebab-case ident
 /// matches one of these is rejected — its custom-element tag would
@@ -183,17 +198,87 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_idents: Vec<syn::Ident> = Vec::new();
     let mut field_names: Vec<String> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
+    let mut mirrors: Vec<MirrorEntry> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else { continue };
+        let field_ty = field.ty.clone();
         let mut is_prop = false;
+        let mut mirror_spec: Option<(Path, Option<String>)> = None;
+        let mut mirror_err: Option<syn::Error> = None;
         field.attrs.retain(|a| {
             if a.path().is_ident("prop") {
                 is_prop = true;
-                false
-            } else {
-                true
+                return false;
             }
+            if a.path().is_ident("mirror") {
+                let parsed: syn::Result<Punctuated<MetaNameValue, Token![,]>> =
+                    a.parse_args_with(Punctuated::parse_terminated);
+                match parsed {
+                    Ok(pairs) => {
+                        let mut via: Option<Path> = None;
+                        let mut rename: Option<String> = None;
+                        for kv in pairs {
+                            if kv.path.is_ident("via") {
+                                // `via = SOME_KEY` — the value is a path
+                                // expression (an identifier or module path).
+                                match kv.value {
+                                    Expr::Path(p) => via = Some(p.path),
+                                    other => {
+                                        mirror_err = Some(syn::Error::new_spanned(
+                                            other,
+                                            "expected an identifier for `via` — \
+                                             the module-scope InjectKey<T>",
+                                        ));
+                                    }
+                                }
+                            } else if kv.path.is_ident("field") {
+                                if let Expr::Lit(ExprLit {
+                                    lit: Lit::Str(s), ..
+                                }) = kv.value
+                                {
+                                    rename = Some(s.value());
+                                } else {
+                                    mirror_err = Some(syn::Error::new_spanned(
+                                        kv.path,
+                                        "`field` must be a string literal",
+                                    ));
+                                }
+                            } else {
+                                mirror_err = Some(syn::Error::new_spanned(
+                                    kv.path,
+                                    "unknown #[mirror] key — expected: via, field",
+                                ));
+                            }
+                        }
+                        match via {
+                            Some(v) => mirror_spec = Some((v, rename)),
+                            None => {
+                                mirror_err = Some(syn::Error::new_spanned(
+                                    a.path(),
+                                    "#[mirror] requires `via = KEY`",
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => mirror_err = Some(e),
+                }
+                return false;
+            }
+            true
         });
+        if let Some(err) = mirror_err {
+            return err.to_compile_error().into();
+        }
+        if let Some((key_path, rename)) = mirror_spec {
+            let name_on_root = rename
+                .unwrap_or_else(|| ident.to_string().trim_start_matches("r#").to_string());
+            mirrors.push(MirrorEntry {
+                field_ident: ident.clone(),
+                field_ty,
+                field_name_on_root: name_on_root,
+                key_path,
+            });
+        }
         field_names.push(ident.to_string().trim_start_matches("r#").to_string());
         field_idents.push(ident);
         field_is_prop.push(is_prop);
@@ -286,8 +371,67 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
 
+    // RFC-036 — `#[mirror(via = KEY)]`. Emit two inherent methods
+    // on the struct that #[handlers] calls from its generated
+    // `setup()`. Bodies are empty when no field is mirrored, so
+    // the call sites are cheap but unconditional.
+    let mirror_seed_stmts = mirrors.iter().map(|m| {
+        let field_ident = &m.field_ident;
+        let root_field_ident = syn::Ident::new(&m.field_name_on_root, field_ident.span());
+        let key_path = &m.key_path;
+        quote! {
+            if let ::core::option::Option::Some(__root) =
+                ::pocopine::inject(&#key_path)
+            {
+                __root.with(|__r| {
+                    self.#field_ident = ::core::clone::Clone::clone(&__r.#root_field_ident);
+                });
+            }
+        }
+    });
+    let mirror_install_stmts = mirrors.iter().map(|m| {
+        let field_ident = &m.field_ident;
+        let field_ty = &m.field_ty;
+        let field_name_on_root = &m.field_name_on_root;
+        let key_path = &m.key_path;
+        quote! {
+            if let ::core::option::Option::Some(__root) =
+                ::pocopine::inject(&#key_path)
+            {
+                let __scope = __root.scope_id();
+                let __h = ::core::clone::Clone::clone(&__handle);
+                ::pocopine::watch_scope_field::<#field_ty, _>(
+                    __scope,
+                    #field_name_on_root,
+                    move |__v, _| {
+                        let __v: #field_ty = ::core::clone::Clone::clone(__v);
+                        __h.update(|__s| __s.#field_ident = __v);
+                    },
+                );
+            }
+        }
+    });
+    let has_mirrors = !mirrors.is_empty();
+    let mirror_impl = quote! {
+        impl #struct_ident {
+            #[doc(hidden)]
+            pub fn __pocopine_mirror_seed(&mut self) {
+                #(#mirror_seed_stmts)*
+            }
+            #[doc(hidden)]
+            pub fn __pocopine_mirror_install(__handle: ::pocopine::Handle<Self>) {
+                let _ = &__handle;
+                #(#mirror_install_stmts)*
+            }
+            #[doc(hidden)]
+            pub const __POCOPINE_HAS_MIRRORS: bool = #has_mirrors;
+        }
+    };
+
     let out = quote! {
         #input
+
+        #mirror_impl
 
         impl ::pocopine::__private::ComponentState for #struct_ident {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
@@ -510,15 +654,24 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
 
-    // Only override the trait's default if the user actually defined
-    // the hook — keeps the "no lifecycle code" path a real no-op.
-    let setup_impl = has_on_setup.then(|| {
-        quote! {
-            fn setup(&mut self) {
-                Self::on_setup(self);
-            }
-            fn has_setup(&self) -> bool { true }
+    // Always wrap setup with the mirror seed + install calls the
+    // `#[component]` macro emitted as inherent methods. The bodies
+    // are no-ops when the struct has no `#[mirror(via = KEY)]`
+    // fields, so the overhead is one call + a `this::<Self>()`
+    // lookup — negligible compared to the setup invocation itself.
+    // User's `on_setup` (when declared) runs after mirrors so
+    // author code sees mirrored fields already populated.
+    let user_on_setup_call = has_on_setup.then(|| {
+        quote! { Self::on_setup(self); }
+    });
+    let setup_impl = Some(quote! {
+        fn setup(&mut self) {
+            <Self>::__pocopine_mirror_seed(self);
+            let __me = ::pocopine::this::<Self>();
+            <Self>::__pocopine_mirror_install(__me);
+            #user_on_setup_call
         }
+        fn has_setup(&self) -> bool { true }
     });
     // RFC-032: forward `__ctx.into()` for each extractor the user
     // declared on `on_mount`. Zero-arg signature just calls
@@ -754,6 +907,24 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let out = quote! {
         #input
+
+        impl #struct_ident {
+            // RFC-036 — stores don't support `#[mirror(via = KEY)]`
+            // (there's no parent context / inject chain), but
+            // `#[handlers]` unconditionally calls these from its
+            // generated setup. Emit no-op shims so the call
+            // compiles for `#[store]` targets.
+            #[doc(hidden)]
+            pub fn __pocopine_mirror_seed(&mut self) {}
+            #[doc(hidden)]
+            pub fn __pocopine_mirror_install(
+                __handle: ::pocopine::Handle<Self>,
+            ) {
+                let _ = __handle;
+            }
+            #[doc(hidden)]
+            pub const __POCOPINE_HAS_MIRRORS: bool = false;
+        }
 
         impl ::pocopine::__private::ComponentState for #struct_ident {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {

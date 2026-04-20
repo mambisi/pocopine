@@ -373,18 +373,11 @@ fn teardown(scope: ScopeId) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTooltipPortal.poco", role = "scope")]
 pub struct PineTooltipPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineTooltipPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineTooltipPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 

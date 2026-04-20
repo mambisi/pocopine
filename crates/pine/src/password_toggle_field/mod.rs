@@ -87,24 +87,11 @@ impl PinePasswordToggleFieldInput {
 #[component(template = "PinePasswordToggleFieldToggle.poco", role = "interactive")]
 pub struct PinePasswordToggleFieldToggle {
     /// Mirrored from Root for `:aria-pressed` + `:data-state`.
-    pub visible: bool,
+    #[mirror(via = ROOT)] pub visible: bool,
 }
 
 #[handlers]
 impl PinePasswordToggleFieldToggle {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.visible = root.with(|r| r.visible);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "visible", move |&v, _| {
-            handle.update(|s| s.visible = v);
-        });
-    }
-
     pub fn click(&mut self) {
         if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PinePasswordToggleFieldRoot| r.toggle());

@@ -22,7 +22,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide, watch_scope_field};
+use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineProgressRoot>);
@@ -62,30 +62,9 @@ pub struct PineProgressIndicator {
     /// Mirrored from Root for template bindings. Authors style
     /// the indicator's transform/width with CSS reading
     /// `data-value` / `data-max`.
-    pub value: f64,
-    pub max: f64,
+    #[mirror(via = ROOT)] pub value: f64,
+    #[mirror(via = ROOT)] pub max: f64,
 }
 
 #[handlers]
-impl PineProgressIndicator {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            let (v, m) = root.with(|r| (r.value, r.max));
-            self.value = v;
-            self.max = m;
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        let root_scope = root.scope_id();
-        let h1 = handle.clone();
-        watch_scope_field::<f64, _>(root_scope, "value", move |&v, _| {
-            h1.update(|s| s.value = v);
-        });
-        let h2 = handle;
-        watch_scope_field::<f64, _>(root_scope, "max", move |&m, _| {
-            h2.update(|s| s.max = m);
-        });
-    }
-}
+impl PineProgressIndicator {}

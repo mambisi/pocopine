@@ -127,43 +127,18 @@ impl PineComboboxRoot {
 pub struct PineComboboxInput {
     #[prop]
     pub placeholder: String,
-    pub open: bool,
-    pub disabled: bool,
-    pub listbox_id: String,
+    #[mirror(via = ROOT)] pub open: bool,
+    #[mirror(via = ROOT)] pub disabled: bool,
+    #[mirror(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
 impl PineComboboxInput {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.open = r.open;
-                self.disabled = r.disabled;
-                self.listbox_id = r.listbox_id.clone();
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) else {
             return;
         };
         let root_scope = root.scope_id();
-
-        // Mirror open/disabled/listbox_id from Root.
-        let h = handle.clone();
-        watch_scope_field::<bool, _>(root_scope, "open", move |&v, _| {
-            h.update(|s| s.open = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<bool, _>(root_scope, "disabled", move |&v, _| {
-            h.update(|s| s.disabled = v);
-        });
-        let h = handle;
-        watch_scope_field::<String, _>(root_scope, "listbox_id", move |v, _| {
-            let v = v.clone();
-            h.update(|s| s.listbox_id = v);
-        });
 
         // Install activedescendant-mode pp-roving on this input
         // exactly once. Guard by a shared `installed` flag so
@@ -298,20 +273,11 @@ fn schedule_install_virtual(
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineComboboxPortal.poco", role = "scope")]
 pub struct PineComboboxPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineComboboxPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&v, _| {
-            handle.update(|s| s.open = v);
-        });
-    }
-}
+impl PineComboboxPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 

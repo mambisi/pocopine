@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide, refs, watch_scope_field, ScopeId};
+use pocopine::{inject, inject_key, provide, refs, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -323,18 +323,11 @@ fn teardown_trigger(root_id: ScopeId) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineHoverCardPortal.poco", role = "scope")]
 pub struct PineHoverCardPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineHoverCardPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineHoverCardPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 

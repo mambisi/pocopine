@@ -137,50 +137,23 @@ impl PineSelectRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectTrigger.poco", role = "interactive")]
 pub struct PineSelectTrigger {
-    pub open: bool,
-    pub disabled: bool,
-    pub value: String,
-    pub listbox_id: String,
+    #[mirror(via = ROOT)] pub open: bool,
+    #[mirror(via = ROOT)] pub disabled: bool,
+    #[mirror(via = ROOT)] pub value: String,
+    #[mirror(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
 impl PineSelectTrigger {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            root.with(|r| {
-                self.open = r.open;
-                self.disabled = r.disabled;
-                self.value = r.value.clone();
-                self.listbox_id = r.listbox_id.clone();
-            });
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
             return;
         };
-        let root_scope = root.scope_id();
-
-        let h = handle.clone();
-        watch_scope_field::<bool, _>(root_scope, "open", move |&v, _| {
-            h.update(|s| s.open = v);
-        });
-        let h = handle.clone();
-        watch_scope_field::<bool, _>(root_scope, "disabled", move |&v, _| {
-            h.update(|s| s.disabled = v);
-        });
-        let h = handle;
-        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
-            let v = v.clone();
-            h.update(|s| s.value = v);
-        });
-
         // Stamp the trigger with its root scope id so Content
         // can anchor to it without the author coordinating a
         // selector.
         if let Some(btn) = refs.get("trigger") {
-            compound::stamp_trigger(&btn, root_scope, SLUG);
+            compound::stamp_trigger(&btn, root.scope_id(), SLUG);
         }
     }
 
@@ -242,20 +215,11 @@ impl PineSelectValue {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectPortal.poco", role = "scope")]
 pub struct PineSelectPortal {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineSelectPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineSelectPortal {}
 
 // ── Content ───────────────────────────────────────────────────────
 

@@ -22,7 +22,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{emit_model, inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 // Provide/inject key for the Root handle. Descendants (Trigger,
@@ -49,30 +49,19 @@ impl PineCollapsibleRoot {
     pub fn open_self(&mut self) {
         if !self.open {
             self.open = true;
-            emit_from_self(true);
+            emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_from_self(false);
+            emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_from_self(self.open);
+        emit_model(self.open);
     }
-}
-
-/// Emit from Root's own element — same pattern as Dialog /
-/// Popover. Collapsible doesn't teleport, so plain `emit` would
-/// also work here (current_el inside Trigger.click bubbles to
-/// Root's tag). Keeping the explicit emit-from-self for symmetry
-/// and to stay correct if someone wraps Content in a teleport.
-fn emit_from_self(open: bool) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", open);
 }
 
 // ── Trigger ───────────────────────────────────────────────────────
@@ -80,30 +69,12 @@ fn emit_from_self(open: bool) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleTrigger.poco", role = "interactive")]
 pub struct PineCollapsibleTrigger {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
     #[prop] pub disabled: bool,
 }
 
 #[handlers]
 impl PineCollapsibleTrigger {
-    pub fn on_setup(&mut self) {
-        // Read the initial open state from the injected root so
-        // the template's first bind of `:aria-expanded` /
-        // `:data-state` sees the correct value.
-        if let Some(root) = inject(&ROOT) {
-            self.open = root.with(|r| r.open);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-
     pub fn toggle(&mut self) {
         if self.disabled {
             return;
@@ -119,23 +90,8 @@ impl PineCollapsibleTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleContent.poco", role = "panel")]
 pub struct PineCollapsibleContent {
-    pub open: bool,
+    #[mirror(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
-impl PineCollapsibleContent {
-    pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.open = root.with(|r| r.open);
-        }
-    }
-
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else {
-            return;
-        };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
-    }
-}
+impl PineCollapsibleContent {}
