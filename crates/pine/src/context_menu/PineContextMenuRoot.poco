@@ -1,0 +1,5 @@
+<div class="pine-context-menu-root"
+     pp-ref="root"
+     :data-state="open ? 'open' : 'closed'">
+  <slot></slot>
+</div>

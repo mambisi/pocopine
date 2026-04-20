@@ -192,6 +192,26 @@
     </span>
   </section>
 
+  <!-- PineContextMenu — right-click menu ──────────────────── -->
+  <h2>Context menu</h2>
+  <section>
+    <pine-context-menu-root>
+      <pine-context-menu-trigger>
+        <div class="cm-canvas">
+          Right-click (or long-press) anywhere inside this box.
+        </div>
+      </pine-context-menu-trigger>
+      <pine-context-menu-portal>
+        <pine-context-menu-content>
+          <pine-context-menu-item @click="action_bump">Copy</pine-context-menu-item>
+          <pine-context-menu-item @click="action_bump">Paste</pine-context-menu-item>
+          <pine-context-menu-separator></pine-context-menu-separator>
+          <pine-context-menu-item @click="action_reset">Reset demo</pine-context-menu-item>
+        </pine-context-menu-content>
+      </pine-context-menu-portal>
+    </pine-context-menu-root>
+  </section>
+
   <!-- PineAvatar — image with fallback ─────────────────── -->
   <h2>Avatar</h2>
   <section class="row">

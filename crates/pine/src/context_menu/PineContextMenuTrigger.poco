@@ -1,0 +1,5 @@
+<div class="pine-context-menu-trigger"
+     pp-ref="trigger"
+     style="display:contents">
+  <slot></slot>
+</div>

@@ -1836,6 +1836,85 @@ async fn dialog_trigger_composes_pine_button() {
     host.remove();
 }
 
+// ─── PineContextMenu ──────────────────────────────────────────────
+
+/// A `contextmenu` event on the Trigger captures pointer coords,
+/// opens the menu, and positions Content at those coords. Clicking
+/// an Item closes the menu.
+#[wasm_bindgen_test]
+async fn context_menu_right_click_opens_and_item_closes() {
+    let host = mount(
+        "<pine-context-menu-root>\
+           <pine-context-menu-trigger>\
+             <div class=\"cm-surface\" style=\"width:200px;height:100px\">right-click me</div>\
+           </pine-context-menu-trigger>\
+           <pine-context-menu-portal>\
+             <pine-context-menu-content>\
+               <pine-context-menu-item class=\"cm-copy\">Copy</pine-context-menu-item>\
+               <pine-context-menu-separator></pine-context-menu-separator>\
+               <pine-context-menu-item class=\"cm-del\">Delete</pine-context-menu-item>\
+             </pine-context-menu-content>\
+           </pine-context-menu-portal>\
+         </pine-context-menu-root>",
+    );
+    tick().await;
+
+    // Build a `contextmenu` MouseEvent with explicit client
+    // coords. The `MouseEventInit` web-sys binding isn't in our
+    // feature set, so construct the JS init object by hand —
+    // short enough to keep local.
+    let init = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&init, &"bubbles".into(), &true.into());
+    let _ = js_sys::Reflect::set(&init, &"clientX".into(), &150.into());
+    let _ = js_sys::Reflect::set(&init, &"clientY".into(), &80.into());
+    let ctor = js_sys::Reflect::get(&web_sys::window().unwrap(), &"MouseEvent".into()).unwrap();
+    let ctor: js_sys::Function = ctor.dyn_into().unwrap();
+    let ev_js = js_sys::Reflect::construct(
+        &ctor,
+        &js_sys::Array::of2(&"contextmenu".into(), &init),
+    )
+    .unwrap();
+    let ev: web_sys::Event = ev_js.dyn_into().unwrap();
+
+    let surface = host.query_selector(".cm-surface").unwrap().unwrap();
+    surface.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-context-menu-content")
+        .unwrap()
+        .expect("menu teleported to body after contextmenu");
+    let style: String = menu.get_attribute("style").unwrap_or_default();
+    assert!(
+        style.contains("left:150px") && style.contains("top:80px"),
+        "content positioned at captured pointer — style={style}"
+    );
+
+    // Click Copy → menu closes. The `.cm-copy` class lives on
+    // the `<pine-context-menu-item>` custom element; `@click` is
+    // on the inner `<li>` the template renders, so target that
+    // directly.
+    doc()
+        .query_selector(".cm-copy li")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-context-menu-content")
+            .unwrap()
+            .is_none(),
+        "menu torn down after Item select"
+    );
+
+    host.remove();
+}
+
 // ─── PineHoverCard ────────────────────────────────────────────────
 
 /// Hover on the Trigger with a zero open-delay opens the card;

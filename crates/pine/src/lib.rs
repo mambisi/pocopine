@@ -29,6 +29,7 @@ pub mod avatar;
 pub mod button;
 pub mod checkbox;
 pub mod collapsible;
+pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod hover_card;
@@ -53,6 +54,10 @@ pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
+pub use context_menu::{
+    PineContextMenuContent, PineContextMenuItem, PineContextMenuPortal, PineContextMenuRoot,
+    PineContextMenuSeparator, PineContextMenuTrigger,
+};
 pub use dialog::{
     PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay,
     PineDialogPortal, PineDialogRoot, PineDialogTitle, PineDialogTrigger,
@@ -103,6 +108,12 @@ pub fn register_all() {
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();
+    PineContextMenuRoot::register();
+    PineContextMenuTrigger::register();
+    PineContextMenuPortal::register();
+    PineContextMenuContent::register();
+    PineContextMenuItem::register();
+    PineContextMenuSeparator::register();
     PineDialogRoot::register();
     PineDialogTrigger::register();
     PineDialogPortal::register();
