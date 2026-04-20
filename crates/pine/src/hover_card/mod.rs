@@ -44,7 +44,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field, ScopeId};
+use pocopine::{inject, inject_key, provide, refs, watch_scope_field, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -118,15 +118,12 @@ pub struct PineHoverCardTrigger {}
 
 #[handlers]
 impl PineHoverCardTrigger {
-    pub fn on_ready(&self) {
-        let Some(_scope) = current_scope_id() else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject(&ROOT) else { return };
         let root_id = root.scope_id();
         // Stamp the trigger element with the Root's scope id so
         // Content's anchor selector resolves to it.
-        if let Some(el) = refs::get_on(root_id, "trigger").or_else(|| {
-            current_scope_id().and_then(|s| refs::get_on(s, "trigger"))
-        }) {
+        if let Some(el) = refs::get_on(root_id, "trigger").or_else(|| refs.get("trigger")) {
             let _ = el.set_attribute("data-pine-hover-card-trigger", &format!("{}", root_id.0));
             install_trigger_listeners(root_id, el, root);
         }
@@ -328,11 +325,10 @@ pub struct PineHoverCardPortal {
 
 #[handlers]
 impl PineHoverCardPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -370,9 +366,8 @@ impl PineHoverCardContent {
         }
     }
 
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(content) = refs::get_on(scope, "content") else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(content) = refs.get("content") else { return };
         let Some(root) = inject(&ROOT) else { return };
         let root_id = root.scope_id();
 

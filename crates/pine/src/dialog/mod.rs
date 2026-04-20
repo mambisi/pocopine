@@ -127,11 +127,10 @@ impl PineDialogTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 
@@ -152,11 +151,10 @@ pub struct PineDialogPortal {
 
 #[handlers]
 impl PineDialogPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }

@@ -138,16 +138,15 @@ impl PineAccordionItem {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else {
             return;
         };
         let my_value = self.with_value();
-        let me = this::<Self>();
         let root_scope = root.scope_id();
         // Watch the single-mode `value` …
         let my_value_1 = my_value.clone();
-        let me_1 = me.clone();
+        let me_1 = handle.clone();
         let root_1 = root.clone();
         watch_scope_field::<String, _>(root_scope, "value", move |_, _| {
             let is_open = root_1.with(|r| r.item_open(&my_value_1));
@@ -157,7 +156,7 @@ impl PineAccordionItem {
         // based on root.type; watching both keeps the code
         // simple and paying-for-what-you-use is negligible.
         let my_value_2 = my_value;
-        let me_2 = me;
+        let me_2 = handle;
         let root_2 = root;
         watch_scope_field::<Vec<String>, _>(root_scope, "values", move |_, _| {
             let is_open = root_2.with(|r| r.item_open(&my_value_2));
@@ -203,11 +202,10 @@ impl PineAccordionTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = inject(&ITEM) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 
@@ -244,11 +242,10 @@ impl PineAccordionContent {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = inject(&ITEM) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }

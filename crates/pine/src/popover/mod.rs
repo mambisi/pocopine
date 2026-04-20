@@ -117,22 +117,19 @@ impl PinePopoverTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(root) = inject(&ROOT) else { return };
         let root_scope = root.scope_id();
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
         // Stamp the button so Content's pp-anchor can target it
         // uniquely, mirroring DropdownMenu's auto-anchor scheme.
-        if let Some(scope) = current_scope_id() {
-            if let Some(btn) = refs::get_on(scope, "trigger") {
-                let _ = btn.set_attribute(
-                    "data-pine-popover-trigger",
-                    &format!("{}", root_scope.0),
-                );
-            }
+        if let Some(btn) = refs.get("trigger") {
+            let _ = btn.set_attribute(
+                "data-pine-popover-trigger",
+                &format!("{}", root_scope.0),
+            );
         }
     }
 
@@ -153,11 +150,10 @@ pub struct PinePopoverPortal {
 
 #[handlers]
 impl PinePopoverPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -198,9 +194,8 @@ impl PinePopoverContent {
         }
     }
 
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(content) = refs::get_on(scope, "content") else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+        let Some(content) = refs.get("content") else { return };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(false);

@@ -50,8 +50,8 @@ pub use emit::{
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
-    Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, Me, MountEpoch,
-    ParentId, Refs, ScopePath, Slots, TagName, TeleportHost, TypedEl, Win,
+    Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, MountEpoch, ParentId,
+    Refs, ScopePath, Slots, TagName, TeleportHost, TypedEl, Win,
 };
 pub use magics::dispatch_event;
 pub use server::{Result as ServerResult, ServerError};

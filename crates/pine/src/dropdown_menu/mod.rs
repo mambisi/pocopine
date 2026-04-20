@@ -46,8 +46,8 @@ pub struct PineDropdownMenuRoot {
 
 #[handlers]
 impl PineDropdownMenuRoot {
-    pub fn on_mount(&mut self) {
-        provide(&ROOT, this::<Self>());
+    pub fn on_mount(&mut self, handle: pocopine::Handle<Self>) {
+        provide(&ROOT, handle);
     }
 
     pub fn open_menu(&mut self) {
@@ -75,26 +75,23 @@ pub struct PineDropdownMenuTrigger {
 
 #[handlers]
 impl PineDropdownMenuTrigger {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(root) = inject(&ROOT) else {
             return;
         };
         let root_scope = root.scope_id();
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
         // Stamp the trigger's button with its root scope id. Every
         // Pine dropdown on the page gets a unique value so multiple
         // menus don't collide on the shared selector. Content mirrors
         // the same id into its own `anchor` field in `on_setup`.
-        if let Some(scope) = current_scope_id() {
-            if let Some(btn) = refs::get_on(scope, "trigger") {
-                let _ = btn.set_attribute(
-                    "data-pine-dm-trigger",
-                    &format!("{}", root_scope.0),
-                );
-            }
+        if let Some(btn) = refs.get("trigger") {
+            let _ = btn.set_attribute(
+                "data-pine-dm-trigger",
+                &format!("{}", root_scope.0),
+            );
         }
     }
 
@@ -117,13 +114,12 @@ pub struct PineDropdownMenuPortal {
 
 #[handlers]
 impl PineDropdownMenuPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else {
             return;
         };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -178,13 +174,12 @@ impl PineDropdownMenuContent {
         provide(&CONTENT_SIDE, self.side.clone());
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         // Auto-focus the first menuitem once the teleported clone
         // has committed. Items live in the slot which only
         // materialises after Portal flips `pp-if` on, so this is
         // the first point we can see them.
-        let Some(scope) = current_scope_id() else { return };
-        let Some(menu) = refs::get_on(scope, "menu") else { return };
+        let Some(menu) = refs.get("menu") else { return };
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
 
@@ -302,21 +297,18 @@ impl PineDropdownMenuSubTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(sub) = inject(&SUB) else { return };
-        let me = this::<Self>();
         let sub_scope = sub.scope_id();
         watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
         // Stamp so SubContent can auto-anchor.
-        if let Some(scope) = current_scope_id() {
-            if let Some(btn) = refs::get_on(scope, "trigger") {
-                let _ = btn.set_attribute(
-                    "data-pine-dm-sub-trigger",
-                    &format!("{}", sub_scope.0),
-                );
-            }
+        if let Some(btn) = refs.get("trigger") {
+            let _ = btn.set_attribute(
+                "data-pine-dm-sub-trigger",
+                &format!("{}", sub_scope.0),
+            );
         }
     }
 
@@ -367,16 +359,15 @@ impl PineDropdownMenuSubContent {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(sub) = inject(&SUB) else { return };
-        let me = this::<Self>();
         let sub_scope = sub.scope_id();
         // Watch for the sub's open transitions so roving-focus +
         // auto-focus can run when the menu mounts. pp-anchor is
         // handled declaratively in the template; we only need to
         // forward `open` into self.
         watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
             if is_open {
                 focus_first_sub_item();
             }
@@ -583,11 +574,10 @@ impl PineDropdownMenuItemIndicator {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(owner) = inject(&CHECKED_OWNER) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
-            me.update(|s| s.checked = c);
+            handle.update(|s| s.checked = c);
         });
     }
 }
@@ -656,12 +646,11 @@ impl PineDropdownMenuRadioItem {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(group) = inject(&RADIO_GROUP) else { return };
-        let me = this::<Self>();
         watch_scope_field::<String, _>(group, "value", move |new, _| {
             let new_v = new.clone();
-            me.update(|s| {
+            handle.update(|s| {
                 s.group_value = new_v.clone();
                 s.checked = s.group_value == s.value;
             });

@@ -121,14 +121,13 @@ impl PineTabsTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
         let my_value = self.value.clone();
-        let me = this::<Self>();
         let root_scope = root.scope_id();
         watch_scope_field::<String, _>(root_scope, "value", move |new, _| {
             let is_selected = new == &my_value;
-            me.update(|s| s.selected = is_selected);
+            handle.update(|s| s.selected = is_selected);
         });
     }
 
@@ -168,14 +167,13 @@ impl PineTabsContent {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
         let my_value = self.value.clone();
-        let me = this::<Self>();
         let root_scope = root.scope_id();
         watch_scope_field::<String, _>(root_scope, "value", move |new, _| {
             let is_selected = new == &my_value;
-            me.update(|s| s.selected = is_selected);
+            handle.update(|s| s.selected = is_selected);
         });
     }
 }

@@ -52,13 +52,12 @@ pub struct PineAvatarImage {
 
 #[handlers]
 impl PineAvatarImage {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else {
             return;
         };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "loaded", move |&is_loaded, _| {
-            me.update(|s| s.loaded = is_loaded);
+            handle.update(|s| s.loaded = is_loaded);
         });
     }
 
@@ -95,13 +94,12 @@ impl PineAvatarFallback {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else {
             return;
         };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "loaded", move |&is_loaded, _| {
-            me.update(|s| s.loaded = is_loaded);
+            handle.update(|s| s.loaded = is_loaded);
         });
     }
 }

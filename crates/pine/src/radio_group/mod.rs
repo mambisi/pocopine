@@ -116,12 +116,11 @@ impl PineRadioGroupItem {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<String, _>(root, "value", move |new, _| {
             let new_v = new.clone();
-            me.update(|s| {
+            handle.update(|s| {
                 s.group_value = new_v.clone();
                 s.checked = s.group_value == s.value;
             });
@@ -188,11 +187,10 @@ impl PineRadioGroupIndicator {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(owner) = inject(&CHECKED_OWNER) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
-            me.update(|s| s.checked = c);
+            handle.update(|s| s.checked = c);
         });
     }
 }

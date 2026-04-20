@@ -46,7 +46,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{focus, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -102,10 +102,9 @@ pub struct PineContextMenuTrigger {}
 
 #[handlers]
 impl PineContextMenuTrigger {
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject(&ROOT) else { return };
-        let Some(el) = refs::get_on(scope, "trigger") else { return };
+        let Some(el) = refs.get("trigger") else { return };
 
         let root_for_closure = root.clone();
         let closure = Closure::wrap(Box::new(move |ev: Event| {
@@ -141,11 +140,10 @@ pub struct PineContextMenuPortal {
 
 #[handlers]
 impl PineContextMenuPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -173,12 +171,11 @@ impl PineContextMenuContent {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         // Roving + auto-focus the first item once the teleported
         // clone has committed — identical path to DropdownMenu's
         // menu root, just a different ref name.
-        let Some(scope) = current_scope_id() else { return };
-        let Some(menu) = refs::get_on(scope, "menu") else { return };
+        let Some(menu) = refs.get("menu") else { return };
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
     }

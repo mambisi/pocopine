@@ -203,7 +203,7 @@ gives, why it's worth it, and what it'd cost to ship.
 
 | Extractor | Type | What it gives | Cost |
 |---|---|---|---|
-| `Me<T>` | typed handle to self | `Handle<T>` to own scope — replaces `this::<Self>()` in hooks | macro substitutes `T = SelfType` |
+| `Handle<T>` | typed handle to self | Replaces `this::<Self>()` in hooks. `fn on_ready(&self, handle: Handle<Self>)` — call `handle.update(…)` directly, no wrapper newtype | blanket `From` impl that reads the scope by id and downcasts |
 | `ParentId` | `Option<ScopeId>` | RFC-027 parent scope id via `context::parent_of` | one HashMap lookup |
 | `Document` | `web_sys::Document` | shared shortcut (pocopine never exposes it as a singleton) | `web_sys::window().unwrap().document().unwrap()` |
 | `Window` | `web_sys::Window` | same, at window level | `web_sys::window().unwrap()` |
@@ -240,13 +240,16 @@ pub struct El<'a>(pub &'a web_sys::Element);
 impl<'a> Deref for El<'a> { type Target = Element; fn deref(&self) -> &Element { self.0 } }
 impl<'a> From<LifecycleContext<'a>> for El<'a> { fn from(c: LifecycleContext<'a>) -> Self { El(c.el) } }
 
-// Tier 2
-pub struct Me<T: 'static>(pub Handle<T>);
-// Generated via the `#[handlers]` macro — it knows the current
-// component type, so `Me<Self>` at the hook-param site gets
-// substituted with the component's concrete type.
-// Not a blanket From<LifecycleContext> impl; see §5.2 for how the macro
-// wires this one.
+// Tier 2 — Handle<T> is the existing typed handle (no new wrapper).
+// Blanket impl means `fn on_ready(&self, handle: Handle<Self>)`
+// Just Works; rustc picks `T = Self` from the param type.
+impl<'a, T: 'static> From<LifecycleContext<'a>> for Handle<T> {
+    fn from(ctx: LifecycleContext<'a>) -> Self {
+        let scope = Scope::find(ctx.scope_id).expect("scope evicted");
+        let rc = scope.typed::<T>().expect("T doesn't match this scope");
+        Handle::new(rc, ctx.scope_id)
+    }
+}
 
 pub struct ParentId(pub Option<ScopeId>);
 impl<'a> From<LifecycleContext<'a>> for ParentId {
@@ -323,10 +326,12 @@ pub fn on_ready(&self, el: El, scope: ScopeId) {
     overlay::activate(scope, &el, modal);
 }
 
-// With Tier 2 adding Me<Self> — watch_scope_field chains get
-// their Handle from the extractor, not a `this::<Self>()` line.
-pub fn on_ready(&self, el: El, scope: ScopeId, me: Me<Self>) {
-    // … use me.0 inside closures instead of cloning `this::<Self>()`.
+// With Tier 2 adding Handle<Self> — watch_scope_field chains
+// get their Handle from the extractor, not a `this::<Self>()`
+// line. No wrapper newtype; call `handle.update(…)` directly.
+pub fn on_ready(&self, el: El, scope: ScopeId, handle: Handle<Self>) {
+    // … use `handle` inside closures instead of cloning
+    // `this::<Self>()`.
 }
 
 // Author-defined typed ref — one impl per "ref I use a lot."

@@ -12,7 +12,7 @@ pub use pocopine_core::{
     set_auto_flush, signal, store, this, trigger_scope, watch, watch_field,
     watch_scope_field, App, Body, Component, ComponentState, Computed, Doc, EffectId,
     EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported, LifecycleContext,
-    Me, MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError,
     ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName,
     TeleportHost, TypedEl, Win,
 };

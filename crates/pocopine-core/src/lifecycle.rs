@@ -83,24 +83,24 @@ impl<'a> From<LifecycleContext<'a>> for ScopeId {
 
 // ── Tier 2 — Handle to self, parent id, Window/Document/Body, tag ──
 
-/// Typed `Handle` to this component's own scope — lets on_ready /
-/// on_mount pass a handle into watch callbacks without writing
-/// `let me = this::<Self>();`.
+/// Extracting a `Handle<T>` directly is the RFC-032 replacement
+/// for `this::<Self>()` inside hooks — write
+/// `fn on_ready(&self, handle: Handle<Self>)` and call
+/// `handle.update(|s| …)` straight through, no wrapper newtype
+/// to unpack.
 ///
-/// Blanket `From` impl: any `T: 'static` that can be found as the
-/// concrete Rust type of this scope. Panics if the scope is gone
-/// or if `T` doesn't match — both shouldn't happen inside a live
-/// hook and indicate a framework bug, not an author bug.
-pub struct Me<T: 'static>(pub Handle<T>);
-
-impl<'a, T: 'static> From<LifecycleContext<'a>> for Me<T> {
+/// Blanket `From` impl: any `T: 'static` that matches this
+/// scope's concrete Rust type. Panics if the scope has been
+/// evicted or if `T` doesn't match — either indicates a
+/// framework bug, not an author bug.
+impl<'a, T: 'static> From<LifecycleContext<'a>> for Handle<T> {
     fn from(ctx: LifecycleContext<'a>) -> Self {
         let scope = Scope::find(ctx.scope_id)
             .expect("LifecycleContext carried a scope id whose entry no longer exists");
         let rc = scope
             .typed::<T>()
-            .expect("Me<T>: `T` doesn't match this scope's Rust type");
-        Me(Handle::new(rc, ctx.scope_id))
+            .expect("Handle<T>: `T` doesn't match this scope's Rust type");
+        Handle::new(rc, ctx.scope_id)
     }
 }
 

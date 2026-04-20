@@ -142,13 +142,12 @@ impl PineToggleGroupItem {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         let my_value = self.value.clone();
         let root_s = root;
         // Single-mode watcher — Root.value.
-        let me1 = me.clone();
+        let me1 = handle.clone();
         let my_value1 = my_value.clone();
         watch_scope_field::<String, _>(root_s, "value", move |_, _| {
             let is_pressed = Scope::find(root_s)
@@ -158,7 +157,7 @@ impl PineToggleGroupItem {
             me1.update(|s| s.pressed = is_pressed);
         });
         // Multiple-mode watcher — Root.values.
-        let me2 = me;
+        let me2 = handle;
         let my_value2 = my_value;
         watch_scope_field::<Vec<String>, _>(root_s, "values", move |_, _| {
             let is_pressed = Scope::find(root_s)

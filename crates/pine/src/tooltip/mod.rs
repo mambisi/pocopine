@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field, ScopeId};
+use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field, ScopeId};
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
@@ -157,13 +157,13 @@ impl PineTooltipRoot {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, scope: ScopeId) {
         // Singleton policy — watch our own `open` field. When it
         // flips true, evict whichever tooltip is currently open
         // in this Provider and take the slot. When it flips
         // false, release the slot. Runs only when a Provider
         // ancestor exists; standalone tooltips are unaffected.
-        let Some(root_id) = current_scope_id() else { return };
+        let root_id = scope;
         let Some(prov) = inject::<Handle<PineTooltipProvider>>(&PROVIDER) else {
             return;
         };
@@ -222,13 +222,12 @@ pub struct PineTooltipTrigger {}
 
 #[handlers]
 impl PineTooltipTrigger {
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         let Some(root) = inject(&ROOT) else { return };
         // Stamp the trigger's slot root so Content's auto-anchor
         // resolves to it. `pp-ref="trigger"` points at the
         // wrapper the template renders around the author's slot.
-        if let Some(el) = refs::get_on(scope, "trigger") {
+        if let Some(el) = refs.get("trigger") {
             let _ = el.set_attribute(
                 "data-pine-tooltip-trigger",
                 &format!("{}", root.scope_id().0),
@@ -379,11 +378,10 @@ pub struct PineTooltipPortal {
 
 #[handlers]
 impl PineTooltipPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -421,9 +419,8 @@ impl PineTooltipContent {
         }
     }
 
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(content) = refs::get_on(scope, "content") else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(content) = refs.get("content") else { return };
         if let Some(anchor_el) = resolve_anchor(&self.anchor) {
             if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
                 let placement = pocopine_core::directives::anchor::Placement {

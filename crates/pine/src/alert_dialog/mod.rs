@@ -126,11 +126,10 @@ impl PineAlertDialogTrigger {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 
@@ -151,11 +150,10 @@ pub struct PineAlertDialogPortal {
 
 #[handlers]
 impl PineAlertDialogPortal {
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject(&ROOT) else { return };
-        let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            me.update(|s| s.open = is_open);
+            handle.update(|s| s.open = is_open);
         });
     }
 }
@@ -198,9 +196,8 @@ impl PineAlertDialogContent {
         }
     }
 
-    pub fn on_ready(&self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(content) = refs::get_on(scope, "content") else { return };
+    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+        let Some(content) = refs.get("content") else { return };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(true);

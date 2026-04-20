@@ -399,6 +399,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     .iter()
                     .filter(|a| matches!(a, FnArg::Typed(_)))
                     .count();
+                continue; // lifecycle; don't emit an invoke arm
             }
             "on_ready" => {
                 has_on_ready = true;
