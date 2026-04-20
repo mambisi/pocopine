@@ -36,6 +36,7 @@ pub mod dropdown_menu;
 pub mod hover_card;
 pub mod label;
 pub mod overlay;
+pub mod password_toggle_field;
 pub mod popover;
 pub mod progress;
 pub mod radio_group;
@@ -84,6 +85,9 @@ pub use dropdown_menu::{
 };
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
+};
+pub use password_toggle_field::{
+    PinePasswordToggleFieldInput, PinePasswordToggleFieldRoot, PinePasswordToggleFieldToggle,
 };
 pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
@@ -186,4 +190,7 @@ pub fn register_all() {
     PineToolbarButton::register();
     PineToolbarLink::register();
     PineToolbarSeparator::register();
+    PinePasswordToggleFieldRoot::register();
+    PinePasswordToggleFieldInput::register();
+    PinePasswordToggleFieldToggle::register();
 }

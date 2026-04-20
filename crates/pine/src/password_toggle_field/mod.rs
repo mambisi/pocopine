@@ -1,0 +1,113 @@
+//! `<pine-password-toggle-field-*>` — password input with an
+//! integrated show/hide button (compound).
+//!
+//! Mirrors Radix `<PasswordToggleField>`. Three parts:
+//!
+//! - **Root** (`pine-password-toggle-field-root`) — holds
+//!   `visible: bool` (two-way bindable via
+//!   `pp-model:visible="my_bool"`). Provides its handle to
+//!   descendants.
+//! - **Input** (`pine-password-toggle-field-input`) — `pp-as`
+//!   friendly; merges onto a user-provided `<input>` and binds
+//!   its `type` attribute to `"text"` when `visible`, else
+//!   `"password"`. Authors write the attrs they care about
+//!   (`name`, `placeholder`, `required`, …) on the inner
+//!   `<input>` and the Input component binds only the `type`.
+//! - **Toggle** (`pine-password-toggle-field-toggle`) — button
+//!   that flips Root.visible. `aria-pressed` mirrors the state
+//!   so screen readers announce "pressed" when the password is
+//!   shown.
+//!
+//! ```html
+//! <pine-password-toggle-field-root>
+//!   <pine-password-toggle-field-input pp-as>
+//!     <input name="pwd" placeholder="Password" required>
+//!   </pine-password-toggle-field-input>
+//!   <pine-password-toggle-field-toggle>
+//!     <span pp-show="visible">🙈</span>
+//!     <span pp-show="!visible">👀</span>
+//!   </pine-password-toggle-field-toggle>
+//! </pine-password-toggle-field-root>
+//! ```
+
+use pocopine::prelude::*;
+use pocopine::{inject, inject_key, provide, watch_scope_field};
+use serde::{Deserialize, Serialize};
+
+inject_key!(ROOT: Handle<PinePasswordToggleFieldRoot>);
+
+// ── Root ──────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePasswordToggleFieldRoot.poco")]
+pub struct PinePasswordToggleFieldRoot {
+    /// Whether the password is currently shown. Two-way
+    /// bindable via `pp-model:visible`.
+    #[prop] pub visible: bool,
+}
+
+#[handlers]
+impl PinePasswordToggleFieldRoot {
+    pub fn on_setup(&mut self) {
+        provide(&ROOT, this::<Self>());
+    }
+
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
+        emit("pp:update:model", self.visible);
+    }
+}
+
+// ── Input ─────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePasswordToggleFieldInput.poco")]
+pub struct PinePasswordToggleFieldInput {}
+
+#[handlers]
+impl PinePasswordToggleFieldInput {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(root) = inject(&ROOT) else { return };
+        let Some(wrap) = refs.get("slot") else { return };
+        let Some(inp) = wrap.query_selector("input").ok().flatten() else {
+            return;
+        };
+        let initial = root.with(|r| r.visible);
+        let _ = inp.set_attribute("type", if initial { "text" } else { "password" });
+        let inp_cap = inp.clone();
+        watch_scope_field::<bool, _>(root.scope_id(), "visible", move |&v, _| {
+            let _ = inp_cap.set_attribute("type", if v { "text" } else { "password" });
+        });
+    }
+}
+
+// ── Toggle ────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PinePasswordToggleFieldToggle.poco")]
+pub struct PinePasswordToggleFieldToggle {
+    /// Mirrored from Root for `:aria-pressed` + `:data-state`.
+    pub visible: bool,
+}
+
+#[handlers]
+impl PinePasswordToggleFieldToggle {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            self.visible = root.with(|r| r.visible);
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(root) = inject(&ROOT) else { return };
+        watch_scope_field::<bool, _>(root.scope_id(), "visible", move |&v, _| {
+            handle.update(|s| s.visible = v);
+        });
+    }
+
+    pub fn click(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            root.update(|r: &mut PinePasswordToggleFieldRoot| r.toggle());
+        }
+    }
+}

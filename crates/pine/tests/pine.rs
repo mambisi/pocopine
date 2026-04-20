@@ -2715,3 +2715,70 @@ async fn button_clicks_bubble_through_pine_button_tag() {
 
     host.remove();
 }
+
+// ─── PinePasswordToggleField ──────────────────────────────────────
+
+/// Toggle flips Root.visible, which imperatively rewrites the
+/// inner `<input>`'s `type` attribute between "password" and
+/// "text" without disturbing author-supplied attributes.
+#[wasm_bindgen_test]
+async fn password_toggle_field_toggle_flips_input_type() {
+    let host = mount(
+        r#"<pine-password-toggle-field-root>
+             <pine-password-toggle-field-input>
+               <input name="pwd" placeholder="Password" required>
+             </pine-password-toggle-field-input>
+             <pine-password-toggle-field-toggle>
+               <span>eye</span>
+             </pine-password-toggle-field-toggle>
+           </pine-password-toggle-field-root>"#,
+    );
+    tick().await;
+
+    let input = host.query_selector("input").unwrap().unwrap();
+    let toggle = host
+        .query_selector("button.pine-password-toggle-field-toggle")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        input.get_attribute("type").as_deref(),
+        Some("password"),
+        "starts masked"
+    );
+    assert_eq!(
+        input.get_attribute("name").as_deref(),
+        Some("pwd"),
+        "author name attr preserved"
+    );
+    assert_eq!(
+        input.get_attribute("placeholder").as_deref(),
+        Some("Password"),
+        "author placeholder preserved"
+    );
+
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        input.get_attribute("type").as_deref(),
+        Some("text"),
+        "toggle reveals plain text"
+    );
+    assert_eq!(
+        toggle.get_attribute("aria-pressed").as_deref(),
+        Some("true"),
+        "toggle aria-pressed mirrors visible state"
+    );
+
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        input.get_attribute("type").as_deref(),
+        Some("password"),
+        "toggle masks again"
+    );
+
+    host.remove();
+}
