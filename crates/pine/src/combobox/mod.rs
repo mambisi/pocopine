@@ -262,6 +262,78 @@ impl PineComboboxInput {
     }
 }
 
+/// Outside-dismiss for the Combobox listbox. Deferred one
+/// macrotask so the click/mousedown that opened the listbox
+/// has finished dispatching before our listener is live —
+/// otherwise the same click that triggers `@focus="on_focus"`
+/// (which opens the palette) would immediately close it again
+/// when it bubbled to the document-level listener.
+///
+/// The listener treats the associated Input as "inside" so
+/// clicking back into the Input doesn't close.
+fn install_outside_dismiss(
+    content: web_sys::Element,
+    input: web_sys::Element,
+    root: Handle<PineComboboxRoot>,
+) {
+    use wasm_bindgen::closure::Closure;
+    let cb = Closure::once_into_js(Box::new(move || {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let content_for_listener = content.clone();
+        let input_for_listener = input.clone();
+        let root_for_listener = root.clone();
+        type DismissClosure = Closure<dyn FnMut(web_sys::Event)>;
+        let listener_holder: Rc<std::cell::RefCell<Option<DismissClosure>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        let listener_holder_for_cb = listener_holder.clone();
+        let listener = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            // Self-GC: once Content is detached from the DOM
+            // (palette closed), detach the listener too.
+            let content_node: &web_sys::Node = content_for_listener.as_ref();
+            if !content_node.is_connected() {
+                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                    if let Some(c) = listener_holder_for_cb.borrow().as_ref() {
+                        let t: &web_sys::EventTarget = doc.as_ref();
+                        let _ = t.remove_event_listener_with_callback(
+                            "mousedown",
+                            c.as_ref().unchecked_ref(),
+                        );
+                    }
+                }
+                *listener_holder_for_cb.borrow_mut() = None;
+                return;
+            }
+            // Compute "inside": either Content or the Input.
+            let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+            else {
+                return;
+            };
+            if content_node.contains(Some(&target)) {
+                return;
+            }
+            let input_node: &web_sys::Node = input_for_listener.as_ref();
+            if input_node.contains(Some(&target)) || input_node.is_same_node(Some(&target)) {
+                return;
+            }
+            // Outside → close via the captured Root handle.
+            root_for_listener.update(|r: &mut PineComboboxRoot| r.close());
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        let t: &web_sys::EventTarget = doc.as_ref();
+        let _ =
+            t.add_event_listener_with_callback("mousedown", listener.as_ref().unchecked_ref());
+        *listener_holder.borrow_mut() = Some(listener);
+        // Leak the Rc — the closure self-references via
+        // `listener_holder` so it can remove itself from the
+        // document listener list when Content detaches.
+        std::mem::forget(listener_holder);
+    }) as Box<dyn FnOnce()>);
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
+    }
+}
+
 /// Install `pp-roving.virtual` on the input when the listbox
 /// is actually in the DOM. Guarded by a shared `installed`
 /// flag so repeated open→close→open cycles don't stack
@@ -374,7 +446,8 @@ impl PineComboboxContent {
         else {
             return;
         };
-        if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+        let menu_for_anchor = menu.clone();
+        if let Ok(floater) = menu_for_anchor.dyn_into::<web_sys::HtmlElement>() {
             let placement = pocopine_core::directives::anchor::Placement {
                 side: pocopine_core::directives::anchor::Side::parse(&self.side),
                 align: pocopine_core::directives::anchor::Align::parse(&self.align),
@@ -386,6 +459,20 @@ impl PineComboboxContent {
                 self.side_offset,
                 true,
             );
+        }
+
+        // Outside-dismiss. Replaces `@click.outside` because
+        // that directive fires when the target isn't inside
+        // Content — but for Combobox the Input (teleported
+        // apart from Content) is *also* part of the combobox
+        // surface. Listener treats both as "inside".
+        //
+        // Captures the Root handle here (handler-context) so the
+        // document-level listener that fires outside any scope
+        // context can still close via `root.update` without
+        // needing to `inject`.
+        if let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
+            install_outside_dismiss(menu, input, root);
         }
     }
 

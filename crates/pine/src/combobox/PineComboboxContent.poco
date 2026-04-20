@@ -2,7 +2,6 @@
       class="pine-combobox-content"
       pp-ref="menu"
       :id="listbox_id"
-      data-state="open"
-      @click.outside="close">
+      data-state="open">
   <slot></slot>
 </root>

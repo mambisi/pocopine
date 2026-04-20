@@ -3760,6 +3760,82 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
     host.remove();
 }
 
+/// Regression: mousedown on the input must NOT be treated as
+/// "outside" and close the listbox. The outside-dismiss listener
+/// treats the associated Input as inside via a data-attr bridge.
+#[wasm_bindgen_test]
+async fn combobox_mousedown_on_input_does_not_close() {
+    let host = mount(
+        "<pine-combobox-root>\
+           <pine-combobox-input></pine-combobox-input>\
+           <pine-combobox-portal>\
+             <pine-combobox-content>\
+               <pine-combobox-item value=\"a\">Apple</pine-combobox-item>\
+             </pine-combobox-content>\
+           </pine-combobox-portal>\
+         </pine-combobox-root>",
+    );
+    tick().await;
+
+    let input: HtmlInputElement = host
+        .query_selector("input.pine-combobox-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    // Focus → open. Content mounts; deferred outside-dismiss
+    // listener schedules via setTimeout(0).
+    input.focus().unwrap();
+    tick().await;
+    sleep_ms(10).await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-combobox-content")
+            .unwrap()
+            .is_some(),
+        "listbox open after focus"
+    );
+
+    // Simulate a second mousedown on the input — the dismiss
+    // listener IS live now. It must see the Input as "inside".
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    input
+        .dispatch_event(&web_sys::Event::new_with_event_init_dict("mousedown", &init).unwrap())
+        .unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-combobox-content")
+            .unwrap()
+            .is_some(),
+        "listbox stays open on mousedown over the input"
+    );
+
+    // Mousedown on body closes.
+    let body = doc().body().unwrap();
+    let body_target: &web_sys::EventTarget = body.as_ref();
+    body_target
+        .dispatch_event(&web_sys::Event::new_with_event_init_dict("mousedown", &init).unwrap())
+        .unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-combobox-content")
+            .unwrap()
+            .is_none(),
+        "listbox closes on mousedown outside"
+    );
+
+    host.remove();
+}
+
 /// DIAGNOSTIC: simulate keystroke-by-keystroke typing and verify
 /// the input's `.value` accumulates AND `root.query` tracks it.
 #[wasm_bindgen_test]
