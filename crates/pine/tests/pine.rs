@@ -3759,3 +3759,57 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
 
     host.remove();
 }
+
+/// DIAGNOSTIC: simulate keystroke-by-keystroke typing and verify
+/// the input's `.value` accumulates AND `root.query` tracks it.
+#[wasm_bindgen_test]
+async fn combobox_accumulates_typed_characters_in_input_value() {
+    let host = mount(
+        "<pine-combobox-root>\
+           <pine-combobox-input placeholder=\"\"></pine-combobox-input>\
+           <pine-combobox-portal>\
+             <pine-combobox-content>\
+               <pine-combobox-item value=\"a\">Apple</pine-combobox-item>\
+               <pine-combobox-item value=\"b\">Banana</pine-combobox-item>\
+             </pine-combobox-content>\
+           </pine-combobox-portal>\
+         </pine-combobox-root>",
+    );
+    tick().await;
+
+    let input: HtmlInputElement = host
+        .query_selector("input.pine-combobox-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    input.focus().unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    // Simulate typing "re" char by char.
+    let push_char = |ch: &str| {
+        let current = input.value();
+        input.set_value(&(current + ch));
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        input
+            .dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+    };
+    push_char("r");
+    sleep_ms(5).await;
+    tick().await;
+    push_char("e");
+    sleep_ms(5).await;
+    tick().await;
+
+    assert_eq!(
+        input.value(),
+        "re",
+        "input.value accumulated 're' across two keystrokes"
+    );
+
+    host.remove();
+}

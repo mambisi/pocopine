@@ -112,9 +112,8 @@ pub fn run(call: &DirectiveCall) {
         let timer = timer.clone();
         let last_event = last_event.clone();
         move |ev: Event| {
-            // `outside` runs before `prevent` so an outside click on
-            // a real link still navigates (preventing default on a
-            // document-level click listener would break the page).
+            // `outside` runs first: when set, we only continue past
+            // this block if the event originated outside the host.
             if outside {
                 let host_node: &Node = el_for_closure.as_ref();
                 if !host_node.is_connected() {
@@ -131,14 +130,22 @@ pub fn run(call: &DirectiveCall) {
                     },
                     None => return,
                 }
-            } else if prevent {
+            }
+            // Key filter runs BEFORE `prevent` / `stop` so a modifier
+            // chain like `@keydown.enter.prevent` only preventDefaults
+            // when the target key actually matches. Otherwise every
+            // keystroke on an editable input (e.g. PineCombobox /
+            // PineCommand search inputs) would be swallowed by the
+            // `.prevent` applied to a sibling `.escape` / `.enter`
+            // handler.
+            if !key_modifiers.is_empty() && !key_filter_matches(&ev, &key_modifiers) {
+                return;
+            }
+            if !outside && prevent {
                 ev.prevent_default();
             }
             if stop {
                 ev.stop_propagation();
-            }
-            if !key_modifiers.is_empty() && !key_filter_matches(&ev, &key_modifiers) {
-                return;
             }
             if self_only {
                 if outside {

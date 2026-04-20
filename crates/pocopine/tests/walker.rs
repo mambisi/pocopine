@@ -233,6 +233,17 @@ struct VirtualRovingHost {}
 #[handlers]
 impl VirtualRovingHost {}
 
+// pp-on `.prevent` + key-modifier ordering regression.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "KeyPreventHost.html")]
+struct KeyPreventHost {}
+
+#[handlers]
+impl KeyPreventHost {
+    pub fn on_enter(&mut self) {}
+    pub fn on_escape(&mut self) {}
+}
+
 // RFC-027 — parent-scope context (provide + inject).
 // RFC-030 — typed `InjectKey` replaces string keys.
 pocopine::inject_key!(CTX_ROOT: pocopine::Handle<CtxRoot>);
@@ -351,6 +362,7 @@ fn register_all() {
     ShortHost::register();
     RovingHost::register();
     VirtualRovingHost::register();
+    KeyPreventHost::register();
     ExprOnHost::register();
     InterpHost::register();
     CtxRoot::register();
@@ -1306,6 +1318,53 @@ async fn roving_navigates_with_arrows_and_skips_disabled() {
         doc().active_element().unwrap(),
         a,
         "Home jumped to first enabled (A)"
+    );
+
+    host.remove();
+}
+
+/// `@keydown.X.prevent="h"` — the `.prevent` modifier only fires
+/// when the key filter matches, so non-matching keystrokes pass
+/// through without `preventDefault`. Regression for the bug where
+/// `.enter.prevent` / `.escape.prevent` on an editable input
+/// swallowed every letter keystroke.
+#[wasm_bindgen_test]
+async fn on_keydown_prevent_respects_key_filter() {
+    let host = mount("<key-prevent-host></key-prevent-host>");
+    tick().await;
+
+    let input = host.query_selector(".kph-input").unwrap().unwrap();
+
+    let dispatch = |key: &str| -> web_sys::KeyboardEvent {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        input.dispatch_event(&ev).unwrap();
+        ev
+    };
+
+    // Typing 'r' — no filter matches, `.prevent` must NOT fire.
+    let ev = dispatch("r");
+    assert!(
+        !ev.default_prevented(),
+        "non-matching keys pass through without preventDefault"
+    );
+
+    // Enter — key matches, prevent fires.
+    let ev = dispatch("Enter");
+    assert!(
+        ev.default_prevented(),
+        "matching key triggers preventDefault"
+    );
+
+    // Escape — same.
+    let ev = dispatch("Escape");
+    assert!(
+        ev.default_prevented(),
+        "Escape's .prevent modifier fires on Escape"
     );
 
     host.remove();
