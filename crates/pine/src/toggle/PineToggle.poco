@@ -1,0 +1,9 @@
+<button type="button"
+        class="pine-toggle"
+        :aria-pressed="pressed ? 'true' : 'false'"
+        :data-state="pressed ? 'on' : 'off'"
+        :data-disabled="disabled"
+        :disabled="disabled"
+        @click="toggle">
+  <slot></slot>
+</button>

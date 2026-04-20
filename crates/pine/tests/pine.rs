@@ -1824,6 +1824,155 @@ async fn dialog_trigger_composes_pine_button() {
     host.remove();
 }
 
+// ─── PineToggle (standalone) ──────────────────────────────────────
+
+/// Clicking the toggle flips `aria-pressed` + `data-state`, and
+/// emits `pp:update:pressed` for two-way `pp-model:pressed` binding.
+#[wasm_bindgen_test]
+async fn toggle_click_flips_state_and_emits() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+
+    let host = mount("<pine-toggle class=\"tg\">B</pine-toggle>");
+    tick().await;
+
+    let tag = host.query_selector("pine-toggle").unwrap().unwrap();
+    let btn = host.query_selector(".tg button").unwrap().unwrap();
+    assert_eq!(btn.get_attribute("aria-pressed").as_deref(), Some("false"));
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("off"));
+
+    let seen = Rc::new(RefCell::new(None::<bool>));
+    let s = seen.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *s.borrow_mut() = ce.detail().as_bool();
+    });
+    tag.add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+
+    btn.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert_eq!(seen.borrow().as_ref().copied(), Some(true));
+    assert_eq!(btn.get_attribute("aria-pressed").as_deref(), Some("true"));
+    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("on"));
+
+    btn.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert_eq!(seen.borrow().as_ref().copied(), Some(false));
+
+    host.remove();
+}
+
+// ─── PineToggleGroup ──────────────────────────────────────────────
+
+/// `type="single"` — clicking an Item presses it and unpresses
+/// the previously-pressed one. Re-clicking the pressed Item clears
+/// the selection (value = "").
+#[wasm_bindgen_test]
+async fn toggle_group_single_mode_exclusive_selection() {
+    let host = mount(
+        "<pine-toggle-group-root>\
+           <pine-toggle-group-item value=\"a\" class=\"tgi-a\">A</pine-toggle-group-item>\
+           <pine-toggle-group-item value=\"b\" class=\"tgi-b\">B</pine-toggle-group-item>\
+           <pine-toggle-group-item value=\"c\" class=\"tgi-c\">C</pine-toggle-group-item>\
+         </pine-toggle-group-root>",
+    );
+    tick().await;
+
+    host.query_selector(".tgi-b button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    let a = host.query_selector(".tgi-a button").unwrap().unwrap();
+    let b = host.query_selector(".tgi-b button").unwrap().unwrap();
+    let c = host.query_selector(".tgi-c button").unwrap().unwrap();
+    assert_eq!(a.get_attribute("data-state").as_deref(), Some("off"));
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("on"));
+    assert_eq!(c.get_attribute("data-state").as_deref(), Some("off"));
+
+    // Click C — B flips off, C on.
+    host.query_selector(".tgi-c button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("off"));
+    assert_eq!(c.get_attribute("data-state").as_deref(), Some("on"));
+
+    // Click C again — clears (single-mode toggle off).
+    host.query_selector(".tgi-c button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(c.get_attribute("data-state").as_deref(), Some("off"));
+
+    host.remove();
+}
+
+/// `type="multiple"` — each click flips the clicked Item
+/// independently; other items keep their state.
+#[wasm_bindgen_test]
+async fn toggle_group_multiple_mode_independent_selection() {
+    let host = mount(
+        "<pine-toggle-group-root type=\"multiple\">\
+           <pine-toggle-group-item value=\"bold\" class=\"tgm-b\">B</pine-toggle-group-item>\
+           <pine-toggle-group-item value=\"italic\" class=\"tgm-i\">I</pine-toggle-group-item>\
+           <pine-toggle-group-item value=\"underline\" class=\"tgm-u\">U</pine-toggle-group-item>\
+         </pine-toggle-group-root>",
+    );
+    tick().await;
+
+    host.query_selector(".tgm-b button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    host.query_selector(".tgm-u button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    let b = host.query_selector(".tgm-b button").unwrap().unwrap();
+    let i = host.query_selector(".tgm-i button").unwrap().unwrap();
+    let u = host.query_selector(".tgm-u button").unwrap().unwrap();
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("on"));
+    assert_eq!(i.get_attribute("data-state").as_deref(), Some("off"));
+    assert_eq!(u.get_attribute("data-state").as_deref(), Some("on"));
+
+    // Re-click B — it alone flips off.
+    host.query_selector(".tgm-b button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("off"));
+    assert_eq!(u.get_attribute("data-state").as_deref(), Some("on"));
+
+    host.remove();
+}
+
 // ─── PineRadioGroup ───────────────────────────────────────────────
 
 /// Clicking an Item writes its `value` into Root (Items become

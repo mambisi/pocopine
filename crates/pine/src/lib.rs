@@ -36,6 +36,8 @@ pub mod popover;
 pub mod radio_group;
 pub mod switch;
 pub mod tabs;
+pub mod toggle;
+pub mod toggle_group;
 pub mod tooltip;
 
 pub use accordion::{
@@ -68,6 +70,8 @@ pub use popover::{
 pub use radio_group::{PineRadioGroupIndicator, PineRadioGroupItem, PineRadioGroupRoot};
 pub use switch::PineSwitch;
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
+pub use toggle::PineToggle;
+pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
 pub use tooltip::{
     PineTooltipContent, PineTooltipPortal, PineTooltipRoot, PineTooltipTrigger,
 };
@@ -131,6 +135,9 @@ pub fn register_all() {
     PineTabsList::register();
     PineTabsTrigger::register();
     PineTabsContent::register();
+    PineToggle::register();
+    PineToggleGroupRoot::register();
+    PineToggleGroupItem::register();
     PineTooltipRoot::register();
     PineTooltipTrigger::register();
     PineTooltipPortal::register();
