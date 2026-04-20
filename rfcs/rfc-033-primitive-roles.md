@@ -151,8 +151,12 @@ Authors get one selector surface for effects that span a role:
 
 ## 5. Migration
 
-Opt-in. New primitives should pick a role. Existing primitives
-will be migrated incrementally; this RFC ships with AvatarRoot
-and AvatarFallback switched over as proof-of-concept. The role
-attribute is additive — components without `role` keep behaving
-exactly as before.
+Opt-in. New primitives should pick a role. The role attribute is
+additive — components without `role` keep behaving exactly as
+before.
+
+**Status in tree:** all current Pine primitives (82 components
+across 24 families) are role-annotated. New primitives should
+pick a role from the table; unannotated components keep the
+classic `inject_pp_data` path. A canonical source of defaults
+lives in `crates/pocopine-macros/src/lib.rs::role_to_tag`.
