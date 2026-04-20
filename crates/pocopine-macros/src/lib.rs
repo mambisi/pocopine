@@ -118,6 +118,11 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
         "panel" => Some("div"),
         "scope" => Some("div"),
         "surface" => Some("div"),
+        "heading" => Some("h2"),
+        "text" => Some("p"),
+        "list" => Some("ul"),
+        "item" => Some("li"),
+        "label" => Some("label"),
         _ => None,
     }
 }
@@ -242,7 +247,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     lit,
                     format!(
                         "unknown primitive role `{role_name}` — expected one of: \
-                         visual, interactive, link, media, panel, scope, surface"
+                         visual, interactive, link, media, panel, scope, surface, \
+                         heading, text, list, item, label"
                     ),
                 )
                 .to_compile_error()

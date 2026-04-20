@@ -17,7 +17,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineToggle.poco")]
+#[component(template = "PineToggle.poco", role = "interactive")]
 pub struct PineToggle {
     /// Two-way bindable via `pp-model:pressed="bool"`.
     #[prop] pub pressed: bool,

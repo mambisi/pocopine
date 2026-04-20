@@ -15,7 +15,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineAspectRatio.poco")]
+#[component(template = "PineAspectRatio.poco", role = "panel")]
 pub struct PineAspectRatio {
     /// Width / height ratio. Examples: `1.0` (square), `1.777`
     /// (16:9), `0.5625` (9:16 vertical video).

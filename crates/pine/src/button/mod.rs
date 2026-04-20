@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// rendered element — Pine ships no styling. Authors style via
 /// `.pine-btn[data-variant="primary"] { … }`.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineButton.poco")]
+#[component(template = "PineButton.poco", role = "interactive")]
 pub struct PineButton {
     /// Arbitrary variant name — becomes `data-variant`. No
     /// built-in values; whatever the author writes gets rendered.

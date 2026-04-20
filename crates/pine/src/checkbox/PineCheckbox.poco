@@ -1,10 +1,9 @@
-<button type="button"
-        role="checkbox"
-        class="pine-checkbox"
-        :aria-checked="state == 'indeterminate' ? 'mixed' : (state == 'checked' ? 'true' : 'false')"
-        :data-state="state"
-        :data-disabled="disabled"
-        :disabled="disabled"
-        @click="toggle">
+<root role="checkbox"
+      class="pine-checkbox"
+      :aria-checked="state == 'indeterminate' ? 'mixed' : (state == 'checked' ? 'true' : 'false')"
+      :data-state="state"
+      :data-disabled="disabled"
+      :disabled="disabled"
+      @click="toggle">
   <span class="pine-checkbox-indicator" :data-state="state"></span>
-</button>
+</root>

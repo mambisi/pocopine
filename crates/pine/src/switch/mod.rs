@@ -13,7 +13,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSwitch.poco")]
+#[component(template = "PineSwitch.poco", role = "interactive")]
 pub struct PineSwitch {
     #[prop] pub checked: bool,
     #[prop] pub disabled: bool,

@@ -1,8 +1,7 @@
-<button type="button"
-        class="pine-btn"
-        :data-variant="variant"
-        :data-size="size"
-        :data-disabled="disabled"
-        :disabled="disabled">
+<root class="pine-btn"
+      :data-variant="variant"
+      :data-size="size"
+      :data-disabled="disabled"
+      :disabled="disabled">
   <slot></slot>
-</button>
+</root>

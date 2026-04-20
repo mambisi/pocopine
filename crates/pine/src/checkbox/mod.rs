@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// impl; the macro-generated `#[derive(Default)]` would produce an
 /// empty string which renders as a non-checkbox state).
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineCheckbox.poco")]
+#[component(template = "PineCheckbox.poco", role = "interactive")]
 pub struct PineCheckbox {
     #[prop] pub state: String,
     #[prop] pub disabled: bool,

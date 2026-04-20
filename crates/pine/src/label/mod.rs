@@ -18,7 +18,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineLabel.poco")]
+#[component(template = "PineLabel.poco", role = "label")]
 pub struct PineLabel {
     /// `id` of the form control this label is paired with.
     /// Flows to the underlying `<label>`'s `for` attribute.

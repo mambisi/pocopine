@@ -16,7 +16,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSeparator.poco")]
+#[component(template = "PineSeparator.poco", role = "panel")]
 pub struct PineSeparator {
     /// `"horizontal"` (default) or `"vertical"`.
     #[prop] pub orientation: String,
