@@ -49,6 +49,113 @@ section {
   background: var(--bg);
 }
 
+/* ─── Tier A primitives: Label / Separator / Progress /
+   AspectRatio / Toolbar ───────────────────────────────────── */
+
+.pine-label {
+  display: inline-block;
+  min-width: 5rem;
+  font-weight: 500;
+}
+
+.pine-separator[data-orientation="horizontal"] {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+.pine-separator[data-orientation="vertical"] {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--border);
+  margin: 0 0.5rem;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.pine-progress-root {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border-radius: var(--radius);
+  width: 100%;
+  height: 0.5rem;
+}
+.pine-progress-indicator {
+  height: 100%;
+  background: var(--brand);
+  transition: transform 150ms ease;
+  /* Author-managed: translateX based on data-value/data-max. */
+  width: calc(var(--pine-progress-pct, 0%) + 0%);
+}
+/* Compute the percentage from data-value/data-max via CSS
+   calc using attribute selectors. */
+.pine-progress-indicator[data-state="loading"][data-max="100"] {
+  width: calc(1% * attr(data-value type(<number>), 0));
+}
+.pine-progress-indicator[data-state="complete"] { width: 100%; }
+.pine-progress-indicator[data-state="indeterminate"] {
+  width: 30%;
+  animation: pine-progress-indeterminate 1.25s linear infinite;
+}
+@keyframes pine-progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+
+.ar-demo {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+
+.pine-toolbar-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.pine-toolbar-root[data-orientation="vertical"] {
+  flex-direction: column;
+  align-items: stretch;
+}
+.pine-toolbar-button,
+.pine-toolbar-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+}
+.pine-toolbar-button:hover,
+.pine-toolbar-link:hover { background: var(--bg-hover); }
+.pine-toolbar-separator[data-orientation="vertical"] {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--border);
+  margin: 0 0.25rem;
+}
+.pine-toolbar-separator[data-orientation="horizontal"] {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+  align-self: stretch;
+}
+
 .row {
   display: flex;
   gap: 0.75rem;

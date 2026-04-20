@@ -1,0 +1,7 @@
+<div role="toolbar"
+     class="pine-toolbar-root"
+     :aria-orientation="orientation"
+     :data-orientation="orientation"
+     pp-roving.both>
+  <slot></slot>
+</div>

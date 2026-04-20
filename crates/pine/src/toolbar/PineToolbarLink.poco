@@ -1,0 +1,6 @@
+<a pp-as
+   class="pine-toolbar-link"
+   tabindex="-1"
+   :href="href">
+  <slot></slot>
+</a>

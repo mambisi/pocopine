@@ -1,0 +1,4 @@
+<div class="pine-separator"
+     :role="decorative ? 'none' : 'separator'"
+     :aria-orientation="decorative ? false : orientation"
+     :data-orientation="orientation"></div>

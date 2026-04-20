@@ -2,6 +2,61 @@
   <h1>Pine</h1>
   <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
 
+  <!-- Label + Separator + Progress + AspectRatio + Toolbar — -->
+  <!-- small primitives showcased together.                 -->
+  <h2>Label, Separator, Progress</h2>
+  <section>
+    <div class="row" style="align-items:center;margin-bottom:0.75rem">
+      <pine-label target="demo-name">Name</pine-label>
+      <input id="demo-name" type="text" placeholder="clicking the label focuses me">
+    </div>
+    <pine-separator></pine-separator>
+    <div style="margin:0.75rem 0">
+      <pine-progress-root value="42" max="100">
+        <pine-progress-indicator></pine-progress-indicator>
+      </pine-progress-root>
+    </div>
+    <pine-separator></pine-separator>
+    <div style="margin-top:0.75rem">
+      <pine-progress-root value="-1">
+        <pine-progress-indicator></pine-progress-indicator>
+      </pine-progress-root>
+      <span style="font-size:0.875rem;color:var(--fg-muted);margin-left:0.5rem">
+        indeterminate
+      </span>
+    </div>
+  </section>
+
+  <h2>Aspect ratio</h2>
+  <section class="row">
+    <div style="width:280px">
+      <pine-aspect-ratio ratio="1.777">
+        <div class="ar-demo">16 : 9</div>
+      </pine-aspect-ratio>
+    </div>
+    <div style="width:180px">
+      <pine-aspect-ratio ratio="1">
+        <div class="ar-demo">1 : 1</div>
+      </pine-aspect-ratio>
+    </div>
+  </section>
+
+  <h2>Toolbar</h2>
+  <section>
+    <pine-toolbar-root>
+      <pine-toolbar-button @click="action_bump">Save</pine-toolbar-button>
+      <pine-toolbar-button @click="action_bump">Undo</pine-toolbar-button>
+      <pine-toolbar-separator></pine-toolbar-separator>
+      <pine-toggle-group-root type="multiple">
+        <pine-toggle-group-item value="bold"><strong>B</strong></pine-toggle-group-item>
+        <pine-toggle-group-item value="italic"><em>I</em></pine-toggle-group-item>
+        <pine-toggle-group-item value="underline"><u>U</u></pine-toggle-group-item>
+      </pine-toggle-group-root>
+      <pine-toolbar-separator></pine-toolbar-separator>
+      <pine-toolbar-link href="#">Docs</pine-toolbar-link>
+    </pine-toolbar-root>
+  </section>
+
   <!-- PineButton ─────────────────────────────────────────── -->
   <h2>Button</h2>
   <section class="row">

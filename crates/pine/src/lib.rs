@@ -25,6 +25,7 @@
 
 pub mod accordion;
 pub mod alert_dialog;
+pub mod aspect_ratio;
 pub mod avatar;
 pub mod button;
 pub mod checkbox;
@@ -33,13 +34,17 @@ pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod hover_card;
+pub mod label;
 pub mod overlay;
 pub mod popover;
+pub mod progress;
 pub mod radio_group;
+pub mod separator;
 pub mod switch;
 pub mod tabs;
 pub mod toggle;
 pub mod toggle_group;
+pub mod toolbar;
 pub mod tooltip;
 
 pub use accordion::{
@@ -49,6 +54,13 @@ pub use alert_dialog::{
     PineAlertDialogAction, PineAlertDialogCancel, PineAlertDialogContent,
     PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal,
     PineAlertDialogRoot, PineAlertDialogTitle, PineAlertDialogTrigger,
+};
+pub use aspect_ratio::PineAspectRatio;
+pub use label::PineLabel;
+pub use progress::{PineProgressIndicator, PineProgressRoot};
+pub use separator::PineSeparator;
+pub use toolbar::{
+    PineToolbarButton, PineToolbarLink, PineToolbarRoot, PineToolbarSeparator,
 };
 pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
@@ -165,4 +177,13 @@ pub fn register_all() {
     PineTooltipContent::register();
     PineSwitch::register();
     PineCheckbox::register();
+    PineLabel::register();
+    PineSeparator::register();
+    PineProgressRoot::register();
+    PineProgressIndicator::register();
+    PineAspectRatio::register();
+    PineToolbarRoot::register();
+    PineToolbarButton::register();
+    PineToolbarLink::register();
+    PineToolbarSeparator::register();
 }

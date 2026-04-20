@@ -1990,6 +1990,167 @@ async fn context_menu_right_click_opens_and_item_closes() {
     host.remove();
 }
 
+// ─── PineLabel ────────────────────────────────────────────────────
+
+/// `<pine-label for="foo">` renders a `<label for="foo">` so
+/// native click-through to the paired input Just Works.
+#[wasm_bindgen_test]
+async fn label_renders_native_label_with_for_attr() {
+    let host = mount(
+        "<pine-label target=\"the-input\">Email</pine-label>\
+         <input id=\"the-input\" type=\"text\">",
+    );
+    tick().await;
+
+    let label = host.query_selector("label.pine-label").unwrap().unwrap();
+    assert_eq!(label.get_attribute("for").as_deref(), Some("the-input"));
+    assert!(label.text_content().unwrap().contains("Email"));
+
+    host.remove();
+}
+
+// ─── PineSeparator ────────────────────────────────────────────────
+
+/// Default separator renders `role="separator"` +
+/// `aria-orientation="horizontal"`; `decorative` drops them.
+#[wasm_bindgen_test]
+async fn separator_role_and_orientation_flags() {
+    let host = mount(
+        "<pine-separator class=\"s-one\"></pine-separator>\
+         <pine-separator class=\"s-two\" orientation=\"vertical\"></pine-separator>\
+         <pine-separator class=\"s-three\" decorative=\"true\"></pine-separator>",
+    );
+    tick().await;
+
+    let s1 = host.query_selector(".s-one div").unwrap().unwrap();
+    assert_eq!(s1.get_attribute("role").as_deref(), Some("separator"));
+    assert_eq!(
+        s1.get_attribute("aria-orientation").as_deref(),
+        Some("horizontal")
+    );
+
+    let s2 = host.query_selector(".s-two div").unwrap().unwrap();
+    assert_eq!(
+        s2.get_attribute("aria-orientation").as_deref(),
+        Some("vertical")
+    );
+
+    let s3 = host.query_selector(".s-three div").unwrap().unwrap();
+    assert_eq!(s3.get_attribute("role").as_deref(), Some("none"));
+    assert!(s3.get_attribute("aria-orientation").is_none());
+
+    host.remove();
+}
+
+// ─── PineProgress ─────────────────────────────────────────────────
+
+/// Root exposes `role="progressbar"` with valid ARIA; indicator
+/// mirrors `data-value` / `data-max` / `data-state` reactively.
+#[wasm_bindgen_test]
+async fn progress_determinate_and_indeterminate_states() {
+    let host = mount(
+        "<pine-progress-root value=\"42\" max=\"100\">\
+           <pine-progress-indicator></pine-progress-indicator>\
+         </pine-progress-root>",
+    );
+    tick().await;
+
+    let root = host
+        .query_selector("[role=\"progressbar\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(root.get_attribute("aria-valuenow").as_deref(), Some("42"));
+    assert_eq!(root.get_attribute("aria-valuemax").as_deref(), Some("100"));
+    assert_eq!(root.get_attribute("data-state").as_deref(), Some("loading"));
+
+    let ind = host
+        .query_selector("div.pine-progress-indicator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(ind.get_attribute("data-state").as_deref(), Some("loading"));
+
+    host.remove();
+
+    // Indeterminate — negative value drops aria-valuenow + data-value.
+    let host = mount(
+        "<pine-progress-root value=\"-1\">\
+           <pine-progress-indicator class=\"ind2\"></pine-progress-indicator>\
+         </pine-progress-root>",
+    );
+    tick().await;
+    let root = host
+        .query_selector("[role=\"progressbar\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        root.get_attribute("data-state").as_deref(),
+        Some("indeterminate")
+    );
+    assert!(root.get_attribute("aria-valuenow").is_none());
+    let ind = host.query_selector("div.ind2").unwrap().unwrap();
+    assert_eq!(
+        ind.get_attribute("data-state").as_deref(),
+        Some("indeterminate")
+    );
+
+    host.remove();
+}
+
+// ─── PineAspectRatio ──────────────────────────────────────────────
+
+/// `ratio` prop flows into inline `style="aspect-ratio: …"`.
+#[wasm_bindgen_test]
+async fn aspect_ratio_sets_css_aspect_ratio() {
+    let host = mount("<pine-aspect-ratio ratio=\"1.777\"></pine-aspect-ratio>");
+    tick().await;
+
+    let el = host.query_selector(".pine-aspect-ratio").unwrap().unwrap();
+    let style = el.get_attribute("style").unwrap_or_default();
+    assert!(
+        style.contains("aspect-ratio:1.777") || style.contains("aspect-ratio: 1.777"),
+        "expected aspect-ratio in style — got {style:?}"
+    );
+
+    host.remove();
+}
+
+// ─── PineToolbar ──────────────────────────────────────────────────
+
+/// Toolbar root carries `role="toolbar"` + `aria-orientation`,
+/// and Separator inside picks up the inverted orientation.
+#[wasm_bindgen_test]
+async fn toolbar_orientation_flows_to_separator() {
+    let host = mount(
+        "<pine-toolbar-root orientation=\"horizontal\">\
+           <pine-toolbar-button>A</pine-toolbar-button>\
+           <pine-toolbar-separator class=\"tb-sep\"></pine-toolbar-separator>\
+           <pine-toolbar-button>B</pine-toolbar-button>\
+         </pine-toolbar-root>",
+    );
+    tick().await;
+
+    let tb = host
+        .query_selector("[role=\"toolbar\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tb.get_attribute("aria-orientation").as_deref(),
+        Some("horizontal")
+    );
+
+    // Horizontal toolbar → vertical separator (perpendicular to item axis).
+    let sep = host
+        .query_selector(".tb-sep div[role=\"separator\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        sep.get_attribute("aria-orientation").as_deref(),
+        Some("vertical")
+    );
+
+    host.remove();
+}
+
 // ─── PineHoverCard ────────────────────────────────────────────────
 
 /// Hover on the Trigger with a zero open-delay opens the card;

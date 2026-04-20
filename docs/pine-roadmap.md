@@ -20,6 +20,11 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineToggleGroup* (compound, 2 parts) | stable | Root/Item; `type="single\|multiple"`, `pp-roving.both` |
 | PineHoverCard* (compound, 4 parts) | stable | Root/Trigger/Portal/Content; `open_delay` + `close_delay`, shared timer so pointer can move trigger→content without close |
 | PineContextMenu* (compound, 6 parts) | stable | Root/Trigger/Portal/Content/Item/Separator; right-click opens at pointer coords |
+| PineLabel | stable | `<label for>` wrapper — `target` prop flows to `for` attr |
+| PineSeparator | stable | horizontal / vertical, `decorative` prop drops ARIA |
+| PineProgress* (compound, 2 parts) | stable | Root/Indicator; `role="progressbar"` + indeterminate state on negative value |
+| PineAspectRatio | stable | CSS `aspect-ratio` wrapper |
+| PineToolbar* (compound, 4 parts) | stable | Root/Button/Link/Separator; `pp-roving.both`, orientation-aware separator |
 | PinePopover* (compound, 5 parts) | stable | Root/Trigger/Portal/Content/Close; auto-anchor via Trigger stamp |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |

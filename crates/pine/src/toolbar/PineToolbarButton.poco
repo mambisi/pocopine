@@ -1,0 +1,8 @@
+<button pp-as
+        type="button"
+        class="pine-toolbar-button"
+        tabindex="-1"
+        :data-disabled="disabled"
+        :disabled="disabled">
+  <slot></slot>
+</button>

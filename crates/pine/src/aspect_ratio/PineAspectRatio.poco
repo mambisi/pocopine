@@ -1,0 +1,4 @@
+<div class="pine-aspect-ratio"
+     :style="'aspect-ratio:' + ratio + ';'">
+  <slot></slot>
+</div>
