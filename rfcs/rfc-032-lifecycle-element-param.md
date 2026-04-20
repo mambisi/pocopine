@@ -13,7 +13,7 @@
 Let `on_mount` and `on_ready` accept a **variable list of
 extractor parameters** — axum / bevy-system style. Authors
 declare the types they want and `#[handlers]` wires each one
-from a common `LifecycleContext` carrier via the `FromLifecycleContext` trait.
+from a common `LifecycleContext` carrier via the `From<LifecycleContext>` trait.
 
 Today those hooks get `&self` / `&mut self` only; to touch the
 DOM they re-derive the scope id + element by hand —
@@ -39,7 +39,7 @@ pub fn on_mount(&mut self, _el: El) {
 }
 ```
 
-The `FromLifecycleContext` trait is open — authors define their own
+The `From<LifecycleContext>` trait is open — authors define their own
 extractors (typed `<ul>` ref, `Handle<ParentRoot>`, …) the same
 way axum lets you extend `FromRequest`. Each parameter is a
 zero-cost projection of the walker-supplied `LifecycleContext`; handlers
@@ -122,13 +122,13 @@ pub struct LifecycleContext<'a> {
 }
 ```
 
-### 4.2 The `FromLifecycleContext` trait — the extractor shape
+### 4.2 Extractors are std `From<LifecycleContext<'a>>` impls
 
-```rust
-pub trait FromLifecycleContext<'a>: Sized {
-    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self;
-}
-```
+We don't invent a new trait. Each extractor is a plain
+`impl From<LifecycleContext<'a>> for MyType` — the stdlib trait
+everyone already knows. The macro generates one `.into()` per
+parameter at the callsite; rustc's type inference picks the
+target from the handler signature.
 
 Built-in impls (live in `pocopine-core`):
 
@@ -136,7 +136,7 @@ Built-in impls (live in `pocopine-core`):
 |---|---|
 | `El<'a>` (newtype over `&'a Element`) | the rendered root |
 | `ScopeId` | the component's scope id |
-| `LifecycleContext<'a>` | the full carrier (for the escape hatch) |
+| `LifecycleContext<'a>` | the full carrier (for the escape hatch — blanket `impl From<T> for T` in std) |
 
 `El<'a>` is a thin newtype instead of a bare `&Element` because
 rustc can't infer `&'a Element` as a generic extractor type
@@ -151,18 +151,40 @@ impl<'a> std::ops::Deref for El<'a> {
     fn deref(&self) -> &Self::Target { self.0 }
 }
 
-impl<'a> FromLifecycleContext<'a> for El<'a> {
-    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { El(ctx.el) }
+impl<'a> From<LifecycleContext<'a>> for El<'a> {
+    fn from(ctx: LifecycleContext<'a>) -> Self { El(ctx.el) }
 }
 
-impl<'a> FromLifecycleContext<'a> for ScopeId {
-    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { ctx.scope_id }
+impl<'a> From<LifecycleContext<'a>> for ScopeId {
+    fn from(ctx: LifecycleContext<'a>) -> Self { ctx.scope_id }
 }
 
-impl<'a> FromLifecycleContext<'a> for LifecycleContext<'a> {
-    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self { ctx }
-}
+// No impl needed for LifecycleContext itself — the std blanket
+// `impl<T> From<T> for T` already covers it.
 ```
+
+Why not a custom `From<LifecycleContext>` trait?
+
+- **No teaching surface.** Rust devs already know `From` /
+  `Into`; no new trait name to introduce.
+- **Orphan rule works.** Authors impl
+  `From<LifecycleContext> for TheirType` — they own the
+  target, so it compiles in downstream crates without a
+  re-export dance.
+- **Fallibility is handled by `Option<T>`.** Extractors that
+  might miss return `Option<MenuRef>` with an `impl
+  From<LifecycleContext> for Option<MenuRef>`. Handlers match
+  on the `Option` at the callsite — standard Rust. If an
+  extractor genuinely wants `Result<T, E>` it uses the same
+  pattern with `Result`.
+- **Semantics match.** Each extractor builds a fresh value
+  from the shared read-only `LifecycleContext`; that's exactly
+  what `From` is for. "Extraction" vs "conversion" is a
+  framework cosmetic.
+- **If we outgrow it.** The moment we need something `From`
+  can't express (async, typed errors with extra context,
+  associated state), we introduce a `FromLifecycleContextAsync`
+  (or whatever) additively — and keep `From` for the 99% case.
 
 ### 4.3 Proposed built-in extractors — shopping list
 
@@ -210,30 +232,30 @@ gives, why it's worth it, and what it'd cost to ship.
 
 ### 4.4 Rough shapes for each
 
-Enough to see how they compose with `FromLifecycleContext`:
+Enough to see how they compose with `From<LifecycleContext>`:
 
 ```rust
 // Tier 1
 pub struct El<'a>(pub &'a web_sys::Element);
 impl<'a> Deref for El<'a> { type Target = Element; fn deref(&self) -> &Element { self.0 } }
-impl<'a> FromLifecycleContext<'a> for El<'a> { fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self { El(c.el) } }
+impl<'a> From<LifecycleContext<'a>> for El<'a> { fn from(c: LifecycleContext<'a>) -> Self { El(c.el) } }
 
 // Tier 2
 pub struct Me<T: 'static>(pub Handle<T>);
 // Generated via the `#[handlers]` macro — it knows the current
 // component type, so `Me<Self>` at the hook-param site gets
 // substituted with the component's concrete type.
-// Not a blanket FromLifecycleContext impl; see §5.2 for how the macro
+// Not a blanket From<LifecycleContext> impl; see §5.2 for how the macro
 // wires this one.
 
 pub struct ParentId(pub Option<ScopeId>);
-impl<'a> FromLifecycleContext<'a> for ParentId {
-    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self { ParentId(context::parent_of(c.scope_id)) }
+impl<'a> From<LifecycleContext<'a>> for ParentId {
+    fn from(c: LifecycleContext<'a>) -> Self { ParentId(context::parent_of(c.scope_id)) }
 }
 
 pub struct Document(pub web_sys::Document);
-impl<'a> FromLifecycleContext<'a> for Document {
-    fn from_lifecycle_context(_c: LifecycleContext<'a>) -> Self {
+impl<'a> From<LifecycleContext<'a>> for Document {
+    fn from(_c: LifecycleContext<'a>) -> Self {
         Document(web_sys::window().unwrap().document().unwrap())
     }
 }
@@ -262,8 +284,8 @@ impl<'a> Refs<'a> {
         self.get(name).and_then(|el| el.dyn_into().ok())
     }
 }
-impl<'a> FromLifecycleContext<'a> for Refs<'a> {
-    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self {
+impl<'a> From<LifecycleContext<'a>> for Refs<'a> {
+    fn from(c: LifecycleContext<'a>) -> Self {
         Refs { scope_id: c.scope_id, _m: PhantomData }
     }
 }
@@ -272,8 +294,8 @@ pub struct TypedEl<'a, T: JsCast>(pub &'a T, PhantomData<T>);
 // panic on mismatch — author's contract
 
 pub struct HostEl<'a>(pub &'a web_sys::Element);
-impl<'a> FromLifecycleContext<'a> for HostEl<'a> {
-    fn from_lifecycle_context(c: LifecycleContext<'a>) -> Self {
+impl<'a> From<LifecycleContext<'a>> for HostEl<'a> {
+    fn from(c: LifecycleContext<'a>) -> Self {
         HostEl(c.el.parent_element().as_ref().unwrap_or(c.el))
     }
 }
@@ -333,15 +355,15 @@ pub fn on_mount(&mut self, doc: Document) {
 
 ### 4.6 Author-defined extractors
 
-Because `FromLifecycleContext` is open, authors add their own when a
+Because `From<LifecycleContext>` is open, authors add their own when a
 pattern repeats. Example — a typed menu ref that looks up
 `pp-ref="menu"`:
 
 ```rust
 pub struct MenuRef(pub web_sys::HtmlElement);
 
-impl<'a> FromLifecycleContext<'a> for MenuRef {
-    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self {
+impl<'a> From<LifecycleContext<'a>> for MenuRef {
+    fn from(ctx: LifecycleContext<'a>) -> Self {
         let el = pocopine::refs::get_on(ctx.scope_id, "menu")
             .expect("pp-ref=\"menu\" on template root");
         MenuRef(el.dyn_into().unwrap())
@@ -375,7 +397,7 @@ The `#[handlers]` macro accepts any of these for `on_mount` /
 fn on_mount(&mut self) { … }
 fn on_ready(&self) { … }
 
-// Any number, any order — each param implements FromLifecycleContext.
+// Any number, any order — each param implements From<LifecycleContext>.
 fn on_ready(&self, el: El) { … }
 fn on_ready(&self, el: El, scope: ScopeId) { … }
 fn on_ready(&self, scope: ScopeId, ctx: LifecycleContext) { … }
@@ -385,11 +407,11 @@ fn on_ready(&self, MenuRef(menu): MenuRef) { … }
 The macro doesn't constrain order or count. The only
 constraint is that `&self` / `&mut self` is the first
 receiver; every subsequent parameter must implement
-`FromLifecycleContext<'_>`. rustc enforces the latter via the generated
+`From<LifecycleContext<'_>>`. rustc enforces the latter via the generated
 forwarder.
 
-Non-`FromLifecycleContext` types in the signature produce a normal
-rustc trait-bound error: *"the trait `FromLifecycleContext<'_>` is not
+Non-`From<LifecycleContext>` types in the signature produce a normal
+rustc trait-bound error: *"the trait `From<LifecycleContext<'_>>` is not
 implemented for …"* — same shape as axum's "not a valid
 extractor" compile error.
 
@@ -463,7 +485,7 @@ if has_ready {
 
 The ComponentState trait methods receive a single `LifecycleContext`
 argument; the `#[handlers]`-generated forwarder destructures it
-through `FromLifecycleContext::from_lifecycle_context` per parameter.
+through `From::<LifecycleContext>::from` per parameter.
 
 `tick::next` fires after the microtask queue drains; we clone
 `el` into the closure so the call site owns it, then re-borrow
@@ -473,7 +495,7 @@ a wasm-bindgen JsValue handle, so clone is a ref bump.
 ### 5.2 `#[handlers]` macro
 
 For each handler with extractor parameters, generate a forwarder
-that extracts each one via `FromLifecycleContext`:
+that extracts each one via `From<LifecycleContext>`:
 
 ```rust
 // User writes:
@@ -481,13 +503,21 @@ fn on_ready(&self, el: El, scope: ScopeId) { … }
 
 // Macro generates (inside the HandlerDispatch impl):
 fn on_ready(&self, __ctx: LifecycleContext) {
-    Self::on_ready(
-        self,
-        <El as FromLifecycleContext>::from_lifecycle_context(__ctx),
-        <ScopeId as FromLifecycleContext>::from_lifecycle_context(__ctx),
-    );
+    Self::on_ready(self, __ctx.into(), __ctx.into());
 }
 ```
+
+`__ctx.into()` is the simple form — rustc infers the target
+type from the handler's parameter position. Equivalent
+explicit forms:
+
+```rust
+<El as ::core::convert::From<LifecycleContext>>::from(__ctx)
+```
+
+The macro emits the explicit `::core::convert::From<LifecycleContext>`
+form so an author's shadowing `From` impl (e.g. on a type
+alias) can't change what gets called.
 
 Implementation sketch — reuse the signature-walk that already
 powers the handler dispatch:
@@ -500,7 +530,11 @@ let params: Vec<_> = user_method.sig.inputs.iter()
             FnArg::Typed(p) => p,
             FnArg::Receiver(_) => unreachable!(),
         };
-        quote! { <#ty as ::pocopine::FromLifecycleContext>::from_lifecycle_context(__ctx) }
+        quote! {
+            <#ty as ::core::convert::From<
+                ::pocopine::LifecycleContext
+            >>::from(__ctx)
+        }
     })
     .collect();
 
@@ -608,7 +642,7 @@ across every compound that ships a menu.
   author's contract, not the framework's. The built-ins never
   panic.
 - **Extractor ordering.** Order in the handler signature
-  controls call order — each `FromLifecycleContext::from_lifecycle_context` runs
+  controls call order — each `From::<LifecycleContext>::from` runs
   left to right. For stateless built-ins that's irrelevant;
   author extractors that mutate side tables (rare) should
   document their ordering expectations.
@@ -675,6 +709,33 @@ Have two trait methods — `on_ready(&self)` and
 implement whichever. Clutters the trait surface and doesn't
 give the typed-extractor benefits of §4.3.
 
+### 8.6 Custom `FromLifecycleContext` trait
+
+Earlier draft had a pocopine-specific extractor trait:
+
+```rust
+pub trait FromLifecycleContext<'a>: Sized {
+    fn from_lifecycle_context(ctx: LifecycleContext<'a>) -> Self;
+}
+```
+
+Rejected in favour of stdlib `From<LifecycleContext<'a>>`:
+
+- **More to teach.** Authors learn `From` in week one of Rust;
+  a custom extractor trait is novel even if it's isomorphic.
+- **No real upside.** axum's `FromRequest` exists because it's
+  async + fallible with typed errors; bevy's `SystemParam`
+  needs associated types. Our extractors are sync, infallible
+  (or return `Option<T>`), and have no associated state —
+  `From` covers the full contract.
+- **Orphan-rule story is identical.** Authors impl
+  `From<LifecycleContext> for TheirType`; `TheirType` is
+  local, so it compiles.
+- **Upgrade path intact.** If we ever need what `From` can't
+  express, we add a second trait additively (e.g.
+  `FromLifecycleContextAsync`) without touching the 99%
+  case.
+
 ## 9. Rollout
 
 1. Land the macro signature introspection + trait-default
@@ -701,7 +762,7 @@ give the typed-extractor benefits of §4.3.
   const-string generics and lands as a placeholder that errors
   at compile time until stable. See §4.3 for the full list.
 - **Naming — settled on `LifecycleContext`** +
-  `FromLifecycleContext`. Rejected alternatives: `HookCtx`
+  `From<LifecycleContext>`. Rejected alternatives: `HookCtx`
   (overloaded with pocopine's other "hook" uses), `MountCtx`
   (misleads — `on_ready` shares the type), `ScopeCtx`
   (collides with the `Scope` type), `ComponentCtx` (verbose,
