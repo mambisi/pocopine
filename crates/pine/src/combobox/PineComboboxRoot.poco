@@ -1,0 +1,6 @@
+<root class="pine-combobox-root"
+      pp-ref="root"
+      :data-state="open ? 'open' : 'closed'"
+      :data-disabled="disabled">
+  <slot></slot>
+</root>

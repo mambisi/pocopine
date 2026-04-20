@@ -30,6 +30,7 @@ pub mod avatar;
 pub mod button;
 pub mod checkbox;
 pub mod collapsible;
+pub mod combobox;
 pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
@@ -75,6 +76,10 @@ pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
+pub use combobox::{
+    PineComboboxContent, PineComboboxEmpty, PineComboboxInput, PineComboboxItem,
+    PineComboboxPortal, PineComboboxRoot,
+};
 pub use context_menu::{
     PineContextMenuContent, PineContextMenuItem, PineContextMenuPortal, PineContextMenuRoot,
     PineContextMenuSeparator, PineContextMenuTrigger,
@@ -215,4 +220,10 @@ pub fn register_all() {
     PineSelectItem::register();
     PineSelectItemIndicator::register();
     PineSelectSeparator::register();
+    PineComboboxRoot::register();
+    PineComboboxInput::register();
+    PineComboboxPortal::register();
+    PineComboboxContent::register();
+    PineComboboxEmpty::register();
+    PineComboboxItem::register();
 }

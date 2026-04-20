@@ -584,6 +584,35 @@
     </p>
   </section>
 
+  <!-- PineCombobox ───────────────────────────────────────── -->
+  <h2>Combobox</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Editable filter-driven listbox. Type to narrow the options,
+      arrow keys move the highlighted match while the caret stays
+      in the input, Enter picks it.
+    </p>
+    <pine-combobox-root pp-model:value="selected_framework">
+      <pine-combobox-input placeholder="Search frameworks…"></pine-combobox-input>
+      <pine-combobox-portal>
+        <pine-combobox-content>
+          <pine-combobox-item value="react">React</pine-combobox-item>
+          <pine-combobox-item value="vue">Vue</pine-combobox-item>
+          <pine-combobox-item value="svelte">Svelte</pine-combobox-item>
+          <pine-combobox-item value="angular">Angular</pine-combobox-item>
+          <pine-combobox-item value="solid">Solid</pine-combobox-item>
+          <pine-combobox-item value="qwik">Qwik</pine-combobox-item>
+          <pine-combobox-item value="leptos">Leptos</pine-combobox-item>
+          <pine-combobox-item value="pocopine">pocopine</pine-combobox-item>
+          <pine-combobox-empty>No framework matches that query.</pine-combobox-empty>
+        </pine-combobox-content>
+      </pine-combobox-portal>
+    </pine-combobox-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Picked: <strong pp-text="selected_framework || '(none)'"></strong>
+    </p>
+  </section>
+
   <!-- PineSlider ─────────────────────────────────────────── -->
   <h2>Slider</h2>
   <section>

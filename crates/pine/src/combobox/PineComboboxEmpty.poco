@@ -1,0 +1,4 @@
+<root class="pine-combobox-empty"
+      pp-show="empty">
+  <slot></slot>
+</root>

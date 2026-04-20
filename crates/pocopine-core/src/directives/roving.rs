@@ -337,6 +337,24 @@ fn parse_items_selector_virtual(modifiers: &[String]) -> String {
     "[role=\"option\"]".to_string()
 }
 
+/// Public entry point so Pine primitives (PineCombobox) can
+/// install virtual-mode behaviour programmatically when the
+/// listbox id is only known at component mount time. Passes
+/// through orientation/nowrap/items modifiers if provided.
+pub fn install_virtual_on(
+    host: &Element,
+    listbox_id: &str,
+    orientation_modifiers: &[String],
+    items_selector: Option<&str>,
+) {
+    let orientation = parse_orientation(orientation_modifiers);
+    let wrap = !orientation_modifiers.iter().any(|m| m == "nowrap");
+    let items = items_selector
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "[role=\"option\"]".to_string());
+    install_virtual(host, listbox_id.to_string(), orientation, wrap, items);
+}
+
 /// Activedescendant installer — RFC-034.
 ///
 /// Wires arrow-key navigation on `host`, scoped to the listbox

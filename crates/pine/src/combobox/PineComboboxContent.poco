@@ -1,0 +1,8 @@
+<root role="listbox"
+      class="pine-combobox-content"
+      pp-ref="menu"
+      :id="listbox_id"
+      data-state="open"
+      @click.outside="close">
+  <slot></slot>
+</root>

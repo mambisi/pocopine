@@ -72,6 +72,9 @@ pub struct PineDemoApp {
 
     /// Select demo — currently-selected city.
     pub selected_city: String,
+
+    /// Combobox demo — currently-selected framework.
+    pub selected_framework: String,
 }
 
 #[handlers]

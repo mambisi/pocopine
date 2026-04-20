@@ -3512,3 +3512,151 @@ async fn select_escape_closes_and_aria_selected_mirrors_value() {
 
     host.remove();
 }
+
+// ─── PineCombobox ─────────────────────────────────────────────────
+
+/// Typing in the Input filters the listbox via each Item's
+/// `visible` mirror + `pp-show`. Arrow keys move
+/// `aria-activedescendant` on the Input without moving DOM focus.
+/// Enter activates the currently-highlighted item.
+#[wasm_bindgen_test]
+async fn combobox_filter_arrow_nav_and_enter_selects() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-combobox-root>\
+           <pine-combobox-input placeholder=\"Search\"></pine-combobox-input>\
+           <pine-combobox-portal>\
+             <pine-combobox-content>\
+               <pine-combobox-item value=\"react\">React</pine-combobox-item>\
+               <pine-combobox-item value=\"vue\">Vue</pine-combobox-item>\
+               <pine-combobox-item value=\"svelte\">Svelte</pine-combobox-item>\
+               <pine-combobox-empty>Nothing matched.</pine-combobox-empty>\
+             </pine-combobox-content>\
+           </pine-combobox-portal>\
+         </pine-combobox-root>",
+    );
+    tick().await;
+
+    let root_tag = host.query_selector("pine-combobox-root").unwrap().unwrap();
+    let input: HtmlInputElement = host
+        .query_selector("input.pine-combobox-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    let last: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let l = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *l.borrow_mut() = ce.detail().as_string();
+    }));
+    let target: &web_sys::EventTarget = root_tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Focus the input — opens the listbox.
+    input.focus().unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    let listbox = doc()
+        .query_selector("ul[role=\"listbox\"].pine-combobox-content")
+        .expect("listbox selector query ran")
+        .expect("listbox mounted after focus");
+
+    // Type "v" — filters to "Vue" + "Svelte".
+    input.set_value("v");
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    input
+        .dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+        .unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    let react = listbox
+        .query_selector("li[data-value=\"react\"]")
+        .unwrap()
+        .unwrap();
+    let vue = listbox
+        .query_selector("li[data-value=\"vue\"]")
+        .unwrap()
+        .unwrap();
+    let svelte = listbox
+        .query_selector("li[data-value=\"svelte\"]")
+        .unwrap()
+        .unwrap();
+
+    // React should be hidden (no 'v'); Vue + Svelte visible.
+    let is_hidden = |el: &Element| -> bool {
+        if let Ok(html) = el.clone().dyn_into::<HtmlElement>() {
+            return html
+                .style()
+                .get_property_value("display")
+                .unwrap_or_default()
+                == "none";
+        }
+        false
+    };
+    assert!(is_hidden(&react), "React filtered out by query 'v'");
+    assert!(!is_hidden(&vue), "Vue still visible");
+    assert!(!is_hidden(&svelte), "Svelte still visible");
+
+    // DOM focus must still be on the input.
+    assert_eq!(
+        doc().active_element().unwrap(),
+        input.clone().dyn_into::<Element>().unwrap(),
+        "focus stays on the input while filtering"
+    );
+
+    // ArrowDown — activedescendant moves; DOM focus stays on input.
+    let press = |key: &str| {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        input.dispatch_event(&ev).unwrap();
+    };
+    press("ArrowDown");
+    tick().await;
+    assert_eq!(
+        doc().active_element().unwrap(),
+        input.clone().dyn_into::<Element>().unwrap(),
+        "focus stays on input after ArrowDown"
+    );
+    let active_after = input
+        .get_attribute("aria-activedescendant")
+        .expect("activedescendant set after ArrowDown");
+    assert!(
+        active_after == vue.id() || active_after == svelte.id(),
+        "active landed on a visible item; got {active_after}"
+    );
+
+    // Enter — selects the currently-highlighted item.
+    press("Enter");
+    tick().await;
+    sleep_ms(5).await;
+
+    let emitted = last.borrow().clone();
+    assert!(
+        emitted == Some("vue".into()) || emitted == Some("svelte".into()),
+        "Enter selected a visible item; emitted {emitted:?}"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-combobox-content")
+            .unwrap()
+            .is_none(),
+        "listbox closed after Enter-select"
+    );
+
+    host.remove();
+}

@@ -1,0 +1,13 @@
+<root role="option"
+      class="pine-combobox-item"
+      pp-ref="item"
+      :id="item_id"
+      :data-value="value"
+      :aria-selected="selected ? 'true' : 'false'"
+      :data-state="selected ? 'checked' : 'unchecked'"
+      :aria-disabled="disabled"
+      :data-disabled="disabled"
+      pp-show="visible"
+      @click="select">
+  <slot></slot>
+</root>
