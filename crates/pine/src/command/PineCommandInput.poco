@@ -1,0 +1,11 @@
+<input role="combobox"
+       type="text"
+       class="pine-command-input"
+       pp-ref="input"
+       autocomplete="off"
+       :placeholder="placeholder"
+       :aria-expanded="open ? 'true' : 'false'"
+       :aria-controls="listbox_id"
+       aria-autocomplete="list"
+       @input="on_input"
+       @keydown.enter.prevent="on_enter">

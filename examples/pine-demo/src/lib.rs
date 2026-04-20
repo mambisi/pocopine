@@ -75,6 +75,9 @@ pub struct PineDemoApp {
 
     /// Combobox demo — currently-selected framework.
     pub selected_framework: String,
+
+    /// Command palette — most recently invoked command label.
+    pub last_command: String,
 }
 
 #[handlers]
@@ -128,6 +131,25 @@ impl PineDemoApp {
         self.tab = "account".into();
         self.dark_mode = false;
         self.agree_state = "unchecked".into();
+    }
+
+    // ── Command palette actions ──────────────────────────────
+
+    pub fn cmd_new_file(&mut self) {
+        self.last_command = "New File".into();
+    }
+    pub fn cmd_open_file(&mut self) {
+        self.last_command = "Open File".into();
+    }
+    pub fn cmd_save(&mut self) {
+        self.last_command = "Save".into();
+    }
+    pub fn cmd_toggle_theme(&mut self) {
+        self.last_command = "Toggle theme".into();
+        self.dark_mode = !self.dark_mode;
+    }
+    pub fn cmd_settings(&mut self) {
+        self.last_command = "Open Settings".into();
     }
 }
 

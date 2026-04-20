@@ -1,0 +1,6 @@
+<root role="listbox"
+      class="pine-command-list"
+      pp-ref="list"
+      :id="listbox_id">
+  <slot></slot>
+</root>

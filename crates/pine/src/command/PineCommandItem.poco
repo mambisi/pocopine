@@ -1,0 +1,11 @@
+<root role="option"
+      class="pine-command-item"
+      pp-ref="item"
+      :id="item_id"
+      :data-value="value"
+      :aria-disabled="disabled"
+      :data-disabled="disabled"
+      pp-show="visible"
+      @click="select">
+  <slot></slot>
+</root>

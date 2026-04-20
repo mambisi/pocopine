@@ -31,6 +31,7 @@ pub mod button;
 pub mod checkbox;
 pub mod collapsible;
 pub mod combobox;
+pub mod command;
 pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
@@ -79,6 +80,10 @@ pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsib
 pub use combobox::{
     PineComboboxContent, PineComboboxEmpty, PineComboboxInput, PineComboboxItem,
     PineComboboxPortal, PineComboboxRoot,
+};
+pub use command::{
+    PineCommandContent, PineCommandEmpty, PineCommandInput, PineCommandItem,
+    PineCommandList, PineCommandOverlay, PineCommandPortal, PineCommandRoot,
 };
 pub use context_menu::{
     PineContextMenuContent, PineContextMenuItem, PineContextMenuPortal, PineContextMenuRoot,
@@ -226,4 +231,12 @@ pub fn register_all() {
     PineComboboxContent::register();
     PineComboboxEmpty::register();
     PineComboboxItem::register();
+    PineCommandRoot::register();
+    PineCommandPortal::register();
+    PineCommandOverlay::register();
+    PineCommandContent::register();
+    PineCommandInput::register();
+    PineCommandList::register();
+    PineCommandItem::register();
+    PineCommandEmpty::register();
 }

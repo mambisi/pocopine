@@ -1,0 +1,8 @@
+<root role="dialog"
+      aria-modal="true"
+      class="pine-command-content"
+      pp-ref="content"
+      data-state="open"
+      @keydown.escape.prevent="close">
+  <slot></slot>
+</root>

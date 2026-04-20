@@ -1,0 +1,4 @@
+<root class="pine-command-empty"
+      pp-show="empty">
+  <slot></slot>
+</root>

@@ -1,0 +1,3 @@
+<root class="pine-command-overlay"
+      data-state="open"
+      @click.self="close"></root>

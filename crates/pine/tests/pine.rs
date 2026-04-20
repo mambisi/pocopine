@@ -3660,3 +3660,102 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
 
     host.remove();
 }
+
+// ─── PineCommand ──────────────────────────────────────────────────
+
+/// Mod+K toggles the palette open. Typing filters Items. Clicking
+/// an Item fires `pp:command:select` with the item's `value`
+/// and closes the palette.
+#[wasm_bindgen_test]
+async fn command_mod_k_opens_click_fires_select_and_closes() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-command-root>\
+           <pine-command-portal>\
+             <pine-command-overlay></pine-command-overlay>\
+             <pine-command-content>\
+               <pine-command-input placeholder=\"Type a command\"></pine-command-input>\
+               <pine-command-list>\
+                 <pine-command-item value=\"new\">New File</pine-command-item>\
+                 <pine-command-item value=\"open\">Open File</pine-command-item>\
+                 <pine-command-empty>No match.</pine-command-empty>\
+               </pine-command-list>\
+             </pine-command-content>\
+           </pine-command-portal>\
+         </pine-command-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+
+    // Initially closed — no Content in body.
+    assert!(
+        doc()
+            .query_selector("div[role=\"dialog\"].pine-command-content")
+            .unwrap()
+            .is_none(),
+        "palette starts closed"
+    );
+
+    // Ctrl+K (Mod+K on non-macOS) opens it.
+    let doc_ref = doc();
+    let doc_target: &web_sys::EventTarget = doc_ref.as_ref();
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("k");
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_ctrl_key(true);
+    let ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    doc_target.dispatch_event(&ev).unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    let content = doc()
+        .query_selector("div[role=\"dialog\"].pine-command-content")
+        .unwrap()
+        .expect("palette opened after Ctrl+K");
+
+    // Listen for `pp:command:select` on body (event bubbles up
+    // from the portal-mounted item).
+    let picked: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let p = picked.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *p.borrow_mut() = ce.detail().as_string();
+    }));
+    let body = doc().body().unwrap();
+    let body_target: &web_sys::EventTarget = body.as_ref();
+    body_target
+        .add_event_listener_with_callback("pp:command:select", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Click "Open File".
+    let open_item: HtmlElement = content
+        .query_selector("li[data-value=\"open\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    open_item.click();
+    tick().await;
+    sleep_ms(5).await;
+
+    assert_eq!(
+        picked.borrow().as_deref(),
+        Some("open"),
+        "pp:command:select fired with the item value"
+    );
+    assert!(
+        doc()
+            .query_selector("div[role=\"dialog\"].pine-command-content")
+            .unwrap()
+            .is_none(),
+        "palette closed after item click"
+    );
+
+    host.remove();
+}

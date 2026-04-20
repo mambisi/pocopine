@@ -1031,3 +1031,97 @@ pine-combobox-empty {
   color: var(--fg-muted);
   font-size: 0.875rem;
 }
+
+/* ─── PineCommand ─────────────────────────────────────────────── */
+
+pine-command-root,
+pine-command-portal,
+pine-command-list,
+pine-command-item,
+pine-command-empty {
+  display: contents;
+}
+
+.pine-command-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 70;
+}
+.pine-command-content {
+  position: fixed;
+  top: 20vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 71;
+  width: min(40rem, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pine-command-input {
+  font: inherit;
+  font-size: 1rem;
+  padding: 1rem 1.25rem;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  outline: none;
+  width: 100%;
+}
+.pine-command-input::placeholder {
+  color: var(--fg-muted);
+}
+.pine-command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  max-height: min(24rem, 60vh);
+  overflow-y: auto;
+}
+.pine-command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.pine-command-item[data-highlighted="true"] {
+  background: var(--bg-hover);
+}
+.pine-command-item[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.pine-command-shortcut {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 0.4rem;
+  line-height: 1.4;
+}
+.pine-command-empty {
+  padding: 1rem;
+  color: var(--fg-muted);
+  text-align: center;
+  font-size: 0.875rem;
+}
+kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
