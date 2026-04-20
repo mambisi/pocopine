@@ -2,26 +2,6 @@
   <h1>Pine</h1>
   <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
 
-  <!-- Live selection state — every component's current value is
-       visible here so interactions have obvious feedback. -->
-  <section class="state-panel" aria-label="Live state">
-    <dl>
-      <dt>Button clicks</dt> <dd pp-text="clicks"></dd>
-      <dt>Dialog</dt>        <dd pp-text="dialog_open ? 'open' : 'closed'"></dd>
-      <dt>AlertDialog</dt>   <dd pp-text="alert_dialog_open ? 'open' : 'closed'"></dd>
-      <dt>Last alert action</dt><dd pp-text="last_action"></dd>
-      <dt>Popover</dt>       <dd pp-text="popover_open ? 'open' : 'closed'"></dd>
-      <dt>Menu actions fired</dt><dd pp-text="actions_fired"></dd>
-      <dt>Current tab</dt>   <dd pp-text="tab"></dd>
-      <dt>Dark mode</dt>     <dd pp-text="dark_mode ? 'on' : 'off'"></dd>
-      <dt>Agree</dt>         <dd pp-text="agree_state"></dd>
-      <dt>Plan</dt>          <dd pp-text="plan"></dd>
-      <dt>Bold</dt>          <dd pp-text="bold ? 'on' : 'off'"></dd>
-      <dt>Align</dt>         <dd pp-text="align"></dd>
-      <dt>Format flags</dt>  <dd pp-text="format"></dd>
-    </dl>
-  </section>
-
   <!-- PineButton ─────────────────────────────────────────── -->
   <h2>Button</h2>
   <section class="row">
