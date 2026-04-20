@@ -709,7 +709,49 @@ Have two trait methods — `on_ready(&self)` and
 implement whichever. Clutters the trait surface and doesn't
 give the typed-extractor benefits of §4.3.
 
-### 8.6 Custom `FromLifecycleContext` trait
+### 8.6 axum-style `Handler<Args>` tuple trait tower
+
+axum dispatches magic-param functions through a `Handler<Args>`
+trait impl'd separately for each arity: `Handler<(T1,)>`,
+`Handler<(T1, T2)>`, and so on, where every `Ti: FromRequest`.
+The framework calls `handler.call(req)`; the trait resolution
+picks the right impl by the closure's argument tuple. See the
+["Axum-Style Magic Function Param" write-up](https://github.com/alexpusch/rust-magic-patterns/blob/master/axum-style-magic-function-param/Readme.md)
+for a macro-free walkthrough.
+
+**Why we don't need it.** `#[handlers]` already parses the
+user's impl block and sees each method's signature. The
+forwarder it emits is a direct `Self::on_ready(self,
+__ctx.into(), __ctx.into())` call — no trait-level arity
+dispatch, no blanket `Handler` impls per tuple size. axum pays
+for the tower because it accepts bare `fn handler(…)` values
+at the type system's edges; we don't have that constraint.
+
+If pocopine ever exposes a hook-registration API that takes
+plain functions (rather than methods inside `#[handlers]`),
+this tower is the known migration path.
+
+### 8.7 bevy-style `SystemParam` with GATs
+
+bevy's `SystemParam` trait uses a generic associated type
+(`type Item<'new>;`) to decouple the trait itself from a
+specific lifetime while still letting the extracted value
+borrow from the resource store. See
+["Passing References" in "Dependency Injection like Bevy From
+Scratch"](https://promethia-27.github.io/dependency_injection_like_bevy_from_scratch/chapter2/passing_references.html)
+for the HRTB trick.
+
+**Why we don't need GATs.** bevy stores resources in a global
+map and extracts borrows out of it — the extracted lifetime
+isn't visible in the `SystemParam` trait's type signature
+unless you use GATs. Our `LifecycleContext<'a>` IS the
+borrowed thing: `impl From<LifecycleContext<'a>> for El<'a>`
+threads the same lifetime through both sides of the conversion.
+The macro emits `__ctx.into()` and rustc elides `El<'_>` to
+match `LifecycleContext`'s lifetime. Works with plain stable
+Rust; no GAT / HRTB plumbing.
+
+### 8.8 Custom `FromLifecycleContext` trait
 
 Earlier draft had a pocopine-specific extractor trait:
 
