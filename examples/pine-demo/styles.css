@@ -605,9 +605,8 @@ pine-dropdown-menu-portal { display: contents; }
 /* ─── PineAvatar ──────────────────────────────────────────────── */
 
 .pine-avatar-root {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-block;
+  position: relative;
   width: 2.5rem;
   height: 2.5rem;
   border-radius: 9999px;
@@ -616,20 +615,35 @@ pine-dropdown-menu-portal { display: contents; }
   color: var(--fg-muted);
   font-weight: 600;
   font-size: 0.875rem;
+  line-height: 1;
   user-select: none;
+  vertical-align: middle;
 }
-.pine-avatar-image-wrap,
-.pine-avatar-image-wrap img {
-  width: 100%;
-  height: 100%;
-}
-.pine-avatar-image { object-fit: cover; }
-.pine-avatar-fallback {
-  display: inline-flex;
+/* Image and fallback layers stack; each fills the circular root and
+   centers its own content. */
+.pine-avatar-root pine-avatar-image,
+.pine-avatar-root pine-avatar-fallback {
+  display: flex;
   align-items: center;
   justify-content: center;
+  position: absolute;
+  inset: 0;
+}
+.pine-avatar-image-wrap {
+  display: block;
   width: 100%;
   height: 100%;
+}
+.pine-avatar-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pine-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ─── PineTabs ────────────────────────────────────────────────── */
