@@ -38,6 +38,8 @@
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
@@ -166,13 +168,39 @@ impl PineComboboxInput {
             h.update(|s| s.listbox_id = v);
         });
 
-        // Install activedescendant-mode pp-roving on this input,
-        // scoped to the listbox Root minted. The listbox element
-        // only exists once Content mounts (pp-if on Portal); wait
-        // for that before installing.
+        // Install activedescendant-mode pp-roving on this input
+        // exactly once. Guard by a shared `installed` flag so
+        // repeated open→close→open cycles don't stack duplicate
+        // keydown listeners (which caused arrow keys to advance
+        // the highlight by multiple items per press).
         if let Some(input_el) = refs.get("input") {
             let listbox_id = root.with(|r| r.listbox_id.clone());
-            install_virtual_when_ready(input_el, listbox_id);
+            // Stamp the input with Root's scope id so Content
+            // can anchor to `[data-pine-combobox-input="N"]`
+            // (same convention the other compound primitives use
+            // for Trigger → Content).
+            let _ = input_el.set_attribute(
+                "data-pine-combobox-input",
+                &format!("{}", root_scope.0),
+            );
+            let installed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+            schedule_install_virtual(
+                input_el.clone(),
+                listbox_id.clone(),
+                installed.clone(),
+            );
+            let input_for_watch = input_el;
+            let listbox_for_watch = listbox_id;
+            watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
+                if !is_open {
+                    return;
+                }
+                schedule_install_virtual(
+                    input_for_watch.clone(),
+                    listbox_for_watch.clone(),
+                    installed.clone(),
+                );
+            });
         }
     }
 
@@ -234,74 +262,41 @@ impl PineComboboxInput {
     }
 }
 
-/// Install the virtual-mode pp-roving behaviour on the input
-/// once the listbox element with `listbox_id` shows up in the
-/// DOM (it only materialises after Portal's `pp-if="open"`
-/// flips). Retry on subsequent opens so re-opens keep the
-/// listener alive.
-fn install_virtual_when_ready(input_el: web_sys::Element, listbox_id: String) {
+/// Install `pp-roving.virtual` on the input when the listbox
+/// is actually in the DOM. Guarded by a shared `installed`
+/// flag so repeated open→close→open cycles don't stack
+/// duplicate keydown listeners on the input (the stacked
+/// listeners were advancing the highlight by multiple items
+/// per arrow press).
+fn schedule_install_virtual(
+    input_el: web_sys::Element,
+    listbox_id: String,
+    installed: Rc<Cell<bool>>,
+) {
     use wasm_bindgen::closure::Closure;
-    // Defer one tick so Portal's teleport settles; if the listbox
-    // isn't there yet, retry — the input's `@focus` handler opens
-    // the listbox, and by the time the next tick fires, Portal
-    // has committed the teleport.
-    let input_clone = input_el.clone();
-    let listbox_for_closure = listbox_id.clone();
+    if installed.get() {
+        return;
+    }
     let cb = Closure::once_into_js(Box::new(move || {
+        if installed.get() {
+            return;
+        }
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
-        if doc.get_element_by_id(&listbox_for_closure).is_none() {
-            // Listbox not mounted yet — ignore; we retry on every
-            // `pp:update:model` or next focus.
+        if doc.get_element_by_id(&listbox_id).is_none() {
             return;
         }
         pocopine_core::directives::roving::install_virtual_on(
-            &input_clone,
-            &listbox_for_closure,
+            &input_el,
+            &listbox_id,
             &[],
             None,
         );
+        installed.set(true);
     }) as Box<dyn FnOnce()>);
     if let Some(w) = web_sys::window() {
         let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
-    }
-    // Also retry every time Root.open flips true — simplest
-    // way to guarantee the install lands even when the listbox
-    // mounts on a later frame.
-    let input_for_watch = input_el;
-    let listbox_for_watch = listbox_id;
-    if let Some(scope) = current_scope_id() {
-        if let Some(root_handle) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
-            watch_scope_field::<bool, _>(root_handle.scope_id(), "open", move |&is_open, _| {
-                if !is_open {
-                    return;
-                }
-                let input_clone = input_for_watch.clone();
-                let listbox_for_inner = listbox_for_watch.clone();
-                let cb = Closure::once_into_js(Box::new(move || {
-                    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-                        return;
-                    };
-                    if doc.get_element_by_id(&listbox_for_inner).is_none() {
-                        return;
-                    }
-                    pocopine_core::directives::roving::install_virtual_on(
-                        &input_clone,
-                        &listbox_for_inner,
-                        &[],
-                        None,
-                    );
-                }) as Box<dyn FnOnce()>);
-                if let Some(w) = web_sys::window() {
-                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                        cb.unchecked_ref(),
-                        0,
-                    );
-                }
-            });
-        }
-        let _ = scope;
     }
 }
 
@@ -327,17 +322,70 @@ impl PineComboboxPortal {
 
 // ── Content ───────────────────────────────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[component(template = "PineComboboxContent.poco", role = "list")]
 pub struct PineComboboxContent {
     pub listbox_id: String,
+    /// Selector resolving to the linked Input element; computed
+    /// from the Root's scope id in `on_setup` (same Trigger →
+    /// Content anchor convention used by DropdownMenu/Popover/
+    /// Select, just targeting the Input instead of a Trigger).
+    pub anchor: String,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
+}
+
+impl Default for PineComboboxContent {
+    fn default() -> Self {
+        Self {
+            listbox_id: String::new(),
+            anchor: String::new(),
+            side: "bottom".into(),
+            align: "start".into(),
+            side_offset: 4.0,
+        }
+    }
 }
 
 #[handlers]
 impl PineComboboxContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
-            self.listbox_id = root.with(|r| r.listbox_id.clone());
+        if let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
+            let (lb, scope_id) =
+                root.with(|r| (r.listbox_id.clone(), root.scope_id().0));
+            self.listbox_id = lb;
+            self.anchor = format!("[data-pine-combobox-input=\"{scope_id}\"]");
+        }
+    }
+
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        // Anchor the listbox to the Input. Without this the
+        // teleported `<ul>` lands at the top of `<body>` with
+        // default positioning, leaving the dropdown invisible
+        // below the viewport.
+        let Some(menu) = refs.get("menu") else { return };
+        let Some(input) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.query_selector(&self.anchor).ok().flatten())
+        else {
+            return;
+        };
+        if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+            let placement = pocopine_core::directives::anchor::Placement {
+                side: pocopine_core::directives::anchor::Side::parse(&self.side),
+                align: pocopine_core::directives::anchor::Align::parse(&self.align),
+            };
+            pocopine_core::directives::anchor::install(
+                &floater,
+                &input,
+                placement,
+                self.side_offset,
+                true,
+            );
         }
     }
 

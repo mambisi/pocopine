@@ -44,6 +44,8 @@
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use wasm_bindgen::closure::Closure;
@@ -346,19 +348,30 @@ impl PineCommandInput {
             h.update(|s| s.listbox_id = v);
         });
 
-        // Install pp-roving.virtual from Rust since the listbox id
-        // is dynamic (per-instance scope suffix). Defer to a
-        // macrotask so Portal's teleport has committed.
+        // Install pp-roving.virtual on the input EXACTLY ONCE.
+        // Guarded by a shared flag so repeated open→close→open
+        // doesn't stack duplicate keydown listeners on the input
+        // (the stack was advancing the highlight by multiple
+        // items per arrow press).
         if let Some(input_el) = refs.get("input") {
             let listbox_id = root.with(|r| r.listbox_id.clone());
-            schedule_install_virtual(input_el.clone(), listbox_id.clone());
-            // Also retry each time the palette reopens so the
-            // install lands even when List mounts on a later tick.
+            let installed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+            schedule_install_virtual(
+                input_el.clone(),
+                listbox_id.clone(),
+                installed.clone(),
+            );
             let input_for_watch = input_el;
+            let listbox_for_watch = listbox_id;
             watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
-                if is_open {
-                    schedule_install_virtual(input_for_watch.clone(), listbox_id.clone());
+                if !is_open {
+                    return;
                 }
+                schedule_install_virtual(
+                    input_for_watch.clone(),
+                    listbox_for_watch.clone(),
+                    installed.clone(),
+                );
             });
         }
         let _ = handle;
@@ -395,8 +408,18 @@ impl PineCommandInput {
     }
 }
 
-fn schedule_install_virtual(input_el: web_sys::Element, listbox_id: String) {
+fn schedule_install_virtual(
+    input_el: web_sys::Element,
+    listbox_id: String,
+    installed: Rc<Cell<bool>>,
+) {
+    if installed.get() {
+        return;
+    }
     let cb = Closure::once_into_js(Box::new(move || {
+        if installed.get() {
+            return;
+        }
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
@@ -409,6 +432,7 @@ fn schedule_install_virtual(input_el: web_sys::Element, listbox_id: String) {
             &[],
             None,
         );
+        installed.set(true);
     }) as Box<dyn FnOnce()>);
     if let Some(w) = web_sys::window() {
         let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
