@@ -225,6 +225,14 @@ struct RovingHost {}
 #[handlers]
 impl RovingHost {}
 
+// RFC-034 — pp-roving.virtual (activedescendant).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "VirtualRovingHost.html")]
+struct VirtualRovingHost {}
+
+#[handlers]
+impl VirtualRovingHost {}
+
 // RFC-027 — parent-scope context (provide + inject).
 // RFC-030 — typed `InjectKey` replaces string keys.
 pocopine::inject_key!(CTX_ROOT: pocopine::Handle<CtxRoot>);
@@ -342,6 +350,7 @@ fn register_all() {
     AsButton::register();
     ShortHost::register();
     RovingHost::register();
+    VirtualRovingHost::register();
     ExprOnHost::register();
     InterpHost::register();
     CtxRoot::register();
@@ -1297,6 +1306,104 @@ async fn roving_navigates_with_arrows_and_skips_disabled() {
         doc().active_element().unwrap(),
         a,
         "Home jumped to first enabled (A)"
+    );
+
+    host.remove();
+}
+
+/// RFC-034 — `pp-roving:<listbox>.virtual` keeps DOM focus on the
+/// host and moves `aria-activedescendant` + `data-highlighted`
+/// through the linked listbox's items. Disabled + hidden items
+/// are skipped. The canonical editable-combobox pattern.
+#[wasm_bindgen_test]
+async fn roving_virtual_moves_activedescendant_without_stealing_focus() {
+    let host = mount("<virtual-roving-host></virtual-roving-host>");
+    tick().await;
+
+    let input = host
+        .query_selector(".vrv-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    let item = |id: &str| host.query_selector(&format!("#{id}")).unwrap().unwrap();
+
+    // Initial seed: first enabled visible item is Apple.
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-1"),
+        "initial activedescendant seeded to first option"
+    );
+    assert_eq!(
+        item("vrv-opt-1").get_attribute("data-highlighted").as_deref(),
+        Some("true"),
+    );
+
+    // Focus the input and verify all navigation keeps it there.
+    input.focus().unwrap();
+    assert_eq!(
+        doc().active_element().unwrap(),
+        input.clone().dyn_into::<Element>().unwrap(),
+    );
+
+    fn press(target: &HtmlElement, key: &str) {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        target.dispatch_event(&ev).unwrap();
+    }
+
+    // ArrowDown from Apple → Banana.
+    press(&input, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-2"),
+    );
+    assert_eq!(
+        item("vrv-opt-2").get_attribute("data-highlighted").as_deref(),
+        Some("true"),
+    );
+    assert!(!item("vrv-opt-1").has_attribute("data-highlighted"));
+    assert_eq!(
+        doc().active_element().unwrap(),
+        input.clone().dyn_into::<Element>().unwrap(),
+        "focus stayed on the input"
+    );
+
+    // ArrowDown from Banana skips disabled Carrot AND hidden Durian
+    // → lands on Elderberry.
+    press(&input, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-5"),
+        "ArrowDown skipped disabled + hidden options"
+    );
+
+    // ArrowDown wraps back to Apple.
+    press(&input, "ArrowDown");
+    tick().await;
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-1"),
+    );
+
+    // Home / End.
+    press(&input, "End");
+    tick().await;
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-5"),
+    );
+    press(&input, "Home");
+    tick().await;
+    assert_eq!(
+        input.get_attribute("aria-activedescendant").as_deref(),
+        Some("vrv-opt-1"),
     );
 
     host.remove();

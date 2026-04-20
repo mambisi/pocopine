@@ -5,10 +5,17 @@
 //! `tabindex="-1"`. Arrow keys (per orientation), Home, and End
 //! move focus and bump the tabindex with it.
 //!
-//! A variant (`pp-roving:<listbox-id>`) installs on an `<input>`
-//! and forwards the first arrow keypress into the referenced
-//! listbox's first enabled item — the canonical Command Palette
-//! entry-transfer pattern.
+//! Two optional variants:
+//!
+//! - `pp-roving:<listbox-id>` on an `<input>` — the Command
+//!   Palette **entry-transfer** form. First arrow keypress moves
+//!   focus into the referenced listbox's first enabled item.
+//! - `pp-roving:<listbox-id>.virtual` on any host (typically an
+//!   editable `<input>`) — **activedescendant** form (RFC-034).
+//!   DOM focus stays on the host; arrow keys move a virtual
+//!   highlight through the listbox's items, communicated via
+//!   the host's `aria-activedescendant` and each item's
+//!   `data-highlighted` attribute.
 
 use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
@@ -31,9 +38,22 @@ pub fn run(call: &DirectiveCall) {
     let container = call.el.clone();
     let orientation = parse_orientation(&call.modifiers);
     let wrap = !call.modifiers.iter().any(|m| m == "nowrap");
+    let virtual_mode = call
+        .modifiers
+        .iter()
+        .any(|m| m == "virtual" || m == "activedescendant");
     let linked_listbox = call.arg.clone();
 
-    if linked_listbox.is_some() {
+    if virtual_mode {
+        if let Some(listbox_id) = linked_listbox {
+            let items_selector = parse_items_selector_virtual(&call.modifiers);
+            install_virtual(&container, listbox_id, orientation, wrap, items_selector);
+        } else {
+            console::warn_1(&JsValue::from_str(
+                "pp-roving.virtual requires a :<listbox-id> argument",
+            ));
+        }
+    } else if linked_listbox.is_some() {
         install_palette_entry(&container, orientation);
     } else {
         let items_selector = parse_items_selector(&call.modifiers);
@@ -301,6 +321,186 @@ fn default_items_selector() -> String {
         "[role=\"option\"], [role=\"tab\"], [role=\"radio\"], [role=\"treeitem\"]"
     )
     .to_string()
+}
+
+/// Virtual-mode items default to `[role="option"]` (WAI-ARIA
+/// combobox/listbox pattern), still overridable via the
+/// `items.<selector>` modifier from RFC-022.
+fn parse_items_selector_virtual(modifiers: &[String]) -> String {
+    for (i, m) in modifiers.iter().enumerate() {
+        if m == "items" {
+            if let Some(s) = modifiers.get(i + 1) {
+                return s.clone();
+            }
+        }
+    }
+    "[role=\"option\"]".to_string()
+}
+
+/// Activedescendant installer — RFC-034.
+///
+/// Wires arrow-key navigation on `host`, scoped to the listbox
+/// with id `listbox_id`. Items inside that listbox receive a
+/// `data-highlighted="true"` attribute on the active one; the
+/// host element's `aria-activedescendant` tracks the active
+/// item's id. DOM focus is never moved.
+fn install_virtual(
+    host: &Element,
+    listbox_id: String,
+    orientation: Orientation,
+    wrap: bool,
+    items_selector: String,
+) {
+    // Seed: pick the first enabled visible item so a11y trees
+    // have an initial activedescendant the moment the host
+    // gets focused.
+    {
+        let items = query_virtual_items(&listbox_id, &items_selector);
+        if let Some(first) = items.iter().find(|i| is_virtual_nav_candidate(i)) {
+            let id = ensure_id(first, &listbox_id, 0);
+            let _ = host.set_attribute("aria-activedescendant", &id);
+            set_highlighted(&items, Some(first));
+        }
+    }
+
+    let host_clone = host.clone();
+    let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::wrap(Box::new({
+        move |ev: KeyboardEvent| {
+            let action = match classify_key(&ev.key(), orientation) {
+                Some(a) => a,
+                None => return,
+            };
+            let items = query_virtual_items(&listbox_id, &items_selector);
+            // Enabled AND visible cycle — hidden items (display:none
+            // from `pp-show`, `[hidden]`, `aria-hidden="true"`) never
+            // receive the virtual highlight so users can't activate
+            // an invisible filtered-out match.
+            let nav: Vec<Element> = items
+                .iter()
+                .filter(|i| is_virtual_nav_candidate(i))
+                .cloned()
+                .collect();
+            if nav.is_empty() {
+                let _ = host_clone.remove_attribute("aria-activedescendant");
+                return;
+            }
+            let current_id = host_clone.get_attribute("aria-activedescendant");
+            let cur_idx = current_id
+                .as_ref()
+                .and_then(|id| nav.iter().position(|e| e.id() == *id));
+            let last = nav.len() - 1;
+            let target_idx = match action {
+                KeyAction::Next => match cur_idx {
+                    Some(i) if i < last => i + 1,
+                    Some(_) => {
+                        if wrap {
+                            0
+                        } else {
+                            last
+                        }
+                    }
+                    None => 0,
+                },
+                KeyAction::Prev => match cur_idx {
+                    Some(0) => {
+                        if wrap {
+                            last
+                        } else {
+                            0
+                        }
+                    }
+                    Some(i) => i - 1,
+                    None => last,
+                },
+                KeyAction::First => 0,
+                KeyAction::Last => last,
+            };
+            ev.prevent_default();
+            let target = &nav[target_idx];
+            let id = ensure_id(target, &listbox_id, target_idx);
+            let _ = host_clone.set_attribute("aria-activedescendant", &id);
+            set_highlighted(&items, Some(target));
+        }
+    }) as Box<dyn FnMut(KeyboardEvent)>);
+
+    let target: &web_sys::EventTarget = host.as_ref();
+    let _ = target.add_event_listener_with_callback(
+        "keydown",
+        closure.as_ref().unchecked_ref(),
+    );
+    closure.forget();
+    let _ = Reflect::set(host.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
+}
+
+fn query_virtual_items(listbox_id: &str, selector: &str) -> Vec<Element> {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return Vec::new();
+    };
+    let Some(listbox) = doc.get_element_by_id(listbox_id) else {
+        return Vec::new();
+    };
+    query_items(&listbox, selector)
+}
+
+/// `true` when the item is both enabled AND visible — the
+/// candidate pool for virtual-mode navigation.
+fn is_virtual_nav_candidate(item: &Element) -> bool {
+    !is_item_disabled(item) && is_item_visible(item)
+}
+
+fn is_item_visible(item: &Element) -> bool {
+    if item.has_attribute("hidden") {
+        return false;
+    }
+    if item.get_attribute("aria-hidden").as_deref() == Some("true") {
+        return false;
+    }
+    // `offsetParent === null` catches `display:none` + display:none
+    // ancestors (the common `pp-show` case). A follow-up computed-
+    // style check covers fixed-position edge cases.
+    if let Ok(html) = item.clone().dyn_into::<HtmlElement>() {
+        if html.offset_parent().is_none() {
+            if let Some(win) = web_sys::window() {
+                if let Ok(Some(style)) = win.get_computed_style(item) {
+                    if let Ok(display) = style.get_property_value("display") {
+                        if display == "none" {
+                            return false;
+                        }
+                    }
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn ensure_id(el: &Element, listbox_id: &str, index: usize) -> String {
+    let existing = el.id();
+    if !existing.is_empty() {
+        return existing;
+    }
+    // Keep ids stable per (listbox, index) so repeated queries
+    // see the same string.
+    let stamp = format!("pine-roving-{listbox_id}-{index}");
+    let _ = el.set_attribute("id", &stamp);
+    let _ = el.set_attribute("data-pine-roving-id", &stamp);
+    stamp
+}
+
+fn set_highlighted(items: &[Element], active: Option<&Element>) {
+    for item in items {
+        if let Some(a) = active {
+            if item.is_same_node(Some(a.as_ref())) {
+                let _ = item.set_attribute("data-highlighted", "true");
+                continue;
+            }
+        }
+        if item.has_attribute("data-highlighted") {
+            let _ = item.remove_attribute("data-highlighted");
+        }
+    }
 }
 
 fn query_items(container: &Element, selector: &str) -> Vec<Element> {
