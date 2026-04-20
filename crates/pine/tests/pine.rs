@@ -2950,3 +2950,85 @@ async fn otp_field_backspace_walks_back_and_clears() {
 
     host.remove();
 }
+
+// ─── PineSlider ───────────────────────────────────────────────────
+
+/// Keyboard on the thumb steps the value by Root.step; Home / End
+/// snap to min / max; the emitted `pp:update:model` detail carries
+/// the new numeric value.
+#[wasm_bindgen_test]
+async fn slider_keyboard_steps_and_emits_value() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"50\">\
+           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
+           <pine-slider-thumb></pine-slider-thumb>\
+         </pine-slider-root>",
+    );
+    tick().await;
+
+    let root = host.query_selector("pine-slider-root").unwrap().unwrap();
+    let thumb = host.query_selector("pine-slider-thumb").unwrap().unwrap();
+    let inner_thumb = host.query_selector(".pine-slider-thumb").unwrap().unwrap();
+
+    // Listen for the emitted update events on the root tag so we
+    // can inspect each step's detail payload.
+    let last: Rc<RefCell<Option<f64>>> = Rc::new(RefCell::new(None));
+    let l = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *l.borrow_mut() = ce.detail().as_f64();
+    }));
+    let target: &web_sys::EventTarget = root.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Helper: dispatch a keydown with the given key on the thumb's
+    // inner <button>. Pine key-modifier routing reads `key`.
+    let press = |key: &str| {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_key(key);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        inner_thumb.dispatch_event(&ev).unwrap();
+    };
+
+    assert_eq!(
+        inner_thumb.get_attribute("aria-valuenow").as_deref(),
+        Some("50"),
+        "initial aria-valuenow is 50"
+    );
+
+    press("ArrowRight");
+    tick().await;
+    assert_eq!(*last.borrow(), Some(60.0), "ArrowRight → +step");
+
+    press("ArrowLeft");
+    tick().await;
+    assert_eq!(*last.borrow(), Some(50.0), "ArrowLeft → -step");
+
+    press("Home");
+    tick().await;
+    assert_eq!(*last.borrow(), Some(0.0), "Home → min");
+
+    press("End");
+    tick().await;
+    assert_eq!(*last.borrow(), Some(100.0), "End → max");
+
+    // Thumb aria-valuenow mirrors the current value.
+    assert_eq!(
+        inner_thumb.get_attribute("aria-valuenow").as_deref(),
+        Some("100"),
+        "aria-valuenow tracks the emitted value"
+    );
+    let _ = thumb;
+
+    host.remove();
+}

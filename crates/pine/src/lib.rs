@@ -42,6 +42,7 @@ pub mod popover;
 pub mod progress;
 pub mod radio_group;
 pub mod separator;
+pub mod slider;
 pub mod switch;
 pub mod tabs;
 pub mod toggle;
@@ -61,6 +62,7 @@ pub use aspect_ratio::PineAspectRatio;
 pub use label::PineLabel;
 pub use progress::{PineProgressIndicator, PineProgressRoot};
 pub use separator::PineSeparator;
+pub use slider::{PineSliderRange, PineSliderRoot, PineSliderThumb, PineSliderTrack};
 pub use toolbar::{
     PineToolbarButton, PineToolbarLink, PineToolbarRoot, PineToolbarSeparator,
 };
@@ -196,4 +198,8 @@ pub fn register_all() {
     PinePasswordToggleFieldInput::register();
     PinePasswordToggleFieldToggle::register();
     PineOtpField::register();
+    PineSliderRoot::register();
+    PineSliderTrack::register();
+    PineSliderRange::register();
+    PineSliderThumb::register();
 }

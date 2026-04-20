@@ -1,0 +1,7 @@
+<root class="pine-slider-root"
+      pp-ref="root"
+      :data-orientation="orientation"
+      :data-disabled="disabled"
+      :aria-disabled="disabled">
+  <slot></slot>
+</root>

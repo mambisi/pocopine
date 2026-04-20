@@ -1,0 +1,6 @@
+<root class="pine-slider-track"
+      pp-ref="track"
+      :data-orientation="orientation"
+      :data-disabled="disabled">
+  <slot></slot>
+</root>

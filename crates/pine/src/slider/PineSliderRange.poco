@@ -1,0 +1,4 @@
+<root class="pine-slider-range"
+      :data-orientation="orientation"
+      :data-disabled="disabled"
+      :style="orientation == 'vertical' ? ('height:' + percent + '%;') : ('width:' + percent + '%;')"></root>
