@@ -181,16 +181,14 @@ fn install_pointer(
     root_el: web_sys::Element,
     root: Handle<PineSliderRoot>,
 ) {
-    // pointerdown: snap to click position + capture the pointer so
-    // we keep getting move / up even when the cursor leaves the
-    // slider bounds.
+    // pointerdown stays on the slider root — snaps to click
+    // position + marks the drag as active.
     let root_for_down = root_el.clone();
     let handle_for_down = root.clone();
     let down = Closure::wrap(Box::new(move |ev: PointerEvent| {
         if handle_for_down.with(|r| r.disabled) {
             return;
         }
-        let _ = root_for_down.set_pointer_capture(ev.pointer_id());
         ROOT_RUNTIME.with(|r| {
             if let Some(rt) = r.borrow_mut().get_mut(&scope) {
                 rt.dragging_pointer_id = Some(ev.pointer_id());
@@ -201,7 +199,12 @@ fn install_pointer(
         handle_for_down.update(|r: &mut PineSliderRoot| r.set_value(v));
     }) as Box<dyn FnMut(PointerEvent)>);
 
-    // pointermove: only reacts while a drag is in progress for this scope.
+    // pointermove + pointerup attach to `document`. Pointer capture
+    // on the slider itself is flaky across real browsers (the
+    // event can be retargeted to the original hit element instead
+    // of the capturing one). Document-level listeners always fire,
+    // and we gate them on `dragging_pointer_id` so they're no-ops
+    // when the user isn't dragging this slider.
     let root_for_move = root_el.clone();
     let handle_for_move = root.clone();
     let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
@@ -214,35 +217,35 @@ fn install_pointer(
         if !active {
             return;
         }
+        ev.prevent_default();
         let v = value_from_pointer(&root_for_move, &ev, &handle_for_move);
         handle_for_move.update(|r: &mut PineSliderRoot| r.set_value(v));
     }) as Box<dyn FnMut(PointerEvent)>);
 
-    // pointerup / pointercancel: end the drag.
-    let root_for_up = root_el.clone();
     let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        let was_active = ROOT_RUNTIME.with(|r| {
+        ROOT_RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
-            let Some(rt) = map.get_mut(&scope) else {
-                return false;
-            };
-            if rt.dragging_pointer_id == Some(ev.pointer_id()) {
-                rt.dragging_pointer_id = None;
-                true
-            } else {
-                false
+            if let Some(rt) = map.get_mut(&scope) {
+                if rt.dragging_pointer_id == Some(ev.pointer_id()) {
+                    rt.dragging_pointer_id = None;
+                }
             }
         });
-        if was_active {
-            let _ = root_for_up.release_pointer_capture(ev.pointer_id());
-        }
     }) as Box<dyn FnMut(PointerEvent)>);
 
     let target: &EventTarget = root_el.as_ref();
     let _ = target.add_event_listener_with_callback("pointerdown", down.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
+
+    let doc = web_sys::window().and_then(|w| w.document());
+    if let Some(doc) = doc.as_ref() {
+        let doc_target: &EventTarget = doc.as_ref();
+        let _ = doc_target
+            .add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
+        let _ = doc_target
+            .add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
+        let _ = doc_target
+            .add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
+    }
 
     ROOT_RUNTIME.with(|r| {
         r.borrow_mut().insert(
@@ -268,14 +271,22 @@ fn teardown_pointer(scope: ScopeId) {
         let _ =
             target.remove_event_listener_with_callback("pointerdown", c.as_ref().unchecked_ref());
     }
-    if let Some(c) = rt.pointer_move.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.pointer_up.as_ref() {
-        let _ = target.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-        let _ = target
-            .remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        let doc_target: &EventTarget = doc.as_ref();
+        if let Some(c) = rt.pointer_move.as_ref() {
+            let _ = doc_target.remove_event_listener_with_callback(
+                "pointermove",
+                c.as_ref().unchecked_ref(),
+            );
+        }
+        if let Some(c) = rt.pointer_up.as_ref() {
+            let _ = doc_target
+                .remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
+            let _ = doc_target.remove_event_listener_with_callback(
+                "pointercancel",
+                c.as_ref().unchecked_ref(),
+            );
+        }
     }
 }
 

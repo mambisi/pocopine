@@ -3261,3 +3261,94 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     style.remove();
     host.remove();
 }
+
+/// Pointerdown-then-pointermove (drag) updates value during
+/// motion — not just on the initial press. Regression: pointer
+/// capture must route `pointermove` to the root so the listener
+/// fires even when the cursor moves outside the root's box.
+#[wasm_bindgen_test]
+async fn slider_drag_updates_value_continuously() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"0\">\
+           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
+           <pine-slider-thumb></pine-slider-thumb>\
+         </pine-slider-root>",
+    );
+    let style = doc().create_element("style").unwrap();
+    style.set_text_content(Some(
+        ".pine-slider-root, .pine-slider-track { display: block; width: 200px; height: 4px; position: relative; }",
+    ));
+    doc().head().unwrap().append_child(&style).unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    let root_tag = host.query_selector("pine-slider-root").unwrap().unwrap();
+    let root_inner = host.query_selector(".pine-slider-root").unwrap().unwrap();
+
+    // Collect every emitted value so we can verify motion.
+    let seen: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        if let Some(v) = ce.detail().as_f64() {
+            s.borrow_mut().push(v);
+        }
+    }));
+    let target: &web_sys::EventTarget = root_tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    let rect = root_inner.get_bounding_client_rect();
+    let y = rect.top() + rect.height() / 2.0;
+
+    let mk = |kind: &str, x: f64| -> web_sys::PointerEvent {
+        let init = web_sys::PointerEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_client_x(x as i32);
+        init.set_client_y(y as i32);
+        init.set_pointer_id(1);
+        web_sys::PointerEvent::new_with_event_init_dict(kind, &init).unwrap()
+    };
+
+    // Start drag at 20%, drag through 50% and 80%, release.
+    // pointerdown lands on the slider root; pointermove / pointerup
+    // go to document (where the listeners live, so drag keeps
+    // working when the cursor leaves the slider's box).
+    let x20 = rect.left() + rect.width() * 0.20;
+    let x50 = rect.left() + rect.width() * 0.50;
+    let x80 = rect.left() + rect.width() * 0.80;
+    let doc_ref = doc();
+    let doc_target: &web_sys::EventTarget = doc_ref.as_ref();
+    root_inner.dispatch_event(&mk("pointerdown", x20)).unwrap();
+    tick().await;
+    doc_target.dispatch_event(&mk("pointermove", x50)).unwrap();
+    tick().await;
+    doc_target.dispatch_event(&mk("pointermove", x80)).unwrap();
+    tick().await;
+    doc_target.dispatch_event(&mk("pointerup", x80)).unwrap();
+    tick().await;
+
+    let values = seen.borrow().clone();
+    assert!(
+        values.contains(&20.0),
+        "drag start at 20% emitted 20; got {values:?}"
+    );
+    assert!(
+        values.contains(&50.0),
+        "pointermove at 50% emitted 50; got {values:?}"
+    );
+    assert!(
+        values.contains(&80.0),
+        "pointermove at 80% emitted 80; got {values:?}"
+    );
+
+    style.remove();
+    host.remove();
+}
