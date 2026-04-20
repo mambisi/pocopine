@@ -4,11 +4,13 @@
 //!
 //! - **Root** (`pine-slider-root`) — owns `value`, `min`, `max`,
 //!   `step`, `orientation`, `disabled`. Two-way bindable via
-//!   `pp-model:value="my_volume"`. Provides its Handle so Track,
-//!   Range, and Thumb can subscribe.
+//!   `pp-model:value="my_volume"`. Installs the pointer handlers
+//!   on its own element so clicks anywhere on the slider surface
+//!   (Track, Range, or Thumb) start a drag. Provides its Handle
+//!   to descendants.
 //! - **Track** (`pine-slider-track`) — the rail the Range fills.
-//!   Installs the pointer-down handler: clicking anywhere on the
-//!   track snaps the thumb and starts a drag.
+//!   Tagged with `pp-ref="track"` so Root knows where to measure
+//!   the pointer position from.
 //! - **Range** (`pine-slider-range`) — the filled portion, sized
 //!   as `width: <percent>%` (horizontal) or
 //!   `height: <percent>%` (vertical).
@@ -40,10 +42,10 @@ use web_sys::{EventTarget, PointerEvent};
 
 inject_key!(ROOT: Handle<PineSliderRoot>);
 
-// Per-Track runtime: captures installed listeners + drag state so
+// Per-Root runtime: captures installed listeners + drag state so
 // `on_unmount` can detach cleanly.
-struct TrackRuntime {
-    track_el: Option<web_sys::Element>,
+struct RootRuntime {
+    root_el: Option<web_sys::Element>,
     pointer_down: Option<Closure<dyn FnMut(PointerEvent)>>,
     pointer_move: Option<Closure<dyn FnMut(PointerEvent)>>,
     pointer_up: Option<Closure<dyn FnMut(PointerEvent)>>,
@@ -51,7 +53,7 @@ struct TrackRuntime {
 }
 
 thread_local! {
-    static TRACK_RUNTIME: RefCell<HashMap<ScopeId, TrackRuntime>> =
+    static ROOT_RUNTIME: RefCell<HashMap<ScopeId, RootRuntime>> =
         RefCell::new(HashMap::new());
 }
 
@@ -119,6 +121,22 @@ impl PineSliderRoot {
     fn on_max(&mut self, _: f64, _: Option<f64>) {
         self.recompute_percent();
     }
+
+    pub fn on_ready(
+        &self,
+        handle: pocopine::Handle<Self>,
+        refs: pocopine::Refs,
+        scope: ScopeId,
+    ) {
+        let Some(root_el) = refs.get("root") else { return };
+        install_pointer(scope, root_el, handle);
+    }
+
+    pub fn on_unmount(&mut self) {
+        if let Some(scope) = current_scope_id() {
+            teardown_pointer(scope);
+        }
+    }
 }
 
 impl PineSliderRoot {
@@ -158,6 +176,136 @@ fn emit_value_update(value: f64) {
     pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
+fn install_pointer(
+    scope: ScopeId,
+    root_el: web_sys::Element,
+    root: Handle<PineSliderRoot>,
+) {
+    // pointerdown: snap to click position + capture the pointer so
+    // we keep getting move / up even when the cursor leaves the
+    // slider bounds.
+    let root_for_down = root_el.clone();
+    let handle_for_down = root.clone();
+    let down = Closure::wrap(Box::new(move |ev: PointerEvent| {
+        if handle_for_down.with(|r| r.disabled) {
+            return;
+        }
+        let _ = root_for_down.set_pointer_capture(ev.pointer_id());
+        ROOT_RUNTIME.with(|r| {
+            if let Some(rt) = r.borrow_mut().get_mut(&scope) {
+                rt.dragging_pointer_id = Some(ev.pointer_id());
+            }
+        });
+        ev.prevent_default();
+        let v = value_from_pointer(&root_for_down, &ev, &handle_for_down);
+        handle_for_down.update(|r: &mut PineSliderRoot| r.set_value(v));
+    }) as Box<dyn FnMut(PointerEvent)>);
+
+    // pointermove: only reacts while a drag is in progress for this scope.
+    let root_for_move = root_el.clone();
+    let handle_for_move = root.clone();
+    let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
+        let active = ROOT_RUNTIME.with(|r| {
+            r.borrow()
+                .get(&scope)
+                .and_then(|rt| rt.dragging_pointer_id)
+                == Some(ev.pointer_id())
+        });
+        if !active {
+            return;
+        }
+        let v = value_from_pointer(&root_for_move, &ev, &handle_for_move);
+        handle_for_move.update(|r: &mut PineSliderRoot| r.set_value(v));
+    }) as Box<dyn FnMut(PointerEvent)>);
+
+    // pointerup / pointercancel: end the drag.
+    let root_for_up = root_el.clone();
+    let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
+        let was_active = ROOT_RUNTIME.with(|r| {
+            let mut map = r.borrow_mut();
+            let Some(rt) = map.get_mut(&scope) else {
+                return false;
+            };
+            if rt.dragging_pointer_id == Some(ev.pointer_id()) {
+                rt.dragging_pointer_id = None;
+                true
+            } else {
+                false
+            }
+        });
+        if was_active {
+            let _ = root_for_up.release_pointer_capture(ev.pointer_id());
+        }
+    }) as Box<dyn FnMut(PointerEvent)>);
+
+    let target: &EventTarget = root_el.as_ref();
+    let _ = target.add_event_listener_with_callback("pointerdown", down.as_ref().unchecked_ref());
+    let _ = target.add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
+    let _ = target.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
+    let _ = target.add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
+
+    ROOT_RUNTIME.with(|r| {
+        r.borrow_mut().insert(
+            scope,
+            RootRuntime {
+                root_el: Some(root_el),
+                pointer_down: Some(down),
+                pointer_move: Some(move_),
+                pointer_up: Some(up),
+                dragging_pointer_id: None,
+            },
+        );
+    });
+}
+
+fn teardown_pointer(scope: ScopeId) {
+    let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
+        return;
+    };
+    let Some(el) = rt.root_el.as_ref() else { return };
+    let target: &EventTarget = el.as_ref();
+    if let Some(c) = rt.pointer_down.as_ref() {
+        let _ =
+            target.remove_event_listener_with_callback("pointerdown", c.as_ref().unchecked_ref());
+    }
+    if let Some(c) = rt.pointer_move.as_ref() {
+        let _ =
+            target.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
+    }
+    if let Some(c) = rt.pointer_up.as_ref() {
+        let _ = target.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
+        let _ = target
+            .remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
+    }
+}
+
+/// Compute the Slider value corresponding to a pointer position
+/// relative to the Track's bounding rect. Falls back to Root's
+/// rect if Track isn't findable. Honours orientation.
+fn value_from_pointer(
+    root_el: &web_sys::Element,
+    ev: &PointerEvent,
+    root: &Handle<PineSliderRoot>,
+) -> f64 {
+    let rect = root_el
+        .query_selector(".pine-slider-track")
+        .ok()
+        .flatten()
+        .map(|t| t.get_bounding_client_rect())
+        .unwrap_or_else(|| root_el.get_bounding_client_rect());
+    let (min, max, orientation) = root.with(|r| (r.min, r.max, r.orientation.clone()));
+    let pct = if orientation == "vertical" {
+        let h = rect.height().max(1.0);
+        let y = (ev.client_y() as f64) - rect.top();
+        (y / h).clamp(0.0, 1.0)
+    } else {
+        let w = rect.width().max(1.0);
+        let x = (ev.client_x() as f64) - rect.left();
+        (x / w).clamp(0.0, 1.0)
+    };
+    min + pct * (max - min)
+}
+
 // ── Track ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
@@ -179,15 +327,10 @@ impl PineSliderTrack {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs, scope: ScopeId) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = inject::<Handle<PineSliderRoot>>(&ROOT) else {
             return;
         };
-        let Some(track_el) = refs.get("track") else {
-            return;
-        };
-
-        // Mirror orientation + disabled from Root.
         let h1 = handle.clone();
         watch_scope_field::<String, _>(root.scope_id(), "orientation", move |v, _| {
             let v = v.clone();
@@ -197,138 +340,7 @@ impl PineSliderTrack {
         watch_scope_field::<bool, _>(root.scope_id(), "disabled", move |&v, _| {
             h2.update(|s| s.disabled = v);
         });
-
-        install_pointer(scope, track_el, root);
     }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            teardown_pointer(scope);
-        }
-    }
-}
-
-fn install_pointer(scope: ScopeId, track_el: web_sys::Element, root: Handle<PineSliderRoot>) {
-    // pointerdown: snap to click position + capture the pointer so
-    // we keep getting move / up even when the cursor leaves the
-    // track bounds.
-    let track_for_down = track_el.clone();
-    let root_for_down = root.clone();
-    let down = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        if root_for_down.with(|r| r.disabled) {
-            return;
-        }
-        let target: EventTarget = track_for_down.clone().into();
-        if let Some(htarget) = target.dyn_ref::<web_sys::Element>() {
-            let _ = htarget.set_pointer_capture(ev.pointer_id());
-        }
-        TRACK_RUNTIME.with(|r| {
-            if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-                rt.dragging_pointer_id = Some(ev.pointer_id());
-            }
-        });
-        ev.prevent_default();
-        let v = value_from_pointer(&track_for_down, &ev, &root_for_down);
-        root_for_down.update(|r: &mut PineSliderRoot| r.set_value(v));
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    // pointermove: only reacts while a drag is in progress for this scope.
-    let track_for_move = track_el.clone();
-    let root_for_move = root.clone();
-    let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        let active = TRACK_RUNTIME.with(|r| {
-            r.borrow()
-                .get(&scope)
-                .and_then(|rt| rt.dragging_pointer_id)
-                == Some(ev.pointer_id())
-        });
-        if !active {
-            return;
-        }
-        let v = value_from_pointer(&track_for_move, &ev, &root_for_move);
-        root_for_move.update(|r: &mut PineSliderRoot| r.set_value(v));
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    // pointerup / pointercancel: end the drag.
-    let track_for_up = track_el.clone();
-    let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        let was_active = TRACK_RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            let Some(rt) = map.get_mut(&scope) else {
-                return false;
-            };
-            if rt.dragging_pointer_id == Some(ev.pointer_id()) {
-                rt.dragging_pointer_id = None;
-                true
-            } else {
-                false
-            }
-        });
-        if was_active {
-            let _ = track_for_up.release_pointer_capture(ev.pointer_id());
-        }
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    let target: &EventTarget = track_el.as_ref();
-    let _ = target.add_event_listener_with_callback("pointerdown", down.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
-
-    TRACK_RUNTIME.with(|r| {
-        r.borrow_mut().insert(
-            scope,
-            TrackRuntime {
-                track_el: Some(track_el),
-                pointer_down: Some(down),
-                pointer_move: Some(move_),
-                pointer_up: Some(up),
-                dragging_pointer_id: None,
-            },
-        );
-    });
-}
-
-fn teardown_pointer(scope: ScopeId) {
-    let Some(rt) = TRACK_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    let Some(el) = rt.track_el.as_ref() else { return };
-    let target: &EventTarget = el.as_ref();
-    if let Some(c) = rt.pointer_down.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("pointerdown", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.pointer_move.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.pointer_up.as_ref() {
-        let _ = target.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-        let _ = target
-            .remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
-    }
-}
-
-/// Compute the Slider value corresponding to a pointer position
-/// relative to the track's bounding rect. Honours orientation.
-fn value_from_pointer(
-    track_el: &web_sys::Element,
-    ev: &PointerEvent,
-    root: &Handle<PineSliderRoot>,
-) -> f64 {
-    let rect = track_el.get_bounding_client_rect();
-    let (min, max, orientation) = root.with(|r| (r.min, r.max, r.orientation.clone()));
-    let pct = if orientation == "vertical" {
-        let h = rect.height().max(1.0);
-        let y = (ev.client_y() as f64) - rect.top();
-        (y / h).clamp(0.0, 1.0)
-    } else {
-        let w = rect.width().max(1.0);
-        let x = (ev.client_x() as f64) - rect.left();
-        (x / w).clamp(0.0, 1.0)
-    };
-    min + pct * (max - min)
 }
 
 // ── Range ─────────────────────────────────────────────────────────
@@ -478,4 +490,3 @@ impl PineSliderThumb {
         }
     }
 }
-

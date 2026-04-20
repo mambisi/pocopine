@@ -3189,3 +3189,75 @@ async fn slider_keyboard_steps_and_emits_value() {
 
     host.remove();
 }
+
+/// Pointer down on the slider (anywhere inside it — track, range,
+/// or thumb) snaps the value to the click position. Regression:
+/// an earlier pass installed the listener on the Track only, but
+/// clicks on the Thumb don't bubble to Track (sibling in the DOM).
+#[wasm_bindgen_test]
+async fn slider_pointerdown_snaps_value_to_click_position() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"0\">\
+           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
+           <pine-slider-thumb></pine-slider-thumb>\
+         </pine-slider-root>",
+    );
+    // Inject a stylesheet so the track has a measurable width —
+    // without it, `getBoundingClientRect()` returns 0-wide and
+    // pointer-to-value maps to the min.
+    let style = doc().create_element("style").unwrap();
+    style.set_text_content(Some(
+        ".pine-slider-root, .pine-slider-track { display: block; width: 200px; height: 4px; position: relative; }",
+    ));
+    doc().head().unwrap().append_child(&style).unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    let root_tag = host.query_selector("pine-slider-root").unwrap().unwrap();
+    let root_inner = host.query_selector(".pine-slider-root").unwrap().unwrap();
+
+    // Listener for the emitted value updates.
+    let last: Rc<RefCell<Option<f64>>> = Rc::new(RefCell::new(None));
+    let l = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *l.borrow_mut() = ce.detail().as_f64();
+    }));
+    let target: &web_sys::EventTarget = root_tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Compute a click position ~70% across the slider's width.
+    let rect = root_inner.get_bounding_client_rect();
+    let x = rect.left() + rect.width() * 0.70;
+    let y = rect.top() + rect.height() / 2.0;
+
+    // Dispatch pointerdown at that position. The Root's installed
+    // listener computes the target value and calls set_value.
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_client_x(x as i32);
+    init.set_client_y(y as i32);
+    init.set_pointer_id(1);
+    let ev =
+        web_sys::PointerEvent::new_with_event_init_dict("pointerdown", &init).unwrap();
+    root_inner.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    // 70 → snaps to step=10 → 70.
+    assert_eq!(
+        *last.borrow(),
+        Some(70.0),
+        "pointerdown at ~70% snapped the value to 70"
+    );
+
+    style.remove();
+    host.remove();
+}
