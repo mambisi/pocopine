@@ -22,12 +22,12 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-/// Provide/inject key for the Root handle. Descendants (Trigger,
-/// Content) inject to call `toggle` / mirror `open`.
-const ROOT_KEY: &str = "pine-collapsible-root";
+// Provide/inject key for the Root handle. Descendants (Trigger,
+// Content) inject to call `toggle` / mirror `open`.
+inject_key!(ROOT: Handle<PineCollapsibleRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ pub struct PineCollapsibleRoot {
 #[handlers]
 impl PineCollapsibleRoot {
     pub fn on_setup(&mut self) {
-        provide(ROOT_KEY, this::<Self>());
+        provide(&ROOT, this::<Self>());
     }
 
     pub fn open_self(&mut self) {
@@ -90,13 +90,13 @@ impl PineCollapsibleTrigger {
         // Read the initial open state from the injected root so
         // the template's first bind of `:aria-expanded` /
         // `:data-state` sees the correct value.
-        if let Some(root) = inject::<Handle<PineCollapsibleRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.open = root.with(|r| r.open);
         }
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineCollapsibleRoot>>(ROOT_KEY) else {
+        let Some(root) = inject(&ROOT) else {
             return;
         };
         let me = this::<Self>();
@@ -109,7 +109,7 @@ impl PineCollapsibleTrigger {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject::<Handle<PineCollapsibleRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineCollapsibleRoot| r.toggle());
         }
     }
@@ -126,13 +126,13 @@ pub struct PineCollapsibleContent {
 #[handlers]
 impl PineCollapsibleContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineCollapsibleRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.open = root.with(|r| r.open);
         }
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineCollapsibleRoot>>(ROOT_KEY) else {
+        let Some(root) = inject(&ROOT) else {
             return;
         };
         let me = this::<Self>();

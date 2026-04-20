@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-04-20 |
 | **Supersedes** | Extends [RFC 027](./rfc-027-provide-inject.md) §2 (non-goal: "TypeId-keyed context") |

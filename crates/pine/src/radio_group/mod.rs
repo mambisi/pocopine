@@ -24,18 +24,17 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, provide, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
 use pocopine_core::reactive::ScopeId;
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 
-const ROOT_KEY: &str = "pine-radio-group-root";
-/// Key under which an Item publishes its own scope id so a nested
-/// Indicator can mirror its `checked` field. Matches the pattern
-/// used by DropdownMenu's CheckboxItem / RadioItem (same key name
-/// kept deliberately — both compounds expose the same
-/// "indicator watches its owner item" contract).
-const CHECKED_OWNER_KEY: &str = "pine-checked-owner";
+inject_key!(ROOT: ScopeId);
+// Per-Item scope publication — a nested Indicator injects it to
+// mirror its owner's `checked`. Each compound that ships an
+// indicator pattern declares its own key so compounds stay
+// isolated (DropdownMenu has its own CHECKED_OWNER).
+inject_key!(CHECKED_OWNER: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -75,7 +74,7 @@ impl Default for PineRadioGroupRoot {
 impl PineRadioGroupRoot {
     pub fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
-            provide(ROOT_KEY, scope);
+            provide(&ROOT, scope);
         }
     }
 }
@@ -105,7 +104,7 @@ impl PineRadioGroupItem {
     pub fn on_setup(&mut self) {
         // Seed initial state from Root and publish this Item's
         // scope so a nested Indicator mirrors `checked`.
-        if let Some(root) = inject::<ScopeId>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             if let Some(scope) = Scope::find(root) {
                 let v = scope.state.borrow().get("value");
                 self.group_value = v.as_string().unwrap_or_default();
@@ -113,12 +112,12 @@ impl PineRadioGroupItem {
             }
         }
         if let Some(scope) = current_scope_id() {
-            provide(CHECKED_OWNER_KEY, scope);
+            provide(&CHECKED_OWNER, scope);
         }
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<ScopeId>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let me = this::<Self>();
         watch_scope_field::<String, _>(root, "value", move |new, _| {
             let new_v = new.clone();
@@ -136,7 +135,7 @@ impl PineRadioGroupItem {
         if self.disabled {
             return;
         }
-        let Some(root) = inject::<ScopeId>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let Some(scope) = Scope::find(root) else { return };
         if scope
             .state
@@ -181,7 +180,7 @@ impl PineRadioGroupIndicator {
     pub fn on_setup(&mut self) {
         // Read the parent Item's initial `checked` synchronously so
         // the first pp-show evaluation sees the right value.
-        if let Some(owner) = inject::<ScopeId>(CHECKED_OWNER_KEY) {
+        if let Some(owner) = inject(&CHECKED_OWNER) {
             if let Some(scope) = Scope::find(owner) {
                 let v = scope.state.borrow().get("checked");
                 self.checked = v.as_bool().unwrap_or(false);
@@ -190,7 +189,7 @@ impl PineRadioGroupIndicator {
     }
 
     pub fn on_ready(&self) {
-        let Some(owner) = inject::<ScopeId>(CHECKED_OWNER_KEY) else { return };
+        let Some(owner) = inject(&CHECKED_OWNER) else { return };
         let me = this::<Self>();
         watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
             me.update(|s| s.checked = c);

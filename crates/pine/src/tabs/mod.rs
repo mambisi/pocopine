@@ -27,10 +27,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-const ROOT_KEY: &str = "pine-tabs-root";
+inject_key!(ROOT: Handle<PineTabsRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ impl Default for PineTabsRoot {
 #[handlers]
 impl PineTabsRoot {
     pub fn on_setup(&mut self) {
-        provide(ROOT_KEY, this::<Self>());
+        provide(&ROOT, this::<Self>());
     }
 
     pub fn select(&mut self, value: String) {
@@ -84,7 +84,7 @@ pub struct PineTabsList {
 #[handlers]
 impl PineTabsList {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.orientation = root.with(|r| r.orientation.clone());
         }
     }
@@ -108,7 +108,7 @@ pub struct PineTabsTrigger {
 #[handlers]
 impl PineTabsTrigger {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.trigger_id = format!(
                 "pine-tabs-trigger-{}-{}",
                 root.scope_id().0,
@@ -119,7 +119,7 @@ impl PineTabsTrigger {
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let my_value = self.value.clone();
         let me = this::<Self>();
         let root_scope = root.scope_id();
@@ -133,7 +133,7 @@ impl PineTabsTrigger {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             let v = self.value.clone();
             root.update(|r: &mut PineTabsRoot| r.select(v));
         }
@@ -155,7 +155,7 @@ pub struct PineTabsContent {
 #[handlers]
 impl PineTabsContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.trigger_id = format!(
                 "pine-tabs-trigger-{}-{}",
                 root.scope_id().0,
@@ -166,7 +166,7 @@ impl PineTabsContent {
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineTabsRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let my_value = self.value.clone();
         let me = this::<Self>();
         let root_scope = root.scope_id();

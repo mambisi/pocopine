@@ -11,9 +11,11 @@ pub use pocopine_core::{
     flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
     set_auto_flush, signal, store, this, trigger_scope, watch, watch_field,
     watch_scope_field, App, Component, ComponentState, Computed, EffectId, EffectOptions,
-    Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, SignalId,
-    Store, StoreHandle,
+    Handle, InjectKey, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal,
+    SignalId, Store, StoreHandle,
 };
+#[doc(inline)]
+pub use pocopine_core::inject_key;
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{component, handlers, server, store};
@@ -22,8 +24,8 @@ pub mod prelude {
     pub use crate::{
         batch, component, computed, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, handlers,
-        on_cleanup, run, rw_signal, signal, store, this, watch, App, Component,
-        ComponentState, Computed, Handle, RwSignal, Scope, ScopeId, ServerError,
+        inject_key, on_cleanup, run, rw_signal, signal, store, this, watch, App, Component,
+        ComponentState, Computed, Handle, InjectKey, RwSignal, Scope, ScopeId, ServerError,
         ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;

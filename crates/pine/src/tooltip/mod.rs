@@ -28,13 +28,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field, ScopeId};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget};
 
-const ROOT_KEY: &str = "pine-tooltip-root";
+inject_key!(ROOT: Handle<PineTooltipRoot>);
 
 thread_local! {
     /// Per-Trigger-scope runtime: holds the listener closures +
@@ -78,7 +78,7 @@ impl Default for PineTooltipRoot {
 #[handlers]
 impl PineTooltipRoot {
     pub fn on_setup(&mut self) {
-        provide(ROOT_KEY, this::<Self>());
+        provide(&ROOT, this::<Self>());
     }
 }
 
@@ -92,7 +92,7 @@ pub struct PineTooltipTrigger {}
 impl PineTooltipTrigger {
     pub fn on_ready(&self) {
         let Some(scope) = current_scope_id() else { return };
-        let Some(root) = inject::<Handle<PineTooltipRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         // Stamp the trigger's slot root so Content's auto-anchor
         // resolves to it. `pp-ref="trigger"` points at the
         // wrapper the template renders around the author's slot.
@@ -248,7 +248,7 @@ pub struct PineTooltipPortal {
 #[handlers]
 impl PineTooltipPortal {
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineTooltipRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
             me.update(|s| s.open = is_open);
@@ -281,7 +281,7 @@ impl Default for PineTooltipContent {
 #[handlers]
 impl PineTooltipContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineTooltipRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.anchor = format!(
                 "[data-pine-tooltip-trigger=\"{}\"]",
                 root.scope_id().0

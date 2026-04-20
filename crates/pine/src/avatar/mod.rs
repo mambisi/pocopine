@@ -18,10 +18,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{inject, provide, watch_scope_field};
+use pocopine::{inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-const ROOT_KEY: &str = "pine-avatar-root";
+inject_key!(ROOT: Handle<PineAvatarRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ pub struct PineAvatarRoot {
 #[handlers]
 impl PineAvatarRoot {
     pub fn on_setup(&mut self) {
-        provide(ROOT_KEY, this::<Self>());
+        provide(&ROOT, this::<Self>());
     }
 }
 
@@ -53,7 +53,7 @@ pub struct PineAvatarImage {
 #[handlers]
 impl PineAvatarImage {
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineAvatarRoot>>(ROOT_KEY) else {
+        let Some(root) = inject(&ROOT) else {
             return;
         };
         let me = this::<Self>();
@@ -65,7 +65,7 @@ impl PineAvatarImage {
     /// `@load` on the img — fires once the browser has the
     /// bitmap. Promotes Root to loaded so Fallback hides.
     pub fn on_load(&mut self) {
-        if let Some(root) = inject::<Handle<PineAvatarRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineAvatarRoot| r.loaded = true);
         }
     }
@@ -90,13 +90,13 @@ pub struct PineAvatarFallback {
 #[handlers]
 impl PineAvatarFallback {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineAvatarRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.loaded = root.with(|r| r.loaded);
         }
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineAvatarRoot>>(ROOT_KEY) else {
+        let Some(root) = inject(&ROOT) else {
             return;
         };
         let me = this::<Self>();

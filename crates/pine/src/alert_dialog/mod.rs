@@ -37,12 +37,12 @@
 
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-const ROOT_KEY: &str = "pine-alert-dialog-root";
-const TITLE_ID_KEY: &str = "pine-alert-dialog-title-id";
-const DESCRIPTION_ID_KEY: &str = "pine-alert-dialog-description-id";
+inject_key!(ROOT: Handle<PineAlertDialogRoot>);
+inject_key!(TITLE_ID: String);
+inject_key!(DESCRIPTION_ID: String);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -81,9 +81,9 @@ impl PineAlertDialogRoot {
         let Some(scope) = current_scope_id() else { return };
         self.title_id = format!("pine-alert-dialog-title-{}", scope.0);
         self.description_id = format!("pine-alert-dialog-description-{}", scope.0);
-        provide(ROOT_KEY, this::<Self>());
-        provide(TITLE_ID_KEY, self.title_id.clone());
-        provide(DESCRIPTION_ID_KEY, self.description_id.clone());
+        provide(&ROOT, this::<Self>());
+        provide(&TITLE_ID, self.title_id.clone());
+        provide(&DESCRIPTION_ID, self.description_id.clone());
     }
 
     pub fn open_dialog(&mut self) {
@@ -121,13 +121,13 @@ pub struct PineAlertDialogTrigger {
 #[handlers]
 impl PineAlertDialogTrigger {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             self.open = root.with(|r| r.open);
         }
     }
 
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
             me.update(|s| s.open = is_open);
@@ -135,7 +135,7 @@ impl PineAlertDialogTrigger {
     }
 
     pub fn toggle(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineAlertDialogRoot| r.toggle());
         }
     }
@@ -152,7 +152,7 @@ pub struct PineAlertDialogPortal {
 #[handlers]
 impl PineAlertDialogPortal {
     pub fn on_ready(&self) {
-        let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) else { return };
+        let Some(root) = inject(&ROOT) else { return };
         let me = this::<Self>();
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
             me.update(|s| s.open = is_open);
@@ -169,7 +169,7 @@ pub struct PineAlertDialogOverlay {}
 #[handlers]
 impl PineAlertDialogOverlay {
     pub fn on_click(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             let dismiss = root.with(|r| r.dismiss_on_overlay);
             if dismiss {
                 root.update(|r: &mut PineAlertDialogRoot| r.close());
@@ -190,10 +190,10 @@ pub struct PineAlertDialogContent {
 #[handlers]
 impl PineAlertDialogContent {
     pub fn on_setup(&mut self) {
-        if let Some(id) = inject::<String>(TITLE_ID_KEY) {
+        if let Some(id) = inject(&TITLE_ID) {
             self.title_id = id;
         }
-        if let Some(id) = inject::<String>(DESCRIPTION_ID_KEY) {
+        if let Some(id) = inject(&DESCRIPTION_ID) {
             self.description_id = id;
         }
     }
@@ -201,12 +201,12 @@ impl PineAlertDialogContent {
     pub fn on_ready(&self) {
         let Some(scope) = current_scope_id() else { return };
         let Some(content) = refs::get_on(scope, "content") else { return };
-        let modal = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY)
+        let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(true);
         overlay::activate(scope, &content, modal);
 
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, prev| {
                 if prev == Some(&true) && !is_open {
                     overlay::deactivate(scope);
@@ -222,7 +222,7 @@ impl PineAlertDialogContent {
     }
 
     pub fn on_escape(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             let dismiss = root.with(|r| r.dismiss_on_escape);
             if dismiss {
                 root.update(|r: &mut PineAlertDialogRoot| r.close());
@@ -242,7 +242,7 @@ pub struct PineAlertDialogTitle {
 #[handlers]
 impl PineAlertDialogTitle {
     pub fn on_setup(&mut self) {
-        if let Some(id) = inject::<String>(TITLE_ID_KEY) {
+        if let Some(id) = inject(&TITLE_ID) {
             self.title_id = id;
         }
     }
@@ -259,7 +259,7 @@ pub struct PineAlertDialogDescription {
 #[handlers]
 impl PineAlertDialogDescription {
     pub fn on_setup(&mut self) {
-        if let Some(id) = inject::<String>(DESCRIPTION_ID_KEY) {
+        if let Some(id) = inject(&DESCRIPTION_ID) {
             self.description_id = id;
         }
     }
@@ -278,7 +278,7 @@ pub struct PineAlertDialogAction {}
 #[handlers]
 impl PineAlertDialogAction {
     pub fn click(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineAlertDialogRoot| r.close());
         }
     }
@@ -297,7 +297,7 @@ pub struct PineAlertDialogCancel {}
 #[handlers]
 impl PineAlertDialogCancel {
     pub fn click(&mut self) {
-        if let Some(root) = inject::<Handle<PineAlertDialogRoot>>(ROOT_KEY) {
+        if let Some(root) = inject(&ROOT) {
             root.update(|r: &mut PineAlertDialogRoot| r.close());
         }
     }

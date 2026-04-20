@@ -226,6 +226,9 @@ struct RovingHost {}
 impl RovingHost {}
 
 // RFC-027 — parent-scope context (provide + inject).
+// RFC-030 — typed `InjectKey` replaces string keys.
+pocopine::inject_key!(CTX_ROOT: pocopine::Handle<CtxRoot>);
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "CtxRoot.html")]
 struct CtxRoot {
@@ -235,7 +238,7 @@ struct CtxRoot {
 #[handlers]
 impl CtxRoot {
     pub fn on_mount(&mut self) {
-        pocopine::provide("ctx-root", pocopine::this::<Self>());
+        pocopine::provide(&CTX_ROOT, pocopine::this::<Self>());
     }
     pub fn bump(&mut self) {
         self.hits += 1;
@@ -249,7 +252,7 @@ struct CtxChild {}
 #[handlers]
 impl CtxChild {
     pub fn bump(&mut self) {
-        if let Some(root) = pocopine::inject::<pocopine::Handle<CtxRoot>>("ctx-root") {
+        if let Some(root) = pocopine::inject(&CTX_ROOT) {
             root.update(|r| r.bump());
         }
     }
