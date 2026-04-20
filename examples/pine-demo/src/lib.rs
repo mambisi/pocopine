@@ -69,6 +69,9 @@ pub struct PineDemoApp {
     /// Slider demo — current volume 0..100, bound two-way via
     /// `pp-model:value` on `<pine-slider-root>`.
     pub volume: f64,
+
+    /// Select demo — currently-selected city.
+    pub selected_city: String,
 }
 
 #[handlers]

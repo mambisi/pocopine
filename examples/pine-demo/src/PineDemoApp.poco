@@ -555,6 +555,35 @@
     </p>
   </section>
 
+  <!-- PineSelect ─────────────────────────────────────────── -->
+  <h2>Select</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Listbox-backed single-choice picker. Click the trigger,
+      pick with arrow keys + Enter, or just click an option.
+    </p>
+    <pine-select-root pp-model:value="selected_city">
+      <pine-select-trigger>
+        <pine-select-value>Choose a city…</pine-select-value>
+        <span aria-hidden="true" style="margin-left:0.5rem">▾</span>
+      </pine-select-trigger>
+      <pine-select-portal>
+        <pine-select-content>
+          <pine-select-item value="lagos">Lagos</pine-select-item>
+          <pine-select-item value="accra">Accra</pine-select-item>
+          <pine-select-item value="nairobi">Nairobi</pine-select-item>
+          <pine-select-separator></pine-select-separator>
+          <pine-select-item value="cairo">Cairo</pine-select-item>
+          <pine-select-item value="johannesburg">Johannesburg</pine-select-item>
+          <pine-select-item value="casablanca" disabled>Casablanca (unavailable)</pine-select-item>
+        </pine-select-content>
+      </pine-select-portal>
+    </pine-select-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Selected: <strong pp-text="selected_city || '(none)'"></strong>
+    </p>
+  </section>
+
   <!-- PineSlider ─────────────────────────────────────────── -->
   <h2>Slider</h2>
   <section>

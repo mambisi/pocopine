@@ -1,0 +1,5 @@
+<template pp-if="selected">
+  <root class="pine-select-item-indicator">
+    <slot></slot>
+  </root>
+</template>

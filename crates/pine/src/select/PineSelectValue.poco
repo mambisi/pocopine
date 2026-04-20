@@ -1,0 +1,10 @@
+<root class="pine-select-value"
+      pp-ref="value"
+      :data-placeholder="has_value ? 'false' : 'true'">
+  <template pp-if="has_value">
+    <span pp-text="display_label"></span>
+  </template>
+  <template pp-if="!has_value">
+    <slot></slot>
+  </template>
+</root>

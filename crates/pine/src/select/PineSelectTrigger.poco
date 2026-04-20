@@ -1,0 +1,13 @@
+<root role="combobox"
+      class="pine-select-trigger"
+      pp-ref="trigger"
+      :aria-expanded="open ? 'true' : 'false'"
+      aria-haspopup="listbox"
+      :aria-controls="listbox_id"
+      :data-state="open ? 'open' : 'closed'"
+      :data-disabled="disabled"
+      :data-placeholder="value == ''"
+      :disabled="disabled"
+      @click="toggle">
+  <slot></slot>
+</root>

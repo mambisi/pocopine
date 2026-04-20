@@ -1,0 +1,5 @@
+<template pp-if="open" pp-teleport="body">
+  <root class="pine-select-portal">
+    <slot></slot>
+  </root>
+</template>

@@ -1,0 +1,510 @@
+//! `<pine-select-*>` — listbox-based single-value selector
+//! (Radix-style compound).
+//!
+//! Eight parts:
+//!
+//! - **Root** — owns `value`, `open`, `disabled`, `name`
+//!   (hidden `<input>` for form submission), and a
+//!   `HashMap<value, label>` registry that Items populate
+//!   during `on_setup` so `Value` can render the
+//!   currently-selected item's text without re-querying the DOM.
+//! - **Trigger** — `<button role="combobox" aria-haspopup="listbox">`.
+//!   Click toggles Root.open.
+//! - **Value** — reads the label from Root's registry for the
+//!   current value; falls back to its own slot (placeholder).
+//! - **Portal** — teleports Content to `<body>` when open.
+//! - **Content** — `<ul role="listbox">` + `pp-roving` (focus-
+//!   based arrow nav). Anchored to Trigger. Click-outside +
+//!   Escape close.
+//! - **Item** — `<li role="option">`. Click / Enter / Space
+//!   select (pp-roving doesn't activate — explicit handlers).
+//! - **ItemIndicator** — renders only when its parent Item is
+//!   selected.
+//! - **Separator** — `<li role="separator">` divider.
+//!
+//! ```html
+//! <pine-select-root pp-model:value="city" name="city">
+//!   <pine-select-trigger>
+//!     <pine-select-value>Choose a city…</pine-select-value>
+//!     <span aria-hidden="true">▾</span>
+//!   </pine-select-trigger>
+//!   <pine-select-portal>
+//!     <pine-select-content>
+//!       <pine-select-item value="lagos">Lagos</pine-select-item>
+//!       <pine-select-item value="accra">Accra</pine-select-item>
+//!       <pine-select-separator></pine-select-separator>
+//!       <pine-select-item value="nairobi">Nairobi</pine-select-item>
+//!     </pine-select-content>
+//!   </pine-select-portal>
+//! </pine-select-root>
+//! ```
+
+use pocopine::prelude::*;
+use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use wasm_bindgen::JsCast;
+use web_sys::HtmlElement;
+
+inject_key!(ROOT: Handle<PineSelectRoot>);
+
+// ── Root ──────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectRoot.poco", role = "scope")]
+pub struct PineSelectRoot {
+    /// Open state. Two-way bindable via `pp-model:open="current"`.
+    #[prop]
+    pub open: bool,
+    /// Selected value. Two-way bindable via `pp-model:value="current"`.
+    #[prop]
+    pub value: String,
+    /// Initial value applied on mount if `value` is still blank —
+    /// mirrors the native `<select>` `defaultValue` convention.
+    #[prop]
+    pub default_value: String,
+    /// Form-field name. When set, Root renders a hidden
+    /// `<input name value>` so the Select participates in native
+    /// form submission.
+    #[prop]
+    pub name: String,
+    #[prop]
+    pub disabled: bool,
+    /// id used by Trigger's `aria-controls` and Content's own
+    /// `id`. Derived from the Root's scope id.
+    pub listbox_id: String,
+    /// Registry populated by each Item's `on_setup`:
+    /// `value → rendered label text`. Value reads this to show
+    /// the current selection without a DOM lookup. Skipped from
+    /// serde round-trip because it's derived, not authored.
+    #[serde(skip)]
+    pub labels: HashMap<String, String>,
+}
+
+#[handlers]
+impl PineSelectRoot {
+    pub fn on_setup(&mut self) {
+        if let Some(scope) = current_scope_id() {
+            self.listbox_id = format!("pine-select-listbox-{}", scope.0);
+        }
+        if self.value.is_empty() && !self.default_value.is_empty() {
+            self.value = self.default_value.clone();
+        }
+        provide(&ROOT, this::<Self>());
+    }
+
+    pub fn open_self(&mut self) {
+        if !self.open && !self.disabled {
+            self.open = true;
+        }
+    }
+
+    pub fn close(&mut self) {
+        if self.open {
+            self.open = false;
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        if self.disabled {
+            return;
+        }
+        self.open = !self.open;
+    }
+
+    /// Called by each Item during its own `on_setup` so Value
+    /// can show the active label without scanning the DOM.
+    pub fn register_label(&mut self, value: String, label: String) {
+        self.labels.insert(value, label);
+    }
+
+    pub fn select_value(&mut self, value: String) {
+        if self.value != value {
+            self.value = value.clone();
+            emit_value_update(value);
+        }
+        self.open = false;
+    }
+}
+
+/// Emit `pp:update:model` from Root's own element so
+/// `pp-model:value` on the parent catches the change even when
+/// the call originates from Content (teleported to `<body>`).
+fn emit_value_update(value: String) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    pocopine::emit_from(&root_el, "pp:update:model", value);
+}
+
+// ── Trigger ───────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectTrigger.poco", role = "interactive")]
+pub struct PineSelectTrigger {
+    pub open: bool,
+    pub disabled: bool,
+    pub value: String,
+    pub listbox_id: String,
+}
+
+#[handlers]
+impl PineSelectTrigger {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            root.with(|r| {
+                self.open = r.open;
+                self.disabled = r.disabled;
+                self.value = r.value.clone();
+                self.listbox_id = r.listbox_id.clone();
+            });
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+            return;
+        };
+        let root_scope = root.scope_id();
+
+        let h = handle.clone();
+        watch_scope_field::<bool, _>(root_scope, "open", move |&v, _| {
+            h.update(|s| s.open = v);
+        });
+        let h = handle.clone();
+        watch_scope_field::<bool, _>(root_scope, "disabled", move |&v, _| {
+            h.update(|s| s.disabled = v);
+        });
+        let h = handle;
+        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+            let v = v.clone();
+            h.update(|s| s.value = v);
+        });
+
+        // Stamp the trigger with its root scope id so Content can
+        // anchor to `[data-pine-select-trigger="<id>"]` without
+        // the author coordinating a selector.
+        if let Some(btn) = refs.get("trigger") {
+            let _ = btn.set_attribute(
+                "data-pine-select-trigger",
+                &format!("{}", root_scope.0),
+            );
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            root.update(|r: &mut PineSelectRoot| r.toggle());
+        }
+    }
+}
+
+// ── Value ─────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectValue.poco", role = "visual")]
+pub struct PineSelectValue {
+    pub display_label: String,
+    pub has_value: bool,
+}
+
+#[handlers]
+impl PineSelectValue {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            root.with(|r| {
+                self.has_value = !r.value.is_empty();
+                self.display_label = r
+                    .labels
+                    .get(&r.value)
+                    .cloned()
+                    .unwrap_or_else(|| r.value.clone());
+            });
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+            return;
+        };
+        let root_scope = root.scope_id();
+        let root_for_watch = root;
+
+        // Re-pull the label whenever the current value changes.
+        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+            let current = v.clone();
+            let label = root_for_watch
+                .with(|r| r.labels.get(&current).cloned())
+                .unwrap_or_else(|| current.clone());
+            let has_value = !current.is_empty();
+            handle.update(|s| {
+                s.has_value = has_value;
+                s.display_label = label;
+            });
+        });
+    }
+}
+
+// ── Portal ────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectPortal.poco", role = "scope")]
+pub struct PineSelectPortal {
+    pub open: bool,
+}
+
+#[handlers]
+impl PineSelectPortal {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+            return;
+        };
+        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
+            handle.update(|s| s.open = is_open);
+        });
+    }
+}
+
+// ── Content ───────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+#[component(template = "PineSelectContent.poco", role = "list")]
+pub struct PineSelectContent {
+    pub anchor: String,
+    pub listbox_id: String,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
+}
+
+impl Default for PineSelectContent {
+    fn default() -> Self {
+        Self {
+            anchor: String::new(),
+            listbox_id: String::new(),
+            side: "bottom".into(),
+            align: "start".into(),
+            side_offset: 4.0,
+        }
+    }
+}
+
+#[handlers]
+impl PineSelectContent {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+            let (scope_id, lb) = root.with(|r| (root.scope_id().0, r.listbox_id.clone()));
+            self.anchor = format!("[data-pine-select-trigger=\"{scope_id}\"]");
+            self.listbox_id = lb;
+        }
+    }
+
+    pub fn on_ready(&self, refs: pocopine::Refs) {
+        let Some(menu) = refs.get("menu") else { return };
+        // Focus the selected item (data-state="checked") if one
+        // exists, otherwise the first enabled option.
+        let initial = menu
+            .query_selector("[role=\"option\"][data-state=\"checked\"]:not([data-disabled=\"true\"])")
+            .ok()
+            .flatten()
+            .or_else(|| {
+                menu.query_selector("[role=\"option\"]:not([data-disabled=\"true\"])")
+                    .ok()
+                    .flatten()
+            });
+        if let Some(item) = initial {
+            // Roving expects exactly one tabindex=0 per group.
+            if let Ok(list) = menu.query_selector_all("[role=\"option\"]") {
+                for i in 0..list.length() {
+                    if let Some(node) = list.item(i) {
+                        if let Ok(el) = node.dyn_into::<web_sys::Element>() {
+                            let _ = el.set_attribute("tabindex", "-1");
+                        }
+                    }
+                }
+            }
+            let _ = item.set_attribute("tabindex", "0");
+            if let Ok(html) = item.dyn_into::<HtmlElement>() {
+                let _ = html.focus();
+            }
+        } else {
+            focus::auto_focus_first(&menu);
+        }
+
+        // Programmatic anchor install — same pattern as Popover
+        // + DropdownMenu so author-authored placement / offset
+        // flow through.
+        if let Some(trigger) = resolve_anchor(&self.anchor) {
+            if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
+                let placement = pocopine_core::directives::anchor::Placement {
+                    side: pocopine_core::directives::anchor::Side::parse(&self.side),
+                    align: pocopine_core::directives::anchor::Align::parse(&self.align),
+                };
+                pocopine_core::directives::anchor::install(
+                    &floater,
+                    &trigger,
+                    placement,
+                    self.side_offset,
+                    true,
+                );
+            }
+        }
+    }
+
+    pub fn close(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            root.update(|r: &mut PineSelectRoot| r.close());
+            schedule_trigger_focus(root.scope_id());
+        }
+    }
+}
+
+fn resolve_anchor(selector: &str) -> Option<web_sys::Element> {
+    let s = selector.trim();
+    if s.is_empty() {
+        return None;
+    }
+    web_sys::window()?
+        .document()?
+        .query_selector(s)
+        .ok()
+        .flatten()
+}
+
+/// Move focus back to the Trigger after close. Deferred via
+/// `setTimeout(_, 0)` so reactive flush finishes before `.focus()`.
+fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+    let cb = Closure::once_into_js(Box::new(move || {
+        let Some(trigger) = refs::get_on(root_scope, "trigger") else {
+            return;
+        };
+        // `trigger` ref lives on Trigger's template root, which
+        // is inside Trigger's scope. Root's scope holds the
+        // container only. So look up Trigger by its data-*
+        // stamp instead.
+        let _ = trigger;
+        let selector = format!("[data-pine-select-trigger=\"{}\"]", root_scope.0);
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.query_selector(&selector).ok().flatten())
+        {
+            if let Ok(html) = el.dyn_into::<HtmlElement>() {
+                let _ = html.focus();
+            }
+        }
+    }) as Box<dyn FnOnce()>);
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
+    }
+}
+
+// ── Item ──────────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectItem.poco", role = "item")]
+pub struct PineSelectItem {
+    #[prop]
+    pub value: String,
+    #[prop]
+    pub disabled: bool,
+    /// Mirrored from Root.value — `true` when this Item's value
+    /// is the current selection.
+    pub selected: bool,
+}
+
+// Provide key for ItemIndicator's `selected` mirror.
+inject_key!(SELECTED_OWNER: pocopine::ScopeId);
+
+#[handlers]
+impl PineSelectItem {
+    pub fn on_setup(&mut self) {
+        if let Some(root) = inject(&ROOT) {
+            self.selected = root.with(|r| r.value == self.value);
+        }
+        // Provide the Item's own scope id so a nested
+        // ItemIndicator can mirror `selected` without having to
+        // go back to Root.
+        if let Some(scope) = current_scope_id() {
+            provide(&SELECTED_OWNER, scope);
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+        // Register the item's label with Root so Value can show
+        // the rendered text.
+        let label = refs
+            .get("item")
+            .and_then(|el| el.text_content())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+            let value = self.value.clone();
+            root.update(|r: &mut PineSelectRoot| r.register_label(value, label));
+        }
+
+        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+            return;
+        };
+        let my_value = self.value.clone();
+        let root_scope = root.scope_id();
+        let h = handle;
+        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+            let is_selected = v == &my_value;
+            h.update(|s| s.selected = is_selected);
+        });
+    }
+
+    pub fn select(&mut self) {
+        if self.disabled {
+            return;
+        }
+        let my_value = self.value.clone();
+        if let Some(root) = inject(&ROOT) {
+            root.update(|r: &mut PineSelectRoot| r.select_value(my_value));
+            schedule_trigger_focus(root.scope_id());
+        }
+    }
+}
+
+// ── ItemIndicator ─────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectItemIndicator.poco", role = "visual")]
+pub struct PineSelectItemIndicator {
+    pub selected: bool,
+}
+
+#[handlers]
+impl PineSelectItemIndicator {
+    pub fn on_setup(&mut self) {
+        if let Some(owner) = inject(&SELECTED_OWNER) {
+            if let Some(scope) = pocopine::Scope::find(owner) {
+                let v = scope.state.borrow().get("selected");
+                self.selected = v.as_bool().unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(owner) = inject(&SELECTED_OWNER) else {
+            return;
+        };
+        watch_scope_field::<bool, _>(owner, "selected", move |&v, _| {
+            handle.update(|s| s.selected = v);
+        });
+    }
+}
+
+// ── Separator ─────────────────────────────────────────────────────
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineSelectSeparator.poco", role = "item")]
+pub struct PineSelectSeparator {}
+
+#[handlers]
+impl PineSelectSeparator {}

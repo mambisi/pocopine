@@ -3352,3 +3352,163 @@ async fn slider_drag_updates_value_continuously() {
     style.remove();
     host.remove();
 }
+
+// ─── PineSelect ───────────────────────────────────────────────────
+
+/// Clicking the Trigger opens the listbox, clicking an Item
+/// selects it + closes the listbox, and the emitted
+/// `pp:update:model` carries the Item's value so a parent
+/// `pp-model:value` binding round-trips.
+#[wasm_bindgen_test]
+async fn select_click_item_emits_value_and_closes() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-select-root>\
+           <pine-select-trigger>\
+             <pine-select-value>Pick one</pine-select-value>\
+           </pine-select-trigger>\
+           <pine-select-portal>\
+             <pine-select-content>\
+               <pine-select-item value=\"a\">Apple</pine-select-item>\
+               <pine-select-item value=\"b\">Banana</pine-select-item>\
+               <pine-select-item value=\"c\" disabled>Carrot</pine-select-item>\
+             </pine-select-content>\
+           </pine-select-portal>\
+         </pine-select-root>",
+    );
+    tick().await;
+
+    let root_tag = host.query_selector("pine-select-root").unwrap().unwrap();
+    let trigger: HtmlElement = host
+        .query_selector("button.pine-select-trigger")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    let last: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let l = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *l.borrow_mut() = ce.detail().as_string();
+    }));
+    let target: &web_sys::EventTarget = root_tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    // Initial: closed, aria-expanded=false.
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false")
+    );
+
+    // Open.
+    trigger.click();
+    tick().await;
+    let listbox = doc()
+        .query_selector("ul[role=\"listbox\"].pine-select-content")
+        .unwrap()
+        .expect("listbox teleported to body after open");
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("true")
+    );
+
+    // Click Banana.
+    let banana: HtmlElement = listbox
+        .query_selector("li[data-value=\"b\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    banana.click();
+    tick().await;
+    sleep_ms(5).await;
+
+    assert_eq!(
+        last.borrow().as_deref(),
+        Some("b"),
+        "pp:update:model emitted the selected value"
+    );
+    // Listbox closes (pp-if unmounts the portal).
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-select-content")
+            .unwrap()
+            .is_none(),
+        "listbox closed after selection"
+    );
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false")
+    );
+
+    host.remove();
+}
+
+/// Escape closes the listbox without changing the current value.
+/// aria-selected on Items mirrors the Root's value so a freshly
+/// opened listbox paints the current selection.
+#[wasm_bindgen_test]
+async fn select_escape_closes_and_aria_selected_mirrors_value() {
+    let host = mount(
+        "<pine-select-root value=\"b\">\
+           <pine-select-trigger><pine-select-value>-</pine-select-value></pine-select-trigger>\
+           <pine-select-portal>\
+             <pine-select-content>\
+               <pine-select-item value=\"a\">Apple</pine-select-item>\
+               <pine-select-item value=\"b\">Banana</pine-select-item>\
+             </pine-select-content>\
+           </pine-select-portal>\
+         </pine-select-root>",
+    );
+    tick().await;
+
+    let trigger: HtmlElement = host
+        .query_selector("button.pine-select-trigger")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    trigger.click();
+    tick().await;
+
+    let listbox = doc()
+        .query_selector("ul[role=\"listbox\"].pine-select-content")
+        .unwrap()
+        .expect("listbox open");
+    let banana = listbox
+        .query_selector("li[data-value=\"b\"]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        banana.get_attribute("aria-selected").as_deref(),
+        Some("true"),
+        "initially-selected item mirrors aria-selected"
+    );
+
+    // Escape.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    listbox.dispatch_event(&ev).unwrap();
+    tick().await;
+    sleep_ms(5).await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"listbox\"].pine-select-content")
+            .unwrap()
+            .is_none(),
+        "listbox closed after Escape"
+    );
+
+    host.remove();
+}

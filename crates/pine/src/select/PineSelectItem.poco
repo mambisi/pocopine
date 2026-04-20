@@ -1,0 +1,14 @@
+<root role="option"
+      class="pine-select-item"
+      tabindex="-1"
+      pp-ref="item"
+      :data-value="value"
+      :aria-selected="selected ? 'true' : 'false'"
+      :data-state="selected ? 'checked' : 'unchecked'"
+      :aria-disabled="disabled"
+      :data-disabled="disabled"
+      @click="select"
+      @keydown.enter.prevent="select"
+      @keydown.space.prevent="select">
+  <slot></slot>
+</root>

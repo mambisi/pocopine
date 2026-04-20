@@ -1,0 +1,10 @@
+<root role="listbox"
+      class="pine-select-content"
+      pp-ref="menu"
+      :id="listbox_id"
+      data-state="open"
+      pp-roving
+      @click.outside="close"
+      @keydown.escape.prevent="close">
+  <slot></slot>
+</root>

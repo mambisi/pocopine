@@ -1,0 +1,9 @@
+<root class="pine-select-root"
+      pp-ref="root"
+      :data-state="open ? 'open' : 'closed'"
+      :data-disabled="disabled">
+  <slot></slot>
+  <template pp-if="name != ''">
+    <input type="hidden" :name="name" :value="value">
+  </template>
+</root>
