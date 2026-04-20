@@ -8,6 +8,8 @@
     <dl>
       <dt>Button clicks</dt> <dd pp-text="clicks"></dd>
       <dt>Dialog</dt>        <dd pp-text="dialog_open ? 'open' : 'closed'"></dd>
+      <dt>AlertDialog</dt>   <dd pp-text="alert_dialog_open ? 'open' : 'closed'"></dd>
+      <dt>Last alert action</dt><dd pp-text="last_action"></dd>
       <dt>Popover</dt>       <dd pp-text="popover_open ? 'open' : 'closed'"></dd>
       <dt>Menu actions fired</dt><dd pp-text="actions_fired"></dd>
       <dt>Current tab</dt>   <dd pp-text="tab"></dd>
@@ -53,6 +55,33 @@
         </pine-dialog-content>
       </pine-dialog-portal>
     </pine-dialog-root>
+  </section>
+
+  <!-- PineAlertDialog — interruptive confirmation ────────── -->
+  <h2>Alert dialog</h2>
+  <section class="row">
+    <pine-alert-dialog-root pp-model:open="alert_dialog_open">
+      <pine-alert-dialog-trigger pp-as>
+        <pine-button variant="destructive">Destroy project</pine-button>
+      </pine-alert-dialog-trigger>
+      <pine-alert-dialog-portal>
+        <pine-alert-dialog-overlay></pine-alert-dialog-overlay>
+        <pine-alert-dialog-content>
+          <pine-alert-dialog-title>Destroy project?</pine-alert-dialog-title>
+          <pine-alert-dialog-description>
+            All files will be permanently removed. This cannot be undone.
+          </pine-alert-dialog-description>
+          <div class="row" style="margin-top:1rem;justify-content:flex-end">
+            <pine-alert-dialog-cancel pp-as>
+              <pine-button variant="ghost">Keep project</pine-button>
+            </pine-alert-dialog-cancel>
+            <pine-alert-dialog-action pp-as @click="confirm_destroy">
+              <pine-button variant="destructive">Destroy</pine-button>
+            </pine-alert-dialog-action>
+          </div>
+        </pine-alert-dialog-content>
+      </pine-alert-dialog-portal>
+    </pine-alert-dialog-root>
   </section>
 
   <!-- PinePopover — compound (Radix-style) ───────────────── -->

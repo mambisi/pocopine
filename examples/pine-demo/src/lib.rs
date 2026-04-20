@@ -11,7 +11,12 @@ pub struct PineDemoApp {
     pub clicks: u32,
 
     pub dialog_open: bool,
+    pub alert_dialog_open: bool,
     pub popover_open: bool,
+
+    /// Set by the alert dialog's Action button — shows the user
+    /// made the destructive choice.
+    pub last_action: String,
 
     /// Running count of menu actions fired — dropdown menus are
     /// for actions (Copy, Refresh, Sign out), not for selection.
@@ -57,6 +62,11 @@ impl PineDemoApp {
 
     pub fn bump(&mut self) {
         self.clicks += 1;
+    }
+
+    /// Alert-dialog Action handler — records the destructive choice.
+    pub fn confirm_destroy(&mut self) {
+        self.last_action = "destroyed".into();
     }
 
     // ── Menu actions ─────────────────────────────────────────
