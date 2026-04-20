@@ -41,6 +41,9 @@ pub struct PineDemoApp {
     /// is currently selected.
     pub density: String,
 
+    /// Standalone RadioGroup demo value — the selected plan tier.
+    pub plan: String,
+
     /// Collapsible open state — bound two-way via
     /// `pp-model:open` on `<pine-collapsible-root>`.
     pub faq_open: bool,
@@ -58,6 +61,7 @@ impl PineDemoApp {
         self.show_muted = "unchecked".into();
         self.show_archived = "unchecked".into();
         self.density = "comfortable".into();
+        self.plan = "free".into();
     }
 
     pub fn bump(&mut self) {
