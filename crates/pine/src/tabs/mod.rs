@@ -70,7 +70,10 @@ impl PineTabsRoot {
 fn emit_from_self(value: String) {
     let Some(scope) = current_scope_id() else { return };
     let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:value", value);
+    // pp-model always listens for `pp:update:model`; the `:field`
+    // arg on `pp-model:value="…"` only picks the child prop on
+    // parent→child, not the event name on child→parent.
+    pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
 // ── List ──────────────────────────────────────────────────────────

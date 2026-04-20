@@ -76,7 +76,9 @@ impl PineAccordionRoot {
                 } else {
                     self.values.push(item_value);
                 }
-                emit("pp:update:values", self.values.clone());
+                // pp-model listens on `pp:update:model` only —
+                // see the matching note in tabs::emit_from_self.
+                emit("pp:update:model", self.values.clone());
             }
             _ => {
                 // single
@@ -88,7 +90,7 @@ impl PineAccordionRoot {
                 } else {
                     self.value = item_value;
                 }
-                emit("pp:update:value", self.value.clone());
+                emit("pp:update:model", self.value.clone());
             }
         }
     }

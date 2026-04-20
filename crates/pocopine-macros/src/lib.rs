@@ -151,7 +151,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .filter_map(|f| f.ident.clone())
         .collect();
-    let field_names: Vec<String> = field_idents.iter().map(|i| i.to_string()).collect();
+    // `ident.to_string()` on a raw identifier (`r#type`) returns
+    // the `r#` prefix. Callers never see it in HTML attributes,
+    // so strip it so attribute-to-prop mapping matches the bare
+    // name (`type`) as authors expect.
+    let field_names: Vec<String> = field_idents
+        .iter()
+        .map(|i| i.to_string().trim_start_matches("r#").to_string())
+        .collect();
 
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -578,7 +585,14 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .filter_map(|f| f.ident.clone())
         .collect();
-    let field_names: Vec<String> = field_idents.iter().map(|i| i.to_string()).collect();
+    // `ident.to_string()` on a raw identifier (`r#type`) returns
+    // the `r#` prefix. Callers never see it in HTML attributes,
+    // so strip it so attribute-to-prop mapping matches the bare
+    // name (`type`) as authors expect.
+    let field_names: Vec<String> = field_idents
+        .iter()
+        .map(|i| i.to_string().trim_start_matches("r#").to_string())
+        .collect();
 
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
