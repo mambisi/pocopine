@@ -41,7 +41,7 @@ inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
-    pub open: bool,
+    #[prop] pub open: bool,
 }
 
 #[handlers]
@@ -141,12 +141,12 @@ pub struct PineDropdownMenuContent {
     /// Which side of the trigger the content sits on —
     /// `"top"` / `"bottom"` / `"left"` / `"right"`. Default
     /// `"bottom"`.
-    pub side: String,
+    #[prop] pub side: String,
     /// Cross-axis alignment — `"start"` / `"center"` / `"end"`.
     /// Default `"start"`.
-    pub align: String,
+    #[prop] pub align: String,
     /// Pixel offset from the trigger. Default `4`.
-    pub side_offset: f64,
+    #[prop] pub side_offset: f64,
 }
 
 impl Default for PineDropdownMenuContent {
@@ -217,7 +217,7 @@ impl PineDropdownMenuContent {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuItem.poco")]
 pub struct PineDropdownMenuItem {
-    pub disabled: bool,
+    #[prop] pub disabled: bool,
 }
 
 #[handlers]
@@ -291,7 +291,7 @@ impl PineDropdownMenuSub {
 #[component(template = "PineDropdownMenuSubTrigger.poco")]
 pub struct PineDropdownMenuSubTrigger {
     pub open: bool,
-    pub disabled: bool,
+    #[prop] pub disabled: bool,
 }
 
 #[handlers]
@@ -339,9 +339,9 @@ impl PineDropdownMenuSubTrigger {
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,
-    pub side: String,
-    pub align: String,
-    pub side_offset: f64,
+    #[prop] pub side: String,
+    #[prop] pub align: String,
+    #[prop] pub side_offset: f64,
 }
 
 impl Default for PineDropdownMenuSubContent {
@@ -488,8 +488,8 @@ impl PineDropdownMenuGroup {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuCheckboxItem.poco")]
 pub struct PineDropdownMenuCheckboxItem {
-    pub state: String,
-    pub disabled: bool,
+    #[prop] pub state: String,
+    #[prop] pub disabled: bool,
     /// Computed mirror of `state != "unchecked"` for
     /// ItemIndicator's pp-if. Kept as a bool so
     /// `watch_scope_field::<bool>` in ItemIndicator stays simple.
@@ -602,7 +602,7 @@ impl PineDropdownMenuItemIndicator {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuRadioGroup.poco")]
 pub struct PineDropdownMenuRadioGroup {
-    pub value: String,
+    #[prop] pub value: String,
 }
 
 // Provide/inject key for a RadioGroup's scope id. RadioItems
@@ -630,13 +630,13 @@ impl PineDropdownMenuRadioGroup {
 #[component(template = "PineDropdownMenuRadioItem.poco")]
 pub struct PineDropdownMenuRadioItem {
     /// Author-provided — the value this item represents.
-    pub value: String,
+    #[prop] pub value: String,
     /// Mirrored from the group. Only used to derive `checked`.
     pub group_value: String,
     /// Computed: `group_value == value`. Drives aria-checked +
     /// ItemIndicator visibility.
     pub checked: bool,
-    pub disabled: bool,
+    #[prop] pub disabled: bool,
 }
 
 #[handlers]

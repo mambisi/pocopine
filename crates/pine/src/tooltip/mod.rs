@@ -60,10 +60,10 @@ struct TriggerRuntime {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTooltipRoot.poco")]
 pub struct PineTooltipRoot {
-    pub open: bool,
+    #[prop] pub open: bool,
     /// Delay (ms) before the tooltip appears on hover. Focus
     /// opens immediately (no delay — matches WAI-ARIA).
-    pub delay_duration: u32,
+    #[prop] pub delay_duration: u32,
 }
 
 impl Default for PineTooltipRoot {
@@ -262,9 +262,9 @@ impl PineTooltipPortal {
 #[component(template = "PineTooltipContent.poco")]
 pub struct PineTooltipContent {
     pub anchor: String,
-    pub side: String,
-    pub align: String,
-    pub side_offset: f64,
+    #[prop] pub side: String,
+    #[prop] pub align: String,
+    #[prop] pub side_offset: f64,
 }
 
 impl Default for PineTooltipContent {

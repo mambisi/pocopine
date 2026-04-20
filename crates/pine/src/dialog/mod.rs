@@ -44,10 +44,10 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDialogRoot.poco")]
 pub struct PineDialogRoot {
-    pub open: bool,
-    pub modal: bool,
-    pub dismiss_on_overlay: bool,
-    pub dismiss_on_escape: bool,
+    #[prop] pub open: bool,
+    #[prop] pub modal: bool,
+    #[prop] pub dismiss_on_overlay: bool,
+    #[prop] pub dismiss_on_escape: bool,
     pub title_id: String,
     pub description_id: String,
 }

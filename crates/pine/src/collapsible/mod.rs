@@ -37,7 +37,7 @@ pub struct PineCollapsibleRoot {
     /// Open/closed. Two-way bindable via
     /// `pp-model:open="my_open"` on the tag; Root emits
     /// `pp:update:model` whenever the value changes.
-    pub open: bool,
+    #[prop] pub open: bool,
 }
 
 #[handlers]
@@ -81,7 +81,7 @@ fn emit_from_self(open: bool) {
 #[component(template = "PineCollapsibleTrigger.poco")]
 pub struct PineCollapsibleTrigger {
     pub open: bool,
-    pub disabled: bool,
+    #[prop] pub disabled: bool,
 }
 
 #[handlers]

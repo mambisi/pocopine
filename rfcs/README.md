@@ -46,4 +46,4 @@ Conventions:
 | 028 | [`emit` / `emit_from` helpers](./rfc-028-emit.md) | Implemented |
 | 029 | [Rename `post_mount` → `on_ready`](./rfc-029-on-ready-rename.md) | Implemented |
 | 030 | [Typed `InjectKey` (Symbol-style provide/inject)](./rfc-030-inject-key-symbols.md) | Implemented |
-| 031 | [`#[prop]` / `#[state]` field roles](./rfc-031-prop-vs-state.md) | Draft |
+| 031 | [`#[prop]` / `#[state]` field roles](./rfc-031-prop-vs-state.md) | Implemented (breaking) |

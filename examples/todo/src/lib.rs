@@ -27,9 +27,9 @@ impl TodoList {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct TodoItem {
-    pub id: i32,
-    pub label: String,
-    pub done: bool,
+    #[prop] pub id: i32,
+    #[prop] pub label: String,
+    #[prop] pub done: bool,
 }
 
 #[handlers]

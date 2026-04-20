@@ -39,17 +39,17 @@ inject_key!(ROOT: ScopeId);
 #[component(template = "PineToggleGroupRoot.poco")]
 pub struct PineToggleGroupRoot {
     /// `"single"` (default) or `"multiple"`.
-    pub r#type: String,
+    #[prop] pub r#type: String,
     /// Single-mode current value. `""` when nothing is pressed.
-    pub value: String,
+    #[prop] pub value: String,
     /// Multiple-mode current values.
-    pub values: Vec<String>,
+    #[prop] pub values: Vec<String>,
     /// `"horizontal"` (default) / `"vertical"` — flows to
     /// `data-orientation` for styling. Roving is `.both` either
     /// way so keyboard nav works without orientation-specific
     /// configuration.
-    pub orientation: String,
-    pub disabled: bool,
+    #[prop] pub orientation: String,
+    #[prop] pub disabled: bool,
 }
 
 impl Default for PineToggleGroupRoot {
@@ -122,8 +122,8 @@ impl PineToggleGroupRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineToggleGroupItem.poco")]
 pub struct PineToggleGroupItem {
-    pub value: String,
-    pub disabled: bool,
+    #[prop] pub value: String,
+    #[prop] pub disabled: bool,
     /// Mirrored from Root's selection. Watched via
     /// `watch_scope_field` on both `value` and `values`; exactly
     /// one applies per tick based on Root's `type`.

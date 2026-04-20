@@ -39,15 +39,15 @@ inject_key!(ITEM: ScopeId);
 #[component(template = "PineAccordionRoot.poco")]
 pub struct PineAccordionRoot {
     /// `"single"` (default) or `"multiple"`.
-    pub r#type: String,
+    #[prop] pub r#type: String,
     /// When type="single" and collapsible=true, clicking the open
     /// item collapses it. When collapsible=false, at least one
     /// item must stay open (clicking the open item is a no-op).
-    pub collapsible: bool,
+    #[prop] pub collapsible: bool,
     /// `type="single"` state. `""` when all closed.
-    pub value: String,
+    #[prop] pub value: String,
     /// `type="multiple"` state.
-    pub values: Vec<String>,
+    #[prop] pub values: Vec<String>,
 }
 
 impl Default for PineAccordionRoot {
@@ -116,8 +116,8 @@ impl PineAccordionRoot {
 #[component(template = "PineAccordionItem.poco")]
 pub struct PineAccordionItem {
     /// Stable identifier for this item within the Root.
-    pub value: String,
-    pub disabled: bool,
+    #[prop] pub value: String,
+    #[prop] pub disabled: bool,
     /// Mirrored from Root's state via `item_open(self.value)`.
     pub open: bool,
 }

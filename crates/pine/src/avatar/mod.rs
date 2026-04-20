@@ -43,8 +43,8 @@ impl PineAvatarRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAvatarImage.poco")]
 pub struct PineAvatarImage {
-    pub src: String,
-    pub alt: String,
+    #[prop] pub src: String,
+    #[prop] pub alt: String,
     /// Mirrored from Root. Drives `pp-show` so the browser's
     /// broken-image glyph never flashes during load.
     pub loaded: bool,

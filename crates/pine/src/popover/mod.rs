@@ -49,12 +49,12 @@ inject_key!(ROOT: Handle<PinePopoverRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PinePopoverRoot.poco")]
 pub struct PinePopoverRoot {
-    pub open: bool,
+    #[prop] pub open: bool,
     /// Non-modal by default — matches reka-ui. Set `true` to get
     /// a focus trap + scroll lock via the shared overlay helper.
-    pub modal: bool,
-    pub dismiss_on_outside: bool,
-    pub dismiss_on_escape: bool,
+    #[prop] pub modal: bool,
+    #[prop] pub dismiss_on_outside: bool,
+    #[prop] pub dismiss_on_escape: bool,
 }
 
 impl Default for PinePopoverRoot {
@@ -171,9 +171,9 @@ pub struct PinePopoverContent {
     /// per-instance selector for anchor. Matches the
     /// `data-pine-popover-trigger="N"` stamp Trigger adds.
     pub anchor: String,
-    pub side: String,
-    pub align: String,
-    pub side_offset: f64,
+    #[prop] pub side: String,
+    #[prop] pub align: String,
+    #[prop] pub side_offset: f64,
 }
 
 impl Default for PinePopoverContent {

@@ -37,7 +37,7 @@ struct Row {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "TestRow.html")]
 struct TestRow {
-    row: Row,
+    #[prop] row: Row,
 }
 
 #[handlers]
@@ -206,7 +206,7 @@ impl AsButton {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ShortHost.html")]
 struct ShortHost {
-    variant: String,
+    #[prop] variant: String,
     count: u32,
 }
 
@@ -298,7 +298,7 @@ impl InterpHost {
 #[component(template = "FallthroughRoot.html")]
 struct FallthroughRoot {
     // `variant` is declared → flows into the prop path, NOT fallthrough.
-    variant: String,
+    #[prop] variant: String,
 }
 
 #[handlers]
@@ -308,7 +308,7 @@ impl FallthroughRoot {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ModelChild.html")]
 struct ModelChild {
-    model: String,
+    #[prop] model: String,
 }
 
 #[handlers]

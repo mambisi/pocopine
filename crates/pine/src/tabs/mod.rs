@@ -37,11 +37,11 @@ inject_key!(ROOT: Handle<PineTabsRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTabsRoot.poco")]
 pub struct PineTabsRoot {
-    pub value: String,
+    #[prop] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Flows into
     /// `aria-orientation` on List and dictates the roving
     /// nav-axis.
-    pub orientation: String,
+    #[prop] pub orientation: String,
 }
 
 impl Default for PineTabsRoot {
@@ -99,8 +99,8 @@ impl PineTabsList {
 #[component(template = "PineTabsTrigger.poco")]
 pub struct PineTabsTrigger {
     /// Author-set id of the tab this trigger activates.
-    pub value: String,
-    pub disabled: bool,
+    #[prop] pub value: String,
+    #[prop] pub disabled: bool,
     /// Mirrored — `true` when Root.value == self.value.
     pub selected: bool,
     /// ARIA id derived from Root's scope id + value, so Content
@@ -148,7 +148,7 @@ impl PineTabsTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsContent.poco")]
 pub struct PineTabsContent {
-    pub value: String,
+    #[prop] pub value: String,
     /// Mirrored.
     pub selected: bool,
     /// `aria-labelledby` target — the matching Trigger's id.

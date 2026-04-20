@@ -37,7 +37,7 @@ pub async fn get_post(post_id: u32) -> ServerResult<Post> {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct BlogPost {
-    pub post_id: u32,
+    #[prop] pub post_id: u32,
     pub title: String,
     pub body: String,
     pub loading: bool,

@@ -19,7 +19,7 @@ use super::DirectiveCall;
 use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::{child_component_proxy, track_effect_on};
+use crate::walker::track_effect_on;
 
 pub fn run(call: &DirectiveCall) {
     let Some(attr) = call.arg.clone() else { return };
@@ -36,17 +36,27 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    // Capture whether the target is a child component at bind time. The
-    // child's proxy is stable for the lifetime of the element.
-    let child_proxy = child_component_proxy(call.el);
+    // Capture child-component target info at bind time. The scope
+    // id is stable for the lifetime of the element; we use it at
+    // each effect tick to consult `is_prop` on the child's state
+    // so parents can't write through to `#[state]` fields.
+    let child_target = crate::walker::child_component_scope(call.el);
 
     let id = effect(move || {
         with_current_el(&el.clone(), || {
             let v = expr::evaluate(&ast, &parent_proxy);
-            match &child_proxy {
-                Some(cp) => {
-                    // Prop write — the set trap on the child's proxy
-                    // takes care of triggering downstream effects.
+            match &child_target {
+                Some((child_scope_id, cp)) => {
+                    // RFC-031 — only `#[prop]` fields are writable
+                    // from the parent. Silently drop writes to
+                    // state fields so accidental `<pine-thing
+                    // loaded="true">` doesn't clobber child state.
+                    let is_prop = crate::scope::Scope::find(*child_scope_id)
+                        .map(|s| s.state.borrow().is_prop(&attr))
+                        .unwrap_or(false);
+                    if !is_prop {
+                        return;
+                    }
                     let _ = Reflect::set(cp, &JsValue::from_str(&attr), &v);
                 }
                 None => apply(&el, &attr, &v),

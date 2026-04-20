@@ -689,6 +689,12 @@ fn apply_static_props(el: &Element, scope: &Scope) {
         // fields are snake_case (`post_id`). Map between them so authors
         // don't have to pick one side's spelling.
         let field = name.replace('-', "_");
+        // RFC-031 — only `#[prop]` fields are writable by parents
+        // via static HTML attributes. `#[state]` fields (the
+        // default) stay opaque to the parent.
+        if !scope.state.borrow().is_prop(&field) {
+            continue;
+        }
         let raw = a.value();
         let js = coerce_attr_value(&raw);
         scope.state.borrow_mut().set(&field, js);
@@ -925,11 +931,22 @@ fn find_slot_with_owner(
 /// template root, return the child component's proxy so directives like
 /// `pp-bind:` can write props directly.
 pub fn child_component_proxy(el: &Element) -> Option<JsValue> {
+    child_component_scope(el).map(|(_, p)| p)
+}
+
+/// RFC-031 — like [`child_component_proxy`] but also returns the
+/// child's scope id, so callers can consult `is_prop` on the
+/// child's `ComponentState` before writing through the proxy.
+/// Writes via `Reflect::set(&proxy, …)` always succeed at the JS
+/// layer; the is_prop gate lives at the directive site, not on
+/// the proxy itself (the proxy also sees the child's OWN internal
+/// writes, which must always land).
+pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     if !is_registered(&el.local_name()) {
         return None;
     }
     let root = first_element_child(el)?;
-    scope_of_element(&root).map(|(_, p)| p)
+    scope_of_element(&root)
 }
 
 fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {

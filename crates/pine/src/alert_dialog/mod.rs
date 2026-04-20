@@ -49,15 +49,15 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineAlertDialogRoot.poco")]
 pub struct PineAlertDialogRoot {
-    pub open: bool,
+    #[prop] pub open: bool,
     /// Alert dialogs are modal by definition — kept as a prop for
     /// consistency with Dialog but changing it would undermine the
     /// "interruptive choice" semantic.
-    pub modal: bool,
+    #[prop] pub modal: bool,
     /// Defaults to `false`: an alert dialog requires an explicit
     /// Action or Cancel click; clicking the overlay is a no-op.
-    pub dismiss_on_overlay: bool,
-    pub dismiss_on_escape: bool,
+    #[prop] pub dismiss_on_overlay: bool,
+    #[prop] pub dismiss_on_escape: bool,
     pub title_id: String,
     pub description_id: String,
 }

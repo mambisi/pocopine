@@ -45,8 +45,15 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
     // `model` so plain `pp-model="name"` keeps working unchanged.
     let child_field = call.arg.clone().unwrap_or_else(|| "model".into());
 
+    // Resolve the child's scope id once — we need it to consult
+    // `is_prop` per RFC-031 before every mirror-in write.
+    let child_scope_id = crate::walker::child_component_scope(call.el).map(|(id, _)| id);
+
     // Parent → child: mirror proxy[key] into the child's
-    // `<child_field>` prop. Same shape as pp-bind's child-prop path.
+    // `<child_field>` prop. Same shape as pp-bind's child-prop path,
+    // with the same RFC-031 gate — writes only land on
+    // `#[prop]` fields. The child → parent leg below uses a
+    // fresh CustomEvent, not a proxy write, and stays unaffected.
     let parent_r = parent_proxy.clone();
     let key_r = key.clone();
     let child_r = child_proxy.clone();
@@ -55,6 +62,14 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
             let v = resolve_path(&parent_r, &key_r);
+            if let Some(cid) = child_scope_id {
+                let is_prop = crate::scope::Scope::find(cid)
+                    .map(|s| s.state.borrow().is_prop(&child_field_w))
+                    .unwrap_or(false);
+                if !is_prop {
+                    return;
+                }
+            }
             let _ = Reflect::set(&child_r, &JsValue::from_str(&child_field_w), &v);
         });
     });

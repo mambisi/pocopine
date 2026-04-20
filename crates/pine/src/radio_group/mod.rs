@@ -43,20 +43,20 @@ inject_key!(CHECKED_OWNER: ScopeId);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineRadioGroupRoot.poco")]
 pub struct PineRadioGroupRoot {
-    pub value: String,
+    #[prop] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Drives both the
     /// `data-orientation` attribute and the roving direction —
     /// horizontal uses Arrow-Left / Arrow-Right, vertical uses
     /// Arrow-Up / Arrow-Down.
-    pub orientation: String,
+    #[prop] pub orientation: String,
     /// Disables every Item when true. Individual Items can also be
     /// disabled via their own `disabled` prop.
-    pub disabled: bool,
+    #[prop] pub disabled: bool,
     /// Form name for native form submission. Stamped on the
     /// hidden `<input>` Pine emits alongside the radio buttons so
     /// non-JS form posts see the selected value. Optional — omit
     /// when the group's value is managed entirely in app state.
-    pub name: String,
+    #[prop] pub name: String,
 }
 
 impl Default for PineRadioGroupRoot {
@@ -87,8 +87,8 @@ impl PineRadioGroupRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineRadioGroupItem.poco")]
 pub struct PineRadioGroupItem {
-    pub value: String,
-    pub disabled: bool,
+    #[prop] pub value: String,
+    #[prop] pub disabled: bool,
     /// Mirrored from Root's `value` — `true` when this Item is
     /// the currently-selected one. Watched via `watch_scope_field`
     /// so template bindings (`aria-checked`, `data-state`) stay in

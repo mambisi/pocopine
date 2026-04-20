@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 #[component(template = "PineToggle.poco")]
 pub struct PineToggle {
     /// Two-way bindable via `pp-model:pressed="bool"`.
-    pub pressed: bool,
-    pub disabled: bool,
+    #[prop] pub pressed: bool,
+    #[prop] pub disabled: bool,
 }
 
 #[handlers]

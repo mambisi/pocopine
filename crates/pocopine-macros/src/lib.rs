@@ -118,7 +118,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(a) => a,
         Err(e) => return e.to_compile_error().into(),
     };
-    let input = parse_macro_input!(item as ItemStruct);
+    let mut input = parse_macro_input!(item as ItemStruct);
 
     let struct_ident = input.ident.clone();
     let ident_str = struct_ident.to_string();
@@ -146,19 +146,31 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => LitStr::new(&format!("{ident_str}.poco"), struct_ident.span()),
     };
 
-    let field_idents: Vec<_> = input
-        .fields
-        .iter()
-        .filter_map(|f| f.ident.clone())
-        .collect();
-    // `ident.to_string()` on a raw identifier (`r#type`) returns
-    // the `r#` prefix. Callers never see it in HTML attributes,
-    // so strip it so attribute-to-prop mapping matches the bare
-    // name (`type`) as authors expect.
-    let field_names: Vec<String> = field_idents
-        .iter()
-        .map(|i| i.to_string().trim_start_matches("r#").to_string())
-        .collect();
+    // RFC-031 — `#[prop]` is the explicit "parent contract"
+    // marker; everything else defaults to state (internal,
+    // parents can't write it). Mirrors `pub` vs private in
+    // Rust — annotate what leaks outward, not what stays
+    // internal. The macro strips the `#[prop]` attribute from
+    // the emitted struct so rustc doesn't see an unknown
+    // attribute.
+    let mut field_idents: Vec<syn::Ident> = Vec::new();
+    let mut field_names: Vec<String> = Vec::new();
+    let mut field_is_prop: Vec<bool> = Vec::new();
+    for field in input.fields.iter_mut() {
+        let Some(ident) = field.ident.clone() else { continue };
+        let mut is_prop = false;
+        field.attrs.retain(|a| {
+            if a.path().is_ident("prop") {
+                is_prop = true;
+                false
+            } else {
+                true
+            }
+        });
+        field_names.push(ident.to_string().trim_start_matches("r#").to_string());
+        field_idents.push(ident);
+        field_is_prop.push(is_prop);
+    }
 
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -178,6 +190,23 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     });
 
     let keys_arr = field_names.iter().map(|n| quote! { #n });
+
+    // RFC-031 — `is_prop(key)` returns true only for fields
+    // annotated `#[prop]`. Everything else is state — parents
+    // stay out. Runtime consults this in `apply_static_props`,
+    // `pp-bind` child-prop write, and `pp-model` mirror-in.
+    let prop_field_names: Vec<&String> = field_names
+        .iter()
+        .zip(field_is_prop.iter())
+        .filter_map(|(n, is_prop)| is_prop.then_some(n))
+        .collect();
+    // `matches!(key, a | b | c)` needs at least one pattern —
+    // fall back to a `false` literal when no field is a prop.
+    let is_prop_body = if prop_field_names.is_empty() {
+        quote! { let _ = key; false }
+    } else {
+        quote! { matches!(key, #(#prop_field_names)|*) }
+    };
 
     let register_template_stmt = quote! {
         const _: &str = include_str!(#template_path);
@@ -223,6 +252,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn keys(&self) -> &'static [&'static str] {
                 &[#(#keys_arr),*]
+            }
+            fn is_prop(&self, key: &str) -> bool {
+                #is_prop_body
             }
             fn invoke(
                 &mut self,

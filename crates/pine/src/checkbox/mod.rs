@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineCheckbox.poco")]
 pub struct PineCheckbox {
-    pub state: String,
-    pub disabled: bool,
+    #[prop] pub state: String,
+    #[prop] pub disabled: bool,
 }
 
 impl Default for PineCheckbox {

@@ -30,6 +30,18 @@ pub trait ComponentState: 'static {
     /// a handler invocation.
     fn keys(&self) -> &'static [&'static str];
 
+    /// RFC-031 — is `key` annotated `#[prop]`? Returns `false` for
+    /// state fields (the default — anything not explicitly
+    /// marked as part of the parent contract). Used by
+    /// `apply_static_props`, `pp-bind`'s child-prop write, and
+    /// `pp-model`'s mirror-in leg to keep parents out of state.
+    /// Unknown keys return `false` — the runtime also uses
+    /// `keys()` / `set()` to know which fields exist at all.
+    fn is_prop(&self, key: &str) -> bool {
+        let _ = key;
+        false
+    }
+
     /// Invoke a named method on `&mut self` with JS-land arguments.
     /// Returns a JsValue (or `JsValue::UNDEFINED` for void methods).
     fn invoke(&mut self, key: &str, args: &Array) -> JsValue;

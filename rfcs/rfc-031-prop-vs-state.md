@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented (breaking) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-20 |
 | **Supersedes** | — |
@@ -13,11 +13,19 @@
 Split `#[component]` struct fields into two declarative roles:
 
 - **`#[prop]`** — intended to flow *in* from parents (HTML
-  attributes, `pp-bind`, fallthrough, `pp-model` write path).
-- **`#[state]`** — intended to flow *out*. Internal reactive
-  state the component owns: DOM-event-driven fields
-  (`<img @load>` → `loaded: bool`), compound-derived mirrors
-  (`open` in a Trigger mirroring Root), computed-ish fields.
+  attributes, `pp-bind`, fallthrough, `pp-model` mirror-in).
+- **state (the default — unmarked)** — intended to flow *out*.
+  Internal reactive state the component owns: DOM-event-driven
+  fields (`<img @load>` → `loaded: bool`), compound-derived
+  mirrors (`open` in a Trigger mirroring Root), derived IDs,
+  computed-ish fields.
+
+`#[prop]` is the explicit "parent contract" marker — same
+philosophy as `pub` vs private in Rust: you annotate what leaks
+outward, not what stays internal. Compounds usually have two or
+three props per sub-part and five-plus state fields (all the
+mirror values), so unmarked-is-state also drops annotation
+noise where it matters least.
 
 The mechanism stays identical — both are entries in the same
 scope state map, both trigger reactivity the same way — but the
@@ -34,8 +42,13 @@ role declaration lets the framework:
    struct can tell "this value comes from a parent" vs "this
    value is computed here" without following every handler.
 
-Unmarked fields keep the current semantics (parent-settable),
-so this is an additive annotation pass, not a breaking change.
+Unmarked fields default to state. No `#[state]` marker — one
+attribute does the work, less noise. Enforcement is at the
+directive level (runtime `is_prop` gate), not compile time: an
+unannotated field that a parent tries to write simply has its
+write silently dropped, as if the attribute didn't exist. That
+keeps the mental model tight (one attribute, one meaning) and
+matches Rust's `pub` vs private default.
 
 ```rust
 #[component(template = "PineAvatarImage.poco")]
@@ -111,55 +124,42 @@ RFC-031 puts that policy into pocopine.
 ```rust
 #[component(template = "…")]
 pub struct Thing {
-    /// Parent-provided. Default behavior.
+    /// Parent-provided. Explicit — flows in from HTML attrs,
+    /// `pp-bind:size`, or `pp-model:size`.
     #[prop]
     pub size: String,
 
-    /// Internal — parent can't write to this via attrs.
-    #[state]
-    pub hovered: bool,
-
-    /// Unmarked — treated as `#[prop]` for backward compat
-    /// (current Pine code). Macro emits a deprecation lint
-    /// after one release window so authors can migrate.
-    pub unclassified: u32,
+    /// Internal — parent writes are silently dropped. No marker
+    /// required (unmarked = state).
 }
 ```
 
 ### 4.2 Accepted modifiers
 
-v1 keeps the attributes bare — `#[prop]` and `#[state]` with no
-arguments. Future extensions considered:
+v1 keeps the attribute bare — `#[prop]` with no arguments.
+Future extensions considered:
 
 - `#[prop(required)]` — error if parent doesn't supply.
 - `#[prop(default = "…")]` — override Default.
-- `#[state(compute = "path_or_fn")]` — derive from other fields
-  reactively; see §3's follow-up note.
 
-These come later. v1 ships the bare role annotations only.
+These come later. v1 ships the bare marker only.
 
-### 4.3 `#[component]` attribute option
+### 4.3 Default = state
 
-```rust
-#[component(template = "…", strict_roles)]
-```
-
-With `strict_roles`, unmarked fields are a compile error. Without
-it, unmarked fields default to `#[prop]` for smooth migration.
-Pine's own crate flips `strict_roles` on after the migration pass
-lands; user apps can opt in at their own pace.
+No opt-out, no opt-in. An unmarked field is state. An annotated
+`#[prop]` field is a prop. That's the full surface.
 
 ## 5. Behavior
 
 ### 5.1 Static attribute application
 
-`walker::apply_static_props` skips fields declared `#[state]`:
+`walker::apply_static_props` skips non-prop fields:
 
 ```rust
 fn apply_static_props(el: &Element, scope: &Scope) {
     // … existing attribute iteration …
     let field = name.replace('-', "_");
-    // NEW: ask ComponentState whether the field is prop-writable.
+    // NEW — only `#[prop]` fields accept writes from HTML attrs.
     if !scope.state.borrow().is_prop(&field) {
         continue;
     }
@@ -168,46 +168,47 @@ fn apply_static_props(el: &Element, scope: &Scope) {
 ```
 
 `ComponentState::is_prop(&str) -> bool` is macro-generated; it
-returns `false` for fields annotated `#[state]`, `true` for
-`#[prop]` / unmarked.
+returns `true` only for fields annotated `#[prop]`. Unknown
+keys and state fields return `false`.
 
 ### 5.2 `pp-bind` child-prop path
 
 Same rule — writing from parent's `pp-bind:foo="path"` to a
 registered component's `foo` prop calls `is_prop("foo")` first.
-`#[state]` fields stay opaque to the parent.
+State fields stay opaque to the parent. The gate sits at the
+pp-bind directive (not the child's proxy set trap), because the
+child's OWN writes (internal handlers, `self.field = …`,
+`Handle::update(…)`) also route through the same proxy and
+must always land.
 
 ### 5.3 Fallthrough attrs (RFC-010)
 
-Current fallthrough skips `pp-*`, `@`, `:`, and attrs matching a
-declared field. Adding the `#[state]` rule: fallthrough treats
-`#[state]` fields as "declared, don't fall through" exactly like
-a `#[prop]` — so `<pine-thing hovered="true">` doesn't end up on
-the template root as an HTML attribute either.
+Unchanged — fallthrough still skips any attribute matching a
+declared field name regardless of role. State fields are
+declared (they're `keys()` entries), so they don't fall through
+either; the author simply gets no effect from writing them.
 
 ### 5.4 `pp-model` child path
 
 `pp-model:<field>="parent_key"` writes `event.detail` to the
 parent's `parent_key` and mirrors parent's value into child's
-`<field>`. If `<field>` is `#[state]`, the mirror-in leg is
-skipped (same rule as §5.1). The event-out leg stays unchanged
-— components still fire `pp:update:model` on internal state
-changes if they want the two-way binding for that specific
-field, and authors can mark a field both `#[state]` *and* emit
-from it (the role annotation governs *writes into* the field,
-not emits out).
+`<field>`. If `<field>` is state (unmarked), the mirror-in leg
+is skipped (same gate as §5.1). The event-out leg stays
+unchanged — state fields can still emit `pp:update:model`; the
+role annotation governs *writes into* the field, not emits
+out.
 
 ### 5.5 Reactivity & template access
 
 Zero change. Templates read `<span pp-text="loaded">` the same
-way whether `loaded` is `#[prop]` or `#[state]`. `watch_field` /
+way whether `loaded` is `#[prop]` or state. `watch_field` /
 `watch_scope_field` subscribe to any field regardless of role.
 
 ### 5.6 Devtools
 
 Devtools' component panel groups fields into two sections — props
-above, state below — driven by `ComponentState::field_role(&str)`
-(the same macro-generated metadata that powers `is_prop`).
+above, state below — driven by the same macro-generated
+`is_prop` method. Follow-up work.
 
 ## 6. "State from a special entity" — §7 expansion
 
@@ -225,17 +226,17 @@ captures it:
 pub struct PineAvatarImage {
     #[prop] pub src: String,
     #[prop] pub alt: String,
-    // `#[state]` because the <img>'s events are the authority,
-    // not the parent. The handler path:
+    // Unmarked (= state) because the <img>'s events are the
+    // authority, not the parent. The handler path:
     //
     //   <img @load="on_load" @error="on_error">
     //
     //   fn on_load(&mut self) { self.loaded = true; ... }
     //
-    // is plain reactive state mutation; the annotation only
-    // says "parents stay out of this field."
-    #[state] pub loaded: bool,
-    #[state] pub error: bool,
+    // is plain reactive state mutation; omitting `#[prop]`
+    // keeps parents out of the field.
+    pub loaded: bool,
+    pub error: bool,
 }
 ```
 
@@ -246,90 +247,82 @@ components want shared boilerplate for wrapping an element's
 native state (common enough across `<img>`, `<video>`, `<audio>`,
 `<details>` toggle, form-input `:invalid`), we can land a
 `#[mirror]` helper that takes a DOM event name and a setter —
-but that's ergonomic sugar for the `#[state]` + handler pattern,
-not a third role.
+but that's ergonomic sugar for unmarked-state + handler, not a
+third role.
 
 ## 7. Implementation sketch
 
 ### 7.1 `crates/pocopine-macros/src/lib.rs`
 
 Parse the per-field attributes when building `field_idents` /
-`field_names`:
+`field_names`: consume `#[prop]`, record which fields carried it,
+leave unmarked fields alone. The macro strips the `#[prop]`
+attribute from the emitted struct so rustc doesn't see an
+unknown attribute.
+
+Emit an extra `ComponentState` member:
 
 ```rust
-enum FieldRole { Prop, State }
-
-struct FieldInfo {
-    ident: Ident,
-    name: String,    // stripped of `r#`
-    role: FieldRole, // #[prop] / #[state] / unmarked default
-}
-
-fn parse_fields(input: &DeriveInput) -> Vec<FieldInfo> { … }
-```
-
-Emit an extra `impl` member:
-
-```rust
-fn field_role(&self, key: &str) -> Option<&'static str> {
-    match key {
-        #(#prop_field_names => Some("prop"),)*
-        #(#state_field_names => Some("state"),)*
-        _ => None,
-    }
-}
 fn is_prop(&self, key: &str) -> bool {
-    matches!(self.field_role(key), Some("prop"))
+    matches!(key, #(#prop_field_names)|*)
 }
 ```
 
-Add the `is_prop` method to the `ComponentState` trait.
+When there are zero prop fields, the arm is `false` (with a
+`let _ = key;` to silence the unused-var lint).
 
-### 7.2 `crates/pocopine-core/src/walker.rs`
+The `is_prop` method also lives on the `ComponentState` trait
+with a default `false` impl, so non-component `ComponentState`
+impls (if any appear) don't break.
 
-One line in `apply_static_props`, one in the fallthrough skip
-list, one in `pp-bind`'s child-prop write:
+### 7.2 `crates/pocopine-core/src/walker.rs` + directives
 
-```rust
-if !scope.state.borrow().is_prop(&field) {
-    continue;
-}
-```
+Three sites gate on `is_prop`:
+
+1. `walker::apply_static_props` — static HTML-attr writes.
+2. `directives::bind::run` — parent→child `pp-bind:<prop>` path.
+   Uses the new `walker::child_component_scope(el)` helper to
+   get the child's scope id + proxy, so we can query
+   `is_prop` without going through the proxy (which would track
+   a dependency we don't want).
+3. `directives::model::run_component` — parent→child mirror-in
+   leg of `pp-model:<field>`.
+
+The proxy's set trap itself stays ungated — child components
+write to their own state through the same proxy during handlers,
+and gating there would break internal writes.
 
 ### 7.3 Migration pass
 
-Mechanical per Pine compound — read each struct, annotate fields
-as `#[prop]` or `#[state]` based on how they're used:
+Mechanical per Pine compound — read each struct, mark
+parent-writable fields `#[prop]`:
 
-- Set in handlers only → `#[state]`
-- Referenced in HTML attrs + author-facing usage → `#[prop]`
+- Set in handlers only → leave unmarked (state).
+- Referenced in HTML attrs or `pp-model:<field>` in demos/tests
+  → `#[prop]`.
 - Both (e.g. Dialog's `open` is prop-settable AND self-mutated
   through handlers) → `#[prop]` (parent-writable wins when in
   doubt; the annotation governs the *can-parent-write-it*
   contract).
 
-Expected distribution across the ten Pine compounds:
+Actual distribution across the Pine compounds:
 
 - Most `open` / `value` / `values` / `checked` / `pressed` →
   `#[prop]` (they're the `pp-model` binding targets).
-- Most `*_id` (title_id, description_id, trigger_id, label_id) →
-  `#[state]` (derived from scope id in `on_setup`).
+- Most `*_id` (title_id, description_id, trigger_id, label_id),
+  `anchor` → unmarked state (derived from scope id in `on_setup`).
 - Mirror fields on sub-parts (Trigger's `open`, Item's
-  `selected`) → `#[state]` (set by `watch_scope_field`, never
-  by parent).
-- Avatar's `loaded`, accordion-item's internal mirror of Root's
-  `values` membership → `#[state]`.
+  `selected`) → unmarked state (set by `watch_scope_field`,
+  never by parent).
+- Avatar's `loaded` → unmarked state (driven by `<img @load>`).
 
-### 7.4 Lint + deprecation
+### 7.4 No compile error
 
-After RFC lands:
-
-1. Macro accepts both annotated and unannotated fields.
-2. In `#[component(template = "…", strict_roles)]` mode, an
-   unannotated field is an error — Pine's crate opts in.
-3. In the lax default, an unannotated field emits a
-   `#[deprecated]`-style compile warning suggesting one of the
-   two roles.
+Unannotated fields are valid (= state). The breakage is
+behavioural — a parent trying to write a previously-writable
+field now has its write silently dropped. Authors verify by
+running their test suite; there's no macro-level check that
+flags "you probably wanted to annotate this."
 
 ## 8. Alternatives considered
 
@@ -373,28 +366,32 @@ their own components.
 
 ## 9. Open questions
 
-- **Should `#[state]` fields still be `pub`?** Rust visibility
-  and "parent-writable" are orthogonal axes. A `pub` field that
-  can't be written from attrs is confusing. Options: require
-  `pub(crate)` on `#[state]`, or accept the confusion as
-  documentation noise. v1 accepts any visibility; style guide
-  recommends `pub` for symmetry with other fields even though
-  parents can't write it.
-- **Should `#[state]` fields emit `pp:update:model`?** The RFC
-  says "governs writes-in, not emits-out" — a `#[state]` field
-  can still be a `pp-model` target. Confusing? Let's see if real
-  usage produces the pattern before forbidding it.
-- **Naming.** `#[state]` overloads a common word (scope state,
-  state trait, component state). Alternatives: `#[internal]`,
-  `#[private_prop]`, `#[owned]`. None are as clear as `#[state]`;
-  sticking with it.
+- **Should state fields still be `pub`?** Rust visibility and
+  "parent-writable" are orthogonal axes. A `pub` field that
+  can't be written from attrs is mildly confusing but symmetric
+  with the prop fields. v1 accepts any visibility; the field
+  still needs to be `pub` to participate in reactivity /
+  template bindings.
+- **Should state fields emit `pp:update:model`?** The RFC says
+  "governs writes-in, not emits-out" — an unmarked field can
+  still be a `pp-model` target from outside. Useful when the
+  child reports internal changes (e.g. Avatar's `loaded` could
+  notify the parent when the image finishes loading) without
+  being overwritten by the parent.
 
-## 10. Rollout
+## 10. Rollout — breaking, single-shot
 
-1. Land macro support + `is_prop` / `field_role` in
-   `pocopine-macros` + `pocopine-core`.
-2. Walker + pp-bind + fallthrough + pp-model honour the role in
-   their skip rules.
-3. Annotate every Pine compound (one pass across ~10 modules).
-4. Flip `strict_roles` on for `crates/pine/`.
-5. Document in `docs/` and update RFC-001.
+1. Land macro support + `is_prop` in `pocopine-macros` +
+   `pocopine-core`. Unmarked fields keep compiling (now state).
+2. Walker's `apply_static_props` + `pp-bind` child-prop + `pp-model`
+   mirror-in honour the role in their skip rules.
+3. Migrate every `#[component]` struct in the workspace in the
+   same commit series — Pine (all compounds), every example,
+   every test fixture — adding `#[prop]` to fields that were
+   parent-writable.
+4. Update RFC-001 and docs.
+
+No deprecation window. The breakage is behavioural: a parent's
+attempt to write a newly-unmarked field is now silently dropped,
+so the migration is "find the prop fields, annotate them, run
+tests."
