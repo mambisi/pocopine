@@ -266,11 +266,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn setup(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::setup(self);
             }
-            fn mount(&mut self) {
-                <Self as ::pocopine::__private::HandlerDispatch>::mount(self);
+            fn mount(
+                &mut self,
+                ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                <Self as ::pocopine::__private::HandlerDispatch>::mount(self, ctx);
             }
-            fn on_ready(&self) {
-                <Self as ::pocopine::__private::HandlerDispatch>::on_ready(self);
+            fn on_ready(
+                &self,
+                ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                <Self as ::pocopine::__private::HandlerDispatch>::on_ready(self, ctx);
             }
             fn unmount(&mut self) {
                 <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
@@ -333,6 +339,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut has_on_mount = false;
     let mut has_on_ready = false;
     let mut has_on_unmount = false;
+    // RFC-032 — number of extractor params past &self / &mut self.
+    // Drives how many `__ctx.into()` calls the generated forwarder
+    // passes to the user's `on_mount` / `on_ready`.
+    let mut on_mount_extractor_count: usize = 0;
+    let mut on_ready_extractor_count: usize = 0;
     // (method_ident, field_ident, value_type) for each `#[watch(f)]`
     // method. The macro auto-generates an `on_ready` that wires a
     // `watch_field` per entry.
@@ -378,9 +389,25 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let name = ident.to_string();
         match name.as_str() {
             "on_setup" => has_on_setup = true,
-            "on_mount" => has_on_mount = true,
+            "on_mount" => {
+                has_on_mount = true;
+                // Count non-receiver params — each becomes a
+                // `__ctx.into()` in the generated forwarder.
+                on_mount_extractor_count = method
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter(|a| matches!(a, FnArg::Typed(_)))
+                    .count();
+            }
             "on_ready" => {
                 has_on_ready = true;
+                on_ready_extractor_count = method
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter(|a| matches!(a, FnArg::Typed(_)))
+                    .count();
                 continue; // lifecycle; don't emit an invoke arm
             }
             "on_unmount" => has_on_unmount = true,
@@ -440,10 +467,20 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn has_setup(&self) -> bool { true }
         }
     });
+    // RFC-032: forward `__ctx.into()` for each extractor the user
+    // declared on `on_mount`. Zero-arg signature just calls
+    // through and ignores the ctx.
+    let mount_extractor_args = (0..on_mount_extractor_count).map(|_| {
+        quote! { __ctx.into() }
+    });
     let mount_impl = has_on_mount.then(|| {
         quote! {
-            fn mount(&mut self) {
-                Self::on_mount(self);
+            fn mount(
+                &mut self,
+                __ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                let _ = &__ctx;
+                Self::on_mount(self #(, #mount_extractor_args)*);
             }
             fn has_on_mount(&self) -> bool { true }
         }
@@ -495,6 +532,13 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     });
     let has_watches = !watches.is_empty();
 
+    // RFC-032 — same extractor-forwarding logic as mount. Zero-arg
+    // user signature stays zero-arg; any extractor params become
+    // `__ctx.into()` in the generated forwarder.
+    let on_ready_extractor_args: Vec<_> = (0..on_ready_extractor_count)
+        .map(|_| quote! { __ctx.into() })
+        .collect();
+
     // User wrote their own `on_ready` explicitly: use it. If they
     // didn't but there's at least one `#[watch]`, generate an
     // on_ready that wires up every watch. If they wrote BOTH,
@@ -502,23 +546,35 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let on_ready_impl = if has_on_ready {
         if has_watches {
             quote! {
-                fn on_ready(&self) {
-                    Self::on_ready(self);
+                fn on_ready(
+                    &self,
+                    __ctx: ::pocopine::__private::LifecycleContext<'_>,
+                ) {
+                    let _ = &__ctx;
+                    Self::on_ready(self #(, #on_ready_extractor_args)*);
                     #(#watch_installs)*
                 }
                 fn has_on_ready(&self) -> bool { true }
             }
         } else {
             quote! {
-                fn on_ready(&self) {
-                    Self::on_ready(self);
+                fn on_ready(
+                    &self,
+                    __ctx: ::pocopine::__private::LifecycleContext<'_>,
+                ) {
+                    let _ = &__ctx;
+                    Self::on_ready(self #(, #on_ready_extractor_args)*);
                 }
                 fn has_on_ready(&self) -> bool { true }
             }
         }
     } else if has_watches {
         quote! {
-            fn on_ready(&self) {
+            fn on_ready(
+                &self,
+                __ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                let _ = &__ctx;
                 #(#watch_installs)*
             }
             fn has_on_ready(&self) -> bool { true }

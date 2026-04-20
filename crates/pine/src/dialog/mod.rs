@@ -199,7 +199,7 @@ impl PineDialogContent {
         }
     }
 
-    pub fn on_ready(&self) {
+    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         // Install focus trap + scroll lock via the shared overlay
         // helper. Content is inside Portal's teleported subtree,
         // which `MutationObserver` on the mount root can't
@@ -207,8 +207,10 @@ impl PineDialogContent {
         // yanks the portal. Instead watch root.open and
         // deactivate when it flips false; on_unmount stays as a
         // belt-and-braces backup for the non-teleport path.
-        let Some(scope) = current_scope_id() else { return };
-        let Some(content) = refs::get_on(scope, "content") else { return };
+        //
+        // RFC-032 extractors (`Refs`, `ScopeId`) remove the scope
+        // lookup + `refs::get_on` dance from the top of the hook.
+        let Some(content) = refs.get("content") else { return };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(true);

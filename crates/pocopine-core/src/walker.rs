@@ -165,8 +165,9 @@ fn fire_mount_hook(el: &Element) {
     };
 
     if has_mount {
+        let ctx = crate::lifecycle::LifecycleContext::__new(el, id);
         crate::scope::with_current_scope_id(id, || {
-            scope.state.borrow_mut().mount();
+            scope.state.borrow_mut().mount(ctx);
         });
         crate::reactive::trigger_scope(id);
     }
@@ -174,15 +175,20 @@ fn fire_mount_hook(el: &Element) {
     if has_ready {
         // RFC-026/029: defer `on_ready` to the next microtask so
         // the surrounding walker frame has unwound and pp-if /
-        // pp-teleport children have had a chance to commit. The
-        // hook is invoked through an IMMUTABLE borrow — proxy reads
-        // inside the hook (watch_field, refs::get_on that touches
-        // the proxy, `$event`) require state.borrow() on the get
-        // trap, which is compatible with other immutable borrows.
+        // pp-teleport children have had a chance to commit. Own the
+        // element by cloning into the closure so the fresh
+        // `LifecycleContext` at invoke time borrows a live handle.
+        // The hook is invoked through an IMMUTABLE borrow — proxy
+        // reads inside the hook (watch_field, refs::get_on that
+        // touches the proxy, `$event`) require state.borrow() on
+        // the get trap, which is compatible with other immutable
+        // borrows.
+        let el_owned = el.clone();
         crate::tick::next(move || {
             let Some(scope) = Scope::find(id) else { return };
+            let ctx = crate::lifecycle::LifecycleContext::__new(&el_owned, id);
             crate::scope::with_current_scope_id(id, || {
-                scope.state.borrow().on_ready();
+                scope.state.borrow().on_ready(ctx);
             });
         });
     }
@@ -1083,6 +1089,9 @@ pub(crate) fn release_subtree(node: &Node) {
                     });
                 }
                 Scope::remove(scope_id);
+                // RFC-032 — drop any MountEpoch entry for this scope
+                // so a recycled scope id doesn't inherit stale values.
+                crate::lifecycle::__clear_mount_epoch(scope_id);
             }
         }
         crate::directives::transition::release(&el);

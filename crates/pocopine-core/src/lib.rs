@@ -25,6 +25,7 @@ pub mod magics;
 pub mod slot_scope;
 pub mod slots;
 pub mod path;
+pub mod lifecycle;
 pub mod reactive;
 pub mod refs;
 pub mod registry;
@@ -48,6 +49,10 @@ pub use emit::{
 };
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
+pub use lifecycle::{
+    Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, Me, MountEpoch,
+    ParentId, Refs, ScopePath, Slots, TagName, TeleportHost, TypedEl, Win,
+};
 pub use magics::dispatch_event;
 pub use server::{Result as ServerResult, ServerError};
 pub use store::{

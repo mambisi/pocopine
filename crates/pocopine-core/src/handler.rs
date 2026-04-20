@@ -30,16 +30,25 @@ pub trait HandlerDispatch {
     fn setup(&mut self) {}
 
     /// Called once after the component is mounted and its subtree is
-    /// fully bound. The `#[handlers]` macro generates an override that
-    /// delegates to the user's `on_mount` method when one exists.
-    fn mount(&mut self) {}
+    /// fully bound. The `#[handlers]` macro generates an override
+    /// that delegates to the user's `on_mount` method when one
+    /// exists. RFC-032: receives a `LifecycleContext` whose
+    /// extractors the generated forwarder projects into the user
+    /// method's declared parameters.
+    fn mount(&mut self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// Called once, scheduled via `tick::next` AFTER `mount()` returns.
     /// Takes `&self` so proxy-reading helpers (`watch_field`, refs,
     /// `$event`) called from inside don't clash with an active
     /// `borrow_mut`. Mutation in on_ready goes via
     /// `pocopine::this::<Self>().update(...)`. See RFC-026 / RFC-029.
-    fn on_ready(&self) {}
+    /// RFC-032: receives a `LifecycleContext` — same story as
+    /// `mount`.
+    fn on_ready(&self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// Called once just before the component unmounts, while the
     /// state is still mutable and the scope is still in the registry.

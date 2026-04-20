@@ -76,6 +76,18 @@ pub fn lookup(
     })
 }
 
+/// RFC-032 — return the names of all slots captured for `scope_id`,
+/// in insertion order. Used by the `Slots` extractor. Returns an
+/// empty vec when the scope has no slot store.
+pub fn names_for(scope_id: ScopeId) -> Vec<String> {
+    STORES.with(|s| {
+        s.borrow()
+            .get(&scope_id)
+            .map(|store| store.by_name.keys().cloned().collect())
+            .unwrap_or_default()
+    })
+}
+
 /// Drop any stored slots for a component whose scope has been
 /// removed. Hooked from `Scope::remove` so the map doesn't outlive
 /// the component.

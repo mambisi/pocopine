@@ -10,9 +10,11 @@ pub use pocopine_core::{
     emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, fetch,
     flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
     set_auto_flush, signal, store, this, trigger_scope, watch, watch_field,
-    watch_scope_field, App, Component, ComponentState, Computed, EffectId, EffectOptions,
-    Handle, InjectKey, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal,
-    SignalId, Store, StoreHandle,
+    watch_scope_field, App, Body, Component, ComponentState, Computed, Doc, EffectId,
+    EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported, LifecycleContext,
+    Me, MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName,
+    TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::inject_key;
@@ -38,7 +40,7 @@ pub mod __private {
     pub use pocopine_core::{
         inject_pp_data, inject_style, register_component, register_store_scope,
         register_template, store_scope, Component, ComponentState, FromHandlerArg, Handle,
-        HandlerDispatch, Scope, Store,
+        HandlerDispatch, LifecycleContext, Scope, Store,
     };
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;

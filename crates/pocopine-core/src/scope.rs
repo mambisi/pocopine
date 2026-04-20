@@ -56,8 +56,12 @@ pub trait ComponentState: 'static {
 
     /// Lifecycle — called once after the component's subtree is fully
     /// bound. Default no-op; `#[component]` wires the user's
-    /// `on_mount` when one exists.
-    fn mount(&mut self) {}
+    /// `on_mount` when one exists. RFC-032: receives a
+    /// `LifecycleContext` so handler signatures can extract the
+    /// rendered root, scope id, refs, etc. via `From`.
+    fn mount(&mut self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// Lifecycle — called once, scheduled via `tick::next` AFTER
     /// `mount()` returns. Takes `&self` (not `&mut self`) so
@@ -65,8 +69,10 @@ pub trait ComponentState: 'static {
     /// doesn't clash with the scope's state borrow. Mutation in
     /// on_ready goes through `pocopine::this::<Self>().update(...)`.
     /// Default no-op; `#[component]` wires the user's `on_ready`
-    /// when one exists. See RFC-026 / RFC-029.
-    fn on_ready(&self) {}
+    /// when one exists. See RFC-026 / RFC-029 / RFC-032.
+    fn on_ready(&self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// Lifecycle — called once just before the component is torn down.
     /// Default no-op; `#[component]` wires the user's `on_unmount`
