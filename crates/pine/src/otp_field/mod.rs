@@ -39,12 +39,12 @@ use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget, HtmlElement, HtmlInputElement, KeyboardEvent};
 
 /// Structural descriptor for one slot — driven entirely by the
-/// `length` prop. Kept deliberately free of per-character state:
-/// `.value`, `data-filled`, and the bullet-vs-char display are
-/// synced imperatively in [`PineOtpField::sync_slot_display`] so
-/// the `pp-for` that renders the slots never has to reconcile on
-/// every keystroke (which would swap the focused `<input>` out
-/// from under the user).
+/// `length` prop. Per-character state (`.value`, `data-filled`,
+/// bullet-vs-char display) is applied imperatively in
+/// [`PineOtpField::sync_slot_display`] so the `pp-for` that
+/// renders the slots never has to reconcile on every keystroke
+/// (which would swap the focused `<input>` out from under the
+/// user).
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct OtpSlot {
     pub index: u32,
@@ -66,14 +66,21 @@ pub struct PineOtpField {
     pub disabled: bool,
     #[prop]
     pub label: String,
-    /// Computed view model for `pp-for` in the template.
+    /// Computed view model for `pp-for` in the template. Only
+    /// rebuilt when `length` changes.
     pub slots: Vec<OtpSlot>,
     /// `inputmode` derived from `type`. Flows to each slot's
     /// `inputmode` attribute for mobile keyboards.
     pub input_mode: String,
     /// Validation pattern derived from `type` — used by the
-    /// native `pattern` attribute + the in-Rust input filter.
+    /// native `pattern` attribute.
     pub pattern: String,
+    /// Target slot index for the next scheduled focus move.
+    /// `handle_input` / `handle_backspace` write here; the event
+    /// closure consumes it and schedules the actual `.focus()`
+    /// on the next macrotask — after any reactive flush has
+    /// finished walking the template.
+    pub pending_focus: Option<u32>,
 }
 
 impl Default for PineOtpField {
@@ -88,6 +95,7 @@ impl Default for PineOtpField {
             slots: Vec::new(),
             input_mode: "numeric".into(),
             pattern: "[0-9]*".into(),
+            pending_focus: None,
         }
     }
 }
@@ -99,13 +107,9 @@ impl PineOtpField {
         self.rebuild_slots();
     }
 
-    pub fn on_ready_pull(&self) {}
-
     /// When the parent writes `value` externally (via `pp-bind`
     /// or a `pp-model` round-trip), push the new characters into
-    /// the live `<input>` elements. Skips touching `self.slots`
-    /// to avoid pp-for reconciliation — the slots only change
-    /// structurally with `length`.
+    /// the live `<input>` elements.
     #[watch(value)]
     fn on_value_change(&mut self, _value: String, _prev: Option<String>) {
         self.sync_slot_display();
@@ -117,15 +121,13 @@ impl PineOtpField {
         self.rebuild_slots();
     }
 
-    /// Likewise `type` — the `inputmode` / `pattern` mirrors
-    /// depend on it.
+    /// `type` changes the `inputmode` / `pattern` mirrors.
     #[watch(r#type)]
     fn on_type_change(&mut self, _v: String, _prev: Option<String>) {
         self.refresh_mode();
     }
 
-    /// `mask` only affects `.value` (bullet vs real char); no
-    /// slot rebuild needed.
+    /// `mask` only affects `.value` display (bullet vs real char).
     #[watch(mask)]
     fn on_mask_change(&mut self, _v: bool, _prev: Option<bool>) {
         self.sync_slot_display();
@@ -133,20 +135,20 @@ impl PineOtpField {
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         // First-paint sync — the template's `pp-for` has just
-        // materialised the slot <input>s; push the current
-        // value (if any) to their `.value` properties + stamp
-        // `data-filled` so authors' CSS rules match on mount.
+        // materialised the slot <input>s; push the current value
+        // (if any) to their `.value` properties.
         handle.with(|s| s.sync_slot_display());
         let Some(root) = refs.get("root") else { return };
 
         // ── `input` — a character landed in a slot. The browser
-        // already replaced the slot's value, so we pull it, feed
-        // it through the component's filter + set-at-index
-        // logic, and advance focus.
+        // already updated the slot's .value, so we pull it, feed
+        // it through the component's filter + set-at-index logic,
+        // and remember where focus should land.
         let h = handle.clone();
         let root_for_input = root.clone();
         let input_cb = Closure::wrap(Box::new(move |ev: Event| {
-            let Some(el) = ev.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) else {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+            else {
                 return;
             };
             let Some(idx) = el
@@ -157,17 +159,27 @@ impl PineOtpField {
             };
             let typed = el.value();
             h.update(|s| s.handle_input(idx, &typed));
+            // Consume the requested focus target, falling back to
+            // the slot the event fired on so a deletion keeps
+            // focus put.
+            let focus_target =
+                h.update(|s| s.pending_focus.take()).unwrap_or(idx as u32);
             let new_value = h.with(|s| s.value.clone());
             pocopine::emit_from(&root_for_input, "pp:update:model", new_value);
+
+            // `h.update` can trigger reactive flushes that walk
+            // the template and blur the focused input. Re-apply
+            // focus via a macrotask so it lands after flush.
+            schedule_focus(root_for_input.clone(), focus_target);
         }) as Box<dyn FnMut(Event)>);
         let target: &EventTarget = root.as_ref();
-        let _ = target.add_event_listener_with_callback("input", input_cb.as_ref().unchecked_ref());
+        let _ =
+            target.add_event_listener_with_callback("input", input_cb.as_ref().unchecked_ref());
         input_cb.forget();
 
-        // ── Backspace on an empty slot walks focus back and
-        // clears the previous filled slot. Without this, the
-        // user gets stuck on an empty slot after fixing a
-        // mistake.
+        // ── Keydown: Backspace on empty slot walks back; arrows
+        // navigate between slots. Regular character keys are
+        // handled by the browser + the `input` listener above.
         let h2 = handle;
         let root_for_kd = root.clone();
         let target_kd: EventTarget = root.into();
@@ -176,7 +188,8 @@ impl PineOtpField {
             if key != "Backspace" && key != "ArrowLeft" && key != "ArrowRight" {
                 return;
             }
-            let Some(el) = ev.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok()) else {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+            else {
                 return;
             };
             let Some(idx) = el
@@ -192,25 +205,48 @@ impl PineOtpField {
                     }
                     ev.prevent_default();
                     h2.update(|s| s.handle_backspace(idx));
+                    let focus_target = h2
+                        .update(|s| s.pending_focus.take())
+                        .unwrap_or(idx as u32);
                     let new_value = h2.with(|s| s.value.clone());
                     pocopine::emit_from(&root_for_kd, "pp:update:model", new_value);
+                    schedule_focus(root_for_kd.clone(), focus_target);
                 }
                 "ArrowLeft" => {
                     if idx > 0 {
                         ev.prevent_default();
-                        h2.with(|s| s.focus_slot(idx - 1));
+                        schedule_focus(root_for_kd.clone(), (idx - 1) as u32);
                     }
                 }
                 "ArrowRight" => {
                     ev.prevent_default();
-                    h2.with(|s| s.focus_slot(idx + 1));
+                    schedule_focus(root_for_kd.clone(), (idx + 1) as u32);
                 }
                 _ => {}
             }
         }) as Box<dyn FnMut(KeyboardEvent)>);
-        let _ = target_kd
-            .add_event_listener_with_callback("keydown", kd_cb.as_ref().unchecked_ref());
+        let _ =
+            target_kd.add_event_listener_with_callback("keydown", kd_cb.as_ref().unchecked_ref());
         kd_cb.forget();
+    }
+}
+
+/// Schedule a `.focus()` on `input[data-index="{target}"]`
+/// inside `root` on the next macrotask (`setTimeout(_, 0)`).
+/// Used by all handler paths so the re-focus lands *after*
+/// any reactive flush from a preceding `Handle::update` has
+/// finished walking the template.
+fn schedule_focus(root: web_sys::Element, target: u32) {
+    let cb = Closure::once_into_js(Box::new(move || {
+        let selector = format!("input[data-index=\"{target}\"]");
+        if let Some(found) = root.query_selector(&selector).ok().flatten() {
+            if let Ok(html) = found.dyn_into::<HtmlElement>() {
+                let _ = html.focus();
+            }
+        }
+    }) as Box<dyn FnOnce()>);
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 0);
     }
 }
 
@@ -224,7 +260,6 @@ impl PineOtpField {
                 self.pattern = "[a-zA-Z0-9]*".into();
             }
             _ => {
-                // numeric (default)
                 self.input_mode = "numeric".into();
                 self.pattern = "[0-9]*".into();
             }
@@ -242,13 +277,13 @@ impl PineOtpField {
     }
 
     /// Push the current `value` + `mask` into the DOM slots'
-    /// `.value` properties and `data-filled` attribute. Doesn't
-    /// mutate `self.slots`, so the `pp-for` that renders them
-    /// doesn't reconcile on every keystroke — keeping the
-    /// focused `<input>` stable.
+    /// `.value` properties and `data-filled` attribute without
+    /// mutating `self.slots`, so the `pp-for` doesn't reconcile.
     fn sync_slot_display(&self) {
         let Some(scope) = current_scope_id() else { return };
-        let Some(root_el) = refs::get_on(scope, "root") else { return };
+        let Some(root_el) = refs::get_on(scope, "root") else {
+            return;
+        };
         let value_chars: Vec<char> = self.value.chars().collect();
         let len = self.length as usize;
         for i in 0..len {
@@ -285,15 +320,12 @@ impl PineOtpField {
         if typed_chars.is_empty() {
             if typed.is_empty() {
                 // User genuinely cleared the slot (cut / delete).
-                // Remove from the dense value.
                 if index < value_chars.len() {
                     value_chars.remove(index);
                 }
             } else {
-                // A disallowed character was typed (e.g. "a" in a
-                // numeric-mode slot). Leave `value` alone and push
-                // the old slot content back to the DOM so the
-                // rejected keystroke doesn't linger.
+                // Disallowed character rejected by the filter —
+                // revert the DOM input + leave `value` alone.
                 self.sync_slot_display();
                 return;
             }
@@ -302,21 +334,11 @@ impl PineOtpField {
             if index < value_chars.len() {
                 value_chars[index] = c;
             } else if value_chars.len() < len {
-                // Append — only valid when the slot is exactly
-                // at the current tail. Clicking into a
-                // far-ahead empty slot and typing is a no-op
-                // except for pushing at the tail, which matches
-                // user expectation (auto-advance implies dense
-                // from-the-front fill).
                 value_chars.push(c);
             }
-            // Advance focus to the next slot, clamped.
-            let next = (index + 1).min(len.saturating_sub(1));
-            self.focus_slot(next);
+            self.pending_focus = Some(((index + 1).min(len.saturating_sub(1))) as u32);
         } else {
-            // Multi-char arrival — paste or one-time-code
-            // autofill. Spread the characters across slots
-            // starting at `index`.
+            // Multi-char arrival — paste or autofill. Spread.
             for (i, c) in typed_chars.iter().enumerate() {
                 let slot = index + i;
                 if slot >= len {
@@ -328,16 +350,15 @@ impl PineOtpField {
                     value_chars.push(*c);
                 }
             }
-            let next = (index + typed_chars.len()).min(len.saturating_sub(1));
-            self.focus_slot(next);
+            self.pending_focus =
+                Some(((index + typed_chars.len()).min(len.saturating_sub(1))) as u32);
         }
 
         value_chars.truncate(len);
         self.value = value_chars.iter().collect();
-        // `#[watch(value)]` fires sync_slot_display, but the
-        // reactive flush happens after Handle::update returns —
-        // call it eagerly so any follow-up logic (focus_slot,
-        // emit) runs against an up-to-date DOM.
+        // `#[watch(value)]` fires sync_slot_display on the next
+        // reactive tick, but we also call it eagerly so subsequent
+        // logic sees the up-to-date DOM.
         self.sync_slot_display();
     }
 
@@ -352,41 +373,14 @@ impl PineOtpField {
         }
         self.value = value_chars.iter().collect();
         self.sync_slot_display();
-        self.focus_slot(target);
+        self.pending_focus = Some(target as u32);
     }
 
     /// Filter a string down to characters allowed by `type`.
-    /// Applied to both direct typing and paste content.
     fn filter(&self, s: &str) -> String {
         match self.r#type.as_str() {
             "alphanumeric" => s.chars().filter(|c| c.is_ascii_alphanumeric()).collect(),
             _ => s.chars().filter(|c| c.is_ascii_digit()).collect(),
-        }
-    }
-
-    /// Move DOM focus to the slot at `index`, if it exists.
-    /// Deferred to a macrotask (`setTimeout(_, 0)`) so reactive
-    /// state flush — which can re-run `pp-for` bindings and drop
-    /// focus during node reuse — has completed before we try to
-    /// land on the target input.
-    fn focus_slot(&self, index: usize) {
-        let Some(scope) = current_scope_id() else { return };
-        let cb = Closure::once_into_js(Box::new(move || {
-            let Some(root_el) = refs::get_on(scope, "root") else {
-                return;
-            };
-            let selector = format!("input[data-index=\"{index}\"]");
-            if let Some(el) = root_el.query_selector(&selector).ok().flatten() {
-                if let Ok(html) = el.dyn_into::<HtmlElement>() {
-                    let _ = html.focus();
-                }
-            }
-        }) as Box<dyn FnOnce()>);
-        if let Some(w) = web_sys::window() {
-            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                cb.unchecked_ref(),
-                0,
-            );
         }
     }
 }

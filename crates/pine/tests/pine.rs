@@ -2940,6 +2940,122 @@ async fn otp_field_typing_advances_focus_to_next_slot() {
     host.remove();
 }
 
+/// Deleting content from a filled, focused slot via the Delete
+/// key (browser fires `input` with newValue "") keeps focus
+/// on that same slot rather than dumping it to `<body>`.
+#[wasm_bindgen_test]
+async fn otp_field_delete_on_filled_slot_keeps_focus() {
+    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slot = |i: u32| -> HtmlInputElement {
+        tag.query_selector(&format!(
+            "input.pine-otp-field-slot[data-index=\"{i}\"]"
+        ))
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+    };
+
+    // Fill slots 0..3 with "1234" — user types each digit.
+    for i in 0..4 {
+        let el = slot(i);
+        el.set_value(&(i + 1).to_string());
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        el.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+        sleep_ms(5).await;
+        tick().await;
+    }
+
+    // User presses Delete on slot 2 (filled). Browser clears the
+    // content and fires `input` with "". Focus should stay on
+    // slot 2.
+    // User presses Delete on slot 2 (filled). Browser clears the
+    // content and fires `input` with "". Focus should stay on
+    // slot 2.
+    let s2 = slot(2);
+    s2.focus().unwrap();
+    s2.set_value("");
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    s2.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    let active = doc()
+        .active_element()
+        .expect("document has an active element");
+    assert_eq!(
+        active.get_attribute("data-index").as_deref(),
+        Some("2"),
+        "delete on filled slot 2 keeps focus on slot 2"
+    );
+
+    host.remove();
+}
+
+/// Backspace on an empty slot moves focus *to* the previous
+/// (now-cleared) slot, not to `<body>`. Regression test for
+/// the same reactive-flush race that stole focus on type.
+#[wasm_bindgen_test]
+async fn otp_field_backspace_lands_focus_on_previous_slot() {
+    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slot = |i: u32| -> HtmlInputElement {
+        tag.query_selector(&format!(
+            "input.pine-otp-field-slot[data-index=\"{i}\"]"
+        ))
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+    };
+
+    // Fill slots 0..2 so the current "tail" is slot 2 (empty).
+    for i in 0..2 {
+        let el = slot(i);
+        el.set_value(&(i + 1).to_string());
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        el.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+    }
+    // Yield so auto-advance has landed focus on slot 2.
+    sleep_ms(5).await;
+    tick().await;
+
+    // User clicks / tabs to slot 2 (empty) and presses Backspace.
+    let s2 = slot(2);
+    s2.focus().unwrap();
+    let kd_init = web_sys::KeyboardEventInit::new();
+    kd_init.set_bubbles(true);
+    kd_init.set_cancelable(true);
+    kd_init.set_key("Backspace");
+    let ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kd_init).unwrap();
+    s2.dispatch_event(&ev).unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    let active = doc()
+        .active_element()
+        .expect("document has an active element");
+    assert_eq!(
+        active.get_attribute("data-index").as_deref(),
+        Some("1"),
+        "backspace on empty slot 2 focuses slot 1"
+    );
+
+    host.remove();
+}
+
 /// Backspace on an empty slot walks focus back and clears the
 /// previously-filled slot. Auto-advance means a completed-then-
 /// backspaced field leaves focus in the correct place.
