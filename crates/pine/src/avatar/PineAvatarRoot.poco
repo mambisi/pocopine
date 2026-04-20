@@ -1,4 +1,4 @@
-<div class="pine-avatar-root"
-     :data-loaded="loaded">
+<span class="pine-avatar-root"
+      :data-loaded="loaded">
   <slot></slot>
-</div>
+</span>

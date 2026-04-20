@@ -1,4 +1,4 @@
-<div class="pine-avatar-fallback"
-     pp-show="!loaded">
+<span class="pine-avatar-fallback"
+      pp-show="!loaded">
   <slot></slot>
-</div>
+</span>
