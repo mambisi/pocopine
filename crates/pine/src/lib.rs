@@ -24,6 +24,7 @@
 //! into their templates without enumerating the library.
 
 pub mod accordion;
+pub mod alert_dialog;
 pub mod avatar;
 pub mod button;
 pub mod checkbox;
@@ -38,6 +39,11 @@ pub mod tooltip;
 
 pub use accordion::{
     PineAccordionContent, PineAccordionItem, PineAccordionRoot, PineAccordionTrigger,
+};
+pub use alert_dialog::{
+    PineAlertDialogAction, PineAlertDialogCancel, PineAlertDialogContent,
+    PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal,
+    PineAlertDialogRoot, PineAlertDialogTitle, PineAlertDialogTrigger,
 };
 pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
@@ -71,6 +77,15 @@ pub fn register_all() {
     PineAccordionItem::register();
     PineAccordionTrigger::register();
     PineAccordionContent::register();
+    PineAlertDialogRoot::register();
+    PineAlertDialogTrigger::register();
+    PineAlertDialogPortal::register();
+    PineAlertDialogOverlay::register();
+    PineAlertDialogContent::register();
+    PineAlertDialogTitle::register();
+    PineAlertDialogDescription::register();
+    PineAlertDialogAction::register();
+    PineAlertDialogCancel::register();
     PineAvatarRoot::register();
     PineAvatarImage::register();
     PineAvatarFallback::register();

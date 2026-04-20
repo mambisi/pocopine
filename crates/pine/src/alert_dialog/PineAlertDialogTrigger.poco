@@ -1,0 +1,9 @@
+<button pp-as
+        type="button"
+        class="pine-alert-dialog-trigger"
+        :aria-expanded="open ? 'true' : 'false'"
+        aria-haspopup="dialog"
+        :data-state="open ? 'open' : 'closed'"
+        @click="toggle">
+  <slot></slot>
+</button>

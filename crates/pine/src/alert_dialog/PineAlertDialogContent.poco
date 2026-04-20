@@ -1,0 +1,10 @@
+<div role="alertdialog"
+     aria-modal="true"
+     class="pine-alert-dialog-content"
+     pp-ref="content"
+     data-state="open"
+     :aria-labelledby="title_id"
+     :aria-describedby="description_id"
+     @keydown.escape.prevent="on_escape">
+  <slot></slot>
+</div>

@@ -1,0 +1,6 @@
+<button pp-as
+        type="button"
+        class="pine-alert-dialog-cancel"
+        @click="click">
+  <slot></slot>
+</button>

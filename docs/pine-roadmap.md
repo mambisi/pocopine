@@ -14,6 +14,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 |---|---|---|
 | PineButton | stable | `variant` / `size` / `disabled` + `pp-as` |
 | PineDialog* (compound, 8 parts) | stable | Root/Trigger/Portal/Overlay/Content/Title/Description/Close |
+| PineAlertDialog* (compound, 9 parts) | stable | Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel; `role="alertdialog"`, no overlay-dismiss |
 | PinePopover* (compound, 5 parts) | stable | Root/Trigger/Portal/Content/Close; auto-anchor via Trigger stamp |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
@@ -206,7 +207,7 @@ After DropdownMenu's core is fleshed out:
 | 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
 | 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
 | 5 | ~~**Avatar**~~ | Done — Root/Image/Fallback compound. |
-| 6 | **AlertDialog** | ~30 lines layered on Dialog (forbid dismiss-on-outside, `role="alertdialog"`). |
+| 6 | ~~**AlertDialog**~~ | Done — 9-part compound: Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel. Content renders `role="alertdialog"`; `dismiss_on_overlay` defaults `false`. Author's side-effect handler goes on the `<pine-alert-dialog-action>` tag (fallthrough skips `@`) so it fires alongside the framework's own `close()`. |
 | 7 | **HoverCard** | Popover + hover delay timers (copy Tooltip's timing). |
 | 8 | **ContextMenu** | DropdownMenu + pointer-coord anchor. Free once Sub lands. |
 | 9 | **Tooltip provider** | Radix's single-open policy across a subtree (compound-rewrite territory). |

@@ -1,0 +1,3 @@
+<p class="pine-alert-dialog-description" :id="description_id">
+  <slot></slot>
+</p>

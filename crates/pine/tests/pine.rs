@@ -1824,6 +1824,142 @@ async fn dialog_trigger_composes_pine_button() {
     host.remove();
 }
 
+// ─── PineAlertDialog ──────────────────────────────────────────────
+
+/// AlertDialog opens the same way as Dialog, but Content renders
+/// `role="alertdialog"` and overlay-click is a no-op by default
+/// (alerts require an explicit Action or Cancel choice).
+#[wasm_bindgen_test]
+async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
+    let host = mount(
+        "<pine-alert-dialog-root>\
+           <pine-alert-dialog-trigger class=\"ad-trig\">open</pine-alert-dialog-trigger>\
+           <pine-alert-dialog-portal>\
+             <pine-alert-dialog-overlay></pine-alert-dialog-overlay>\
+             <pine-alert-dialog-content>\
+               <pine-alert-dialog-title>Delete?</pine-alert-dialog-title>\
+               <pine-alert-dialog-description>Irreversible.</pine-alert-dialog-description>\
+               <pine-alert-dialog-cancel class=\"ad-cancel\">Cancel</pine-alert-dialog-cancel>\
+               <pine-alert-dialog-action class=\"ad-action\">Delete</pine-alert-dialog-action>\
+             </pine-alert-dialog-content>\
+           </pine-alert-dialog-portal>\
+         </pine-alert-dialog-root>",
+    );
+    tick().await;
+
+    host.query_selector(".ad-trig button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let alert = doc()
+        .query_selector("[role=\"alertdialog\"].pine-alert-dialog-content")
+        .unwrap()
+        .expect("alertdialog role on Content");
+    assert_eq!(alert.get_attribute("aria-modal").as_deref(), Some("true"));
+
+    // Clicking the overlay must NOT close (default
+    // `dismiss_on_overlay = false`).
+    let overlay = doc()
+        .query_selector(".pine-alert-dialog-overlay")
+        .unwrap()
+        .expect("overlay");
+    overlay.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"alertdialog\"].pine-alert-dialog-content")
+            .unwrap()
+            .is_some(),
+        "alert dialog stays open on overlay click"
+    );
+
+    // Close via Cancel so the teleported portal doesn't leak into
+    // body for the next test (host.remove() alone can't clean up
+    // body-teleported content — the host's MutationObserver
+    // doesn't observe body).
+    doc()
+        .query_selector(".ad-cancel button")
+        .unwrap()
+        .expect("cancel btn")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    host.remove();
+}
+
+/// Action and Cancel both close the alert dialog.
+#[wasm_bindgen_test]
+async fn alert_dialog_action_and_cancel_close() {
+    let host = mount(
+        "<pine-alert-dialog-root>\
+           <pine-alert-dialog-trigger class=\"ad2-trig\">open</pine-alert-dialog-trigger>\
+           <pine-alert-dialog-portal>\
+             <pine-alert-dialog-content>\
+               <pine-alert-dialog-title>Hi</pine-alert-dialog-title>\
+               <pine-alert-dialog-cancel class=\"ad2-cancel\">Cancel</pine-alert-dialog-cancel>\
+               <pine-alert-dialog-action class=\"ad2-action\">OK</pine-alert-dialog-action>\
+             </pine-alert-dialog-content>\
+           </pine-alert-dialog-portal>\
+         </pine-alert-dialog-root>",
+    );
+    tick().await;
+
+    let trig = host.query_selector(".ad2-trig button").unwrap().unwrap();
+    trig.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    // Cancel closes.
+    doc()
+        .query_selector(".ad2-cancel button")
+        .unwrap()
+        .expect("cancel btn")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"alertdialog\"]")
+            .unwrap()
+            .is_none(),
+        "Cancel closes alert dialog"
+    );
+
+    // Reopen, Action closes.
+    trig.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    doc()
+        .query_selector(".ad2-action button")
+        .unwrap()
+        .expect("action btn")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"alertdialog\"]")
+            .unwrap()
+            .is_none(),
+        "Action closes alert dialog"
+    );
+
+    host.remove();
+}
+
 /// Clicks on the inner `<button>` bubble up through the
 /// `<pine-button>` custom element tag — so `@click` (or any
 /// directly-attached listener) on the tag catches them. This is

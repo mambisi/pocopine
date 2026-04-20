@@ -1,0 +1,3 @@
+<div class="pine-alert-dialog-overlay"
+     data-state="open"
+     @click.self="on_click"></div>
