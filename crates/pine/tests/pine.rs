@@ -1858,17 +1858,17 @@ async fn tooltip_provider_singleton_evicts_previous() {
     );
     tick().await;
 
-    // Hover A — `pp-ref="trigger"` points at the <span> Trigger
-    // template renders around the author's button, so the
-    // Trigger's mouseenter listener lives on the span. The class
-    // `tp-a-trig` is on the custom element tag; the span inside
+    // Hover A — `pp-ref="trigger"` points at the Trigger template's
+    // wrapper div that renders around the author's button, so the
+    // Trigger's mouseenter listener lives on that div. The class
+    // `tp-a-trig` is on the custom element tag; the div inside
     // carries `class="pine-tooltip-trigger"` plus the fallthrough
-    // class, so we reach it via the inner span.
-    let a_span = host
-        .query_selector(".tp-a-trig span")
+    // class, so we reach it via `.tp-a-trig > div`.
+    let a_wrap = host
+        .query_selector(".tp-a-trig > div")
         .unwrap()
-        .expect("A trigger span");
-    a_span
+        .expect("A trigger wrapper");
+    a_wrap
         .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
         .unwrap();
     sleep_ms(5).await;
@@ -1880,11 +1880,11 @@ async fn tooltip_provider_singleton_evicts_previous() {
     );
 
     // Hover B — Provider should evict A.
-    let b_span = host
-        .query_selector(".tp-b-trig span")
+    let b_wrap = host
+        .query_selector(".tp-b-trig > div")
         .unwrap()
-        .expect("B trigger span");
-    b_span
+        .expect("B trigger wrapper");
+    b_wrap
         .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
         .unwrap();
     sleep_ms(5).await;
@@ -1902,7 +1902,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
     // Close B before host.remove() — the teleported portal lives
     // in body, so without this the next tooltip test sees a
     // stale `[role="tooltip"]` element.
-    b_span
+    b_wrap
         .dispatch_event(&web_sys::Event::new("mouseleave").unwrap())
         .unwrap();
     sleep_ms(5).await;
@@ -2173,13 +2173,13 @@ async fn hover_card_hover_opens_and_leave_closes() {
     tick().await;
 
     // mouseenter doesn't bubble per spec, so dispatch directly on
-    // the trigger span where the listener lives.
-    let trig_span = host
+    // the trigger wrapper div where the listener lives.
+    let trig_wrap = host
         .query_selector(".pine-hover-card-trigger")
         .unwrap()
         .unwrap();
     let enter = web_sys::Event::new("mouseenter").unwrap();
-    trig_span.dispatch_event(&enter).unwrap();
+    trig_wrap.dispatch_event(&enter).unwrap();
     // setTimeout(0) schedules on the task queue, which only runs
     // after our microtasks drain — a real yield is required.
     sleep_ms(5).await;
@@ -2195,7 +2195,7 @@ async fn hover_card_hover_opens_and_leave_closes() {
 
     // Leave the trigger → close timer fires (0 delay).
     let leave = web_sys::Event::new("mouseleave").unwrap();
-    trig_span.dispatch_event(&leave).unwrap();
+    trig_wrap.dispatch_event(&leave).unwrap();
     sleep_ms(5).await;
     tick().await;
 
