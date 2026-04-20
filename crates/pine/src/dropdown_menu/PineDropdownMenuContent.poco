@@ -1,9 +1,9 @@
-<ul role="menu"
-    class="pine-dm-content"
-    pp-ref="menu"
-    data-state="open"
-    pp-roving
-    @click.outside="close"
-    @keydown.escape.prevent="close">
+<root role="menu"
+      class="pine-dm-content"
+      pp-ref="menu"
+      data-state="open"
+      pp-roving
+      @click.outside="close"
+      @keydown.escape.prevent="close">
   <slot></slot>
-</ul>
+</root>

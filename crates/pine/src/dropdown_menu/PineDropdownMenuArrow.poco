@@ -1,3 +1,3 @@
-<span class="pine-dm-arrow"
+<root class="pine-dm-arrow"
       :data-side="side"
-      aria-hidden="true"></span>
+      aria-hidden="true"></root>

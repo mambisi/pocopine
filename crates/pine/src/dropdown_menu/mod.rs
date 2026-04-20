@@ -37,7 +37,7 @@ inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRoot.poco")]
+#[component(template = "PineDropdownMenuRoot.poco", role = "scope")]
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
@@ -66,7 +66,7 @@ impl PineDropdownMenuRoot {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuTrigger.poco")]
+#[component(template = "PineDropdownMenuTrigger.poco", role = "interactive")]
 pub struct PineDropdownMenuTrigger {
     /// Mirrored from Root.open so the template's `:aria-expanded`
     /// and `:data-state` bindings fire reactively.
@@ -105,7 +105,7 @@ impl PineDropdownMenuTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuPortal.poco")]
+#[component(template = "PineDropdownMenuPortal.poco", role = "scope")]
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
@@ -127,7 +127,7 @@ impl PineDropdownMenuPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuContent.poco")]
+#[component(template = "PineDropdownMenuContent.poco", role = "list")]
 pub struct PineDropdownMenuContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// a per-instance selector targeting this root's Trigger
@@ -210,7 +210,7 @@ impl PineDropdownMenuContent {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuItem.poco")]
+#[component(template = "PineDropdownMenuItem.poco", role = "item")]
 pub struct PineDropdownMenuItem {
     #[prop] pub disabled: bool,
 }
@@ -261,7 +261,7 @@ fn dispatch_pp_select() -> bool {
 /// v0 is click-to-open (no hover-intent timers). Escape in
 /// SubContent closes just the sub, not the outer menu.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSub.poco")]
+#[component(template = "PineDropdownMenuSub.poco", role = "scope")]
 pub struct PineDropdownMenuSub {
     pub open: bool,
 }
@@ -283,7 +283,7 @@ impl PineDropdownMenuSub {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSubTrigger.poco")]
+#[component(template = "PineDropdownMenuSubTrigger.poco", role = "item")]
 pub struct PineDropdownMenuSubTrigger {
     pub open: bool,
     #[prop] pub disabled: bool,
@@ -327,7 +327,7 @@ impl PineDropdownMenuSubTrigger {
 }
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSubContent.poco")]
+#[component(template = "PineDropdownMenuSubContent.poco", role = "list")]
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,
@@ -406,7 +406,7 @@ fn focus_first_sub_item() {
 /// `pp-anchor::reposition` to expose the resolved side through
 /// a side-table — saved for a follow-up.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuArrow.poco")]
+#[component(template = "PineDropdownMenuArrow.poco", role = "visual")]
 pub struct PineDropdownMenuArrow {
     pub side: String,
 }
@@ -431,7 +431,7 @@ impl PineDropdownMenuArrow {
 /// focus, no interaction — pure `role="separator"` +
 /// `aria-orientation`.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSeparator.poco")]
+#[component(template = "PineDropdownMenuSeparator.poco", role = "item")]
 pub struct PineDropdownMenuSeparator {}
 
 #[handlers]
@@ -443,7 +443,7 @@ impl PineDropdownMenuSeparator {}
 /// own scope id (unique per instance) and provides it to any
 /// nested Label so their ids match up for `aria-labelledby`.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuGroup.poco")]
+#[component(template = "PineDropdownMenuGroup.poco", role = "panel")]
 pub struct PineDropdownMenuGroup {
     /// Computed — id of the Label inside this group, for
     /// `aria-labelledby` on the group's root. Populated in
@@ -477,7 +477,7 @@ impl PineDropdownMenuGroup {
 /// renders its slot only when `checked != "unchecked"` (matches
 /// reka-ui semantics).
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuCheckboxItem.poco")]
+#[component(template = "PineDropdownMenuCheckboxItem.poco", role = "item")]
 pub struct PineDropdownMenuCheckboxItem {
     #[prop] pub state: String,
     #[prop] pub disabled: bool,
@@ -556,7 +556,7 @@ impl PineDropdownMenuCheckboxItem {
 /// `watch_scope_field`, so any state change in the parent item
 /// reactively shows/hides this indicator.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuItemIndicator.poco")]
+#[component(template = "PineDropdownMenuItemIndicator.poco", role = "visual")]
 pub struct PineDropdownMenuItemIndicator {
     pub checked: bool,
 }
@@ -590,7 +590,7 @@ impl PineDropdownMenuItemIndicator {
 /// flows changes both ways via `pp:update:model` bubbling up
 /// from RadioItem clicks.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRadioGroup.poco")]
+#[component(template = "PineDropdownMenuRadioGroup.poco", role = "panel")]
 pub struct PineDropdownMenuRadioGroup {
     #[prop] pub value: String,
 }
@@ -617,7 +617,7 @@ impl PineDropdownMenuRadioGroup {
 /// Also provides `CHECKED_OWNER` so nested ItemIndicators
 /// work identically to CheckboxItem.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRadioItem.poco")]
+#[component(template = "PineDropdownMenuRadioItem.poco", role = "item")]
 pub struct PineDropdownMenuRadioItem {
     /// Author-provided — the value this item represents.
     #[prop] pub value: String,
@@ -696,7 +696,7 @@ impl PineDropdownMenuRadioItem {
 /// `aria-labelledby` resolves. Does not render a `role` — it's
 /// styling-only (matches reka-ui / Radix).
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuLabel.poco")]
+#[component(template = "PineDropdownMenuLabel.poco", role = "panel")]
 pub struct PineDropdownMenuLabel {
     pub label_id: String,
 }

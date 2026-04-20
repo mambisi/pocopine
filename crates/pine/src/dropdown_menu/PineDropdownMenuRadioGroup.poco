@@ -1,4 +1,4 @@
-<div class="pine-dm-radio-group"
-     role="group">
+<root class="pine-dm-radio-group"
+      role="group">
   <slot></slot>
-</div>
+</root>
