@@ -1,0 +1,7 @@
+<div role="radiogroup"
+     class="pine-radio-group"
+     :data-orientation="orientation"
+     :data-disabled="disabled"
+     pp-roving.both>
+  <slot></slot>
+</div>

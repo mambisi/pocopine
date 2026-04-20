@@ -1824,6 +1824,189 @@ async fn dialog_trigger_composes_pine_button() {
     host.remove();
 }
 
+// ─── PineRadioGroup ───────────────────────────────────────────────
+
+/// Clicking an Item writes its `value` into Root (Items become
+/// checked / unchecked correctly) and fires `pp:update:model` from
+/// Root's element so `pp-model:value` can two-way bind.
+#[wasm_bindgen_test]
+async fn radio_group_click_selects_and_emits() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+
+    let host = mount(
+        "<pine-radio-group-root>\
+           <pine-radio-group-item value=\"a\" class=\"rg-a\">A</pine-radio-group-item>\
+           <pine-radio-group-item value=\"b\" class=\"rg-b\">B</pine-radio-group-item>\
+           <pine-radio-group-item value=\"c\" class=\"rg-c\">C</pine-radio-group-item>\
+         </pine-radio-group-root>",
+    );
+    tick().await;
+
+    let root = host
+        .query_selector("pine-radio-group-root")
+        .unwrap()
+        .expect("root element");
+
+    // Listen for the pp:update:model event on the Root tag.
+    let emitted = Rc::new(RefCell::new(None::<String>));
+    let em = emitted.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        *em.borrow_mut() = ce.detail().as_string();
+    });
+    root.add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+
+    // Click item B's rendered <button>.
+    host.query_selector(".rg-b button.pine-radio-group-item")
+        .unwrap()
+        .expect("B button")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        emitted.borrow().as_deref(),
+        Some("b"),
+        "pp:update:model fires with selected value"
+    );
+
+    // States reflected on buttons.
+    let a = host.query_selector(".rg-a button").unwrap().unwrap();
+    let b = host.query_selector(".rg-b button").unwrap().unwrap();
+    let c = host.query_selector(".rg-c button").unwrap().unwrap();
+    assert_eq!(a.get_attribute("data-state").as_deref(), Some("unchecked"));
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("checked"));
+    assert_eq!(c.get_attribute("data-state").as_deref(), Some("unchecked"));
+    assert_eq!(b.get_attribute("aria-checked").as_deref(), Some("true"));
+    assert_eq!(a.get_attribute("aria-checked").as_deref(), Some("false"));
+
+    // Switch to C — B flips back.
+    host.query_selector(".rg-c button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("unchecked"));
+    assert_eq!(c.get_attribute("data-state").as_deref(), Some("checked"));
+
+    host.remove();
+}
+
+/// Disabled Item ignores clicks; disabled Root disables all items.
+#[wasm_bindgen_test]
+async fn radio_group_respects_disabled() {
+    let host = mount(
+        "<pine-radio-group-root value=\"a\">\
+           <pine-radio-group-item value=\"a\" class=\"rg2-a\">A</pine-radio-group-item>\
+           <pine-radio-group-item value=\"b\" disabled=\"true\" class=\"rg2-b\">B</pine-radio-group-item>\
+         </pine-radio-group-root>",
+    );
+    tick().await;
+
+    // Disabled item click doesn't select.
+    host.query_selector(".rg2-b button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    let a = host.query_selector(".rg2-a button").unwrap().unwrap();
+    let b = host.query_selector(".rg2-b button").unwrap().unwrap();
+    assert_eq!(a.get_attribute("data-state").as_deref(), Some("checked"));
+    assert_eq!(b.get_attribute("data-state").as_deref(), Some("unchecked"));
+
+    host.remove();
+}
+
+/// Indicator only renders visible markup when its enclosing Item
+/// is checked. Gated via `pp-show="checked"`; watched through
+/// `inject<ScopeId>(CHECKED_OWNER_KEY)` + `watch_scope_field`.
+#[wasm_bindgen_test]
+async fn radio_group_indicator_mirrors_item_checked() {
+    let host = mount(
+        "<pine-radio-group-root>\
+           <pine-radio-group-item value=\"a\" class=\"rg3-a\">\
+             <pine-radio-group-indicator class=\"rg3-a-ind\">●</pine-radio-group-indicator>\
+             A\
+           </pine-radio-group-item>\
+           <pine-radio-group-item value=\"b\" class=\"rg3-b\">\
+             <pine-radio-group-indicator class=\"rg3-b-ind\">●</pine-radio-group-indicator>\
+             B\
+           </pine-radio-group-item>\
+         </pine-radio-group-root>",
+    );
+    tick().await;
+
+    // Select the INNER span (template root that pp-show toggles) —
+    // the user's `.rg3-*-ind` class lives on the custom element
+    // tag, the span inherits it via fallthrough but we want the
+    // `span.pine-radio-group-indicator` specifically.
+    let a_ind = host
+        .query_selector("span.rg3-a-ind")
+        .unwrap()
+        .expect("A indicator inner span");
+    let b_ind = host
+        .query_selector("span.rg3-b-ind")
+        .unwrap()
+        .expect("B indicator inner span");
+
+    let a_ind_html: HtmlElement = a_ind.clone().dyn_into().unwrap();
+    let b_ind_html: HtmlElement = b_ind.clone().dyn_into().unwrap();
+
+    // Click A → A's indicator visible, B's stays / becomes hidden.
+    host.query_selector(".rg3-a button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_ne!(
+        a_ind_html.style().get_property_value("display").unwrap(),
+        "none",
+        "A's indicator visible after selecting A"
+    );
+    assert_eq!(
+        b_ind_html.style().get_property_value("display").unwrap(),
+        "none",
+        "B's indicator hidden (B not selected)"
+    );
+
+    // Click B → A becomes hidden, B becomes visible.
+    host.query_selector(".rg3-b button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(
+        a_ind_html.style().get_property_value("display").unwrap(),
+        "none",
+        "A's indicator hidden after B selected"
+    );
+    assert_ne!(
+        b_ind_html.style().get_property_value("display").unwrap(),
+        "none",
+        "B's indicator visible after selecting B"
+    );
+
+    host.remove();
+}
+
 // ─── PineAlertDialog ──────────────────────────────────────────────
 
 /// AlertDialog opens the same way as Dialog, but Content renders

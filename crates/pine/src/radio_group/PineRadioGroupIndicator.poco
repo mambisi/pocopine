@@ -1,0 +1,5 @@
+<span class="pine-radio-group-indicator"
+      :data-state="checked ? 'checked' : 'unchecked'"
+      pp-show="checked">
+  <slot></slot>
+</span>

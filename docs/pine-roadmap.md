@@ -15,6 +15,7 @@ Reference checkout (gitignored): `tmp/reka-ui/packages/core/src/`.
 | PineButton | stable | `variant` / `size` / `disabled` + `pp-as` |
 | PineDialog* (compound, 8 parts) | stable | Root/Trigger/Portal/Overlay/Content/Title/Description/Close |
 | PineAlertDialog* (compound, 9 parts) | stable | Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel; `role="alertdialog"`, no overlay-dismiss |
+| PineRadioGroup* (compound, 3 parts) | stable | Root/Item/Indicator; `role="radiogroup"`, `pp-roving.both`, `pp-model:value` |
 | PinePopover* (compound, 5 parts) | stable | Root/Trigger/Portal/Content/Close; auto-anchor via Trigger stamp |
 | PineDropdownMenu* (compound, 13 parts) | stable | Root/Trigger/Portal/Content/Item/Separator/Group/Label/CheckboxItem/ItemIndicator/RadioGroup/RadioItem |
 | PineCollapsible* (compound) | stable | Root/Trigger/Content — second compound; `pp-model:open` |
@@ -204,7 +205,7 @@ After DropdownMenu's core is fleshed out:
 |---|---|---|
 | 1 | ~~**Collapsible**~~ | Done — second compound validated the pattern. |
 | 2 | ~~**Accordion**~~ | Done — Root/Item/Trigger/Content with `type="single\|multiple"` + `collapsible`. |
-| 3 | **RadioGroup** | Compound with RadioGroupItem (role="radio") + roving focus. Maps almost 1-to-1 onto the Tabs substrate. |
+| 3 | ~~**RadioGroup**~~ | Done — 3-part compound: Root/Item/Indicator. `role="radiogroup"`, `pp-roving.both` for arrow-key nav, `pp-model:value` round-trips via `pp:update:model` emitted from Root. Indicator `pp-show`-gated on its enclosing Item's `checked`. |
 | 4 | **Toggle / ToggleGroup** | Reuses Switch mechanics + pp-roving; second "set of controls" after RadioGroup. |
 | 5 | ~~**Avatar**~~ | Done — Root/Image/Fallback compound. |
 | 6 | ~~**AlertDialog**~~ | Done — 9-part compound: Root/Trigger/Portal/Overlay/Content/Title/Description/Action/Cancel. Content renders `role="alertdialog"`; `dismiss_on_overlay` defaults `false`. Author's side-effect handler goes on the `<pine-alert-dialog-action>` tag (fallthrough skips `@`) so it fires alongside the framework's own `close()`. |

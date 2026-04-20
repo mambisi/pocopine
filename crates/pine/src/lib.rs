@@ -33,6 +33,7 @@ pub mod dialog;
 pub mod dropdown_menu;
 pub mod overlay;
 pub mod popover;
+pub mod radio_group;
 pub mod switch;
 pub mod tabs;
 pub mod tooltip;
@@ -64,6 +65,7 @@ pub use dropdown_menu::{
 pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
+pub use radio_group::{PineRadioGroupIndicator, PineRadioGroupItem, PineRadioGroupRoot};
 pub use switch::PineSwitch;
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use tooltip::{
@@ -106,6 +108,9 @@ pub fn register_all() {
     PinePopoverPortal::register();
     PinePopoverContent::register();
     PinePopoverClose::register();
+    PineRadioGroupRoot::register();
+    PineRadioGroupItem::register();
+    PineRadioGroupIndicator::register();
     PineDropdownMenuRoot::register();
     PineDropdownMenuTrigger::register();
     PineDropdownMenuPortal::register();

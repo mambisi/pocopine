@@ -1,0 +1,12 @@
+<button type="button"
+        role="radio"
+        class="pine-radio-group-item"
+        tabindex="-1"
+        :value="value"
+        :aria-checked="checked ? 'true' : 'false'"
+        :data-state="checked ? 'checked' : 'unchecked'"
+        :data-disabled="disabled"
+        :disabled="disabled"
+        @click="select">
+  <slot></slot>
+</button>
