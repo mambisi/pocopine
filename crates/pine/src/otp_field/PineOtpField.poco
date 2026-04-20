@@ -9,8 +9,6 @@
            maxlength="1"
            autocomplete="one-time-code"
            :data-index="slot.index"
-           :data-filled="slot.filled"
-           :value="slot.display"
            :inputmode="input_mode"
            :pattern="pattern"
            :aria-label="slot.aria_label"

@@ -2899,6 +2899,47 @@ async fn otp_field_types_digits_and_emits_value_updates() {
     host.remove();
 }
 
+/// After typing a character, focus auto-advances to the next
+/// slot. Regression test for a bug where tick-time reconciliation
+/// of the slot list stole focus back to `<body>`.
+#[wasm_bindgen_test]
+async fn otp_field_typing_advances_focus_to_next_slot() {
+    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let s0: HtmlInputElement = tag
+        .query_selector("input.pine-otp-field-slot[data-index=\"0\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    // Focus slot 0, type a digit, wait for tick-scheduled focus move.
+    s0.focus().unwrap();
+    s0.set_value("1");
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    s0.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+        .unwrap();
+    // `focus_slot` defers via `setTimeout(_, 0)` so reactive
+    // state flush + `pp-for` reconcile complete before the focus
+    // move lands. Yield a real macrotask (not just microtasks).
+    sleep_ms(5).await;
+    tick().await;
+
+    let active = doc()
+        .active_element()
+        .expect("document has an active element");
+    assert_eq!(
+        active.get_attribute("data-index").as_deref(),
+        Some("1"),
+        "focus advanced to slot 1 after typing in slot 0"
+    );
+
+    host.remove();
+}
+
 /// Backspace on an empty slot walks focus back and clears the
 /// previously-filled slot. Auto-advance means a completed-then-
 /// backspaced field leaves focus in the correct place.

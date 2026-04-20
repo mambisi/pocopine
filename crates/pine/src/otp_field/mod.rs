@@ -38,17 +38,16 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget, HtmlElement, HtmlInputElement, KeyboardEvent};
 
-/// One visible slot. Exposed to the template via `pp-for`.
+/// Structural descriptor for one slot — driven entirely by the
+/// `length` prop. Kept deliberately free of per-character state:
+/// `.value`, `data-filled`, and the bullet-vs-char display are
+/// synced imperatively in [`PineOtpField::sync_slot_display`] so
+/// the `pp-for` that renders the slots never has to reconcile on
+/// every keystroke (which would swap the focused `<input>` out
+/// from under the user).
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct OtpSlot {
     pub index: u32,
-    /// Real character at this position, `""` when the slot is
-    /// empty. Drives `data-filled` + used as the source of truth
-    /// for `display` when `mask` is off.
-    pub char: String,
-    /// What the DOM `<input>` shows. Mirrors `char`, or `"•"`
-    /// when `mask` is `true` and the slot is filled.
-    pub display: String,
     pub aria_label: String,
 }
 
@@ -97,30 +96,47 @@ impl Default for PineOtpField {
 impl PineOtpField {
     pub fn on_setup(&mut self) {
         self.refresh_mode();
-        self.refresh_slots();
+        self.rebuild_slots();
     }
 
-    /// Keep the view model in sync when the parent writes a new
-    /// `value` externally (e.g. via `pp-bind` or a `pp-model`
-    /// round-trip). Emits no events — only repaints.
+    pub fn on_ready_pull(&self) {}
+
+    /// When the parent writes `value` externally (via `pp-bind`
+    /// or a `pp-model` round-trip), push the new characters into
+    /// the live `<input>` elements. Skips touching `self.slots`
+    /// to avoid pp-for reconciliation — the slots only change
+    /// structurally with `length`.
     #[watch(value)]
     fn on_value_change(&mut self, _value: String, _prev: Option<String>) {
-        self.refresh_slots();
+        self.sync_slot_display();
     }
 
-    /// Same story for `length`, `type`, `mask`: rebuild the view
-    /// model so slots re-render with the new configuration.
+    /// `length` is structural — re-materialise the slot list.
     #[watch(length)]
     fn on_length_change(&mut self, _v: u32, _prev: Option<u32>) {
-        self.refresh_slots();
+        self.rebuild_slots();
     }
 
+    /// Likewise `type` — the `inputmode` / `pattern` mirrors
+    /// depend on it.
+    #[watch(r#type)]
+    fn on_type_change(&mut self, _v: String, _prev: Option<String>) {
+        self.refresh_mode();
+    }
+
+    /// `mask` only affects `.value` (bullet vs real char); no
+    /// slot rebuild needed.
     #[watch(mask)]
     fn on_mask_change(&mut self, _v: bool, _prev: Option<bool>) {
-        self.refresh_slots();
+        self.sync_slot_display();
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+        // First-paint sync — the template's `pp-for` has just
+        // materialised the slot <input>s; push the current
+        // value (if any) to their `.value` properties + stamp
+        // `data-filled` so authors' CSS rules match on mount.
+        handle.with(|s| s.sync_slot_display());
         let Some(root) = refs.get("root") else { return };
 
         // ── `input` — a character landed in a slot. The browser
@@ -215,47 +231,46 @@ impl PineOtpField {
         }
     }
 
-    fn refresh_slots(&mut self) {
+    fn rebuild_slots(&mut self) {
         let len = self.length as usize;
-        let value_chars: Vec<char> = self.value.chars().collect();
         self.slots = (0..len)
-            .map(|i| {
-                let ch = value_chars.get(i).copied();
-                let char_s = ch.map(|c| c.to_string()).unwrap_or_default();
-                let display = if self.mask && !char_s.is_empty() {
-                    "\u{2022}".to_string()
-                } else {
-                    char_s.clone()
-                };
-                OtpSlot {
-                    index: i as u32,
-                    char: char_s.clone(),
-                    display,
-                    aria_label: format!("Digit {}", i + 1),
-                }
+            .map(|i| OtpSlot {
+                index: i as u32,
+                aria_label: format!("Digit {}", i + 1),
             })
             .collect();
-        // `:value` attribute bindings don't overwrite an <input>'s
-        // live `.value` property once the user (or test) has typed
-        // into it. Force-sync the property from the current slot
-        // state so cases where the *component* authoritatively
-        // changes the value (backspace clearing a previous slot,
-        // multi-char paste spread, rejected-char revert) land in
-        // the DOM.
-        self.sync_slot_properties();
     }
 
-    fn sync_slot_properties(&self) {
+    /// Push the current `value` + `mask` into the DOM slots'
+    /// `.value` properties and `data-filled` attribute. Doesn't
+    /// mutate `self.slots`, so the `pp-for` that renders them
+    /// doesn't reconcile on every keystroke — keeping the
+    /// focused `<input>` stable.
+    fn sync_slot_display(&self) {
         let Some(scope) = current_scope_id() else { return };
         let Some(root_el) = refs::get_on(scope, "root") else { return };
-        for slot in &self.slots {
-            let selector = format!("input[data-index=\"{}\"]", slot.index);
+        let value_chars: Vec<char> = self.value.chars().collect();
+        let len = self.length as usize;
+        for i in 0..len {
+            let char_s = value_chars
+                .get(i)
+                .copied()
+                .map(|c| c.to_string())
+                .unwrap_or_default();
+            let filled = !char_s.is_empty();
+            let display = if self.mask && filled {
+                "\u{2022}".to_string()
+            } else {
+                char_s
+            };
+            let selector = format!("input[data-index=\"{i}\"]");
             let Some(el) = root_el.query_selector(&selector).ok().flatten() else {
                 continue;
             };
+            let _ = el.set_attribute("data-filled", if filled { "true" } else { "false" });
             if let Ok(input) = el.dyn_into::<HtmlInputElement>() {
-                if input.value() != slot.display {
-                    input.set_value(&slot.display);
+                if input.value() != display {
+                    input.set_value(&display);
                 }
             }
         }
@@ -277,10 +292,9 @@ impl PineOtpField {
             } else {
                 // A disallowed character was typed (e.g. "a" in a
                 // numeric-mode slot). Leave `value` alone and push
-                // the old slot content back to the DOM by
-                // refreshing the view model — this reverts the
-                // browser-side change the keystroke caused.
-                self.refresh_slots();
+                // the old slot content back to the DOM so the
+                // rejected keystroke doesn't linger.
+                self.sync_slot_display();
                 return;
             }
         } else if typed_chars.len() == 1 {
@@ -320,7 +334,11 @@ impl PineOtpField {
 
         value_chars.truncate(len);
         self.value = value_chars.iter().collect();
-        self.refresh_slots();
+        // `#[watch(value)]` fires sync_slot_display, but the
+        // reactive flush happens after Handle::update returns —
+        // call it eagerly so any follow-up logic (focus_slot,
+        // emit) runs against an up-to-date DOM.
+        self.sync_slot_display();
     }
 
     fn handle_backspace(&mut self, index: usize) {
@@ -333,7 +351,7 @@ impl PineOtpField {
             value_chars.remove(target);
         }
         self.value = value_chars.iter().collect();
-        self.refresh_slots();
+        self.sync_slot_display();
         self.focus_slot(target);
     }
 
@@ -347,18 +365,28 @@ impl PineOtpField {
     }
 
     /// Move DOM focus to the slot at `index`, if it exists.
-    /// Uses a selector against the root so it still works after
-    /// `pp-for` re-renders (refs inside a loop get clobbered).
+    /// Deferred to a macrotask (`setTimeout(_, 0)`) so reactive
+    /// state flush — which can re-run `pp-for` bindings and drop
+    /// focus during node reuse — has completed before we try to
+    /// land on the target input.
     fn focus_slot(&self, index: usize) {
         let Some(scope) = current_scope_id() else { return };
-        let Some(root_el) = refs::get_on(scope, "root") else { return };
-        let selector = format!("input[data-index=\"{index}\"]");
-        let found: Option<web_sys::Element> =
-            root_el.query_selector(&selector).ok().flatten();
-        if let Some(el) = found {
-            if let Ok(html) = el.dyn_into::<HtmlElement>() {
-                let _ = html.focus();
+        let cb = Closure::once_into_js(Box::new(move || {
+            let Some(root_el) = refs::get_on(scope, "root") else {
+                return;
+            };
+            let selector = format!("input[data-index=\"{index}\"]");
+            if let Some(el) = root_el.query_selector(&selector).ok().flatten() {
+                if let Ok(html) = el.dyn_into::<HtmlElement>() {
+                    let _ = html.focus();
+                }
             }
+        }) as Box<dyn FnOnce()>);
+        if let Some(w) = web_sys::window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                cb.unchecked_ref(),
+                0,
+            );
         }
     }
 }
