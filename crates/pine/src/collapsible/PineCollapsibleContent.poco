@@ -1,6 +1,6 @@
 <template pp-if="open">
-  <div class="pine-collapsible-content"
-       data-state="open">
+  <root class="pine-collapsible-content"
+        data-state="open">
     <slot></slot>
-  </div>
+  </root>
 </template>

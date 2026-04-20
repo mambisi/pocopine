@@ -30,7 +30,7 @@ inject_key!(ROOT: Handle<PineProgressRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineProgressRoot.poco")]
+#[component(template = "PineProgressRoot.poco", role = "panel")]
 pub struct PineProgressRoot {
     /// Current progress. Negative (e.g. `-1`) marks an
     /// indeterminate state — spinner-style loading with no known
@@ -57,7 +57,7 @@ impl PineProgressRoot {
 // ── Indicator ─────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineProgressIndicator.poco")]
+#[component(template = "PineProgressIndicator.poco", role = "panel")]
 pub struct PineProgressIndicator {
     /// Mirrored from Root for template bindings. Authors style
     /// the indicator's transform/width with CSS reading

@@ -1,4 +1,4 @@
-<div class="pine-accordion-root"
-     :data-orientation="'vertical'">
+<root class="pine-accordion-root"
+      :data-orientation="'vertical'">
   <slot></slot>
-</div>
+</root>

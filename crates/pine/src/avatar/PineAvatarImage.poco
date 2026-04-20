@@ -1,7 +1,7 @@
-<span class="pine-avatar-image-wrap" pp-show="loaded">
+<root class="pine-avatar-image-wrap" pp-show="loaded">
   <img @load="on_load"
        @error="on_error"
        :src="src"
        :alt="alt"
        class="pine-avatar-image">
-</span>
+</root>

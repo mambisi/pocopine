@@ -41,7 +41,7 @@ inject_key!(CHECKED_OWNER: ScopeId);
 /// Radio group container. Owns `value`; provides its scope id so
 /// Items can read + write it through `Scope::find` + Handle::update.
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineRadioGroupRoot.poco")]
+#[component(template = "PineRadioGroupRoot.poco", role = "panel")]
 pub struct PineRadioGroupRoot {
     #[prop] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Drives both the
@@ -85,7 +85,7 @@ impl PineRadioGroupRoot {
 /// `data-state="checked|unchecked"` and `aria-checked` based on
 /// whether the Root's `value` matches this Item's `value`.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineRadioGroupItem.poco")]
+#[component(template = "PineRadioGroupItem.poco", role = "interactive")]
 pub struct PineRadioGroupItem {
     #[prop] pub value: String,
     #[prop] pub disabled: bool,
@@ -169,7 +169,7 @@ impl PineRadioGroupItem {
 /// unchecked. Authors supply whatever visual (a dot, a filled
 /// circle, an icon) via the default slot.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineRadioGroupIndicator.poco")]
+#[component(template = "PineRadioGroupIndicator.poco", role = "visual")]
 pub struct PineRadioGroupIndicator {
     pub checked: bool,
 }

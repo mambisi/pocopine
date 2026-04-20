@@ -32,7 +32,7 @@ inject_key!(ROOT: Handle<PineCollapsibleRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCollapsibleRoot.poco")]
+#[component(template = "PineCollapsibleRoot.poco", role = "scope")]
 pub struct PineCollapsibleRoot {
     /// Open/closed. Two-way bindable via
     /// `pp-model:open="my_open"` on the tag; Root emits
@@ -78,7 +78,7 @@ fn emit_from_self(open: bool) {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCollapsibleTrigger.poco")]
+#[component(template = "PineCollapsibleTrigger.poco", role = "interactive")]
 pub struct PineCollapsibleTrigger {
     pub open: bool,
     #[prop] pub disabled: bool,
@@ -117,7 +117,7 @@ impl PineCollapsibleTrigger {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCollapsibleContent.poco")]
+#[component(template = "PineCollapsibleContent.poco", role = "panel")]
 pub struct PineCollapsibleContent {
     pub open: bool,
 }

@@ -37,7 +37,7 @@ inject_key!(ORIENTATION: String);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineToolbarRoot.poco")]
+#[component(template = "PineToolbarRoot.poco", role = "panel")]
 pub struct PineToolbarRoot {
     /// `"horizontal"` (default) or `"vertical"`. Flows to
     /// `aria-orientation` + `data-orientation`; descendant
@@ -62,7 +62,7 @@ impl PineToolbarRoot {
 // ── Button ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineToolbarButton.poco")]
+#[component(template = "PineToolbarButton.poco", role = "interactive")]
 pub struct PineToolbarButton {
     #[prop] pub disabled: bool,
 }
@@ -73,7 +73,7 @@ impl PineToolbarButton {}
 // ── Link ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineToolbarLink.poco")]
+#[component(template = "PineToolbarLink.poco", role = "link")]
 pub struct PineToolbarLink {
     #[prop] pub href: String,
 }
@@ -88,7 +88,7 @@ impl PineToolbarLink {}
 /// (perpendicular to the item axis) and vice versa — same rule
 /// Radix uses.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineToolbarSeparator.poco")]
+#[component(template = "PineToolbarSeparator.poco", role = "panel")]
 pub struct PineToolbarSeparator {
     /// Mirrored from the toolbar root's orientation (flipped).
     /// Authors don't set this; it's derived in `on_setup`.

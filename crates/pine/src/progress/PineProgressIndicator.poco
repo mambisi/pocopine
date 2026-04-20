@@ -1,4 +1,4 @@
-<div class="pine-progress-indicator"
-     :data-state="value < 0 ? 'indeterminate' : (value >= max ? 'complete' : 'loading')"
-     :data-value="value < 0 ? false : value"
-     :data-max="max"></div>
+<root class="pine-progress-indicator"
+      :data-state="value < 0 ? 'indeterminate' : (value >= max ? 'complete' : 'loading')"
+      :data-value="value < 0 ? false : value"
+      :data-max="max"></root>

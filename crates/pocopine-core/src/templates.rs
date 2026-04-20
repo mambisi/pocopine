@@ -31,45 +31,64 @@ pub fn is_registered(name: &str) -> bool {
 ///
 /// - `role = None` → just injects `pp-data` (the classic path).
 /// - `role = Some((tag, role_name))` → treats the template root as a
-///   `<root>` placeholder (see [RFC-033](../../rfcs/rfc-033-primitive-roles.md)),
-///   rewrites `<root>` / `</root>` to `<tag>` / `</tag>`, injects
-///   `data-pine-role="<role_name>"` on the root, and — when `tag == "button"`
-///   — injects `type="button"` so interactive primitives don't
-///   accidentally submit a surrounding `<form>`.
+///   `<root>` placeholder (see [RFC-033](../../rfcs/rfc-033-primitive-roles.md)).
+///   Rewrites `<root>` / `</root>` to `<tag>` / `</tag>`, splicing
+///   `data-pine-role="<role_name>"` into the rewritten opening tag
+///   (so the role attribute lands on the primitive's real root even
+///   when it's wrapped in `<template pp-if="...">`). For `tag == "button"`
+///   and no existing `type` attribute, also injects `type="button"`.
+///   Finally runs [`inject_pp_data`] so `pp-data` lands on the outermost
+///   opening tag as usual.
 pub fn compile_template(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
     let Some((tag, role_name)) = role else {
         return inject_pp_data(raw, name);
     };
-    let renamed = rewrite_root_placeholder(raw, tag);
-    let mut extra = format!(r#"data-pine-role="{role_name}""#);
-    if tag == "button" && !first_tag_has_attr(&renamed, "type") {
-        extra.push_str(r#" type="button""#);
+    let mut prefix = format!(r#"data-pine-role="{role_name}""#);
+    if tag == "button" && !root_placeholder_has_attr(raw, "type") {
+        prefix.push_str(r#" type="button""#);
     }
-    inject_root_attrs(&renamed, name, &extra)
+    let renamed = rewrite_root_placeholder(raw, tag, &prefix);
+    inject_pp_data(&renamed, name)
 }
 
-/// Rewrite the `<root>` / `</root>` placeholder tag pair to the given
-/// real tag name. `root` isn't a real HTML element, so every occurrence
-/// in a `.poco` file is unambiguously the placeholder.
-fn rewrite_root_placeholder(raw: &str, tag: &str) -> String {
-    let step1 = raw.replace("<root>", &format!("<{tag}>"));
-    let step2 = step1.replace("<root ", &format!("<{tag} "));
-    let step3 = step2.replace("<root/>", &format!("<{tag}/>"));
+/// Rewrite `<root>` / `<root ...>` / `<root/>` to `<tag ... prefix_attrs>`
+/// and `</root>` to `</tag>`. `root` isn't a real HTML element, so
+/// every occurrence in a `.poco` file is unambiguously the placeholder.
+fn rewrite_root_placeholder(raw: &str, tag: &str, prefix_attrs: &str) -> String {
+    let attrs = prefix_attrs.trim();
+    let step1 = raw.replace(
+        "<root>",
+        &format!("<{tag} {attrs}>"),
+    );
+    let step2 = step1.replace(
+        "<root ",
+        &format!("<{tag} {attrs} "),
+    );
+    let step3 = step2.replace(
+        "<root/>",
+        &format!("<{tag} {attrs}/>"),
+    );
     step3.replace("</root>", &format!("</{tag}>"))
 }
 
-/// True when the first opening tag of `raw` has an attribute named
-/// `needle` (case-insensitive boolean match, doesn't parse the value).
-fn first_tag_has_attr(raw: &str, needle: &str) -> bool {
+/// True when the `<root>` placeholder tag has an attribute named
+/// `needle` (case-insensitive). Only looks inside the placeholder's
+/// own opening tag — ignores siblings and children.
+fn root_placeholder_has_attr(raw: &str, needle: &str) -> bool {
+    let Some(pos) = raw.find("<root") else { return false };
+    let after = pos + "<root".len();
+    let boundary = raw.as_bytes().get(after).copied();
+    if !matches!(
+        boundary,
+        Some(b' ') | Some(b'>') | Some(b'/') | Some(b'\n') | Some(b'\t') | Some(b'\r')
+    ) {
+        return false;
+    }
     let bytes = raw.as_bytes();
-    let Some(tag_start) = find_byte(bytes, 0, b'<') else {
+    let Some(close) = find_tag_end(bytes, pos) else {
         return false;
     };
-    let Some(close) = find_tag_end(bytes, tag_start) else {
-        return false;
-    };
-    let tag_slice = &raw[tag_start + 1..close];
-    // Split into whitespace-delimited chunks; look at attr names.
+    let tag_slice = &raw[pos + 1..close];
     for chunk in tag_slice.split_ascii_whitespace().skip(1) {
         let name_end = chunk.find('=').unwrap_or(chunk.len());
         if chunk[..name_end].eq_ignore_ascii_case(needle) {
@@ -77,62 +96,6 @@ fn first_tag_has_attr(raw: &str, needle: &str) -> bool {
         }
     }
     false
-}
-
-/// Like [`inject_pp_data`] but also splices `extra_attrs` (raw attribute
-/// string) into the first opening tag, before `pp-data`. Caller guarantees
-/// `extra_attrs` is safe HTML.
-fn inject_root_attrs(raw: &str, name: &str, extra_attrs: &str) -> String {
-    let bytes = raw.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        while i < len && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= len {
-            break;
-        }
-        if bytes[i] != b'<' {
-            return raw.to_owned();
-        }
-        if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
-            if let Some(end) = find_seq(bytes, i + 4, b"-->") {
-                i = end + 3;
-                continue;
-            }
-            return raw.to_owned();
-        }
-        if i + 2 <= len && bytes[i + 1] == b'!' {
-            if let Some(end) = find_byte(bytes, i, b'>') {
-                i = end + 1;
-                continue;
-            }
-            return raw.to_owned();
-        }
-        if i + 2 <= len && bytes[i + 1] == b'?' {
-            if let Some(end) = find_seq(bytes, i + 2, b"?>") {
-                i = end + 2;
-                continue;
-            }
-            return raw.to_owned();
-        }
-        let Some(close) = find_tag_end(bytes, i) else {
-            return raw.to_owned();
-        };
-        let self_closing = close > 0 && bytes[close - 1] == b'/';
-        let insert_at = if self_closing { close - 1 } else { close };
-        let suffix = format!(r#" {extra_attrs} pp-data="{name}""#);
-        let mut out = String::with_capacity(raw.len() + suffix.len());
-        out.push_str(&raw[..insert_at]);
-        if !out.ends_with(char::is_whitespace) {
-            out.push(' ');
-        }
-        out.push_str(suffix.trim_start());
-        out.push_str(&raw[insert_at..]);
-        return out;
-    }
-    raw.to_owned()
 }
 
 /// Insert `pp-data="<name>"` into the first element's opening tag of
@@ -299,7 +262,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            r#"<span class="pine-avatar-root" data-pine-role="visual" pp-data="pine-avatar-root"><slot></slot></span>"#
+            r#"<span data-pine-role="visual" class="pine-avatar-root" pp-data="pine-avatar-root"><slot></slot></span>"#
         );
     }
 
@@ -310,9 +273,7 @@ mod tests {
             "pine-switch",
             Some(("button", "interactive")),
         );
-        assert!(out.starts_with(r#"<button class="pine-switch""#));
-        assert!(out.contains(r#"data-pine-role="interactive""#));
-        assert!(out.contains(r#"type="button""#));
+        assert!(out.starts_with(r#"<button data-pine-role="interactive" type="button" class="pine-switch""#));
         assert!(out.ends_with("</button>"));
     }
 

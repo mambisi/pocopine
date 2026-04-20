@@ -1,4 +1,4 @@
-<div class="pine-toolbar-separator"
-     role="separator"
-     :aria-orientation="orientation"
-     :data-orientation="orientation"></div>
+<root class="pine-toolbar-separator"
+      role="separator"
+      :aria-orientation="orientation"
+      :data-orientation="orientation"></root>

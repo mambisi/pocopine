@@ -36,7 +36,7 @@ inject_key!(ROOT: ScopeId);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineToggleGroupRoot.poco")]
+#[component(template = "PineToggleGroupRoot.poco", role = "panel")]
 pub struct PineToggleGroupRoot {
     /// `"single"` (default) or `"multiple"`.
     #[prop] pub r#type: String,
@@ -120,7 +120,7 @@ impl PineToggleGroupRoot {
 /// share CSS) — distinguished only by its membership in the
 /// group's roving + selection policy.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineToggleGroupItem.poco")]
+#[component(template = "PineToggleGroupItem.poco", role = "interactive")]
 pub struct PineToggleGroupItem {
     #[prop] pub value: String,
     #[prop] pub disabled: bool,

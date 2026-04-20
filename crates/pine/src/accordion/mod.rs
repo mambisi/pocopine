@@ -36,7 +36,7 @@ inject_key!(ITEM: ScopeId);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineAccordionRoot.poco")]
+#[component(template = "PineAccordionRoot.poco", role = "panel")]
 pub struct PineAccordionRoot {
     /// `"single"` (default) or `"multiple"`.
     #[prop] pub r#type: String,
@@ -113,7 +113,7 @@ impl PineAccordionRoot {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAccordionItem.poco")]
+#[component(template = "PineAccordionItem.poco", role = "panel")]
 pub struct PineAccordionItem {
     /// Stable identifier for this item within the Root.
     #[prop] pub value: String,
@@ -184,7 +184,7 @@ impl PineAccordionItem {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAccordionTrigger.poco")]
+#[component(template = "PineAccordionTrigger.poco", role = "interactive")]
 pub struct PineAccordionTrigger {
     pub open: bool,
     pub disabled: bool,
@@ -222,7 +222,7 @@ impl PineAccordionTrigger {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAccordionContent.poco")]
+#[component(template = "PineAccordionContent.poco", role = "panel")]
 pub struct PineAccordionContent {
     pub open: bool,
 }

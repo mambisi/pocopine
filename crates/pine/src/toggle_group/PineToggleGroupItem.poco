@@ -1,11 +1,10 @@
-<button type="button"
-        class="pine-toggle-group-item"
-        tabindex="-1"
-        :value="value"
-        :aria-pressed="pressed ? 'true' : 'false'"
-        :data-state="pressed ? 'on' : 'off'"
-        :data-disabled="disabled"
-        :disabled="disabled"
-        @click="click">
+<root class="pine-toggle-group-item"
+      tabindex="-1"
+      :value="value"
+      :aria-pressed="pressed ? 'true' : 'false'"
+      :data-state="pressed ? 'on' : 'off'"
+      :data-disabled="disabled"
+      :disabled="disabled"
+      @click="click">
   <slot></slot>
-</button>
+</root>

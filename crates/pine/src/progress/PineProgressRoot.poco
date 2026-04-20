@@ -1,10 +1,10 @@
-<div role="progressbar"
-     class="pine-progress-root"
-     aria-valuemin="0"
-     :aria-valuemax="max"
-     :aria-valuenow="value < 0 ? false : value"
-     :data-state="value < 0 ? 'indeterminate' : (value >= max ? 'complete' : 'loading')"
-     :data-value="value < 0 ? false : value"
-     :data-max="max">
+<root role="progressbar"
+      class="pine-progress-root"
+      aria-valuemin="0"
+      :aria-valuemax="max"
+      :aria-valuenow="value < 0 ? false : value"
+      :data-state="value < 0 ? 'indeterminate' : (value >= max ? 'complete' : 'loading')"
+      :data-value="value < 0 ? false : value"
+      :data-max="max">
   <slot></slot>
-</div>
+</root>

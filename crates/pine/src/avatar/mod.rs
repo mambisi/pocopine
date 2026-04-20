@@ -41,7 +41,7 @@ impl PineAvatarRoot {
 // ── Image ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAvatarImage.poco")]
+#[component(template = "PineAvatarImage.poco", role = "visual")]
 pub struct PineAvatarImage {
     #[prop] pub src: String,
     #[prop] pub alt: String,
