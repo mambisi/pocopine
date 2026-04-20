@@ -44,6 +44,15 @@ pub struct PineDemoApp {
     /// Standalone RadioGroup demo value — the selected plan tier.
     pub plan: String,
 
+    /// Standalone Toggle — "bold" pressed-state.
+    pub bold: bool,
+
+    /// ToggleGroup single-mode (text alignment, one of left/center/right).
+    pub align: String,
+
+    /// ToggleGroup multiple-mode (any combination of format flags).
+    pub format: Vec<String>,
+
     /// Collapsible open state — bound two-way via
     /// `pp-model:open` on `<pine-collapsible-root>`.
     pub faq_open: bool,
@@ -62,6 +71,7 @@ impl PineDemoApp {
         self.show_archived = "unchecked".into();
         self.density = "comfortable".into();
         self.plan = "free".into();
+        self.align = "left".into();
     }
 
     pub fn bump(&mut self) {

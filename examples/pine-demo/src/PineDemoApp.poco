@@ -16,6 +16,9 @@
       <dt>Dark mode</dt>     <dd pp-text="dark_mode ? 'on' : 'off'"></dd>
       <dt>Agree</dt>         <dd pp-text="agree_state"></dd>
       <dt>Plan</dt>          <dd pp-text="plan"></dd>
+      <dt>Bold</dt>          <dd pp-text="bold ? 'on' : 'off'"></dd>
+      <dt>Align</dt>         <dd pp-text="align"></dd>
+      <dt>Format flags</dt>  <dd pp-text="format"></dd>
     </dl>
   </section>
 
@@ -311,6 +314,35 @@
       Arrow keys rove, Space/Enter selects. Currently:
       <strong pp-text="plan"></strong>.
     </span>
+  </section>
+
+  <!-- PineToggle + PineToggleGroup ───────────────────────── -->
+  <h2>Toggle</h2>
+  <section>
+    <div class="row" style="margin-bottom:0.75rem;align-items:center">
+      <pine-toggle pp-model:pressed="bold">
+        <strong>B</strong>
+      </pine-toggle>
+      <span>Bold is <strong pp-text="bold ? 'on' : 'off'"></strong></span>
+    </div>
+
+    <div class="row" style="margin-bottom:0.75rem;align-items:center">
+      <pine-toggle-group-root pp-model:value="align">
+        <pine-toggle-group-item value="left">Left</pine-toggle-group-item>
+        <pine-toggle-group-item value="center">Center</pine-toggle-group-item>
+        <pine-toggle-group-item value="right">Right</pine-toggle-group-item>
+      </pine-toggle-group-root>
+      <span>Align: <strong pp-text="align || '(none)'"></strong></span>
+    </div>
+
+    <div class="row" style="align-items:center">
+      <pine-toggle-group-root type="multiple" pp-model:values="format">
+        <pine-toggle-group-item value="bold"><strong>B</strong></pine-toggle-group-item>
+        <pine-toggle-group-item value="italic"><em>I</em></pine-toggle-group-item>
+        <pine-toggle-group-item value="underline"><u>U</u></pine-toggle-group-item>
+      </pine-toggle-group-root>
+      <span>Format: <strong pp-text="format"></strong></span>
+    </div>
   </section>
 
   <!-- PineSwitch + PineCheckbox ──────────────────────────── -->
