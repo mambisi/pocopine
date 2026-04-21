@@ -1493,3 +1493,95 @@ pine-tags-input-clear {
   cursor: default;
   opacity: 0.5;
 }
+
+/* Labelled "Skills" variant — same anatomy, different coat. */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.form-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.tags-input-skills {
+  padding: 0.35rem 0.45rem;
+  min-height: 2.25rem;
+  background: #fafaf9;
+  border-color: #d6d3d1;
+}
+.tags-input-skills:focus-within {
+  border-color: #065f46;
+  box-shadow: 0 0 0 3px rgba(6, 95, 70, 0.15);
+}
+.tags-input-skills .pine-tags-input-item {
+  padding: 0.05rem 0.15rem 0.05rem 0.5rem;
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #a7f3d0;
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+}
+.tags-input-skills .pine-tags-input-item-delete:hover {
+  background: rgba(6, 95, 70, 0.12);
+}
+.tags-input-skills .pine-tags-input-input { font-size: 0.875rem; }
+
+/* ─── Command palette in a Popover ─────────────────────── */
+
+.cmd-popover-content {
+  padding: 0;
+  min-width: 280px;
+  max-width: 360px;
+}
+.cmd-popover {
+  display: flex;
+  flex-direction: column;
+}
+.cmd-popover .pine-command-input {
+  padding: 0.65rem 0.9rem;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  outline: none;
+}
+.cmd-popover .pine-command-input:focus {
+  background: var(--bg-subtle);
+}
+.cmd-popover .pine-command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  max-height: 260px;
+  overflow: auto;
+}
+.cmd-popover .pine-command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.875rem;
+}
+.cmd-popover .pine-command-item[data-highlighted="true"] {
+  background: var(--brand);
+  color: var(--brand-fg);
+}
+.cmd-popover .pine-command-item[data-highlighted="true"] .pine-command-shortcut {
+  color: var(--brand-fg);
+  border-color: rgba(255,255,255,0.4);
+}
+.cmd-popover .pine-command-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}

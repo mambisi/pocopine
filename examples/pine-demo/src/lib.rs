@@ -97,6 +97,17 @@ pub struct PineDemoApp {
     /// `pp-model:values` on `<pine-tags-input-root>` so adds /
     /// removes / clears flow both directions.
     pub tags: Vec<String>,
+
+    /// Second TagsInput demo — "Skills" variant with custom
+    /// chip styling and a 5-tag cap.
+    pub skills: Vec<String>,
+
+    /// Popover-triggered command palette — separate from the
+    /// modal `<pine-command-root>` overlay. This field owns the
+    /// popover's open state via `pp-model:open`.
+    pub cmd_popover_open: bool,
+    /// Last command fired from the popover palette.
+    pub cmd_popover_last: String,
 }
 
 #[handlers]
@@ -114,6 +125,7 @@ impl PineDemoApp {
         self.splitter_sizes = vec![25.0, 50.0, 25.0];
         self.tree_value = String::new();
         self.tags = vec!["rust".into(), "wasm".into(), "pocopine".into()];
+        self.skills = vec!["typescript".into(), "css".into()];
     }
 
     pub fn bump(&mut self) {
@@ -173,6 +185,33 @@ impl PineDemoApp {
     }
     pub fn cmd_settings(&mut self) {
         self.last_command = "Open Settings".into();
+    }
+
+    // ── Popover-command handlers ─────────────────────────────
+    //
+    // Each handler records the fired command and closes the
+    // popover — the `<pine-command-root>` inside doesn't own
+    // the outer popover's open state, so we nudge it shut
+    // explicitly after a pick.
+    pub fn pcmd_new_file(&mut self) {
+        self.cmd_popover_last = "New File".into();
+        self.cmd_popover_open = false;
+    }
+    pub fn pcmd_open_file(&mut self) {
+        self.cmd_popover_last = "Open File".into();
+        self.cmd_popover_open = false;
+    }
+    pub fn pcmd_save(&mut self) {
+        self.cmd_popover_last = "Save".into();
+        self.cmd_popover_open = false;
+    }
+    pub fn pcmd_format(&mut self) {
+        self.cmd_popover_last = "Format Document".into();
+        self.cmd_popover_open = false;
+    }
+    pub fn pcmd_find_file(&mut self) {
+        self.cmd_popover_last = "Find in files".into();
+        self.cmd_popover_open = false;
     }
 }
 

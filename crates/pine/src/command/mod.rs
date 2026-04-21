@@ -81,6 +81,13 @@ pub struct PineCommandRoot {
     /// `"Mod+k"`.
     #[prop]
     pub shortcut: String,
+    /// Skip the global shortcut install entirely. Useful when
+    /// Command is wrapped inside a Popover / Dropdown whose own
+    /// trigger opens it — the outer compound already owns
+    /// open/close, and a lingering Cmd+K would toggle an
+    /// unrelated `Root.open` out from under it.
+    #[prop]
+    pub no_shortcut: bool,
     pub listbox_id: String,
     pub has_matches: bool,
 }
@@ -99,6 +106,9 @@ impl PineCommandRoot {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, scope: ScopeId) {
+        if self.no_shortcut {
+            return;
+        }
         install_global_shortcut(scope, handle, self.shortcut.clone());
     }
 
