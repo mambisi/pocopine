@@ -1227,41 +1227,53 @@ kbd {
 
 .pine-tree-item {
   display: block;
+  position: relative;
+  padding: 0.15rem 0.25rem;
   border-radius: 4px;
   cursor: pointer;
   user-select: none;
+  /* Hover / selection backgrounds paint only over the top "row"
+     (toggle + label), not the whole block — otherwise a parent's
+     background would bleed behind every nested child. */
+  background-repeat: no-repeat;
+  background-size: 100% 1.75em;
+  background-position: 0 0;
 }
 .pine-tree-item[aria-hidden="true"] { display: none; }
 
-/* The "row" — just a flex wrapper around the toggle/spacer + label.
-   We use `display: contents`-free styling by targeting the Item's
-   direct inline children (toggle, spacer, span). Nested Items
-   aren't direct inlines because they're block-level siblings. */
-.pine-tree-item {
-  padding: 0.15rem 0.25rem;
-}
-
-/* Indent per depth via aria-level (1-based). The Item's root
-   sets aria-level from its Rust-side `level` field. */
+/* Indent per depth via aria-level (1-based). */
 .pine-tree-item[aria-level="2"] { padding-left: 1.25rem; }
 .pine-tree-item[aria-level="3"] { padding-left: 2.5rem; }
 .pine-tree-item[aria-level="4"] { padding-left: 3.75rem; }
 .pine-tree-item[aria-level="5"] { padding-left: 5rem; }
 
-/* Hover / selection / highlight only on the header row area, not
-   the nested-children space. We fake that by restricting the
-   background with a pseudo-element over the line's top strip. */
-.pine-tree-item:hover { background: var(--bg-hover); }
-.pine-tree-item[data-selected="true"] { background: var(--brand); color: var(--brand-fg); }
-.pine-tree-item[data-highlighted="true"] {
-  outline: 2px solid var(--brand);
-  outline-offset: -2px;
+/* Hover: only when no nested Item is hovered, so cursor-on-child
+   doesn't leak into the ancestor chain. */
+.pine-tree-item:hover:not(:has(.pine-tree-item:hover)) {
+  background-image: linear-gradient(var(--bg-hover), var(--bg-hover));
 }
-/* Nested-item background/selection shouldn't stack on top of the
-   parent's. Simplest: strip the parent's background once the user
-   hovers / selects a child (child selector wins via later cascade
-   — but we want the OPPOSITE). Rely on the standard flow where
-   nested items paint their own background on top. */
+.pine-tree-item[data-selected="true"] {
+  background-image: linear-gradient(var(--brand), var(--brand));
+}
+/* Selected text colour only on the row's direct content, not on
+   nested Item children (they keep their own colour). */
+.pine-tree-item[data-selected="true"] > *:not(pine-tree-item) {
+  color: var(--brand-fg);
+}
+
+/* Row-only outline for the virtually-highlighted item (roving). */
+.pine-tree-item[data-highlighted="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.75em;
+  border: 2px solid var(--brand);
+  border-radius: 4px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
 
 .pine-tree-item-toggle {
   display: inline-flex;
