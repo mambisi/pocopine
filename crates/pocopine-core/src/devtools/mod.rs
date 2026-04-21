@@ -33,6 +33,7 @@ mod inspect;
 mod panel;
 mod panels;
 pub mod ring;
+mod router_log;
 mod shell;
 mod signal_last;
 mod style;
@@ -70,6 +71,7 @@ fn register_builtin_panels() {
     panel::register(Box::new(panels::timeline::Timeline));
     panel::register(Box::new(panels::graph::Graph));
     panel::register(Box::new(panels::health::Health));
+    panel::register(Box::new(panels::router::RouterPanel));
 }
 
 /// Register the default push-style handlers: effect-run / handler-
@@ -99,11 +101,15 @@ fn register_default_hooks() {
         signal_last::record(id);
     }));
 
-    // Queue changes / route changes: PR D / PR F panels will
-    // consume via their own side tables. For now the hook is
-    // registered with a no-op so the fire path exists end-to-end.
+    // Queue changes — PR D reads `reactive::queue_snapshot` each
+    // tick, so the hook is a no-op placeholder today. If we ever
+    // need a queue-transitions log, push into a ring here.
     hooks::set_on_queue_change(Rc::new(|_added| {}));
-    hooks::set_on_route_change(Rc::new(|_path, _params| {}));
+
+    // Route changes → `router_log` ring for the PR F router panel.
+    hooks::set_on_route_change(Rc::new(|path, params| {
+        router_log::push(path, params);
+    }));
 }
 
 fn summarise_args(args: &js_sys::Array) -> String {

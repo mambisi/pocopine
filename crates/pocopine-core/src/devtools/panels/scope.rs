@@ -153,6 +153,13 @@ pub(in crate::devtools) fn select(id: ScopeId) {
     super::super::panel::invalidate_active();
 }
 
+/// The currently-selected scope id, if any. Exposed so sibling
+/// panels (router/inject chain) can pivot on the user's
+/// "current scope" without duplicating selection state.
+pub(in crate::devtools) fn current_selection() -> Option<ScopeId> {
+    SELECTED.with(|c| c.get())
+}
+
 // ── row assembly ──────────────────────────────────────────────────
 
 fn pick_selected(scopes: &[Scope]) -> Option<ScopeId> {

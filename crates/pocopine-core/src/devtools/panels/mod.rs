@@ -3,5 +3,6 @@
 
 pub(super) mod graph;
 pub(super) mod health;
+pub(super) mod router;
 pub(super) mod scope;
 pub(super) mod timeline;
