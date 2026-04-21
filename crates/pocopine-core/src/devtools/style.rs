@@ -179,4 +179,20 @@ pub(crate) const STYLESHEET: &str = "\
     .__pp_dev_gr_sig_row:hover{background:#23211e;}\
     .__pp_dev_gr_subs{color:#ffb86c;font-variant-numeric:tabular-nums;}\
     .__pp_dev_gr_lc{color:#828282;font-variant-numeric:tabular-nums;}\
+    \
+    /* Memory health panel. */\
+    .__pp_dev_hl_alert{background:#3a1d1d;color:#ff9e9e;border-left:3px solid #ff3030;\
+    padding:6px 10px;margin:6px 10px;font-size:10px;}\
+    .__pp_dev_hl_cards{display:grid;grid-template-columns:1fr 1fr;gap:6px;\
+    padding:8px 10px;overflow:auto;flex:1 1 auto;}\
+    .__pp_dev_hl_card{background:#1f1d1b;border:1px solid #2d2a24;border-radius:4px;\
+    padding:8px 10px;}\
+    .__pp_dev_hl_card_leak{border-color:#ff3030;}\
+    .__pp_dev_hl_hd{display:flex;justify-content:space-between;align-items:baseline;\
+    color:#828282;font-size:9px;text-transform:uppercase;letter-spacing:0.08em;}\
+    .__pp_dev_hl_peak{color:#828282;}\
+    .__pp_dev_hl_value{font-size:18px;font-weight:700;margin:2px 0 4px;\
+    font-variant-numeric:tabular-nums;}\
+    .__pp_dev_hl_spark{width:100%;height:28px;}\
+    .__pp_dev_hl_spark svg{width:100%;height:100%;display:block;}\
 ";

@@ -529,7 +529,11 @@ pub fn flush_sync() {
     flush();
 }
 
-#[cfg(debug_assertions)]
+/// `(effect_count, dep_count)` — cheap health counters consumed by
+/// the devtools memory panel. Gated to debug builds + any build with
+/// the `devtools` feature on, so opt-in release devtools still
+/// gets real numbers.
+#[cfg(any(debug_assertions, feature = "devtools"))]
 pub fn stats() -> (usize, usize) {
     let dep_count = DEPS.with(|d| {
         d.borrow()

@@ -1198,10 +1198,12 @@ fn release_listeners(el: &Element) {
 }
 
 /// Count of listener entries currently retained by the
-/// element-scoped listener table. Debug-only — tests use this to
-/// assert that `release_subtree` reclaims everything. Counts
-/// entries across all elements.
-#[cfg(debug_assertions)]
+/// element-scoped listener table. Used by tests (assert
+/// `release_subtree` reclaims everything) and by the devtools
+/// memory-health panel (leak-over-time sparkline). Gated on
+/// debug builds OR the `devtools` feature so opt-in release
+/// devtools gets real numbers.
+#[cfg(any(debug_assertions, feature = "devtools"))]
 pub fn listener_count() -> usize {
     LISTENERS.with(|m| m.borrow().values().map(|v| v.len()).sum())
 }

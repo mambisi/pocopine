@@ -26,6 +26,7 @@ use web_sys::{window, HtmlElement, KeyboardEvent};
 use crate::scope::Scope;
 
 mod event;
+mod health;
 mod highlight;
 pub mod hooks;
 mod inspect;
@@ -68,6 +69,7 @@ fn register_builtin_panels() {
     panel::register(Box::new(panels::scope::ScopeInspector));
     panel::register(Box::new(panels::timeline::Timeline));
     panel::register(Box::new(panels::graph::Graph));
+    panel::register(Box::new(panels::health::Health));
 }
 
 /// Register the default push-style handlers: effect-run / handler-
@@ -201,6 +203,10 @@ fn render() {
     if shell::is_collapsed() {
         return;
     }
+
+    // Sample health counters every tick so the Health panel's
+    // sparklines fill whether or not it's the active tab.
+    health::sample_tick();
 
     let scopes = Scope::all();
     shell::update_meta_line(&root, &scopes);
