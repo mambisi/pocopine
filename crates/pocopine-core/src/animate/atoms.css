@@ -33,14 +33,19 @@
  */
 
 :root {
-  --pp-tx-duration: 200ms;
-  --pp-tx-easing: cubic-bezier(0, 0, 0.2, 1);
+  --pp-tx-duration: 180ms;
+  /* Apple-style sharp deceleration — lands earlier than a plain
+   * ease-out so the motion reads as decisive rather than lingering.
+   * Feels snappier than `cubic-bezier(0, 0, 0.2, 1)` at the same
+   * duration. */
+  --pp-tx-easing: cubic-bezier(0.16, 1, 0.3, 1);
   /* `fade` is the overlay/backdrop preset — keep it noticeably
    * faster than scale/slide so the backdrop snaps in while the
    * focal Content takes its full duration. The two start
    * together; fade finishes early and Content's tail overlaps
    * the settled overlay. Mirrors Material/Apple HIG behaviour. */
-  --pp-tx-fade-duration: 110ms;
+  --pp-tx-fade-duration: 100ms;
+  --pp-tx-fade-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --pp-tx-collapse-duration: 220ms;
   --pp-tx-collapse-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --pp-tx-flip-duration: 260ms;
@@ -72,7 +77,7 @@
               transform var(--pp-tx-fade-scale-duration, var(--pp-tx-duration))
               var(--pp-tx-fade-scale-easing, var(--pp-tx-easing));
 }
-.pp-tx-fade-scale-from { opacity: 0; transform: scale(0.96); }
+.pp-tx-fade-scale-from { opacity: 0; transform: scale(0.94); }
 .pp-tx-fade-scale-to   { opacity: 1; transform: scale(1); }
 
 /* ── zoom (opacity + 0.8 → 1) ─────────────────────────────────── */
@@ -131,25 +136,48 @@
  * tweens its single row between collapsed and full intrinsic
  * height. The grid item (the inner rendered root of the
  * collapsible content) needs `min-height: 0; overflow: hidden`
- * so its content can actually shrink during the close phase —
- * the `> *` selector below handles that automatically.
+ * so its content can actually shrink during the close phase.
+ *
+ * `display: grid` + the `> *` shrink rule apply on BOTH `from`
+ * and `base`, because the two-phase enter swap (RFC-039) applies
+ * `from` alone for one frame before adding `base`. Without
+ * display:grid on from, `grid-template-rows: 0fr` is inert and
+ * the subsequent display-change jumps instead of tweening.
+ *
+ * Opacity is tweened alongside grid-template-rows so the content
+ * fades in sync with the row growth — without it the last 30% of
+ * the transition looks like a pop (content suddenly appearing
+ * when the row reaches its intrinsic height). The user-visible
+ * motion becomes a smooth dissolve + unfold instead of a snap.
  *
  * No JavaScript measurement; works for arbitrary content
- * heights. Pairs with `transition = "collapse"` on Pine's
- * Collapsible / Accordion content macros.
+ * heights. Pairs with `pp-transition="collapse"` on Pine's
+ * Collapsible / Accordion content clone roots.
  */
-.pp-tx-collapse-base {
+.pp-tx-collapse-base,
+.pp-tx-collapse-from {
   display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows var(--pp-tx-collapse-duration)
-              var(--pp-tx-collapse-easing);
+  /* `minmax(0, …)` explicitly sets the row's minimum to 0 so the
+   * grid-template-rows value can actually tween to 0 without
+   * being clamped by the intrinsic min-content size of the child
+   * (which in Firefox otherwise wins even with `min-height: 0`
+   * and `overflow: hidden`). Without this, `0fr` collapses to
+   * content-height and the transition is invisible. */
+  grid-template-rows: minmax(0, 1fr);
 }
-.pp-tx-collapse-base > * {
+.pp-tx-collapse-base > *,
+.pp-tx-collapse-from > * {
   min-height: 0;
   overflow: hidden;
 }
-.pp-tx-collapse-from { grid-template-rows: 0fr; }
-.pp-tx-collapse-to   { grid-template-rows: 1fr; }
+.pp-tx-collapse-base {
+  transition: grid-template-rows var(--pp-tx-collapse-duration)
+              var(--pp-tx-collapse-easing),
+              opacity var(--pp-tx-collapse-duration)
+              var(--pp-tx-collapse-easing);
+}
+.pp-tx-collapse-from { grid-template-rows: minmax(0, 0fr); opacity: 0; }
+.pp-tx-collapse-to   { grid-template-rows: minmax(0, 1fr); opacity: 1; }
 
 /* ── flip helper — pp-for reorder animation.
  *    Applied imperatively by the FLIP runtime: the element gets a

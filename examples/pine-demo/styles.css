@@ -198,22 +198,34 @@ section {
   background: rgba(0, 0, 0, 0.5);
   z-index: 50;
 }
-/* Content is a sibling of Overlay (not nested). Center against
- * the viewport with `inset: 0 + margin: auto` so the `transform`
- * property stays free for the `fade-scale` preset. The earlier
- * `transform: translate(-50%, -50%)` centering competed with the
- * preset's `transform: scale(...)` and snapped on transition end
- * — perceptually a flicker.
+/* The OUTER `<pine-dialog-content>` becomes the viewport-filling
+ * flex container that centers the actual inner dialog box. This
+ * matters for animation: the `fade-scale` preset puts
+ * `transform: scale(0.96 → 1)` on the OUTER. If the inner were
+ * itself `position: fixed`, it'd be laid out against the viewport
+ * and the ancestor's transform wouldn't visually scale it — we'd
+ * see a pure fade. With the inner as a flex child of the outer,
+ * the whole container scales together and the fade-scale effect
+ * actually lands.
+ *
+ * `pointer-events: none/auto` lets clicks pass through the empty
+ * outer area back to the overlay (for click-to-close) while the
+ * inner still receives its own interactions.
  */
-.pine-dialog-content {
+pine-dialog-content {
   position: fixed;
   inset: 0;
-  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 51;
+  pointer-events: none;
+}
+.pine-dialog-content {
+  pointer-events: auto;
   width: 90vw;
   max-width: 420px;
-  height: fit-content;
   max-height: 90vh;
-  z-index: 51;
   background: var(--bg);
   border-radius: var(--radius);
   padding: 1.5rem;
@@ -235,15 +247,22 @@ section {
   background: rgba(0, 0, 0, 0.6);
   z-index: 50;
 }
-.pine-alert-dialog-content {
+/* Same flex-container pattern as pine-dialog — the outer custom
+ * tag fills the viewport so the preset's scale lands visually. */
+pine-alert-dialog-content {
   position: fixed;
   inset: 0;
-  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 51;
+  pointer-events: none;
+}
+.pine-alert-dialog-content {
+  pointer-events: auto;
   width: 90vw;
   max-width: 440px;
-  height: fit-content;
   max-height: 90vh;
-  z-index: 51;
   background: var(--bg);
   border: 1px solid var(--destructive);
   border-radius: var(--radius);
@@ -1055,15 +1074,21 @@ pine-command-empty {
   background: rgba(0, 0, 0, 0.55);
   z-index: 70;
 }
-.pine-command-content {
+/* Same flex-container pattern — outer fills viewport so the
+ * `fade-scale` preset's scale can take visual effect on the
+ * inner command palette box. */
+pine-command-content {
   position: fixed;
-  /* Anchor to top of viewport, centre horizontally without using
-   * `transform` (which would conflict with the `fade-scale` preset). */
-  top: 20vh;
-  left: 0;
-  right: 0;
-  margin-inline: auto;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
   z-index: 71;
+  pointer-events: none;
+}
+.pine-command-content {
+  pointer-events: auto;
   width: min(40rem, 92vw);
   background: var(--bg);
   border: 1px solid var(--border);
