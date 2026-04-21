@@ -250,3 +250,19 @@ fn update_host_visibility(el: &Element, idx: usize) {
         }
     }
 }
+
+/// Re-apply `display: none / ""` to every registered panel's host
+/// based on the current active index. Called every render tick so
+/// tab switches take effect — `host_for_panel` sets the display
+/// only on mount / lookup, and `ensure_mounted` short-circuits
+/// once every panel is mounted, which left visibility frozen at
+/// the first mount. This is the explicit sync path.
+pub(super) fn sync_panel_host_visibility(doc: &Document) {
+    let summary = panel::summary();
+    for (idx, (id, _, _)) in summary.iter().enumerate() {
+        let host_id = format!("__pp_dev_panel_{id}");
+        if let Some(el) = doc.get_element_by_id(&host_id) {
+            update_host_visibility(&el, idx);
+        }
+    }
+}

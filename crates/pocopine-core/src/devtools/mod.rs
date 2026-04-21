@@ -220,6 +220,10 @@ fn render() {
     // Ensure a host <div> exists for every registered panel, then
     // ask the panel registry to render whichever one is active.
     panel::ensure_mounted(|idx, id| shell::host_for_panel(&doc, idx, id));
+    // `ensure_mounted` short-circuits after first mount; re-apply
+    // display: none/"" every tick so `select-panel` actions take
+    // visible effect.
+    shell::sync_panel_host_visibility(&doc);
 
     let active_idx = panel::active_index();
     if let Some(active_id) = panel::summary()
