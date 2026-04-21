@@ -91,26 +91,30 @@ fn apply_memoised(
     prev: &Rc<RefCell<Option<String>>>,
 ) {
     // Shape handling diverges on whether this is a *state* attribute
-    // (data-*/aria-*) or a classic HTML attribute:
+    // (`data-*` / `aria-*`) or a classic HTML attribute, but ONLY
+    // on the truthy side:
     //
-    //   - State attrs expect literal `"true"` / `"false"` strings
-    //     because CSS selectors + ARIA consumers read them by value
-    //     (`[data-selected="true"]`, `aria-expanded="false"`).
-    //     Presence-without-value (the Alpine default) doesn't cut it.
-    //   - Classic attrs keep the upstream Alpine semantics: bool
-    //     `true` renders present-with-empty, bool `false` / null /
-    //     undefined removes the attribute entirely (matches
-    //     `<input disabled>` / `<script async>` shape).
+    //   - State attrs render bool `true` as the literal string
+    //     `"true"` so CSS value selectors like
+    //     `[data-disabled="true"]` and ARIA consumers reading the
+    //     value work without an author ternary. `aria-expanded`,
+    //     `aria-hidden`, etc. all read by value.
+    //   - Classic attrs keep upstream Alpine semantics: bool `true`
+    //     renders present-with-empty string (`<input disabled>`).
     //
-    // `null` and `undefined` always remove, on both paths, because
-    // neither carries a displayable value.
+    // On the falsy side (bool `false`, `null`, `undefined`), both
+    // paths REMOVE the attribute — presence-based CSS selectors
+    // like `[data-disabled]` or `[hidden]` treat the attribute as a
+    // "truthy if present" signal, and rendering `data-disabled="false"`
+    // would falsely match them. The demo's Pine stylesheet mixes
+    // both idioms (`[data-disabled]` on some primitives,
+    // `[data-disabled="true"]` on others), so removal is the only
+    // safe falsy shape across both.
     //
     // The removal path is memoed by storing an `Option<String>` where
     // `None` means "attribute is currently absent". A transition into
     // or out of the "absent" state must fire a DOM call exactly once.
-    let state_attr = is_state_attr(attr);
-    let is_false = v == &JsValue::FALSE;
-    let should_remove = v.is_undefined() || v.is_null() || (is_false && !state_attr);
+    let should_remove = v.is_undefined() || v.is_null() || v == &JsValue::FALSE;
     if should_remove {
         let mut p = prev.borrow_mut();
         if p.is_none() {
@@ -209,18 +213,15 @@ fn serialise_plain(attr: &str, v: &JsValue) -> Option<String> {
         return Some(n.to_string());
     }
     if let Some(b) = v.as_bool() {
-        // `data-*` / `aria-*` want the literal string — see
-        // `is_state_attr` + `apply_memoised` above. Classic HTML
-        // attrs keep Alpine's `true → present-with-empty-string`
-        // shape; `false` is already handled upstream as removal.
+        // `false` is routed through `remove_attribute` before this
+        // function runs, on both state-attr and classic-attr paths.
+        // So the only bool that reaches us is `true`: state attrs
+        // render it as the literal `"true"` (CSS value selectors +
+        // ARIA consumers read by value); classic attrs keep the
+        // upstream `true → present-with-empty-string` shape.
         if is_state_attr(attr) {
             return Some(if b { "true".into() } else { "false".into() });
         }
-        if b {
-            return Some(String::new());
-        }
-        // Unreachable on the classic path — `false` is routed
-        // through `remove_attribute` before this function runs.
         return Some(String::new());
     }
     // Fallback: JSON-stringify objects/arrays (matches the old
