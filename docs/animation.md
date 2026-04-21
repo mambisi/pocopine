@@ -231,6 +231,44 @@ motion-as-data UI:
 automatically (deferred — author the attribute directly until that
 ships).
 
+## Gotcha: don't center with `transform` if you use scale / slide presets
+
+The `scale`, `fade-scale`, `zoom`, and `slide-*` presets all
+animate the `transform` CSS property. If your CSS centres the
+animated element via `transform: translate(-50%, -50%)`, the
+preset's transform clobbers the centering — the element animates
+from an off-centre position, then snaps to centre when the
+transition class clears. Visually that reads as a flicker.
+
+Fix: use a non-`transform` centring technique on any element you
+want to scale or slide. Common patterns:
+
+```css
+/* Modal-style: position fixed + inset 0 + margin auto. */
+.my-content {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: 90vw;
+  max-width: 420px;
+  height: fit-content;
+}
+
+/* Or: a centring wrapper with flexbox / grid that doesn't move. */
+.my-portal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.my-portal > .my-content { pointer-events: auto; }
+```
+
+Either keeps `transform` free for the preset to own. The
+pine-demo's Dialog / AlertDialog / Command CSS uses the first
+pattern — copy from there if you're styling the same primitives.
+
 ## Theming hooks (RFC-039)
 
 atoms.css reads durations and easings via CSS custom properties:

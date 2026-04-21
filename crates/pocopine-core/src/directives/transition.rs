@@ -239,17 +239,27 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     }
     let epoch = rc.borrow().epoch;
 
-    // Apply `enter` + `enter-start`. A synchronous read of
-    // `client_width` is the textbook "force a reflow" trick, but
-    // browsers (Firefox in particular) coalesce same-task style
-    // changes and the from-state never commits — the transition
-    // would run from `to` to `to` and visibly do nothing. Defer the
-    // from→to swap to the next animation frame so the browser
-    // actually paints the start state first.
+    // Two-phase swap. Apply ONLY `enter-start` (the initial state)
+    // first, force a reflow so the browser commits opacity:0 /
+    // transform:scale(...) WITHOUT a transition rule active. Then
+    // on next frame, add `enter` (which carries the
+    // `transition: opacity ..., transform ...` shorthand) AND
+    // `enter-end` (the final state) at once, removing
+    // `enter-start`. The browser sees the property change with a
+    // transition rule already present and starts a clean tween.
+    //
+    // The earlier single-phase pattern (add base+from together)
+    // looked correct but kicked off a TRANSITION from the prior
+    // computed value (opacity:1 for a freshly cloned element) to
+    // the from-state (opacity:0). The next-frame swap to `to` then
+    // interrupted that in-flight tween with a new target near the
+    // current value, leaving opacity stuck around 1 — the
+    // user-visible "content settles before the overlay fades in"
+    // flicker on Pine Dialog.
     let cl = el.class_list();
     {
         let s = rc.borrow();
-        for c in s.enter.iter().chain(s.enter_start.iter()) {
+        for c in &s.enter_start {
             let _ = cl.add_1(c);
         }
     }
@@ -267,6 +277,9 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             let s = rc_cap.borrow();
             for c in &s.enter_start {
                 let _ = cl.remove_1(c);
+            }
+            for c in &s.enter {
+                let _ = cl.add_1(c);
             }
             for c in &s.enter_end {
                 let _ = cl.add_1(c);
@@ -321,10 +334,16 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     }
     let epoch = rc.borrow().epoch;
 
+    // Mirror enter()'s two-phase swap. For leave: the element is
+    // currently visible (opacity:1 etc.). Apply ONLY `leave-start`
+    // first to lock in the current rendered state explicitly, then
+    // on next frame add `leave` (transition rule) and `leave-end`
+    // (target state) at once so the browser tweens cleanly from
+    // start to end.
     let cl = el.class_list();
     {
         let s = rc.borrow();
-        for c in s.leave.iter().chain(s.leave_start.iter()) {
+        for c in &s.leave_start {
             let _ = cl.add_1(c);
         }
     }
@@ -342,6 +361,9 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             let s = rc_cap.borrow();
             for c in &s.leave_start {
                 let _ = cl.remove_1(c);
+            }
+            for c in &s.leave {
+                let _ = cl.add_1(c);
             }
             for c in &s.leave_end {
                 let _ = cl.add_1(c);

@@ -198,19 +198,25 @@ section {
   background: rgba(0, 0, 0, 0.5);
   z-index: 50;
 }
-/* Content is a sibling of Overlay now (not nested inside).
-   Center it against the viewport manually. */
+/* Content is a sibling of Overlay (not nested). Center against
+ * the viewport with `inset: 0 + margin: auto` so the `transform`
+ * property stays free for the `fade-scale` preset. The earlier
+ * `transform: translate(-50%, -50%)` centering competed with the
+ * preset's `transform: scale(...)` and snapped on transition end
+ * — perceptually a flicker.
+ */
 .pine-dialog-content {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  margin: auto;
+  width: 90vw;
+  max-width: 420px;
+  height: fit-content;
+  max-height: 90vh;
   z-index: 51;
   background: var(--bg);
   border-radius: var(--radius);
   padding: 1.5rem;
-  max-width: 420px;
-  width: 90vw;
   box-shadow: var(--shadow);
 }
 .pine-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
@@ -231,16 +237,17 @@ section {
 }
 .pine-alert-dialog-content {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  margin: auto;
+  width: 90vw;
+  max-width: 440px;
+  height: fit-content;
+  max-height: 90vh;
   z-index: 51;
   background: var(--bg);
   border: 1px solid var(--destructive);
   border-radius: var(--radius);
   padding: 1.5rem;
-  max-width: 440px;
-  width: 90vw;
   box-shadow: var(--shadow);
 }
 .pine-alert-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
@@ -1050,9 +1057,12 @@ pine-command-empty {
 }
 .pine-command-content {
   position: fixed;
+  /* Anchor to top of viewport, centre horizontally without using
+   * `transform` (which would conflict with the `fade-scale` preset). */
   top: 20vh;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
   z-index: 71;
   width: min(40rem, 92vw);
   background: var(--bg);
