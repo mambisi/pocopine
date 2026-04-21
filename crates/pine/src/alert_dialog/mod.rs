@@ -109,7 +109,7 @@ impl PineAlertDialogRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAlertDialogTrigger.poco", role = "interactive")]
 pub struct PineAlertDialogTrigger {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -126,7 +126,7 @@ impl PineAlertDialogTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAlertDialogPortal.poco", role = "scope")]
 pub struct PineAlertDialogPortal {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]

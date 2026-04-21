@@ -323,8 +323,8 @@ fn value_from_pointer(
 #[component(template = "PineSliderTrack.poco", role = "panel")]
 pub struct PineSliderTrack {
     /// Mirrored for the `data-orientation` / `data-disabled` attrs.
-    #[observe(via = ROOT)] pub orientation: String,
-    #[observe(via = ROOT)] pub disabled: bool,
+    #[observe(ROOT)] pub orientation: String,
+    #[observe(ROOT)] pub disabled: bool,
 }
 
 #[handlers]
@@ -335,9 +335,9 @@ impl PineSliderTrack {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSliderRange.poco", role = "visual")]
 pub struct PineSliderRange {
-    #[observe(via = ROOT)] pub orientation: String,
-    #[observe(via = ROOT)] pub disabled: bool,
-    #[observe(via = ROOT)] pub percent: f64,
+    #[observe(ROOT)] pub orientation: String,
+    #[observe(ROOT)] pub disabled: bool,
+    #[observe(ROOT)] pub percent: f64,
 }
 
 #[handlers]
@@ -349,12 +349,12 @@ impl PineSliderRange {}
 #[component(template = "PineSliderThumb.poco", role = "interactive")]
 pub struct PineSliderThumb {
     /// Mirrored from Root for ARIA + positioning.
-    #[observe(via = ROOT)] pub value: f64,
-    #[observe(via = ROOT)] pub min: f64,
-    #[observe(via = ROOT)] pub max: f64,
-    #[observe(via = ROOT)] pub percent: f64,
-    #[observe(via = ROOT)] pub orientation: String,
-    #[observe(via = ROOT)] pub disabled: bool,
+    #[observe(ROOT)] pub value: f64,
+    #[observe(ROOT)] pub min: f64,
+    #[observe(ROOT)] pub max: f64,
+    #[observe(ROOT)] pub percent: f64,
+    #[observe(ROOT)] pub orientation: String,
+    #[observe(ROOT)] pub disabled: bool,
 }
 
 #[handlers]

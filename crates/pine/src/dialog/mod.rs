@@ -107,7 +107,7 @@ impl PineDialogRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogTrigger.poco", role = "interactive")]
 pub struct PineDialogTrigger {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -124,7 +124,7 @@ impl PineDialogTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogPortal.poco", role = "scope")]
 pub struct PineDialogPortal {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]

@@ -29,7 +29,7 @@ use syn::{
     Pat, Path, PatType, Token, Type,
 };
 
-/// Parsed `#[observe(via = KEY [, field = "name"])]` attribute —
+/// Parsed `#[observe(KEY [, field = "name"])]` attribute —
 /// RFC-036. Each entry emits a `watch_scope_field` install that
 /// writes back into `field_ident` whenever the parent's
 /// `field_name_on_root` changes, plus a seed read during setup.
@@ -211,55 +211,44 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return false;
             }
             if a.path().is_ident("observe") {
-                let parsed: syn::Result<Punctuated<MetaNameValue, Token![,]>> =
-                    a.parse_args_with(Punctuated::parse_terminated);
-                match parsed {
-                    Ok(pairs) => {
-                        let mut via: Option<Path> = None;
-                        let mut rename: Option<String> = None;
-                        for kv in pairs {
-                            if kv.path.is_ident("via") {
-                                // `via = SOME_KEY` — the value is a path
-                                // expression (an identifier or module path).
-                                match kv.value {
-                                    Expr::Path(p) => via = Some(p.path),
-                                    other => {
-                                        observe_err = Some(syn::Error::new_spanned(
-                                            other,
-                                            "expected an identifier for `via` — \
-                                             the module-scope InjectKey<T>",
-                                        ));
-                                    }
-                                }
-                            } else if kv.path.is_ident("field") {
-                                if let Expr::Lit(ExprLit {
+                // Shape: `#[observe(KEY)]` or
+                // `#[observe(KEY, field = "name")]`. First positional
+                // arg is the `InjectKey<Handle<T>>` path; the
+                // optional `field = "…"` overrides the default
+                // parent-field name (which would otherwise match
+                // `field_ident`).
+                let parsed = a.parse_args_with(|input: syn::parse::ParseStream| {
+                    let key: Path = input.parse()?;
+                    let mut rename: Option<LitStr> = None;
+                    while !input.is_empty() {
+                        input.parse::<Token![,]>()?;
+                        if input.is_empty() {
+                            break;
+                        }
+                        let kv: MetaNameValue = input.parse()?;
+                        if kv.path.is_ident("field") {
+                            match kv.value {
+                                Expr::Lit(ExprLit {
                                     lit: Lit::Str(s), ..
-                                }) = kv.value
-                                {
-                                    rename = Some(s.value());
-                                } else {
-                                    observe_err = Some(syn::Error::new_spanned(
-                                        kv.path,
+                                }) => rename = Some(s),
+                                other => {
+                                    return Err(syn::Error::new_spanned(
+                                        other,
                                         "`field` must be a string literal",
                                     ));
                                 }
-                            } else {
-                                observe_err = Some(syn::Error::new_spanned(
-                                    kv.path,
-                                    "unknown #[observe] key — expected: via, field",
-                                ));
                             }
-                        }
-                        match via {
-                            Some(v) => observe_spec = Some((v, rename)),
-                            None => {
-                                observe_err = Some(syn::Error::new_spanned(
-                                    a.path(),
-                                    "#[observe] requires `via = KEY`",
-                                ));
-                            }
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                kv.path,
+                                "unknown #[observe] key — expected: field",
+                            ));
                         }
                     }
+                    Ok((key, rename.map(|s| s.value())))
+                });
+                match parsed {
+                    Ok(spec) => observe_spec = Some(spec),
                     Err(e) => observe_err = Some(e),
                 }
                 return false;
@@ -371,7 +360,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
 
-    // RFC-036 — `#[observe(via = KEY)]`. Emit two inherent
+    // RFC-036 — `#[observe(KEY)]`. Emit two inherent
     // methods on the struct that #[handlers] calls from its
     // generated `setup()`. Bodies are empty when no field is
     // observed, so the call sites are cheap but unconditional.
@@ -656,7 +645,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Always wrap setup with the observe seed + install calls the
     // `#[component]` macro emitted as inherent methods. The bodies
-    // are no-ops when the struct has no `#[observe(via = KEY)]`
+    // are no-ops when the struct has no `#[observe(KEY)]`
     // fields, so the overhead is one call + a `this::<Self>()`
     // lookup — negligible compared to the setup invocation itself.
     // User's `on_setup` (when declared) runs after observes so
@@ -909,7 +898,7 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         impl #struct_ident {
-            // RFC-036 — stores don't support `#[observe(via = KEY)]`
+            // RFC-036 — stores don't support `#[observe(KEY)]`
             // (there's no parent context / inject chain), but
             // `#[handlers]` unconditionally calls these from its
             // generated setup. Emit no-op shims so the call

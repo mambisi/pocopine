@@ -89,7 +89,7 @@ impl PinePopoverRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverTrigger.poco", role = "interactive")]
 pub struct PinePopoverTrigger {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -115,7 +115,7 @@ impl PinePopoverTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverPortal.poco", role = "scope")]
 pub struct PinePopoverPortal {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]

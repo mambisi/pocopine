@@ -87,7 +87,7 @@ impl PinePasswordToggleFieldInput {
 #[component(template = "PinePasswordToggleFieldToggle.poco", role = "interactive")]
 pub struct PinePasswordToggleFieldToggle {
     /// Mirrored from Root for `:aria-pressed` + `:data-state`.
-    #[observe(via = ROOT)] pub visible: bool,
+    #[observe(ROOT)] pub visible: bool,
 }
 
 #[handlers]

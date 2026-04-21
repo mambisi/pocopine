@@ -76,7 +76,7 @@ impl PineTabsRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsList.poco", role = "panel")]
 pub struct PineTabsList {
-    #[observe(via = ROOT)] pub orientation: String,
+    #[observe(ROOT)] pub orientation: String,
 }
 
 #[handlers]

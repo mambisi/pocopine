@@ -373,7 +373,7 @@ fn teardown(scope: ScopeId) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTooltipPortal.poco", role = "scope")]
 pub struct PineTooltipPortal {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]

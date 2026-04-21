@@ -323,7 +323,7 @@ fn teardown_trigger(root_id: ScopeId) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineHoverCardPortal.poco", role = "scope")]
 pub struct PineHoverCardPortal {
-    #[observe(via = ROOT)] pub open: bool,
+    #[observe(ROOT)] pub open: bool,
 }
 
 #[handlers]
