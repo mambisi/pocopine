@@ -244,3 +244,76 @@ fn watch_fires_on_distinct_values_only() {
     assert_eq!(last_old.get(), Some(5));
     assert_eq!(last_new.get(), 7);
 }
+
+#[wasm_bindgen_test]
+fn set_skips_trigger_when_value_unchanged() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let runs = Rc::new(Cell::new(0));
+    let runs_w = runs.clone();
+    let s_c = s.clone();
+    effect(move || {
+        let _ = s_c.get();
+        runs_w.set(runs_w.get() + 1);
+    });
+    assert_eq!(runs.get(), 1);
+
+    // Same value → no trigger.
+    setter.set(0);
+    flush_sync();
+    assert_eq!(runs.get(), 1, "same-value set must not re-run subscribers");
+
+    // Different value → triggers.
+    setter.set(1);
+    flush_sync();
+    assert_eq!(runs.get(), 2);
+
+    // Same value again → no trigger.
+    setter.set(1);
+    flush_sync();
+    assert_eq!(runs.get(), 2);
+}
+
+#[wasm_bindgen_test]
+fn set_force_always_triggers_even_when_unchanged() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let runs = Rc::new(Cell::new(0));
+    let runs_w = runs.clone();
+    let s_c = s.clone();
+    effect(move || {
+        let _ = s_c.get();
+        runs_w.set(runs_w.get() + 1);
+    });
+    assert_eq!(runs.get(), 1);
+
+    setter.set_force(0);
+    flush_sync();
+    assert_eq!(runs.get(), 2, "set_force must re-fire on same value");
+
+    setter.set_force(0);
+    flush_sync();
+    assert_eq!(runs.get(), 3);
+}
+
+#[wasm_bindgen_test]
+fn update_always_triggers_even_when_unchanged() {
+    setup();
+    let (s, setter) = signal(0_i32);
+    let runs = Rc::new(Cell::new(0));
+    let runs_w = runs.clone();
+    let s_c = s.clone();
+    effect(move || {
+        let _ = s_c.get();
+        runs_w.set(runs_w.get() + 1);
+    });
+    assert_eq!(runs.get(), 1);
+
+    // Update that doesn't mutate still fires — closure-based
+    // mutation can't be proven identity-free without a clone.
+    setter.update(|v| {
+        let _ = v;
+    });
+    flush_sync();
+    assert_eq!(runs.get(), 2, "update must always trigger");
+}

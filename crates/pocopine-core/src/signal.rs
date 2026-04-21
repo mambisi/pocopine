@@ -99,14 +99,41 @@ impl<T: 'static> Signal<T> {
     }
 }
 
-impl<T: 'static> Setter<T> {
-    /// Replace the stored value and notify subscribers.
+impl<T: PartialEq + 'static> Setter<T> {
+    /// Replace the stored value; notify subscribers only when the
+    /// new value differs from the current one. The equality check
+    /// eliminates a class of render-loop / watcher-thrash bugs:
+    /// an effect that writes back a value it just read (even when
+    /// the value is unchanged) used to re-fire every subscriber
+    /// and, in a chain, spin.
+    ///
+    /// For the rare "I want to re-fire even on an identical value"
+    /// case, use [`Setter::set_force`].
     pub fn set(&self, value: T) {
+        if *self.cell.borrow() == value {
+            return;
+        }
+        *self.cell.borrow_mut() = value;
+        trigger(SIGNAL_SCOPE, &key_of(self.id));
+    }
+}
+
+impl<T: 'static> Setter<T> {
+    /// Replace the stored value and unconditionally notify
+    /// subscribers — the escape hatch from [`Setter::set`]'s
+    /// value-equality guard. Use when a subscriber must re-fire
+    /// even for the identical value (rare; e.g. force-replaying
+    /// the last effect run).
+    pub fn set_force(&self, value: T) {
         *self.cell.borrow_mut() = value;
         trigger(SIGNAL_SCOPE, &key_of(self.id));
     }
 
-    /// Mutate in place via `f`, then notify subscribers.
+    /// Mutate in place via `f`, then notify subscribers. Always
+    /// fires — the closure can't prove the value didn't change
+    /// without us reading twice (pre-mutation snapshot + post-
+    /// mutation compare), which would defeat the point of `update`
+    /// for non-`Clone` / non-`PartialEq` `T`.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         f(&mut self.cell.borrow_mut());
         trigger(SIGNAL_SCOPE, &key_of(self.id));
@@ -124,13 +151,25 @@ impl<T: Clone + 'static> RwSignal<T> {
     }
 }
 
+impl<T: PartialEq + 'static> RwSignal<T> {
+    /// See [`Setter::set`] — value-equality guard identical shape.
+    pub fn set(&self, value: T) {
+        if *self.cell.borrow() == value {
+            return;
+        }
+        *self.cell.borrow_mut() = value;
+        trigger(SIGNAL_SCOPE, &key_of(self.id));
+    }
+}
+
 impl<T: 'static> RwSignal<T> {
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         track(SIGNAL_SCOPE, &key_of(self.id));
         f(&self.cell.borrow())
     }
 
-    pub fn set(&self, value: T) {
+    /// See [`Setter::set_force`].
+    pub fn set_force(&self, value: T) {
         *self.cell.borrow_mut() = value;
         trigger(SIGNAL_SCOPE, &key_of(self.id));
     }
