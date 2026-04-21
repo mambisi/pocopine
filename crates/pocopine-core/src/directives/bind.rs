@@ -90,15 +90,28 @@ fn apply_memoised(
     v: &JsValue,
     prev: &Rc<RefCell<Option<String>>>,
 ) {
-    // Special-case the three shapes that write DOM:
-    //   1. null/undefined/false → remove_attribute
-    //   2. class/style object   → build serialised string first, compare
-    //   3. everything else      → to_value_string(v), compare, set_attribute
+    // Shape handling diverges on whether this is a *state* attribute
+    // (data-*/aria-*) or a classic HTML attribute:
+    //
+    //   - State attrs expect literal `"true"` / `"false"` strings
+    //     because CSS selectors + ARIA consumers read them by value
+    //     (`[data-selected="true"]`, `aria-expanded="false"`).
+    //     Presence-without-value (the Alpine default) doesn't cut it.
+    //   - Classic attrs keep the upstream Alpine semantics: bool
+    //     `true` renders present-with-empty, bool `false` / null /
+    //     undefined removes the attribute entirely (matches
+    //     `<input disabled>` / `<script async>` shape).
+    //
+    // `null` and `undefined` always remove, on both paths, because
+    // neither carries a displayable value.
     //
     // The removal path is memoed by storing an `Option<String>` where
     // `None` means "attribute is currently absent". A transition into
     // or out of the "absent" state must fire a DOM call exactly once.
-    if v.is_undefined() || v.is_null() || v == &JsValue::FALSE {
+    let state_attr = is_state_attr(attr);
+    let is_false = v == &JsValue::FALSE;
+    let should_remove = v.is_undefined() || v.is_null() || (is_false && !state_attr);
+    if should_remove {
         let mut p = prev.borrow_mut();
         if p.is_none() {
             return;
@@ -119,7 +132,7 @@ fn apply_memoised(
             Some(s) => s,
             None => return,
         },
-        _ => match serialise_plain(v) {
+        _ => match serialise_plain(attr, v) {
             Some(s) => s,
             None => return,
         },
@@ -133,6 +146,15 @@ fn apply_memoised(
     // Write + memo.
     let _ = el.set_attribute(attr, &serialised);
     *prev.borrow_mut() = Some(serialised);
+}
+
+/// `data-*` / `aria-*` — attributes read *by value* (CSS selectors,
+/// ARIA consumers) rather than by presence. Bool values on these
+/// render as the literal strings `"true"` / `"false"` so expressions
+/// like `:data-selected="is_selected"` work without an explicit
+/// `? 'true' : 'false'` ternary at the call site.
+fn is_state_attr(attr: &str) -> bool {
+    attr.starts_with("data-") || attr.starts_with("aria-")
 }
 
 fn serialise_class(v: &JsValue) -> Option<String> {
@@ -179,14 +201,26 @@ fn serialise_style(v: &JsValue) -> Option<String> {
     None
 }
 
-fn serialise_plain(v: &JsValue) -> Option<String> {
+fn serialise_plain(attr: &str, v: &JsValue) -> Option<String> {
     if let Some(s) = v.as_string() {
         return Some(s);
     }
     if let Some(n) = v.as_f64() {
         return Some(n.to_string());
     }
-    if v == &JsValue::TRUE {
+    if let Some(b) = v.as_bool() {
+        // `data-*` / `aria-*` want the literal string — see
+        // `is_state_attr` + `apply_memoised` above. Classic HTML
+        // attrs keep Alpine's `true → present-with-empty-string`
+        // shape; `false` is already handled upstream as removal.
+        if is_state_attr(attr) {
+            return Some(if b { "true".into() } else { "false".into() });
+        }
+        if b {
+            return Some(String::new());
+        }
+        // Unreachable on the classic path — `false` is routed
+        // through `remove_attribute` before this function runs.
         return Some(String::new());
     }
     // Fallback: JSON-stringify objects/arrays (matches the old
