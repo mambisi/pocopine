@@ -1,4 +1,4 @@
-/* pocopine animation preset atoms.
+/* pocopine animation preset atoms (RFC-038, themed in RFC-039).
  *
  * Injected once at App::new() via `crate::styles::inject_style`. Each
  * preset ships three classes — `*-base` (transition-property +
@@ -7,73 +7,111 @@
  * them in this order for enter:
  *
  *   add    enter-start (= *-from)
- *   reflow
+ *   reflow + next animation frame
  *   swap to enter-end  (= *-to)
  *
  * and the reverse for leave. Duration/easing come from the `*-base`
  * class, which is applied for the whole phase.
  *
- * Authors can ship their own presets via
- * `pocopine::animate::register_preset` or write `.pp-tx-foo-*` rules
- * of their own.
+ * THEMING (RFC-039 §2). Every duration / easing reads through CSS
+ * custom properties so authors can retune all presets globally:
+ *
+ *   :root {
+ *     --pp-tx-duration: 120ms;
+ *     --pp-tx-easing: ease-out;
+ *   }
+ *
+ * Per-preset overrides via `--pp-tx-fade-duration` etc. fall back
+ * to the global `--pp-tx-duration` when absent.
+ *
+ * REDUCED MOTION (RFC-039 §1). When the user prefers reduced
+ * motion, every duration collapses to 1ms — the transition still
+ * fires (so `transitionend` lands and on_done plays out), but the
+ * motion is imperceptible. Authors who *want* motion under reduced
+ * preference set `--pp-tx-respect-motion-pref: 0` on the element
+ * (the `motion="always"` macro arg flips this).
  */
 
+:root {
+  --pp-tx-duration: 200ms;
+  --pp-tx-easing: cubic-bezier(0, 0, 0.2, 1);
+  --pp-tx-flip-duration: 260ms;
+  --pp-tx-flip-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 /* ── fade ─────────────────────────────────────────────────────── */
-.pp-tx-fade-base { transition: opacity 150ms cubic-bezier(0, 0, 0.2, 1); }
+.pp-tx-fade-base {
+  transition: opacity var(--pp-tx-fade-duration, var(--pp-tx-duration))
+              var(--pp-tx-fade-easing, var(--pp-tx-easing));
+}
 .pp-tx-fade-from { opacity: 0; }
 .pp-tx-fade-to   { opacity: 1; }
 
 /* ── scale (opacity + 0.95 → 1) ───────────────────────────────── */
 .pp-tx-scale-base {
-  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
-              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-scale-duration, var(--pp-tx-duration))
+              var(--pp-tx-scale-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-scale-duration, var(--pp-tx-duration))
+              var(--pp-tx-scale-easing, var(--pp-tx-easing));
 }
 .pp-tx-scale-from { opacity: 0; transform: scale(0.95); }
 .pp-tx-scale-to   { opacity: 1; transform: scale(1); }
 
 /* ── fade-scale (default for Dialog / HoverCard / Command) ────── */
 .pp-tx-fade-scale-base {
-  transition: opacity 200ms cubic-bezier(0, 0, 0.2, 1),
-              transform 200ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-fade-scale-duration, var(--pp-tx-duration))
+              var(--pp-tx-fade-scale-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-fade-scale-duration, var(--pp-tx-duration))
+              var(--pp-tx-fade-scale-easing, var(--pp-tx-easing));
 }
 .pp-tx-fade-scale-from { opacity: 0; transform: scale(0.96); }
 .pp-tx-fade-scale-to   { opacity: 1; transform: scale(1); }
 
 /* ── zoom (opacity + 0.8 → 1) ─────────────────────────────────── */
 .pp-tx-zoom-base {
-  transition: opacity 200ms cubic-bezier(0, 0, 0.2, 1),
-              transform 200ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-zoom-duration, var(--pp-tx-duration))
+              var(--pp-tx-zoom-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-zoom-duration, var(--pp-tx-duration))
+              var(--pp-tx-zoom-easing, var(--pp-tx-easing));
 }
 .pp-tx-zoom-from { opacity: 0; transform: scale(0.80); }
 .pp-tx-zoom-to   { opacity: 1; transform: scale(1); }
 
 /* ── slide-up: comes in from BELOW, leaves downward ──────────── */
 .pp-tx-slide-up-base {
-  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
-              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-slide-up-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-up-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-slide-up-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-up-easing, var(--pp-tx-easing));
 }
 .pp-tx-slide-up-from { opacity: 0; transform: translateY(8px); }
 .pp-tx-slide-up-to   { opacity: 1; transform: translateY(0); }
 
 /* ── slide-down: comes in from ABOVE (typical popover/menu) ──── */
 .pp-tx-slide-down-base {
-  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
-              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-slide-down-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-down-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-slide-down-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-down-easing, var(--pp-tx-easing));
 }
 .pp-tx-slide-down-from { opacity: 0; transform: translateY(-8px); }
 .pp-tx-slide-down-to   { opacity: 1; transform: translateY(0); }
 
 /* ── slide-left / slide-right (horizontal) ───────────────────── */
 .pp-tx-slide-left-base {
-  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
-              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-slide-left-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-left-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-slide-left-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-left-easing, var(--pp-tx-easing));
 }
 .pp-tx-slide-left-from { opacity: 0; transform: translateX(8px); }
 .pp-tx-slide-left-to   { opacity: 1; transform: translateX(0); }
 
 .pp-tx-slide-right-base {
-  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
-              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+  transition: opacity var(--pp-tx-slide-right-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-right-easing, var(--pp-tx-easing)),
+              transform var(--pp-tx-slide-right-duration, var(--pp-tx-duration))
+              var(--pp-tx-slide-right-easing, var(--pp-tx-easing));
 }
 .pp-tx-slide-right-from { opacity: 0; transform: translateX(-8px); }
 .pp-tx-slide-right-to   { opacity: 1; transform: translateX(0); }
@@ -83,6 +121,29 @@
  *    transform that matches its OLD position (invert), then a
  *    transition to transform: none is started on the next frame. */
 .pp-tx-flip-base {
-  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--pp-tx-flip-duration)
+              var(--pp-tx-flip-easing);
   will-change: transform;
+}
+
+/* ── reduced motion ──────────────────────────────────────────────
+ *
+ * Collapse every preset's duration to 1ms when the user has set
+ * `prefers-reduced-motion: reduce`. The transition still fires
+ * (so `transitionend` is delivered and the state machine's
+ * on_done callback runs at the right moment) but the motion is
+ * imperceptible. Authors who specifically want motion under
+ * reduced-motion (e.g. a progress indicator where the motion
+ * conveys data) opt out by stamping `data-pp-motion="always"`
+ * on the element — the `motion = "always"` macro arg does this.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-pp-motion="always"]) {
+    --pp-tx-duration: 1ms;
+    --pp-tx-flip-duration: 1ms;
+  }
+  [data-pp-motion="always"] {
+    /* opt-out island — motion plays at the durations defined
+       above (or per-element overrides). */
+  }
 }

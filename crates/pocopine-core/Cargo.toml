@@ -68,6 +68,7 @@ features = [
     "Navigator",
     "Location",
     "MouseEvent",
+    "MediaQueryList",
     "NamedNodeMap",
     "Node",
     "NodeList",

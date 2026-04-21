@@ -38,20 +38,29 @@
 
 pub mod collapse;
 pub mod flip;
+pub mod motion;
 pub mod presets;
 pub mod waapi;
 
 // Flat re-exports — authors import from `pocopine::animate::*`.
 pub use collapse::{collapse_to, CollapseOptions};
 pub use flip::{flip, flip_from_snapshot, FlipOptions};
+pub use motion::{is_reduced as motion_is_reduced, MotionPreference};
 pub use presets::{apply_preset, lookup, register_preset, Phase, Preset};
 pub use waapi::{animate, AnimateOptions, AnimationHandle, Keyframe};
 
-/// Boot-time installation — inject the preset atom stylesheet. The
-/// runtime calls this from `App::new`/`start` so authors don't have
-/// to. Idempotent — safe to call repeatedly.
+/// Current motion preference snapshot. Convenience re-export so
+/// authors don't have to know the submodule path.
+pub fn motion_preference() -> MotionPreference {
+    motion::current()
+}
+
+/// Boot-time installation — inject the preset atom stylesheet and
+/// start the motion-preference media-query watcher. Called from
+/// `App::run`. Idempotent.
 pub fn install() {
     presets::inject_atoms_stylesheet();
+    motion::install();
 }
 
 /// Disable RFC-038 transitions globally. Intended for tests that

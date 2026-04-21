@@ -71,6 +71,7 @@ pub fn collapse_to(el: &Element, open: bool, opts: CollapseOptions) {
                 // None so height clears to intrinsic when done —
                 // the element can then resize freely with content.
                 fill: "none",
+                respect_motion_preference: true,
             },
         )
         .on_finish(move || {
@@ -102,6 +103,7 @@ pub fn collapse_to(el: &Element, open: bool, opts: CollapseOptions) {
                 // `forwards` — keep the 0px height applied once the
                 // animation finishes so the slot stays closed.
                 fill: "forwards",
+                respect_motion_preference: true,
             },
         );
     }

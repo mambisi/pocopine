@@ -95,6 +95,7 @@ pub fn flip_from_snapshot(el: &Element, old_rect: DomRect, opts: FlipOptions) {
             // keep `transform: translate(0, 0)` forever, which can
             // block stacking-context-sensitive layout.
             fill: "none",
+            respect_motion_preference: true,
         },
     );
 }

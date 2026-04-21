@@ -1,12 +1,23 @@
 //! Thin Web Animations API wrapper — `Element.animate(keyframes,
-//! options)` as a Rust function returning a cancelable future.
+//! options)` as a Rust function returning a cancelable handle.
 //!
 //! This is the "escape hatch" programmatic API: use it when the
 //! declarative preset catalogue in [`crate::animate::presets`] isn't
 //! enough, or to drive imperative motion like the FLIP helper in
 //! `flip.rs`.
+//!
+//! RFC-039 additions:
+//! - [`AnimationHandle::finished`] returns `impl Future<Output = ()>`
+//!   so callers can `await` an animation.
+//! - First-class playback control: [`AnimationHandle::pause`],
+//!   [`AnimationHandle::play`], [`AnimationHandle::set_playback_rate`],
+//!   [`AnimationHandle::current_time`].
+//! - [`animate`] respects [`crate::animate::motion::is_reduced`] and
+//!   collapses `duration_ms` to ~1ms when the user prefers reduced
+//!   motion (so `finish` callbacks still fire at the natural moment).
 
 use js_sys::{Array, Object, Reflect};
+use std::future::Future;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -49,6 +60,12 @@ pub struct AnimateOptions {
     /// `"forwards"`, `"backwards"`, `"both"`. Default `"forwards"`
     /// so the final keyframe state sticks.
     pub fill: &'static str,
+    /// When `true` (default), respects the user's reduced-motion
+    /// preference: durations collapse to 1ms when
+    /// `prefers-reduced-motion: reduce` is set. Set `false` for
+    /// motion that conveys data (progress indicators, drag-to-
+    /// dismiss feedback) and must always animate.
+    pub respect_motion_preference: bool,
 }
 
 impl Default for AnimateOptions {
@@ -58,14 +75,15 @@ impl Default for AnimateOptions {
             easing: "cubic-bezier(0, 0, 0.2, 1)",
             delay_ms: 0.0,
             fill: "forwards",
+            respect_motion_preference: true,
         }
     }
 }
 
 /// Handle to a running animation. Drop it and the animation keeps
 /// running (with `fill: "forwards"` the final state persists). Call
-/// [`AnimationHandle::cancel`] to interrupt. `.finished()` returns a
-/// Promise you can await.
+/// [`AnimationHandle::cancel`] to interrupt. [`AnimationHandle::finished`]
+/// returns a `Future` you can `.await`.
 pub struct AnimationHandle {
     inner: web_sys::Animation,
 }
@@ -83,18 +101,64 @@ impl AnimationHandle {
         let _ = self.inner.finish();
     }
 
-    /// Returns the underlying `web_sys::Animation` for escape-hatch
-    /// use (pause, playbackRate, etc).
+    /// Pause playback at the current `currentTime`. Resume with
+    /// [`AnimationHandle::play`].
+    pub fn pause(&self) {
+        let _ = self.inner.pause();
+    }
+
+    /// Resume a paused animation, or restart a finished one from
+    /// the beginning.
+    pub fn play(&self) {
+        let _ = self.inner.play();
+    }
+
+    /// Set playback rate. `1.0` is normal speed; `0.5` plays at half
+    /// speed; `-1.0` reverses; `0.0` pauses.
+    pub fn set_playback_rate(&self, rate: f64) {
+        self.inner.set_playback_rate(rate);
+    }
+
+    /// Current playback position in milliseconds, if known.
+    pub fn current_time(&self) -> Option<f64> {
+        self.inner.current_time()
+    }
+
+    /// Returns the underlying `web_sys::Animation` for any
+    /// remaining escape-hatch needs (KeyframeEffect introspection,
+    /// timeline manipulation).
     pub fn raw(&self) -> &web_sys::Animation {
         &self.inner
     }
 
     /// Register a callback to fire when the animation finishes
     /// normally (not cancelled). Each call replaces the previous
-    /// handler.
+    /// handler. Lower-level than [`AnimationHandle::finished`] —
+    /// prefer that for `await`-ing in async contexts.
     pub fn on_finish<F: FnOnce() + 'static>(&self, cb: F) {
         let closure = Closure::once_into_js(cb);
         self.inner.set_onfinish(Some(closure.unchecked_ref()));
+    }
+
+    /// Resolves when the animation finishes (naturally or via
+    /// [`AnimationHandle::finish`]). Wraps `Animation.finished`,
+    /// which is a Promise-typed property of every WAAPI animation.
+    /// If the animation is cancelled before finishing, the future
+    /// resolves anyway — the caller can check
+    /// [`AnimationHandle::current_time`] or `playState` to disambiguate.
+    pub fn finished(&self) -> impl Future<Output = ()> {
+        // `Animation.finished` returns a Promise<Animation>. Wrap it
+        // and discard the result.
+        let promise: js_sys::Promise = match Reflect::get(
+            self.inner.as_ref(),
+            &JsValue::from_str("finished"),
+        ) {
+            Ok(v) if !v.is_undefined() => v.unchecked_into(),
+            _ => js_sys::Promise::resolve(&JsValue::UNDEFINED),
+        };
+        async move {
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        }
     }
 }
 
@@ -112,8 +176,24 @@ impl AnimationHandle {
 ///     ],
 ///     AnimateOptions { duration_ms: 180.0, ..Default::default() },
 /// );
+/// handle.finished().await;
 /// ```
 pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> AnimationHandle {
+    // Reduced-motion clamp. Element-level overrides (data-pp-motion)
+    // win, then the system preference. Authors who explicitly opt
+    // out via `respect_motion_preference: false` always get the full
+    // duration.
+    let effective_duration = if opts.respect_motion_preference
+        && super::motion::effective_for(el) == super::motion::MotionPreference::Reduced
+    {
+        // 1ms instead of 0 so onfinish + finished() fire on the
+        // natural microtask, not synchronously — keeps callers'
+        // assumptions about "finish runs after the current task" intact.
+        1.0
+    } else {
+        opts.duration_ms
+    };
+
     // Keyframes: `[{ property: value, … }, …]` as a JS array of
     // plain objects.
     let kf_array = Array::new();
@@ -130,7 +210,7 @@ pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> An
     let _ = Reflect::set(
         &opt_obj,
         &JsValue::from_str("duration"),
-        &JsValue::from_f64(opts.duration_ms),
+        &JsValue::from_f64(effective_duration),
     );
     let _ = Reflect::set(
         &opt_obj,
@@ -156,9 +236,6 @@ pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> An
     let animate_fn = match Reflect::get(el.as_ref(), &JsValue::from_str("animate")) {
         Ok(v) if v.is_function() => v.unchecked_into::<js_sys::Function>(),
         _ => {
-            // Element.animate unavailable — shouldn't happen on any
-            // modern browser, but return a dummy inert animation
-            // handle so callers don't crash.
             return AnimationHandle {
                 inner: fallback_animation(),
             };
@@ -179,9 +256,6 @@ pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> An
 /// already finished and does nothing — keeps the return type
 /// uniform so call sites don't need Option handling.
 fn fallback_animation() -> web_sys::Animation {
-    // Construct via JS: `new Animation()` is valid but the empty
-    // ctor is non-standard; we use Reflect and fall back to a
-    // plain Object cast.
     match js_sys::Reflect::construct(
         &js_sys::Function::new_no_args("return new Animation();"),
         &Array::new(),

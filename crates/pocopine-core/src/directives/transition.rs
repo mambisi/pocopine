@@ -206,8 +206,19 @@ pub fn is_leaving(el: &Element) -> bool {
 
 /// Run the enter sequence on `el`, then invoke `on_done`. If no
 /// `pp-transition:*` attrs are present, invokes `on_done` synchronously.
+///
+/// Honours `prefers-reduced-motion` (RFC-039 §1) — when reduced and
+/// the element has no `data-pp-motion="always"` opt-out, fires
+/// `on_done` synchronously and skips the class swap. Authors who
+/// want motion under reduced-motion stamp `data-pp-motion="always"`
+/// (the `#[component(motion = "always")]` macro arg does this).
 pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     if is_disabled() {
+        on_done();
+        return;
+    }
+    if crate::animate::motion::effective_for(el) == crate::animate::motion::MotionPreference::Reduced
+    {
         on_done();
         return;
     }
@@ -218,6 +229,7 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             return;
         }
     };
+    set_will_change(el);
 
     // Cancel whatever was in flight (leaving, or stale entering).
     {
@@ -271,6 +283,7 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             }
             s.phase = Phase::Idle;
             drop(s);
+            clear_will_change(&el_for_end);
             if let Some(cb) = on_done_cell.borrow_mut().take() {
                 cb();
             }
@@ -287,6 +300,11 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
         on_done();
         return;
     }
+    if crate::animate::motion::effective_for(el) == crate::animate::motion::MotionPreference::Reduced
+    {
+        on_done();
+        return;
+    }
     let rc = match get_or_init(el) {
         Some(r) => r,
         None => {
@@ -294,6 +312,7 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             return;
         }
     };
+    set_will_change(el);
 
     {
         let mut s = rc.borrow_mut();
@@ -339,6 +358,7 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             }
             s.phase = Phase::Idle;
             drop(s);
+            clear_will_change(&el_for_end);
             if let Some(cb) = on_done_cell.borrow_mut().take() {
                 cb();
             }
@@ -396,17 +416,43 @@ fn computed_duration_ms(el: &Element) -> f64 {
 }
 
 fn parse_duration(s: &str) -> f64 {
-    // `transition-*` can be comma-separated for multiple properties;
-    // take the first value — it's the upper bound for any single
-    // property anyway for the typical `transition: all ...ms` case.
-    let first = s.split(',').next().unwrap_or("").trim();
-    if let Some(n) = first.strip_suffix("ms") {
-        n.trim().parse::<f64>().unwrap_or(0.0)
-    } else if let Some(n) = first.strip_suffix('s') {
-        n.trim().parse::<f64>().unwrap_or(0.0) * 1000.0
-    } else {
-        0.0
-    }
+    // `transition-*` may be comma-separated when properties have
+    // different timings (e.g. `opacity 100ms, transform 250ms`).
+    // Take the MAX so `schedule_end` waits for the longest property
+    // — RFC-039 §4 fixes a bug where reading the first value early-
+    // fired `on_done` and yanked the element mid-transform.
+    s.split(',')
+        .map(|seg| {
+            let t = seg.trim();
+            if let Some(n) = t.strip_suffix("ms") {
+                n.trim().parse::<f64>().unwrap_or(0.0)
+            } else if let Some(n) = t.strip_suffix('s') {
+                n.trim().parse::<f64>().unwrap_or(0.0) * 1000.0
+            } else {
+                0.0
+            }
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+/// Hint the compositor that `transform` and `opacity` are about to
+/// change — keeps the element on its own GPU layer for the duration
+/// of the transition. Removed by [`clear_will_change`] once the
+/// state machine settles. Idempotent.
+fn set_will_change(el: &Element) {
+    use wasm_bindgen::JsCast;
+    let Ok(html) = el.clone().dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let _ = html.style().set_property("will-change", "transform, opacity");
+}
+
+fn clear_will_change(el: &Element) {
+    use wasm_bindgen::JsCast;
+    let Ok(html) = el.clone().dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let _ = html.style().remove_property("will-change");
 }
 
 /// Selector matching every element that carries any preset attr
