@@ -338,8 +338,14 @@ impl PineTreeItem {
 }
 
 fn collect_ancestor_values(item_el: &web_sys::Element) -> Vec<String> {
+    // `item_el` is this Item's rendered inner `<div>` (where
+    // `pp-ref="item"` sits). Its immediate parent is this
+    // component's own `<pine-tree-item>` custom tag — that's
+    // SELF, not an ancestor. Skip it before walking.
     let mut out = Vec::new();
-    let mut cur = item_el.parent_element();
+    let mut cur = item_el
+        .parent_element()
+        .and_then(|own_tag| own_tag.parent_element());
     while let Some(el) = cur {
         if el.tag_name().eq_ignore_ascii_case("pine-tree-item") {
             if let Some(v) = el.get_attribute("value") {

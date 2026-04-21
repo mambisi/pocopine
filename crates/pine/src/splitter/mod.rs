@@ -67,6 +67,13 @@ pub struct PineSplitterGroup {
     pub direction: String,
     /// Per-panel sizes as percentages. Order matches the Panels'
     /// registration order, which matches DOM source order.
+    ///
+    /// `#[prop]` so `pp-model:sizes="my_layout"` hydrates the
+    /// parent's value into Group.sizes on mount (and on every
+    /// parent-side change), and so authors who only want one-way
+    /// binding via `<pine-splitter-group sizes="[25, 50, 25]">`
+    /// hit the standard attribute → prop pipeline.
+    #[prop]
     pub sizes: Vec<f64>,
     pub min_sizes: Vec<f64>,
     pub max_sizes: Vec<f64>,
@@ -414,17 +421,25 @@ impl PineSplitterResizeHandle {
 }
 
 fn neighbour_indices(handle_el: &web_sys::Element) -> (usize, usize) {
-    let parent = match handle_el.parent_element() {
-        Some(p) => p,
-        None => return (0, 0),
+    // `handle_el` is this ResizeHandle's inner `<button>` (where
+    // `pp-ref="handle"` sits). One `parent_element` step up lands
+    // us on this component's own `<pine-splitter-resize-handle>`
+    // custom tag; a second step reaches the Group's inner `<div>`
+    // whose children are the Panel / ResizeHandle custom tags in
+    // DOM order.
+    let Some(own_tag) = handle_el.parent_element() else {
+        return (0, 0);
+    };
+    let Some(parent) = own_tag.parent_element() else {
+        return (0, 0);
     };
     let children = parent.children();
     let mut count = 0usize;
     for i in 0..children.length() {
         let Some(child) = children.item(i) else { continue };
         let child_node: &web_sys::Node = child.as_ref();
-        let handle_node: &web_sys::Node = handle_el.as_ref();
-        if child_node.is_same_node(Some(handle_node)) {
+        let own_tag_node: &web_sys::Node = own_tag.as_ref();
+        if child_node.is_same_node(Some(own_tag_node)) {
             // No preceding Panel → return (0, 0); `resize` is a
             // no-op outside the sizes vec bounds.
             if count == 0 {

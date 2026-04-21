@@ -3889,3 +3889,333 @@ async fn combobox_accumulates_typed_characters_in_input_value() {
 
     host.remove();
 }
+
+// ─── PineTree (compound) ──────────────────────────────────────────
+
+/// Top-level Items get aria-level=1, nested ones 2, deeper 3, etc.
+/// Before RFC: `collect_ancestor_values` started walking from the
+/// Item's rendered inner div — whose immediate parent is the Item's
+/// own `<pine-tree-item>` custom tag. That counted SELF as an
+/// ancestor, so every Item's level was off-by-one (top-level=2,
+/// nested=3). Fixed by starting the walk one level above own tag.
+#[wasm_bindgen_test]
+async fn tree_aria_level_counts_real_ancestors_only() {
+    let host = mount(
+        "<pine-tree-root type=\"single\">\
+           <pine-tree-item value=\"a\" class=\"t-a\">\
+             <pine-tree-item-toggle>▸</pine-tree-item-toggle>\
+             <span>a</span>\
+             <pine-tree-item value=\"a/b\" class=\"t-b\">\
+               <pine-tree-item-toggle>▸</pine-tree-item-toggle>\
+               <span>b</span>\
+               <pine-tree-item value=\"a/b/c\" class=\"t-c\">c</pine-tree-item>\
+             </pine-tree-item>\
+           </pine-tree-item>\
+         </pine-tree-root>",
+    );
+    tick().await;
+    tick().await;
+
+    let item_a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
+    let item_b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
+    let item_c = host.query_selector(".t-c div[role=treeitem]").unwrap().unwrap();
+    assert_eq!(item_a.get_attribute("aria-level").as_deref(), Some("1"));
+    assert_eq!(item_b.get_attribute("aria-level").as_deref(), Some("2"));
+    assert_eq!(item_c.get_attribute("aria-level").as_deref(), Some("3"));
+
+    host.remove();
+}
+
+/// A top-level Item is always visible (its ancestor chain is empty,
+/// so `parent_visible` is trivially true). Regression guard for the
+/// same self-as-ancestor bug — when the Item saw SELF as an
+/// ancestor, compute_parent_visible checked if `self.value` was in
+/// the empty `expanded` set → false → aria-hidden="true" on
+/// top-level items → the entire tree disappeared.
+#[wasm_bindgen_test]
+async fn tree_top_level_items_are_never_hidden() {
+    let host = mount(
+        "<pine-tree-root type=\"single\">\
+           <pine-tree-item value=\"a\" class=\"t-a\">a</pine-tree-item>\
+           <pine-tree-item value=\"b\" class=\"t-b\">b</pine-tree-item>\
+         </pine-tree-root>",
+    );
+    tick().await;
+    tick().await;
+
+    let a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
+    let b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
+    assert_ne!(
+        a.get_attribute("aria-hidden").as_deref(),
+        Some("true"),
+        "top-level items must not be aria-hidden",
+    );
+    assert_ne!(
+        b.get_attribute("aria-hidden").as_deref(),
+        Some("true"),
+    );
+
+    host.remove();
+}
+
+/// Nested items are aria-hidden until their parent is expanded.
+/// Clicking the toggle expands the parent, the child's
+/// `parent_visible` flips via the expanded-watch, aria-hidden clears.
+#[wasm_bindgen_test]
+async fn tree_toggle_click_expands_and_shows_children() {
+    let host = mount(
+        "<pine-tree-root type=\"single\">\
+           <pine-tree-item value=\"a\" class=\"t-a\">\
+             <pine-tree-item-toggle class=\"t-a-toggle\">▸</pine-tree-item-toggle>\
+             <span>a</span>\
+             <pine-tree-item value=\"a/b\" class=\"t-b\">b</pine-tree-item>\
+           </pine-tree-item>\
+         </pine-tree-root>",
+    );
+    tick().await;
+    // `has_children` is written in `tick::after_flush`
+    // (setTimeout(0)), so a microtask `tick()` alone doesn't
+    // guarantee it has landed. Yield to the macrotask queue.
+    sleep_ms(10).await;
+    tick().await;
+
+    let item_b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
+    assert_eq!(
+        item_b.get_attribute("aria-hidden").as_deref(),
+        Some("true"),
+        "nested item is hidden while parent is collapsed",
+    );
+
+    // Click the chevron — toggles expansion on the enclosing Item
+    // via the injected ITEM scope, which writes back through Root.
+    let toggle: HtmlElement = host
+        .query_selector(".t-a-toggle button")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    toggle.click();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert_ne!(
+        item_b.get_attribute("aria-hidden").as_deref(),
+        Some("true"),
+        "nested item becomes visible after parent expands",
+    );
+    let item_a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
+    assert_eq!(
+        item_a.get_attribute("aria-expanded").as_deref(),
+        Some("true"),
+    );
+    assert_eq!(
+        item_a.get_attribute("data-state").as_deref(),
+        Some("open"),
+    );
+
+    host.remove();
+}
+
+/// Toggle's `pp-show="has_children"` hides the chevron on leaves.
+/// Leaf items have no descendant `<pine-tree-item>`, so the Item's
+/// `has_children` after_flush check leaves it false, which flows
+/// through the Toggle's watch to collapse the chevron's display.
+#[wasm_bindgen_test]
+async fn tree_leaf_toggle_is_hidden() {
+    let host = mount(
+        "<pine-tree-root type=\"single\">\
+           <pine-tree-item value=\"leaf\" class=\"t-leaf\">\
+             <pine-tree-item-toggle class=\"t-leaf-toggle\">▸</pine-tree-item-toggle>\
+             <span>leaf</span>\
+           </pine-tree-item>\
+         </pine-tree-root>",
+    );
+    tick().await;
+    tick().await;
+
+    let toggle: HtmlElement = host
+        .query_selector(".t-leaf-toggle button")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    // `has_children` is written via `tick::after_flush`
+    // (setTimeout(0)), so yield to the macrotask queue first.
+    sleep_ms(10).await;
+    tick().await;
+    let display = toggle.style().get_property_value("display").unwrap_or_default();
+    assert_eq!(
+        display, "none",
+        "leaf's Toggle should be display:none via pp-show=\"has_children\"",
+    );
+
+    host.remove();
+}
+
+/// Clicking an Item row in type="single" mode sets Root.value and
+/// emits pp:update:model. The item's own `aria-selected` flips true.
+#[wasm_bindgen_test]
+async fn tree_click_item_selects_in_single_mode() {
+    let host = mount(
+        "<pine-tree-root type=\"single\">\
+           <pine-tree-item value=\"a\" class=\"t-a\">a</pine-tree-item>\
+           <pine-tree-item value=\"b\" class=\"t-b\">b</pine-tree-item>\
+         </pine-tree-root>",
+    );
+    tick().await;
+    tick().await;
+
+    let item_b: HtmlElement = host
+        .query_selector(".t-b div[role=treeitem]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    item_b.click();
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        item_b.get_attribute("aria-selected").as_deref(),
+        Some("true"),
+    );
+
+    host.remove();
+}
+
+// ─── PineSplitter (compound) ──────────────────────────────────────
+
+/// Three panels with default-size 25 / 50 / 25 (summing to 100)
+/// render at exactly those flex-basis percentages. Regression
+/// guard for the old register_panel / normalize_sizes that rescaled
+/// partial sums during registration.
+#[wasm_bindgen_test]
+async fn splitter_initial_sizes_match_panel_defaults() {
+    let host = mount(
+        "<pine-splitter-group direction=\"horizontal\">\
+           <pine-splitter-panel default-size=\"25\" min-size=\"10\" class=\"sp-a\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"50\" class=\"sp-b\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"25\" min-size=\"10\" class=\"sp-c\"></pine-splitter-panel>\
+         </pine-splitter-group>",
+    );
+    tick().await;
+    tick().await;
+
+    let a = host.query_selector(".sp-a div").unwrap().unwrap();
+    let b = host.query_selector(".sp-b div").unwrap().unwrap();
+    let c = host.query_selector(".sp-c div").unwrap().unwrap();
+    let style_a = a.get_attribute("style").unwrap_or_default();
+    let style_b = b.get_attribute("style").unwrap_or_default();
+    let style_c = c.get_attribute("style").unwrap_or_default();
+    assert!(
+        style_a.contains("flex: 0 0 25%"),
+        "Panel A flex-basis should be 25% (got {style_a:?})"
+    );
+    assert!(
+        style_b.contains("flex: 0 0 50%"),
+        "Panel B flex-basis should be 50% (got {style_b:?})"
+    );
+    assert!(
+        style_c.contains("flex: 0 0 25%"),
+        "Panel C flex-basis should be 25% (got {style_c:?})"
+    );
+
+    host.remove();
+}
+
+/// Handle 1 sits between Panel 0 and Panel 1; handle 2 between
+/// Panel 1 and Panel 2. aria-valuenow reflects the BEFORE-panel's
+/// current size, so handle 1's aria-valuenow == sizes[0] and
+/// handle 2's == sizes[1]. Regression guard for neighbour_indices
+/// returning (0, 0) for every handle (which made aria-valuenow
+/// identical across handles and resizes no-op).
+#[wasm_bindgen_test]
+async fn splitter_handle_aria_valuenow_tracks_before_panel() {
+    let host = mount(
+        "<pine-splitter-group direction=\"horizontal\">\
+           <pine-splitter-panel default-size=\"20\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"60\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"20\"></pine-splitter-panel>\
+         </pine-splitter-group>",
+    );
+    tick().await;
+    tick().await;
+
+    let h1 = host.query_selector(".sp-h1 button").unwrap().unwrap();
+    let h2 = host.query_selector(".sp-h2 button").unwrap().unwrap();
+    assert_eq!(
+        h1.get_attribute("aria-valuenow").as_deref(),
+        Some("20"),
+        "handle 1's before-panel is Panel 0, size 20",
+    );
+    assert_eq!(
+        h2.get_attribute("aria-valuenow").as_deref(),
+        Some("60"),
+        "handle 2's before-panel is Panel 1, size 60",
+    );
+
+    host.remove();
+}
+
+/// step_inc on handle 2 (ArrowRight / ArrowDown) shifts 1% from
+/// Panel 2 into Panel 1 — NOT into Panel 0. Before the fix,
+/// neighbour_indices returned (0, 0) for every handle, so keyboard
+/// resize shuffled Panel 0 against itself and nothing observably
+/// changed.
+#[wasm_bindgen_test]
+async fn splitter_handle_2_keyboard_resizes_neighbours_only() {
+    let host = mount(
+        "<pine-splitter-group direction=\"horizontal\">\
+           <pine-splitter-panel default-size=\"30\" class=\"sp-a\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"40\" class=\"sp-b\"></pine-splitter-panel>\
+           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
+           <pine-splitter-panel default-size=\"30\" class=\"sp-c\"></pine-splitter-panel>\
+         </pine-splitter-group>",
+    );
+    tick().await;
+    tick().await;
+
+    let h2: HtmlElement = host
+        .query_selector(".sp-h2 button")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    let _ = h2.focus();
+    // ArrowRight should route to step_inc — step 1% from Panel 2
+    // into Panel 1.
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("ArrowRight");
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    h2.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    let a = host.query_selector(".sp-a div").unwrap().unwrap();
+    let b = host.query_selector(".sp-b div").unwrap().unwrap();
+    let c = host.query_selector(".sp-c div").unwrap().unwrap();
+    let style_a = a.get_attribute("style").unwrap_or_default();
+    let style_b = b.get_attribute("style").unwrap_or_default();
+    let style_c = c.get_attribute("style").unwrap_or_default();
+    assert!(
+        style_a.contains("flex: 0 0 30%"),
+        "Panel A unchanged (handle 2 doesn't touch it); got {style_a:?}",
+    );
+    assert!(
+        style_b.contains("flex: 0 0 41%"),
+        "Panel B grew by 1%; got {style_b:?}",
+    );
+    assert!(
+        style_c.contains("flex: 0 0 29%"),
+        "Panel C shrank by 1%; got {style_c:?}",
+    );
+
+    host.remove();
+}
