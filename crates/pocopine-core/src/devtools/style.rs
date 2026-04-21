@@ -157,4 +157,26 @@ pub(crate) const STYLESHEET: &str = "\
     .__pp_dev_tl_col_name[data-copy]{cursor:pointer;}\
     .__pp_dev_tl_col_name[data-copy]:hover{color:#fff;}\
     .__pp_dev_tl_handler_args{color:#828282;margin-left:4px;}\
+    \
+    /* Flush queue + signal graph panel. */\
+    .__pp_dev_gr_section{padding:6px 0;border-bottom:1px solid #2d2a24;}\
+    .__pp_dev_gr_section:last-child{border-bottom:none;flex:1 1 auto;overflow:auto;}\
+    .__pp_dev_gr_hd{padding:0 12px 4px;color:#828282;font-size:9px;\
+    text-transform:uppercase;letter-spacing:0.08em;}\
+    .__pp_dev_gr_queue{max-height:80px;overflow:auto;padding:0 12px;}\
+    .__pp_dev_gr_row{display:flex;gap:8px;align-items:baseline;padding:1px 0;}\
+    .__pp_dev_gr_id{color:#9ecbff;font-variant-numeric:tabular-nums;}\
+    .__pp_dev_gr_chip{display:inline-block;border-radius:2px;font-size:9px;\
+    font-weight:700;letter-spacing:0.04em;padding:0 6px;}\
+    .__pp_dev_gr_chip_q{background:#1a2a40;color:#9ecbff;}\
+    .__pp_dev_gr_chip_sched{background:#2a1c3a;color:#c79eff;}\
+    .__pp_dev_gr_signals{padding:0 12px;}\
+    .__pp_dev_gr_sig_head{display:grid;grid-template-columns:56px 52px 1fr;gap:6px;\
+    padding:2px 0;color:#828282;font-size:9px;text-transform:uppercase;\
+    letter-spacing:0.08em;border-bottom:1px dashed #2d2a24;}\
+    .__pp_dev_gr_sig_row{display:grid;grid-template-columns:56px 52px 1fr;gap:6px;\
+    padding:1px 0;align-items:baseline;}\
+    .__pp_dev_gr_sig_row:hover{background:#23211e;}\
+    .__pp_dev_gr_subs{color:#ffb86c;font-variant-numeric:tabular-nums;}\
+    .__pp_dev_gr_lc{color:#828282;font-variant-numeric:tabular-nums;}\
 ";
