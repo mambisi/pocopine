@@ -82,28 +82,13 @@ def main() -> int:
             }"""
         )
         print("MID-ANIM SAMPLE:", opacity_mid_dump)
-        # The dialog demo now uses the standalone `scale` property
-        # plus `@starting-style` for the enter. Firefox's
-        # getComputedStyle.scale returns the interpolated value
-        # mid-transition; read it directly.
-        scale_str = opacity_mid_dump["outer_scale"] or "none"
-        if scale_str == "none":
-            # Fall back to the transform matrix for presets that
-            # use `transform: scale(...)` instead.
-            tx = opacity_mid_dump["outer_transform"] or ""
-            import re
-            m = re.match(r"matrix\(([\-0-9.]+),", tx)
-            scale_x = float(m.group(1)) if m else 1.0
-        else:
-            # `scale` can be "1" or "0.94" — single value (uniform).
-            try:
-                scale_x = float(scale_str.split()[0])
-            except (ValueError, IndexError):
-                scale_x = 1.0
-        opacity_mid = scale_x  # repurpose for the assertion below
-        if opacity_mid >= 0.999:
+        # The dialog demo uses opacity-only fade via @starting-style
+        # (no scale — see styles.css for why). Check opacity is
+        # partway through the tween.
+        opacity_mid = float(opacity_mid_dump["outer_opacity"] or "1")
+        if opacity_mid >= 0.99:
             failures.append(
-                f"dialog enter: expected scale < 1 mid-animation (preset starts at 0.96), got {opacity_mid}"
+                f"dialog enter: expected opacity < 1 mid-animation, got {opacity_mid}"
             )
         time.sleep(0.30)
         opacity_after = float(

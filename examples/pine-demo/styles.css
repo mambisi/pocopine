@@ -198,21 +198,15 @@ section {
   background: rgba(0, 0, 0, 0.5);
   z-index: 50;
 }
-/* Native CSS animation via `@starting-style`. The preset machinery
- * is disabled on this content (`transition="none"` on the tag) so
- * the class-swap from → to two-phase dance doesn't fight the
- * browser's native approach.
+/* GPU-friendly opacity-only fade. `opacity` is one of the two
+ * properties browsers composite on their own layer (the other is
+ * `transform`) — see Chromium's GPU-accelerated compositing
+ * architecture. Dropping `scale` here keeps the motion on the
+ * compositor's fast path and feels snappier than the
+ * scale + opacity combo, even at a slightly longer duration.
  *
- * Flow:
- *   1. pp-if mounts the dialog → element is newly inserted.
- *   2. First style pass picks up `@starting-style` for opacity + scale.
- *   3. Browser transitions to the settled state (opacity 1, scale 1).
- *
- * Leave is still instant because pp-if removes the element on
- * close — the user sees a clean fade-in with no leave animation.
- * That's a fair trade for the simplicity and polish of enter;
- * `allow-discrete` + `display` transitions would be symmetric but
- * require staying in the DOM, which pp-if explicitly doesn't do.
+ * `pp-transition="none"` on the tag disables the preset
+ * machinery so the class-swap doesn't fight `@starting-style`.
  */
 pine-dialog-content {
   position: fixed;
@@ -223,14 +217,11 @@ pine-dialog-content {
   z-index: 51;
   pointer-events: none;
   opacity: 1;
-  scale: 1;
-  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
-              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 160ms ease-out;
 }
 @starting-style {
   pine-dialog-content {
     opacity: 0;
-    scale: 0.94;
   }
 }
 .pine-dialog-content {
@@ -259,7 +250,6 @@ pine-dialog-content {
   background: rgba(0, 0, 0, 0.6);
   z-index: 50;
 }
-/* Same @starting-style pattern as pine-dialog-content. */
 pine-alert-dialog-content {
   position: fixed;
   inset: 0;
@@ -269,14 +259,11 @@ pine-alert-dialog-content {
   z-index: 51;
   pointer-events: none;
   opacity: 1;
-  scale: 1;
-  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
-              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 160ms ease-out;
 }
 @starting-style {
   pine-alert-dialog-content {
     opacity: 0;
-    scale: 0.94;
   }
 }
 .pine-alert-dialog-content {
@@ -1095,7 +1082,6 @@ pine-command-empty {
   background: rgba(0, 0, 0, 0.55);
   z-index: 70;
 }
-/* Same @starting-style pattern as pine-dialog-content. */
 pine-command-content {
   position: fixed;
   inset: 0;
@@ -1106,14 +1092,11 @@ pine-command-content {
   z-index: 71;
   pointer-events: none;
   opacity: 1;
-  scale: 1;
-  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
-              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 160ms ease-out;
 }
 @starting-style {
   pine-command-content {
     opacity: 0;
-    scale: 0.94;
   }
 }
 .pine-command-content {
