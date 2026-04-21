@@ -127,16 +127,16 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
     tick().await;
     tick().await;
 
-    let trig_a = host.query_selector(".tc-a button").unwrap().unwrap();
-    let trig_b = host.query_selector(".tc-b button").unwrap().unwrap();
+    let trig_a = host.query_selector(".tc-a").unwrap().unwrap();
+    let trig_b = host.query_selector(".tc-b").unwrap().unwrap();
     let panel_a: HtmlElement = host
-        .query_selector(".tc-panel-a div")
+        .query_selector(".tc-panel-a")
         .unwrap()
         .unwrap()
         .dyn_into()
         .unwrap();
     let panel_b: HtmlElement = host
-        .query_selector(".tc-panel-b div")
+        .query_selector(".tc-panel-b")
         .unwrap()
         .unwrap()
         .dyn_into()
@@ -157,7 +157,7 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
     );
 
     // aria-labelledby on panels points at their sibling trigger's id.
-    let panel_b_el = host.query_selector(".tc-panel-b div").unwrap().unwrap();
+    let panel_b_el = host.query_selector(".tc-panel-b").unwrap().unwrap();
     let labelledby = panel_b_el.get_attribute("aria-labelledby").unwrap_or_default();
     let trig_b_id = trig_b.get_attribute("id").unwrap_or_default();
     assert_eq!(labelledby, trig_b_id, "panel B aria-labelledby → trigger B id");
@@ -456,7 +456,7 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     tick().await;
 
     let trigger = host
-        .query_selector(".mh-trigger button")
+        .query_selector(".mh-trigger")
         .unwrap()
         .expect("trigger button rendered");
 
@@ -505,7 +505,7 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     // the outer tag. Dispatching on the tag directly would skip
     // the inner li listener entirely.
     let item_li = doc()
-        .query_selector(".mh-item-a .pine-dm-item, .mh-item-a li")
+        .query_selector(".mh-item-a")
         .unwrap()
         .expect("item li rendered");
     item_li.dyn_into::<HtmlElement>().unwrap().click();
@@ -551,7 +551,7 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     );
     tick().await;
 
-    let trigger = host.query_selector(".pv-trig button").unwrap().unwrap();
+    let trigger = host.query_selector(".pv-trig").unwrap().unwrap();
     trigger.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
@@ -560,7 +560,7 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     // for the "keep open" item. Stands in for what an author
     // would write with `@pp:select.prevent` or an event handler.
     let keep_li = doc()
-        .query_selector(".pv-keep .pine-dm-item")
+        .query_selector(".pv-keep")
         .unwrap()
         .expect("keep-open item rendered");
     let prevent_cb: Closure<dyn FnMut(web_sys::Event)> =
@@ -588,7 +588,7 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
 
     // Click the plain item — no listener → menu dismisses.
     let close_li = doc()
-        .query_selector(".pv-close .pine-dm-item")
+        .query_selector(".pv-close")
         .unwrap()
         .expect("close item rendered");
     close_li.dyn_into::<HtmlElement>().unwrap().click();
@@ -633,7 +633,7 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
     );
     tick().await;
 
-    host.query_selector(".rg-trig button")
+    host.query_selector(".rg-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -644,8 +644,8 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
 
     // Initial: A is selected (group.value=\"a\"). aria-checked
     // reflects that — and the indicator inside A is visible.
-    let a_li = doc().query_selector(".rg-a li").unwrap().unwrap();
-    let b_li = doc().query_selector(".rg-b li").unwrap().unwrap();
+    let a_li = doc().query_selector(".rg-a").unwrap().unwrap();
+    let b_li = doc().query_selector(".rg-b").unwrap().unwrap();
     assert_eq!(
         a_li.get_attribute("aria-checked").as_deref(),
         Some("true"),
@@ -712,7 +712,7 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
     tick().await;
 
     // Open the menu.
-    host.query_selector(".ck-trig button")
+    host.query_selector(".ck-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -724,7 +724,7 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
     // Initial: unchecked — aria-checked=false, indicator absent
     // from DOM (pp-if gated on `checked = false`).
     let item_li = doc()
-        .query_selector(".ck-one li")
+        .query_selector(".ck-one")
         .unwrap()
         .expect("checkbox item li");
     assert_eq!(
@@ -807,14 +807,14 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     tick().await;
 
     // Click trigger to open.
-    let trigger = host.query_selector(".gl-trig button").unwrap().unwrap();
+    let trigger = host.query_selector(".gl-trig").unwrap().unwrap();
     trigger.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
 
     // Separator: role + orientation on the inner li.
     let sep = doc()
-        .query_selector(".gl-sep li")
+        .query_selector(".gl-sep")
         .unwrap()
         .expect("separator li rendered");
     assert_eq!(sep.get_attribute("role").as_deref(), Some("separator"));
@@ -827,7 +827,7 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     // rendered Label's id; the id is non-empty + instance-unique
     // (derived from the Group's scope id).
     let group_root = doc()
-        .query_selector(".gl-group div[role=\"group\"]")
+        .query_selector(".gl-group")
         .unwrap()
         .expect("group role element");
     let label_el = doc()
@@ -873,7 +873,7 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
     tick().await;
 
     // Open outer menu.
-    host.query_selector(".sub-root-t button")
+    host.query_selector(".sub-root-t")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -893,7 +893,7 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
 
     // Click the SubTrigger (its li inside the open menu).
     let sub_trig = doc()
-        .query_selector(".s-sub-t li")
+        .query_selector(".s-sub-t")
         .unwrap()
         .expect("sub trigger li");
     sub_trig.clone().dyn_into::<HtmlElement>().unwrap().click();
@@ -992,12 +992,12 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
     // `@click.outside` closer and nets to no state change.
     let body = doc().body().unwrap();
     for _ in 0..3 {
-        let outer_trig = host.query_selector(".sc-root-t button").unwrap().unwrap();
+        let outer_trig = host.query_selector(".sc-root-t").unwrap().unwrap();
         outer_trig.dyn_into::<HtmlElement>().unwrap().click();
         tick().await;
         tick().await;
         let sub_trig = doc()
-            .query_selector(".sc-sub-t li")
+            .query_selector(".sc-sub-t")
             .unwrap()
             .expect("sub trigger li");
         sub_trig.dyn_into::<HtmlElement>().unwrap().click();
@@ -1037,7 +1037,7 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
          </pine-dropdown-menu-root>",
     );
     tick().await;
-    host.query_selector(".ar-trig button")
+    host.query_selector(".ar-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -1047,7 +1047,7 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
     tick().await;
 
     let arrow = doc()
-        .query_selector(".ar-arrow span")
+        .query_selector(".ar-arrow")
         .unwrap()
         .expect("arrow rendered");
     assert_eq!(
@@ -1081,7 +1081,7 @@ async fn dropdown_menu_content_config_props_override_anchor() {
          </pine-dropdown-menu-root>",
     );
     tick().await;
-    host.query_selector(".cfg-trig button")
+    host.query_selector(".cfg-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -1143,8 +1143,8 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
     // distinct per instance. Pre-`on_setup`, the stamp was a
     // shared empty string and both menus' Content anchored to
     // the first trigger in the document.
-    let b1 = host.query_selector(".t1 button").unwrap().unwrap();
-    let b2 = host.query_selector(".t2 button").unwrap().unwrap();
+    let b1 = host.query_selector(".t1").unwrap().unwrap();
+    let b2 = host.query_selector(".t2").unwrap().unwrap();
     let id1 = b1
         .get_attribute("data-pine-dm-trigger")
         .unwrap_or_default();
@@ -1294,8 +1294,8 @@ async fn accordion_single_collapsible_exclusive_toggle() {
     );
     tick().await;
 
-    let trig_a = host.query_selector(".ac-t-a button").unwrap().unwrap();
-    let trig_b = host.query_selector(".ac-t-b button").unwrap().unwrap();
+    let trig_a = host.query_selector(".ac-t-a").unwrap().unwrap();
+    let trig_b = host.query_selector(".ac-t-b").unwrap().unwrap();
 
     // Start: nothing open.
     assert!(
@@ -1371,7 +1371,7 @@ async fn collapsible_trigger_toggles_and_content_mounts() {
     );
     tick().await;
 
-    let trigger = host.query_selector(".cp-trig button").unwrap().unwrap();
+    let trigger = host.query_selector(".cp-trig").unwrap().unwrap();
 
     // Initial state: closed — aria-expanded=false, content not
     // mounted (pp-if gated on Content.open=false).
@@ -1435,7 +1435,7 @@ async fn popover_opens_anchors_and_closes_on_escape() {
     tick().await;
 
     // Click Trigger → Root.open=true → Portal mirror fires → teleport.
-    let trigger = host.query_selector(".pt-trig button").unwrap().unwrap();
+    let trigger = host.query_selector(".pt-trig").unwrap().unwrap();
     trigger.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
@@ -1593,7 +1593,7 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
     tick().await;
 
     // Click Trigger → open.
-    host.query_selector(".dg-trig button")
+    host.query_selector(".dg-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -1839,7 +1839,7 @@ async fn dialog_trigger_composes_pine_button() {
     // Click the INNER rendered button — Pine's Button template
     // renders `<button class=\"pine-btn\">` inside the pine-button
     // custom element.
-    host.query_selector(".user-trig button.pine-btn")
+    host.query_selector(".user-trig")
         .unwrap()
         .expect("pine-button rendered native button")
         .dyn_into::<HtmlElement>()
@@ -1856,7 +1856,7 @@ async fn dialog_trigger_composes_pine_button() {
     );
 
     doc()
-        .query_selector(".user-close button.pine-btn")
+        .query_selector(".user-close")
         .unwrap()
         .expect("close pine-button rendered")
         .dyn_into::<HtmlElement>()
@@ -1904,7 +1904,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
     // carries `class="pine-tooltip-trigger"` plus the fallthrough
     // class, so we reach it via `.tp-a-trig > div`.
     let a_wrap = host
-        .query_selector(".tp-a-trig > div")
+        .query_selector(".tp-a-trig")
         .unwrap()
         .expect("A trigger wrapper");
     a_wrap
@@ -1920,7 +1920,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
 
     // Hover B — Provider should evict A.
     let b_wrap = host
-        .query_selector(".tp-b-trig > div")
+        .query_selector(".tp-b-trig")
         .unwrap()
         .expect("B trigger wrapper");
     b_wrap
@@ -2010,7 +2010,7 @@ async fn context_menu_right_click_opens_and_item_closes() {
     // on the inner `<li>` the template renders, so target that
     // directly.
     doc()
-        .query_selector(".cm-copy li")
+        .query_selector(".cm-copy")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2061,20 +2061,20 @@ async fn separator_role_and_orientation_flags() {
     );
     tick().await;
 
-    let s1 = host.query_selector(".s-one div").unwrap().unwrap();
+    let s1 = host.query_selector(".s-one").unwrap().unwrap();
     assert_eq!(s1.get_attribute("role").as_deref(), Some("separator"));
     assert_eq!(
         s1.get_attribute("aria-orientation").as_deref(),
         Some("horizontal")
     );
 
-    let s2 = host.query_selector(".s-two div").unwrap().unwrap();
+    let s2 = host.query_selector(".s-two").unwrap().unwrap();
     assert_eq!(
         s2.get_attribute("aria-orientation").as_deref(),
         Some("vertical")
     );
 
-    let s3 = host.query_selector(".s-three div").unwrap().unwrap();
+    let s3 = host.query_selector(".s-three").unwrap().unwrap();
     assert_eq!(s3.get_attribute("role").as_deref(), Some("none"));
     assert!(s3.get_attribute("aria-orientation").is_none());
 
@@ -2179,7 +2179,7 @@ async fn toolbar_orientation_flows_to_separator() {
 
     // Horizontal toolbar → vertical separator (perpendicular to item axis).
     let sep = host
-        .query_selector(".tb-sep div[role=\"separator\"]")
+        .query_selector(".tb-sep")
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -2263,7 +2263,7 @@ async fn toggle_click_flips_state_and_emits() {
     tick().await;
 
     let tag = host.query_selector("pine-toggle").unwrap().unwrap();
-    let btn = host.query_selector(".tg button").unwrap().unwrap();
+    let btn = host.query_selector(".tg").unwrap().unwrap();
     assert_eq!(btn.get_attribute("aria-pressed").as_deref(), Some("false"));
     assert_eq!(btn.get_attribute("data-state").as_deref(), Some("off"));
 
@@ -2308,7 +2308,7 @@ async fn toggle_group_single_mode_exclusive_selection() {
     );
     tick().await;
 
-    host.query_selector(".tgi-b button")
+    host.query_selector(".tgi-b")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2316,15 +2316,15 @@ async fn toggle_group_single_mode_exclusive_selection() {
         .click();
     tick().await;
     tick().await;
-    let a = host.query_selector(".tgi-a button").unwrap().unwrap();
-    let b = host.query_selector(".tgi-b button").unwrap().unwrap();
-    let c = host.query_selector(".tgi-c button").unwrap().unwrap();
+    let a = host.query_selector(".tgi-a").unwrap().unwrap();
+    let b = host.query_selector(".tgi-b").unwrap().unwrap();
+    let c = host.query_selector(".tgi-c").unwrap().unwrap();
     assert_eq!(a.get_attribute("data-state").as_deref(), Some("off"));
     assert_eq!(b.get_attribute("data-state").as_deref(), Some("on"));
     assert_eq!(c.get_attribute("data-state").as_deref(), Some("off"));
 
     // Click C — B flips off, C on.
-    host.query_selector(".tgi-c button")
+    host.query_selector(".tgi-c")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2336,7 +2336,7 @@ async fn toggle_group_single_mode_exclusive_selection() {
     assert_eq!(c.get_attribute("data-state").as_deref(), Some("on"));
 
     // Click C again — clears (single-mode toggle off).
-    host.query_selector(".tgi-c button")
+    host.query_selector(".tgi-c")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2362,13 +2362,13 @@ async fn toggle_group_multiple_mode_independent_selection() {
     );
     tick().await;
 
-    host.query_selector(".tgm-b button")
+    host.query_selector(".tgm-b")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
         .unwrap()
         .click();
-    host.query_selector(".tgm-u button")
+    host.query_selector(".tgm-u")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2376,15 +2376,15 @@ async fn toggle_group_multiple_mode_independent_selection() {
         .click();
     tick().await;
     tick().await;
-    let b = host.query_selector(".tgm-b button").unwrap().unwrap();
-    let i = host.query_selector(".tgm-i button").unwrap().unwrap();
-    let u = host.query_selector(".tgm-u button").unwrap().unwrap();
+    let b = host.query_selector(".tgm-b").unwrap().unwrap();
+    let i = host.query_selector(".tgm-i").unwrap().unwrap();
+    let u = host.query_selector(".tgm-u").unwrap().unwrap();
     assert_eq!(b.get_attribute("data-state").as_deref(), Some("on"));
     assert_eq!(i.get_attribute("data-state").as_deref(), Some("off"));
     assert_eq!(u.get_attribute("data-state").as_deref(), Some("on"));
 
     // Re-click B — it alone flips off.
-    host.query_selector(".tgm-b button")
+    host.query_selector(".tgm-b")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2435,7 +2435,7 @@ async fn radio_group_click_selects_and_emits() {
     cb.forget();
 
     // Click item B's rendered <button>.
-    host.query_selector(".rg-b button.pine-radio-group-item")
+    host.query_selector(".rg-b")
         .unwrap()
         .expect("B button")
         .dyn_into::<HtmlElement>()
@@ -2451,9 +2451,9 @@ async fn radio_group_click_selects_and_emits() {
     );
 
     // States reflected on buttons.
-    let a = host.query_selector(".rg-a button").unwrap().unwrap();
-    let b = host.query_selector(".rg-b button").unwrap().unwrap();
-    let c = host.query_selector(".rg-c button").unwrap().unwrap();
+    let a = host.query_selector(".rg-a").unwrap().unwrap();
+    let b = host.query_selector(".rg-b").unwrap().unwrap();
+    let c = host.query_selector(".rg-c").unwrap().unwrap();
     assert_eq!(a.get_attribute("data-state").as_deref(), Some("unchecked"));
     assert_eq!(b.get_attribute("data-state").as_deref(), Some("checked"));
     assert_eq!(c.get_attribute("data-state").as_deref(), Some("unchecked"));
@@ -2461,7 +2461,7 @@ async fn radio_group_click_selects_and_emits() {
     assert_eq!(a.get_attribute("aria-checked").as_deref(), Some("false"));
 
     // Switch to C — B flips back.
-    host.query_selector(".rg-c button")
+    host.query_selector(".rg-c")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2487,7 +2487,7 @@ async fn radio_group_respects_disabled() {
     tick().await;
 
     // Disabled item click doesn't select.
-    host.query_selector(".rg2-b button")
+    host.query_selector(".rg2-b")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2495,8 +2495,8 @@ async fn radio_group_respects_disabled() {
         .click();
     tick().await;
     tick().await;
-    let a = host.query_selector(".rg2-a button").unwrap().unwrap();
-    let b = host.query_selector(".rg2-b button").unwrap().unwrap();
+    let a = host.query_selector(".rg2-a").unwrap().unwrap();
+    let b = host.query_selector(".rg2-b").unwrap().unwrap();
     assert_eq!(a.get_attribute("data-state").as_deref(), Some("checked"));
     assert_eq!(b.get_attribute("data-state").as_deref(), Some("unchecked"));
 
@@ -2539,7 +2539,7 @@ async fn radio_group_indicator_mirrors_item_checked() {
     let b_ind_html: HtmlElement = b_ind.clone().dyn_into().unwrap();
 
     // Click A → A's indicator visible, B's stays / becomes hidden.
-    host.query_selector(".rg3-a button")
+    host.query_selector(".rg3-a")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2559,7 +2559,7 @@ async fn radio_group_indicator_mirrors_item_checked() {
     );
 
     // Click B → A becomes hidden, B becomes visible.
-    host.query_selector(".rg3-b button")
+    host.query_selector(".rg3-b")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2604,7 +2604,7 @@ async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
     );
     tick().await;
 
-    host.query_selector(".ad-trig button")
+    host.query_selector(".ad-trig")
         .unwrap()
         .unwrap()
         .dyn_into::<HtmlElement>()
@@ -2641,7 +2641,7 @@ async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
     // body-teleported content — the host's MutationObserver
     // doesn't observe body).
     doc()
-        .query_selector(".ad-cancel button")
+        .query_selector(".ad-cancel")
         .unwrap()
         .expect("cancel btn")
         .dyn_into::<HtmlElement>()
@@ -2670,14 +2670,14 @@ async fn alert_dialog_action_and_cancel_close() {
     );
     tick().await;
 
-    let trig = host.query_selector(".ad2-trig button").unwrap().unwrap();
+    let trig = host.query_selector(".ad2-trig").unwrap().unwrap();
     trig.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
 
     // Cancel closes.
     doc()
-        .query_selector(".ad2-cancel button")
+        .query_selector(".ad2-cancel")
         .unwrap()
         .expect("cancel btn")
         .dyn_into::<HtmlElement>()
@@ -2698,7 +2698,7 @@ async fn alert_dialog_action_and_cancel_close() {
     tick().await;
     tick().await;
     doc()
-        .query_selector(".ad2-action button")
+        .query_selector(".ad2-action")
         .unwrap()
         .expect("action btn")
         .dyn_into::<HtmlElement>()
@@ -3916,9 +3916,9 @@ async fn tree_aria_level_counts_real_ancestors_only() {
     tick().await;
     tick().await;
 
-    let item_a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
-    let item_b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
-    let item_c = host.query_selector(".t-c div[role=treeitem]").unwrap().unwrap();
+    let item_a = host.query_selector(".t-a").unwrap().unwrap();
+    let item_b = host.query_selector(".t-b").unwrap().unwrap();
+    let item_c = host.query_selector(".t-c").unwrap().unwrap();
     assert_eq!(item_a.get_attribute("aria-level").as_deref(), Some("1"));
     assert_eq!(item_b.get_attribute("aria-level").as_deref(), Some("2"));
     assert_eq!(item_c.get_attribute("aria-level").as_deref(), Some("3"));
@@ -3943,8 +3943,8 @@ async fn tree_top_level_items_are_never_hidden() {
     tick().await;
     tick().await;
 
-    let a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
-    let b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
+    let a = host.query_selector(".t-a").unwrap().unwrap();
+    let b = host.query_selector(".t-b").unwrap().unwrap();
     assert_ne!(
         a.get_attribute("aria-hidden").as_deref(),
         Some("true"),
@@ -3979,7 +3979,7 @@ async fn tree_toggle_click_expands_and_shows_children() {
     sleep_ms(10).await;
     tick().await;
 
-    let item_b = host.query_selector(".t-b div[role=treeitem]").unwrap().unwrap();
+    let item_b = host.query_selector(".t-b").unwrap().unwrap();
     assert_eq!(
         item_b.get_attribute("aria-hidden").as_deref(),
         Some("true"),
@@ -3989,7 +3989,7 @@ async fn tree_toggle_click_expands_and_shows_children() {
     // Click the chevron — toggles expansion on the enclosing Item
     // via the injected ITEM scope, which writes back through Root.
     let toggle: HtmlElement = host
-        .query_selector(".t-a-toggle button")
+        .query_selector(".t-a-toggle")
         .unwrap()
         .unwrap()
         .dyn_into()
@@ -4003,7 +4003,7 @@ async fn tree_toggle_click_expands_and_shows_children() {
         Some("true"),
         "nested item becomes visible after parent expands",
     );
-    let item_a = host.query_selector(".t-a div[role=treeitem]").unwrap().unwrap();
+    let item_a = host.query_selector(".t-a").unwrap().unwrap();
     assert_eq!(
         item_a.get_attribute("aria-expanded").as_deref(),
         Some("true"),
@@ -4034,7 +4034,7 @@ async fn tree_leaf_toggle_is_hidden() {
     tick().await;
 
     let toggle: HtmlElement = host
-        .query_selector(".t-leaf-toggle button")
+        .query_selector(".t-leaf-toggle")
         .unwrap()
         .unwrap()
         .dyn_into()
@@ -4066,7 +4066,7 @@ async fn tree_click_item_selects_in_single_mode() {
     tick().await;
 
     let item_b: HtmlElement = host
-        .query_selector(".t-b div[role=treeitem]")
+        .query_selector(".t-b")
         .unwrap()
         .unwrap()
         .dyn_into()
@@ -4103,9 +4103,9 @@ async fn splitter_initial_sizes_match_panel_defaults() {
     tick().await;
     tick().await;
 
-    let a = host.query_selector(".sp-a div").unwrap().unwrap();
-    let b = host.query_selector(".sp-b div").unwrap().unwrap();
-    let c = host.query_selector(".sp-c div").unwrap().unwrap();
+    let a = host.query_selector(".sp-a").unwrap().unwrap();
+    let b = host.query_selector(".sp-b").unwrap().unwrap();
+    let c = host.query_selector(".sp-c").unwrap().unwrap();
     let style_a = a.get_attribute("style").unwrap_or_default();
     let style_b = b.get_attribute("style").unwrap_or_default();
     let style_c = c.get_attribute("style").unwrap_or_default();
@@ -4145,8 +4145,8 @@ async fn splitter_handle_aria_valuenow_tracks_before_panel() {
     tick().await;
     tick().await;
 
-    let h1 = host.query_selector(".sp-h1 button").unwrap().unwrap();
-    let h2 = host.query_selector(".sp-h2 button").unwrap().unwrap();
+    let h1 = host.query_selector(".sp-h1").unwrap().unwrap();
+    let h2 = host.query_selector(".sp-h2").unwrap().unwrap();
     assert_eq!(
         h1.get_attribute("aria-valuenow").as_deref(),
         Some("20"),
@@ -4181,7 +4181,7 @@ async fn splitter_handle_2_keyboard_resizes_neighbours_only() {
     tick().await;
 
     let h2: HtmlElement = host
-        .query_selector(".sp-h2 button")
+        .query_selector(".sp-h2")
         .unwrap()
         .unwrap()
         .dyn_into()
@@ -4198,9 +4198,9 @@ async fn splitter_handle_2_keyboard_resizes_neighbours_only() {
     tick().await;
     tick().await;
 
-    let a = host.query_selector(".sp-a div").unwrap().unwrap();
-    let b = host.query_selector(".sp-b div").unwrap().unwrap();
-    let c = host.query_selector(".sp-c div").unwrap().unwrap();
+    let a = host.query_selector(".sp-a").unwrap().unwrap();
+    let b = host.query_selector(".sp-b").unwrap().unwrap();
+    let c = host.query_selector(".sp-c").unwrap().unwrap();
     let style_a = a.get_attribute("style").unwrap_or_default();
     let style_b = b.get_attribute("style").unwrap_or_default();
     let style_c = c.get_attribute("style").unwrap_or_default();
@@ -4458,7 +4458,7 @@ async fn tags_input_clear_empties_values() {
     assert_eq!(tags_root_values(&host).len(), 2);
 
     let clear: HtmlElement = host
-        .query_selector(".t-clear button")
+        .query_selector(".t-clear")
         .unwrap()
         .unwrap()
         .dyn_into()

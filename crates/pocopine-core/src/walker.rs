@@ -624,6 +624,15 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
         .collect();
 
     let attrs = tag.attributes();
+    // Track which attrs the walker forwarded off the tag so they
+    // can be stripped after the loop. `class` / `style` are the
+    // only offenders that cause visible CSS "outer + inner" double
+    // matching (same rule painting pills / borders twice). Other
+    // attrs are left on the tag — devtools still sees them there,
+    // and author JS (`document.querySelector('pine-foo[data-id="x"]')`)
+    // keeps working.
+    let mut strip_class = false;
+    let mut strip_style = false;
     for i in 0..attrs.length() {
         let Some(a) = attrs.item(i) else { continue };
         let name = a.name();
@@ -652,16 +661,37 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
                 let existing = root.get_attribute("class").unwrap_or_default();
                 let merged = merge_space(&existing, &val);
                 let _ = root.set_attribute("class", &merged);
+                strip_class = true;
             }
             "style" => {
                 let existing = root.get_attribute("style").unwrap_or_default();
                 let merged = merge_semicolon(&existing, &val);
                 let _ = root.set_attribute("style", &merged);
+                strip_style = true;
             }
             _ => {
                 let _ = root.set_attribute(&name, &val);
             }
         }
+    }
+    // Strip `class` / `style` from the outer custom-element tag
+    // now that they've been forwarded to the inner rendered root.
+    // Without this, `.my-class { … }` author CSS matches BOTH the
+    // tag and the inner element, double-painting borders /
+    // padding / backgrounds. Stripping aligns pocopine with what
+    // React / Vue / Svelte authors expect: one rule, one match.
+    //
+    // Intentionally unconditional (no debug_assertions gate) —
+    // diverging CSS semantics between dev and release would
+    // itself be the bigger surprise. Tests that relied on
+    // `.<author-class> <descendant-tag>` selectors target the
+    // inner element directly via `.<author-class>` post-strip,
+    // since the inner root now owns the class uniquely.
+    if strip_class {
+        let _ = tag.remove_attribute("class");
+    }
+    if strip_style {
+        let _ = tag.remove_attribute("style");
     }
 }
 
