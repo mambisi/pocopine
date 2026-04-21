@@ -222,6 +222,9 @@ impl PineAccordionTrigger {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
+// `transition` lives on the CLONE root inside the .poco template
+// (see PineAccordionContent.poco) — pp-if's clone is outside the
+// macro-stamp scope, so the macro arg won't reach it.
 #[component(template = "PineAccordionContent.poco", role = "panel")]
 pub struct PineAccordionContent {
     pub open: bool,

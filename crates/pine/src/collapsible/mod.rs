@@ -88,6 +88,10 @@ impl PineCollapsibleTrigger {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
+// `transition` lives on the CLONE root inside the .poco template
+// (search "pp-transition" in PineCollapsibleContent.poco), not on
+// this macro arg, because the component's pp-if puts the cloned
+// subtree outside the macro-stamp scope.
 #[component(template = "PineCollapsibleContent.poco", role = "panel")]
 pub struct PineCollapsibleContent {
     #[observe(ROOT)] pub open: bool,

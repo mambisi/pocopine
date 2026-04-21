@@ -1,6 +1,12 @@
 <template pp-if="open">
+  <!-- pp-transition lives on the CLONE root (the rendered <div>)
+       because pp-if dispatches enter/leave starting from here. The
+       outer <pine-collapsible-content> custom tag sits outside the
+       clone, so the macro-stamped preset attrs there can't reach
+       this subtree. -->
   <root class="pine-collapsible-content"
-        data-state="open">
+        data-state="open"
+        pp-transition="collapse">
     <slot></slot>
   </root>
 </template>

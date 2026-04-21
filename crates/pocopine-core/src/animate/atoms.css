@@ -35,6 +35,14 @@
 :root {
   --pp-tx-duration: 200ms;
   --pp-tx-easing: cubic-bezier(0, 0, 0.2, 1);
+  /* `fade` is the overlay/backdrop preset — keep it noticeably
+   * faster than scale/slide so the backdrop snaps in while the
+   * focal Content takes its full duration. The two start
+   * together; fade finishes early and Content's tail overlaps
+   * the settled overlay. Mirrors Material/Apple HIG behaviour. */
+  --pp-tx-fade-duration: 110ms;
+  --pp-tx-collapse-duration: 220ms;
+  --pp-tx-collapse-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --pp-tx-flip-duration: 260ms;
   --pp-tx-flip-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -115,6 +123,33 @@
 }
 .pp-tx-slide-right-from { opacity: 0; transform: translateX(-8px); }
 .pp-tx-slide-right-to   { opacity: 1; transform: translateX(0); }
+
+/* ── collapse — auto-height open / close.
+ *
+ * Uses CSS Grid's `grid-template-rows` interpolation: a parent
+ * with `display: grid; grid-template-rows: 0fr | 1fr` smoothly
+ * tweens its single row between collapsed and full intrinsic
+ * height. The grid item (the inner rendered root of the
+ * collapsible content) needs `min-height: 0; overflow: hidden`
+ * so its content can actually shrink during the close phase —
+ * the `> *` selector below handles that automatically.
+ *
+ * No JavaScript measurement; works for arbitrary content
+ * heights. Pairs with `transition = "collapse"` on Pine's
+ * Collapsible / Accordion content macros.
+ */
+.pp-tx-collapse-base {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--pp-tx-collapse-duration)
+              var(--pp-tx-collapse-easing);
+}
+.pp-tx-collapse-base > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.pp-tx-collapse-from { grid-template-rows: 0fr; }
+.pp-tx-collapse-to   { grid-template-rows: 1fr; }
 
 /* ── flip helper — pp-for reorder animation.
  *    Applied imperatively by the FLIP runtime: the element gets a

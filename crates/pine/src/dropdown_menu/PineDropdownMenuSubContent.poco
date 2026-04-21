@@ -1,5 +1,12 @@
 <template pp-if="open" pp-teleport="body">
-  <div class="pine-dm-sub-portal">
+  <!-- `pp-transition` lives on the CLONE root, not the outer
+       custom-element tag, because pp-if dispatches enter/leave
+       starting from THIS clone. The outer
+       pine-dropdown-menu-sub-content lives inside the parent
+       dropdown's portal clone, so its macro-stamped preset attrs
+       aren't reachable from here. Stamping the shorthand on the
+       clone wrapper keeps the slide-down enter + leave firing. -->
+  <div class="pine-dm-sub-portal" pp-transition="slide-down">
     <root role="menu"
           class="pine-dm-sub-content"
           pp-ref="menu"

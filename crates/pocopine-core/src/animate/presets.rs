@@ -126,11 +126,20 @@ fn built_ins() -> HashMap<&'static str, Preset> {
             "pp-tx-slide-right-to",
         ),
     );
-    // `collapse` has no atom classes — it's a height-measurement
-    // helper handled by `animate::collapse`. Its presence in the
-    // registry is a marker so `apply_preset("collapse", …)` knows
-    // to route to `collapse::install` instead of stamping attrs.
-    m.insert("collapse", Preset::symmetric("", "", ""));
+    // `collapse` — CSS-only auto-height open/close via
+    // `grid-template-rows: 0fr | 1fr` (atoms.css ships the
+    // matching rules). Works on arbitrary content without
+    // measuring scrollHeight; the `.pp-tx-collapse-base > *`
+    // descendant rule clamps the inner element so it can shrink
+    // cleanly.
+    m.insert(
+        "collapse",
+        Preset::symmetric(
+            "pp-tx-collapse-base",
+            "pp-tx-collapse-from",
+            "pp-tx-collapse-to",
+        ),
+    );
     // `none` is the explicit opt-out — no classes, `apply_preset`
     // clears whatever was there.
     m.insert("none", Preset::symmetric("", "", ""));
@@ -175,12 +184,6 @@ pub fn lookup(name: &str) -> Option<Preset> {
 pub fn apply_preset(el: &Element, in_name: &str, out_name: &str) {
     let in_preset = lookup(in_name).unwrap_or_else(|| lookup("none").unwrap());
     let out_preset = lookup(out_name).unwrap_or_else(|| lookup("none").unwrap());
-
-    // Special-case `collapse` — it's not CSS-class-based. A marker
-    // attr tells `collapse::install` which element to wire.
-    if in_name == "collapse" || out_name == "collapse" {
-        let _ = el.set_attribute("data-pp-collapse", "true");
-    }
 
     // Helper to write (or clear) a single attr.
     let set_or_clear = |attr: &str, value: &str| {

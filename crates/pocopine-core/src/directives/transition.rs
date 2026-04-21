@@ -289,14 +289,24 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
         let rc_for_end = rc_cap.clone();
         let on_done_cell = on_done_cell.clone();
         schedule_end(&el_cap, rc_cap.clone(), epoch, move || {
-            let cl = el_for_end.class_list();
+            // KEEP `enter` (base) + `enter-end` (to) on the element
+            // post-settle. Removing them at the moment the
+            // transition completes triggered a visible end-of-enter
+            // flicker: `transform: matrix(1,0,0,1,0,0)` snapping
+            // to `transform: none` (semantically identical, but
+            // browsers re-rasterize anti-aliased glyphs / borders
+            // on style change). The `enter` class still has the
+            // `transition: opacity ...` rule active, so a later
+            // author-side style change to opacity / transform
+            // would tween — but for Pine compounds those are
+            // stable post-mount, and the trade-off (no flicker)
+            // wins. `cancel()` at the start of `leave()` clears
+            // these before the leave dispatch, so the next round
+            // has a clean slate.
+            let _ = el_for_end;
             let mut s = rc_for_end.borrow_mut();
-            for c in s.enter.iter().chain(s.enter_end.iter()) {
-                let _ = cl.remove_1(c);
-            }
             s.phase = Phase::Idle;
             drop(s);
-            clear_will_change(&el_for_end);
             if let Some(cb) = on_done_cell.borrow_mut().take() {
                 cb();
             }
@@ -373,14 +383,17 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
         let rc_for_end = rc_cap.clone();
         let on_done_cell = on_done_cell.clone();
         schedule_end(&el_cap, rc_cap.clone(), epoch, move || {
-            let cl = el_for_end.class_list();
+            // Same reasoning as enter: keep the leave classes
+            // applied. For pp-if leave, the on_done callback
+            // removes the element entirely — the classes go with
+            // it. For pp-show leave, the on_done sets `display:
+            // none` so the leftover classes are invisible until
+            // the next enter, which `cancel`s them in its first
+            // step.
+            let _ = el_for_end;
             let mut s = rc_for_end.borrow_mut();
-            for c in s.leave.iter().chain(s.leave_end.iter()) {
-                let _ = cl.remove_1(c);
-            }
             s.phase = Phase::Idle;
             drop(s);
-            clear_will_change(&el_for_end);
             if let Some(cb) = on_done_cell.borrow_mut().take() {
                 cb();
             }
@@ -457,25 +470,19 @@ fn parse_duration(s: &str) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Hint the compositor that `transform` and `opacity` are about to
-/// change — keeps the element on its own GPU layer for the duration
-/// of the transition. Removed by [`clear_will_change`] once the
-/// state machine settles. Idempotent.
-fn set_will_change(el: &Element) {
-    use wasm_bindgen::JsCast;
-    let Ok(html) = el.clone().dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    let _ = html.style().set_property("will-change", "transform, opacity");
-}
+/// `will-change` was set on enter / leave during RFC-039 PR 1 to
+/// hint the compositor. In practice it caused a visible end-of-
+/// transition flicker: when the state machine cleared `will-change`
+/// AND the transition's `to` classes at the same instant, the
+/// browser tore down the dedicated GPU layer and re-composited
+/// the element back to the regular paint layer — sub-pixel
+/// anti-aliasing differences read as a pop. Modern browsers (FF
+/// 60+, Chrome 60+, Safari 13+) auto-promote opacity / transform
+/// transitions to the compositor without an explicit hint, so
+/// these helpers are now no-ops kept for API stability.
+fn set_will_change(_el: &Element) {}
 
-fn clear_will_change(el: &Element) {
-    use wasm_bindgen::JsCast;
-    let Ok(html) = el.clone().dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    let _ = html.style().remove_property("will-change");
-}
+fn clear_will_change(_el: &Element) {}
 
 /// Selector matching every element that carries any preset attr
 /// (shorthand or six-attr form). Used by the subtree helpers to
