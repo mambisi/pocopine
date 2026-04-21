@@ -238,14 +238,19 @@ pub struct PineSplitterPanel {
     pub min_size: f64,
     #[prop]
     pub max_size: f64,
-    /// Mirrored from Group.direction for `data-direction` attr.
+    /// Mirrored from `GROUP.direction` via the macro-installed
+    /// observer (replaces a hand-written `watch_scope_field`).
+    #[observe(GROUP)]
     pub direction: String,
     /// This panel's index in Group.sizes / panel_index. Seeded at
     /// registration time (`on_setup`) and stable for the panel's
     /// lifetime.
     pub my_index: usize,
     /// Reactive mirror of `group.sizes[my_index]`. Drives the
-    /// `flex-basis` inline style.
+    /// `flex-basis` inline style. Can't use `#[observe]` directly
+    /// — this is a *derived* projection of a Vec, not a 1:1
+    /// field mirror, so the watch in `on_ready` pulls the right
+    /// slot each time `sizes` ticks.
     pub size: f64,
 }
 
@@ -272,13 +277,13 @@ impl PineSplitterPanel {
         };
         let min = self.min_size;
         let max = self.max_size;
-        let (my_index, size, direction) = group.update(|g| {
+        let (my_index, size) = group.update(|g| {
             let idx = g.register_panel(scope, default, min, max);
-            (idx, g.sizes.get(idx).copied().unwrap_or(0.0), g.direction.clone())
+            (idx, g.sizes.get(idx).copied().unwrap_or(0.0))
         });
         self.my_index = my_index;
         self.size = size;
-        self.direction = direction;
+        // `direction` is mirrored by `#[observe(GROUP)]`.
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
@@ -286,8 +291,8 @@ impl PineSplitterPanel {
             return;
         };
         let group_scope = group.scope_id();
-        let handle_for_watch = handle.clone();
-        let group_for_watch = group.clone();
+        let handle_for_watch = handle;
+        let group_for_watch = group;
         // Watch the full Vec<f64>. When sizes changes for any
         // reason (a drag, a keyboard step, a later panel
         // registering and renormalizing), pull the slot matching
@@ -299,11 +304,6 @@ impl PineSplitterPanel {
             }
             let _ = &group_for_watch;
         });
-        // Mirror direction for `data-direction`.
-        let handle_for_dir = handle;
-        pocopine::watch_scope_field::<String, _>(group_scope, "direction", move |v, _| {
-            handle_for_dir.update(|s| s.direction = v.clone());
-        });
     }
 }
 
@@ -314,7 +314,9 @@ impl PineSplitterPanel {
 pub struct PineSplitterResizeHandle {
     #[prop]
     pub disabled: bool,
-    /// Mirrored from Group.
+    /// Mirrored from `GROUP.direction` via the macro-installed
+    /// observer.
+    #[observe(GROUP)]
     pub direction: String,
     /// Index of the Panel immediately before this handle in DOM
     /// order. Computed in `on_ready` by counting preceding
@@ -322,18 +324,14 @@ pub struct PineSplitterResizeHandle {
     pub before_idx: usize,
     pub after_idx: usize,
     /// `aria-valuenow` for this handle — the size of the panel
-    /// immediately before it.
+    /// immediately before it. Derived from `group.sizes[before_idx]`,
+    /// so not a 1:1 field mirror; the watch in `on_ready` keeps it
+    /// in sync.
     pub aria_value: f64,
 }
 
 #[handlers]
 impl PineSplitterResizeHandle {
-    pub fn on_setup(&mut self) {
-        if let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) {
-            self.direction = group.with(|g| g.direction.clone());
-        }
-    }
-
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
             return;
@@ -357,16 +355,12 @@ impl PineSplitterResizeHandle {
         });
 
         let group_scope = group.scope_id();
-        let handle_for_aria = handle.clone();
+        let handle_for_aria = handle;
         pocopine::watch_scope_field::<Vec<f64>, _>(group_scope, "sizes", move |v, _| {
             let idx = handle_for_aria.with(|s| s.before_idx);
             if let Some(&val) = v.get(idx) {
                 handle_for_aria.update(|s| s.aria_value = val);
             }
-        });
-        let handle_for_dir = handle;
-        pocopine::watch_scope_field::<String, _>(group_scope, "direction", move |v, _| {
-            handle_for_dir.update(|s| s.direction = v.clone());
         });
     }
 

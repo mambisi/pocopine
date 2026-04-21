@@ -243,9 +243,12 @@ def main() -> int:
         )
         return 2
 
+    capture_dir = DEMO_ROOT / "e2e" / "screenshots"
+    capture = "--no-screenshots" not in sys.argv
+
     with _serve() as url, sync_playwright() as pw:
         browser = pw.firefox.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(viewport={"width": 1024, "height": 768})
         page = context.new_page()
         page.goto(url)
         page.wait_for_load_state("networkidle")
@@ -256,6 +259,15 @@ def main() -> int:
         try:
             run_tree_checks(page)
             run_splitter_checks(page)
+            if capture:
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                tree = page.locator(".tree-demo")
+                splitter = page.locator(".splitter-frame")
+                if tree.count() > 0:
+                    tree.first.screenshot(path=str(capture_dir / "tree.png"))
+                if splitter.count() > 0:
+                    splitter.first.screenshot(path=str(capture_dir / "splitter.png"))
+                print(f"\nScreenshots saved to {capture_dir}")
         finally:
             browser.close()
 

@@ -8,8 +8,8 @@
       :aria-disabled="disabled ? 'true' : null"
       :aria-hidden="parent_visible ? null : 'true'"
       :data-state="expanded ? 'open' : 'closed'"
-      :data-selected="selected"
-      :data-disabled="disabled"
+      :data-selected="selected ? 'true' : 'false'"
+      :data-disabled="disabled ? 'true' : 'false'"
       @click.stop="select">
   <slot></slot>
 </root>

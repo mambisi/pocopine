@@ -1170,10 +1170,11 @@ kbd {
 /* ─── PineSplitter ────────────────────────────────────────── */
 
 .splitter-frame {
-  height: 200px;
+  height: 220px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  background: var(--bg-subtle);
 }
 
 /* The custom-element tags `<pine-splitter-group>`, `-panel`, and
@@ -1194,32 +1195,66 @@ pine-splitter-resize-handle {
   height: 100%;
   padding: 1rem;
   font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-/* Colour each panel differently so a drag is visually unambiguous. */
-.splitter-pane-sidebar { background: #dbeafe; color: #1e3a8a; }
-.splitter-pane-main    { background: #fef3c7; color: #78350f; }
-.splitter-pane-details { background: #dcfce7; color: #065f46; }
+/* Low-saturation tinted panes so drag + layout are visible but
+   not visually loud. */
+.splitter-pane-sidebar { background: #eef2ff; color: #3730a3; }
+.splitter-pane-main    { background: #fefce8; color: #854d0e; }
+.splitter-pane-details { background: #ecfdf5; color: #065f46; }
 
+/* Grippy handle: wider hit area, 3 vertical/horizontal dots at
+   the midpoint via a radial-gradient pattern. */
+.pine-splitter-resize-handle {
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  outline: none;
+  transition: background 140ms ease;
+}
+.pine-splitter-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  transition: background 140ms ease;
+}
 .pine-splitter-resize-handle[data-direction="horizontal"] {
-  flex: 0 0 6px;
-  background: var(--border);
+  flex: 0 0 8px;
   cursor: col-resize;
-  transition: background 120ms ease;
 }
 .pine-splitter-resize-handle[data-direction="vertical"] {
-  flex: 0 0 6px;
-  background: var(--border);
+  flex: 0 0 8px;
   cursor: row-resize;
-  transition: background 120ms ease;
 }
-.pine-splitter-resize-handle:hover,
+.pine-splitter-resize-handle[data-direction="horizontal"]::before {
+  background-image: radial-gradient(circle, var(--fg-muted) 0.9px, transparent 1px);
+  background-size: 100% 4px;
+  background-position: center;
+  background-repeat: repeat-y;
+  opacity: 0.35;
+}
+.pine-splitter-resize-handle[data-direction="vertical"]::before {
+  background-image: radial-gradient(circle, var(--fg-muted) 0.9px, transparent 1px);
+  background-size: 4px 100%;
+  background-position: center;
+  background-repeat: repeat-x;
+  opacity: 0.35;
+}
+.pine-splitter-resize-handle:hover {
+  background: rgba(0, 112, 243, 0.12);
+}
+.pine-splitter-resize-handle:hover::before { opacity: 0.8; }
 .pine-splitter-resize-handle:focus-visible {
-  background: var(--brand);
-  outline: none;
+  background: rgba(0, 112, 243, 0.18);
+  box-shadow: inset 0 0 0 1px var(--brand);
 }
+.pine-splitter-resize-handle:focus-visible::before { opacity: 1; }
 .pine-splitter-resize-handle[data-disabled="true"] {
   cursor: default;
   opacity: 0.5;
@@ -1233,34 +1268,57 @@ pine-splitter-resize-handle {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  max-height: 280px;
+  max-height: 320px;
   overflow: auto;
   font-size: 0.875rem;
+  line-height: 1.6;
   outline: none;
 }
-.tree-demo:focus { box-shadow: 0 0 0 2px rgba(0, 112, 243, 0.2); }
+.tree-demo:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15);
+}
 
 .pine-tree-item {
   display: block;
   position: relative;
-  padding: 0.15rem 0.25rem;
-  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
+  color: var(--fg);
   /* Hover / selection backgrounds paint only over the top "row"
      (toggle + label), not the whole block — otherwise a parent's
      background would bleed behind every nested child. */
   background-repeat: no-repeat;
-  background-size: 100% 1.75em;
+  background-size: 100% 1.9em;
   background-position: 0 0;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 .pine-tree-item[aria-hidden="true"] { display: none; }
 
-/* Indent per depth via aria-level (1-based). */
-.pine-tree-item[aria-level="2"] { padding-left: 1.25rem; }
-.pine-tree-item[aria-level="3"] { padding-left: 2.5rem; }
-.pine-tree-item[aria-level="4"] { padding-left: 3.75rem; }
-.pine-tree-item[aria-level="5"] { padding-left: 5rem; }
+/* Indent per depth via aria-level (1-based), plus a subtle
+   vertical guide rail on nested items. */
+.pine-tree-item[aria-level="2"] { padding-left: 1.5rem; }
+.pine-tree-item[aria-level="3"] { padding-left: 2.75rem; }
+.pine-tree-item[aria-level="4"] { padding-left: 4rem; }
+.pine-tree-item[aria-level="5"] { padding-left: 5.25rem; }
+.pine-tree-item[aria-level="2"]::before,
+.pine-tree-item[aria-level="3"]::before,
+.pine-tree-item[aria-level="4"]::before,
+.pine-tree-item[aria-level="5"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+.pine-tree-item[aria-level="2"]::before { left: 0.55rem; }
+.pine-tree-item[aria-level="3"]::before { left: 1.8rem; }
+.pine-tree-item[aria-level="4"]::before { left: 3.05rem; }
+.pine-tree-item[aria-level="5"]::before { left: 4.3rem; }
 
 /* Hover: only when no nested Item is hovered, so cursor-on-child
    doesn't leak into the ancestor chain. */
@@ -1283,9 +1341,9 @@ pine-splitter-resize-handle {
   top: 0;
   left: 0;
   right: 0;
-  height: 1.75em;
+  height: 1.9em;
   border: 2px solid var(--brand);
-  border-radius: 4px;
+  border-radius: 6px;
   pointer-events: none;
   box-sizing: border-box;
 }
@@ -1294,20 +1352,28 @@ pine-splitter-resize-handle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.1em;
-  margin-right: 0.25rem;
+  width: 1.25em;
+  height: 1.25em;
+  margin-right: 0.35rem;
   padding: 0;
   border: 0;
+  border-radius: 3px;
   background: transparent;
-  color: inherit;
+  color: var(--fg-muted);
   font: inherit;
+  font-size: 0.75em;
   cursor: pointer;
-  transition: transform 120ms ease;
+  transition: transform 120ms ease, color 120ms ease, background 120ms ease;
+}
+.pine-tree-item-toggle:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--fg);
 }
 .pine-tree-item-toggle[data-state="open"] { transform: rotate(90deg); }
+.pine-tree-item[data-selected="true"] > .pine-tree-item-toggle { color: var(--brand-fg); }
 
 .tree-leaf-spacer {
   display: inline-block;
-  width: 1.1em;
-  margin-right: 0.25rem;
+  width: 1.25em;
+  margin-right: 0.35rem;
 }
