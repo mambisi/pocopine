@@ -87,7 +87,10 @@
       </pine-dialog-trigger>
       <pine-dialog-portal>
         <pine-dialog-overlay></pine-dialog-overlay>
-        <pine-dialog-content>
+        <!-- `pp-transition="none"` disables the preset's class-swap
+             machinery so the demo CSS can drive the enter animation
+             via native `@starting-style`. See styles.css. -->
+        <pine-dialog-content pp-transition="none">
           <pine-dialog-title>Delete file?</pine-dialog-title>
           <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
           <div class="row" style="margin-top:1rem;justify-content:flex-end">
@@ -112,7 +115,7 @@
       </pine-alert-dialog-trigger>
       <pine-alert-dialog-portal>
         <pine-alert-dialog-overlay></pine-alert-dialog-overlay>
-        <pine-alert-dialog-content>
+        <pine-alert-dialog-content pp-transition="none">
           <pine-alert-dialog-title>Destroy project?</pine-alert-dialog-title>
           <pine-alert-dialog-description>
             All files will be permanently removed. This cannot be undone.
@@ -654,7 +657,7 @@
     <pine-command-root shortcut="Mod+k">
       <pine-command-portal>
         <pine-command-overlay></pine-command-overlay>
-        <pine-command-content>
+        <pine-command-content pp-transition="none">
           <pine-command-input placeholder="Type a command…"></pine-command-input>
           <pine-command-list>
             <pine-command-item value="new" @pp:command:select="cmd_new_file">

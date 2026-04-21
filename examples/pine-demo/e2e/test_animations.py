@@ -67,26 +67,39 @@ def main() -> int:
             """() => {
               const outer = document.querySelector('pine-dialog-content');
               const inner = document.querySelector('pine-dialog-content > div');
+              const cs = outer ? getComputedStyle(outer) : null;
               return {
-                outer_opacity: outer ? getComputedStyle(outer).opacity : null,
-                outer_transform: outer ? getComputedStyle(outer).transform : null,
-                outer_transition: outer ? getComputedStyle(outer).transition : null,
+                outer_opacity: cs ? cs.opacity : null,
+                // The demo's dialog CSS uses the standalone `scale`
+                // property (not transform) so `@starting-style` can
+                // provide the from-state. Check both.
+                outer_scale: cs ? cs.scale : null,
+                outer_transform: cs ? cs.transform : null,
+                outer_transition: cs ? cs.transition : null,
                 outer_classes: outer ? outer.className : null,
                 inner_opacity: inner ? getComputedStyle(inner).opacity : null,
               };
             }"""
         )
         print("MID-ANIM SAMPLE:", opacity_mid_dump)
-        # Firefox composites opacity on the GPU and getComputedStyle
-        # may return the post-transition value, so trust the transform
-        # matrix instead — if scale is < 1 we know the fade-scale
-        # transition is mid-flight.
-        tx = opacity_mid_dump["outer_transform"] or ""
-        # Parse matrix(a, b, c, d, …) → a (X scale) and check it's
-        # below 1 (preset starts at scale(0.96)).
-        import re
-        m = re.match(r"matrix\(([\-0-9.]+),", tx)
-        scale_x = float(m.group(1)) if m else 1.0
+        # The dialog demo now uses the standalone `scale` property
+        # plus `@starting-style` for the enter. Firefox's
+        # getComputedStyle.scale returns the interpolated value
+        # mid-transition; read it directly.
+        scale_str = opacity_mid_dump["outer_scale"] or "none"
+        if scale_str == "none":
+            # Fall back to the transform matrix for presets that
+            # use `transform: scale(...)` instead.
+            tx = opacity_mid_dump["outer_transform"] or ""
+            import re
+            m = re.match(r"matrix\(([\-0-9.]+),", tx)
+            scale_x = float(m.group(1)) if m else 1.0
+        else:
+            # `scale` can be "1" or "0.94" — single value (uniform).
+            try:
+                scale_x = float(scale_str.split()[0])
+            except (ValueError, IndexError):
+                scale_x = 1.0
         opacity_mid = scale_x  # repurpose for the assertion below
         if opacity_mid >= 0.999:
             failures.append(

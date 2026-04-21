@@ -198,19 +198,21 @@ section {
   background: rgba(0, 0, 0, 0.5);
   z-index: 50;
 }
-/* The OUTER `<pine-dialog-content>` becomes the viewport-filling
- * flex container that centers the actual inner dialog box. This
- * matters for animation: the `fade-scale` preset puts
- * `transform: scale(0.96 → 1)` on the OUTER. If the inner were
- * itself `position: fixed`, it'd be laid out against the viewport
- * and the ancestor's transform wouldn't visually scale it — we'd
- * see a pure fade. With the inner as a flex child of the outer,
- * the whole container scales together and the fade-scale effect
- * actually lands.
+/* Native CSS animation via `@starting-style`. The preset machinery
+ * is disabled on this content (`transition="none"` on the tag) so
+ * the class-swap from → to two-phase dance doesn't fight the
+ * browser's native approach.
  *
- * `pointer-events: none/auto` lets clicks pass through the empty
- * outer area back to the overlay (for click-to-close) while the
- * inner still receives its own interactions.
+ * Flow:
+ *   1. pp-if mounts the dialog → element is newly inserted.
+ *   2. First style pass picks up `@starting-style` for opacity + scale.
+ *   3. Browser transitions to the settled state (opacity 1, scale 1).
+ *
+ * Leave is still instant because pp-if removes the element on
+ * close — the user sees a clean fade-in with no leave animation.
+ * That's a fair trade for the simplicity and polish of enter;
+ * `allow-discrete` + `display` transitions would be symmetric but
+ * require staying in the DOM, which pp-if explicitly doesn't do.
  */
 pine-dialog-content {
   position: fixed;
@@ -220,6 +222,16 @@ pine-dialog-content {
   justify-content: center;
   z-index: 51;
   pointer-events: none;
+  opacity: 1;
+  scale: 1;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@starting-style {
+  pine-dialog-content {
+    opacity: 0;
+    scale: 0.94;
+  }
 }
 .pine-dialog-content {
   pointer-events: auto;
@@ -247,8 +259,7 @@ pine-dialog-content {
   background: rgba(0, 0, 0, 0.6);
   z-index: 50;
 }
-/* Same flex-container pattern as pine-dialog — the outer custom
- * tag fills the viewport so the preset's scale lands visually. */
+/* Same @starting-style pattern as pine-dialog-content. */
 pine-alert-dialog-content {
   position: fixed;
   inset: 0;
@@ -257,6 +268,16 @@ pine-alert-dialog-content {
   justify-content: center;
   z-index: 51;
   pointer-events: none;
+  opacity: 1;
+  scale: 1;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@starting-style {
+  pine-alert-dialog-content {
+    opacity: 0;
+    scale: 0.94;
+  }
 }
 .pine-alert-dialog-content {
   pointer-events: auto;
@@ -1074,9 +1095,7 @@ pine-command-empty {
   background: rgba(0, 0, 0, 0.55);
   z-index: 70;
 }
-/* Same flex-container pattern — outer fills viewport so the
- * `fade-scale` preset's scale can take visual effect on the
- * inner command palette box. */
+/* Same @starting-style pattern as pine-dialog-content. */
 pine-command-content {
   position: fixed;
   inset: 0;
@@ -1086,6 +1105,16 @@ pine-command-content {
   padding-top: 20vh;
   z-index: 71;
   pointer-events: none;
+  opacity: 1;
+  scale: 1;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@starting-style {
+  pine-command-content {
+    opacity: 0;
+    scale: 0.94;
+  }
 }
 .pine-command-content {
   pointer-events: auto;

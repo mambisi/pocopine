@@ -231,6 +231,48 @@ motion-as-data UI:
 automatically (deferred — author the attribute directly until that
 ships).
 
+## `@starting-style` — the modern CSS-only path
+
+For authors who want native CSS motion with no preset machinery
+at all, modern browsers (Chrome 117+, Safari 17.5+, Firefox 129+)
+ship `@starting-style`. It defines the style an element starts
+from the moment it's first rendered — the browser handles the
+transition from there. Much simpler than the preset system when
+you control the author CSS.
+
+Disable the preset on a specific instance via `pp-transition="none"`
+and drive the animation from CSS:
+
+```html
+<pine-dialog-content pp-transition="none">…</pine-dialog-content>
+```
+
+```css
+pine-dialog-content {
+  opacity: 1;
+  scale: 1;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              scale 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@starting-style {
+  pine-dialog-content {
+    opacity: 0;
+    scale: 0.94;
+  }
+}
+```
+
+The demo's Dialog / AlertDialog / Command CSS uses this pattern
+— see `examples/pine-demo/styles.css`. Pairs naturally with Pine
+components where `pp-if` fully unmounts: each mount is a fresh
+insertion, so `@starting-style` always kicks in.
+
+Leave is still handled by the preset system (or the state machine
+waits for transitionend if present) — `@starting-style` has no
+unmount analogue without `transition-behavior: allow-discrete`,
+which requires staying in the DOM via `pp-show` rather than
+`pp-if`.
+
 ## Gotcha: don't center with `transform` if you use scale / slide presets
 
 The `scale`, `fade-scale`, `zoom`, and `slide-*` presets all
