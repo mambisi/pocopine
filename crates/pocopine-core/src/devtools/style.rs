@@ -121,4 +121,40 @@ pub(crate) const STYLESHEET: &str = "\
     .__pp_jv_bool.__pp_dev_copied,.__pp_jv_null.__pp_dev_copied{\
     background:#ff6600;color:#181715;border-radius:2px;padding:0 3px;}\
     .__pp_dev_highlight{outline:2px solid #ff6600 !important;}\
+    \
+    /* Tab strip (activated when ≥2 panels register). */\
+    .__pp_dev_tabs{padding:4px 12px;background:#1f1d1b;border-bottom:1px solid #2d2a24;\
+    flex:0 0 auto;}\
+    .__pp_dev_tabs .__pp_dev_seg{width:auto;}\
+    \
+    /* Per-panel host divs sit inside the shell body. */\
+    .__pp_dev_panel_host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;\
+    overflow:hidden;}\
+    \
+    /* Scope inspector sub-header (mode toggle). */\
+    .__pp_dev_scope_subhd{padding:6px 12px;border-bottom:1px solid #2d2a24;flex:0 0 auto;}\
+    .__pp_dev_panes{display:flex;flex:1 1 auto;min-height:0;overflow:hidden;}\
+    \
+    /* Timeline panel. */\
+    .__pp_dev_tl_head{display:grid;grid-template-columns:60px 42px 52px 1fr 60px;\
+    gap:6px;padding:6px 12px;border-bottom:1px solid #2d2a24;color:#828282;\
+    font-size:9px;text-transform:uppercase;letter-spacing:0.08em;flex:0 0 auto;}\
+    .__pp_dev_tl_list{flex:1 1 auto;overflow:auto;padding:2px 0;}\
+    .__pp_dev_tl_row{display:grid;grid-template-columns:60px 42px 52px 1fr 60px;\
+    gap:6px;padding:2px 12px;align-items:baseline;white-space:nowrap;}\
+    .__pp_dev_tl_row:hover{background:#23211e;}\
+    .__pp_dev_tl_row_effect{color:#9ecbff;}\
+    .__pp_dev_tl_row_handler{color:#c6e377;}\
+    .__pp_dev_tl_col_t{color:#828282;font-variant-numeric:tabular-nums;}\
+    .__pp_dev_tl_col_scope{color:#828282;font-size:10px;}\
+    .__pp_dev_tl_col_dur{color:#828282;font-variant-numeric:tabular-nums;text-align:right;\
+    font-size:10px;}\
+    .__pp_dev_tl_chip{display:inline-block;width:20px;text-align:center;border-radius:2px;\
+    font-size:9px;font-weight:700;letter-spacing:0.04em;padding:0 3px;}\
+    .__pp_dev_tl_chip_effect{background:#1a2a40;color:#9ecbff;}\
+    .__pp_dev_tl_chip_handler{background:#2a3a1c;color:#c6e377;}\
+    .__pp_dev_tl_col_name{overflow:hidden;text-overflow:ellipsis;cursor:default;}\
+    .__pp_dev_tl_col_name[data-copy]{cursor:pointer;}\
+    .__pp_dev_tl_col_name[data-copy]:hover{color:#fff;}\
+    .__pp_dev_tl_handler_args{color:#828282;margin-left:4px;}\
 ";

@@ -66,6 +66,7 @@ pub fn install() {
 
 fn register_builtin_panels() {
     panel::register(Box::new(panels::scope::ScopeInspector));
+    panel::register(Box::new(panels::timeline::Timeline));
 }
 
 /// Register the default push-style handlers: effect-run / handler-
