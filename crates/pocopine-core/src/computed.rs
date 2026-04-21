@@ -14,8 +14,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::reactive::{
-    effect_with, next_signal_id, release, run_now, track, trigger, EffectId, EffectOptions,
-    SignalId, SIGNAL_SCOPE,
+    effect_with, next_signal_id, release, run_now, track_signal, trigger_signal, EffectId,
+    EffectOptions, SignalId,
 };
 
 struct State<T> {
@@ -42,7 +42,6 @@ pub fn computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T> 
 
     let state_for_body = state.clone();
     let state_for_sched = state.clone();
-    let key_for_sched = id.0.to_string();
 
     let effect_id = effect_with(
         move || {
@@ -58,7 +57,7 @@ pub fn computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T> 
                 // Tell our own subscribers the value has (potentially)
                 // changed. They'll call back into `get()` and we'll rerun
                 // the effect lazily if dirty is still true at that point.
-                trigger(SIGNAL_SCOPE, &key_for_sched);
+                trigger_signal(id);
             })),
         },
     );
@@ -74,7 +73,7 @@ impl<T: Clone + 'static> Computed<T> {
         if dirty {
             run_now(self.effect_id);
         }
-        track(SIGNAL_SCOPE, &self.id.0.to_string());
+        track_signal(self.id);
         self.state
             .borrow()
             .cached

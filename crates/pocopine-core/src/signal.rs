@@ -3,14 +3,16 @@
 //! A signal is a `(Signal<T>, Setter<T>)` pair. Reads through `Signal::get`
 //! subscribe the current effect; writes through `Setter::set` notify
 //! subscribers. Internally they share a `Rc<RefCell<T>>` and a single
-//! [`SignalId`]; dep tracking rides the effect engine via the synthetic
-//! [`crate::reactive::SIGNAL_SCOPE`], so batching, flushing, and cleanup
-//! behave exactly as they do for proxy-based scopes.
+//! [`SignalId`]; dep tracking rides a dedicated signal-specific table
+//! ([`crate::reactive::track_signal`] / [`crate::reactive::trigger_signal`])
+//! keyed on `SignalId` directly. Batching, flushing, and cleanup behave
+//! exactly as they do for proxy-based scopes — they share the effect
+//! engine, just not the key type.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::reactive::{next_signal_id, track, trigger, SignalId, SIGNAL_SCOPE};
+use crate::reactive::{next_signal_id, track_signal, trigger_signal, SignalId};
 
 /// Read handle for a reactive cell. Clone freely; all clones see the same
 /// value and share the same id.
@@ -69,18 +71,11 @@ pub fn rw_signal<T: 'static>(initial: T) -> RwSignal<T> {
     RwSignal { id, cell }
 }
 
-fn key_of(id: SignalId) -> String {
-    // IDs stringified at the dep-map boundary. Measured as the cheapest
-    // shape for v0; can swap for a non-string key kind once benchmarks
-    // tell us it matters.
-    id.0.to_string()
-}
-
 impl<T: Clone + 'static> Signal<T> {
     /// Subscribe + read. Returns a cloned value; use [`Signal::with`] to
     /// avoid the clone for non-`Clone` `T`.
     pub fn get(&self) -> T {
-        track(SIGNAL_SCOPE, &key_of(self.id));
+        track_signal(self.id);
         self.cell.borrow().clone()
     }
 }
@@ -88,7 +83,7 @@ impl<T: Clone + 'static> Signal<T> {
 impl<T: 'static> Signal<T> {
     /// Subscribe + borrow the inner value for the duration of `f`.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        track(SIGNAL_SCOPE, &key_of(self.id));
+        track_signal(self.id);
         f(&self.cell.borrow())
     }
 
@@ -114,7 +109,7 @@ impl<T: PartialEq + 'static> Setter<T> {
             return;
         }
         *self.cell.borrow_mut() = value;
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 }
 
@@ -126,7 +121,7 @@ impl<T: 'static> Setter<T> {
     /// the last effect run).
     pub fn set_force(&self, value: T) {
         *self.cell.borrow_mut() = value;
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 
     /// Mutate in place via `f`, then notify subscribers. Always
@@ -136,7 +131,7 @@ impl<T: 'static> Setter<T> {
     /// for non-`Clone` / non-`PartialEq` `T`.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         f(&mut self.cell.borrow_mut());
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 
     pub fn id(&self) -> SignalId {
@@ -146,7 +141,7 @@ impl<T: 'static> Setter<T> {
 
 impl<T: Clone + 'static> RwSignal<T> {
     pub fn get(&self) -> T {
-        track(SIGNAL_SCOPE, &key_of(self.id));
+        track_signal(self.id);
         self.cell.borrow().clone()
     }
 }
@@ -158,25 +153,25 @@ impl<T: PartialEq + 'static> RwSignal<T> {
             return;
         }
         *self.cell.borrow_mut() = value;
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 }
 
 impl<T: 'static> RwSignal<T> {
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        track(SIGNAL_SCOPE, &key_of(self.id));
+        track_signal(self.id);
         f(&self.cell.borrow())
     }
 
     /// See [`Setter::set_force`].
     pub fn set_force(&self, value: T) {
         *self.cell.borrow_mut() = value;
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         f(&mut self.cell.borrow_mut());
-        trigger(SIGNAL_SCOPE, &key_of(self.id));
+        trigger_signal(self.id);
     }
 
     pub fn id(&self) -> SignalId {

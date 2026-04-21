@@ -5,10 +5,13 @@
 //! Every effect rerun clears its previous dependency set so conditional reads
 //! don't leak stale subscriptions.
 //!
-//! Signals piggyback on the same dep-map via a synthetic
-//! [`SIGNAL_SCOPE`] = `ScopeId(0)`, so they share `flush`, batching, and
-//! cleanup semantics with proxy-scoped effects.
+//! Signals have their own dedicated dep table keyed on `SignalId` directly
+//! (see `SIGNAL_DEPS` / `SIGNAL_REVERSE`). They share the effect engine,
+//! queue, flush, and batching with proxy-scoped subscriptions — just not
+//! the key type. The `SIGNAL_SCOPE` sentinel `ScopeId(0)` is reserved so
+//! a future path could re-join the two tables without a scope-id collision.
 
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -17,6 +20,13 @@ use js_sys::Promise;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
+
+/// Dependency-map key: the scope-scoped field name. Stored as
+/// `Cow<'static, str>` so a macro-generated `&'static str` threads
+/// through to the HashMap without allocation, while a dynamically-
+/// built key (proxy `get`/`set` traps, dotted paths) owns its
+/// string exactly once.
+pub type Key = Cow<'static, str>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ScopeId(pub u64);
@@ -54,13 +64,44 @@ thread_local! {
     static CURRENT_EFFECT: Cell<Option<EffectId>> = const { Cell::new(None) };
     static EFFECTS: RefCell<HashMap<EffectId, EffectFn>> = RefCell::new(HashMap::new());
     static SCHEDULERS: RefCell<HashMap<EffectId, SchedulerFn>> = RefCell::new(HashMap::new());
-    static DEPS: RefCell<HashMap<(ScopeId, String), HashSet<EffectId>>> = RefCell::new(HashMap::new());
-    static REVERSE: RefCell<HashMap<EffectId, HashSet<(ScopeId, String)>>> = RefCell::new(HashMap::new());
+    /// Nested layout: `DEPS[scope][key] = set<EffectId>`. The outer
+    /// level is the scope id; the inner level is the per-scope key
+    /// map. Two wins over the old flat `HashMap<(ScopeId, Key), _>`:
+    ///
+    ///   1. Key lookup uses `&str` directly via HashMap's Borrow
+    ///      trait on `Cow<'static, str>: Borrow<str>`. The flat
+    ///      form needed a `(ScopeId, Cow<_>)` probe which required
+    ///      the string to be `'static` — forcing an allocation on
+    ///      every lookup.
+    ///   2. `trigger_scope` becomes O(k) in the scope's live keys
+    ///      — iterate the inner map. The old flat form had to scan
+    ///      every `(scope, key)` pair in the app.
+    static DEPS: RefCell<HashMap<ScopeId, HashMap<Key, HashSet<EffectId>>>> =
+        RefCell::new(HashMap::new());
+    static REVERSE: RefCell<HashMap<EffectId, HashSet<(ScopeId, Key)>>> =
+        RefCell::new(HashMap::new());
+
+    /// Dedicated signal dependency table. Signals used to piggyback
+    /// on the proxy dep map via a stringified id + `SIGNAL_SCOPE`
+    /// pseudo-scope, which cost two allocations per access (one in
+    /// `id.to_string()`, one in the key-type's `.to_owned()`). Keyed
+    /// on `SignalId` directly the cost is zero.
+    static SIGNAL_DEPS: RefCell<HashMap<SignalId, HashSet<EffectId>>> = RefCell::new(HashMap::new());
+    static SIGNAL_REVERSE: RefCell<HashMap<EffectId, HashSet<SignalId>>> = RefCell::new(HashMap::new());
+
     static QUEUE: RefCell<HashSet<EffectId>> = RefCell::new(HashSet::new());
     static FLUSH_SCHEDULED: Cell<bool> = const { Cell::new(false) };
     static CLEANUPS: RefCell<HashMap<EffectId, Vec<CleanupFn>>> = RefCell::new(HashMap::new());
     static BATCHING: Cell<u32> = const { Cell::new(0) };
     static AUTO_FLUSH: Cell<bool> = const { Cell::new(true) };
+
+    /// Reusable scratch buffer for `trigger`'s subscriber snapshot.
+    /// `trigger` must iterate subscribers outside the `DEPS` borrow
+    /// because running an effect can mutate `DEPS` (via
+    /// `clear_deps_for`). A per-thread scratch `Vec` avoids the
+    /// `HashSet::clone()` allocation every hot-path `trigger` used
+    /// to pay.
+    static TRIGGER_SCRATCH: RefCell<Vec<EffectId>> = RefCell::new(Vec::with_capacity(16));
 }
 
 /// Toggle the automatic microtask flush. Production code leaves this at
@@ -140,16 +181,38 @@ fn run_effect(id: EffectId, f: &EffectFn) {
 }
 
 fn clear_deps_for(id: EffectId) {
-    let keys: Option<HashSet<(ScopeId, String)>> =
+    // Proxy-scope deps.
+    let keys: Option<HashSet<(ScopeId, Key)>> =
         REVERSE.with(|r| r.borrow_mut().remove(&id));
     if let Some(keys) = keys {
         DEPS.with(|d| {
             let mut d = d.borrow_mut();
-            for k in keys {
-                if let Some(set) = d.get_mut(&k) {
+            for (scope, key) in keys {
+                if let Some(inner) = d.get_mut(&scope) {
+                    if let Some(set) = inner.get_mut(&key) {
+                        set.remove(&id);
+                        if set.is_empty() {
+                            inner.remove(&key);
+                        }
+                    }
+                    if inner.is_empty() {
+                        d.remove(&scope);
+                    }
+                }
+            }
+        });
+    }
+    // Signal deps — own table, indexed on SignalId.
+    let sig_keys: Option<HashSet<SignalId>> =
+        SIGNAL_REVERSE.with(|r| r.borrow_mut().remove(&id));
+    if let Some(sig_keys) = sig_keys {
+        SIGNAL_DEPS.with(|d| {
+            let mut d = d.borrow_mut();
+            for sid in sig_keys {
+                if let Some(set) = d.get_mut(&sid) {
                     set.remove(&id);
                     if set.is_empty() {
-                        d.remove(&k);
+                        d.remove(&sid);
                     }
                 }
             }
@@ -191,43 +254,107 @@ pub fn on_cleanup(f: impl FnOnce() + 'static) {
 /// a subscriber of `(scope_id, key)`.
 pub fn track(scope_id: ScopeId, key: &str) {
     let Some(id) = current_effect() else { return };
-    let dep = (scope_id, key.to_owned());
+    // Borrow-lookup first: `HashMap<Key, _>` supports `get(&str)`
+    // via `Cow<'static, str>: Borrow<str>`. When the subscription
+    // already exists (the common hot-path case — an effect that
+    // re-reads fields it's already subscribed to), we bail without
+    // any allocation. On first track we own the string exactly
+    // once and share the `Cow::Owned` across the DEPS key and the
+    // REVERSE entry.
+    let already_present = DEPS.with(|d| {
+        d.borrow()
+            .get(&scope_id)
+            .and_then(|inner| inner.get(key))
+            .map(|set| set.contains(&id))
+            .unwrap_or(false)
+    });
+    if already_present {
+        return;
+    }
+    let owned: Key = Cow::Owned(key.to_owned());
     DEPS.with(|d| {
         d.borrow_mut()
-            .entry(dep.clone())
+            .entry(scope_id)
+            .or_default()
+            .entry(owned.clone())
             .or_default()
             .insert(id);
     });
     REVERSE.with(|r| {
-        r.borrow_mut().entry(id).or_default().insert(dep);
+        r.borrow_mut()
+            .entry(id)
+            .or_default()
+            .insert((scope_id, owned));
     });
 }
 
-/// Called from a proxy `set` trap (or an equivalent mutation path like a
-/// handler invocation). Queues subscribers for the next microtask flush.
-pub fn trigger(scope_id: ScopeId, key: &str) {
-    let dep = (scope_id, key.to_owned());
-    let subs: Option<HashSet<EffectId>> = DEPS.with(|d| d.borrow().get(&dep).cloned());
-    let Some(subs) = subs else { return };
+/// Subscribe the currently-running effect to `signal_id`. Signals
+/// keep their own dep table so there's no per-access string-id
+/// conversion or allocation.
+pub fn track_signal(signal_id: SignalId) {
+    let Some(id) = current_effect() else { return };
+    let already = SIGNAL_DEPS.with(|d| {
+        d.borrow()
+            .get(&signal_id)
+            .map(|set| set.contains(&id))
+            .unwrap_or(false)
+    });
+    if already {
+        return;
+    }
+    SIGNAL_DEPS.with(|d| {
+        d.borrow_mut()
+            .entry(signal_id)
+            .or_default()
+            .insert(id);
+    });
+    SIGNAL_REVERSE.with(|r| {
+        r.borrow_mut()
+            .entry(id)
+            .or_default()
+            .insert(signal_id);
+    });
+}
+
+/// Snapshot `subs` into `TRIGGER_SCRATCH` (length-prefixed region),
+/// route per-effect scheduler or queue, schedule flush if needed.
+/// Factored out so `trigger` and `trigger_signal` share the dispatch
+/// path — they diverge only on how they look up subscribers.
+fn dispatch_subs(subs: &HashSet<EffectId>) {
     if subs.is_empty() {
         return;
     }
-    // Route through schedulers first so computeds (and similar) can
-    // consume their notifications instead of the default flush.
-    let mut queued: HashSet<EffectId> = HashSet::new();
-    for id in subs {
-        let sched = SCHEDULERS.with(|s| s.borrow().get(&id).cloned());
+    // Snapshot ids into the thread-local scratch so effect-run code
+    // (`clear_deps_for` → HashMap mutate) can't invalidate the iteration.
+    let ids_len = TRIGGER_SCRATCH.with(|s| {
+        let mut v = s.borrow_mut();
+        v.clear();
+        v.extend(subs.iter().copied());
+        v.len()
+    });
+    if ids_len == 0 {
+        return;
+    }
+    // Drain scratch into dispatch. Schedulers fire inline; the rest
+    // accumulate in QUEUE. No intermediate HashSet<EffectId> clone.
+    let mut any_queued = false;
+    for i in 0..ids_len {
+        let eid = TRIGGER_SCRATCH.with(|s| s.borrow()[i]);
+        let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
         match sched {
-            Some(s) => s(id),
+            Some(s) => s(eid),
             None => {
-                queued.insert(id);
+                QUEUE.with(|q| {
+                    q.borrow_mut().insert(eid);
+                });
+                any_queued = true;
             }
         }
     }
-    if queued.is_empty() {
+    TRIGGER_SCRATCH.with(|s| s.borrow_mut().clear());
+    if !any_queued {
         return;
     }
-    QUEUE.with(|q| q.borrow_mut().extend(queued));
     if BATCHING.with(|b| b.get()) > 0 {
         // A batch is in progress — let its exit schedule the flush.
         return;
@@ -235,19 +362,61 @@ pub fn trigger(scope_id: ScopeId, key: &str) {
     schedule_flush();
 }
 
-/// Trigger every `(scope_id, key)` currently tracked for this scope. Used
-/// after a handler invocation mutates Rust state directly without going
-/// through the proxy's `set` trap.
-pub fn trigger_scope(scope_id: ScopeId) {
-    let keys: Vec<String> = DEPS.with(|d| {
+/// Called from a proxy `set` trap (or an equivalent mutation path like a
+/// handler invocation). Queues subscribers for the next microtask flush.
+pub fn trigger(scope_id: ScopeId, key: &str) {
+    let subs: Option<HashSet<EffectId>> = DEPS.with(|d| {
         d.borrow()
-            .keys()
-            .filter(|(s, _)| *s == scope_id)
-            .map(|(_, k)| k.clone())
-            .collect()
+            .get(&scope_id)
+            .and_then(|inner| inner.get(key))
+            .cloned()
+    });
+    if let Some(subs) = subs {
+        dispatch_subs(&subs);
+    }
+}
+
+/// Signal-targeted trigger. Skips the `(scope_id, key)` lookup path
+/// entirely — signal deps live in their own table keyed on `SignalId`.
+pub fn trigger_signal(signal_id: SignalId) {
+    let subs: Option<HashSet<EffectId>> =
+        SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
+    if let Some(subs) = subs {
+        dispatch_subs(&subs);
+    }
+}
+
+/// Drop every reactivity-side entry associated with `scope_id`.
+/// Called from `Scope::remove` alongside refs/slots/id/context
+/// cleanups. Effects associated with the scope are independently
+/// released via `walker::release_subtree` → `release(EffectId)`;
+/// this just evicts the scope's inner DEPS map.
+pub fn clear_scope(scope_id: ScopeId) {
+    DEPS.with(|d| {
+        d.borrow_mut().remove(&scope_id);
+    });
+}
+
+/// Trigger every key currently tracked for this scope. Used after a
+/// handler invocation mutates Rust state directly without going
+/// through the proxy's `set` trap. O(k) in the scope's tracked keys
+/// via the nested `DEPS[scope]` map — not O(|DEPS|) like the old
+/// flat scan.
+pub fn trigger_scope(scope_id: ScopeId) {
+    // Clone the inner key list out because `trigger` below will
+    // mutate DEPS (via effect reruns through the scheduler), and
+    // we can't hold DEPS borrowed across that. Clones of
+    // `Cow::Borrowed(&'static)` are zero-cost; owned entries
+    // allocate but the set is bounded by the scope's field count
+    // (typically < 20).
+    let keys: Vec<Key> = DEPS.with(|d| {
+        d.borrow()
+            .get(&scope_id)
+            .map(|inner| inner.keys().cloned().collect())
+            .unwrap_or_default()
     });
     for k in keys {
-        trigger(scope_id, &k);
+        trigger(scope_id, k.as_ref());
     }
 }
 
@@ -321,10 +490,13 @@ pub fn flush_sync() {
 
 #[cfg(debug_assertions)]
 pub fn stats() -> (usize, usize) {
-    (
-        EFFECTS.with(|e| e.borrow().len()),
-        DEPS.with(|d| d.borrow().len()),
-    )
+    let dep_count = DEPS.with(|d| {
+        d.borrow()
+            .values()
+            .map(|inner| inner.len())
+            .sum::<usize>()
+    });
+    (EFFECTS.with(|e| e.borrow().len()), dep_count)
 }
 
 // Keep unused-import noise away when `wasm-bindgen-futures` features drift.

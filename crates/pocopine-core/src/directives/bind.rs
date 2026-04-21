@@ -9,6 +9,15 @@
 //! * **Attribute write** — otherwise, follow upstream Alpine semantics
 //!   (`class` / `style` special-cased for string-or-object, everything
 //!   else a plain `setAttribute`).
+//!
+//! Both branches memoise the last-applied value so no-op effect ticks
+//! (a watch firing whose *input* changed but whose *bound output*
+//! didn't) skip the DOM write. A `setAttribute` is cheap but a
+//! `class`/`style` mutation triggers a style recalc; eliding those
+//! when nothing changed saves the most expensive browser work.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use js_sys::{Object, Reflect};
 use wasm_bindgen::prelude::*;
@@ -42,6 +51,12 @@ pub fn run(call: &DirectiveCall) {
     // so parents can't write through to `#[state]` fields.
     let child_target = crate::walker::child_component_scope(call.el);
 
+    // Memo of the last value written to this attribute. Serialised
+    // to a String so the compare is cheap + monomorphic (class and
+    // style have to build a string anyway before `set_attribute`;
+    // for plain attrs we serialise to the value we'd write).
+    let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
     let id = effect(move || {
         with_current_el(&el.clone(), || {
             let v = expr::evaluate(&ast, &parent_proxy);
@@ -59,45 +74,72 @@ pub fn run(call: &DirectiveCall) {
                     }
                     let _ = Reflect::set(cp, &JsValue::from_str(&attr), &v);
                 }
-                None => apply(&el, &attr, &v),
+                None => apply_memoised(&el, &attr, &v, &prev),
             }
         });
     });
     track_effect_on(call.el, id);
 }
 
-fn apply(el: &Element, attr: &str, v: &JsValue) {
-    match attr {
-        "class" => set_class(el, v),
-        "style" => set_style(el, v),
-        _ => {
-            if v.is_undefined() || v.is_null() || v == &JsValue::FALSE {
-                let _ = el.remove_attribute(attr);
-            } else if let Some(s) = v.as_string() {
-                let _ = el.set_attribute(attr, &s);
-            } else if let Some(n) = v.as_f64() {
-                let _ = el.set_attribute(attr, &n.to_string());
-            } else if v == &JsValue::TRUE {
-                let _ = el.set_attribute(attr, "");
-            } else {
-                // Fallback: JSON-stringify objects/arrays.
-                let s = js_sys::JSON::stringify(v)
-                    .ok()
-                    .and_then(|s| s.as_string())
-                    .unwrap_or_default();
-                let _ = el.set_attribute(attr, &s);
-            }
+/// [`apply`] wrapped with a last-value memo. Skips `set_attribute`
+/// / `remove_attribute` when the serialised form matches the last
+/// write.
+fn apply_memoised(
+    el: &Element,
+    attr: &str,
+    v: &JsValue,
+    prev: &Rc<RefCell<Option<String>>>,
+) {
+    // Special-case the three shapes that write DOM:
+    //   1. null/undefined/false → remove_attribute
+    //   2. class/style object   → build serialised string first, compare
+    //   3. everything else      → to_value_string(v), compare, set_attribute
+    //
+    // The removal path is memoed by storing an `Option<String>` where
+    // `None` means "attribute is currently absent". A transition into
+    // or out of the "absent" state must fire a DOM call exactly once.
+    if v.is_undefined() || v.is_null() || v == &JsValue::FALSE {
+        let mut p = prev.borrow_mut();
+        if p.is_none() {
+            return;
         }
-    }
-}
-
-fn set_class(el: &Element, v: &JsValue) {
-    if let Some(s) = v.as_string() {
-        let _ = el.set_attribute("class", &s);
+        *p = None;
+        let _ = el.remove_attribute(attr);
         return;
     }
+    // Compute the string we'd write. For class/style object form,
+    // that string IS the joined output; for simple values it's the
+    // attribute literal.
+    let serialised: String = match attr {
+        "class" => match serialise_class(v) {
+            Some(s) => s,
+            None => return, // shape we don't handle — leave DOM alone
+        },
+        "style" => match serialise_style(v) {
+            Some(s) => s,
+            None => return,
+        },
+        _ => match serialise_plain(v) {
+            Some(s) => s,
+            None => return,
+        },
+    };
+    {
+        let p = prev.borrow();
+        if p.as_deref() == Some(serialised.as_str()) {
+            return;
+        }
+    }
+    // Write + memo.
+    let _ = el.set_attribute(attr, &serialised);
+    *prev.borrow_mut() = Some(serialised);
+}
+
+fn serialise_class(v: &JsValue) -> Option<String> {
+    if let Some(s) = v.as_string() {
+        return Some(s);
+    }
     if v.is_object() {
-        // Object form: { 'name': truthy } -> join truthy keys.
         let obj: Object = v.clone().unchecked_into();
         let keys = Object::keys(&obj);
         let mut out: Vec<String> = Vec::new();
@@ -112,14 +154,14 @@ fn set_class(el: &Element, v: &JsValue) {
                 }
             }
         }
-        let _ = el.set_attribute("class", &out.join(" "));
+        return Some(out.join(" "));
     }
+    None
 }
 
-fn set_style(el: &Element, v: &JsValue) {
+fn serialise_style(v: &JsValue) -> Option<String> {
     if let Some(s) = v.as_string() {
-        let _ = el.set_attribute("style", &s);
-        return;
+        return Some(s);
     }
     if v.is_object() {
         let obj: Object = v.clone().unchecked_into();
@@ -132,6 +174,30 @@ fn set_style(el: &Element, v: &JsValue) {
                 out.push_str(&format!("{name}:{val_s};"));
             }
         }
-        let _ = el.set_attribute("style", &out);
+        return Some(out);
     }
+    None
 }
+
+fn serialise_plain(v: &JsValue) -> Option<String> {
+    if let Some(s) = v.as_string() {
+        return Some(s);
+    }
+    if let Some(n) = v.as_f64() {
+        return Some(n.to_string());
+    }
+    if v == &JsValue::TRUE {
+        return Some(String::new());
+    }
+    // Fallback: JSON-stringify objects/arrays (matches the old
+    // behaviour). Silently dropping non-serialisable values would
+    // regress — return an empty string on serialisation failure,
+    // same as the pre-memo path did.
+    Some(
+        js_sys::JSON::stringify(v)
+            .ok()
+            .and_then(|s| s.as_string())
+            .unwrap_or_default(),
+    )
+}
+
