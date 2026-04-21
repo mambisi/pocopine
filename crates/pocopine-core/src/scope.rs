@@ -132,10 +132,27 @@ pub struct Scope {
     pub typed: Rc<dyn Any>,
 }
 
+/// Type-erased storage for the two `Closure`s backing a proxy's
+/// `get` and `set` traps. Kept as a `Vec<Box<dyn Any>>` so the
+/// per-trap type parameters don't pollute the side-table's type.
+/// Dropping the `Box<dyn Any>` drops the underlying `Closure`,
+/// which reclaims the `Box<dyn Fn>` behind it — the whole point of
+/// this table (old code called `.forget()` and leaked forever).
+type AnyClosures = Vec<Box<dyn Any>>;
+
 thread_local! {
     /// Registry of live scopes keyed by id. Directives look up the scope
     /// here to invoke handlers when an event fires.
     static SCOPES: RefCell<HashMap<ScopeId, Scope>> = RefCell::new(HashMap::new());
+
+    /// Proxy-trap closures pinned to their owning scope id. Previously
+    /// these were leaked via `Closure::forget()` — the comment there
+    /// claimed "live as long as the scope" but `Scope::remove` had no
+    /// code path to recover them. With the side-table, `Scope::remove`
+    /// drops the entry and the two `Box<dyn Fn>` boxes behind the
+    /// closures are reclaimed.
+    static PROXY_CLOSURES: RefCell<HashMap<ScopeId, AnyClosures>> =
+        RefCell::new(HashMap::new());
 
     /// The element the current directive is running against. Set by the
     /// walker immediately around each directive call so `$el` works without
@@ -189,6 +206,13 @@ impl Scope {
         crate::slots::clear(id);
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);
+        // Drop the proxy-trap closures that were pinned in
+        // `into_proxy`. The `Box<dyn Any>` drop chain runs the
+        // `Closure` destructor, which releases the underlying
+        // `Box<dyn Fn>`.
+        PROXY_CLOSURES.with(|m| {
+            m.borrow_mut().remove(&id);
+        });
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct
@@ -236,11 +260,21 @@ impl Scope {
         Reflect::set(&handler, &"set".into(), set_closure.as_ref().unchecked_ref())
             .expect("set set trap");
 
-        // Closures outlive this call; the proxy holds them via the JS handler
-        // object. `forget` leaks them intentionally — they live as long as
-        // the scope itself, and scopes live for the lifetime of their element.
-        get_closure.forget();
-        set_closure.forget();
+        // Pin the two closures in the per-scope side-table. The
+        // handler `Object` holds their JS function pointers; we
+        // hold the Rust `Closure` wrappers so the `Box<dyn Fn>`
+        // they own is dropped when `Scope::remove` runs. Previously
+        // a `.forget()` call leaked both boxes for the life of the
+        // process.
+        PROXY_CLOSURES.with(|m| {
+            m.borrow_mut()
+                .entry(scope_id)
+                .or_default()
+                .extend([
+                    Box::new(get_closure) as Box<dyn Any>,
+                    Box::new(set_closure) as Box<dyn Any>,
+                ]);
+        });
 
         Proxy::new(&target, &handler).into()
     }

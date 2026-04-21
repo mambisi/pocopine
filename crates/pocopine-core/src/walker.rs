@@ -10,7 +10,8 @@
 //! Effects created by directives are pinned to their owning element so they
 //! can be released on unmount via the `MutationObserver`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use js_sys::{Array, Reflect};
@@ -18,8 +19,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{
-    DocumentFragment, Element, HtmlTemplateElement, MutationObserver, MutationObserverInit,
-    MutationRecord, Node, NodeList,
+    DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement, MutationObserver,
+    MutationObserverInit, MutationRecord, Node, NodeList,
 };
 
 use crate::directives::{lookup, parse_attr, DirectiveCall};
@@ -34,6 +35,7 @@ const SCOPE_ID_KEY: &str = "__pp_scope_id";
 const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
+const LISTENERS_KEY: &str = "__pp_listeners";
 const INIT_PENDING_KEY: &str = "__pp_init_pending";
 const WALKED_KEY: &str = "__pp_walked";
 /// Explicit inject-chain parent for RFC-027. Stamped on
@@ -1055,6 +1057,155 @@ pub fn track_effect_on(el: &Element, id: EffectId) {
     set_private(el, EFFECTS_KEY, &list);
 }
 
+// ── Element-scoped listener side-table ────────────────────────────
+//
+// `pp-on` / `pp-model` previously called `closure.forget()`, which
+// leaks the Rust `Box<dyn FnMut>` for the listener's lifetime AND —
+// for `.window` / `.document` / `.outside` variants whose target is
+// not the element itself — keeps the listener firing past unmount.
+//
+// The fix: every listener the runtime registers goes through
+// `track_listener_on`. That stashes the `(target, event, capture,
+// closure)` tuple in a thread-local table keyed by a numeric id
+// stamped on the element via the existing `set_private` path.
+// `release_subtree` walks the ids, calls
+// `remove_event_listener_with_callback` for each, and drops the
+// `Closure` — which drops the underlying `Box<dyn FnMut>`.
+
+/// One installed listener. Kept alive by the side-table so the
+/// closure's JS function pointer stays valid; torn down when the
+/// owning element unmounts.
+struct ListenerEntry {
+    target: EventTarget,
+    event: String,
+    capture: bool,
+    closure: Closure<dyn FnMut(Event)>,
+}
+
+thread_local! {
+    /// Monotonically-increasing id stamped on each element that
+    /// tracks listeners. Same shape as the per-scope id stamp —
+    /// cheap integer in a JS private field, rich state side-tabled.
+    static LISTENER_NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    static LISTENERS: RefCell<HashMap<u64, Vec<ListenerEntry>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn listener_slot_for(el: &Element) -> u64 {
+    if let Some(v) = get_private(el, LISTENERS_KEY).and_then(|v| v.as_f64()) {
+        return v as u64;
+    }
+    let id = LISTENER_NEXT_ID.with(|c| {
+        let id = c.get();
+        c.set(id + 1);
+        id
+    });
+    set_private(el, LISTENERS_KEY, &JsValue::from_f64(id as f64));
+    id
+}
+
+/// Install `closure` as an event listener for `event` on `target`,
+/// and tie its lifetime to `el`. When `el`'s subtree is released,
+/// `remove_event_listener_with_callback` runs and the closure's
+/// `Box<dyn FnMut>` is dropped.
+///
+/// Use this instead of `add_event_listener_with_callback` +
+/// `closure.forget()` anywhere the listener should NOT outlive the
+/// element — which is every listener we register. `target` may be
+/// the element itself, `window`, or `document`.
+pub fn track_listener_on(
+    el: &Element,
+    target: EventTarget,
+    event: &str,
+    capture: bool,
+    closure: Closure<dyn FnMut(Event)>,
+) {
+    let opts = web_sys::AddEventListenerOptions::new();
+    opts.set_capture(capture);
+    let _ = target.add_event_listener_with_callback_and_add_event_listener_options(
+        event,
+        closure.as_ref().unchecked_ref(),
+        &opts,
+    );
+    let slot = listener_slot_for(el);
+    LISTENERS.with(|m| {
+        m.borrow_mut()
+            .entry(slot)
+            .or_default()
+            .push(ListenerEntry {
+                target,
+                event: event.to_string(),
+                capture,
+                closure,
+            });
+    });
+}
+
+/// Same as [`track_listener_on`] but passes through extra
+/// `AddEventListenerOptions` (currently only `once`). Kept separate
+/// so the common path stays simple. A `once` listener still needs
+/// cleanup in case the element unmounts before the event fires.
+pub fn track_listener_on_with_opts(
+    el: &Element,
+    target: EventTarget,
+    event: &str,
+    opts: &web_sys::AddEventListenerOptions,
+    closure: Closure<dyn FnMut(Event)>,
+) {
+    // Opts are applied directly on the add — we retain only the
+    // `capture` flag on our side because that's all removal needs
+    // to match.
+    let capture = opts.get_capture().unwrap_or(false);
+    let _ = target.add_event_listener_with_callback_and_add_event_listener_options(
+        event,
+        closure.as_ref().unchecked_ref(),
+        opts,
+    );
+    let slot = listener_slot_for(el);
+    LISTENERS.with(|m| {
+        m.borrow_mut()
+            .entry(slot)
+            .or_default()
+            .push(ListenerEntry {
+                target,
+                event: event.to_string(),
+                capture,
+                closure,
+            });
+    });
+}
+
+fn release_listeners(el: &Element) {
+    let Some(slot) = get_private(el, LISTENERS_KEY).and_then(|v| v.as_f64()) else {
+        return;
+    };
+    let entries = LISTENERS.with(|m| m.borrow_mut().remove(&(slot as u64)));
+    if let Some(entries) = entries {
+        for e in entries {
+            // Removal needs the same (event, callback, capture)
+            // triple that `add` received. Boolean removal form —
+            // `AddEventListenerOptions` has no matching boolean-
+            // returning removal call in web-sys.
+            let _ = e.target.remove_event_listener_with_callback_and_bool(
+                &e.event,
+                e.closure.as_ref().unchecked_ref(),
+                e.capture,
+            );
+            // `e.closure` drops here, reclaiming the Rust box.
+            drop(e);
+        }
+    }
+}
+
+/// Count of listener entries currently retained by the
+/// element-scoped listener table. Debug-only — tests use this to
+/// assert that `release_subtree` reclaims everything. Counts
+/// entries across all elements.
+#[cfg(debug_assertions)]
+pub fn listener_count() -> usize {
+    LISTENERS.with(|m| m.borrow().values().map(|v| v.len()).sum())
+}
+
 pub(crate) fn release_subtree(node: &Node) {
     // Recurse through children first so leaves are cleaned before roots.
     if let Ok(el) = node.clone().dyn_into::<Element>() {
@@ -1100,6 +1251,7 @@ pub(crate) fn release_subtree(node: &Node) {
         crate::directives::intersect::release(&el);
         crate::directives::anchor::release(&el);
         crate::directives::roving::release(&el);
+        release_listeners(&el);
     }
 }
 

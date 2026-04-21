@@ -64,33 +64,41 @@ pub fn run(call: &DirectiveCall) {
     // JS closure each time. Pulls the most recent event out of the
     // shared slot so the expression still sees `$event` after a
     // debounce delay.
+    //
+    // The backing `Closure<dyn FnMut()>` is `Some` only for debounced
+    // listeners. Kept alive by being moved into the outer listener
+    // closure's capture (below) so its JS callable stays valid for
+    // the lifetime of the listener — and drops when the listener
+    // drops via the element-scoped listener table.
     let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
-    let invoke_fn: Function = {
-        let ast = ast.clone();
-        let last_event = last_event.clone();
-        let el_for_debounce = el.clone();
-        let proxy_for_debounce = proxy.clone();
-        let c = Closure::wrap(Box::new(move || {
-            let ev = last_event.borrow().clone();
-            let ev_js: JsValue = match &ev {
-                Some(e) => {
-                    let r: &JsValue = e.as_ref();
-                    r.clone()
-                }
-                None => JsValue::UNDEFINED,
-            };
-            with_current_el(&el_for_debounce, || {
-                crate::scope::with_current_scope_id(scope_id, || {
-                    with_current_event(&ev_js, || {
-                        expr::evaluate(&ast, &proxy_for_debounce);
+    let (invoke_fn, debounce_closure): (Option<Function>, Option<Closure<dyn FnMut()>>) =
+        if debounce_ms.is_some() {
+            let ast = ast.clone();
+            let last_event = last_event.clone();
+            let el_for_debounce = el.clone();
+            let proxy_for_debounce = proxy.clone();
+            let c = Closure::wrap(Box::new(move || {
+                let ev = last_event.borrow().clone();
+                let ev_js: JsValue = match &ev {
+                    Some(e) => {
+                        let r: &JsValue = e.as_ref();
+                        r.clone()
+                    }
+                    None => JsValue::UNDEFINED,
+                };
+                with_current_el(&el_for_debounce, || {
+                    crate::scope::with_current_scope_id(scope_id, || {
+                        with_current_event(&ev_js, || {
+                            expr::evaluate(&ast, &proxy_for_debounce);
+                        });
                     });
                 });
-            });
-        }) as Box<dyn FnMut()>);
-        let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
-        c.forget();
-        f
-    };
+            }) as Box<dyn FnMut()>);
+            let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
+            (Some(f), Some(c))
+        } else {
+            (None, None)
+        };
 
     let window = web_sys::window().expect("window");
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
@@ -104,6 +112,11 @@ pub fn run(call: &DirectiveCall) {
         .collect();
 
     let el_for_closure = el.clone();
+    // Keep the debounce closure alive by moving it into the outer
+    // listener's capture. When the listener drops (via the element
+    // listener table in `release_subtree`), the debounce closure
+    // drops with it — no `.forget()` required.
+    let _debounce_closure_owned = debounce_closure;
     let closure = Closure::wrap(Box::new({
         let ast = ast.clone();
         let proxy = proxy.clone();
@@ -111,6 +124,7 @@ pub fn run(call: &DirectiveCall) {
         let window = window.clone();
         let timer = timer.clone();
         let last_event = last_event.clone();
+        let _debounce_closure_owned = _debounce_closure_owned;
         move |ev: Event| {
             // `outside` runs first: when set, we only continue past
             // this block if the event originated outside the host.
@@ -159,7 +173,7 @@ pub fn run(call: &DirectiveCall) {
                     }
                 }
             }
-            if let Some(ms) = debounce_ms {
+            if let (Some(ms), Some(invoke_fn)) = (debounce_ms, invoke_fn.as_ref()) {
                 // Remember the most recent event so the delayed
                 // callback can still pass it to the handler.
                 *last_event.borrow_mut() = Some(ev);
@@ -168,7 +182,7 @@ pub fn run(call: &DirectiveCall) {
                 }
                 let handle = window
                     .set_timeout_with_callback_and_timeout_and_arguments_0(
-                        &invoke_fn,
+                        invoke_fn,
                         ms as i32,
                     )
                     .unwrap_or(0);
@@ -208,12 +222,12 @@ pub fn run(call: &DirectiveCall) {
         // outside click from us.
         opts.set_capture(true);
     }
-    let _ = target.add_event_listener_with_callback_and_add_event_listener_options(
-        &event,
-        closure.as_ref().unchecked_ref(),
-        &opts,
-    );
-    closure.forget();
+    // Tie the listener's lifetime to `el` so `release_subtree`
+    // removes it (and drops the underlying `Box<dyn FnMut>`) on
+    // unmount. Replaces the old `closure.forget()` which leaked the
+    // listener AND — for `.window` / `.document` / `.outside`
+    // variants — kept it firing past unmount.
+    crate::walker::track_listener_on_with_opts(&el, target, &event, &opts, closure);
 }
 
 /// Backward-compat: a directive value that's a single identifier

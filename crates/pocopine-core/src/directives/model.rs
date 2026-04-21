@@ -25,7 +25,7 @@ use super::DirectiveCall;
 use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::{child_component_proxy, track_effect_on};
+use crate::walker::{child_component_proxy, track_effect_on, track_listener_on};
 
 pub fn run(call: &DirectiveCall) {
     if let Some(child_proxy) = child_component_proxy(call.el) {
@@ -85,11 +85,8 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
         let detail = ce.detail();
         let _ = write_path(&parent_w, &key_w, &detail);
     }) as Box<dyn FnMut(Event)>);
-    let _ = el.add_event_listener_with_callback(
-        "pp:update:model",
-        listener.as_ref().unchecked_ref(),
-    );
-    listener.forget();
+    let target: web_sys::EventTarget = el.clone().into();
+    track_listener_on(call.el, target, "pp:update:model", false, listener);
 }
 
 // ─── native input path ────────────────────────────────────────────
@@ -123,8 +120,8 @@ fn run_native(call: &DirectiveCall) {
     }) as Box<dyn FnMut(Event)>);
 
     let event_name = if lazy { "change" } else { "input" };
-    let _ = el.add_event_listener_with_callback(event_name, handler.as_ref().unchecked_ref());
-    handler.forget();
+    let target: web_sys::EventTarget = el.clone().into();
+    track_listener_on(call.el, target, event_name, false, handler);
 }
 
 fn write_to_element(el: &web_sys::Element, v: &JsValue) {
