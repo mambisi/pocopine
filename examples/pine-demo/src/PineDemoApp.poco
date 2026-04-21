@@ -132,20 +132,44 @@
 
   <!-- PinePopover — compound (Radix-style) ───────────────── -->
   <h2>Popover</h2>
-  <section class="row">
-    <pine-popover-root pp-model:open="popover_open">
-      <pine-popover-trigger>
-        <span pp-text="popover_open ? 'Close popover' : 'Open popover'"></span>
-      </pine-popover-trigger>
-      <pine-popover-portal>
-        <pine-popover-content>
-          <p style="margin:0">Anchored to the trigger.</p>
-          <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
-            Click outside or press Escape to close.
-          </p>
-        </pine-popover-content>
-      </pine-popover-portal>
-    </pine-popover-root>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      The first popover uses the default <code>slide-down</code>
+      transition. The next two override per-instance — the same
+      mechanism every primitive uses
+      (<code>transition="&lt;preset&gt;"</code> on the Content tag).
+    </p>
+    <div class="row">
+      <pine-popover-root pp-model:open="popover_open">
+        <pine-popover-trigger>
+          <span pp-text="popover_open ? 'Close popover' : 'Default (slide-down)'"></span>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content>
+            <p style="margin:0">Default <code>slide-down</code>.</p>
+            <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
+              Click outside or press Escape to close.
+            </p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+      <pine-popover-root>
+        <pine-popover-trigger>Override: zoom</pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content transition="zoom">
+            <p style="margin:0"><code>transition="zoom"</code></p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+      <pine-popover-root>
+        <pine-popover-trigger>Override: none</pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content transition="none">
+            <p style="margin:0"><code>transition="none"</code> — snaps in.</p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+    </div>
   </section>
 
   <!-- PineDropdownMenu — compound (Radix-style) ──────────── -->
@@ -852,6 +876,10 @@
       Type a tag and press <kbd>Enter</kbd> to add it. Backspace
       on an empty field removes the last tag. Click × on a chip
       to remove just that one. Max 8.
+      <strong>Shuffle</strong> rotates the order so you can see the
+      FLIP layout animation (declared via
+      <code>#[component(animate = "flip")]</code> on
+      <code>PineTagsInputItem</code>).
     </p>
     <pine-tags-input-root pp-model:values="tags" max="8" class="tags-input-root">
       <template pp-for="tag in tags" pp-key="tag">
@@ -863,9 +891,12 @@
       <pine-tags-input-input placeholder="Add tag…"></pine-tags-input-input>
       <pine-tags-input-clear>Clear</pine-tags-input-clear>
     </pine-tags-input-root>
-    <p style="margin:0.75rem 0 0;font-size:0.875rem">
-      Current: <strong pp-text="tags"></strong>
-    </p>
+    <div class="row" style="margin-top:0.75rem;align-items:center">
+      <pine-button variant="ghost" @click="shuffle_tags">Shuffle</pine-button>
+      <span style="font-size:0.875rem">
+        Current: <strong pp-text="tags"></strong>
+      </span>
+    </div>
   </section>
 
   <!-- Labelled, capped TagsInput with its own look ────────── -->
@@ -889,9 +920,12 @@
         <pine-tags-input-clear>Clear all</pine-tags-input-clear>
       </pine-tags-input-root>
     </div>
-    <p style="margin:0.75rem 0 0;font-size:0.875rem">
-      Skills: <strong pp-text="skills"></strong>
-    </p>
+    <div class="row" style="margin-top:0.75rem;align-items:center">
+      <pine-button variant="ghost" @click="shuffle_skills">Shuffle</pine-button>
+      <span style="font-size:0.875rem">
+        Skills: <strong pp-text="skills"></strong>
+      </span>
+    </div>
   </section>
 
   <!-- TagsInput with user-avatar chips ─────────────────── -->
@@ -920,9 +954,12 @@
         <pine-tags-input-clear>Clear</pine-tags-input-clear>
       </pine-tags-input-root>
     </div>
-    <p style="margin:0.75rem 0 0;font-size:0.875rem">
-      Recipients: <strong pp-text="mentions"></strong>
-    </p>
+    <div class="row" style="margin-top:0.75rem;align-items:center">
+      <pine-button variant="ghost" @click="shuffle_mentions">Shuffle</pine-button>
+      <span style="font-size:0.875rem">
+        Recipients: <strong pp-text="mentions"></strong>
+      </span>
+    </div>
   </section>
 
   <!-- Command palette in a Popover (not a Dialog) ────────── -->

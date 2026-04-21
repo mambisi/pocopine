@@ -220,6 +220,24 @@ impl PineDemoApp {
         self.cmd_popover_last = "Find in files".into();
         self.cmd_popover_open = false;
     }
+
+    pub fn shuffle_tags(&mut self) {
+        rotate(&mut self.tags);
+    }
+    pub fn shuffle_skills(&mut self) {
+        rotate(&mut self.skills);
+    }
+    pub fn shuffle_mentions(&mut self) {
+        rotate(&mut self.mentions);
+    }
+}
+
+fn rotate(v: &mut Vec<String>) {
+    if v.len() < 2 {
+        return;
+    }
+    let head = v.remove(0);
+    v.push(head);
 }
 
 #[wasm_bindgen(start)]
