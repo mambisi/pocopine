@@ -137,10 +137,10 @@ impl PineSelectRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectTrigger.poco", role = "interactive")]
 pub struct PineSelectTrigger {
-    #[mirror(via = ROOT)] pub open: bool,
-    #[mirror(via = ROOT)] pub disabled: bool,
-    #[mirror(via = ROOT)] pub value: String,
-    #[mirror(via = ROOT)] pub listbox_id: String,
+    #[observe(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub disabled: bool,
+    #[observe(via = ROOT)] pub value: String,
+    #[observe(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
@@ -215,7 +215,7 @@ impl PineSelectValue {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectPortal.poco", role = "scope")]
 pub struct PineSelectPortal {
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]

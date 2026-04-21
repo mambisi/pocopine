@@ -127,9 +127,9 @@ impl PineComboboxRoot {
 pub struct PineComboboxInput {
     #[prop]
     pub placeholder: String,
-    #[mirror(via = ROOT)] pub open: bool,
-    #[mirror(via = ROOT)] pub disabled: bool,
-    #[mirror(via = ROOT)] pub listbox_id: String,
+    #[observe(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub disabled: bool,
+    #[observe(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
@@ -273,7 +273,7 @@ fn schedule_install_virtual(
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineComboboxPortal.poco", role = "scope")]
 pub struct PineComboboxPortal {
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]

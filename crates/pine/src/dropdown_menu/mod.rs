@@ -74,7 +74,7 @@ impl PineDropdownMenuRoot {
 pub struct PineDropdownMenuTrigger {
     /// Mirrored from Root.open so the template's `:aria-expanded`
     /// and `:data-state` bindings fire reactively.
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -107,7 +107,7 @@ impl PineDropdownMenuTrigger {
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -273,7 +273,7 @@ impl PineDropdownMenuSub {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuSubTrigger.poco", role = "item")]
 pub struct PineDropdownMenuSubTrigger {
-    #[mirror(via = SUB)] pub open: bool,
+    #[observe(via = SUB)] pub open: bool,
     #[prop] pub disabled: bool,
 }
 

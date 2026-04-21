@@ -62,8 +62,8 @@ pub struct PineProgressIndicator {
     /// Mirrored from Root for template bindings. Authors style
     /// the indicator's transform/width with CSS reading
     /// `data-value` / `data-max`.
-    #[mirror(via = ROOT)] pub value: f64,
-    #[mirror(via = ROOT)] pub max: f64,
+    #[observe(via = ROOT)] pub value: f64,
+    #[observe(via = ROOT)] pub max: f64,
 }
 
 #[handlers]

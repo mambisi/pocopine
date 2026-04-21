@@ -249,7 +249,7 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandPortal.poco", role = "scope")]
 pub struct PineCommandPortal {
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]
@@ -308,8 +308,8 @@ impl PineCommandContent {
 pub struct PineCommandInput {
     #[prop]
     pub placeholder: String,
-    #[mirror(via = ROOT)] pub open: bool,
-    #[mirror(via = ROOT)] pub listbox_id: String,
+    #[observe(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]
@@ -457,7 +457,7 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandList.poco", role = "list")]
 pub struct PineCommandList {
-    #[mirror(via = ROOT)] pub listbox_id: String,
+    #[observe(via = ROOT)] pub listbox_id: String,
 }
 
 #[handlers]

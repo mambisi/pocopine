@@ -69,7 +69,7 @@ impl PineCollapsibleRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleTrigger.poco", role = "interactive")]
 pub struct PineCollapsibleTrigger {
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
     #[prop] pub disabled: bool,
 }
 
@@ -90,7 +90,7 @@ impl PineCollapsibleTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleContent.poco", role = "panel")]
 pub struct PineCollapsibleContent {
-    #[mirror(via = ROOT)] pub open: bool,
+    #[observe(via = ROOT)] pub open: bool,
 }
 
 #[handlers]

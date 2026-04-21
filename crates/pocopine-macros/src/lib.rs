@@ -29,11 +29,11 @@ use syn::{
     Pat, Path, PatType, Token, Type,
 };
 
-/// Parsed `#[mirror(via = KEY [, field = "name"])]` attribute —
+/// Parsed `#[observe(via = KEY [, field = "name"])]` attribute —
 /// RFC-036. Each entry emits a `watch_scope_field` install that
 /// writes back into `field_ident` whenever the parent's
 /// `field_name_on_root` changes, plus a seed read during setup.
-struct MirrorEntry {
+struct ObserveEntry {
     field_ident: syn::Ident,
     field_ty: Type,
     /// Name of the field on the injected root. Defaults to
@@ -198,19 +198,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_idents: Vec<syn::Ident> = Vec::new();
     let mut field_names: Vec<String> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
-    let mut mirrors: Vec<MirrorEntry> = Vec::new();
+    let mut observes: Vec<ObserveEntry> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else { continue };
         let field_ty = field.ty.clone();
         let mut is_prop = false;
-        let mut mirror_spec: Option<(Path, Option<String>)> = None;
-        let mut mirror_err: Option<syn::Error> = None;
+        let mut observe_spec: Option<(Path, Option<String>)> = None;
+        let mut observe_err: Option<syn::Error> = None;
         field.attrs.retain(|a| {
             if a.path().is_ident("prop") {
                 is_prop = true;
                 return false;
             }
-            if a.path().is_ident("mirror") {
+            if a.path().is_ident("observe") {
                 let parsed: syn::Result<Punctuated<MetaNameValue, Token![,]>> =
                     a.parse_args_with(Punctuated::parse_terminated);
                 match parsed {
@@ -224,7 +224,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 match kv.value {
                                     Expr::Path(p) => via = Some(p.path),
                                     other => {
-                                        mirror_err = Some(syn::Error::new_spanned(
+                                        observe_err = Some(syn::Error::new_spanned(
                                             other,
                                             "expected an identifier for `via` — \
                                              the module-scope InjectKey<T>",
@@ -238,41 +238,41 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 {
                                     rename = Some(s.value());
                                 } else {
-                                    mirror_err = Some(syn::Error::new_spanned(
+                                    observe_err = Some(syn::Error::new_spanned(
                                         kv.path,
                                         "`field` must be a string literal",
                                     ));
                                 }
                             } else {
-                                mirror_err = Some(syn::Error::new_spanned(
+                                observe_err = Some(syn::Error::new_spanned(
                                     kv.path,
-                                    "unknown #[mirror] key — expected: via, field",
+                                    "unknown #[observe] key — expected: via, field",
                                 ));
                             }
                         }
                         match via {
-                            Some(v) => mirror_spec = Some((v, rename)),
+                            Some(v) => observe_spec = Some((v, rename)),
                             None => {
-                                mirror_err = Some(syn::Error::new_spanned(
+                                observe_err = Some(syn::Error::new_spanned(
                                     a.path(),
-                                    "#[mirror] requires `via = KEY`",
+                                    "#[observe] requires `via = KEY`",
                                 ));
                             }
                         }
                     }
-                    Err(e) => mirror_err = Some(e),
+                    Err(e) => observe_err = Some(e),
                 }
                 return false;
             }
             true
         });
-        if let Some(err) = mirror_err {
+        if let Some(err) = observe_err {
             return err.to_compile_error().into();
         }
-        if let Some((key_path, rename)) = mirror_spec {
+        if let Some((key_path, rename)) = observe_spec {
             let name_on_root = rename
                 .unwrap_or_else(|| ident.to_string().trim_start_matches("r#").to_string());
-            mirrors.push(MirrorEntry {
+            observes.push(ObserveEntry {
                 field_ident: ident.clone(),
                 field_ty,
                 field_name_on_root: name_on_root,
@@ -371,11 +371,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
 
-    // RFC-036 — `#[mirror(via = KEY)]`. Emit two inherent methods
-    // on the struct that #[handlers] calls from its generated
-    // `setup()`. Bodies are empty when no field is mirrored, so
-    // the call sites are cheap but unconditional.
-    let mirror_seed_stmts = mirrors.iter().map(|m| {
+    // RFC-036 — `#[observe(via = KEY)]`. Emit two inherent
+    // methods on the struct that #[handlers] calls from its
+    // generated `setup()`. Bodies are empty when no field is
+    // observed, so the call sites are cheap but unconditional.
+    let observe_seed_stmts = observes.iter().map(|m| {
         let field_ident = &m.field_ident;
         let root_field_ident = syn::Ident::new(&m.field_name_on_root, field_ident.span());
         let key_path = &m.key_path;
@@ -389,7 +389,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     });
-    let mirror_install_stmts = mirrors.iter().map(|m| {
+    let observe_install_stmts = observes.iter().map(|m| {
         let field_ident = &m.field_ident;
         let field_ty = &m.field_ty;
         let field_name_on_root = &m.field_name_on_root;
@@ -411,27 +411,27 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     });
-    let has_mirrors = !mirrors.is_empty();
-    let mirror_impl = quote! {
+    let has_observes = !observes.is_empty();
+    let observe_impl = quote! {
         impl #struct_ident {
             #[doc(hidden)]
-            pub fn __pocopine_mirror_seed(&mut self) {
-                #(#mirror_seed_stmts)*
+            pub fn __pocopine_observe_seed(&mut self) {
+                #(#observe_seed_stmts)*
             }
             #[doc(hidden)]
-            pub fn __pocopine_mirror_install(__handle: ::pocopine::Handle<Self>) {
+            pub fn __pocopine_observe_install(__handle: ::pocopine::Handle<Self>) {
                 let _ = &__handle;
-                #(#mirror_install_stmts)*
+                #(#observe_install_stmts)*
             }
             #[doc(hidden)]
-            pub const __POCOPINE_HAS_MIRRORS: bool = #has_mirrors;
+            pub const __POCOPINE_HAS_OBSERVES: bool = #has_observes;
         }
     };
 
     let out = quote! {
         #input
 
-        #mirror_impl
+        #observe_impl
 
         impl ::pocopine::__private::ComponentState for #struct_ident {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
@@ -654,21 +654,21 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
 
-    // Always wrap setup with the mirror seed + install calls the
+    // Always wrap setup with the observe seed + install calls the
     // `#[component]` macro emitted as inherent methods. The bodies
-    // are no-ops when the struct has no `#[mirror(via = KEY)]`
+    // are no-ops when the struct has no `#[observe(via = KEY)]`
     // fields, so the overhead is one call + a `this::<Self>()`
     // lookup — negligible compared to the setup invocation itself.
-    // User's `on_setup` (when declared) runs after mirrors so
-    // author code sees mirrored fields already populated.
+    // User's `on_setup` (when declared) runs after observes so
+    // author code sees observed fields already populated.
     let user_on_setup_call = has_on_setup.then(|| {
         quote! { Self::on_setup(self); }
     });
     let setup_impl = Some(quote! {
         fn setup(&mut self) {
-            <Self>::__pocopine_mirror_seed(self);
+            <Self>::__pocopine_observe_seed(self);
             let __me = ::pocopine::this::<Self>();
-            <Self>::__pocopine_mirror_install(__me);
+            <Self>::__pocopine_observe_install(__me);
             #user_on_setup_call
         }
         fn has_setup(&self) -> bool { true }
@@ -909,21 +909,21 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         impl #struct_ident {
-            // RFC-036 — stores don't support `#[mirror(via = KEY)]`
+            // RFC-036 — stores don't support `#[observe(via = KEY)]`
             // (there's no parent context / inject chain), but
             // `#[handlers]` unconditionally calls these from its
             // generated setup. Emit no-op shims so the call
             // compiles for `#[store]` targets.
             #[doc(hidden)]
-            pub fn __pocopine_mirror_seed(&mut self) {}
+            pub fn __pocopine_observe_seed(&mut self) {}
             #[doc(hidden)]
-            pub fn __pocopine_mirror_install(
+            pub fn __pocopine_observe_install(
                 __handle: ::pocopine::Handle<Self>,
             ) {
                 let _ = __handle;
             }
             #[doc(hidden)]
-            pub const __POCOPINE_HAS_MIRRORS: bool = false;
+            pub const __POCOPINE_HAS_OBSERVES: bool = false;
         }
 
         impl ::pocopine::__private::ComponentState for #struct_ident {
