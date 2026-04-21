@@ -4219,3 +4219,255 @@ async fn splitter_handle_2_keyboard_resizes_neighbours_only() {
 
     host.remove();
 }
+
+// ─── PineTagsInput (compound) ─────────────────────────────────────
+
+// Shared helper for the TagsInput tests — reads Root's `values`
+// state directly off the rendered inner div's stamped scope id,
+// so test assertions can check state without threading through
+// `pp-model` to a test-side parent scope.
+fn tags_root_values(host: &Element) -> Vec<String> {
+    let root_div = host
+        .query_selector("pine-tags-input-root div.pine-tags-input-root")
+        .unwrap()
+        .expect("root inner div");
+    let id = js_sys::Reflect::get(
+        root_div.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__pp_scope_id"),
+    )
+    .unwrap()
+    .as_f64()
+    .expect("scope id stamped") as u64;
+    let scope = pocopine::Scope::find(pocopine::ScopeId(id)).expect("root scope alive");
+    let js = scope.state.borrow().get("values");
+    pocopine::__private::serde_wasm_bindgen::from_value(js).unwrap_or_default()
+}
+
+/// Authored Items render their label lazily from the injected
+/// Item scope so reactive `:value` bindings that fire *after* the
+/// Item's own `on_setup` still land in the text.
+#[wasm_bindgen_test]
+async fn tags_input_initial_tags_render_with_labels() {
+    let host = mount(
+        "<pine-tags-input-root class=\"t-root\">\
+           <pine-tags-input-item value=\"alpha\" class=\"t-a\">\
+             <pine-tags-input-item-text></pine-tags-input-item-text>\
+           </pine-tags-input-item>\
+           <pine-tags-input-item value=\"beta\" class=\"t-b\">\
+             <pine-tags-input-item-text></pine-tags-input-item-text>\
+           </pine-tags-input-item>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let a_text = host
+        .query_selector(".t-a .pine-tags-input-item-text")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap_or_default();
+    let b_text = host
+        .query_selector(".t-b .pine-tags-input-item-text")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap_or_default();
+    assert_eq!(a_text, "alpha");
+    assert_eq!(b_text, "beta");
+
+    host.remove();
+}
+
+/// Clicking an Item's Delete button removes that tag from
+/// `Root.values`. Guards the lazy-lookup in Delete.click — it
+/// has to resolve the Item's value from the scope *at click
+/// time*, not from a snapshot taken at Delete's own on_setup.
+/// Typing into the Input and pressing Enter appends the
+/// trimmed value to `Root.values`, and clears the field.
+/// Duplicate adds are silently rejected (default `duplicate=false`).
+#[wasm_bindgen_test]
+async fn tags_input_enter_adds_and_duplicate_rejects() {
+    let host = mount(
+        "<pine-tags-input-root>\
+           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let input: HtmlInputElement = host
+        .query_selector(".t-input input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    let press_enter = |i: &HtmlInputElement| {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key("Enter");
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        i.dispatch_event(&ev).unwrap();
+    };
+
+    // First add.
+    input.set_value("rust");
+    press_enter(&input);
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(tags_root_values(&host), vec!["rust".to_string()]);
+    assert_eq!(input.value(), "", "input clears after commit");
+
+    // Second add.
+    input.set_value("wasm");
+    press_enter(&input);
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(
+        tags_root_values(&host),
+        vec!["rust".to_string(), "wasm".to_string()]
+    );
+
+    // Duplicate: no change.
+    input.set_value("rust");
+    press_enter(&input);
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(
+        tags_root_values(&host),
+        vec!["rust".to_string(), "wasm".to_string()],
+        "duplicate add should be silently rejected"
+    );
+
+    // Empty add: no change.
+    input.set_value("   ");
+    press_enter(&input);
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(
+        tags_root_values(&host),
+        vec!["rust".to_string(), "wasm".to_string()],
+        "whitespace-only add is ignored"
+    );
+
+    host.remove();
+}
+
+/// Backspace on an empty Input pops the last tag from Root.values.
+/// Backspace on a non-empty Input is a no-op at the component
+/// level (native text editing handles it).
+#[wasm_bindgen_test]
+async fn tags_input_backspace_on_empty_pops_last_tag() {
+    let host = mount(
+        "<pine-tags-input-root>\
+           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let input: HtmlInputElement = host
+        .query_selector(".t-input input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+
+    let press = |i: &HtmlInputElement, key: &str| {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(key);
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+            .unwrap();
+        i.dispatch_event(&ev).unwrap();
+    };
+
+    input.set_value("alpha");
+    press(&input, "Enter");
+    input.set_value("beta");
+    press(&input, "Enter");
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(
+        tags_root_values(&host),
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+
+    // Backspace on empty — pops last.
+    press(&input, "Backspace");
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(tags_root_values(&host), vec!["alpha".to_string()]);
+
+    // Non-empty + Backspace — no-op at Root level.
+    input.set_value("abc");
+    press(&input, "Backspace");
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(tags_root_values(&host), vec!["alpha".to_string()]);
+
+    host.remove();
+}
+
+/// Clicking the Clear button empties Root.values.
+#[wasm_bindgen_test]
+async fn tags_input_clear_empties_values() {
+    let host = mount(
+        "<pine-tags-input-root>\
+           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
+           <pine-tags-input-clear class=\"t-clear\">Clear</pine-tags-input-clear>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let input: HtmlInputElement = host
+        .query_selector(".t-input input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Enter");
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    input.set_value("a");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    input.dispatch_event(&ev).unwrap();
+    input.set_value("b");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    input.dispatch_event(&ev).unwrap();
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(tags_root_values(&host).len(), 2);
+
+    let clear: HtmlElement = host
+        .query_selector(".t-clear button")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    clear.click();
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(tags_root_values(&host), Vec::<String>::new());
+
+    host.remove();
+}

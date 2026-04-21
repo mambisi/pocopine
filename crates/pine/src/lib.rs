@@ -51,6 +51,7 @@ pub mod slider;
 pub mod splitter;
 pub mod switch;
 pub mod tabs;
+pub mod tags_input;
 pub mod toggle;
 pub mod toggle_group;
 pub mod toolbar;
@@ -122,6 +123,10 @@ pub use scroll_area::{
 };
 pub use splitter::{PineSplitterGroup, PineSplitterPanel, PineSplitterResizeHandle};
 pub use switch::PineSwitch;
+pub use tags_input::{
+    PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
+    PineTagsInputItemText, PineTagsInputRoot,
+};
 pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use toggle::PineToggle;
@@ -260,4 +265,10 @@ pub fn register_all() {
     PineTreeRoot::register();
     PineTreeItem::register();
     PineTreeItemToggle::register();
+    PineTagsInputRoot::register();
+    PineTagsInputItem::register();
+    PineTagsInputItemText::register();
+    PineTagsInputItemDelete::register();
+    PineTagsInputInput::register();
+    PineTagsInputClear::register();
 }

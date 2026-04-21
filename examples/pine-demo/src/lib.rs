@@ -92,6 +92,11 @@ pub struct PineDemoApp {
 
     /// Tree demo — currently-selected path.
     pub tree_value: String,
+
+    /// TagsInput demo — current list of tags. Bound two-way via
+    /// `pp-model:values` on `<pine-tags-input-root>` so adds /
+    /// removes / clears flow both directions.
+    pub tags: Vec<String>,
 }
 
 #[handlers]
@@ -108,6 +113,7 @@ impl PineDemoApp {
         self.scroll_type = "hover".into();
         self.splitter_sizes = vec![25.0, 50.0, 25.0];
         self.tree_value = String::new();
+        self.tags = vec!["rust".into(), "wasm".into(), "pocopine".into()];
     }
 
     pub fn bump(&mut self) {

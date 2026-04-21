@@ -1,0 +1,10 @@
+<root class="pine-tags-input-input-wrap"
+      :data-disabled="disabled">
+  <input type="text"
+         class="pine-tags-input-input"
+         pp-ref="field"
+         :placeholder="placeholder"
+         :disabled="disabled"
+         @keydown.enter.prevent="commit"
+         @keydown.backspace="maybe_pop">
+</root>

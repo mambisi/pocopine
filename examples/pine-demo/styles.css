@@ -1377,3 +1377,119 @@ pine-splitter-resize-handle {
   width: 1.25em;
   margin-right: 0.35rem;
 }
+
+/* ─── PineTagsInput ───────────────────────────────────────── */
+
+/* Same custom-element-wrapper gotcha as Splitter: the template's
+   inner <div>/<span>/<button> lives inside an inline custom tag,
+   so flex / inline-flex layout only works if the wrapper tag
+   itself collapses out of the box tree. */
+pine-tags-input-root,
+pine-tags-input-item,
+pine-tags-input-item-text,
+pine-tags-input-item-delete,
+pine-tags-input-input,
+pine-tags-input-clear {
+  display: contents;
+}
+
+.tags-input-root {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  min-height: 2.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: text;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.tags-input-root:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15);
+}
+.tags-input-root[data-disabled="true"] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.pine-tags-input-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.2rem 0.1rem 0.55rem;
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.pine-tags-input-item-text {
+  display: inline;
+}
+
+.pine-tags-input-item-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25em;
+  height: 1.25em;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.pine-tags-input-item-delete:hover {
+  background: rgba(55, 48, 163, 0.12);
+  opacity: 1;
+}
+
+.pine-tags-input-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 8rem;
+  min-width: 6rem;
+}
+.pine-tags-input-input {
+  width: 100%;
+  padding: 0.2rem 0.1rem;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: var(--fg);
+}
+.pine-tags-input-input::placeholder { color: var(--fg-muted); }
+
+.pine-tags-input-clear {
+  margin-left: auto;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.pine-tags-input-clear:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.pine-tags-input-clear[data-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}

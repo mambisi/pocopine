@@ -1,0 +1,5 @@
+<root class="pine-tags-input-root"
+      pp-ref="root"
+      :data-disabled="disabled">
+  <slot></slot>
+</root>
