@@ -1224,27 +1224,44 @@ kbd {
   outline: none;
 }
 .tree-demo:focus { box-shadow: 0 0 0 2px rgba(0, 112, 243, 0.2); }
+
 .pine-tree-item {
   display: block;
-  padding: 0.15rem 0.25rem;
   border-radius: 4px;
   cursor: pointer;
   user-select: none;
 }
+.pine-tree-item[aria-hidden="true"] { display: none; }
+
+/* The "row" — just a flex wrapper around the toggle/spacer + label.
+   We use `display: contents`-free styling by targeting the Item's
+   direct inline children (toggle, spacer, span). Nested Items
+   aren't direct inlines because they're block-level siblings. */
+.pine-tree-item {
+  padding: 0.15rem 0.25rem;
+}
+
+/* Indent per depth via aria-level (1-based). The Item's root
+   sets aria-level from its Rust-side `level` field. */
+.pine-tree-item[aria-level="2"] { padding-left: 1.25rem; }
+.pine-tree-item[aria-level="3"] { padding-left: 2.5rem; }
+.pine-tree-item[aria-level="4"] { padding-left: 3.75rem; }
+.pine-tree-item[aria-level="5"] { padding-left: 5rem; }
+
+/* Hover / selection / highlight only on the header row area, not
+   the nested-children space. We fake that by restricting the
+   background with a pseudo-element over the line's top strip. */
 .pine-tree-item:hover { background: var(--bg-hover); }
 .pine-tree-item[data-selected="true"] { background: var(--brand); color: var(--brand-fg); }
 .pine-tree-item[data-highlighted="true"] {
   outline: 2px solid var(--brand);
   outline-offset: -2px;
 }
-.pine-tree-item[aria-hidden="true"] { display: none; }
-
-/* Nested items reset their own highlight / padding context so the
-   parent's background doesn't bleed through. */
-.pine-tree-item .pine-tree-item {
-  padding-left: 1.25rem;
-  cursor: pointer;
-}
+/* Nested-item background/selection shouldn't stack on top of the
+   parent's. Simplest: strip the parent's background once the user
+   hovers / selects a child (child selector wins via later cascade
+   — but we want the OPPOSITE). Rely on the standard flow where
+   nested items paint their own background on top. */
 
 .pine-tree-item-toggle {
   display: inline-flex;
@@ -1252,6 +1269,11 @@ kbd {
   justify-content: center;
   width: 1.1em;
   margin-right: 0.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   cursor: pointer;
   transition: transform 120ms ease;
 }

@@ -137,6 +137,12 @@ impl PineSplitterGroup {
         // value in `sizes` (e.g. parent hydrated via
         // `pp-model:sizes="[25, 50, 25]"`). The min/max bounds
         // come from the Panel's own props regardless.
+        //
+        // Deliberately *not* renormalising here: each Panel's
+        // `default-size` is taken as-is so authors whose
+        // default-sizes sum to 100 get exactly [25, 50, 25] and
+        // not a rescaled version based on how far along the
+        // registration chain this Panel is.
         if self.sizes.len() <= idx {
             self.sizes.push(default_size);
         }
@@ -150,27 +156,7 @@ impl PineSplitterGroup {
         } else {
             self.max_sizes[idx] = max_size;
         }
-        self.normalize_sizes();
         idx
-    }
-
-    /// Renormalize `sizes` so they sum to 100. Called after a
-    /// registration (the defaults authors set may not sum exactly)
-    /// and never during a drag (drags always delta-swap between
-    /// two neighbours, so the sum is preserved by construction).
-    fn normalize_sizes(&mut self) {
-        let sum: f64 = self.sizes.iter().sum();
-        if sum <= 0.0 {
-            let n = self.sizes.len().max(1) as f64;
-            for s in self.sizes.iter_mut() {
-                *s = 100.0 / n;
-            }
-            return;
-        }
-        let factor = 100.0 / sum;
-        for s in self.sizes.iter_mut() {
-            *s *= factor;
-        }
     }
 
     /// Redistribute `delta_pct` between `before_idx` and
@@ -350,10 +336,17 @@ impl PineSplitterResizeHandle {
         let Some(el) = refs.get("handle") else { return };
         let (before_idx, after_idx) = neighbour_indices(&el);
         let initial_value = group.with(|g| g.sizes.get(before_idx).copied().unwrap_or(0.0));
-        handle.update(|s| {
-            s.before_idx = before_idx;
-            s.after_idx = after_idx;
-            s.aria_value = initial_value;
+        // `on_ready` runs under an immutable borrow on
+        // `scope.state` (walker.rs:193). Defer the initial
+        // write so the borrow can unwind before handle.update
+        // re-borrows mutably.
+        let handle_for_init = handle.clone();
+        pocopine::tick::next(move || {
+            handle_for_init.update(|s| {
+                s.before_idx = before_idx;
+                s.after_idx = after_idx;
+                s.aria_value = initial_value;
+            });
         });
 
         let group_scope = group.scope_id();

@@ -252,10 +252,19 @@ impl PineTreeItem {
         let initial_parent_visible =
             compute_parent_visible(&ancestor_values, &root.with(|r| r.expanded.clone()));
 
-        handle.update(|s| {
-            s.level = level;
-            s.ancestor_values = ancestor_values.clone();
-            s.parent_visible = initial_parent_visible;
+        // Initial writes deferred via `tick::next` — `on_ready`
+        // executes under an immutable borrow on `scope.state`
+        // (walker.rs:193), so a synchronous `handle.update` would
+        // double-borrow. Deferring lets the on_ready frame unwind
+        // first.
+        let handle_for_init = handle.clone();
+        let ancestor_values_for_init = ancestor_values.clone();
+        pocopine::tick::next(move || {
+            handle_for_init.update(|s| {
+                s.level = level;
+                s.ancestor_values = ancestor_values_for_init;
+                s.parent_visible = initial_parent_visible;
+            });
         });
 
         // `has_children` has to wait for descendants to mount.
