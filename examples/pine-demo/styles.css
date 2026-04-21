@@ -1175,19 +1175,34 @@ kbd {
   border-radius: var(--radius);
   overflow: hidden;
 }
+
+/* The custom-element tags `<pine-splitter-group>`, `-panel`, and
+   `-resize-handle` are `display: inline` by default, so
+   `display: flex` + `flex: 0 0 X%` on their inner <div>s never
+   took effect (the flex items were the inline custom tags, which
+   carried no flex declaration). `display: contents` promotes the
+   inner <div> to a direct child of the enclosing flex container
+   so the inline flex declarations on those <div>s apply as
+   intended. */
+pine-splitter-group,
+pine-splitter-panel,
+pine-splitter-resize-handle {
+  display: contents;
+}
+
 .splitter-pane {
   height: 100%;
   padding: 1rem;
-  color: var(--fg-muted);
   font-size: 0.875rem;
-  background: var(--bg-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.pine-splitter-panel:nth-child(odd) .splitter-pane {
-  background: var(--bg);
-}
+/* Colour each panel differently so a drag is visually unambiguous. */
+.splitter-pane-sidebar { background: #dbeafe; color: #1e3a8a; }
+.splitter-pane-main    { background: #fef3c7; color: #78350f; }
+.splitter-pane-details { background: #dcfce7; color: #065f46; }
+
 .pine-splitter-resize-handle[data-direction="horizontal"] {
   flex: 0 0 6px;
   background: var(--border);

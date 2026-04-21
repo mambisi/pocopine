@@ -148,10 +148,27 @@ def run_splitter_checks(page) -> None:
                 return float(pieces[3].rstrip("%"))
         raise AssertionError(f"no flex in style: {style!r}")
 
+    def _width(el) -> float:
+        box = el.bounding_box()
+        return box["width"] if box else 0.0
+
     a, b, c = _basis(sidebar), _basis(main), _basis(details)
     if abs(a + b + c - 100.0) > 0.01:
         _fail(f"panel sizes don't sum to 100: {a} + {b} + {c} = {a + b + c}")
     _ok(f"initial sizes sum to 100 ({a} / {b} / {c})")
+
+    # Geometry sanity: the pane divs themselves must have non-zero
+    # rendered width — `flex: 0 0 X%` on the template's inner <div>
+    # only resolves if the custom-element wrapper tag is
+    # `display: contents` (otherwise the flex item is the inline
+    # custom tag and sizing collapses).
+    pane_widths = [_width(sidebar), _width(main), _width(details)]
+    if min(pane_widths) < 20:
+        _fail(
+            f"panels rendered with near-zero width {pane_widths} — "
+            "check `display: contents` on pine-splitter-* tags"
+        )
+    _ok(f"panels have non-zero rendered width {pane_widths}")
 
     # Handles: handle 1 tracks sizes[0], handle 2 tracks sizes[1].
     handles = page.locator(".pine-splitter-resize-handle")
@@ -178,6 +195,42 @@ def run_splitter_checks(page) -> None:
     if abs((c - 1.0) - c2) > 0.01:
         _fail(f"Panel 2 should shrink by 1%: {c} -> {c2} (want {c - 1.0})")
     _ok("ArrowRight on handle 2 shifts 1% from Panel 2 into Panel 1")
+
+    # Pointer drag — the user's bug report. Measure Panel 0 width
+    # before, drag handle 1 a long way to the right, and confirm
+    # Panel 0 actually grew + Panel 1 shrank. Hitting the bug shows
+    # up as "width before == width after" despite a clean drag.
+    before_a = _width(sidebar)
+    before_b = _width(main)
+    h1_box = h1.bounding_box()
+    assert h1_box, "handle 1 has no bounding box"
+    start_x = h1_box["x"] + h1_box["width"] / 2
+    start_y = h1_box["y"] + h1_box["height"] / 2
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    # Walk the pointer across in a few steps so pointermove fires
+    # reliably (Firefox can coalesce a single long move).
+    for step in range(1, 11):
+        page.mouse.move(start_x + step * 6, start_y)
+    page.mouse.up()
+    # Give the emit_sizes()-on-pointerup + reactive flush a beat.
+    page.wait_for_timeout(80)
+    after_a = _width(sidebar)
+    after_b = _width(main)
+    if after_a - before_a < 20:
+        _fail(
+            f"drag did NOT grow Panel 0: before={before_a:.1f}px "
+            f"after={after_a:.1f}px (expected +60px)"
+        )
+    if before_b - after_b < 20:
+        _fail(
+            f"drag did NOT shrink Panel 1: before={before_b:.1f}px "
+            f"after={after_b:.1f}px (expected -60px)"
+        )
+    _ok(
+        f"drag handle-1 +60px: Panel 0 {before_a:.0f}→{after_a:.0f}px, "
+        f"Panel 1 {before_b:.0f}→{after_b:.0f}px"
+    )
 
 
 def main() -> int:
