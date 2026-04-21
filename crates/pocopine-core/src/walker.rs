@@ -557,6 +557,17 @@ fn is_trivial_slot_wrapper(tpl_root: &Element) -> bool {
 /// `class` / `style` join; everything else writes only when absent
 /// on the user element (user wins on conflict). Internal markers
 /// (`pp-data`, `pp-as`) are dropped.
+///
+/// RFC-020 shorthand attrs (`@event`, `:attr`) are normalised to
+/// their long form (`pp-on:event`, `pp-bind:attr`) before being
+/// stamped on `user_root` — `setAttribute("@click", …)` throws
+/// `InvalidCharacterError` because `@` isn't a Name-start character
+/// per the XML production browsers' DOM enforces. Without this
+/// normalisation, every template-root `@click="handler"` and
+/// every other event-shorthand silently disappeared as soon as
+/// pp-as tried to forward it to the user element. Long-form attrs
+/// take the same dispatch path through `bind` either way, so the
+/// rewrite is invisible to authors.
 fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
     let attrs = tpl_root.attributes();
     for i in 0..attrs.length() {
@@ -566,6 +577,7 @@ fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
             continue;
         }
         let val = a.value();
+        let setter_name = setattr_safe_name(&name);
         match name.as_str() {
             "class" => {
                 let existing = user_root.get_attribute("class").unwrap_or_default();
@@ -578,12 +590,26 @@ fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
                 let _ = user_root.set_attribute("style", &merged);
             }
             _ => {
-                if !user_root.has_attribute(&name) {
-                    let _ = user_root.set_attribute(&name, &val);
+                if !user_root.has_attribute(&setter_name) {
+                    let _ = user_root.set_attribute(&setter_name, &val);
                 }
             }
         }
     }
+}
+
+/// `setAttribute` rejects names whose first character isn't a
+/// Name-start (per the XML Name production the DOM standard cites).
+/// `:foo` is allowed but `@foo` isn't. Convert RFC-020 shorthands to
+/// the equivalent `pp-bind:` / `pp-on:` long form so the call goes
+/// through cleanly. Other names pass through unchanged.
+fn setattr_safe_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix('@') {
+        if !rest.is_empty() {
+            return format!("pp-on:{rest}");
+        }
+    }
+    name.to_string()
 }
 
 /// Collect the component tag's direct children into named slots,

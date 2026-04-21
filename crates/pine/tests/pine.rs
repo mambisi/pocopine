@@ -18,6 +18,13 @@ fn doc() -> web_sys::Document {
 
 fn mount(host_html: &str) -> Element {
     pine::register_all();
+    // RFC-038: Pine primitives now ship default mount/unmount
+    // transitions; the bulk of these tests assert post-toggle DOM
+    // state synchronously and were written before that. Once any
+    // animate test installs the preset stylesheet, the CSS lives in
+    // the shared test-run document and would slow every assertion
+    // here. Disable globally; the animate-specific tests opt back in.
+    pocopine_core::animate::disable_transitions();
     let body = doc().body().unwrap();
     let host = doc().create_element("div").unwrap();
     host.set_inner_html(host_html);

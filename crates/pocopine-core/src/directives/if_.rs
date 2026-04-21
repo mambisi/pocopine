@@ -127,18 +127,25 @@ pub fn run(call: &DirectiveCall) {
                     }
                     walker::walk(&clone_root);
                     *current.borrow_mut() = Some(clone_root.clone());
-                    transition::enter(&clone_root, || {});
+                    // Subtree dispatch — Pine compounds (Dialog,
+                    // Popover, …) stamp preset attrs on inner custom
+                    // children (`<pine-dialog-content>`), not on the
+                    // portal clone root, so walking the subtree picks
+                    // those up alongside any author-set attrs on the
+                    // root itself.
+                    transition::enter_subtree(&clone_root, || {});
                 }
             }
             (true, Some(clone)) => {
                 // Idle / already showing: no-op. Mid-leave: cancel
-                // and play enter on the same clone.
-                if transition::is_leaving(&clone) {
-                    transition::enter(&clone, || {});
+                // and play enter on the same clone (subtree-wide so
+                // all primed leaves get reversed in lock-step).
+                if transition::is_subtree_leaving(&clone) {
+                    transition::enter_subtree(&clone, || {});
                 }
             }
             (false, Some(clone)) => {
-                if transition::is_leaving(&clone) {
+                if transition::is_subtree_leaving(&clone) {
                     // Already unmounting; leave fires the removal.
                     return;
                 }
@@ -146,7 +153,7 @@ pub fn run(call: &DirectiveCall) {
                 let slot_cap = current.clone();
                 let template_cap = template_el.clone();
                 let teleported = teleport_target.is_some();
-                transition::leave(&clone, move || {
+                transition::leave_subtree(&clone, move || {
                     if let Some(parent) = clone_cap.parent_node() {
                         let _ = parent.remove_child(&clone_cap);
                     }

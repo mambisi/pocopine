@@ -36,10 +36,10 @@ pub fn run(call: &DirectiveCall) {
             let style = html_el.style();
             if truthy {
                 let _ = style.remove_property("display");
-                transition::enter(html_el.as_ref(), || {});
+                transition::enter_subtree(html_el.as_ref(), || {});
             } else {
                 let style_for_leave = style.clone();
-                transition::leave(html_el.as_ref(), move || {
+                transition::leave_subtree(html_el.as_ref(), move || {
                     let _ = style_for_leave.set_property("display", "none");
                 });
             }

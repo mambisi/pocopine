@@ -53,3 +53,17 @@ pub use waapi::{animate, AnimateOptions, AnimationHandle, Keyframe};
 pub fn install() {
     presets::inject_atoms_stylesheet();
 }
+
+/// Disable RFC-038 transitions globally. Intended for tests that
+/// were written before primitives gained default mount/unmount
+/// transitions and assert post-toggle DOM state synchronously. With
+/// this on, `enter` / `leave` invoke their `on_done` callback right
+/// away — no CSS class swap, no waiting for transition-end.
+pub fn disable_transitions() {
+    crate::directives::transition::set_disabled(true);
+}
+
+/// Re-enable transitions after a previous `disable_transitions()`.
+pub fn enable_transitions() {
+    crate::directives::transition::set_disabled(false);
+}

@@ -34,6 +34,19 @@ use crate::reactive::{effect, trigger_scope, ScopeId};
 use crate::scope::Scope;
 use crate::walker::{self, bind_scope_to, track_effect_on};
 
+/// Return the element child whose layout box represents the
+/// custom-element's visible bounds. Custom tags themselves are
+/// `display: inline` by default and `getBoundingClientRect` returns
+/// zero for them, so FLIP needs to measure the rendered root one
+/// level deeper.
+fn first_layout_child(el: &Element) -> Option<Element> {
+    let children = el.children();
+    if children.length() == 0 {
+        return None;
+    }
+    children.item(0)
+}
+
 pub fn run(call: &DirectiveCall) {
     let Some((item_name, items_expr)) = parse_expr(&call.value) else {
         console::error_1(&JsValue::from_str(&format!(
@@ -101,9 +114,12 @@ fn run_naive(
         {
             let mut prior = prior.borrow_mut();
             for el in prior.drain(..) {
-                if let Some(parent) = el.parent_node() {
-                    let _ = parent.remove_child(&el);
-                }
+                let el_cap = el.clone();
+                crate::directives::transition::leave_subtree(&el, move || {
+                    if let Some(parent) = el_cap.parent_node() {
+                        let _ = parent.remove_child(&el_cap);
+                    }
+                });
             }
         }
         if total == 0 {
@@ -139,6 +155,8 @@ fn run_naive(
                 .is_ok()
             {
                 walker::walk(&clone_root);
+                let clone_for_enter = clone_root.clone();
+                crate::directives::transition::enter_subtree(&clone_for_enter, || {});
                 fresh.push(clone_root);
             }
         }
@@ -252,27 +270,42 @@ fn run_keyed(
             }
         }
 
-        // Anything left in the pool is no longer present — remove.
+        // Anything left in the pool is no longer present — leave +
+        // remove. RFC-038: route through `transition::leave_subtree`
+        // so any animated descendants (Pine compounds with
+        // `transition = "..."`) play their leave keyframes before
+        // the actual remove_child fires. The MutationObserver-driven
+        // `release_subtree` runs after the removal as before.
         for (_, entry) in pool.drain() {
-            if let Some(parent) = entry.element.parent_node() {
-                let _ = parent.remove_child(&entry.element);
-            }
-            // MutationObserver will release_subtree the element,
-            // which frees effects + scope.
+            let el = entry.element.clone();
+            let el_cap = el.clone();
+            crate::directives::transition::leave_subtree(&el, move || {
+                if let Some(parent) = el_cap.parent_node() {
+                    let _ = parent.remove_child(&el_cap);
+                }
+            });
         }
 
         // RFC-038 — FLIP prep: snapshot client rects for every
         // reused clone BEFORE the insert_before loop below moves
         // them. We check `data-pp-animate="flip"` to skip scopes
         // that don't opt in (no motion tax on normal lists).
-        let mut flip_snapshots: HashMap<String, web_sys::DomRect> = HashMap::new();
+        //
+        // For Pine compounds the clone_root is an outer custom
+        // element (`<pine-tags-input-item>`) with no display box —
+        // `getBoundingClientRect` on it returns zero. The visible
+        // layout box lives on the inner rendered root (the first
+        // element child). Snapshot + animate that.
+        let mut flip_snapshots: HashMap<String, (Element, web_sys::DomRect)> = HashMap::new();
         for entry in &fresh {
-            if entry.element.parent_node().is_some()
-                && entry.element.get_attribute("data-pp-animate").as_deref() == Some("flip")
+            if entry.element.parent_node().is_none()
+                || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
             {
-                flip_snapshots
-                    .insert(entry.key.clone(), entry.element.get_bounding_client_rect());
+                continue;
             }
+            let target = first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
+            flip_snapshots
+                .insert(entry.key.clone(), (target.clone(), target.get_bounding_client_rect()));
         }
 
         // Reorder + walk new clones. For each entry in the new
@@ -293,8 +326,14 @@ fn run_keyed(
         // Walk freshly-inserted clones AFTER they're in the tree so
         // directive setup can look up the enclosing scope via parent
         // chain if it needs to.
+        for el in &newly_walked {
+            walker::walk(el);
+        }
+        // RFC-038 — fire enter on each newly-walked clone subtree
+        // so a freshly-added TagsInput chip / DropdownMenu Item /
+        // etc. plays its mount preset.
         for el in newly_walked {
-            walker::walk(&el);
+            crate::directives::transition::enter_subtree(&el, || {});
         }
 
         // RFC-038 — FLIP play phase. For each reused clone that was
@@ -303,9 +342,9 @@ fn run_keyed(
         // `data-pp-animate` + inserts, so the elements' new
         // positions are real.
         for entry in &fresh {
-            if let Some(old_rect) = flip_snapshots.remove(&entry.key) {
+            if let Some((target, old_rect)) = flip_snapshots.remove(&entry.key) {
                 crate::animate::flip_from_snapshot(
-                    &entry.element,
+                    &target,
                     old_rect,
                     crate::animate::FlipOptions::default(),
                 );

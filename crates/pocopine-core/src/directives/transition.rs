@@ -75,6 +75,22 @@ thread_local! {
     static TX: RefCell<HashMap<u64, Rc<RefCell<State>>>> =
         RefCell::new(HashMap::new());
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    /// When true, `enter` / `leave` fire `on_done` synchronously and
+    /// skip the CSS-class machinery. Tests opt in via
+    /// `pocopine::animate::disable()` so previously-instant
+    /// mount/unmount assertions stay fast after RFC-038's defaults
+    /// gave every Pine primitive a real CSS transition.
+    static DISABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Globally turn off CSS transitions for `pp-transition`. Intended
+/// for tests; production code should leave the default in place.
+pub fn set_disabled(v: bool) {
+    DISABLED.with(|c| c.set(v));
+}
+
+pub fn is_disabled() -> bool {
+    DISABLED.with(|c| c.get())
 }
 
 fn get_or_init(el: &Element) -> Option<Rc<RefCell<State>>> {
@@ -191,6 +207,10 @@ pub fn is_leaving(el: &Element) -> bool {
 /// Run the enter sequence on `el`, then invoke `on_done`. If no
 /// `pp-transition:*` attrs are present, invokes `on_done` synchronously.
 pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
+    if is_disabled() {
+        on_done();
+        return;
+    }
     let rc = match get_or_init(el) {
         Some(r) => r,
         None => {
@@ -207,8 +227,13 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     }
     let epoch = rc.borrow().epoch;
 
-    // Apply `enter` + `enter-start`, then force a reflow so the
-    // browser commits the start state before we swap to end.
+    // Apply `enter` + `enter-start`. A synchronous read of
+    // `client_width` is the textbook "force a reflow" trick, but
+    // browsers (Firefox in particular) coalesce same-task style
+    // changes and the from-state never commits — the transition
+    // would run from `to` to `to` and visibly do nothing. Defer the
+    // from→to swap to the next animation frame so the browser
+    // actually paints the start state first.
     let cl = el.class_list();
     {
         let s = rc.borrow();
@@ -218,27 +243,38 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     }
     let _ = el.client_width();
 
-    {
-        let s = rc.borrow();
-        for c in &s.enter_start {
-            let _ = cl.remove_1(c);
-        }
-        for c in &s.enter_end {
-            let _ = cl.add_1(c);
-        }
-    }
-
     let el_cap = el.clone();
     let rc_cap = rc.clone();
-    schedule_end(el, rc.clone(), epoch, move || {
-        let cl = el_cap.class_list();
-        let mut s = rc_cap.borrow_mut();
-        for c in s.enter.iter().chain(s.enter_end.iter()) {
-            let _ = cl.remove_1(c);
+    let on_done_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(on_done)));
+    crate::tick::next_frame(move || {
+        if rc_cap.borrow().epoch != epoch {
+            return;
         }
-        s.phase = Phase::Idle;
-        drop(s);
-        on_done();
+        let cl = el_cap.class_list();
+        {
+            let s = rc_cap.borrow();
+            for c in &s.enter_start {
+                let _ = cl.remove_1(c);
+            }
+            for c in &s.enter_end {
+                let _ = cl.add_1(c);
+            }
+        }
+        let el_for_end = el_cap.clone();
+        let rc_for_end = rc_cap.clone();
+        let on_done_cell = on_done_cell.clone();
+        schedule_end(&el_cap, rc_cap.clone(), epoch, move || {
+            let cl = el_for_end.class_list();
+            let mut s = rc_for_end.borrow_mut();
+            for c in s.enter.iter().chain(s.enter_end.iter()) {
+                let _ = cl.remove_1(c);
+            }
+            s.phase = Phase::Idle;
+            drop(s);
+            if let Some(cb) = on_done_cell.borrow_mut().take() {
+                cb();
+            }
+        });
     });
 }
 
@@ -247,6 +283,10 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
 /// happens after the animation completes. With no transition attrs,
 /// `on_done` fires synchronously.
 pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
+    if is_disabled() {
+        on_done();
+        return;
+    }
     let rc = match get_or_init(el) {
         Some(r) => r,
         None => {
@@ -271,27 +311,38 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
     }
     let _ = el.client_width();
 
-    {
-        let s = rc.borrow();
-        for c in &s.leave_start {
-            let _ = cl.remove_1(c);
-        }
-        for c in &s.leave_end {
-            let _ = cl.add_1(c);
-        }
-    }
-
     let el_cap = el.clone();
     let rc_cap = rc.clone();
-    schedule_end(el, rc.clone(), epoch, move || {
-        let cl = el_cap.class_list();
-        let mut s = rc_cap.borrow_mut();
-        for c in s.leave.iter().chain(s.leave_end.iter()) {
-            let _ = cl.remove_1(c);
+    let on_done_cell = std::rc::Rc::new(std::cell::RefCell::new(Some(on_done)));
+    crate::tick::next_frame(move || {
+        if rc_cap.borrow().epoch != epoch {
+            return;
         }
-        s.phase = Phase::Idle;
-        drop(s);
-        on_done();
+        let cl = el_cap.class_list();
+        {
+            let s = rc_cap.borrow();
+            for c in &s.leave_start {
+                let _ = cl.remove_1(c);
+            }
+            for c in &s.leave_end {
+                let _ = cl.add_1(c);
+            }
+        }
+        let el_for_end = el_cap.clone();
+        let rc_for_end = rc_cap.clone();
+        let on_done_cell = on_done_cell.clone();
+        schedule_end(&el_cap, rc_cap.clone(), epoch, move || {
+            let cl = el_for_end.class_list();
+            let mut s = rc_for_end.borrow_mut();
+            for c in s.leave.iter().chain(s.leave_end.iter()) {
+                let _ = cl.remove_1(c);
+            }
+            s.phase = Phase::Idle;
+            drop(s);
+            if let Some(cb) = on_done_cell.borrow_mut().take() {
+                cb();
+            }
+        });
     });
 }
 
@@ -356,6 +407,106 @@ fn parse_duration(s: &str) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Selector matching every element that carries any preset attr
+/// (shorthand or six-attr form). Used by the subtree helpers to
+/// gather descendants whose transitions should fire alongside the
+/// pp-if/pp-show toggle on the clone root.
+const ATTR_SELECTOR: &str = "[pp-transition], [pp-transition\\:in], [pp-transition\\:out], \
+    [pp-transition\\:enter], [pp-transition\\:enter-start], [pp-transition\\:enter-end], \
+    [pp-transition\\:leave], [pp-transition\\:leave-start], [pp-transition\\:leave-end]";
+
+fn has_any_transition_attr(el: &Element) -> bool {
+    el.has_attribute("pp-transition")
+        || el.has_attribute("pp-transition:in")
+        || el.has_attribute("pp-transition:out")
+        || el.has_attribute("pp-transition:enter")
+        || el.has_attribute("pp-transition:enter-start")
+        || el.has_attribute("pp-transition:enter-end")
+        || el.has_attribute("pp-transition:leave")
+        || el.has_attribute("pp-transition:leave-start")
+        || el.has_attribute("pp-transition:leave-end")
+}
+
+fn collect_animated(root: &Element) -> Vec<Element> {
+    use wasm_bindgen::JsCast;
+    let mut out = Vec::new();
+    if has_any_transition_attr(root) {
+        out.push(root.clone());
+    }
+    if let Ok(list) = root.query_selector_all(ATTR_SELECTOR) {
+        for i in 0..list.length() {
+            if let Some(node) = list.item(i) {
+                if let Ok(el) = node.dyn_into::<Element>() {
+                    out.push(el);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Run the enter sequence on `root` AND every descendant carrying
+/// any `pp-transition:*` attr. Compound primitives stamp preset
+/// attrs on inner custom-element children (`<pine-dialog-content>`)
+/// rather than the pp-if clone root (the portal `<div>`), so
+/// callers walking the subtree pick those up. `on_done` fires after
+/// the longest enter completes; with no animated elements it's
+/// synchronous.
+pub fn enter_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
+    let elems = collect_animated(root);
+    if elems.is_empty() {
+        on_done();
+        return;
+    }
+    let remaining = Rc::new(Cell::new(elems.len()));
+    let on_done_cell = Rc::new(RefCell::new(Some(on_done)));
+    for el in elems {
+        let remaining = remaining.clone();
+        let on_done_cell = on_done_cell.clone();
+        enter(&el, move || {
+            let n = remaining.get().saturating_sub(1);
+            remaining.set(n);
+            if n == 0 {
+                if let Some(cb) = on_done_cell.borrow_mut().take() {
+                    cb();
+                }
+            }
+        });
+    }
+}
+
+/// Mirror of [`enter_subtree`] for unmount. Dispatches `leave` to
+/// every animated element in the subtree in parallel; the caller's
+/// `on_done` (typically the actual DOM removal) fires once they all
+/// complete. Synchronous when no element animates.
+pub fn leave_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
+    let elems = collect_animated(root);
+    if elems.is_empty() {
+        on_done();
+        return;
+    }
+    let remaining = Rc::new(Cell::new(elems.len()));
+    let on_done_cell = Rc::new(RefCell::new(Some(on_done)));
+    for el in elems {
+        let remaining = remaining.clone();
+        let on_done_cell = on_done_cell.clone();
+        leave(&el, move || {
+            let n = remaining.get().saturating_sub(1);
+            remaining.set(n);
+            if n == 0 {
+                if let Some(cb) = on_done_cell.borrow_mut().take() {
+                    cb();
+                }
+            }
+        });
+    }
+}
+
+/// True if any element in the subtree (root included) is mid-leave.
+pub fn is_subtree_leaving(root: &Element) -> bool {
+    collect_animated(root).iter().any(is_leaving)
 }
 
 /// Drop any transition state associated with `el`. Called from the
