@@ -1393,10 +1393,10 @@ pine-tags-input-clear {
   display: contents;
 }
 
-/* Anchor author classes to the inner rendered class so the rule
-   doesn't also paint on the outer custom tag (which carries a
-   forwarded copy of every author class). See
-   feedback_author_class_forwarding.md. */
+/* Author classes are safe to use as bare selectors — the walker
+   (pocopine-core) strips class/style from the outer custom tag
+   after forwarding onto the inner rendered root, so `.foo { … }`
+   matches exactly once, like every other framework. */
 .tags-input-root {
   display: flex;
   align-items: center;
@@ -1539,15 +1539,10 @@ pine-tags-input-clear {
   padding: 0.45rem 0.55rem;
   gap: 0.5rem;
 }
-/* Styles target the compound selector `.user-chip`
-   so they only paint on the INNER rendered <div> — not the outer
-   `<pine-tags-input-item class="user-chip">` custom-element tag,
-   which also carries the `user-chip` class (the macro forwards
-   author classes to the template root but doesn't strip them off
-   the custom tag). Before this scoping the chip rendered twice,
-   one nested inside the other — see the user's earlier screenshot.
-   Same story for `.user-chip-avatar`: target only the inner div
-   inside `<pine-avatar-root>`. */
+/* `.user-chip` + `.user-chip-avatar` paint on the inner rendered
+   element only. The walker's class-strip (pocopine-core) means
+   the outer custom tag no longer carries the author's class, so
+   bare-class selectors are safe. */
 .user-chip {
   display: inline-flex;
   align-items: center;
