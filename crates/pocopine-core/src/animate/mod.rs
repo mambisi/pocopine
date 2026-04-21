@@ -63,6 +63,17 @@ pub fn install() {
     motion::install();
 }
 
+/// Re-export of [`crate::directives::transition::enter_subtree_staggered`]
+/// so authors can reach for stagger from the same module they
+/// already import for `apply_preset` / `animate`.
+pub fn enter_subtree_staggered<F: FnOnce() + 'static>(
+    root: &web_sys::Element,
+    stagger_ms: u32,
+    on_done: F,
+) {
+    crate::directives::transition::enter_subtree_staggered(root, stagger_ms, on_done);
+}
+
 /// Disable RFC-038 transitions globally. Intended for tests that
 /// were written before primitives gained default mount/unmount
 /// transitions and assert post-toggle DOM state synchronously. With

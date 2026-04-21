@@ -12,6 +12,7 @@ use crate::reactive::ScopeId;
 
 pub mod anchor;
 pub mod bind;
+pub mod flip;
 pub mod for_;
 pub mod html;
 pub mod if_;
@@ -65,6 +66,7 @@ fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
         m.insert("intersect", intersect::run);
         m.insert("anchor", anchor::run);
         m.insert("roving", roving::run);
+        m.insert("flip", flip::run);
         m
     })
 }

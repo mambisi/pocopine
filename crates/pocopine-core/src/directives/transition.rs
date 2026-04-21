@@ -523,6 +523,54 @@ pub fn enter_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
     }
 }
 
+/// Like [`enter_subtree`] but each animated descendant fires with
+/// an additional `i * stagger_ms` delay (where `i` is its index in
+/// the collected list). Useful for sequenced reveals on `pp-for`
+/// list mounts (RFC-039 §6).
+///
+/// `on_done` fires after the LAST animation settles. Pass
+/// `stagger_ms = 0` for the same behaviour as [`enter_subtree`].
+pub fn enter_subtree_staggered<F: FnOnce() + 'static>(
+    root: &Element,
+    stagger_ms: u32,
+    on_done: F,
+) {
+    let elems = collect_animated(root);
+    if elems.is_empty() {
+        on_done();
+        return;
+    }
+    let remaining = Rc::new(Cell::new(elems.len()));
+    let on_done_cell = Rc::new(RefCell::new(Some(on_done)));
+    for (i, el) in elems.into_iter().enumerate() {
+        let remaining = remaining.clone();
+        let on_done_cell = on_done_cell.clone();
+        let delay = (i as u32).saturating_mul(stagger_ms);
+        let fire = move || {
+            enter(&el, move || {
+                let n = remaining.get().saturating_sub(1);
+                remaining.set(n);
+                if n == 0 {
+                    if let Some(cb) = on_done_cell.borrow_mut().take() {
+                        cb();
+                    }
+                }
+            });
+        };
+        if delay == 0 {
+            fire();
+        } else {
+            let cb = wasm_bindgen::closure::Closure::once_into_js(fire);
+            if let Some(w) = web_sys::window() {
+                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    cb.unchecked_ref(),
+                    delay as i32,
+                );
+            }
+        }
+    }
+}
+
 /// Mirror of [`enter_subtree`] for unmount. Dispatches `leave` to
 /// every animated element in the subtree in parallel; the caller's
 /// `on_done` (typically the actual DOM removal) fires once they all

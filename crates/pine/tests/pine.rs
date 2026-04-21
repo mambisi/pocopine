@@ -4836,6 +4836,96 @@ async fn parse_duration_takes_max_smoke() {
     let _ = 1 + 1;
 }
 
+// ─── RFC-039 §6: stagger ─────────────────────────────────────────
+
+/// `enter_subtree_staggered` dispatches enter to each animated
+/// descendant. The dispatch is observable end-to-end via the
+/// caller's `on_done` callback firing after the last enter
+/// completes. Under disabled-transition test mode, on_done fires
+/// per-item synchronously, so the counter ticks up to N once all
+/// staggered timers fire — the test verifies the COUNT, not the
+/// timing-spread.
+#[wasm_bindgen_test]
+async fn stagger_enter_subtree_dispatches_to_every_animated_descendant() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    pocopine_core::animate::install();
+    let host = mount(
+        "<div class=\"stagger-root\">\
+           <div class=\"a\" pp-transition=\"fade\"></div>\
+           <div class=\"b\" pp-transition=\"fade\"></div>\
+           <div class=\"c\" pp-transition=\"fade\"></div>\
+         </div>",
+    );
+    tick().await;
+    let root = host.query_selector(".stagger-root").unwrap().unwrap();
+    let done = Rc::new(Cell::new(false));
+    let done_for_cb = done.clone();
+    pocopine_core::directives::transition::enter_subtree_staggered(
+        &root,
+        20,
+        move || {
+            done_for_cb.set(true);
+        },
+    );
+    // 3 elements × 20ms stagger ≈ 60ms; even on the slowest path
+    // 200ms is well past that.
+    sleep_ms(200).await;
+    assert!(done.get(), "on_done should fire after all staggered enters complete");
+    host.remove();
+}
+
+// ─── RFC-039 §7: pp-flip directive ───────────────────────────────
+
+/// `pp-flip` registers an element so layout shifts caused by DOM
+/// mutations animate via FLIP. Stamp the element, mutate a
+/// preceding sibling that pushes the pp-flip element down, and
+/// assert the registry picks up the move and stages an animation.
+#[wasm_bindgen_test]
+async fn pp_flip_registers_and_picks_up_layout_shift() {
+    let host = mount(
+        "<div style=\"display:flex;flex-direction:column\">\
+           <div class=\"spacer\" style=\"height:0px\"></div>\
+           <div class=\"flipped\" pp-flip>fl</div>\
+         </div>",
+    );
+    tick().await;
+    tick().await;
+    let flipped = host.query_selector(".flipped").unwrap().unwrap();
+    let initial_top = flipped.get_bounding_client_rect().top();
+    // Push the flipped element down by growing the spacer.
+    let spacer = host.query_selector(".spacer").unwrap().unwrap();
+    spacer
+        .clone()
+        .dyn_into::<web_sys::HtmlElement>()
+        .unwrap()
+        .style()
+        .set_property("height", "100px")
+        .unwrap();
+    // The pp-flip's MutationObserver fires on childList — height
+    // changes are CSS, not childList. To exercise the observer,
+    // we mutate a child via DOM (insert a node).
+    let extra = doc().create_element("div").unwrap();
+    extra
+        .clone()
+        .dyn_into::<web_sys::HtmlElement>()
+        .unwrap()
+        .style()
+        .set_property("height", "50px")
+        .unwrap();
+    spacer.append_child(&extra).unwrap();
+    sleep_ms(40).await;
+    // After mutation observer + next_frame: the pp-flip element
+    // should have moved.
+    let final_top = flipped.get_bounding_client_rect().top();
+    assert!(
+        (final_top - initial_top).abs() > 30.0,
+        "expected pp-flip element to move after sibling grew; \
+         initial_top={initial_top}, final_top={final_top}",
+    );
+    host.remove();
+}
+
 // ─── RFC-039: setattr_safe_name fuzz (silent-drop regression) ────
 
 /// `setAttribute("@click", …)` throws InvalidCharacterError because

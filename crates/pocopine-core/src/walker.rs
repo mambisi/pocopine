@@ -1357,6 +1357,7 @@ pub(crate) fn release_subtree(node: &Node) {
         crate::directives::intersect::release(&el);
         crate::directives::anchor::release(&el);
         crate::directives::roving::release(&el);
+        crate::directives::flip::release(&el);
         release_listeners(&el);
     }
 }

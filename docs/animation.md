@@ -165,11 +165,93 @@ Collisions error — overriding a built-in is a deliberate opt-in.
 | Command / Combobox item | `animate = "flip"` |
 | Collapsible / Accordion / Tree content | `collapse` |
 
+## Stagger (RFC-039)
+
+`enter_subtree_staggered(root, stagger_ms, on_done)` dispatches
+`enter` to every animated descendant in `root`'s subtree with
+`i * stagger_ms` of delay. Use it for sequenced reveals on list
+mounts, popover content, etc.:
+
+```rust
+use pocopine::animate::enter_subtree_staggered;
+
+enter_subtree_staggered(&root, 30, || {
+    // fires after the LAST element settles
+});
+```
+
+`stagger_ms = 0` is equivalent to the (unstaggered)
+`enter_subtree`.
+
+## Layout animation anywhere — `pp-flip`
+
+`pp-flip` opts an element into FLIP layout animation: any time the
+DOM mutates and the element ends up in a new position, the runtime
+animates it from its old spot to its new one. Inspired by Framer
+Motion's `layout` prop.
+
+```html
+<ul>
+  <template pp-for="item in items" pp-key="item">
+    <li pp-flip>{item}</li>
+  </template>
+</ul>
+```
+
+A singleton MutationObserver on `document.body` watches for DOM
+changes; on each batch, every registered `pp-flip` element checks
+whether its `getBoundingClientRect` shifted and FLIP-animates the
+delta. Honours `prefers-reduced-motion`.
+
+Limitations: tracks layout shifts caused by DOM mutations.
+Position changes from font load, scrollbar appearance, or container
+resize need a paired `pp-resize` until a future ResizeObserver-
+driven path lands.
+
+## Reduced motion (RFC-039)
+
+The runtime reads `(prefers-reduced-motion: reduce)` once at
+install and listens for matchMedia change events. When set:
+
+- `transition::enter` / `leave` short-circuit to sync `on_done()`.
+- `animate()` clamps the WAAPI duration to ~1ms (so finished()
+  callbacks fire on a microtask).
+- The CSS atom sheet collapses every preset's duration to 1ms via
+  a `@media (prefers-reduced-motion: reduce)` rule.
+
+Per-element opt-out via `data-pp-motion="always"` (and
+`data-pp-motion="reduce"` to opt-in for a subtree). Use for
+motion-as-data UI:
+
+```html
+<pine-progress-root data-pp-motion="always" value="42"></pine-progress-root>
+```
+
+`#[component(motion = "always")]` stamps the attribute
+automatically (deferred — author the attribute directly until that
+ships).
+
+## Theming hooks (RFC-039)
+
+atoms.css reads durations and easings via CSS custom properties:
+
+```css
+:root {
+  --pp-tx-duration: 120ms;
+  --pp-tx-easing: ease-out;
+}
+```
+
+Per-preset overrides via `--pp-tx-fade-duration`,
+`--pp-tx-flip-duration`, etc. fall back to the global
+`--pp-tx-duration` when absent.
+
 ## Non-goals (for now)
 
 - **Spring / physics easing** — WAAPI `cubic-bezier` covers v0.
-- **Stagger helpers on `pp-for` enter** — CSS `animation-delay`
-  works today; macro-level stagger may come later if demand is real.
+- **`#[component(stagger_ms = N)]` macro arg** — call
+  `enter_subtree_staggered` from author code; the macro arg
+  will follow.
 - **Scroll-triggered animation** — pair `pp-intersect` with
   `animate::animate` manually; a helper may follow.
 - **Router / outlet transitions** — needs an RFC on `pp-outlet`.
