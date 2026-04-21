@@ -1,6 +1,13 @@
 <div>
   <h1>Pine</h1>
   <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
+  <p style="font-size:0.875rem">
+    Every primitive below animates by default — Dialog fades & scales,
+    menus slide, TagsInput chips FLIP on reorder, Collapsibles grow.
+    No handler code, no CSS to copy; see
+    <code>docs/animation.md</code> for the preset catalogue and how
+    to override per instance.
+  </p>
 
   <!-- Label + Separator + Progress + AspectRatio + Toolbar — -->
   <!-- small primitives showcased together.                 -->

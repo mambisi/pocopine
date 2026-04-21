@@ -151,7 +151,7 @@ impl PineContextMenuPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuContent.poco", role = "list")]
+#[component(template = "PineContextMenuContent.poco", role = "list", transition = "slide-down")]
 pub struct PineContextMenuContent {
     /// Mirrored from Root on open so the template's inline style
     /// positions this panel at the captured pointer. Read once at

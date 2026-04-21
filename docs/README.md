@@ -9,6 +9,8 @@ looks the way it does — the code itself tells you *what*.
   the JS `Proxy` bridge, and everything we want to bolt on next.
 - [`poco/`](./poco/) — the `.poco` template format (HTML + directives),
   paired with sibling `.rs` + `.css` files. No mixed-language SFCs.
+- [`animation.md`](./animation.md) — preset catalogue, macro args,
+  FLIP, and the WAAPI escape hatch. See RFC-038 for the design notes.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 

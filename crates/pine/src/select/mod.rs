@@ -224,7 +224,7 @@ impl PineSelectPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSelectContent.poco", role = "list")]
+#[component(template = "PineSelectContent.poco", role = "list", transition = "fade")]
 pub struct PineSelectContent {
     pub anchor: String,
     pub listbox_id: String,

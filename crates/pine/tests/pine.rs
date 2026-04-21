@@ -4660,8 +4660,11 @@ struct AnimateFadeHost {
 impl AnimateFadeHost {}
 
 /// `#[component(transition = "fade")]` stamps the six pp-transition:*
-/// class attrs on the rendered inner root at mount time — same
-/// shape as calling `apply_preset(&root, "fade", "fade")` by hand.
+/// class attrs on the OUTER custom-element tag — that's the element
+/// `pp-if` / `pp-show` hand to `transition::enter` / `leave`, so the
+/// directive's state machine needs to find them there. Opacity and
+/// transform inherit through the outer tag's stacking context to
+/// reach the visually-styled inner root.
 #[wasm_bindgen_test]
 async fn animate_macro_transition_stamps_preset_on_root() {
     pocopine_core::animate::install();
@@ -4669,14 +4672,10 @@ async fn animate_macro_transition_stamps_preset_on_root() {
     let host = mount("<animate-fade-host></animate-fade-host>");
     tick().await;
     tick().await;
-    // The inner rendered root lives inside the custom tag. The
-    // macro-generated `ComponentState::transition_in_preset()` fires
-    // during mount_component → apply_preset runs on the inner root
-    // (the template's `<div>`).
     let inner = host
-        .query_selector("animate-fade-host > div")
+        .query_selector("animate-fade-host")
         .unwrap()
-        .expect("inner root div");
+        .expect("custom tag in DOM");
     assert_eq!(
         inner.get_attribute("pp-transition:enter").as_deref(),
         Some("pp-tx-fade-base"),

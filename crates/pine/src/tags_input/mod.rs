@@ -129,7 +129,7 @@ impl PineTagsInputRoot {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItem.poco", role = "panel")]
+#[component(template = "PineTagsInputItem.poco", role = "panel", animate = "flip", transition = "scale")]
 pub struct PineTagsInputItem {
     /// The tag value this Item represents. Passed via
     /// `:value="tag"` from the author's `pp-for`.

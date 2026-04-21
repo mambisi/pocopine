@@ -382,7 +382,7 @@ impl PineTooltipPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTooltipContent.poco", role = "panel")]
+#[component(template = "PineTooltipContent.poco", role = "panel", transition_in = "scale", transition_out = "fade")]
 pub struct PineTooltipContent {
     pub anchor: String,
     #[prop] pub side: String,

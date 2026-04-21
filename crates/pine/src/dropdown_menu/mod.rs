@@ -125,7 +125,7 @@ impl PineDropdownMenuPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuContent.poco", role = "list")]
+#[component(template = "PineDropdownMenuContent.poco", role = "list", transition = "slide-down")]
 pub struct PineDropdownMenuContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// a per-instance selector targeting this root's Trigger
@@ -311,7 +311,7 @@ impl PineDropdownMenuSubTrigger {
 }
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSubContent.poco", role = "list")]
+#[component(template = "PineDropdownMenuSubContent.poco", role = "list", transition = "slide-down")]
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,

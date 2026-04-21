@@ -282,7 +282,7 @@ impl PineComboboxPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineComboboxContent.poco", role = "list")]
+#[component(template = "PineComboboxContent.poco", role = "list", transition = "fade")]
 pub struct PineComboboxContent {
     pub listbox_id: String,
     /// Selector resolving to the linked Input element; computed
@@ -401,7 +401,7 @@ impl PineComboboxEmpty {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxItem.poco", role = "item")]
+#[component(template = "PineComboboxItem.poco", role = "item", animate = "flip")]
 pub struct PineComboboxItem {
     #[prop]
     pub value: String,

@@ -268,7 +268,7 @@ impl PineCommandPortal {}
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandOverlay.poco", role = "panel")]
+#[component(template = "PineCommandOverlay.poco", role = "panel", transition = "fade")]
 pub struct PineCommandOverlay {}
 
 #[handlers]
@@ -283,7 +283,7 @@ impl PineCommandOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandContent.poco", role = "panel")]
+#[component(template = "PineCommandContent.poco", role = "panel", transition = "fade-scale")]
 pub struct PineCommandContent {}
 
 #[handlers]
@@ -476,7 +476,7 @@ impl PineCommandList {}
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandItem.poco", role = "item")]
+#[component(template = "PineCommandItem.poco", role = "item", animate = "flip")]
 pub struct PineCommandItem {
     #[prop]
     pub value: String,

@@ -332,7 +332,7 @@ impl PineHoverCardPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineHoverCardContent.poco", role = "panel")]
+#[component(template = "PineHoverCardContent.poco", role = "panel", transition = "fade-scale")]
 pub struct PineHoverCardContent {
     pub anchor: String,
     #[prop] pub side: String,

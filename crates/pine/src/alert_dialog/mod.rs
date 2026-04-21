@@ -135,7 +135,7 @@ impl PineAlertDialogPortal {}
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogOverlay.poco", role = "panel")]
+#[component(template = "PineAlertDialogOverlay.poco", role = "panel", transition = "fade")]
 pub struct PineAlertDialogOverlay {}
 
 #[handlers]
@@ -153,7 +153,7 @@ impl PineAlertDialogOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogContent.poco", role = "panel")]
+#[component(template = "PineAlertDialogContent.poco", role = "panel", transition = "fade-scale")]
 pub struct PineAlertDialogContent {
     pub title_id: String,
     pub description_id: String,

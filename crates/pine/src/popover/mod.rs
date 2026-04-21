@@ -124,7 +124,7 @@ impl PinePopoverPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PinePopoverContent.poco", role = "panel")]
+#[component(template = "PinePopoverContent.poco", role = "panel", transition = "slide-down")]
 pub struct PinePopoverContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// per-instance selector for anchor. Matches the
