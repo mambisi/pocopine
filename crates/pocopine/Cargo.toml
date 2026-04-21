@@ -6,8 +6,16 @@ license.workspace = true
 repository.workspace = true
 description = "Rust/WASM framework with an Alpine.js-style client runtime."
 
+[features]
+# Forwards the `devtools` feature of `pocopine-core`. Default-on so
+# `cargo add pocopine` keeps the in-browser scope inspector available.
+# Users who want minimum-binary release builds opt out with
+# `pocopine = { default-features = false }` in their Cargo.toml.
+default = ["devtools"]
+devtools = ["pocopine-core/devtools"]
+
 [dependencies]
-pocopine-core = { workspace = true }
+pocopine-core = { workspace = true, default-features = false }
 pocopine-macros = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

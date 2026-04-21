@@ -107,6 +107,10 @@ impl App {
     /// live scope, its current state, and its registered refs. Toggle
     /// visibility with `Ctrl+Shift+D`. Keep this off in release builds
     /// — the poll loop is cheap but not free.
+    ///
+    /// When the crate is built with `--no-default-features`
+    /// (devtools feature disabled), this method still exists for
+    /// API stability but the flag is ignored at `run()` time.
     pub fn with_devtools(mut self) -> Self {
         self.devtools = true;
         self
@@ -122,9 +126,12 @@ impl App {
         if !self.routes.is_empty() {
             router::init();
         }
+        #[cfg(feature = "devtools")]
         if self.devtools {
             crate::devtools::install();
         }
+        #[cfg(not(feature = "devtools"))]
+        let _ = self.devtools;
         let after = self.after_mount;
         if !after.is_empty() {
             spawn_local(async move {

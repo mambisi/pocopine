@@ -9,6 +9,15 @@ description = "Client-side reactive runtime for pocopine — a Rust/WASM port of
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Compile the devtools overlay (scope inspector + state panel).
+# Default-on: most users develop with it. Turn off with
+# `default-features = false` for minimal release bundles —
+# devtools.rs is ~1200 LOC of UI shell + MutationObserver glue
+# that's pure binary-size cost when unused.
+default = ["devtools"]
+devtools = []
+
 [dependencies]
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

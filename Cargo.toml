@@ -30,7 +30,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/mambisi/pocopine"
 
 [workspace.dependencies]
-pocopine-core = { path = "crates/pocopine-core", version = "0.1.0" }
+# `default-features = false` at the workspace level so per-crate
+# `default-features = false` opt-outs actually take effect. Users
+# of `pocopine` get devtools on by default via its own `default`
+# feature, which forwards `pocopine-core/devtools`.
+pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

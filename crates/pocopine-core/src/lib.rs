@@ -11,6 +11,7 @@
 pub mod app;
 pub mod computed;
 pub mod context;
+#[cfg(feature = "devtools")]
 pub mod devtools;
 pub mod directives;
 pub mod emit;
