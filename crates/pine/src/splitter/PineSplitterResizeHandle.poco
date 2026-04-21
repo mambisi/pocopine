@@ -1,0 +1,18 @@
+<root class="pine-splitter-resize-handle"
+      role="separator"
+      pp-ref="handle"
+      :tabindex="disabled ? -1 : 0"
+      :aria-orientation="direction == 'vertical' ? 'horizontal' : 'vertical'"
+      :aria-valuenow="aria_value"
+      :aria-disabled="disabled"
+      :data-direction="direction"
+      :data-disabled="disabled"
+      @pointerdown="on_pointer_down"
+      @keydown.arrow-right.prevent="step_inc"
+      @keydown.arrow-down.prevent="step_inc"
+      @keydown.arrow-left.prevent="step_dec"
+      @keydown.arrow-up.prevent="step_dec"
+      @keydown.home.prevent="to_min"
+      @keydown.end.prevent="to_max">
+  <slot></slot>
+</root>

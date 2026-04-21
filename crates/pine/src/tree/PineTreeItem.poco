@@ -1,0 +1,15 @@
+<root role="treeitem"
+      class="pine-tree-item"
+      pp-ref="item"
+      :id="item_id"
+      :aria-level="level"
+      :aria-expanded="has_children ? (expanded ? 'true' : 'false') : null"
+      :aria-selected="selected ? 'true' : 'false'"
+      :aria-disabled="disabled ? 'true' : null"
+      :aria-hidden="parent_visible ? null : 'true'"
+      :data-state="expanded ? 'open' : 'closed'"
+      :data-selected="selected"
+      :data-disabled="disabled"
+      @click.stop="select">
+  <slot></slot>
+</root>

@@ -1,0 +1,10 @@
+<root class="pine-scroll-area-viewport"
+      style="overflow: hidden; width: 100%; height: 100%;">
+  <div pp-ref="viewport"
+       class="pine-scroll-area-viewport-inner"
+       style="overflow: scroll; width: 100%; height: 100%; scrollbar-width: none; -ms-overflow-style: none;"
+       @scroll="on_scroll"
+       pp-resize.border-box="on_resize">
+    <slot></slot>
+  </div>
+</root>

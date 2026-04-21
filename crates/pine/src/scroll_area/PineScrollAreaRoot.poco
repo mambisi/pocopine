@@ -1,0 +1,9 @@
+<root class="pine-scroll-area-root"
+      style="position: relative;"
+      :data-type="type"
+      :data-has-overflow-y="has_vertical"
+      :data-has-overflow-x="has_horizontal"
+      @pointerenter="on_pointer_enter"
+      @pointerleave="on_pointer_leave">
+  <slot></slot>
+</root>

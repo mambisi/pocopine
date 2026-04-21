@@ -1,0 +1,10 @@
+<root class="pine-scroll-area-scrollbar"
+      pp-show="visible"
+      :data-orientation="orientation"
+      :data-state="visible ? 'visible' : 'hidden'"
+      :data-has-overflow="has_overflow"
+      :style="orientation == 'horizontal'
+                ? 'position: absolute; left: 0; right: 0; bottom: 0;'
+                : 'position: absolute; top: 0; right: 0; bottom: 0;'">
+  <slot></slot>
+</root>

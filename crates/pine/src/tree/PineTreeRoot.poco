@@ -1,0 +1,13 @@
+<root role="tree"
+      class="pine-tree-root"
+      pp-ref="tree"
+      :id="tree_id"
+      tabindex="0"
+      :aria-multiselectable="type == 'multiple' ? 'true' : 'false'"
+      :data-type="type"
+      @keydown.enter.prevent="select_active"
+      @keydown.space.prevent="select_active"
+      @keydown.arrow-right.prevent="expand_active"
+      @keydown.arrow-left.prevent="collapse_active">
+  <slot></slot>
+</root>

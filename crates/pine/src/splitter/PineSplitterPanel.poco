@@ -1,0 +1,5 @@
+<root class="pine-splitter-panel"
+      :data-direction="direction"
+      :style="'flex: 0 0 ' + size + '%; overflow: hidden;'">
+  <slot></slot>
+</root>

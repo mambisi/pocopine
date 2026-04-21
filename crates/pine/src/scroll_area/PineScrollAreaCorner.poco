@@ -1,0 +1,5 @@
+<root class="pine-scroll-area-corner"
+      pp-show="show"
+      style="position: absolute; right: 0; bottom: 0;">
+  <slot></slot>
+</root>

@@ -44,15 +44,18 @@ pub mod password_toggle_field;
 pub mod popover;
 pub mod progress;
 pub mod radio_group;
+pub mod scroll_area;
 pub mod select;
 pub mod separator;
 pub mod slider;
+pub mod splitter;
 pub mod switch;
 pub mod tabs;
 pub mod toggle;
 pub mod toggle_group;
 pub mod toolbar;
 pub mod tooltip;
+pub mod tree;
 
 pub use accordion::{
     PineAccordionContent, PineAccordionItem, PineAccordionRoot, PineAccordionTrigger,
@@ -113,7 +116,13 @@ pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
 pub use radio_group::{PineRadioGroupIndicator, PineRadioGroupItem, PineRadioGroupRoot};
+pub use scroll_area::{
+    PineScrollAreaCorner, PineScrollAreaRoot, PineScrollAreaScrollbar, PineScrollAreaThumb,
+    PineScrollAreaViewport,
+};
+pub use splitter::{PineSplitterGroup, PineSplitterPanel, PineSplitterResizeHandle};
 pub use switch::PineSwitch;
+pub use tree::{PineTreeItem, PineTreeRoot};
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
@@ -240,4 +249,14 @@ pub fn register_all() {
     PineCommandList::register();
     PineCommandItem::register();
     PineCommandEmpty::register();
+    PineScrollAreaRoot::register();
+    PineScrollAreaViewport::register();
+    PineScrollAreaScrollbar::register();
+    PineScrollAreaThumb::register();
+    PineScrollAreaCorner::register();
+    PineSplitterGroup::register();
+    PineSplitterPanel::register();
+    PineSplitterResizeHandle::register();
+    PineTreeRoot::register();
+    PineTreeItem::register();
 }
