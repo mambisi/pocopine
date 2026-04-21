@@ -122,7 +122,7 @@ pub use scroll_area::{
 };
 pub use splitter::{PineSplitterGroup, PineSplitterPanel, PineSplitterResizeHandle};
 pub use switch::PineSwitch;
-pub use tree::{PineTreeItem, PineTreeRoot};
+pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
@@ -259,4 +259,5 @@ pub fn register_all() {
     PineSplitterResizeHandle::register();
     PineTreeRoot::register();
     PineTreeItem::register();
+    PineTreeItemToggle::register();
 }

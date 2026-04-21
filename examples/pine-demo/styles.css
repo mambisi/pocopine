@@ -1125,3 +1125,140 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+
+/* ─── PineScrollArea ──────────────────────────────────────── */
+
+.sa-demo-frame {
+  height: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.pine-scroll-area-root { height: 100%; }
+.sa-long { padding: 1rem; }
+.sa-long h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+.sa-long p { margin: 0 0 0.75rem; color: var(--fg); }
+
+.pine-scroll-area-scrollbar[data-orientation="vertical"] {
+  width: 10px;
+  padding: 2px;
+  background: transparent;
+  transition: opacity 180ms ease;
+}
+.pine-scroll-area-scrollbar[data-orientation="horizontal"] {
+  height: 10px;
+  padding: 2px;
+  background: transparent;
+  transition: opacity 180ms ease;
+}
+.pine-scroll-area-scrollbar[data-state="visible"] { opacity: 1; }
+.pine-scroll-area-scrollbar[data-state="hidden"] { opacity: 0; }
+.pine-scroll-area-thumb {
+  background: var(--bg-hover);
+  border-radius: 999px;
+  min-height: 20px;
+  min-width: 20px;
+  transition: background 120ms ease;
+}
+.pine-scroll-area-thumb:hover { background: #a1a1aa; }
+.pine-scroll-area-corner {
+  width: 10px;
+  height: 10px;
+  background: var(--bg-subtle);
+}
+
+/* ─── PineSplitter ────────────────────────────────────────── */
+
+.splitter-frame {
+  height: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.splitter-pane {
+  height: 100%;
+  padding: 1rem;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  background: var(--bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pine-splitter-panel:nth-child(odd) .splitter-pane {
+  background: var(--bg);
+}
+.pine-splitter-resize-handle[data-direction="horizontal"] {
+  flex: 0 0 6px;
+  background: var(--border);
+  cursor: col-resize;
+  transition: background 120ms ease;
+}
+.pine-splitter-resize-handle[data-direction="vertical"] {
+  flex: 0 0 6px;
+  background: var(--border);
+  cursor: row-resize;
+  transition: background 120ms ease;
+}
+.pine-splitter-resize-handle:hover,
+.pine-splitter-resize-handle:focus-visible {
+  background: var(--brand);
+  outline: none;
+}
+.pine-splitter-resize-handle[data-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ─── PineTree ────────────────────────────────────────────── */
+
+.tree-demo {
+  display: block;
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 280px;
+  overflow: auto;
+  font-size: 0.875rem;
+  outline: none;
+}
+.tree-demo:focus { box-shadow: 0 0 0 2px rgba(0, 112, 243, 0.2); }
+.pine-tree-item {
+  display: block;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.pine-tree-item:hover { background: var(--bg-hover); }
+.pine-tree-item[data-selected="true"] { background: var(--brand); color: var(--brand-fg); }
+.pine-tree-item[data-highlighted="true"] {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.pine-tree-item[aria-hidden="true"] { display: none; }
+
+/* Nested items reset their own highlight / padding context so the
+   parent's background doesn't bleed through. */
+.pine-tree-item .pine-tree-item {
+  padding-left: 1.25rem;
+  cursor: pointer;
+}
+
+.pine-tree-item-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1em;
+  margin-right: 0.25rem;
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.pine-tree-item-toggle[data-state="open"] { transform: rotate(90deg); }
+
+.tree-leaf-spacer {
+  display: inline-block;
+  width: 1.1em;
+  margin-right: 0.25rem;
+}

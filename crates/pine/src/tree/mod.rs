@@ -42,6 +42,7 @@ use pocopine::{current_scope_id, inject, inject_key, provide, refs};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineTreeRoot>);
+inject_key!(ITEM: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -222,6 +223,12 @@ impl PineTreeItem {
     pub fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.item_id = format!("pine-tree-item-{}", scope.0);
+            // Make this Item's scope id injectable by any Toggle
+            // sub-component the author places in our slot — slot
+            // content binds to the CALLER's scope for directive
+            // dispatch, so the Toggle can't `@click="toggle"`
+            // us directly.
+            provide(&ITEM, scope);
         }
         self.parent_visible = true;
         if let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) {
@@ -339,4 +346,56 @@ fn compute_parent_visible(ancestor_values: &[String], expanded: &[String]) -> bo
     ancestor_values
         .iter()
         .all(|a| expanded.iter().any(|e| e == a))
+}
+
+// ── Toggle ────────────────────────────────────────────────────────
+
+/// `<pine-tree-item-toggle>` — click target that expands /
+/// collapses its enclosing Item. Mirrors the Item's `expanded`
+/// + `has_children` so templates can show / hide it and rotate
+/// the chevron.
+///
+/// Needed because the Item's slot content is dispatched in the
+/// CALLER's scope (see `walker::materialize_slot`) — a plain
+/// `<button @click="toggle">` inside the slot would look up
+/// `toggle` on the caller, not on the Item. The Toggle
+/// component sidesteps that by being its own scope and
+/// reaching the Item via `inject`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PineTreeItemToggle.poco", role = "interactive")]
+pub struct PineTreeItemToggle {
+    pub expanded: bool,
+    pub has_children: bool,
+}
+
+#[handlers]
+impl PineTreeItemToggle {
+    pub fn on_setup(&mut self) {
+        if let Some(item) = inject::<ScopeId>(&ITEM) {
+            if let Some(scope) = Scope::find(item) {
+                let s = scope.state.borrow();
+                self.expanded = s.get("expanded").as_bool().unwrap_or(false);
+                self.has_children = s.get("has_children").as_bool().unwrap_or(false);
+            }
+        }
+    }
+
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(item) = inject::<ScopeId>(&ITEM) else { return };
+        let h_exp = handle.clone();
+        pocopine::watch_scope_field::<bool, _>(item, "expanded", move |&v, _| {
+            h_exp.update(|s| s.expanded = v);
+        });
+        let h_has = handle;
+        pocopine::watch_scope_field::<bool, _>(item, "has_children", move |&v, _| {
+            h_has.update(|s| s.has_children = v);
+        });
+    }
+
+    pub fn click(&mut self) {
+        let Some(item_scope) = inject::<ScopeId>(&ITEM) else { return };
+        let Some(scope) = Scope::find(item_scope) else { return };
+        let Some(inner) = scope.typed::<PineTreeItem>() else { return };
+        Handle::new(inner, item_scope).update(|s: &mut PineTreeItem| s.toggle());
+    }
 }

@@ -78,6 +78,20 @@ pub struct PineDemoApp {
 
     /// Command palette — most recently invoked command label.
     pub last_command: String,
+
+    /// ScrollArea demo — which `type` the user selected in the
+    /// radio. Flows into the root's `type` attr so users can try
+    /// `auto` / `always` / `scroll` / `hover` in place.
+    pub scroll_type: String,
+
+    /// Splitter demo — current `Vec<f64>` sizes. Bound two-way
+    /// via `pp-model:sizes` on the Group so drags + keyboard
+    /// steps flow back into this field and the UI shows the
+    /// live layout.
+    pub splitter_sizes: Vec<f64>,
+
+    /// Tree demo — currently-selected path.
+    pub tree_value: String,
 }
 
 #[handlers]
@@ -91,6 +105,9 @@ impl PineDemoApp {
         self.plan = "free".into();
         self.align = "left".into();
         self.volume = 40.0;
+        self.scroll_type = "hover".into();
+        self.splitter_sizes = vec![25.0, 50.0, 25.0];
+        self.tree_value = String::new();
     }
 
     pub fn bump(&mut self) {

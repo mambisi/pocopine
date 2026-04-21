@@ -133,9 +133,23 @@ impl PineSplitterGroup {
     ) -> usize {
         let idx = self.panel_scopes.len();
         self.panel_scopes.push(scope_id.0);
-        self.sizes.push(default_size);
-        self.min_sizes.push(min_size);
-        self.max_sizes.push(max_size);
+        // Grow parallel vectors — but preserve any pre-seeded
+        // value in `sizes` (e.g. parent hydrated via
+        // `pp-model:sizes="[25, 50, 25]"`). The min/max bounds
+        // come from the Panel's own props regardless.
+        if self.sizes.len() <= idx {
+            self.sizes.push(default_size);
+        }
+        if self.min_sizes.len() <= idx {
+            self.min_sizes.push(min_size);
+        } else {
+            self.min_sizes[idx] = min_size;
+        }
+        if self.max_sizes.len() <= idx {
+            self.max_sizes.push(max_size);
+        } else {
+            self.max_sizes[idx] = max_size;
+        }
         self.normalize_sizes();
         idx
     }

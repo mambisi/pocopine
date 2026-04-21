@@ -1,0 +1,9 @@
+<root class="pine-tree-item-toggle"
+      role="button"
+      pp-show="has_children"
+      :aria-expanded="expanded ? 'true' : 'false'"
+      :data-state="expanded ? 'open' : 'closed'"
+      tabindex="-1"
+      @click.stop="click">
+  <slot></slot>
+</root>
