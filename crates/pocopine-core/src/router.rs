@@ -251,6 +251,12 @@ fn mount_current() {
         }
     });
 
+    // Devtools hook — fires on every resolved route change, even
+    // when there's no matching component (404). The router panel
+    // uses this to build its recent-history view.
+    #[cfg(feature = "devtools")]
+    crate::devtools::hooks::fire_route_change(&path, &params);
+
     let Some(name) = component_name else { return };
 
     // Paint into the outlet. `replace_children` removes the previous

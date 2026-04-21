@@ -70,6 +70,7 @@ features = [
     "NamedNodeMap",
     "Node",
     "NodeList",
+    "Performance",
     "PopStateEvent",
     "Text",
     "Request",

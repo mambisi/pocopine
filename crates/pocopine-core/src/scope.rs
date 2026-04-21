@@ -284,9 +284,21 @@ impl Scope {
     /// triggers every key on this scope so effects re-evaluate.
     pub fn invoke(&self, key: &str, args: &Array) -> JsValue {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
+        #[cfg(feature = "devtools")]
+        let start = crate::devtools::ring::now_ms_for_scope();
         let out = self.state.borrow_mut().invoke(key, args);
         CURRENT_SCOPE_ID.with(|c| c.set(prev));
         trigger_scope(self.id);
+        // Devtools hook — fired after trigger_scope so any effect
+        // runs scheduled by this handler are visible on the timeline
+        // with a seq > this handler's.
+        #[cfg(feature = "devtools")]
+        {
+            let dur = std::time::Duration::from_micros(
+                ((crate::devtools::ring::now_ms_for_scope() - start).max(0.0) * 1000.0) as u64,
+            );
+            crate::devtools::hooks::fire_handler_invoke(self.id, key, args, dur);
+        }
         out
     }
 }

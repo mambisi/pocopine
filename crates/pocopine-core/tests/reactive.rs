@@ -317,3 +317,100 @@ fn update_always_triggers_even_when_unchanged() {
     flush_sync();
     assert_eq!(runs.get(), 2, "update must always trigger");
 }
+
+// ── devtools hook tests (PR B) ────────────────────────────────────
+//
+// Verify the cfg-gated tap points in reactive/signal/computed fire
+// the registered handlers. These only build when the `devtools`
+// feature is on (default). When the feature is off the module
+// `pocopine_core::devtools` doesn't exist and the tests skip.
+
+#[cfg(feature = "devtools")]
+mod devtools_hooks {
+    use super::*;
+    use pocopine_core::devtools::{hooks, ring};
+    use std::rc::Rc;
+
+    fn teardown() {
+        hooks::_reset();
+        ring::_clear();
+    }
+
+    #[wasm_bindgen_test]
+    fn on_signal_trigger_fires_on_set_when_changed() {
+        setup();
+        teardown();
+        let hits = Rc::new(Cell::new(0u32));
+        let hits_w = hits.clone();
+        hooks::set_on_signal_trigger(Rc::new(move |_id| {
+            hits_w.set(hits_w.get() + 1);
+        }));
+
+        let (_s, setter) = signal(0_i32);
+        setter.set(1);
+        assert_eq!(hits.get(), 1, "first set fires the signal hook");
+
+        // Same-value set should NOT fire — the equality guard in
+        // Setter::set skips the trigger entirely.
+        setter.set(1);
+        assert_eq!(hits.get(), 1, "same-value set must not fire the hook");
+
+        setter.set(2);
+        assert_eq!(hits.get(), 2);
+
+        teardown();
+    }
+
+    #[wasm_bindgen_test]
+    fn on_effect_run_fires_at_least_once() {
+        setup();
+        teardown();
+        let hits = Rc::new(Cell::new(0u32));
+        let hits_w = hits.clone();
+        hooks::set_on_effect_run(Rc::new(move |_id, _scope, _dur| {
+            hits_w.set(hits_w.get() + 1);
+        }));
+
+        let (s, setter) = signal(0_i32);
+        let s_c = s.clone();
+        effect(move || {
+            let _ = s_c.get();
+        });
+        // Effect runs immediately on registration.
+        assert!(hits.get() >= 1);
+
+        let before = hits.get();
+        setter.set(42);
+        flush_sync();
+        assert!(hits.get() > before, "effect rerun must fire the hook again");
+
+        teardown();
+    }
+
+    #[wasm_bindgen_test]
+    fn timeline_push_effect_run_caps_at_cap() {
+        setup();
+        teardown();
+        // Install the default handler (ring push) directly.
+        hooks::set_on_effect_run(Rc::new(|id, scope, dur| {
+            ring::push_effect_run(id, scope, dur);
+        }));
+
+        let (s, setter) = signal(0_i32);
+        let s_c = s.clone();
+        effect(move || {
+            let _ = s_c.get();
+        });
+
+        // Fire enough sets to overflow the ring (CAP = 200).
+        for i in 0..250 {
+            setter.set(i);
+            flush_sync();
+        }
+        let len = ring::len();
+        assert!(len > 0, "ring must have captured events");
+        assert!(len <= 200, "ring must cap at CAP (200), got {len}");
+
+        teardown();
+    }
+}

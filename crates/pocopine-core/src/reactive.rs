@@ -176,8 +176,34 @@ fn run_effect(id: EffectId, f: &EffectFn) {
     run_cleanups(id);
     clear_deps_for(id);
     let prev = CURRENT_EFFECT.with(|c| c.replace(Some(id)));
+    #[cfg(feature = "devtools")]
+    let start = now_ms();
     f();
     CURRENT_EFFECT.with(|c| c.set(prev));
+    // Devtools hook — fires at the END so `duration` covers the full
+    // body (including track calls) but excludes cleanup + dep-clear.
+    #[cfg(feature = "devtools")]
+    {
+        let dur = std::time::Duration::from_micros(
+            ((now_ms() - start).max(0.0) * 1000.0) as u64,
+        );
+        crate::devtools::hooks::fire_effect_run(id, None, dur);
+    }
+}
+
+#[cfg(feature = "devtools")]
+fn now_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now())
+            .unwrap_or(0.0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0.0
+    }
 }
 
 fn clear_deps_for(id: EffectId) {
@@ -338,6 +364,10 @@ fn dispatch_subs(subs: &HashSet<EffectId>) {
     // Drain scratch into dispatch. Schedulers fire inline; the rest
     // accumulate in QUEUE. No intermediate HashSet<EffectId> clone.
     let mut any_queued = false;
+    // Devtools — collect the just-queued ids so the hook sees the
+    // delta, not the whole queue. Empty when feature is off.
+    #[cfg(feature = "devtools")]
+    let mut newly_queued: Vec<EffectId> = Vec::new();
     for i in 0..ids_len {
         let eid = TRIGGER_SCRATCH.with(|s| s.borrow()[i]);
         let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
@@ -348,10 +378,16 @@ fn dispatch_subs(subs: &HashSet<EffectId>) {
                     q.borrow_mut().insert(eid);
                 });
                 any_queued = true;
+                #[cfg(feature = "devtools")]
+                newly_queued.push(eid);
             }
         }
     }
     TRIGGER_SCRATCH.with(|s| s.borrow_mut().clear());
+    #[cfg(feature = "devtools")]
+    if !newly_queued.is_empty() {
+        crate::devtools::hooks::fire_queue_change(&newly_queued);
+    }
     if !any_queued {
         return;
     }
@@ -384,6 +420,11 @@ pub fn trigger_signal(signal_id: SignalId) {
     if let Some(subs) = subs {
         dispatch_subs(&subs);
     }
+    // Devtools hook — fires on every signal trigger regardless of
+    // whether there are subscribers, so `last_changed` still updates
+    // for "unread" signals the graph panel displays.
+    #[cfg(feature = "devtools")]
+    crate::devtools::hooks::fire_signal_trigger(signal_id);
 }
 
 /// Drop every reactivity-side entry associated with `scope_id`.
@@ -497,6 +538,56 @@ pub fn stats() -> (usize, usize) {
             .sum::<usize>()
     });
     (EFFECTS.with(|e| e.borrow().len()), dep_count)
+}
+
+// ── devtools read-only snapshots ─────────────────────────────────
+//
+// Cheap-to-build snapshots of internal state for the devtools
+// panels (PR D onwards). Gated behind the devtools feature so they
+// don't contribute to default-feature-off release binaries.
+
+/// Snapshot of the effect ids currently queued for the next flush.
+/// Order is unspecified — `QUEUE` is a `HashSet`. Consumers that
+/// need deterministic ordering should sort by id at the display
+/// boundary.
+#[cfg(feature = "devtools")]
+pub fn queue_snapshot() -> Vec<EffectId> {
+    QUEUE.with(|q| q.borrow().iter().copied().collect())
+}
+
+/// Per-signal subscriber count + id. Consumed by the signal-graph
+/// panel — combined with `hooks::signal_last_changed` it drives the
+/// "what's reactive in this app?" view.
+#[cfg(feature = "devtools")]
+#[derive(Debug, Clone)]
+pub struct SignalSnapshot {
+    pub id: SignalId,
+    pub subscribers: usize,
+}
+
+/// Every signal with at least one subscriber. Signals that nothing
+/// is watching don't appear — they'd fill the panel with noise for
+/// no useful information.
+#[cfg(feature = "devtools")]
+pub fn signal_graph_snapshot() -> Vec<SignalSnapshot> {
+    SIGNAL_DEPS.with(|d| {
+        d.borrow()
+            .iter()
+            .map(|(id, subs)| SignalSnapshot {
+                id: *id,
+                subscribers: subs.len(),
+            })
+            .collect()
+    })
+}
+
+/// Does `effect_id` route through a custom scheduler? True for
+/// computeds (see `computed::computed`). The flush-queue panel
+/// distinguishes these because they don't land in the default
+/// microtask queue.
+#[cfg(feature = "devtools")]
+pub fn is_scheduler_routed(id: EffectId) -> bool {
+    SCHEDULERS.with(|s| s.borrow().contains_key(&id))
 }
 
 // Keep unused-import noise away when `wasm-bindgen-futures` features drift.

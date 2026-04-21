@@ -164,6 +164,38 @@ pub fn inject<T: Clone + Any + 'static>(key: &InjectKey<T>) -> Option<T> {
     }
 }
 
+/// Devtools-only accessor: every (key-id, provider-scope) pair
+/// resolvable from `scope`. Walks the same parent chain as
+/// [`inject`] but collects instead of returning on the first hit,
+/// so the panel can show the full chain. The key's debug `name`
+/// isn't recoverable from its id alone — pair it with a separate
+/// key-id → name registry if needed; for now the panel shows the
+/// numeric id + the provider scope id.
+///
+/// Note: this is a best-effort introspection. Keys minted at
+/// runtime via [`InjectKey::new`] have module-independent debug
+/// names that aren't registered anywhere; panels using this helper
+/// should treat names as optional.
+#[cfg(feature = "devtools")]
+pub fn inject_chain(scope: ScopeId) -> Vec<(u64, ScopeId)> {
+    let mut out: Vec<(u64, ScopeId)> = Vec::new();
+    let mut cur = scope;
+    loop {
+        PROVIDES.with(|p| {
+            if let Some(entries) = p.borrow().get(&cur) {
+                for key_id in entries.keys() {
+                    out.push((*key_id, cur));
+                }
+            }
+        });
+        match parent_of(cur) {
+            Some(parent) => cur = parent,
+            None => break,
+        }
+    }
+    out
+}
+
 /// Drop all provide entries + the parent pointer for `scope`.
 /// Called from `Scope::remove` alongside the other per-scope
 /// side-table cleaners.

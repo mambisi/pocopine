@@ -27,10 +27,13 @@ use crate::scope::Scope;
 
 mod event;
 mod highlight;
+pub mod hooks;
 mod inspect;
 mod panel;
 mod panels;
+pub mod ring;
 mod shell;
+mod signal_last;
 mod style;
 mod util;
 
@@ -57,11 +60,74 @@ pub fn install() {
     style::inject();
     attach_key_listener();
     register_builtin_panels();
+    register_default_hooks();
     start_render_loop();
 }
 
 fn register_builtin_panels() {
     panel::register(Box::new(panels::scope::ScopeInspector));
+}
+
+/// Register the default push-style handlers: effect-run / handler-
+/// invoke events funnel into the timeline ring; signal triggers
+/// stamp a last-changed timestamp; queue changes and route changes
+/// are stored in their own side tables for PR D/F panels.
+fn register_default_hooks() {
+    use std::rc::Rc;
+
+    // Timeline: effect runs.
+    hooks::set_on_effect_run(Rc::new(|id, scope, dur| {
+        ring::push_effect_run(id, scope, dur);
+    }));
+
+    // Timeline: handler invocations. Build a short args summary
+    // inline — `Array::length` is cheap, stringifying each value
+    // through the shared `util::stringify` caps individual slots at
+    // ~80 chars; joined total clamped at 200 so the timeline row
+    // stays one line.
+    hooks::set_on_handler_invoke(Rc::new(|scope, name, args, dur| {
+        let summary = summarise_args(args);
+        ring::push_handler(scope, name, summary, dur);
+    }));
+
+    // Signal triggers → write last-changed.
+    hooks::set_on_signal_trigger(Rc::new(|id| {
+        signal_last::record(id);
+    }));
+
+    // Queue changes / route changes: PR D / PR F panels will
+    // consume via their own side tables. For now the hook is
+    // registered with a no-op so the fire path exists end-to-end.
+    hooks::set_on_queue_change(Rc::new(|_added| {}));
+    hooks::set_on_route_change(Rc::new(|_path, _params| {}));
+}
+
+fn summarise_args(args: &js_sys::Array) -> String {
+    const MAX_TOTAL: usize = 200;
+    let n = args.length();
+    if n == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for i in 0..n {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&util::stringify(&args.get(i)));
+        if out.chars().count() >= MAX_TOTAL {
+            break;
+        }
+    }
+    if out.chars().count() > MAX_TOTAL {
+        out.truncate(
+            out.char_indices()
+                .nth(MAX_TOTAL)
+                .map(|(i, _)| i)
+                .unwrap_or(out.len()),
+        );
+        out.push('…');
+    }
+    out
 }
 
 fn attach_key_listener() {
