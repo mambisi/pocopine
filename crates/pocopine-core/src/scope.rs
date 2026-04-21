@@ -108,6 +108,26 @@ pub trait ComponentState: 'static {
         false
     }
 
+    /// RFC-038 — enter preset name the component declared at
+    /// `#[component(transition = "…")]` (or `transition_in`). The
+    /// walker calls this once post-template-clone to stamp the
+    /// preset's `pp-transition:*` attrs on the rendered root.
+    fn transition_in_preset(&self) -> &'static str {
+        ""
+    }
+
+    /// RFC-038 — leave preset name (`transition` or `transition_out`).
+    fn transition_out_preset(&self) -> &'static str {
+        ""
+    }
+
+    /// RFC-038 — keyed-pp-for layout-animation kind (only `"flip"`
+    /// today). The walker's for_.rs hooks check this to decide
+    /// whether to FLIP-animate reordered clones.
+    fn animate_kind(&self) -> &'static str {
+        ""
+    }
+
     /// Human-readable tag / type name used by devtools. Default
     /// `"?"`; `#[component]` / `#[store]` override with the concrete
     /// kebab-case name.

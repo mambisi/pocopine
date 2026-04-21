@@ -85,6 +85,30 @@ pub trait HandlerDispatch {
     fn has_on_unmount(&self) -> bool {
         false
     }
+
+    /// RFC-038 — preset name the component animates with by default
+    /// on enter (symmetric if `transition_out_preset` returns the
+    /// same). Empty string means "no transition preset declared on
+    /// this component". The `#[component(transition = "…")]` macro
+    /// arg overrides; `transition_in = "…"` wins over `transition`
+    /// for this side.
+    fn transition_in_preset(&self) -> &'static str {
+        ""
+    }
+
+    /// RFC-038 — preset name for the leave (out) phase. See
+    /// [`Self::transition_in_preset`] for the override rules.
+    fn transition_out_preset(&self) -> &'static str {
+        ""
+    }
+
+    /// RFC-038 — keyed-pp-for layout animation kind. Currently
+    /// `"flip"` is the only recognised value; everything else is a
+    /// no-op (forwards-compatible). Empty string = no animate kind
+    /// declared.
+    fn animate_kind(&self) -> &'static str {
+        ""
+    }
 }
 
 /// Convert a raw `JsValue` into the handler-argument type the author

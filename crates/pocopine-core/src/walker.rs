@@ -361,6 +361,46 @@ fn mount_component(el: &Element, tag: &str) {
 
         // Fallthrough (RFC-010).
         apply_fallthrough_attrs(el, &root, &scope);
+
+        // RFC-038 — if the component declared default transition
+        // presets via `#[component(transition = "…")]` (or the
+        // asymmetric `transition_in` / `transition_out` split), stamp
+        // them on the rendered root so the pp-transition state
+        // machine picks them up on enter/leave. Author-side
+        // `pp-transition` / `transition` attrs forwarded through
+        // `apply_fallthrough_attrs` win — `apply_preset` only fills
+        // in attrs the rendered root doesn't already carry.
+        let (tr_in, tr_out, ak) = {
+            let s = scope.state.borrow();
+            (
+                s.transition_in_preset(),
+                s.transition_out_preset(),
+                s.animate_kind(),
+            )
+        };
+        if !tr_in.is_empty() || !tr_out.is_empty() {
+            let effective_in = if tr_in.is_empty() { "none" } else { tr_in };
+            let effective_out = if tr_out.is_empty() { "none" } else { tr_out };
+            // Don't clobber author-forwarded attrs on either phase.
+            if !root.has_attribute("pp-transition:enter")
+                && !root.has_attribute("pp-transition:enter-start")
+                && !root.has_attribute("pp-transition:enter-end")
+                && !root.has_attribute("pp-transition:leave")
+                && !root.has_attribute("pp-transition:leave-start")
+                && !root.has_attribute("pp-transition:leave-end")
+                && !root.has_attribute("pp-transition")
+                && !root.has_attribute("pp-transition:in")
+                && !root.has_attribute("pp-transition:out")
+            {
+                crate::animate::apply_preset(&root, effective_in, effective_out);
+            }
+        }
+        // Stamp `data-pp-animate="<kind>"` on the outer custom tag
+        // so pp-for's keyed reconcile can cheaply check whether to
+        // FLIP each reused clone without walking the scope tree.
+        if !ak.is_empty() {
+            let _ = el.set_attribute("data-pp-animate", ak);
+        }
     }
 
     // Mark the tag as mounted so the recursive walk doesn't re-enter this

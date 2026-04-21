@@ -82,6 +82,20 @@ struct ComponentArgs {
     template: Option<LitStr>,
     style: Option<LitStr>,
     role: Option<LitStr>,
+    /// RFC-038 — symmetric enter/leave preset name. Default preset
+    /// the primitive animates with; authors override per-instance via
+    /// the `transition` HTML attribute.
+    transition: Option<LitStr>,
+    /// RFC-038 — asymmetric enter-only preset. Wins over `transition`
+    /// for the enter phase when both are set.
+    transition_in: Option<LitStr>,
+    /// RFC-038 — asymmetric leave-only preset. Wins over `transition`
+    /// for the leave phase when both are set.
+    transition_out: Option<LitStr>,
+    /// RFC-038 — keyed-pp-for layout animation. Currently only
+    /// `"flip"` is recognised; any other value is a no-op so the arg
+    /// is forwards-compatible with future modes (slide, stagger, …).
+    animate: Option<LitStr>,
 }
 
 impl Parse for ComponentArgs {
@@ -107,10 +121,19 @@ impl Parse for ComponentArgs {
                 args.style = Some(lit);
             } else if kv.path.is_ident("role") {
                 args.role = Some(lit);
+            } else if kv.path.is_ident("transition") {
+                args.transition = Some(lit);
+            } else if kv.path.is_ident("transition_in") {
+                args.transition_in = Some(lit);
+            } else if kv.path.is_ident("transition_out") {
+                args.transition_out = Some(lit);
+            } else if kv.path.is_ident("animate") {
+                args.animate = Some(lit);
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
-                    "unknown key — expected one of: name, template, style, role",
+                    "unknown key — expected one of: name, template, style, role, \
+                     transition, transition_in, transition_out, animate",
                 ));
             }
         }
@@ -333,6 +356,29 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! { None },
     };
 
+    // RFC-038 transition / animate args → string literals the
+    // generated `ComponentState` impl returns. Precedence:
+    //   transition_in wins for enter, transition_out wins for leave,
+    //   `transition` provides the fallback for whichever isn't
+    //   explicitly set. Missing entirely → "". `animate = "flip"`
+    //   sets the animate-kind literal; anything else falls back to
+    //   the raw string for forwards compatibility.
+    let transition_sym = args.transition.as_ref().map(|l| l.value()).unwrap_or_default();
+    let transition_in = args
+        .transition_in
+        .as_ref()
+        .map(|l| l.value())
+        .unwrap_or_else(|| transition_sym.clone());
+    let transition_out = args
+        .transition_out
+        .as_ref()
+        .map(|l| l.value())
+        .unwrap_or_else(|| transition_sym.clone());
+    let animate_kind = args.animate.as_ref().map(|l| l.value()).unwrap_or_default();
+    let transition_in_literal = proc_macro2::Literal::string(&transition_in);
+    let transition_out_literal = proc_macro2::Literal::string(&transition_out);
+    let animate_literal = proc_macro2::Literal::string(&animate_kind);
+
     let register_template_stmt = quote! {
         const _: &str = include_str!(#template_path);
         ::pocopine::__private::register_template(
@@ -477,6 +523,15 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn has_on_unmount(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_on_unmount(self)
+            }
+            fn transition_in_preset(&self) -> &'static str {
+                #transition_in_literal
+            }
+            fn transition_out_preset(&self) -> &'static str {
+                #transition_out_literal
+            }
+            fn animate_kind(&self) -> &'static str {
+                #animate_literal
             }
             fn type_name(&self) -> &'static str {
                 #name_str

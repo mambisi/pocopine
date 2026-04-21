@@ -261,6 +261,20 @@ fn run_keyed(
             // which frees effects + scope.
         }
 
+        // RFC-038 — FLIP prep: snapshot client rects for every
+        // reused clone BEFORE the insert_before loop below moves
+        // them. We check `data-pp-animate="flip"` to skip scopes
+        // that don't opt in (no motion tax on normal lists).
+        let mut flip_snapshots: HashMap<String, web_sys::DomRect> = HashMap::new();
+        for entry in &fresh {
+            if entry.element.parent_node().is_some()
+                && entry.element.get_attribute("data-pp-animate").as_deref() == Some("flip")
+            {
+                flip_snapshots
+                    .insert(entry.key.clone(), entry.element.get_bounding_client_rect());
+            }
+        }
+
         // Reorder + walk new clones. For each entry in the new
         // sequence, position it before the template anchor. For
         // already-attached clones this moves them if needed and
@@ -281,6 +295,21 @@ fn run_keyed(
         // chain if it needs to.
         for el in newly_walked {
             walker::walk(&el);
+        }
+
+        // RFC-038 — FLIP play phase. For each reused clone that was
+        // snapshotted, kick off the inverse-transform-to-identity
+        // animation via WAAPI. Runs AFTER the walker stamps
+        // `data-pp-animate` + inserts, so the elements' new
+        // positions are real.
+        for entry in &fresh {
+            if let Some(old_rect) = flip_snapshots.remove(&entry.key) {
+                crate::animate::flip_from_snapshot(
+                    &entry.element,
+                    old_rect,
+                    crate::animate::FlipOptions::default(),
+                );
+            }
         }
 
         *prior.borrow_mut() = fresh;

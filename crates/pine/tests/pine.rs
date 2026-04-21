@@ -4644,3 +4644,83 @@ async fn animate_flip_applies_inverse_translate() {
     );
     host.remove();
 }
+
+// ─── Macro-declared `transition` arg (RFC-038 PR 2) ───────────────
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(
+    template = "DialogHost.html",
+    name = "animate-fade-host",
+    transition = "fade"
+)]
+struct AnimateFadeHost {
+    dialog_open: bool,
+}
+#[handlers]
+impl AnimateFadeHost {}
+
+/// `#[component(transition = "fade")]` stamps the six pp-transition:*
+/// class attrs on the rendered inner root at mount time — same
+/// shape as calling `apply_preset(&root, "fade", "fade")` by hand.
+#[wasm_bindgen_test]
+async fn animate_macro_transition_stamps_preset_on_root() {
+    pocopine_core::animate::install();
+    AnimateFadeHost::register();
+    let host = mount("<animate-fade-host></animate-fade-host>");
+    tick().await;
+    tick().await;
+    // The inner rendered root lives inside the custom tag. The
+    // macro-generated `ComponentState::transition_in_preset()` fires
+    // during mount_component → apply_preset runs on the inner root
+    // (the template's `<div>`).
+    let inner = host
+        .query_selector("animate-fade-host > div")
+        .unwrap()
+        .expect("inner root div");
+    assert_eq!(
+        inner.get_attribute("pp-transition:enter").as_deref(),
+        Some("pp-tx-fade-base"),
+    );
+    assert_eq!(
+        inner.get_attribute("pp-transition:enter-start").as_deref(),
+        Some("pp-tx-fade-from"),
+    );
+    assert_eq!(
+        inner.get_attribute("pp-transition:leave-end").as_deref(),
+        Some("pp-tx-fade-from"),
+    );
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(
+    template = "DialogHost.html",
+    name = "animate-flip-host",
+    animate = "flip"
+)]
+struct AnimateFlipHost {
+    dialog_open: bool,
+}
+#[handlers]
+impl AnimateFlipHost {}
+
+/// `#[component(animate = "flip")]` stamps `data-pp-animate="flip"`
+/// on the custom element tag so pp-for's keyed reconcile can
+/// cheap-check it when deciding whether to FLIP.
+#[wasm_bindgen_test]
+async fn animate_macro_animate_kind_stamps_data_attr() {
+    pocopine_core::animate::install();
+    AnimateFlipHost::register();
+    let host = mount("<animate-flip-host></animate-flip-host>");
+    tick().await;
+    tick().await;
+    let tag = host
+        .query_selector("animate-flip-host")
+        .unwrap()
+        .expect("custom tag in DOM");
+    assert_eq!(
+        tag.get_attribute("data-pp-animate").as_deref(),
+        Some("flip"),
+    );
+    host.remove();
+}
