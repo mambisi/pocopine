@@ -85,6 +85,13 @@ fn get_or_init(el: &Element) -> Option<Rc<RefCell<State>>> {
         let id = v as u64;
         return TX.with(|m| m.borrow().get(&id).cloned());
     }
+    // RFC-038 preset shorthand — if the element carries
+    // `pp-transition="fade"` (symmetric) or the asymmetric split
+    // `pp-transition:in="scale"` / `pp-transition:out="fade"`,
+    // expand to the six `pp-transition:*` attrs here before
+    // parsing. `apply_preset` is a no-op when the element already
+    // has the six attrs (or when the name is `none` / unknown).
+    expand_preset_shorthand(el);
     let state = parse_attrs(el);
     if !state.any() {
         return None;
@@ -102,6 +109,37 @@ fn get_or_init(el: &Element) -> Option<Rc<RefCell<State>>> {
         &JsValue::from_f64(id as f64),
     );
     Some(rc)
+}
+
+/// If the element carries a preset shorthand (`pp-transition="fade"`
+/// or `pp-transition:in` / `pp-transition:out`), expand it into the
+/// six `pp-transition:*` class attrs via `animate::apply_preset`.
+/// The already-six-attr author path stays untouched — explicit attrs
+/// win if both are present (we only fill in attrs the author didn't
+/// already set).
+fn expand_preset_shorthand(el: &Element) {
+    let sym = el.get_attribute("pp-transition");
+    let in_attr = el.get_attribute("pp-transition:in");
+    let out_attr = el.get_attribute("pp-transition:out");
+    if sym.is_none() && in_attr.is_none() && out_attr.is_none() {
+        return;
+    }
+    let symmetric = sym.as_deref().unwrap_or("");
+    let in_name = in_attr.as_deref().unwrap_or(symmetric);
+    let out_name = out_attr.as_deref().unwrap_or(symmetric);
+    // Only stamp attrs that aren't already explicitly set by the
+    // author — mix-and-match: author can override a single phase.
+    let has = |name: &str| el.has_attribute(name);
+    if has("pp-transition:enter")
+        && has("pp-transition:enter-start")
+        && has("pp-transition:enter-end")
+        && has("pp-transition:leave")
+        && has("pp-transition:leave-start")
+        && has("pp-transition:leave-end")
+    {
+        return;
+    }
+    crate::animate::apply_preset(el, in_name, out_name);
 }
 
 fn parse_attrs(el: &Element) -> State {

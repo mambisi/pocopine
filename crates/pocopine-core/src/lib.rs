@@ -8,6 +8,7 @@
 //! Signals, computed values, and watchers compose with the same engine via
 //! a synthetic [`reactive::SIGNAL_SCOPE`].
 
+pub mod animate;
 pub mod app;
 pub mod computed;
 pub mod context;

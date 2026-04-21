@@ -119,6 +119,11 @@ impl App {
     /// Fire pre-mount hooks, start the walker, initialise the router
     /// (if any routes were registered), then fire post-mount hooks.
     pub fn run(self) {
+        // Inject the animate-preset atom stylesheet before any
+        // component `register()` injects per-component styles, so
+        // the preset atoms live earlier in the cascade and
+        // component styles still win on specificity ties.
+        crate::animate::install();
         for f in self.before_mount {
             f();
         }

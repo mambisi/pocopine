@@ -1,0 +1,88 @@
+/* pocopine animation preset atoms.
+ *
+ * Injected once at App::new() via `crate::styles::inject_style`. Each
+ * preset ships three classes — `*-base` (transition-property +
+ * duration + easing), `*-from` (visual state at one extreme) and
+ * `*-to` (the other extreme). The pp-transition state machine applies
+ * them in this order for enter:
+ *
+ *   add    enter-start (= *-from)
+ *   reflow
+ *   swap to enter-end  (= *-to)
+ *
+ * and the reverse for leave. Duration/easing come from the `*-base`
+ * class, which is applied for the whole phase.
+ *
+ * Authors can ship their own presets via
+ * `pocopine::animate::register_preset` or write `.pp-tx-foo-*` rules
+ * of their own.
+ */
+
+/* ── fade ─────────────────────────────────────────────────────── */
+.pp-tx-fade-base { transition: opacity 150ms cubic-bezier(0, 0, 0.2, 1); }
+.pp-tx-fade-from { opacity: 0; }
+.pp-tx-fade-to   { opacity: 1; }
+
+/* ── scale (opacity + 0.95 → 1) ───────────────────────────────── */
+.pp-tx-scale-base {
+  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-scale-from { opacity: 0; transform: scale(0.95); }
+.pp-tx-scale-to   { opacity: 1; transform: scale(1); }
+
+/* ── fade-scale (default for Dialog / HoverCard / Command) ────── */
+.pp-tx-fade-scale-base {
+  transition: opacity 200ms cubic-bezier(0, 0, 0.2, 1),
+              transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-fade-scale-from { opacity: 0; transform: scale(0.96); }
+.pp-tx-fade-scale-to   { opacity: 1; transform: scale(1); }
+
+/* ── zoom (opacity + 0.8 → 1) ─────────────────────────────────── */
+.pp-tx-zoom-base {
+  transition: opacity 200ms cubic-bezier(0, 0, 0.2, 1),
+              transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-zoom-from { opacity: 0; transform: scale(0.80); }
+.pp-tx-zoom-to   { opacity: 1; transform: scale(1); }
+
+/* ── slide-up: comes in from BELOW, leaves downward ──────────── */
+.pp-tx-slide-up-base {
+  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-slide-up-from { opacity: 0; transform: translateY(8px); }
+.pp-tx-slide-up-to   { opacity: 1; transform: translateY(0); }
+
+/* ── slide-down: comes in from ABOVE (typical popover/menu) ──── */
+.pp-tx-slide-down-base {
+  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-slide-down-from { opacity: 0; transform: translateY(-8px); }
+.pp-tx-slide-down-to   { opacity: 1; transform: translateY(0); }
+
+/* ── slide-left / slide-right (horizontal) ───────────────────── */
+.pp-tx-slide-left-base {
+  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-slide-left-from { opacity: 0; transform: translateX(8px); }
+.pp-tx-slide-left-to   { opacity: 1; transform: translateX(0); }
+
+.pp-tx-slide-right-base {
+  transition: opacity 180ms cubic-bezier(0, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+.pp-tx-slide-right-from { opacity: 0; transform: translateX(-8px); }
+.pp-tx-slide-right-to   { opacity: 1; transform: translateX(0); }
+
+/* ── flip helper — pp-for reorder animation.
+ *    Applied imperatively by the FLIP runtime: the element gets a
+ *    transform that matches its OLD position (invert), then a
+ *    transition to transform: none is started on the next frame. */
+.pp-tx-flip-base {
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}

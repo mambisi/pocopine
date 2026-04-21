@@ -57,6 +57,7 @@ features = [
     "InputEvent",
     "FocusEvent",
     "UiEvent",
+    "Animation",
     "IntersectionObserver",
     "IntersectionObserverEntry",
     "IntersectionObserverInit",
