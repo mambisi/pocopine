@@ -1,7 +1,7 @@
 # RFC-038 — Native animations
 
-Status: **Implemented** (PR 1 of 3). See also RFC-005 (pp-transition,
-the directive this RFC builds on).
+Status: **Implemented** (PRs 1–3 landed). See also RFC-005
+(pp-transition, the directive this RFC builds on).
 
 ## Problem
 
@@ -189,7 +189,51 @@ pocopine::animate::register_preset(
 
 ## Implementation status
 
-- **PR 1** (this commit): `animate` module + preset shorthand in
-  `pp-transition`. Public API stable.
-- **PR 2**: macro args + pp-for FLIP hooks.
-- **PR 3**: Pine primitive defaults + demo + docs.
+- **PR 1** — `068da09` `feat(core): pocopine::animate — WAAPI wrapper
+  + preset catalogue`. The `animate` module (waapi / presets / flip /
+  collapse / atoms.css), `pp-transition="<preset>"` /
+  `pp-transition:in` / `pp-transition:out` shorthand expansion in
+  `directives/transition.rs`, atoms stylesheet auto-injected at
+  `App::run()`. Five wasm tests cover preset stamping, the
+  asymmetric in/out split, the `none` clear, custom-preset
+  registration, and `flip_from_snapshot` translate math.
+- **PR 2** — `89d640f` `feat(core+macros): #[component] transition/
+  animate args + pp-for FLIP`. Parses `transition` / `transition_in`
+  / `transition_out` / `animate` on `#[component(…)]`; emits trait
+  methods on `ComponentState` / `HandlerDispatch` (defaulting to `""`
+  on the trait so existing components stay untouched). Walker
+  `mount_component` reads the methods and stamps preset attrs +
+  `data-pp-animate="<kind>"` on the **outer** custom-element tag —
+  the element `pp-if` / `pp-show` hand to `transition::enter` /
+  `leave`. `directives/for_.rs::run_keyed` snapshots
+  `getBoundingClientRect` for reused clones with
+  `data-pp-animate="flip"` and dispatches `flip_from_snapshot` after
+  the reorder. Two macro tests added.
+- **PR 3** — `4d4dd9e` `feat(pine): native transitions on 14
+  compound primitives (RFC-038 PR 3)`. One-line `#[component]` edits:
+  Dialog/AlertDialog content `fade-scale`, their overlays `fade`;
+  Popover / DropdownMenu (+ SubContent) / ContextMenu content
+  `slide-down`; HoverCard / Command content + Command overlay match
+  Dialog; Tooltip content asymmetric (`scale` in, `fade` out);
+  Combobox / Select content `fade`; TagsInput item gets `animate =
+  "flip"` + `transition = "scale"`; Command / Combobox items get
+  `animate = "flip"`. `docs/animation.md` ships the user-facing
+  preset catalogue + override + custom-preset recipes; demo header
+  explains the no-config story.
+
+## Deferred follow-ups
+
+- **Collapse runtime wiring.** The `"collapse"` preset routes
+  through `animate::collapse_to`, but Collapsible / Accordion / Tree
+  still rely on the CSS-class-swap path. Wiring `collapse_to` into
+  their open/close transitions (so height tweens to measured
+  `scrollHeight` instead of relying on author CSS) is the next
+  iteration.
+- **Per-primitive transition wasm assertions.** The macro-level
+  test in PR 2 covers the stamping mechanism; per-primitive smoke
+  tests asserting each Pine compound's outer tag carries the
+  expected preset attrs would harden the integration but aren't
+  load-bearing.
+- **e2e visual checks.** Playwright assertions on the demo (Dialog
+  opacity transition, Collapsible height growth, TagsInput chip
+  reorder transform delta) — `examples/pine-demo/e2e/`.
