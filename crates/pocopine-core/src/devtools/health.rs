@@ -26,9 +26,6 @@ pub(crate) struct Sample {
     pub effects: usize,
     pub scopes: usize,
     pub deps: usize,
-    /// Wall-clock at sample time in ms (via `performance.now()`),
-    /// so the panel can annotate the chart's right edge with "now".
-    pub t_ms: f64,
 }
 
 thread_local! {
@@ -46,7 +43,6 @@ pub(crate) fn sample_tick() {
         effects,
         scopes: Scope::all().len(),
         deps,
-        t_ms: super::ring::now_ms_for_scope(),
     };
     SAMPLES.with(|s| {
         let mut v = s.borrow_mut();
@@ -153,7 +149,6 @@ mod tests {
             effects,
             scopes,
             deps,
-            t_ms: 0.0,
         }
     }
 
