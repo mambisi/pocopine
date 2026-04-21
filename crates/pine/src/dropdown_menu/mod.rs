@@ -50,8 +50,17 @@ pub struct PineDropdownMenuRoot {
 
 #[handlers]
 impl PineDropdownMenuRoot {
-    pub fn on_mount(&mut self, handle: pocopine::Handle<Self>) {
-        provide(&ROOT, handle);
+    // Must be `on_setup` (pre-children-walk), not `on_mount`
+    // (post-children-walk). Every descendant's `#[observe(ROOT)]`
+    // field installs its observer during its OWN `on_setup`, which
+    // fires while the Root's subtree is still being walked —
+    // providing in `on_mount` runs AFTER all of that so every
+    // descendant's observer never finds ROOT in the inject chain
+    // and silently skips (Trigger/Portal/Content/etc. all see
+    // `open` stuck at false). Same pattern every other Pine
+    // compound uses; DropdownMenu was the odd one out.
+    pub fn on_setup(&mut self) {
+        provide(&ROOT, this::<Self>());
     }
 
     pub fn open_menu(&mut self) {
