@@ -1,16 +1,20 @@
 <template pp-if="open" pp-teleport="body">
-  <!-- `pp-transition` lives on the CLONE root, not the outer
-       custom-element tag, because pp-if dispatches enter/leave
-       starting from THIS clone. The outer
-       pine-dropdown-menu-sub-content lives inside the parent
-       dropdown's portal clone, so its macro-stamped preset attrs
-       aren't reachable from here. Stamping the shorthand on the
-       clone wrapper keeps the slide-down enter + leave firing. -->
-  <div class="pine-dm-sub-portal" pp-transition="slide-down">
+  <!-- `pp-transition` lives on the inner menu element, NOT the
+       outer portal <div>. If the portal wrapper carried the
+       preset, its `transform: …` rule (even identity at
+       `scale(1)`) would create a CSS containing block per spec,
+       and the menu's `position: fixed` would anchor to the
+       portal instead of the viewport — dragging the sub-menu
+       down to wherever the teleported portal landed in body
+       flow. The menu itself already owns its own `transform`
+       via `pp-anchor`, so translating it via the preset stacks
+       cleanly with the anchor positioning. -->
+  <div class="pine-dm-sub-portal">
     <root role="menu"
           class="pine-dm-sub-content"
           pp-ref="menu"
           data-state="open"
+          pp-transition="slide-down"
           pp-anchor:right-start.offset.2.flip="anchor"
           pp-roving
           @keydown.escape.prevent="close"
