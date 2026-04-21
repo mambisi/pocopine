@@ -887,6 +887,37 @@
     </p>
   </section>
 
+  <!-- TagsInput with user-avatar chips ─────────────────── -->
+  <h2>Tags input — user chips with avatars</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Same <code>pine-tags-input-*</code> primitive — the chip
+      just composes a <code>pine-avatar-root</code> alongside
+      the item text. `Root.values` stays <code>Vec&lt;String&gt;</code>;
+      the per-user avatar URL is derived from the username.
+    </p>
+    <div class="form-field">
+      <label class="form-label">Recipients</label>
+      <pine-tags-input-root pp-model:values="mentions" max="6" class="tags-input-root tags-input-users">
+        <template pp-for="user in mentions" pp-key="user">
+          <pine-tags-input-item :value="user" class="user-chip">
+            <pine-avatar-root class="user-chip-avatar">
+              <pine-avatar-image :src="'https://i.pravatar.cc/40?u=' + user" :alt="user"></pine-avatar-image>
+              <pine-avatar-fallback>@</pine-avatar-fallback>
+            </pine-avatar-root>
+            <pine-tags-input-item-text></pine-tags-input-item-text>
+            <pine-tags-input-item-delete aria-label="Remove recipient">×</pine-tags-input-item-delete>
+          </pine-tags-input-item>
+        </template>
+        <pine-tags-input-input placeholder="Add recipient…"></pine-tags-input-input>
+        <pine-tags-input-clear>Clear</pine-tags-input-clear>
+      </pine-tags-input-root>
+    </div>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Recipients: <strong pp-text="mentions"></strong>
+    </p>
+  </section>
+
   <!-- Command palette in a Popover (not a Dialog) ────────── -->
   <h2>Command palette — popover variant</h2>
   <section>

@@ -102,6 +102,12 @@ pub struct PineDemoApp {
     /// chip styling and a 5-tag cap.
     pub skills: Vec<String>,
 
+    /// Third TagsInput demo — user mentions with pravatar
+    /// avatars rendered inside each chip. Same primitive,
+    /// the chip markup composes a <pine-avatar-root> alongside
+    /// the item text.
+    pub mentions: Vec<String>,
+
     /// Popover-triggered command palette — separate from the
     /// modal `<pine-command-root>` overlay. This field owns the
     /// popover's open state via `pp-model:open`.
@@ -126,6 +132,7 @@ impl PineDemoApp {
         self.tree_value = String::new();
         self.tags = vec!["rust".into(), "wasm".into(), "pocopine".into()];
         self.skills = vec!["typescript".into(), "css".into()];
+        self.mentions = vec!["ada".into(), "grace".into(), "linus".into()];
     }
 
     pub fn bump(&mut self) {
