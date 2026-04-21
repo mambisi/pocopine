@@ -114,6 +114,15 @@ pub struct PineDemoApp {
     pub cmd_popover_open: bool,
     /// Last command fired from the popover palette.
     pub cmd_popover_last: String,
+
+    /// RFC-039 perf stress fixture — 500 keyed items rendered
+    /// inside a `pine-tags-input-root`. Toggleable so the demo
+    /// stays light by default; click the button below to mount.
+    pub stress_open: bool,
+    pub stress_items: Vec<String>,
+    /// Wall-clock duration of the most recent shuffle, in ms.
+    /// Updated by `stress_shuffle` for visibility.
+    pub stress_last_shuffle_ms: f64,
 }
 
 #[handlers]
@@ -229,6 +238,29 @@ impl PineDemoApp {
     }
     pub fn shuffle_mentions(&mut self) {
         rotate(&mut self.mentions);
+    }
+
+    pub fn stress_mount(&mut self) {
+        if !self.stress_open {
+            self.stress_items = (0..500).map(|i| format!("item-{i:03}")).collect();
+            self.stress_open = true;
+        } else {
+            self.stress_items.clear();
+            self.stress_open = false;
+        }
+    }
+
+    pub fn stress_shuffle(&mut self) {
+        let start = web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now())
+            .unwrap_or(0.0);
+        rotate(&mut self.stress_items);
+        let end = web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now())
+            .unwrap_or(0.0);
+        self.stress_last_shuffle_ms = end - start;
     }
 }
 

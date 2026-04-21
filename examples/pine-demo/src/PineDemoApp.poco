@@ -1012,4 +1012,39 @@
       Last popover command: <strong pp-text="cmd_popover_last || '(none)'"></strong>
     </p>
   </section>
+
+  <!-- RFC-039 perf stress fixture ─────────────────────────── -->
+  <h2>Animation perf stress (500 keyed items)</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Mounts a <code>pine-tags-input-root</code> with 500 keyed
+      <code>pine-tags-input-item</code> chips — each one a Pine
+      compound with a <code>scale</code> mount transition and
+      <code>flip</code> layout animation. <strong>Shuffle</strong>
+      rotates the list and reports the wall-clock time for the
+      reactive update. Use this to spot regressions in the
+      RFC-039 dispatch path.
+    </p>
+    <div class="row" style="margin-bottom:0.75rem">
+      <pine-button @click="stress_mount">
+        <span pp-text="stress_open ? 'Unmount stress fixture' : 'Mount 500-row stress fixture'"></span>
+      </pine-button>
+      <pine-button variant="ghost" @click="stress_shuffle" pp-show="stress_open">
+        Shuffle
+      </pine-button>
+      <span pp-show="stress_open" style="font-size:0.875rem;align-self:center">
+        last shuffle: <strong pp-text="stress_last_shuffle_ms"></strong> ms
+      </span>
+    </div>
+    <template pp-if="stress_open">
+      <pine-tags-input-root pp-model:values="stress_items" class="tags-input-root">
+        <template pp-for="item in stress_items" pp-key="item">
+          <pine-tags-input-item :value="item">
+            <pine-tags-input-item-text></pine-tags-input-item-text>
+            <pine-tags-input-item-delete aria-label="Remove">×</pine-tags-input-item-delete>
+          </pine-tags-input-item>
+        </template>
+      </pine-tags-input-root>
+    </template>
+  </section>
 </div>
