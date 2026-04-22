@@ -1,5 +1,93 @@
 /* ─── PineCalendar demo ─────────────────────────────────────── */
 
+.calendar-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+.calendar-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.control-title {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  cursor: pointer;
+  user-select: none;
+}
+.date-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.date-row input {
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.button-row {
+  display: flex;
+  gap: 0.25rem;
+}
+.seg-btn {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.seg-btn:hover {
+  background: var(--bg-subtle);
+}
+.seg-btn[data-active="true"] {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+.plain-btn {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  text-align: center;
+}
+.plain-btn:hover {
+  background: var(--bg-subtle);
+}
+
+.calendar-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
 .calendar {
   display: inline-block;
   border: 1px solid var(--border);
@@ -7,6 +95,10 @@
   padding: 0.75rem;
   background: var(--bg);
   user-select: none;
+}
+.calendar[data-disabled] {
+  opacity: 0.6;
+  pointer-events: none;
 }
 .calendar-header {
   display: grid;
@@ -98,4 +190,21 @@
   color: var(--fg-muted);
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.calendar-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+.calendar-readout > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.calendar-readout strong {
+  color: var(--fg);
+  font-weight: 600;
 }

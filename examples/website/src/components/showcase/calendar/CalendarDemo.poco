@@ -3,26 +3,91 @@
   <section>
     <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
       Gregorian month grid, reka-ui port. Click to select, or tab
-      in and use arrow keys. The buttons dispatch
-      <code>prev_page</code> / <code>next_page</code> on the root.
+      in and use arrow keys. The left-hand controls drive the
+      props on <code>&lt;pine-calendar-root&gt;</code> live.
     </p>
 
-    <pine-calendar-root class="calendar"
-                        pp-model:value="value"
-                        pp-model:placeholder="placeholder">
-      <pine-calendar-header class="calendar-header">
-        <pine-calendar-prev class="calendar-nav">‹</pine-calendar-prev>
-        <pine-calendar-heading class="calendar-heading"></pine-calendar-heading>
-        <pine-calendar-next class="calendar-nav">›</pine-calendar-next>
-      </pine-calendar-header>
-      <pine-calendar-grid class="calendar-grid">
-        <pine-calendar-grid-head></pine-calendar-grid-head>
-        <pine-calendar-grid-body></pine-calendar-grid-body>
-      </pine-calendar-grid>
-    </pine-calendar-root>
+    <div class="calendar-layout">
+      <aside class="calendar-controls">
+        <div class="control-group">
+          <div class="control-title">Options</div>
+          <label class="control-row">
+            <pine-switch pp-model:checked="fixed_weeks"></pine-switch>
+            <span>Fixed weeks (always 6)</span>
+          </label>
+          <label class="control-row">
+            <pine-switch pp-model:checked="prevent_deselect"></pine-switch>
+            <span>Prevent deselect</span>
+          </label>
+          <label class="control-row">
+            <pine-switch pp-model:checked="disabled"></pine-switch>
+            <span>Disabled</span>
+          </label>
+          <label class="control-row">
+            <pine-switch pp-model:checked="readonly"></pine-switch>
+            <span>Readonly</span>
+          </label>
+        </div>
 
-    <p style="margin:0.75rem 0 0;font-size:0.875rem">
-      Selected: <strong pp-text="value || '(none)'"></strong>
-    </p>
+        <div class="control-group">
+          <div class="control-title">Week starts on</div>
+          <div class="button-row">
+            <button type="button"
+                    class="seg-btn"
+                    :data-active="week_starts_on === 0"
+                    @click="week_start_sun">Sunday</button>
+            <button type="button"
+                    class="seg-btn"
+                    :data-active="week_starts_on === 1"
+                    @click="week_start_mon">Monday</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="control-title">Bounds</div>
+          <label class="date-row">
+            <span>Min</span>
+            <input type="date" pp-model:value="min_value">
+          </label>
+          <label class="date-row">
+            <span>Max</span>
+            <input type="date" pp-model:value="max_value">
+          </label>
+        </div>
+
+        <div class="control-group">
+          <button type="button" class="plain-btn" @click="goto_today">Go to today</button>
+          <button type="button" class="plain-btn" @click="clear_all">Reset all</button>
+        </div>
+      </aside>
+
+      <div class="calendar-preview">
+        <pine-calendar-root class="calendar"
+                            pp-model:value="value"
+                            pp-model:placeholder="placeholder"
+                            :min-value="min_value"
+                            :max-value="max_value"
+                            :week-starts-on="week_starts_on"
+                            :fixed-weeks="fixed_weeks"
+                            :prevent-deselect="prevent_deselect"
+                            :disabled="disabled"
+                            :readonly="readonly">
+          <pine-calendar-header class="calendar-header">
+            <pine-calendar-prev class="calendar-nav">‹</pine-calendar-prev>
+            <pine-calendar-heading class="calendar-heading"></pine-calendar-heading>
+            <pine-calendar-next class="calendar-nav">›</pine-calendar-next>
+          </pine-calendar-header>
+          <pine-calendar-grid class="calendar-grid">
+            <pine-calendar-grid-head></pine-calendar-grid-head>
+            <pine-calendar-grid-body></pine-calendar-grid-body>
+          </pine-calendar-grid>
+        </pine-calendar-root>
+
+        <div class="calendar-readout">
+          <div><span>Selected</span><strong pp-text="value || '(none)'"></strong></div>
+          <div><span>Placeholder</span><strong pp-text="placeholder"></strong></div>
+        </div>
+      </div>
+    </div>
   </section>
 </root>

@@ -13,5 +13,6 @@ pine = { path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
 pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
 serde = { workspace = true }
 web-sys = { version = "0.3", features = ["Performance", "Window"] }
