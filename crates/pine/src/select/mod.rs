@@ -260,6 +260,15 @@ impl PineSelectContent {
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(menu) = refs.get("menu") else { return };
+        // Exempt our own trigger from `@click.outside` so the
+        // trigger-while-open click closes cleanly instead of
+        // racing outside-close (capture) + trigger-toggle (bubble).
+        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+            let _ = menu.set_attribute(
+                "data-pp-outside-exempt",
+                &compound::trigger_selector(root.scope_id(), SLUG),
+            );
+        }
         // Focus the selected item (data-state="checked") if one
         // exists, otherwise the first enabled option.
         let initial = menu

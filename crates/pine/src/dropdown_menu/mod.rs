@@ -178,6 +178,18 @@ impl PineDropdownMenuContent {
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
 
+        // Exempt our own trigger from `@click.outside`, so clicking
+        // the trigger while the menu is open closes cleanly instead
+        // of racing between outside-close (capture) and
+        // trigger-toggle (bubble). See directives/on.rs for how
+        // `data-pp-outside-exempt` is consumed.
+        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) {
+            let _ = menu.set_attribute(
+                "data-pp-outside-exempt",
+                &compound::trigger_selector(root.scope_id(), SLUG),
+            );
+        }
+
         // Anchor the menu to the trigger programmatically so we
         // can honour the author's side/align/side_offset props
         // (the pp-anchor directive form parses modifiers

@@ -161,6 +161,18 @@ impl PinePopoverContent {
             .unwrap_or(false);
         overlay::activate(scope, &content, modal);
 
+        // Exempt our own trigger from the `@click.outside` check
+        // so reclicking an open popover's trigger closes cleanly
+        // instead of racing between outside-close (capture) and
+        // trigger-toggle (bubble). See
+        // `directives/on.rs` `data-pp-outside-exempt` handling.
+        if let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) {
+            let _ = content.set_attribute(
+                "data-pp-outside-exempt",
+                &compound::trigger_selector(root.scope_id(), SLUG),
+            );
+        }
+
         // Program-install the anchor so side/align/side_offset
         // props flow through (pp-anchor's modifier syntax is
         // parsed statically at bind time).

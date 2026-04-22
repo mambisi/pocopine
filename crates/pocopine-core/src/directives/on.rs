@@ -19,7 +19,9 @@ use std::rc::Rc;
 use js_sys::Function;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{console, AddEventListenerOptions, Event, EventTarget, KeyboardEvent, Node};
+use web_sys::{
+    console, AddEventListenerOptions, Element, Event, EventTarget, KeyboardEvent, Node,
+};
 
 use super::DirectiveCall;
 use crate::expr::{self, Expr, Spanned};
@@ -129,6 +131,21 @@ pub fn run(call: &DirectiveCall) {
         move |ev: Event| {
             // `outside` runs first: when set, we only continue past
             // this block if the event originated outside the host.
+            //
+            // Compound components (Popover, DropdownMenu, Select)
+            // whose *trigger* is a sibling of the Content hit a
+            // classic race: clicking the trigger while the panel is
+            // open fires the capture-phase outside-listener first
+            // (target is the trigger — "outside" the Content) →
+            // close runs → then the click bubbles to the trigger →
+            // toggle flips open back on. Net: stays open.
+            //
+            // Opt-out via `data-pp-outside-exempt="<selector>"` on
+            // the host: when the click's target matches that
+            // selector (or is descended from something that does),
+            // the outside-listener treats it as "inside" and
+            // doesn't fire close. The compound's Content stamps the
+            // attribute with its trigger's selector at mount.
             if outside {
                 let host_node: &Node = el_for_closure.as_ref();
                 if !host_node.is_connected() {
@@ -139,6 +156,22 @@ pub fn run(call: &DirectiveCall) {
                         Ok(node) => {
                             if el_for_closure.contains(Some(&node)) {
                                 return;
+                            }
+                            if let Some(sel) =
+                                el_for_closure.get_attribute("data-pp-outside-exempt")
+                            {
+                                if let Ok(target_el) =
+                                    node.clone().dyn_into::<Element>()
+                                {
+                                    if target_el
+                                        .closest(&sel)
+                                        .ok()
+                                        .flatten()
+                                        .is_some()
+                                    {
+                                        return;
+                                    }
+                                }
                             }
                         }
                         Err(_) => return,
