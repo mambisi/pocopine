@@ -5,37 +5,62 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 92%, white 8%);
 }
 .pine-scroll-area-root { height: 100%; }
-.sa-long { padding: 1rem; }
+.sa-long { padding: 1rem 1.25rem 1.25rem 1rem; }
 .sa-long h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 .sa-long p { margin: 0 0 0.75rem; color: var(--fg); }
 
+.pine-scroll-area-scrollbar {
+  box-sizing: border-box;
+  border-radius: 999px;
+}
 .pine-scroll-area-scrollbar[data-orientation="vertical"] {
-  width: 10px;
-  padding: 2px;
-  background: transparent;
-  transition: opacity 180ms ease;
+  width: 7px;
+  padding: 1px;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
+  transition: opacity 180ms ease, background 120ms ease;
 }
 .pine-scroll-area-scrollbar[data-orientation="horizontal"] {
-  height: 10px;
-  padding: 2px;
-  background: transparent;
-  transition: opacity 180ms ease;
+  height: 7px;
+  padding: 1px;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
+  transition: opacity 180ms ease, background 120ms ease;
 }
 .pine-scroll-area-scrollbar[data-state="visible"] { opacity: 1; }
 .pine-scroll-area-scrollbar[data-state="hidden"] { opacity: 0; }
 .pine-scroll-area-thumb {
-  background: var(--bg-hover);
+  box-sizing: border-box;
+  display: block;
+  background: color-mix(in srgb, var(--fg-muted) 55%, var(--bg-hover));
   border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.pine-scroll-area-thumb[data-orientation="vertical"] {
   min-height: 20px;
+  min-width: 0;
+}
+.pine-scroll-area-thumb[data-orientation="horizontal"] {
   min-width: 20px;
-  transition: background 120ms ease;
+  min-height: 0;
 }
-.pine-scroll-area-thumb:hover { background: #a1a1aa; }
+.pine-scroll-area-thumb:hover {
+  background: color-mix(in srgb, var(--fg) 28%, var(--bg-hover));
+  border-color: color-mix(in srgb, var(--fg-muted) 45%, transparent);
+}
 .pine-scroll-area-corner {
-  width: 10px;
-  height: 10px;
-  background: var(--bg-subtle);
+  width: 7px;
+  height: 7px;
+  right: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
 }
-
