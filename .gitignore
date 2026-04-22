@@ -12,3 +12,6 @@ target/
 
 # Reference checkouts / scratch space (git clones, notes, etc.)
 /tmp
+
+# Playwright screenshot output — regenerated on every e2e run.
+examples/*/e2e/screenshots/
