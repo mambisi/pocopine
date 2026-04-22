@@ -1,0 +1,34 @@
+<root>
+  <h2>Range calendar</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Two-click range selection with live hover preview between the
+      anchor and the cursor. Click once to set <code>start</code>,
+      again to commit <code>end</code>. Click inside an already-set
+      range to restart.
+    </p>
+
+    <div class="range-calendar-layout">
+      <pine-range-calendar-root class="range-calendar"
+                                pp-model:start="start"
+                                pp-model:end="end"
+                                pp-model:placeholder="placeholder">
+        <pine-range-calendar-header class="range-calendar-header">
+          <pine-range-calendar-prev class="range-calendar-nav">‹</pine-range-calendar-prev>
+          <pine-range-calendar-heading class="range-calendar-heading"></pine-range-calendar-heading>
+          <pine-range-calendar-next class="range-calendar-nav">›</pine-range-calendar-next>
+        </pine-range-calendar-header>
+        <pine-range-calendar-grid class="range-calendar-grid">
+          <pine-range-calendar-grid-head></pine-range-calendar-grid-head>
+          <pine-range-calendar-grid-body></pine-range-calendar-grid-body>
+        </pine-range-calendar-grid>
+      </pine-range-calendar-root>
+
+      <div class="range-calendar-readout">
+        <div><span>Start</span><strong pp-text="start || '(none)'"></strong></div>
+        <div><span>End</span><strong pp-text="end || '(none)'"></strong></div>
+        <button type="button" class="range-calendar-clear" @click="clear">Clear</button>
+      </div>
+    </div>
+  </section>
+</root>
