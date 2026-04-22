@@ -47,6 +47,28 @@ pub fn is_same_year_month(a: &DateValue, b: &DateValue) -> bool {
     a.year() == b.year() && a.month() == b.month()
 }
 
+/// `@internationalized/date`-style alias used directly by reka's
+/// `useCalendar.ts`. In the single-calendar v1 both operands are
+/// always Gregorian, so this just delegates to [`is_same_year_month`].
+pub fn is_same_month(a: &DateValue, b: &DateValue) -> bool {
+    is_same_year_month(a, b)
+}
+
+/// Reka's `useCalendar.ts` uses `isEqualMonth` interchangeably with
+/// `isSameMonth`. Kept as a separate alias so call sites read the
+/// same as the TS source.
+pub fn is_equal_month(a: &DateValue, b: &DateValue) -> bool {
+    is_same_year_month(a, b)
+}
+
+/// True when `a` and `b` point at the same civil day. For the
+/// date-only v1 this is plain equality; the alias exists so v2
+/// `CalendarDateTime` / `ZonedDateTime` values can strip their
+/// time components without callers changing.
+pub fn is_same_day(a: &DateValue, b: &DateValue) -> bool {
+    a == b
+}
+
 pub fn compare_year_month(a: &DateValue, b: &DateValue) -> i32 {
     if a.year() != b.year() {
         a.year() - b.year()
@@ -285,5 +307,18 @@ mod tests {
         assert!(is_same_year_month(&b, &d(2024, 2, 20)));
         assert!(!is_same_year_month(&b, &c));
         assert!(is_month_between_inclusive(&b, &a, &c));
+    }
+
+    #[test]
+    fn calendar_aliases_delegate_correctly() {
+        let jan1 = d(2024, 1, 1);
+        let jan31 = d(2024, 1, 31);
+        let feb1 = d(2024, 2, 1);
+        // Same day / same month aliases used by useCalendar.
+        assert!(is_same_day(&jan1, &jan1));
+        assert!(!is_same_day(&jan1, &jan31));
+        assert!(is_same_month(&jan1, &jan31));
+        assert!(is_equal_month(&jan1, &jan31));
+        assert!(!is_same_month(&jan31, &feb1));
     }
 }

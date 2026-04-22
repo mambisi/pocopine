@@ -40,8 +40,9 @@ pub use comparators::{
     are_all_days_between_valid, are_all_months_between_valid, are_all_years_between_valid,
     compare_year_month, get_days_in_month, get_last_first_day_of_week, get_months_between,
     get_next_last_day_of_week, get_years_between, is_after, is_after_or_same, is_before,
-    is_before_or_same, is_between, is_between_inclusive, is_month_between_inclusive,
-    is_same_year, is_same_year_month, is_year_between_inclusive,
+    is_before_or_same, is_between, is_between_inclusive, is_equal_month,
+    is_month_between_inclusive, is_same_day, is_same_month, is_same_year, is_same_year_month,
+    is_year_between_inclusive,
 };
 pub use date_value::DateValue;
 pub use types::{DateRange, DayOfWeek, Grid, Matcher, WeekDayFormat, WeekStartsOn};
