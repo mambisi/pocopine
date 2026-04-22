@@ -59,7 +59,7 @@ thread_local! {
 // ── Group ─────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSplitterGroup.poco", role = "scope")]
+#[component(template = "PineSplitterGroup.poco", role = "scope", display = "contents")]
 pub struct PineSplitterGroup {
     /// `"horizontal"` (panels side-by-side) or `"vertical"`
     /// (panels stacked).
@@ -230,7 +230,7 @@ fn teardown_runtime(scope: ScopeId) {
 // ── Panel ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSplitterPanel.poco", role = "panel")]
+#[component(template = "PineSplitterPanel.poco", role = "panel", display = "contents")]
 pub struct PineSplitterPanel {
     #[prop]
     pub default_size: f64,
@@ -310,7 +310,7 @@ impl PineSplitterPanel {
 // ── ResizeHandle ──────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSplitterResizeHandle.poco", role = "interactive")]
+#[component(template = "PineSplitterResizeHandle.poco", role = "interactive", display = "contents")]
 pub struct PineSplitterResizeHandle {
     #[prop]
     pub disabled: bool,

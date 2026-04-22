@@ -51,7 +51,7 @@ inject_key!(ROOT: Handle<PineComboboxRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxRoot.poco", role = "scope")]
+#[component(template = "PineComboboxRoot.poco", role = "scope", display = "contents")]
 pub struct PineComboboxRoot {
     #[prop]
     pub open: bool,
@@ -271,7 +271,7 @@ fn schedule_install_virtual(
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxPortal.poco", role = "scope")]
+#[component(template = "PineComboboxPortal.poco", role = "scope", display = "contents")]
 pub struct PineComboboxPortal {
     #[observe(ROOT)] pub open: bool,
 }
@@ -375,7 +375,7 @@ impl PineComboboxContent {
 // ── Empty ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxEmpty.poco", role = "panel")]
+#[component(template = "PineComboboxEmpty.poco", role = "panel", display = "contents")]
 pub struct PineComboboxEmpty {
     pub empty: bool,
 }
@@ -401,7 +401,7 @@ impl PineComboboxEmpty {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxItem.poco", role = "item", animate = "flip")]
+#[component(template = "PineComboboxItem.poco", role = "item", display = "contents", animate = "flip")]
 pub struct PineComboboxItem {
     #[prop]
     pub value: String,

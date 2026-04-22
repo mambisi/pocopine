@@ -4,14 +4,6 @@
    inner <div>/<span>/<button> lives inside an inline custom tag,
    so flex / inline-flex layout only works if the wrapper tag
    itself collapses out of the box tree. */
-pine-tags-input-root,
-pine-tags-input-item,
-pine-tags-input-item-text,
-pine-tags-input-item-delete,
-pine-tags-input-input,
-pine-tags-input-clear {
-  display: contents;
-}
 
 /* Author classes are safe to use as bare selectors — the walker
    (pocopine-core) strips class/style from the outer custom tag

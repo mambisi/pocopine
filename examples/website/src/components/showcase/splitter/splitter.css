@@ -16,11 +16,6 @@
    inner <div> to a direct child of the enclosing flex container
    so the inline flex declarations on those <div>s apply as
    intended. */
-pine-splitter-group,
-pine-splitter-panel,
-pine-splitter-resize-handle {
-  display: contents;
-}
 
 .splitter-pane {
   height: 100%;

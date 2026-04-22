@@ -2,8 +2,6 @@
    Same visual shape as Dialog; separate classes so consumers can
    theme the "interruptive" variant differently (a heavier border,
    accent overlay, etc.). */
-.pine-alert-dialog-portal { display: contents; }
-.pine-alert-dialog-root   { display: contents; }
 
 .pine-alert-dialog-overlay {
   position: fixed;

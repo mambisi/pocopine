@@ -3,8 +3,6 @@
 /* Portal wraps Overlay + Content as siblings in <body>.  Kept
    layout-transparent so each child positions against the
    viewport directly. */
-.pine-dialog-portal { display: contents; }
-.pine-dialog-root   { display: contents; }
 
 .pine-dialog-overlay {
   position: fixed;

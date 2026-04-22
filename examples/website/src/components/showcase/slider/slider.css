@@ -5,12 +5,6 @@
    classed, but the outer `<pine-slider-*>` tag is what the
    parent's flex layout sees. Use `display:contents` so the
    inner div is the effective flex participant. */
-pine-slider-root,
-pine-slider-track,
-pine-slider-range,
-pine-slider-thumb {
-  display: contents;
-}
 
 .pine-slider-root {
   position: relative;

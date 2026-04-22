@@ -41,7 +41,7 @@ inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRoot.poco", role = "scope")]
+#[component(template = "PineDropdownMenuRoot.poco", role = "scope", display = "contents")]
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
@@ -112,7 +112,7 @@ impl PineDropdownMenuTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuPortal.poco", role = "scope")]
+#[component(template = "PineDropdownMenuPortal.poco", role = "scope", display = "contents")]
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
@@ -270,7 +270,7 @@ fn dispatch_pp_select() -> bool {
 /// v0 is click-to-open (no hover-intent timers). Escape in
 /// SubContent closes just the sub, not the outer menu.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSub.poco", role = "scope")]
+#[component(template = "PineDropdownMenuSub.poco", role = "scope", display = "contents")]
 pub struct PineDropdownMenuSub {
     pub open: bool,
 }
@@ -585,7 +585,7 @@ impl PineDropdownMenuItemIndicator {
 /// flows changes both ways via `pp:update:model` bubbling up
 /// from RadioItem clicks.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRadioGroup.poco", role = "panel")]
+#[component(template = "PineDropdownMenuRadioGroup.poco", role = "panel", display = "contents")]
 pub struct PineDropdownMenuRadioGroup {
     #[prop] pub value: String,
 }

@@ -57,7 +57,7 @@ inject_key!(ITEM: ScopeId);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputRoot.poco", role = "scope")]
+#[component(template = "PineTagsInputRoot.poco", role = "scope", display = "contents")]
 pub struct PineTagsInputRoot {
     /// The list of tags. Bind with `pp-model:values="my_tags"`.
     #[prop]
@@ -129,7 +129,7 @@ impl PineTagsInputRoot {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItem.poco", role = "panel", animate = "flip", transition = "scale")]
+#[component(template = "PineTagsInputItem.poco", role = "panel", display = "contents", animate = "flip", transition = "scale")]
 pub struct PineTagsInputItem {
     /// The tag value this Item represents. Passed via
     /// `:value="tag"` from the author's `pp-for`.
@@ -156,7 +156,7 @@ impl PineTagsInputItem {
 // ── ItemText ──────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItemText.poco", role = "visual")]
+#[component(template = "PineTagsInputItemText.poco", role = "visual", display = "contents")]
 pub struct PineTagsInputItemText {
     /// Rendered label. Seeded in `on_setup` from the injected
     /// ITEM value; never mutated after mount since a tag's value
@@ -194,7 +194,7 @@ impl PineTagsInputItemText {
 // ── ItemDelete ────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItemDelete.poco", role = "interactive")]
+#[component(template = "PineTagsInputItemDelete.poco", role = "interactive", display = "contents")]
 pub struct PineTagsInputItemDelete {
     #[observe(ROOT)]
     pub disabled: bool,
@@ -230,7 +230,7 @@ impl PineTagsInputItemDelete {
 // ── Input ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputInput.poco", role = "panel")]
+#[component(template = "PineTagsInputInput.poco", role = "panel", display = "contents")]
 pub struct PineTagsInputInput {
     #[prop]
     pub placeholder: String,
@@ -274,7 +274,7 @@ impl PineTagsInputInput {
 // ── Clear ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputClear.poco", role = "interactive")]
+#[component(template = "PineTagsInputClear.poco", role = "interactive", display = "contents")]
 pub struct PineTagsInputClear {
     #[observe(ROOT)]
     pub disabled: bool,

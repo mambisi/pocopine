@@ -1,13 +1,5 @@
 /* ─── PineCombobox ────────────────────────────────────────────── */
 
-pine-combobox-root,
-pine-combobox-portal,
-pine-combobox-content,
-pine-combobox-item,
-pine-combobox-empty {
-  display: contents;
-}
-
 .pine-combobox-input {
   font: inherit;
   padding: 0.5rem 0.75rem;

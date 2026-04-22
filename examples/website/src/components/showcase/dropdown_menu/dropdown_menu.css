@@ -2,9 +2,6 @@
 
 /* Root is a pure state container — let its children participate
    in the surrounding flex / grid context directly. */
-pine-dropdown-menu-root,
-.pine-dm-root { display: contents; }
-pine-dropdown-menu-portal { display: contents; }
 
 .pine-dm-trigger {
   font: inherit;
@@ -89,8 +86,6 @@ pine-dropdown-menu-portal { display: contents; }
   color: var(--fg);
 }
 
-.pine-dm-radio-group { display: contents; }
-
 .pine-dm-radio-item {
   padding: 0.375rem 0.625rem 0.375rem 1.75rem;
   border-radius: 4px;
@@ -134,8 +129,6 @@ pine-dropdown-menu-portal { display: contents; }
 /* Sub — display:contents so SubTrigger (a menu `<li>`) and the
    teleported SubContent participate in layout as if Sub weren't
    there. */
-.pine-dm-sub { display: contents; }
-
 .pine-dm-sub-trigger {
   padding: 0.375rem 0.625rem;
   border-radius: 4px;

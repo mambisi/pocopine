@@ -56,7 +56,7 @@ inject_key!(ROOT: Handle<PineSelectRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectRoot.poco", role = "scope")]
+#[component(template = "PineSelectRoot.poco", role = "scope", display = "contents")]
 pub struct PineSelectRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`.
     #[prop]
@@ -167,7 +167,7 @@ impl PineSelectTrigger {
 // ── Value ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectValue.poco", role = "visual")]
+#[component(template = "PineSelectValue.poco", role = "visual", display = "contents")]
 pub struct PineSelectValue {
     pub display_label: String,
     pub has_value: bool,
@@ -213,7 +213,7 @@ impl PineSelectValue {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectPortal.poco", role = "scope")]
+#[component(template = "PineSelectPortal.poco", role = "scope", display = "contents")]
 pub struct PineSelectPortal {
     #[observe(ROOT)] pub open: bool,
 }
@@ -357,7 +357,7 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectItem.poco", role = "item")]
+#[component(template = "PineSelectItem.poco", role = "item", display = "contents")]
 pub struct PineSelectItem {
     #[prop]
     pub value: String,
@@ -426,7 +426,7 @@ impl PineSelectItem {
 // ── ItemIndicator ─────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectItemIndicator.poco", role = "visual")]
+#[component(template = "PineSelectItemIndicator.poco", role = "visual", display = "contents")]
 pub struct PineSelectItemIndicator {
     pub selected: bool,
 }
@@ -455,7 +455,7 @@ impl PineSelectItemIndicator {
 // ── Separator ─────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectSeparator.poco", role = "item")]
+#[component(template = "PineSelectSeparator.poco", role = "item", display = "contents")]
 pub struct PineSelectSeparator {}
 
 #[handlers]

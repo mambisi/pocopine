@@ -60,7 +60,7 @@ thread_local! {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSliderRoot.poco", role = "scope")]
+#[component(template = "PineSliderRoot.poco", role = "scope", display = "contents")]
 pub struct PineSliderRoot {
     /// Current value. Two-way bindable via
     /// `pp-model:value="my_volume"` on the tag.
@@ -320,7 +320,7 @@ fn value_from_pointer(
 // ── Track ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderTrack.poco", role = "panel")]
+#[component(template = "PineSliderTrack.poco", role = "panel", display = "contents")]
 pub struct PineSliderTrack {
     /// Mirrored for the `data-orientation` / `data-disabled` attrs.
     #[observe(ROOT)] pub orientation: String,
@@ -333,7 +333,7 @@ impl PineSliderTrack {}
 // ── Range ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderRange.poco", role = "visual")]
+#[component(template = "PineSliderRange.poco", role = "visual", display = "contents")]
 pub struct PineSliderRange {
     #[observe(ROOT)] pub orientation: String,
     #[observe(ROOT)] pub disabled: bool,
@@ -346,7 +346,7 @@ impl PineSliderRange {}
 // ── Thumb ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderThumb.poco", role = "interactive")]
+#[component(template = "PineSliderThumb.poco", role = "interactive", display = "contents")]
 pub struct PineSliderThumb {
     /// Mirrored from Root for ARIA + positioning.
     #[observe(ROOT)] pub value: f64,

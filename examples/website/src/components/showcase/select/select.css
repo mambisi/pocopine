@@ -1,16 +1,5 @@
 /* ─── PineSelect ──────────────────────────────────────────────── */
 
-pine-select-root,
-pine-select-trigger,
-pine-select-value,
-pine-select-portal,
-pine-select-content,
-pine-select-item,
-pine-select-item-indicator,
-pine-select-separator {
-  display: contents;
-}
-
 .pine-select-trigger {
   display: inline-flex;
   align-items: center;

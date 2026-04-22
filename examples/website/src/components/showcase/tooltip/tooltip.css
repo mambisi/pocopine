@@ -4,7 +4,6 @@
    body out to <body>, so Root just participates inline in the
    surrounding layout. */
 .pine-tooltip-root    { display: inline; }
-.pine-tooltip-portal  { display: contents; }
 .pine-tooltip-trigger { display: inline-block; }
 
 .pine-tooltip-content {

@@ -1,8 +1,5 @@
 /* ─── PinePopover (compound) ──────────────────────────────────── */
 
-.pine-popover-root   { display: contents; }
-.pine-popover-portal { display: contents; }
-
 .pine-popover-content {
   background: var(--bg);
   border: 1px solid var(--border);

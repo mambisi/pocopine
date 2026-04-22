@@ -2,8 +2,6 @@
    Right-click menu. Positioned absolutely at pointer coords by
    the component; CSS here just styles the visual. Canvas area
    owns the contextmenu listener. */
-.pine-context-menu-root   { display: contents; }
-.pine-context-menu-portal { display: contents; }
 .cm-canvas {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
