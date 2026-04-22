@@ -15,6 +15,7 @@ pocopine-core = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
+time = { version = "0.3", default-features = false, features = ["wasm-bindgen"] }
 
 [dependencies.web-sys]
 version = "0.3"

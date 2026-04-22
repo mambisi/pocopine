@@ -24,6 +24,7 @@
 //! into their templates without enumerating the library.
 
 pub mod compound;
+pub mod datetime;
 pub mod accordion;
 pub mod alert_dialog;
 pub mod aspect_ratio;
