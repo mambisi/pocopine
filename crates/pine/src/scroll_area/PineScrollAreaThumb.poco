@@ -2,8 +2,8 @@
       pp-ref="thumb"
       :data-orientation="orientation"
       :style="orientation == 'horizontal'
-                ? ('position: absolute; top: 0; bottom: 0; left: ' + offset_pct + '%; width: ' + size_pct + '%;')
-                : ('position: absolute; left: 0; right: 0; top: ' + offset_pct + '%; height: ' + size_pct + '%;')"
+                ? ('position: absolute; top: 0; bottom: 0; left: ' + offset_pct + '%; width: ' + size_pct + '%; touch-action: none; user-select: none;')
+                : ('position: absolute; left: 0; right: 0; top: ' + offset_pct + '%; height: ' + size_pct + '%; touch-action: none; user-select: none;')"
       @pointerdown="on_pointer_down">
   <slot></slot>
 </root>

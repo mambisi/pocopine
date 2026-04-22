@@ -47,6 +47,7 @@ use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, PointerEvent};
 
 inject_key!(ROOT: Handle<PineScrollAreaRoot>);
+inject_key!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
 inject_key!(SCROLLBAR_ORIENTATION: String);
 
 // Per-Root runtime: captures the fade-hide timer + Thumb drag state
@@ -386,6 +387,7 @@ impl Default for PineScrollAreaScrollbar {
 #[handlers]
 impl PineScrollAreaScrollbar {
     pub fn on_setup(&mut self) {
+        provide(&SCROLLBAR, this::<Self>());
         provide(&SCROLLBAR_ORIENTATION, self.orientation.clone());
         if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
             let (v_vis, h_vis, has_v, has_h) = root.with(|r| {
@@ -546,15 +548,21 @@ impl PineScrollAreaThumb {
         let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
             return;
         };
+        let Some(scrollbar) = inject::<Handle<PineScrollAreaScrollbar>>(&SCROLLBAR) else {
+            return;
+        };
         let Some(scope) = current_scope_id() else { return };
         let Some(thumb_el) = refs::get_on(scope, "thumb") else {
+            return;
+        };
+        let Some(rail_el) = refs::get_on(scrollbar.scope_id(), "rail") else {
             return;
         };
         let Ok(ev) = ev.dyn_into::<PointerEvent>() else {
             return;
         };
         let orientation = self.orientation.clone();
-        start_drag(root, thumb_el, orientation, ev);
+        start_drag(root, rail_el, thumb_el, orientation, ev);
     }
 }
 
@@ -569,6 +577,7 @@ fn thumb_metrics(client: f64, scroll: f64, offset: f64) -> (f64, f64) {
 
 fn start_drag(
     root: Handle<PineScrollAreaRoot>,
+    rail_el: web_sys::Element,
     thumb_el: web_sys::Element,
     orientation: String,
     ev: PointerEvent,
@@ -581,10 +590,7 @@ fn start_drag(
     }) else {
         return;
     };
-    let (rail_el, rail_rect) = match rail_for_thumb(&thumb_el) {
-        Some(r) => r,
-        None => return,
-    };
+    let rail_rect = rail_el.get_bounding_client_rect();
 
     // Anchor: pointer position vs. thumb offset within the rail, so
     // the thumb doesn't snap to the pointer origin — the delta the
@@ -678,14 +684,6 @@ fn start_drag(
             rt.pointer_up = Some(up);
         }
     });
-}
-
-fn rail_for_thumb(thumb_el: &web_sys::Element) -> Option<(web_sys::Element, web_sys::DomRect)> {
-    // The rail is the Thumb's parent Scrollbar element. Walk up one
-    // parent; the template puts Thumb directly inside Scrollbar.
-    let parent = thumb_el.parent_element()?;
-    let rect = parent.get_bounding_client_rect();
-    Some((parent, rect))
 }
 
 fn set_scroll_top(viewport: &web_sys::Element, v: f64) {
