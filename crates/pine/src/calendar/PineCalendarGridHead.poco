@@ -1,0 +1,5 @@
+<thead class="pine-calendar-grid-head"
+       pp-ref="root"
+       aria-hidden="true">
+  <slot></slot>
+</thead>

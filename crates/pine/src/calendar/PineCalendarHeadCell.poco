@@ -1,0 +1,3 @@
+<th class="pine-calendar-head-cell" pp-ref="root" scope="col">
+  <slot></slot>
+</th>

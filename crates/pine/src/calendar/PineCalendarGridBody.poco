@@ -1,0 +1,3 @@
+<tbody class="pine-calendar-grid-body" pp-ref="root">
+  <slot></slot>
+</tbody>
