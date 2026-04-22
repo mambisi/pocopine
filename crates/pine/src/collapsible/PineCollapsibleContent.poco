@@ -1,6 +1,7 @@
 <template pp-if="open">
   <root class="pine-collapsible-content"
-        data-state="open">
+        data-state="open"
+        pp-transition="collapse">
     <slot></slot>
   </root>
 </template>

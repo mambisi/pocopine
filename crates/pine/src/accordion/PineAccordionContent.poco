@@ -1,7 +1,12 @@
 <template pp-if="open">
+  <!-- `pp-transition="collapse"` drives the grid-template-rows
+       tween on the CLONE root (see atoms.css). Sibling content
+       actually moves up/down with the panel; opacity fades in
+       parallel so the end doesn't pop. -->
   <root class="pine-accordion-content"
         role="region"
-        data-state="open">
+        data-state="open"
+        pp-transition="collapse">
     <slot></slot>
   </root>
 </template>
