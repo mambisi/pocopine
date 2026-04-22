@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "DropdownMenuDemo.poco", role = "panel")]
+#[component(template = "DropdownMenuDemo.poco", style = "dropdown_menu.css", role = "panel")]
 pub struct DropdownMenuDemo {
     pub clicks: u32,
     pub actions_fired: u32,

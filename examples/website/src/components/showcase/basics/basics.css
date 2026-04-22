@@ -1,0 +1,53 @@
+/* ─── Tier A primitives: Label / Separator / Progress /
+   AspectRatio / Toolbar ───────────────────────────────────── */
+
+.pine-label {
+  display: inline-block;
+  min-width: 5rem;
+  font-weight: 500;
+}
+
+.pine-separator[data-orientation="horizontal"] {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+.pine-separator[data-orientation="vertical"] {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--border);
+  margin: 0 0.5rem;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.pine-progress-root {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border-radius: var(--radius);
+  width: 100%;
+  height: 0.5rem;
+}
+.pine-progress-indicator {
+  height: 100%;
+  background: var(--brand);
+  transition: transform 150ms ease;
+  /* Author-managed: translateX based on data-value/data-max. */
+  width: calc(var(--pine-progress-pct, 0%) + 0%);
+}
+/* Compute the percentage from data-value/data-max via CSS
+   calc using attribute selectors. */
+.pine-progress-indicator[data-state="loading"][data-max="100"] {
+  width: calc(1% * attr(data-value type(<number>), 0));
+}
+.pine-progress-indicator[data-state="complete"] { width: 100%; }
+.pine-progress-indicator[data-state="indeterminate"] {
+  width: 30%;
+  animation: pine-progress-indeterminate 1.25s linear infinite;
+}
+@keyframes pine-progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+

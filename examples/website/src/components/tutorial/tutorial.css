@@ -1,0 +1,60 @@
+/* ─── Install / tutorial ──────────────────────────────────────── */
+
+.tutorial {
+  background: transparent;
+  border: 0;
+  padding: 2.5rem 0 3rem;
+  margin: 0;
+}
+.tutorial h2 {
+  margin-top: 0;
+  font-size: 1.75rem;
+  text-align: center;
+}
+.tutorial-steps {
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+  display: grid;
+  gap: 1.25rem;
+}
+.tutorial-step {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.step-num {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--brand-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1rem;
+  font-family: var(--mono);
+}
+.step-body h3 { margin: 0 0 0.35rem; font-size: 1.05rem; letter-spacing: -0.01em; }
+.step-body p { margin: 0 0 0.75rem; color: var(--fg-muted); font-size: 0.95rem; }
+.step-body p code { background: var(--bg-subtle); }
+
+pre.code-block {
+  margin: 0;
+  padding: 0.95rem 1.1rem;
+  background: #2d1a0f;
+  color: #faf0dc;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+pre.code-block code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+pre.code-block .c-comment { color: #9b8067; font-style: italic; }
+pre.code-block .c-cmd { color: #f8ae45; }
+pre.code-block .c-arg { color: #faf0dc; }
+pre.code-block .c-str { color: #b8d98a; }
+

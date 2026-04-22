@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "TabsDemo.poco", role = "panel")]
+#[component(template = "TabsDemo.poco", style = "tabs.css", role = "panel")]
 pub struct TabsDemo {
     pub tab: String,
 }

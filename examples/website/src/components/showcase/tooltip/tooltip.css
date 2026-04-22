@@ -1,0 +1,18 @@
+/* ─── PineTooltip (compound) ──────────────────────────────────── */
+
+/* Root's `<span>` wraps Trigger + Portal. Portal teleports its
+   body out to <body>, so Root just participates inline in the
+   surrounding layout. */
+.pine-tooltip-root    { display: inline; }
+.pine-tooltip-portal  { display: contents; }
+.pine-tooltip-trigger { display: inline-block; }
+
+.pine-tooltip-content {
+  background: #111;
+  color: #fff;
+  padding: 0.375rem 0.625rem;
+  border-radius: 4px;
+  font-size: 0.8125rem;
+  z-index: 40;
+}
+

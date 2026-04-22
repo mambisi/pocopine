@@ -5,7 +5,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "Tutorial.poco", role = "panel")]
+#[component(template = "Tutorial.poco", style = "tutorial.css", role = "panel")]
 pub struct Tutorial {}
 
 #[handlers]

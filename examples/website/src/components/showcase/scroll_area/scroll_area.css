@@ -1,0 +1,41 @@
+/* ─── PineScrollArea ──────────────────────────────────────── */
+
+.sa-demo-frame {
+  height: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.pine-scroll-area-root { height: 100%; }
+.sa-long { padding: 1rem; }
+.sa-long h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+.sa-long p { margin: 0 0 0.75rem; color: var(--fg); }
+
+.pine-scroll-area-scrollbar[data-orientation="vertical"] {
+  width: 10px;
+  padding: 2px;
+  background: transparent;
+  transition: opacity 180ms ease;
+}
+.pine-scroll-area-scrollbar[data-orientation="horizontal"] {
+  height: 10px;
+  padding: 2px;
+  background: transparent;
+  transition: opacity 180ms ease;
+}
+.pine-scroll-area-scrollbar[data-state="visible"] { opacity: 1; }
+.pine-scroll-area-scrollbar[data-state="hidden"] { opacity: 0; }
+.pine-scroll-area-thumb {
+  background: var(--bg-hover);
+  border-radius: 999px;
+  min-height: 20px;
+  min-width: 20px;
+  transition: background 120ms ease;
+}
+.pine-scroll-area-thumb:hover { background: #a1a1aa; }
+.pine-scroll-area-corner {
+  width: 10px;
+  height: 10px;
+  background: var(--bg-subtle);
+}
+

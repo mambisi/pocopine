@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "TagsMentionsDemo.poco", role = "panel")]
+#[component(template = "TagsMentionsDemo.poco", style = "../tags_input/tags_input.css", role = "panel")]
 pub struct TagsMentionsDemo {
     pub mentions: Vec<String>,
 }

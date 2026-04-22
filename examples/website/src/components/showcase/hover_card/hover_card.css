@@ -1,0 +1,17 @@
+/* ─── PineHoverCard (compound) ────────────────────────────────
+   Floating, interactive card. Shares the overlay z-index band
+   with dialogs / popovers; renders as a standard pop panel. */
+.pine-hover-card-root   { display: contents; }
+.pine-hover-card-portal { display: contents; }
+.pine-hover-card-content {
+  position: fixed;
+  z-index: 45;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  max-width: 320px;
+  box-shadow: var(--shadow);
+}
+.hc-link { color: var(--brand); text-decoration: underline; cursor: pointer; }
+

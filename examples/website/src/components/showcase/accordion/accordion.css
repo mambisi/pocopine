@@ -1,0 +1,35 @@
+/* ─── PineAccordion ───────────────────────────────────────────── */
+
+.pine-accordion-root {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.pine-accordion-item { border-bottom: 1px solid var(--border); }
+.pine-accordion-item:last-child { border-bottom: 0; }
+
+.pine-accordion-trigger {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 0;
+  padding: 0.625rem 0.875rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.pine-accordion-trigger:hover { background: var(--bg-hover); }
+.pine-accordion-trigger[data-state="open"] { background: var(--bg-hover); }
+
+/* The outer `.pine-accordion-content` is the collapse preset's
+ * grid container — keep it free of padding / border so the grid
+ * row can truly reach 0 at close. Author-owned classes on the
+ * single child (here: `.faq-answer`) carry the visible box. */
+.pine-accordion-content {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+.faq-answer {
+  padding: 0.5rem 0.875rem 0.875rem;
+}
+

@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "AlertDialogDemo.poco", role = "panel")]
+#[component(template = "AlertDialogDemo.poco", style = "alert_dialog.css", role = "panel")]
 pub struct AlertDialogDemo {
     pub open: bool,
     pub last_action: String,

@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "SplitterDemo.poco", role = "panel")]
+#[component(template = "SplitterDemo.poco", style = "splitter.css", role = "panel")]
 pub struct SplitterDemo {
     pub sizes: Vec<f64>,
 }

@@ -1,0 +1,55 @@
+/* ─── Command palette in a Popover ─────────────────────── */
+
+.cmd-popover-content {
+  padding: 0;
+  min-width: 280px;
+  max-width: 360px;
+}
+.cmd-popover {
+  display: flex;
+  flex-direction: column;
+}
+.cmd-popover .pine-command-input {
+  padding: 0.65rem 0.9rem;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  outline: none;
+}
+.cmd-popover .pine-command-input:focus {
+  background: var(--bg-subtle);
+}
+.cmd-popover .pine-command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  max-height: 260px;
+  overflow: auto;
+}
+.cmd-popover .pine-command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.875rem;
+}
+.cmd-popover .pine-command-item[data-highlighted="true"] {
+  background: var(--brand);
+  color: var(--brand-fg);
+}
+.cmd-popover .pine-command-item[data-highlighted="true"] .pine-command-shortcut {
+  color: var(--brand-fg);
+  border-color: rgba(255,255,255,0.4);
+}
+.cmd-popover .pine-command-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}

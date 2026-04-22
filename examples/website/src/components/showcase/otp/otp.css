@@ -1,0 +1,32 @@
+/* ─── PineOtpField ────────────────────────────────────────────── */
+
+.pine-otp-field {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+.pine-otp-field-slot {
+  width: 2.5rem;
+  height: 3rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  text-align: center;
+  font: inherit;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.pine-otp-field-slot:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+}
+.pine-otp-field-slot[data-filled="true"] {
+  background: var(--bg-hover);
+}
+.pine-otp-field[data-disabled="true"] .pine-otp-field-slot {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+

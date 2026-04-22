@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "CommandDemo.poco", role = "panel")]
+#[component(template = "CommandDemo.poco", style = "command.css", role = "panel")]
 pub struct CommandDemo {
     pub last_command: String,
 }

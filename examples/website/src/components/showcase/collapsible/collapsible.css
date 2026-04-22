@@ -1,0 +1,27 @@
+/* ─── PineCollapsible ─────────────────────────────────────────── */
+
+.pine-collapsible-root { display: block; }
+
+.pine-collapsible-trigger {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+}
+.pine-collapsible-trigger:hover { background: var(--bg-hover); }
+.pine-collapsible-trigger[data-state="open"] { background: var(--bg-hover); }
+
+/* Collapsible panel styling lives on the author's single child,
+ * not on `.pine-collapsible-content` itself — the outer is the
+ * collapse preset's grid container and must stay unpadded. */
+.faq-panel {
+  padding: 0.75rem 1rem;
+  margin-top: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+

@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "ScrollAreaDemo.poco", role = "panel")]
+#[component(template = "ScrollAreaDemo.poco", style = "scroll_area.css", role = "panel")]
 pub struct ScrollAreaDemo {
     pub scroll_type: String,
 }

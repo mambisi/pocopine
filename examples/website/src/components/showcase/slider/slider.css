@@ -1,0 +1,94 @@
+/* ─── PineSlider ──────────────────────────────────────────────── */
+
+/* The custom-element tags themselves need layout — Pine's
+   `<root>` placeholder renders the inner div that actually gets
+   classed, but the outer `<pine-slider-*>` tag is what the
+   parent's flex layout sees. Use `display:contents` so the
+   inner div is the effective flex participant. */
+pine-slider-root,
+pine-slider-track,
+pine-slider-range,
+pine-slider-thumb {
+  display: contents;
+}
+
+.pine-slider-root {
+  position: relative;
+  display: flex;
+  align-items: center;
+  user-select: none;
+  touch-action: none;
+  width: 100%;
+  max-width: 20rem;
+  height: 1.5rem;
+  /* A bigger hit surface than the 4px track — clicking anywhere
+     in the 1.5rem strip starts a drag (Root is the pointer-event
+     host). */
+  cursor: pointer;
+}
+.pine-slider-root[data-orientation="vertical"] {
+  flex-direction: column;
+  width: 1.5rem;
+  height: 12rem;
+  max-width: none;
+}
+.pine-slider-root[data-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
+
+.pine-slider-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--bg-hover);
+}
+.pine-slider-track[data-orientation="vertical"] {
+  width: 4px;
+  height: 100%;
+  flex: 1;
+}
+.pine-slider-range {
+  position: absolute;
+  border-radius: 9999px;
+  background: var(--brand);
+  /* Range must not swallow pointerdown — the Root's listener
+     uses Track's rect; letting the Range steal the event would
+     only matter if we depended on `ev.target`, which we don't,
+     but keeping pointer-events transparent is cleaner. */
+  pointer-events: none;
+}
+.pine-slider-range[data-orientation="horizontal"] {
+  top: 0; left: 0; bottom: 0;
+}
+.pine-slider-range[data-orientation="vertical"] {
+  left: 0; right: 0; top: 0;
+}
+.pine-slider-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  background: var(--bg);
+  border: 2px solid var(--brand);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  cursor: grab;
+  outline: none;
+  /* The Thumb is inside slider-root; Root's pointerdown listener
+     still catches clicks on the Thumb because all descendant
+     events bubble to it. The Thumb's own pointer-events default
+     (auto) gives the cursor its grab affordance. */
+}
+.pine-slider-thumb[data-orientation="vertical"] {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.pine-slider-thumb:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 30%, transparent);
+}
+.pine-slider-thumb[data-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+

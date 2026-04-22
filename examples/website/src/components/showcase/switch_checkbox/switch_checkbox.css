@@ -1,0 +1,53 @@
+/* ─── PineSwitch ──────────────────────────────────────────────── */
+
+.pine-switch {
+  appearance: none;
+  padding: 0;
+  border: none;
+  background: var(--bg-hover);
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pine-switch[data-state="checked"] { background: var(--brand); }
+.pine-switch-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.pine-switch-thumb[data-state="checked"] { transform: translateX(16px); }
+.pine-switch[data-disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── PineCheckbox ────────────────────────────────────────────── */
+
+.pine-checkbox {
+  appearance: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  width: 18px; height: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pine-checkbox[data-state="checked"],
+.pine-checkbox[data-state="indeterminate"] {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.pine-checkbox-indicator {
+  width: 10px; height: 10px;
+  color: #fff;
+  display: none;
+}
+.pine-checkbox-indicator[data-state="checked"]       { display: block; background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="white"><path d="M13 4l-7 7-3-3 1-1 2 2 6-6z"/></svg>') no-repeat center; }
+.pine-checkbox-indicator[data-state="indeterminate"] { display: block; background: #fff; height: 2px; }
+

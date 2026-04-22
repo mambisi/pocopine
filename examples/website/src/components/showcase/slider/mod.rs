@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "SliderDemo.poco", role = "panel")]
+#[component(template = "SliderDemo.poco", style = "slider.css", role = "panel")]
 pub struct SliderDemo {
     pub volume: f64,
 }

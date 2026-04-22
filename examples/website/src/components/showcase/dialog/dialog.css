@@ -1,0 +1,53 @@
+/* ─── PineDialog (compound) ───────────────────────────────────── */
+
+/* Portal wraps Overlay + Content as siblings in <body>.  Kept
+   layout-transparent so each child positions against the
+   viewport directly. */
+.pine-dialog-portal { display: contents; }
+.pine-dialog-root   { display: contents; }
+
+.pine-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 50;
+}
+/* GPU-friendly opacity-only fade. `opacity` is one of the two
+ * properties browsers composite on their own layer (the other is
+ * `transform`) — see Chromium's GPU-accelerated compositing
+ * architecture. Dropping `scale` here keeps the motion on the
+ * compositor's fast path and feels snappier than the
+ * scale + opacity combo, even at a slightly longer duration.
+ *
+ * `pp-transition="none"` on the tag disables the preset
+ * machinery so the class-swap doesn't fight `@starting-style`.
+ */
+pine-dialog-content {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 51;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 160ms ease-out;
+}
+@starting-style {
+  pine-dialog-content {
+    opacity: 0;
+  }
+}
+.pine-dialog-content {
+  pointer-events: auto;
+  width: 90vw;
+  max-width: 420px;
+  max-height: 90vh;
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  box-shadow: var(--shadow);
+}
+.pine-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
+.pine-dialog-description { color: var(--fg-muted); margin: 0 0 1rem; }
+

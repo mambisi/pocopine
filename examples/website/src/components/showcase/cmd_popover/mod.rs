@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "CmdPopoverDemo.poco", role = "panel")]
+#[component(template = "CmdPopoverDemo.poco", style = "cmd_popover.css", role = "panel")]
 pub struct CmdPopoverDemo {
     pub open: bool,
     pub last: String,

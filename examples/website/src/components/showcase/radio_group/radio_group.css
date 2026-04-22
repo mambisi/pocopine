@@ -1,0 +1,30 @@
+/* ─── PineRadioGroup (standalone) ────────────────────────────── */
+
+.pine-radio-group {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+.pine-radio-group[data-orientation="vertical"] {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.pine-radio-group-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.375rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.pine-radio-group-item:hover { background: var(--bg-hover); }
+.pine-radio-group-item[data-state="checked"] {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.pine-radio-group-item[data-disabled] { opacity: 0.5; cursor: not-allowed; }
+.pine-radio-group-indicator { display: inline-flex; color: var(--brand); }
+

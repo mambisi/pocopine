@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "RadioGroupDemo.poco", role = "panel")]
+#[component(template = "RadioGroupDemo.poco", style = "radio_group.css", role = "panel")]
 pub struct RadioGroupDemo {
     pub plan: String,
 }
