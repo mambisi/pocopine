@@ -1,0 +1,30 @@
+<pine-popover-root pp-model:open="open">
+  <pine-popover-trigger class="pine-date-picker-trigger"
+                        :data-has-value="value !== ''"
+                        :data-disabled="disabled">
+    <span class="pine-date-picker-value" pp-text="value || placeholder_text"></span>
+  </pine-popover-trigger>
+  <pine-popover-portal>
+    <pine-popover-content class="pine-date-picker-content">
+      <pine-calendar-root class="pine-date-picker-calendar"
+                          pp-model:value="value"
+                          :placeholder="placeholder"
+                          :min-value="min_value"
+                          :max-value="max_value"
+                          :week-starts-on="week_starts_on"
+                          :fixed-weeks="fixed_weeks"
+                          :disabled="disabled"
+                          :readonly="readonly">
+        <pine-calendar-header class="pine-date-picker-header">
+          <pine-calendar-prev class="pine-date-picker-nav">‹</pine-calendar-prev>
+          <pine-calendar-heading class="pine-date-picker-heading"></pine-calendar-heading>
+          <pine-calendar-next class="pine-date-picker-nav">›</pine-calendar-next>
+        </pine-calendar-header>
+        <pine-calendar-grid class="pine-date-picker-grid">
+          <pine-calendar-grid-head></pine-calendar-grid-head>
+          <pine-calendar-grid-body></pine-calendar-grid-body>
+        </pine-calendar-grid>
+      </pine-calendar-root>
+    </pine-popover-content>
+  </pine-popover-portal>
+</pine-popover-root>
