@@ -1,10 +1,7 @@
 <template pp-if="open">
-  <!-- pp-transition on the CLONE root for the same reason as
-       PineCollapsibleContent — see that template's note. -->
   <root class="pine-accordion-content"
         role="region"
-        data-state="open"
-        pp-transition="collapse">
+        data-state="open">
     <slot></slot>
   </root>
 </template>

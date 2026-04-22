@@ -605,6 +605,13 @@ pine-dropdown-menu-portal { display: contents; }
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  opacity: 1;
+  transition: opacity 160ms ease-out;
+}
+@starting-style {
+  .pine-collapsible-content {
+    opacity: 0;
+  }
 }
 
 /* ─── PineAccordion ───────────────────────────────────────────── */
@@ -634,6 +641,16 @@ pine-dropdown-menu-portal { display: contents; }
   padding: 0.5rem 0.875rem 0.875rem;
   font-size: 0.875rem;
   color: var(--fg-muted);
+  /* GPU-friendly fade on mount via @starting-style. pp-if removes
+   * the element on close so exit is instant — trade we're taking
+   * for simplicity and smoothness. */
+  opacity: 1;
+  transition: opacity 160ms ease-out;
+}
+@starting-style {
+  .pine-accordion-content {
+    opacity: 0;
+  }
 }
 
 /* ─── PineAvatar ──────────────────────────────────────────────── */

@@ -284,7 +284,13 @@ impl PineSelectContent {
             }
             let _ = item.set_attribute("tabindex", "0");
             if let Ok(html) = item.dyn_into::<HtmlElement>() {
-                let _ = html.focus();
+                // Plain `focus()` scrolls the focused element into
+                // view — and when the Select's popover is teleported
+                // to <body>, that "into view" computation can pull
+                // the whole page to wherever the popover landed in
+                // body flow. Use the `preventScroll: true` variant
+                // so keyboard focus moves without yanking the page.
+                focus::focus_no_scroll(&html);
             }
         } else {
             focus::auto_focus_first(&menu);
@@ -330,7 +336,10 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
         let _ = trigger;
         if let Some(el) = compound::resolve_trigger(root_scope, SLUG) {
             if let Ok(html) = el.dyn_into::<HtmlElement>() {
-                let _ = html.focus();
+                // No-scroll focus — after closing the dropdown
+                // we don't want the page to snap to wherever the
+                // trigger happens to sit.
+                focus::focus_no_scroll(&html);
             }
         }
     });
