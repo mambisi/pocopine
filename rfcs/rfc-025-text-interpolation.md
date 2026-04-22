@@ -1,8 +1,12 @@
 # RFC 025 — Inline `{expr}` text interpolation
 
+> **Superseded by [RFC-040](./rfc-040-text-interpolation-double-brace.md).**
+> Current syntax is `{{expr}}`. The single-brace design below is
+> kept for historical context.
+
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Superseded by RFC-040 |
 | **Author** | pocopine team |
 | **Created** | 2026-04-19 |
 | **Supersedes** | — |

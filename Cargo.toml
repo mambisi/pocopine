@@ -10,7 +10,7 @@ members = [
     "examples/blog",
     "examples/counter",
     "examples/hn",
-    "examples/pine-demo",
+    "examples/website",
     "examples/site",
     "examples/spa",
     "examples/tailwind",

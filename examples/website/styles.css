@@ -1,4 +1,4 @@
-/* pine-demo — hand-written demo CSS for the Pine primitives.
+/* website — hand-written demo CSS for the Pine primitives.
  * Shows one opinionated styling approach. Authors using Pine
  * will bring their own stylesheet; nothing here ships with the
  * `pine` crate.
@@ -36,7 +36,7 @@ body {
   line-height: 1.6;
 }
 
-pine-demo-app {
+website-app {
   display: block;
   max-width: 780px;
   margin: 0 auto;

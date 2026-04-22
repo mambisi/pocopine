@@ -981,17 +981,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pine-demo"
-version = "0.1.0"
-dependencies = [
- "pine",
- "pocopine",
- "serde",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1950,6 +1939,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "website"
+version = "0.1.0"
+dependencies = [
+ "pine",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

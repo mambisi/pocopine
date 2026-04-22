@@ -1,79 +1,9 @@
 <div>
-  <!-- ─── Hero ─────────────────────────────────────────────── -->
-  <section class="hero">
-    <img class="hero-mascot" src="/mascot.svg" alt="pocopine mascot">
-    <h1><span class="brand">poco</span>pine</h1>
-    <p class="tagline">
-      A tiny, reactive Rust/WASM UI framework with a full
-      primitive library — ships server-rendered HTML, animates
-      by default, under 50&nbsp;KB.
-    </p>
-    <div class="hero-actions">
-      <a class="cta-primary" href="#get-started">Get started →</a>
-      <a class="cta-ghost" href="https://github.com/mambisi/pocopine">GitHub ↗</a>
-    </div>
-  </section>
-
-  <!-- ─── Get started / tutorial ──────────────────────────── -->
-  <section class="tutorial" id="get-started">
-    <h2>Get started in 60 seconds</h2>
-    <ol class="tutorial-steps">
-      <li class="tutorial-step">
-        <span class="step-num">1</span>
-        <div class="step-body">
-          <h3>Install the CLI</h3>
-          <p>The <code>pocopine</code> CLI handles building, serving, and hot-reload — one install covers all three.</p>
-<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">install pocopine-cli</span></code></pre>
-        </div>
-      </li>
-      <li class="tutorial-step">
-        <span class="step-num">2</span>
-        <div class="step-body">
-          <h3>Scaffold an app</h3>
-          <p>A pocopine app is a regular Rust library crate. Add <code>pocopine</code> (runtime) and <code>pine</code> (optional UI primitives).</p>
-<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">new --lib hello-pine</span>
-<span class="c-cmd">cd</span> <span class="c-arg">hello-pine</span>
-<span class="c-cmd">cargo</span> <span class="c-arg">add pocopine pine</span></code></pre>
-        </div>
-      </li>
-      <li class="tutorial-step">
-        <span class="step-num">3</span>
-        <div class="step-body">
-          <h3>Write your first component</h3>
-          <p>A component is a Rust struct plus a sibling <code>.poco</code> template.</p>
-<pre class="code-block"><code><span class="c-comment">// src/lib.rs</span>
-<span class="c-cmd">use</span> pocopine::prelude::*;
-
-<span class="c-cmd">#[derive(Default, Serialize, Deserialize)]</span>
-<span class="c-cmd">#[component(template = </span><span class="c-str">"Counter.poco"</span><span class="c-cmd">)]</span>
-<span class="c-cmd">pub struct</span> Counter { <span class="c-cmd">pub</span> n: u32 }
-
-<span class="c-cmd">#[handlers]</span>
-<span class="c-cmd">impl</span> Counter {
-    <span class="c-cmd">pub fn</span> bump(&mut self) { self.n += 1; }
-}
-
-<span class="c-cmd">#[wasm_bindgen(start)]</span>
-<span class="c-cmd">pub fn</span> main() {
-    App::new().register::&lt;Counter&gt;().run();
-}</code></pre>
-<pre class="code-block"><code><span class="c-comment">&lt;!-- src/Counter.poco --&gt;</span>
-&lt;button @click=<span class="c-str">"bump"</span>&gt;
-  clicked &lt;strong pp-text=<span class="c-str">"n"</span>&gt;&lt;/strong&gt; times
-&lt;/button&gt;</code></pre>
-        </div>
-      </li>
-      <li class="tutorial-step">
-        <span class="step-num">4</span>
-        <div class="step-body">
-          <h3>Run it</h3>
-          <p><code>pocopine dev</code> builds the wasm bundle, serves it on a local port, and rebuilds on save. Ship with <code>pocopine build --release</code>.</p>
-<pre class="code-block"><code><span class="c-cmd">pocopine</span> <span class="c-arg">dev</span>
-<span class="c-comment"># → listening on http://127.0.0.1:5243</span></code></pre>
-        </div>
-      </li>
-    </ol>
-  </section>
+  <!-- The website composes its own components just like any
+       other pocopine app — Hero + Tutorial are standalone
+       `#[component]`s with their own .poco templates. -->
+  <hero></hero>
+  <tutorial></tutorial>
 
   <div class="section-divider">Pine UI — primitive library</div>
 
@@ -332,7 +262,7 @@
     </pine-dropdown-menu-root>
 
     <span style="font-size:0.875rem;color:var(--fg-muted)">
-      actions fired: <strong>{actions_fired}</strong>
+      actions fired: <strong>{{actions_fired}}</strong>
     </span>
   </section>
 
@@ -386,7 +316,7 @@
           The Root owns <code>open</code>; Trigger and Content both
           inject the handle and mirror the state via
           <code>watch_scope_field</code>.
-          <strong>Currently {faq_open ? 'open' : 'closed'}.</strong>
+          <strong>Currently {{faq_open ? 'open' : 'closed'}}.</strong>
         </div>
       </pine-collapsible-content>
     </pine-collapsible-root>

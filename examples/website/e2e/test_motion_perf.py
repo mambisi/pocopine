@@ -59,7 +59,7 @@ def main() -> int:
         page.on("pageerror", lambda err: print(f"  [PAGE ERROR] {err}"))
         page.on("console", lambda msg: print(f"  [CONSOLE {msg.type}] {msg.text}") if msg.type in ("error", "warning") else None)
         page.goto(base_url)
-        page.wait_for_selector("pine-demo-app pine-button", timeout=10_000)
+        page.wait_for_selector("website-app pine-button", timeout=10_000)
 
         # Mount the stress fixture.
         button = page.locator("pine-button:has-text('Mount 500-row stress fixture')")

@@ -13,7 +13,7 @@ looks the way it does — the code itself tells you *what*.
   FLIP, and the WAAPI escape hatch. See RFC-038 for the design notes.
 - [`animation-perf.md`](./animation-perf.md) — perf characteristics
   + baseline numbers for the motion stack. Refresh via
-  `examples/pine-demo/e2e/test_motion_perf.py`.
+  `examples/website/e2e/test_motion_perf.py`.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 

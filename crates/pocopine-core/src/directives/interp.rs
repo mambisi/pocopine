@@ -1,4 +1,4 @@
-//! Inline `{expr}` text interpolation — RFC-025.
+//! Inline `{{expr}}` text interpolation — RFC-025 as revised by RFC-040.
 //!
 //! After the walker finishes binding directives on an element, it
 //! invokes [`scan_children`] to split each direct Text child into
@@ -6,12 +6,13 @@
 //! text node bound by a reactive effect, pinned to the enclosing
 //! element so release follows the existing unmount path.
 //!
-//! The scanner is a plain UTF-8 pass with escape handling (`\{`,
-//! `\}`, `\\`). Malformed segments fall back to raw text and log
-//! once; one bad segment doesn't kill a text node's siblings.
+//! Double-brace form means single `{` / `}` in ordinary text is
+//! always literal — code samples paste in untouched. Literal
+//! `{{` / `}}` in text is rare but supported via backslash escape
+//! (`\{{` → `{{`).
 //!
 //! Interpolation and `pp-text` are intentionally orthogonal:
-//! `pp-text` owns the whole element, `{expr}` interpolates into
+//! `pp-text` owns the whole element, `{{expr}}` interpolates into
 //! surrounding literal text. The scanner skips elements that carry
 //! `pp-text` so the directive's `textContent` write isn't clobbered
 //! by interpolated siblings.
@@ -30,7 +31,7 @@ enum Segment {
 }
 
 /// Visit `parent`'s direct text children. For any that contain at
-/// least one `{…}` pair, split into static + dynamic text nodes
+/// least one `{{…}}` pair, split into static + dynamic text nodes
 /// and install an effect per dynamic segment.
 pub fn scan_children(parent: &Element, proxy: &JsValue) {
     // `pp-text` takes over the element's content — don't split
@@ -55,7 +56,10 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
 
     for text in texts {
         let Some(data) = text.node_value() else { continue };
-        if !data.contains('{') {
+        // Fast path: no `{{` anywhere means nothing to interpolate.
+        // A single `{` never triggers the scanner — unambiguous
+        // per RFC-040.
+        if !data.contains("{{") {
             continue;
         }
         let segments = match parse_segments(&data) {
@@ -68,7 +72,7 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
             }
         };
         if segments.iter().all(|s| matches!(s, Segment::Static(_))) {
-            // No `{…}` survived escaping; leave the text node
+            // No `{{…}}` survived escaping; leave the text node
             // untouched so whitespace/entities stay byte-exact.
             continue;
         }
@@ -92,16 +96,13 @@ fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Seg
                     Ok(a) => a,
                     Err(e) => {
                         console::error_1(&JsValue::from_str(&format!(
-                            "interpolation `{{{src}}}`: {} (at {}..{})",
+                            "interpolation `{{{{{src}}}}}`: {} (at {}..{})",
                             e.message, e.span.start, e.span.end
                         )));
-                        // Fall back: render the original `{…}` text
-                        // so the author sees where the bad segment
-                        // lives.
                         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
                             return;
                         };
-                        let fallback = doc.create_text_node(&format!("{{{src}}}"));
+                        let fallback = doc.create_text_node(&format!("{{{{{src}}}}}"));
                         let _ = parent_node
                             .insert_before(fallback.as_ref(), Some(original.as_ref()));
                         continue;
@@ -131,7 +132,8 @@ fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Seg
 }
 
 /// Tokenise `input` into alternating static + dynamic segments.
-/// Returns an error string on an unmatched `{`.
+/// Scans for `{{…}}` pairs; single `{` / `}` are always literal.
+/// Returns an error string on an unclosed `{{`.
 fn parse_segments(input: &str) -> Result<Vec<Segment>, String> {
     let mut out = Vec::new();
     let bytes = input.as_bytes();
@@ -139,58 +141,56 @@ fn parse_segments(input: &str) -> Result<Vec<Segment>, String> {
     let mut static_buf = String::new();
     while i < bytes.len() {
         let b = bytes[i];
-        if b == b'\\' && i + 1 < bytes.len() {
-            let next = bytes[i + 1];
-            match next {
-                b'{' | b'}' | b'\\' => {
-                    static_buf.push(next as char);
-                    i += 2;
-                    continue;
-                }
-                _ => {
-                    // Pass through unknown escape verbatim.
-                    static_buf.push(b as char);
-                    i += 1;
-                    continue;
-                }
+        // Escape: `\{{` → literal `{{`, `\}}` → literal `}}`,
+        // `\\` → literal `\`. Any other `\<c>` passes through
+        // verbatim as `\<c>` (don't surprise authors who paste
+        // regex / shell samples that happen to start with `\`).
+        if b == b'\\' && i + 2 < bytes.len() {
+            let n1 = bytes[i + 1];
+            let n2 = bytes[i + 2];
+            if (n1 == b'{' && n2 == b'{') || (n1 == b'}' && n2 == b'}') {
+                static_buf.push(n1 as char);
+                static_buf.push(n2 as char);
+                i += 3;
+                continue;
             }
         }
-        if b == b'{' {
+        if b == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+            static_buf.push('\\');
+            i += 2;
+            continue;
+        }
+        // `{{` opens an expression.
+        if b == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
             if !static_buf.is_empty() {
                 out.push(Segment::Static(std::mem::take(&mut static_buf)));
             }
-            // Find matching `}`. No nesting.
-            let start = i + 1;
+            let start = i + 2;
+            // Find the matching `}}`.
             let mut j = start;
             let mut found = false;
-            while j < bytes.len() {
-                let bj = bytes[j];
-                if bj == b'\\' && j + 1 < bytes.len() {
-                    j += 2;
-                    continue;
-                }
-                if bj == b'}' {
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'}' && bytes[j + 1] == b'}' {
                     found = true;
                     break;
-                }
-                if bj == b'{' {
-                    return Err("nested `{` inside interpolation".into());
                 }
                 j += 1;
             }
             if !found {
-                return Err("unclosed `{` in text".into());
+                return Err("unclosed `{{` in text".into());
             }
             let src = std::str::from_utf8(&bytes[start..j])
                 .map_err(|_| "non-UTF-8 text")?
+                .trim()
                 .to_string();
+            if src.is_empty() {
+                return Err("empty `{{}}` interpolation".into());
+            }
             out.push(Segment::Dynamic(src));
-            i = j + 1;
+            i = j + 2;
             continue;
         }
-        if b == b'}' {
-            return Err("stray `}` without matching `{`".into());
-        }
+        // Single `{` or `}` are literal in text.
         static_buf.push(b as char);
         i += 1;
     }
@@ -213,4 +213,56 @@ fn js_to_string(v: &JsValue) -> String {
                 .and_then(|s| s.as_string())
                 .unwrap_or_default()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_segments, Segment};
+
+    fn render(segs: &[Segment]) -> String {
+        let mut s = String::new();
+        for seg in segs {
+            match seg {
+                Segment::Static(t) => s.push_str(t),
+                Segment::Dynamic(t) => s.push_str(&format!("<<{t}>>")),
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn single_braces_are_literal() {
+        let segs = parse_segments("Rust: fn foo() { x }").unwrap();
+        assert_eq!(render(&segs), "Rust: fn foo() { x }");
+        assert!(segs.iter().all(|s| matches!(s, Segment::Static(_))));
+    }
+
+    #[test]
+    fn double_braces_interpolate() {
+        let segs = parse_segments("Hi {{name}}, {{count}}!").unwrap();
+        assert_eq!(render(&segs), "Hi <<name>>, <<count>>!");
+    }
+
+    #[test]
+    fn escaped_double_brace_is_literal() {
+        let segs = parse_segments(r"\{{literal}}").unwrap();
+        assert_eq!(render(&segs), "{{literal}}");
+    }
+
+    #[test]
+    fn unclosed_errors() {
+        assert!(parse_segments("oops {{foo").is_err());
+    }
+
+    #[test]
+    fn empty_errors() {
+        assert!(parse_segments("{{}}").is_err());
+    }
+
+    #[test]
+    fn mixed_with_code_samples() {
+        let src = "let x = { 1 }; template {{expr}}";
+        let segs = parse_segments(src).unwrap();
+        assert_eq!(render(&segs), "let x = { 1 }; template <<expr>>");
+    }
 }

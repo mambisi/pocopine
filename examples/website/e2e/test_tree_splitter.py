@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end checks for Pine's Tree + Splitter demos.
 
-Boots a throwaway HTTP server rooted at `examples/pine-demo/`,
+Boots a throwaway HTTP server rooted at `examples/website/`,
 opens the demo in Firefox via Playwright, and exercises the two
 primitives the user reported as broken in DOM dumps:
 
@@ -18,9 +18,9 @@ Run:
     python3 -m pip install --user --break-system-packages playwright
     python3 -m playwright install firefox
     # build the demo wasm
-    (cd examples/pine-demo && wasm-pack build --target web --out-dir pkg --dev)
+    (cd examples/website && wasm-pack build --target web --out-dir pkg --dev)
     # run
-    python3 examples/pine-demo/e2e/test_tree_splitter.py
+    python3 examples/website/e2e/test_tree_splitter.py
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class _ReusableTCPServer(socketserver.TCPServer):
 
 @contextlib.contextmanager
 def _serve():
-    """Serve `examples/pine-demo/` on a kernel-assigned free port.
+    """Serve `examples/website/` on a kernel-assigned free port.
     Yields the base URL."""
     handler = lambda *a, **kw: _QuietHandler(*a, directory=str(DEMO_ROOT), **kw)
     server = _ReusableTCPServer(("127.0.0.1", 0), handler)
@@ -234,11 +234,11 @@ def run_splitter_checks(page) -> None:
 
 
 def main() -> int:
-    pkg = DEMO_ROOT / "pkg" / "pine_demo_bg.wasm"
+    pkg = DEMO_ROOT / "pkg" / "website_bg.wasm"
     if not pkg.exists():
         print(f"error: {pkg} missing — run:", file=sys.stderr)
         print(
-            "  (cd examples/pine-demo && wasm-pack build --target web --out-dir pkg --dev)",
+            "  (cd examples/website && wasm-pack build --target web --out-dir pkg --dev)",
             file=sys.stderr,
         )
         return 2

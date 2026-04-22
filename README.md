@@ -170,7 +170,7 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 | [`blog`](./examples/blog) | `App` + `#[server]` + axum server bin |
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
-| [`pine-demo`](./examples/pine-demo) | Pine UI — every primitive, side-by-side |
+| [`website`](./examples/website) | Pine UI — every primitive, side-by-side |
 | [`site`](./examples/site) | The marketing page, dogfooded |
 | [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (CDN-mode for demo) |
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end checks for RFC-038 animations in the pine-demo.
+"""End-to-end checks for RFC-038 animations in the website.
 
 Verifies:
   * Opening the Dialog plays the `fade-scale` enter — opacity sits
@@ -56,7 +56,7 @@ def main() -> int:
         page.on("pageerror", lambda err: print(f"  [PAGE ERROR] {err}"))
         page.on("console", lambda msg: print(f"  [CONSOLE {msg.type}] {msg.text}") if msg.type in ("log", "warning", "error") else None)
         page.goto(base_url)
-        page.wait_for_selector("pine-demo-app pine-button", timeout=10_000)
+        page.wait_for_selector("website-app pine-button", timeout=10_000)
 
         # ── Dialog enter: opacity under 1 mid-animation ───────────
         page.locator("pine-dialog-trigger button").first.click()

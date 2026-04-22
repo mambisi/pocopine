@@ -1,0 +1,13 @@
+<root class="hero">
+  <img class="hero-mascot" src="/mascot.svg" alt="pocopine mascot">
+  <h1><span class="brand">poco</span>pine</h1>
+  <p class="tagline">
+    A tiny, reactive Rust/WASM UI framework with a full
+    primitive library — ships server-rendered HTML, animates
+    by default, under 50&nbsp;KB.
+  </p>
+  <div class="hero-actions">
+    <a class="cta-primary" href="#get-started">Get started →</a>
+    <a class="cta-ghost" href="https://github.com/mambisi/pocopine">GitHub ↗</a>
+  </div>
+</root>

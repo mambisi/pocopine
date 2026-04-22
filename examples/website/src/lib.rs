@@ -1,13 +1,18 @@
-//! Pine MVP showcase. One section per primitive, hand-authored
-//! CSS in `styles.css` alongside for visual parity with something
-//! a Tailwind-ish app would ship.
+//! pocopine's own website. Composes a `Hero`, a `Tutorial`, and
+//! the Pine UI primitive showcase — the first two are regular
+//! `#[component]`s with their own `.poco` templates (same
+//! pattern the `hn` example uses).
+
+pub mod components;
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use components::{Hero, Tutorial};
+
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDemoApp.poco")]
-pub struct PineDemoApp {
+#[component(template = "WebsiteApp.poco")]
+pub struct WebsiteApp {
     pub clicks: u32,
 
     pub dialog_open: bool,
@@ -126,7 +131,7 @@ pub struct PineDemoApp {
 }
 
 #[handlers]
-impl PineDemoApp {
+impl WebsiteApp {
     pub fn on_mount(&mut self) {
         self.tab = "account".into();
         self.agree_state = "unchecked".into();
@@ -275,5 +280,9 @@ fn rotate(v: &mut Vec<String>) {
 #[wasm_bindgen(start)]
 pub fn main() {
     pine::register_all();
-    App::new().register::<PineDemoApp>().run();
+    App::new()
+        .register::<WebsiteApp>()
+        .register::<Hero>()
+        .register::<Tutorial>()
+        .run();
 }

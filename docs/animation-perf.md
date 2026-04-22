@@ -1,12 +1,12 @@
 # Animation performance characteristics
 
 Baseline numbers + analysis for the RFC-038 / RFC-039 motion stack.
-Run `python3 examples/pine-demo/e2e/test_motion_perf.py` to refresh
+Run `python3 examples/website/e2e/test_motion_perf.py` to refresh
 on the current machine; commit message updates can record drift.
 
 ## Stress fixture
 
-`examples/pine-demo` exposes a "Mount 500-row stress fixture"
+`examples/website` exposes a "Mount 500-row stress fixture"
 button that materialises a `pine-tags-input-root` containing 500
 keyed `pine-tags-input-item` chips, each with `transition = "scale"`
 and `animate = "flip"`. The "Shuffle" button rotates the list by

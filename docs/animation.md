@@ -263,7 +263,7 @@ pine-dialog-content {
 ```
 
 The demo's Dialog / AlertDialog / Command CSS uses this pattern
-— see `examples/pine-demo/styles.css`. Pairs naturally with Pine
+— see `examples/website/styles.css`. Pairs naturally with Pine
 components where `pp-if` fully unmounts: each mount is a fresh
 insertion, so `@starting-style` always kicks in.
 
@@ -340,7 +340,7 @@ want to scale or slide. Common patterns:
 ```
 
 Either keeps `transform` free for the preset to own. The
-pine-demo's Dialog / AlertDialog / Command CSS uses the first
+website's Dialog / AlertDialog / Command CSS uses the first
 pattern — copy from there if you're styling the same primitives.
 
 ## Theming hooks (RFC-039)
