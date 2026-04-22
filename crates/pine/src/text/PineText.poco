@@ -1,0 +1,6 @@
+<span class="pine-text"
+      pp-ref="root"
+      :data-truncated="truncated"
+      :data-line-count="line_count">
+  <slot></slot>
+</span>

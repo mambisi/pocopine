@@ -56,6 +56,7 @@ pub mod splitter;
 pub mod switch;
 pub mod tabs;
 pub mod tags_input;
+pub mod text;
 pub mod toggle;
 pub mod toggle_group;
 pub mod toolbar;
@@ -139,6 +140,7 @@ pub use tags_input::{
 };
 pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
 pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
+pub use text::PineText;
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
 pub use tooltip::{
@@ -290,4 +292,5 @@ pub fn register_all() {
     PineTagsInputItemDelete::register();
     PineTagsInputInput::register();
     PineTagsInputClear::register();
+    PineText::register();
 }
