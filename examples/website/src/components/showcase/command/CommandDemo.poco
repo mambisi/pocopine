@@ -2,10 +2,11 @@
   <h2>Command palette</h2>
   <section>
     <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
-      Press <kbd>Ctrl</kbd> + <kbd>K</kbd> (or <kbd>⌘</kbd> + <kbd>K</kbd>)
-      to open. Type to filter, Enter to run.
+      Press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>K</kbd> (or <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>K</kbd>)
+      to open. Type to filter, Enter to run. The header's Cmd+K
+      owns the site-wide palette.
     </p>
-    <pine-command-root shortcut="Mod+k">
+    <pine-command-root shortcut="Mod+Shift+k">
       <pine-command-portal>
         <pine-command-overlay></pine-command-overlay>
         <pine-command-content pp-transition="none">

@@ -1,18 +1,15 @@
 /* ─── PineCommand ─────────────────────────────────────────────── */
 
-pine-command-root,
-pine-command-portal,
-pine-command-list,
-pine-command-item,
-pine-command-empty {
-  display: contents;
-}
-
+/* Overlay + content sit in the teleported portal (direct body
+   child), but when any app chrome uses `backdrop-filter` or other
+   stacking-context triggers, a low-numbered z-index can paint on
+   top. 1000 gives the palette comfortable headroom above sticky
+   bars, floating toolbars, etc. */
 .pine-command-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  z-index: 70;
+  z-index: 1000;
 }
 pine-command-content {
   position: fixed;
@@ -21,7 +18,7 @@ pine-command-content {
   align-items: flex-start;
   justify-content: center;
   padding-top: 20vh;
-  z-index: 71;
+  z-index: 1001;
   pointer-events: none;
   opacity: 1;
   transition: opacity 160ms ease-out;

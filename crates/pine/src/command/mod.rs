@@ -42,7 +42,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -68,7 +68,7 @@ thread_local! {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandRoot.poco", role = "scope")]
+#[component(template = "PineCommandRoot.poco", role = "scope", display = "contents")]
 pub struct PineCommandRoot {
     #[prop]
     pub open: bool,
@@ -123,6 +123,7 @@ impl PineCommandRoot {
             self.open = true;
             self.query = String::new();
             self.has_matches = true;
+            emit_model(true);
         }
     }
 
@@ -130,6 +131,7 @@ impl PineCommandRoot {
         if self.open {
             self.open = false;
             self.query = String::new();
+            emit_model(false);
         }
     }
 
@@ -257,7 +259,7 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandPortal.poco", role = "scope")]
+#[component(template = "PineCommandPortal.poco", role = "scope", display = "contents")]
 pub struct PineCommandPortal {
     #[observe(ROOT)] pub open: bool,
 }
@@ -465,7 +467,7 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
 // ── List ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandList.poco", role = "list")]
+#[component(template = "PineCommandList.poco", role = "list", display = "contents")]
 pub struct PineCommandList {
     #[observe(ROOT)] pub listbox_id: String,
 }
@@ -476,7 +478,7 @@ impl PineCommandList {}
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandItem.poco", role = "item", animate = "flip")]
+#[component(template = "PineCommandItem.poco", role = "item", display = "contents", animate = "flip")]
 pub struct PineCommandItem {
     #[prop]
     pub value: String,
@@ -544,7 +546,7 @@ impl PineCommandItem {
 // ── Empty ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandEmpty.poco", role = "panel")]
+#[component(template = "PineCommandEmpty.poco", role = "panel", display = "contents")]
 pub struct PineCommandEmpty {
     pub empty: bool,
 }
