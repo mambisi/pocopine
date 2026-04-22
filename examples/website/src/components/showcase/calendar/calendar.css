@@ -89,12 +89,14 @@
   min-width: 0;
 }
 .calendar {
-  display: inline-block;
+  display: block;
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem;
   background: var(--bg);
   user-select: none;
+  box-sizing: border-box;
 }
 .calendar[data-disabled] {
   opacity: 0.6;
@@ -139,16 +141,19 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  width: 100%;
 }
 .calendar-grid .pine-calendar-grid-head {
   display: grid;
-  grid-template-columns: repeat(7, 2rem);
+  grid-template-columns: repeat(7, 1fr);
   gap: 2px;
+  width: 100%;
 }
 .calendar-grid .pine-calendar-grid-body {
   display: grid;
-  grid-template-columns: repeat(7, 2rem);
+  grid-template-columns: repeat(7, 1fr);
   gap: 2px;
+  width: 100%;
 }
 .calendar-grid .pine-calendar-head-cell {
   font-weight: 600;
@@ -161,10 +166,11 @@
 }
 .calendar-grid .pine-calendar-cell {
   text-align: center;
+  min-width: 0;
 }
 .calendar-grid .pine-calendar-cell-trigger {
-  height: 2rem;
-  width: 2rem;
+  height: 2.25rem;
+  width: 100%;
   border: 0;
   background: transparent;
   color: var(--fg);
@@ -174,6 +180,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 }
 .calendar-grid .pine-calendar-cell-trigger:hover {
   background: var(--bg-subtle);

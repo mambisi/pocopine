@@ -1,7 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[component(template = "CalendarDemo.poco", style = "calendar.css", role = "panel")]
 pub struct CalendarDemo {
     /// Selected date as ISO `YYYY-MM-DD`. Two-way bound via
@@ -19,24 +19,19 @@ pub struct CalendarDemo {
     pub readonly: bool,
 }
 
-impl Default for CalendarDemo {
-    fn default() -> Self {
-        Self {
-            value: String::new(),
-            placeholder: "2024-06-15".into(),
-            min_value: String::new(),
-            max_value: String::new(),
-            week_starts_on: 0,
-            fixed_weeks: false,
-            prevent_deselect: false,
-            disabled: false,
-            readonly: false,
-        }
-    }
-}
-
 #[handlers]
 impl CalendarDemo {
+    pub fn on_mount(&mut self) {
+        // Seed the reactive state here — not via `Default` —
+        // so the writes propagate through pp-model / pp-bind to
+        // <pine-calendar-root>. Values assigned inside Default
+        // sit pre-reactivity and don't retrigger the child's
+        // #[watch]ers the way a subsequent mutation does.
+        if self.placeholder.is_empty() {
+            self.placeholder = "2024-06-15".into();
+        }
+    }
+
     pub fn week_start_sun(&mut self) {
         self.week_starts_on = 0;
     }

@@ -110,21 +110,23 @@ impl PineCalendarRoot {
             self.number_of_months = 1;
         }
         provide(&ROOT, this::<Self>());
-        // Deliberately skip the reflow here — on_ready runs one
-        // pass once the scope + props are finalized, and the
-        // watchers pick up any subsequent prop churn. Running a
-        // reflow up here too can render an initial grid against
-        // partial state and leave stale pp-for clones behind.
+        // Seed the view model once synchronously so the initial
+        // render already has `heading` / `cells` / `weekdays`
+        // populated. The flat `cells` Vec means a single pp-for
+        // re-runs cleanly when subsequent prop writes land via
+        // the #[watch]ers below — no nested pp-for clones to
+        // leak.
+        self.reflow();
     }
 
-    pub fn on_ready(&self) {
-        // Let authors see the view model immediately after mount
-        // even if the handlers never fire — keeps prerendered
-        // snapshots consistent with the hydrated DOM.
-        let handle = this::<Self>();
-        pocopine::tick::next(move || {
-            handle.update(|s| s.reflow());
-        });
+    pub fn on_mount(&mut self) {
+        // pp-model / pp-bind effects fire between on_setup and
+        // on_mount, so by this point any author-supplied
+        // `placeholder`, `value`, `min-value`, `max-value`, etc.
+        // have settled. A second reflow here guarantees the
+        // view reflects the final prop state even if the
+        // individual #[watch] handlers skipped an initial-write.
+        self.reflow();
     }
 
     #[watch(placeholder)]
