@@ -6,10 +6,13 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use js_sys::Reflect;
 use pocopine_core::{
     batch, computed, effect, flush_sync, on_cleanup, release, rw_signal, set_auto_flush,
-    signal, watch,
+    signal, watch, watch_scope_field_now, Scope,
 };
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn setup() {
@@ -243,6 +246,61 @@ fn watch_fires_on_distinct_values_only() {
     assert_eq!(hits.get(), 2);
     assert_eq!(last_old.get(), Some(5));
     assert_eq!(last_new.get(), 7);
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct TestScopeState {
+    value: String,
+}
+
+impl pocopine_core::ComponentState for TestScopeState {
+    fn get(&self, key: &str) -> JsValue {
+        match key {
+            "value" => JsValue::from_str(&self.value),
+            _ => JsValue::UNDEFINED,
+        }
+    }
+
+    fn set(&mut self, key: &str, value: JsValue) {
+        if key == "value" {
+            self.value = value.as_string().unwrap_or_default();
+        }
+    }
+
+    fn keys(&self) -> &'static [&'static str] {
+        &["value"]
+    }
+
+    fn invoke(&mut self, _key: &str, _args: &js_sys::Array) -> JsValue {
+        JsValue::UNDEFINED
+    }
+}
+
+#[wasm_bindgen_test]
+fn watch_scope_field_now_reads_existing_value_on_install() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let proxy = scope.into_proxy();
+    let _ = Reflect::set(
+        &proxy,
+        &JsValue::from_str("value"),
+        &JsValue::from_str("2024-06-15"),
+    );
+
+    let hits = Rc::new(Cell::new(0));
+    let seen = Rc::new(std::cell::RefCell::new(String::new()));
+    let hits_w = hits.clone();
+    let seen_w = seen.clone();
+    watch_scope_field_now::<String, _>(scope.id, "value", move |next, prev| {
+        hits_w.set(hits_w.get() + 1);
+        assert!(prev.is_none(), "initial install should report prev=None");
+        *seen_w.borrow_mut() = next.clone();
+    });
+
+    assert_eq!(hits.get(), 1);
+    assert_eq!(seen.borrow().as_str(), "2024-06-15");
 }
 
 #[wasm_bindgen_test]

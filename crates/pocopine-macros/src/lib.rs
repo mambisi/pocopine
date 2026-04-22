@@ -798,9 +798,34 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             {
                 let __scope = ::pocopine::current_scope_id()
                     .expect("watch_field installed outside a lifecycle context");
-                ::pocopine::watch_field::<#v_ty, _>(#field_name, move |new, prev| {
+                let __watch_initial_pending =
+                    ::std::rc::Rc::new(::std::cell::Cell::new(true));
+                let __watch_initial_ticket =
+                    ::std::rc::Rc::new(::std::cell::Cell::new(0_u64));
+                ::pocopine::watch_scope_field_now::<#v_ty, _>(__scope, #field_name, move |new, prev| {
                     let new_v: #v_ty = new.clone();
                     let prev_v: ::core::option::Option<#v_ty> = prev.cloned();
+                    if __watch_initial_pending.get() {
+                        let __ticket = __watch_initial_ticket.get() + 1;
+                        __watch_initial_ticket.set(__ticket);
+                        let __pending = __watch_initial_pending.clone();
+                        let __tickets = __watch_initial_ticket.clone();
+                        ::pocopine::tick::next(move || {
+                            if !__pending.get() || __tickets.get() != __ticket {
+                                return;
+                            }
+                            __pending.set(false);
+                            if let Some(scope) = ::pocopine::Scope::find(__scope) {
+                                if let Some(inner) = scope.typed::<#ty>() {
+                                    ::pocopine::Handle::new(inner, __scope)
+                                        .update(|s| {
+                                            s.#method_ident(new_v, ::core::option::Option::None);
+                                        });
+                                }
+                            }
+                        });
+                        return;
+                    }
                     if let Some(scope) = ::pocopine::Scope::find(__scope) {
                         if let Some(inner) = scope.typed::<#ty>() {
                             ::pocopine::Handle::new(inner, __scope)

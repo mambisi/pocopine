@@ -96,16 +96,34 @@ where
     C: Fn(&V, Option<&V>) + 'static,
 {
     crate::tick::next(move || {
-        watch(
-            move || {
-                track(scope_id, field);
-                let Some(scope) = Scope::find(scope_id) else {
-                    return V::default();
-                };
-                let v = scope.state.borrow().get(field);
-                serde_wasm_bindgen::from_value::<V>(v).unwrap_or_default()
-            },
-            cb,
-        );
+        watch_scope_field_now(scope_id, field, cb);
     });
+}
+
+fn read_scope_field<V>(scope_id: ScopeId, field: &'static str) -> V
+where
+    V: Clone + PartialEq + Default + DeserializeOwned + 'static,
+{
+    track(scope_id, field);
+    let Some(scope) = Scope::find(scope_id) else {
+        return V::default();
+    };
+    let v = scope.state.borrow().get(field);
+    serde_wasm_bindgen::from_value::<V>(v).unwrap_or_default()
+}
+
+/// Synchronous variant of [`watch_scope_field`].
+///
+/// The watcher subscribes immediately, so the initial run sees the
+/// field's current value even if it was written earlier in the same
+/// mount sequence. Call this only from contexts where reading the
+/// target scope immediately is borrow-safe (for example `on_ready`,
+/// which runs behind an immutable borrow).
+#[doc(hidden)]
+pub fn watch_scope_field_now<V, C>(scope_id: ScopeId, field: &'static str, cb: C) -> EffectId
+where
+    V: Clone + PartialEq + Default + DeserializeOwned + 'static,
+    C: Fn(&V, Option<&V>) + 'static,
+{
+    watch(move || read_scope_field::<V>(scope_id, field), cb)
 }

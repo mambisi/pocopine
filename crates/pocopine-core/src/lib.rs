@@ -74,7 +74,7 @@ pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
 pub use walker::{start, start_on_body};
-pub use watch::{watch, watch_field, watch_scope_field};
+pub use watch::{watch, watch_field, watch_scope_field, watch_scope_field_now};
 
 /// Convenience re-export alias so `pocopine_core::run()` reads well.
 pub fn run() {

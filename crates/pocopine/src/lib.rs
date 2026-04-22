@@ -9,12 +9,11 @@ pub use pocopine_core::{
     batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
     emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
     fetch, flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
-    set_auto_flush, signal, store, this, trigger_scope, watch, watch_field,
-    watch_scope_field, App, Body, Component, ComponentState, Computed, Doc, EffectId,
+    set_auto_flush, signal, store, this, trigger_scope, watch, watch_field, watch_scope_field,
+    watch_scope_field_now, App, Body, Component, ComponentState, Computed, Doc, EffectId,
     EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported, LifecycleContext,
-    MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError,
-    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName,
-    TeleportHost, TypedEl, Win,
+    MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
+    Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::inject_key;
