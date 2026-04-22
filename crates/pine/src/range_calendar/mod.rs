@@ -8,6 +8,8 @@
 //! same seams as `calendar/`: pure [`state`] machine, then the
 //! `#[component]` parts (landing in follow-up commits).
 
+pub mod root;
 pub mod state;
 
+pub use root::{PineRangeCalendarRoot, RangeCellView, RANGE_ROOT};
 pub use state::RangeCalendarState;
