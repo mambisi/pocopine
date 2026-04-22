@@ -59,6 +59,12 @@ pub struct PineCalendarCellTrigger {
     /// ISO `YYYY-MM-DD` date this trigger acts on.
     #[prop]
     pub date: String,
+    /// Day-of-month displayed inside the button. Authors usually
+    /// bind this via `:day="cell.day"` from the parent grid so the
+    /// value evaluates in the iteration scope; interpolating
+    /// iterator variables inside slot content is unsupported.
+    #[prop]
+    pub day: u32,
 }
 
 #[handlers]

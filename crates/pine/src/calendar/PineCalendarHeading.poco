@@ -2,6 +2,4 @@
      pp-ref="root"
      role="heading"
      aria-level="2"
-     :data-disabled="disabled">
-  <slot>{{ heading }}</slot>
-</div>
+     :data-disabled="disabled">{{heading}}</div>

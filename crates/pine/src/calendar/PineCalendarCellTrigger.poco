@@ -10,6 +10,4 @@
         @keydown.arrow-up.prevent.stop="on_arrow_up"
         @keydown.arrow-down.prevent.stop="on_arrow_down"
         @keydown.enter.prevent="on_activate"
-        @keydown.space.prevent="on_activate">
-  <slot></slot>
-</button>
+        @keydown.space.prevent="on_activate">{{day}}</button>

@@ -9,7 +9,7 @@
               :data-outside-view="!cell.is_current_month"
               :data-selected="cell.is_selected"
               :data-disabled="cell.is_out_of_bounds || cell.is_disabled">
-            <pine-calendar-cell-trigger :date="cell.date">{{ cell.day }}</pine-calendar-cell-trigger>
+            <pine-calendar-cell-trigger :date="cell.date" :day="cell.day"></pine-calendar-cell-trigger>
           </td>
         </template>
       </tr>
