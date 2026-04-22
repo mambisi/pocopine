@@ -40,6 +40,7 @@ pub mod field;
 pub mod fieldset;
 pub mod form;
 pub mod hover_card;
+pub mod input;
 pub mod label;
 pub mod otp_field;
 pub mod overlay;
@@ -117,6 +118,7 @@ pub use form::PineFormRoot;
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
 };
+pub use input::PineInput;
 pub use otp_field::PineOtpField;
 pub use password_toggle_field::{
     PinePasswordToggleFieldInput, PinePasswordToggleFieldRoot, PinePasswordToggleFieldToggle,
@@ -243,6 +245,7 @@ pub fn register_all() {
     PinePasswordToggleFieldRoot::register();
     PinePasswordToggleFieldInput::register();
     PinePasswordToggleFieldToggle::register();
+    PineInput::register();
     PineOtpField::register();
     PineSliderRoot::register();
     PineSliderTrack::register();

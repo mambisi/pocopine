@@ -5250,3 +5250,115 @@ async fn fieldset_wires_legend_id_and_disables_descendants() {
 
     host.remove();
 }
+
+// ─── PineInput ────────────────────────────────────────────────────
+
+/// Initial `value` prop seeds the DOM input's `.value` property
+/// (so `pp-bind:value` on the tag round-trips on mount), and
+/// typing emits `pp:update:model` so `pp-model:value="field"`
+/// writes back to the parent.
+#[wasm_bindgen_test]
+async fn input_seeds_value_and_emits_model_on_type() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount("<pine-input value=\"hello\" placeholder=\"Name\"></pine-input>");
+    tick().await;
+
+    let tag = host.query_selector("pine-input").unwrap().unwrap();
+    let input = host
+        .query_selector("input.pine-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlInputElement>()
+        .unwrap();
+
+    assert_eq!(input.value(), "hello", "initial value seeded from prop");
+    assert_eq!(
+        input.get_attribute("placeholder").as_deref(),
+        Some("Name"),
+        "placeholder forwarded"
+    );
+
+    let last = Rc::new(RefCell::new(None::<String>));
+    let lc = last.clone();
+    let cb: Closure<dyn FnMut(web_sys::CustomEvent)> =
+        Closure::wrap(Box::new(move |ev: web_sys::CustomEvent| {
+            *lc.borrow_mut() = ev.detail().as_string();
+        }));
+    let target: &web_sys::EventTarget = tag.as_ref();
+    target
+        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    input.set_value("hello world");
+    let input_target: &web_sys::EventTarget = input.as_ref();
+    input_target
+        .dispatch_event(&web_sys::Event::new("input").unwrap())
+        .unwrap();
+    tick().await;
+
+    assert_eq!(
+        last.borrow().clone(),
+        Some("hello world".into()),
+        "pp:update:model fired with new value"
+    );
+
+    cb.forget();
+    host.remove();
+}
+
+/// Focus / blur / input flip `data-focused` / `data-touched` /
+/// `data-dirty` / `data-filled` on the rendered `<input>` — same
+/// state vocabulary Field uses, so styling works identically in
+/// both contexts.
+#[wasm_bindgen_test]
+async fn input_tracks_focused_touched_dirty_filled() {
+    let host = mount("<pine-input></pine-input>");
+    tick().await;
+
+    let input = host
+        .query_selector("input.pine-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlInputElement>()
+        .unwrap();
+    let el: &Element = input.as_ref();
+
+    assert!(!el.has_attribute("data-focused"));
+    assert!(!el.has_attribute("data-touched"));
+    assert!(!el.has_attribute("data-dirty"));
+    assert!(!el.has_attribute("data-filled"));
+
+    let target: &web_sys::EventTarget = input.as_ref();
+    let fev_init = web_sys::FocusEventInit::new();
+    fev_init.set_bubbles(true);
+    target
+        .dispatch_event(
+            &web_sys::FocusEvent::new_with_focus_event_init_dict("focus", &fev_init).unwrap(),
+        )
+        .unwrap();
+    tick().await;
+    assert!(el.has_attribute("data-focused"));
+
+    input.set_value("abc");
+    target
+        .dispatch_event(&web_sys::Event::new("input").unwrap())
+        .unwrap();
+    tick().await;
+    assert!(el.has_attribute("data-dirty"));
+    assert!(el.has_attribute("data-filled"));
+
+    target
+        .dispatch_event(
+            &web_sys::FocusEvent::new_with_focus_event_init_dict("blur", &fev_init).unwrap(),
+        )
+        .unwrap();
+    tick().await;
+    assert!(!el.has_attribute("data-focused"));
+    assert!(el.has_attribute("data-touched"));
+
+    host.remove();
+}

@@ -1,0 +1,21 @@
+<root>
+  <h2>Input</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Native <code>&lt;input&gt;</code> with built-in
+      <code>data-focused</code> / <code>data-touched</code> /
+      <code>data-dirty</code> / <code>data-filled</code> state
+      tracking. Style hooks work the same whether the input is
+      standalone or wrapped in a <code>&lt;pine-field-control&gt;</code>.
+    </p>
+    <label class="input-demo-row">
+      <span>Name</span>
+      <pine-input class="input-demo"
+                  placeholder="Enter your name"
+                  pp-model:value="name"></pine-input>
+    </label>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Current: <strong pp-text="name || '(empty)'"></strong>
+    </p>
+  </section>
+</root>
