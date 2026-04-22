@@ -35,6 +35,7 @@ pub use calendar::{
     create_year, create_year_grid, create_year_range, end_of_decade, end_of_month, end_of_year,
     get_days_between, get_week_number, get_week_number_iso, get_week_number_us,
     get_week_starts_on, start_of_decade, start_of_month, start_of_week, start_of_year,
+    CreateMonthProps, CreateMonthsProps, WeekMode,
 };
 pub use comparators::{
     are_all_days_between_valid, are_all_months_between_valid, are_all_years_between_valid,
