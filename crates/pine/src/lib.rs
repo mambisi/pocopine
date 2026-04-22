@@ -36,6 +36,7 @@ pub mod command;
 pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
+pub mod form;
 pub mod hover_card;
 pub mod label;
 pub mod otp_field;
@@ -106,6 +107,7 @@ pub use dropdown_menu::{
     PineDropdownMenuSub, PineDropdownMenuSubContent, PineDropdownMenuSubTrigger,
     PineDropdownMenuTrigger,
 };
+pub use form::PineFormRoot;
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
 };
@@ -197,6 +199,7 @@ pub fn register_all() {
     PineDropdownMenuSub::register();
     PineDropdownMenuSubTrigger::register();
     PineDropdownMenuSubContent::register();
+    PineFormRoot::register();
     PineHoverCardRoot::register();
     PineHoverCardTrigger::register();
     PineHoverCardPortal::register();

@@ -1,0 +1,25 @@
+<root>
+  <h2>Form</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Native <code>&lt;form&gt;</code> wrapper that calls
+      <code>preventDefault()</code> and re-emits the submit as
+      <code>pp:submit</code>. Values live in parent state via
+      <code>pp-model:value</code>, so the handler just reads them.
+    </p>
+    <pine-form-root class="form-demo" @submit="submit">
+      <label class="form-demo-row">
+        <span>Username</span>
+        <input type="text"
+               class="form-demo-input"
+               placeholder="Required"
+               required
+               pp-model:value="username">
+      </label>
+      <button type="submit" class="form-demo-submit">Sign up</button>
+    </pine-form-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Last submitted: <strong pp-text="submitted || '(none)'"></strong>
+    </p>
+  </section>
+</root>

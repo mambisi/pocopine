@@ -4974,3 +4974,53 @@ async fn setattr_round_trip_normalises_event_shorthand() {
     );
     host.remove();
 }
+
+// ─── PineForm ─────────────────────────────────────────────────────
+
+/// Form intercepts native submit with `preventDefault()` and
+/// re-emits it as a Pine-native `pp:submit` event so parents can
+/// bind `@submit="handler"` without fighting the browser's default
+/// navigation. The cancelable `submit` event is observed for
+/// `defaultPrevented`; the `pp:submit` re-emit is observed for
+/// delivery.
+#[wasm_bindgen_test]
+async fn form_prevents_default_and_emits_pp_submit() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::*;
+
+    let host = mount(
+        "<pine-form-root>\
+           <input name=\"x\">\
+           <button type=\"submit\" class=\"fm-submit\">Save</button>\
+         </pine-form-root>",
+    );
+    tick().await;
+
+    let form = host.query_selector("form.pine-form").unwrap().unwrap();
+
+    let saw_pp = Rc::new(Cell::new(false));
+    let saw_for_cb = saw_pp.clone();
+    let pp_cb: Closure<dyn FnMut(web_sys::CustomEvent)> =
+        Closure::wrap(Box::new(move |_| saw_for_cb.set(true)));
+    let target: &web_sys::EventTarget = form.as_ref();
+    target
+        .add_event_listener_with_callback("pp:submit", pp_cb.as_ref().unchecked_ref())
+        .unwrap();
+
+    let submit_init = web_sys::EventInit::new();
+    submit_init.set_bubbles(true);
+    submit_init.set_cancelable(true);
+    let submit_ev =
+        web_sys::Event::new_with_event_init_dict("submit", &submit_init).unwrap();
+    target.dispatch_event(&submit_ev).unwrap();
+    tick().await;
+
+    assert!(submit_ev.default_prevented(), "native submit was preventDefault'd");
+    assert!(saw_pp.get(), "pp:submit re-emitted");
+
+    pp_cb.forget();
+    host.remove();
+}
+

@@ -1,0 +1,5 @@
+<form class="pine-form"
+      pp-ref="root"
+      @submit.prevent="on_submit">
+  <slot></slot>
+</form>

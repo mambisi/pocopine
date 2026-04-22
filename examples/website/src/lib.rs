@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use components::showcase::{
     AccordionDemo, AlertDialogDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo, DialogDemo,
-    DropdownMenuDemo, HoverCardDemo, OtpDemo, PopoverDemo, RadioGroupDemo, ScrollAreaDemo,
+    DropdownMenuDemo, FormDemo, HoverCardDemo, OtpDemo, PopoverDemo, RadioGroupDemo, ScrollAreaDemo,
     SelectDemo, SliderDemo, SplitterDemo, StressDemo, SwitchCheckboxDemo, TabsDemo,
     TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, ToggleDemo, ToolbarDemo, TooltipDemo,
     TreeDemo,
@@ -140,6 +140,7 @@ pub fn main() {
         .register::<ToggleDemo>()
         .register::<SwitchCheckboxDemo>()
         .register::<OtpDemo>()
+        .register::<FormDemo>()
         .register::<SelectDemo>()
         .register::<ComboboxDemo>()
         .register::<CommandDemo>()
