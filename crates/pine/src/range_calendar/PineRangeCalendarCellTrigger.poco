@@ -1,0 +1,15 @@
+<button class="pine-range-calendar-cell-trigger"
+        pp-ref="root"
+        type="button"
+        role="button"
+        data-pine-range-calendar-cell-trigger
+        :data-value="date"
+        @click="on_click"
+        @mouseenter="on_hover"
+        @focus="on_hover"
+        @keydown.arrow-left.prevent.stop="on_arrow_left"
+        @keydown.arrow-right.prevent.stop="on_arrow_right"
+        @keydown.arrow-up.prevent.stop="on_arrow_up"
+        @keydown.arrow-down.prevent.stop="on_arrow_down"
+        @keydown.enter.prevent="on_activate"
+        @keydown.space.prevent="on_activate">{{day}}</button>

@@ -1,0 +1,10 @@
+<div class="pine-range-calendar-grid"
+     pp-ref="root"
+     tabindex="-1"
+     role="grid"
+     :aria-disabled="disabled"
+     :aria-readonly="readonly"
+     :data-disabled="disabled"
+     :data-readonly="readonly">
+  <slot></slot>
+</div>

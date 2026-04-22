@@ -95,6 +95,12 @@ pub use calendar::{
     PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
 };
 pub use date_picker::PineDatePicker;
+pub use range_calendar::{
+    PineRangeCalendarCell, PineRangeCalendarCellTrigger, PineRangeCalendarGrid,
+    PineRangeCalendarGridBody, PineRangeCalendarGridHead, PineRangeCalendarHeader,
+    PineRangeCalendarHeading, PineRangeCalendarNext, PineRangeCalendarPrev,
+    PineRangeCalendarRoot,
+};
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
 pub use combobox::{
@@ -191,6 +197,16 @@ pub fn register_all() {
     PineCalendarCell::register();
     PineCalendarCellTrigger::register();
     PineDatePicker::register();
+    PineRangeCalendarRoot::register();
+    PineRangeCalendarHeader::register();
+    PineRangeCalendarHeading::register();
+    PineRangeCalendarPrev::register();
+    PineRangeCalendarNext::register();
+    PineRangeCalendarGrid::register();
+    PineRangeCalendarGridHead::register();
+    PineRangeCalendarGridBody::register();
+    PineRangeCalendarCell::register();
+    PineRangeCalendarCellTrigger::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();

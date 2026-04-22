@@ -1,0 +1,20 @@
+<div class="pine-range-calendar-grid-body"
+     pp-ref="root"
+     role="rowgroup">
+  <template pp-for="cell in cells">
+    <div class="pine-range-calendar-cell"
+         role="gridcell"
+         :data-value="cell.date"
+         :data-outside-view="!cell.is_current_month"
+         :data-selected="cell.is_selected"
+         :data-selection-start="cell.is_selection_start"
+         :data-selection-end="cell.is_selection_end"
+         :data-in-range="cell.is_in_range"
+         :data-preview-start="cell.is_preview_start"
+         :data-preview-end="cell.is_preview_end"
+         :data-in-preview="cell.is_in_preview"
+         :data-disabled="cell.is_out_of_bounds || cell.is_disabled">
+      <pine-range-calendar-cell-trigger :date="cell.date" :day="cell.day"></pine-range-calendar-cell-trigger>
+    </div>
+  </template>
+</div>

@@ -1,0 +1,5 @@
+<div class="pine-range-calendar-heading"
+     pp-ref="root"
+     role="heading"
+     aria-level="2"
+     :data-disabled="disabled">{{heading}}</div>

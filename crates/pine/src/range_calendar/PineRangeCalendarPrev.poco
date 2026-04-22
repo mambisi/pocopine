@@ -1,0 +1,10 @@
+<button class="pine-range-calendar-prev"
+        pp-ref="root"
+        type="button"
+        aria-label="Previous page"
+        :disabled="disabled || prev_disabled"
+        :aria-disabled="disabled || prev_disabled"
+        :data-disabled="disabled || prev_disabled"
+        @click="on_click">
+  <slot></slot>
+</button>

@@ -1,0 +1,8 @@
+<div class="pine-range-calendar-grid-head"
+     pp-ref="root"
+     role="row"
+     aria-hidden="true">
+  <template pp-for="label in weekdays" pp-key="label">
+    <div class="pine-range-calendar-head-cell" role="columnheader">{{label}}</div>
+  </template>
+</div>

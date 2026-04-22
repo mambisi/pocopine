@@ -1,0 +1,3 @@
+<div class="pine-range-calendar-header" pp-ref="root">
+  <slot></slot>
+</div>
