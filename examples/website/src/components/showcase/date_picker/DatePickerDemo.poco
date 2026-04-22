@@ -1,0 +1,44 @@
+<root>
+  <h2>Date picker</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Compositional pattern: <code>&lt;pine-popover&gt;</code>
+      wraps <code>&lt;pine-calendar-root&gt;</code>. Trigger label
+      tracks <code>value</code> via <code>pp-model</code>; the
+      demo's <code>#[watch(value)]</code> closes the popover on
+      select.
+    </p>
+
+    <div class="date-picker-row">
+      <pine-popover-root pp-model:open="open">
+        <pine-popover-trigger class="date-picker-trigger">
+          <span pp-text="value || 'Pick a date'"></span>
+          <span class="date-picker-caret">▾</span>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content class="date-picker-panel">
+            <pine-calendar-root class="date-picker-calendar"
+                                pp-model:value="value"
+                                pp-model:placeholder="placeholder">
+              <pine-calendar-header class="date-picker-calendar-header">
+                <pine-calendar-prev class="date-picker-nav">‹</pine-calendar-prev>
+                <pine-calendar-heading class="date-picker-calendar-heading"></pine-calendar-heading>
+                <pine-calendar-next class="date-picker-nav">›</pine-calendar-next>
+              </pine-calendar-header>
+              <pine-calendar-grid class="date-picker-calendar-grid">
+                <pine-calendar-grid-head></pine-calendar-grid-head>
+                <pine-calendar-grid-body></pine-calendar-grid-body>
+              </pine-calendar-grid>
+            </pine-calendar-root>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+
+      <button type="button" class="date-picker-clear" @click="clear">Clear</button>
+    </div>
+
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Selected: <strong pp-text="value || '(none)'"></strong>
+    </p>
+  </section>
+</root>

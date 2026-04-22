@@ -44,6 +44,7 @@
   <tags-mentions-demo></tags-mentions-demo>
   <text-demo></text-demo>
   <calendar-demo></calendar-demo>
+  <date-picker-demo></date-picker-demo>
   <cmd-popover-demo></cmd-popover-demo>
   <stress-demo></stress-demo>
 </root>

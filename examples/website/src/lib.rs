@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use components::showcase::{
     AccordionDemo, AlertDialogDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CalendarDemo, CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo,
-    DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo,
+    DatePickerDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo,
     OtpDemo, PopoverDemo, RadioGroupDemo,
     ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo, StressDemo,
     SwitchCheckboxDemo, TabsDemo,
@@ -128,6 +128,7 @@ pub fn main() {
         .register::<ToolbarDemo>()
         .register::<ButtonDemo>()
         .register::<CalendarDemo>()
+        .register::<DatePickerDemo>()
         .register::<DialogDemo>()
         .register::<AlertDialogDemo>()
         .register::<PopoverDemo>()

@@ -1,0 +1,148 @@
+/* ─── DatePickerDemo ────────────────────────────────────────── */
+
+.date-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.date-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 10rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+}
+.date-picker-trigger:hover {
+  background: var(--bg-subtle);
+}
+.date-picker-trigger[data-state="open"] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+}
+.date-picker-caret {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+}
+
+.date-picker-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 0.5rem;
+  min-width: 18rem;
+}
+.date-picker-calendar {
+  display: block;
+  width: 100%;
+}
+.date-picker-calendar-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+}
+.date-picker-calendar-heading {
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.date-picker-nav {
+  height: 1.75rem;
+  width: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.date-picker-nav:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+.date-picker-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.date-picker-calendar-grid {
+  font-size: 0.8125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.date-picker-calendar-grid .pine-calendar-grid-head {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+.date-picker-calendar-grid .pine-calendar-grid-body {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+.date-picker-calendar-grid .pine-calendar-head-cell {
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-align: center;
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.25rem 0;
+}
+.date-picker-calendar-grid .pine-calendar-cell {
+  text-align: center;
+  min-width: 0;
+}
+.date-picker-calendar-grid .pine-calendar-cell-trigger {
+  height: 2rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+.date-picker-calendar-grid .pine-calendar-cell-trigger:hover {
+  background: var(--bg-subtle);
+}
+.date-picker-calendar-grid .pine-calendar-cell[data-outside-view="true"] .pine-calendar-cell-trigger {
+  color: var(--fg-muted);
+  opacity: 0.45;
+}
+.date-picker-calendar-grid .pine-calendar-cell[data-selected="true"] .pine-calendar-cell-trigger {
+  background: var(--brand);
+  color: #fff;
+}
+
+.date-picker-clear {
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.date-picker-clear:hover {
+  background: var(--bg-subtle);
+}
