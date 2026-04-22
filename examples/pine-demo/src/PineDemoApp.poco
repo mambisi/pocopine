@@ -21,16 +21,16 @@
       <li class="tutorial-step">
         <span class="step-num">1</span>
         <div class="step-body">
-          <h3>Install the toolchain</h3>
-          <p>You need <code>wasm-pack</code> to build to WebAssembly. Rust nightly works, stable is fine too.</p>
-<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">install wasm-pack</span></code></pre>
+          <h3>Install the CLI</h3>
+          <p>The <code>pocopine</code> CLI handles building, serving, and hot-reload — one install covers all three.</p>
+<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">install pocopine-cli</span></code></pre>
         </div>
       </li>
       <li class="tutorial-step">
         <span class="step-num">2</span>
         <div class="step-body">
           <h3>Scaffold an app</h3>
-          <p>Create a new Rust library crate and add <code>pocopine</code>.</p>
+          <p>A pocopine app is a regular Rust library crate. Add <code>pocopine</code> (runtime) and <code>pine</code> (optional UI primitives).</p>
 <pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">new --lib hello-pine</span>
 <span class="c-cmd">cd</span> <span class="c-arg">hello-pine</span>
 <span class="c-cmd">cargo</span> <span class="c-arg">add pocopine pine</span></code></pre>
@@ -40,7 +40,7 @@
         <span class="step-num">3</span>
         <div class="step-body">
           <h3>Write your first component</h3>
-          <p>A component is a Rust struct + a <code>.poco</code> template.</p>
+          <p>A component is a Rust struct plus a sibling <code>.poco</code> template.</p>
 <pre class="code-block"><code><span class="c-comment">// src/lib.rs</span>
 <span class="c-cmd">use</span> pocopine::prelude::*;
 
@@ -66,10 +66,10 @@
       <li class="tutorial-step">
         <span class="step-num">4</span>
         <div class="step-body">
-          <h3>Build &amp; serve</h3>
-          <p>Build to wasm and serve the generated <code>pkg/</code> from any static server.</p>
-<pre class="code-block"><code><span class="c-cmd">wasm-pack</span> <span class="c-arg">build --target web --out-dir pkg --dev</span>
-<span class="c-cmd">python3</span> <span class="c-arg">-m http.server 8000</span></code></pre>
+          <h3>Run it</h3>
+          <p><code>pocopine dev</code> builds the wasm bundle, serves it on a local port, and rebuilds on save. Ship with <code>pocopine build --release</code>.</p>
+<pre class="code-block"><code><span class="c-cmd">pocopine</span> <span class="c-arg">dev</span>
+<span class="c-comment"># → listening on http://127.0.0.1:5243</span></code></pre>
         </div>
       </li>
     </ol>
