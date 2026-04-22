@@ -1,0 +1,60 @@
+/* ─── Signup (Form + Fieldset + Field + Input) ───────────────── */
+
+.signup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 22rem;
+}
+.signup-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem 1rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.signup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.signup-input {
+  display: block;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.signup-input[data-focused] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+}
+.signup-input[aria-invalid="true"] {
+  border-color: #d64545;
+}
+.signup-input[aria-invalid="true"][data-focused] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, #d64545 25%, transparent);
+}
+.signup-submit {
+  align-self: flex-start;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--brand);
+  color: var(--brand-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.signup-ok {
+  color: #3a7f4b;
+}

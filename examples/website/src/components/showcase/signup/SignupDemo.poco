@@ -1,0 +1,67 @@
+<root>
+  <h2>Sign up — Form + Fieldset + Field + Input</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      The four primitives composed the way Base UI wires them:
+      <code>&lt;pine-form-root&gt;</code> prevents navigation and
+      carries the server-errors map, <code>&lt;pine-fieldset-root&gt;</code>
+      groups related controls under a shared legend, each
+      <code>&lt;pine-field-root&gt;</code> wires label / input /
+      error + aria relationships, and <code>&lt;pine-input&gt;</code>
+      drops into the Control slot for focused / touched / dirty
+      tracking. Submit with a bad email or short password to see the
+      Field auto-flip to invalid.
+    </p>
+
+    <pine-form-root class="signup-form"
+                    pp-bind:errors="errors"
+                    @submit="submit">
+      <pine-fieldset-root class="signup-fieldset">
+        <pine-fieldset-legend>Account</pine-fieldset-legend>
+
+        <pine-field-root name="email" class="signup-field">
+          <pine-field-label>Email</pine-field-label>
+          <pine-field-control>
+            <pine-input class="signup-input"
+                        type="email"
+                        placeholder="you@example.com"
+                        required
+                        pp-model:value="email"></pine-input>
+          </pine-field-control>
+          <pine-field-description>We'll send a confirmation link.</pine-field-description>
+          <pine-field-error pp-text="errors.email || 'Please enter a valid email.'"></pine-field-error>
+        </pine-field-root>
+
+        <pine-field-root name="password" class="signup-field">
+          <pine-field-label>Password</pine-field-label>
+          <pine-field-control>
+            <pine-input class="signup-input"
+                        type="password"
+                        placeholder="At least 8 characters"
+                        required
+                        pp-model:value="password"></pine-input>
+          </pine-field-control>
+          <pine-field-error pp-text="errors.password || 'Use at least 8 characters.'"></pine-field-error>
+        </pine-field-root>
+
+        <pine-field-root name="confirm" class="signup-field">
+          <pine-field-label>Confirm password</pine-field-label>
+          <pine-field-control>
+            <pine-input class="signup-input"
+                        type="password"
+                        required
+                        pp-model:value="confirm"></pine-input>
+          </pine-field-control>
+          <pine-field-error pp-text="errors.confirm || 'Passwords do not match.'"></pine-field-error>
+        </pine-field-root>
+      </pine-fieldset-root>
+
+      <button type="submit" class="signup-submit">Create account</button>
+    </pine-form-root>
+
+    <p pp-show="submitted" class="signup-ok"
+       style="margin:0.75rem 0 0;font-size:0.875rem">
+      ✓ Account created for <strong pp-text="email"></strong>.
+    </p>
+  </section>
+</root>

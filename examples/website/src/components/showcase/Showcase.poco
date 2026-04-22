@@ -31,6 +31,7 @@
   <field-demo></field-demo>
   <fieldset-demo></fieldset-demo>
   <form-demo></form-demo>
+  <signup-demo></signup-demo>
   <select-demo></select-demo>
   <combobox-demo></combobox-demo>
   <command-demo></command-demo>

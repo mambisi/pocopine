@@ -18,7 +18,8 @@ use components::showcase::{
     CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo, DialogDemo,
     DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo, OtpDemo,
     PopoverDemo, RadioGroupDemo,
-    ScrollAreaDemo, SelectDemo, SliderDemo, SplitterDemo, StressDemo, SwitchCheckboxDemo, TabsDemo,
+    ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo, StressDemo,
+    SwitchCheckboxDemo, TabsDemo,
     TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, ToggleDemo, ToolbarDemo, TooltipDemo,
     TreeDemo,
 };
@@ -145,6 +146,7 @@ pub fn main() {
         .register::<FieldDemo>()
         .register::<FieldsetDemo>()
         .register::<FormDemo>()
+        .register::<SignupDemo>()
         .register::<SelectDemo>()
         .register::<ComboboxDemo>()
         .register::<CommandDemo>()
