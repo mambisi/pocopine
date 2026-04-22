@@ -1,7 +1,14 @@
 <template pp-if="open">
+  <!-- Put visual box styles (padding, border, background) on
+       `.pine-collapsible-content-inner`, not on the outer
+       `.pine-collapsible-content` — the outer is the grid
+       container driven by the `collapse` preset and needs to
+       reach 0 height at the end of close. -->
   <root class="pine-collapsible-content"
         data-state="open"
         pp-transition="collapse">
-    <slot></slot>
+    <div class="pine-collapsible-content-inner">
+      <slot></slot>
+    </div>
   </root>
 </template>
