@@ -1,0 +1,5 @@
+<div class="pine-fieldset-legend"
+     :id="legend_id"
+     :data-disabled="disabled">
+  <slot></slot>
+</div>

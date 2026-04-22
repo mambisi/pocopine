@@ -1,0 +1,6 @@
+<fieldset class="pine-fieldset-root"
+          :data-disabled="disabled"
+          :disabled="disabled"
+          :aria-labelledby="legend_id">
+  <slot></slot>
+</fieldset>

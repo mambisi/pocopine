@@ -37,6 +37,7 @@ pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod field;
+pub mod fieldset;
 pub mod form;
 pub mod hover_card;
 pub mod label;
@@ -111,6 +112,7 @@ pub use dropdown_menu::{
 pub use field::{
     PineFieldControl, PineFieldDescription, PineFieldError, PineFieldLabel, PineFieldRoot,
 };
+pub use fieldset::{PineFieldsetLegend, PineFieldsetRoot};
 pub use form::PineFormRoot;
 pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
@@ -208,6 +210,8 @@ pub fn register_all() {
     PineFieldControl::register();
     PineFieldDescription::register();
     PineFieldError::register();
+    PineFieldsetRoot::register();
+    PineFieldsetLegend::register();
     PineFormRoot::register();
     PineHoverCardRoot::register();
     PineHoverCardTrigger::register();

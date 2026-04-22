@@ -5206,3 +5206,47 @@ async fn field_picks_up_form_errors_by_name() {
 
     host.remove();
 }
+
+// ─── PineFieldset ─────────────────────────────────────────────────
+
+/// Root renders a native `<fieldset>`; `disabled` forwards onto
+/// the attribute (which auto-disables every descendant control).
+/// Legend renders as a `<div>` carrying the shared id; the Root
+/// references it via `aria-labelledby` so the fieldset is labelled
+/// even though the Legend isn't a native `<legend>`.
+#[wasm_bindgen_test]
+async fn fieldset_wires_legend_id_and_disables_descendants() {
+    let host = mount(
+        "<pine-fieldset-root disabled=\"true\">\
+           <pine-fieldset-legend>Account</pine-fieldset-legend>\
+           <input type=\"text\" class=\"fs-first\">\
+           <input type=\"text\" class=\"fs-last\">\
+         </pine-fieldset-root>",
+    );
+    tick().await;
+
+    let fs = host
+        .query_selector("fieldset.pine-fieldset-root")
+        .unwrap()
+        .unwrap();
+    let legend = host
+        .query_selector("div.pine-fieldset-legend")
+        .unwrap()
+        .unwrap();
+
+    let legend_id = legend.get_attribute("id").expect("legend id");
+    assert!(legend_id.starts_with("pine-fieldset-legend-"));
+    assert_eq!(fs.get_attribute("aria-labelledby").as_deref(), Some(legend_id.as_str()));
+
+    // Native `disabled` attr lands on the fieldset; descendants are
+    // implicitly disabled by the browser — `:disabled` selector
+    // matches them without Pine touching each one.
+    assert!(fs.has_attribute("disabled"), "native disabled attr forwarded");
+    let first = host.query_selector(".fs-first").unwrap().unwrap();
+    assert!(
+        first.matches(":disabled").unwrap_or(false),
+        ":disabled pseudo-class matches descendant inputs of a disabled fieldset"
+    );
+
+    host.remove();
+}

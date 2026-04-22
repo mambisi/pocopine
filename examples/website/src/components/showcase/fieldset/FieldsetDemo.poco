@@ -1,0 +1,28 @@
+<root>
+  <h2>Fieldset</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Grouping wrapper with a stylable legend. Toggling
+      <strong>disabled</strong> flips the native attribute on the
+      <code>&lt;fieldset&gt;</code>, which disables every descendant
+      control without any per-input cascade. The Legend is a
+      <code>&lt;div&gt;</code> (not native <code>&lt;legend&gt;</code>)
+      so authors can style it freely; accessibility comes from
+      <code>aria-labelledby</code> on the Root.
+    </p>
+    <pine-fieldset-root class="fieldset-demo" pp-bind:disabled="disabled">
+      <pine-fieldset-legend>Account</pine-fieldset-legend>
+      <label class="fieldset-demo-row">
+        <span>First name</span>
+        <input type="text" class="fieldset-demo-input" pp-model:value="first_name">
+      </label>
+      <label class="fieldset-demo-row">
+        <span>Last name</span>
+        <input type="text" class="fieldset-demo-input" pp-model:value="last_name">
+      </label>
+    </pine-fieldset-root>
+    <pine-button variant="ghost" @click="toggle" style="margin-top:0.75rem">
+      <span pp-text="disabled ? 'Enable fieldset' : 'Disable fieldset'"></span>
+    </pine-button>
+  </section>
+</root>

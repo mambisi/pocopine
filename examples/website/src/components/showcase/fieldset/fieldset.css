@@ -1,0 +1,48 @@
+/* ─── PineFieldset ────────────────────────────────────────────── */
+
+.fieldset-demo {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 22rem;
+  margin: 0;
+}
+.fieldset-demo[data-disabled="true"] {
+  opacity: 0.6;
+}
+.pine-fieldset-legend {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--fg);
+  padding: 0 0.25rem;
+}
+.fieldset-demo-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.fieldset-demo-input {
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.fieldset-demo-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+}
+.fieldset-demo-input:disabled {
+  cursor: not-allowed;
+}

@@ -28,6 +28,7 @@
   <switch-checkbox-demo></switch-checkbox-demo>
   <otp-demo></otp-demo>
   <field-demo></field-demo>
+  <fieldset-demo></fieldset-demo>
   <form-demo></form-demo>
   <select-demo></select-demo>
   <combobox-demo></combobox-demo>
