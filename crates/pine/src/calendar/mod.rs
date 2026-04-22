@@ -9,6 +9,8 @@
 //! `Next`, `Grid` + `GridHead` / `GridBody` / `GridRow`,
 //! `HeadCell`, `Cell`, `CellTrigger`.
 
+pub mod root;
 pub mod state;
 
+pub use root::{CalendarCellView, CalendarMonthView, PineCalendarRoot, ROOT};
 pub use state::CalendarState;

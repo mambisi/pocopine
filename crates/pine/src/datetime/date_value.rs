@@ -66,6 +66,24 @@ impl DateValue {
         self.0
     }
 
+    /// Parse an ISO-8601 `YYYY-MM-DD` string. Accepts leading /
+    /// trailing whitespace for convenience (authored attrs often
+    /// include newlines). Returns `None` on malformed input.
+    pub fn parse_iso(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.len() != 10 {
+            return None;
+        }
+        let bytes = s.as_bytes();
+        if bytes[4] != b'-' || bytes[7] != b'-' {
+            return None;
+        }
+        let year: i32 = s.get(0..4)?.parse().ok()?;
+        let month: u8 = s.get(5..7)?.parse().ok()?;
+        let day: u8 = s.get(8..10)?.parse().ok()?;
+        Self::new(year, month, day)
+    }
+
     // ── arithmetic — all clip end-of-month ──────────────────────
 
     pub fn add_days(&self, days: i64) -> Self {
@@ -234,5 +252,15 @@ mod tests {
         assert!(a.compare(&b) < 0);
         assert!(b.compare(&a) > 0);
         assert_eq!(a.compare(&a), 0);
+    }
+
+    #[test]
+    fn parse_iso_roundtrips_display() {
+        let d = DateValue::new(2024, 6, 15).unwrap();
+        assert_eq!(DateValue::parse_iso(&d.to_string()), Some(d));
+        assert_eq!(DateValue::parse_iso("  2024-12-31 "), DateValue::new(2024, 12, 31));
+        assert_eq!(DateValue::parse_iso("2024/06/15"), None);
+        assert_eq!(DateValue::parse_iso("2024-13-01"), None);
+        assert_eq!(DateValue::parse_iso(""), None);
     }
 }

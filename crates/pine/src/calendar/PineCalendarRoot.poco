@@ -1,0 +1,9 @@
+<root class="pine-calendar-root"
+      pp-ref="root"
+      role="application"
+      :aria-label="heading"
+      :data-disabled="disabled"
+      :data-readonly="readonly"
+      :data-invalid="invalid">
+  <slot></slot>
+</root>
