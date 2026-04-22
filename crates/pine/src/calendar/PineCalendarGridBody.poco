@@ -1,7 +1,7 @@
 <div class="pine-calendar-grid-body"
      pp-ref="root"
      role="rowgroup">
-  <template pp-for="cell in cells" pp-key="cell.date">
+  <template pp-for="cell in cells">
     <div class="pine-calendar-cell"
          role="gridcell"
          :data-value="cell.date"

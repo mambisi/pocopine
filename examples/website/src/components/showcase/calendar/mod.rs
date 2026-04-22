@@ -27,8 +27,12 @@ impl CalendarDemo {
         // <pine-calendar-root>. Values assigned inside Default
         // sit pre-reactivity and don't retrigger the child's
         // #[watch]ers the way a subsequent mutation does.
+        //
+        // Use a month that naturally renders as 5 weeks for both
+        // Sunday- and Monday-start layouts so the "Fixed weeks"
+        // toggle has an obvious visual effect in the demo.
         if self.placeholder.is_empty() {
-            self.placeholder = "2024-06-15".into();
+            self.placeholder = "2024-02-15".into();
         }
     }
 
@@ -54,7 +58,7 @@ impl CalendarDemo {
         self.value = String::new();
         self.min_value = String::new();
         self.max_value = String::new();
-        self.placeholder = "2024-06-15".into();
+        self.placeholder = "2024-02-15".into();
         self.week_starts_on = 0;
         self.fixed_weeks = false;
         self.prevent_deselect = false;

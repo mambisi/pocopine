@@ -47,10 +47,10 @@ impl PineCalendarGridHead {}
 
 /// `<pine-calendar-grid-body>` — flat cell container rendered as a
 /// CSS-grid body (not `<tbody>`). Renders every cell from
-/// `ROOT.cells` via a single-level pp-for so nested pp-for diff
-/// bugs (that accumulate stale clones when the source Vec is
-/// reassigned) can't bite. Authors layout the 7-column grid via
-/// their own CSS on `.pine-calendar-grid-body`.
+/// `ROOT.cells` via a single-level pp-for. This list stays
+/// intentionally unkeyed: the calendar only ever renders 35 or 42
+/// cells, so a full rebuild is cheap and avoids keyed-diff edge
+/// cases when toggling `fixed_weeks` changes the row count.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "PineCalendarGridBody.poco",
