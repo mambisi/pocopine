@@ -20,8 +20,8 @@ use components::showcase::{
     PopoverDemo, RadioGroupDemo,
     ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo, StressDemo,
     SwitchCheckboxDemo, TabsDemo,
-    TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, ToggleDemo, ToolbarDemo, TooltipDemo,
-    TreeDemo,
+    TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo,
+    TooltipDemo, TreeDemo,
 };
 use components::{Hero, Showcase, ShowcaseCard, SiteHeader, Tutorial};
 
@@ -157,6 +157,7 @@ pub fn main() {
         .register::<TagsInputDemo>()
         .register::<TagsSkillsDemo>()
         .register::<TagsMentionsDemo>()
+        .register::<TextDemo>()
         .register::<CmdPopoverDemo>()
         .register::<StressDemo>()
         .run();

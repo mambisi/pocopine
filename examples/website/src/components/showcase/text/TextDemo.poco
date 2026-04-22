@@ -1,0 +1,68 @@
+<root>
+  <h2>Text</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Typography primitive powered by a Rust port of
+      <a href="https://github.com/chenglou/pretext" target="_blank" rel="noreferrer">pretext</a>.
+      Measures text with Canvas <code>measureText()</code> so
+      truncation lands on an exact grapheme boundary and
+      <code>data-truncated</code> tells your CSS when overflow
+      happened.
+    </p>
+
+    <div class="text-demo-block">
+      <div class="text-demo-label">Baseline</div>
+      <pine-text class="text-demo-body">
+        The quick brown fox jumps over the lazy dog.
+      </pine-text>
+    </div>
+
+    <div class="text-demo-block">
+      <div class="text-demo-label">Truncate to 2 lines</div>
+      <div class="text-demo-frame" style="max-width:22rem">
+        <pine-text lines="2" class="text-demo-body">
+          Typography primitives benefit from measurement-backed
+          layout because CSS alone cannot tell you how many lines
+          a paragraph actually wraps into, which is what you need
+          for honest truncation, balanced headlines, and
+          fit-to-width effects.
+        </pine-text>
+      </div>
+    </div>
+
+    <div class="text-demo-block">
+      <div class="text-demo-label">Live reflow</div>
+      <pine-slider-root min="120"
+                        max="480"
+                        step="10"
+                        pp-model:value="width">
+        <pine-slider-track>
+          <pine-slider-range></pine-slider-range>
+        </pine-slider-track>
+        <pine-slider-thumb></pine-slider-thumb>
+      </pine-slider-root>
+      <p style="margin:0.5rem 0;font-size:0.875rem">
+        Width: <strong pp-text="width + 'px'"></strong>
+      </p>
+      <div class="text-demo-frame" :style="'max-width:' + width + 'px'">
+        <pine-text lines="3"
+                   :max-width="width"
+                   class="text-demo-body">
+          Drag the slider to watch the paragraph reflow. The layout
+          engine re-runs on every width change and the
+          <code>data-truncated</code> attribute flips whenever the
+          paragraph no longer fits in three lines.
+        </pine-text>
+      </div>
+    </div>
+
+    <div class="text-demo-block">
+      <div class="text-demo-label">Soft hyphens</div>
+      <div class="text-demo-frame" style="max-width:10rem">
+        <pine-text class="text-demo-body">
+          super&shy;califragi&shy;listic&shy;expiali&shy;docious
+        </pine-text>
+      </div>
+    </div>
+  </section>
+</root>

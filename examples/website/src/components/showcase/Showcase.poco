@@ -42,6 +42,7 @@
   <tags-input-demo></tags-input-demo>
   <tags-skills-demo></tags-skills-demo>
   <tags-mentions-demo></tags-mentions-demo>
+  <text-demo></text-demo>
   <cmd-popover-demo></cmd-popover-demo>
   <stress-demo></stress-demo>
 </root>
