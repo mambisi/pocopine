@@ -66,22 +66,14 @@ impl DateValue {
         self.0
     }
 
-    /// Parse an ISO-8601 `YYYY-MM-DD` string. Accepts leading /
-    /// trailing whitespace for convenience (authored attrs often
-    /// include newlines). Returns `None` on malformed input.
+    /// Parse an ISO-8601 `YYYY-MM-DD` string via [`time::Date`].
+    /// Accepts leading / trailing whitespace for convenience
+    /// (authored attrs often include newlines). Returns `None` on
+    /// malformed input (wrong shape, invalid date, etc.).
     pub fn parse_iso(s: &str) -> Option<Self> {
-        let s = s.trim();
-        if s.len() != 10 {
-            return None;
-        }
-        let bytes = s.as_bytes();
-        if bytes[4] != b'-' || bytes[7] != b'-' {
-            return None;
-        }
-        let year: i32 = s.get(0..4)?.parse().ok()?;
-        let month: u8 = s.get(5..7)?.parse().ok()?;
-        let day: u8 = s.get(8..10)?.parse().ok()?;
-        Self::new(year, month, day)
+        use time::macros::format_description;
+        let fmt = format_description!("[year]-[month]-[day]");
+        Date::parse(s.trim(), fmt).ok().map(Self)
     }
 
     // ── arithmetic — all clip end-of-month ──────────────────────
