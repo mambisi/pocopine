@@ -51,3 +51,4 @@ Conventions:
 | 033 | [Primitive roles — centralized default-element mapping](./rfc-033-primitive-roles.md) | Implemented |
 | 034 | [`pp-roving.virtual` (activedescendant mode)](./rfc-034-pp-roving-activedescendant.md) | Implemented |
 | 042 | [`class` / `style` parity — arrays, custom properties, `\|important`](./rfc-042-class-style-parity.md) | Draft |
+| 043 | [`pocopine::text` layout engine](./rfc-043-text-layout.md) | Implemented |
