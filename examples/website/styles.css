@@ -26,6 +26,24 @@
           "Cascadia Code", Consolas, monospace;
 }
 
+/* Dark theme — toggled by the site header via
+   `document.documentElement.dataset.theme = "dark"`. Same
+   pinecone palette, inverted: warm off-black surfaces, amber
+   accent preserved so the brand reads identically. */
+[data-theme="dark"] {
+  --fg: #f5ead3;
+  --fg-muted: #b8a079;
+  --bg: #1a130c;
+  --bg-subtle: #241a10;
+  --bg-hover: #2f2317;
+  --border: #3a2a1a;
+  --brand: #f8ae45;
+  --brand-fg: #1a130c;
+  --destructive: #e26a48;
+  --destructive-fg: #1a130c;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
 * { box-sizing: border-box; }
 
 body {

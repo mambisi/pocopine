@@ -1,12 +1,16 @@
-//! pocopine's own website. A composition-only root that drops
-//! in a `Hero`, a `Tutorial`, and a `Showcase`. The showcase is
-//! itself a thin composer of 31 per-primitive demo components
-//! that each own their own state — no shared blob. Same layout
-//! the `hn` example uses.
+//! pocopine's own website. The app root (`WebsiteApp`) is also
+//! the canonical root-provider — it owns the site-wide command
+//! palette state + theme, publishes a `WEBSITE_APP` handle into
+//! its scope, and lets any descendant (the header, a hero CTA,
+//! a single demo card) inject that handle to drive the palette.
+//! The palette DOM itself lives in `WebsiteApp.poco` so state
+//! and view sit together; `SiteHeader` is a thin top-bar view
+//! that only forwards clicks up to the app root.
 
 pub mod components;
 
 use pocopine::prelude::*;
+use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 use components::showcase::{
@@ -17,20 +21,100 @@ use components::showcase::{
     TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, ToggleDemo, ToolbarDemo, TooltipDemo,
     TreeDemo,
 };
-use components::{Hero, Showcase, ShowcaseCard, Tutorial};
+use components::{Hero, Showcase, ShowcaseCard, SiteHeader, Tutorial};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[component(template = "WebsiteApp.poco")]
-pub struct WebsiteApp {}
+pub struct WebsiteApp {
+    pub open: bool,
+    pub theme: String,
+    pub last: String,
+}
+
+impl Default for WebsiteApp {
+    fn default() -> Self {
+        Self {
+            open: false,
+            theme: "light".into(),
+            last: String::new(),
+        }
+    }
+}
+
+inject_key!(pub WEBSITE_APP: Handle<WebsiteApp>);
 
 #[handlers]
-impl WebsiteApp {}
+impl WebsiteApp {
+    pub fn on_setup(&mut self) {
+        provide(&WEBSITE_APP, this::<Self>());
+    }
+
+    pub fn open_palette(&mut self) { self.open = true; }
+
+    pub fn toggle_theme(&mut self) {
+        self.theme = if self.theme == "dark" { "light".into() } else { "dark".into() };
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            if let Some(root) = doc.document_element() {
+                let _ = root.set_attribute("data-theme", &self.theme);
+            }
+        }
+    }
+
+    pub fn go_hero(&mut self) {
+        self.last = "Hero".into();
+        self.open = false;
+        Self::scroll_to("hero");
+    }
+    pub fn go_tutorial(&mut self) {
+        self.last = "Install".into();
+        self.open = false;
+        Self::scroll_to("install");
+    }
+    pub fn go_showcase(&mut self) {
+        self.last = "Showcase".into();
+        self.open = false;
+        Self::scroll_to("showcase");
+    }
+    pub fn go_github(&mut self) {
+        self.last = "GitHub".into();
+        self.open = false;
+        if let Some(win) = web_sys::window() {
+            let _ = win.open_with_url("https://github.com/mambisi/pocopine");
+        }
+    }
+    pub fn cmd_toggle_theme(&mut self) {
+        self.last = "Toggle theme".into();
+        self.open = false;
+        self.toggle_theme();
+    }
+
+    fn scroll_to(id: &str) {
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            if let Some(el) = doc.get_element_by_id(id) {
+                el.scroll_into_view();
+            }
+        }
+    }
+}
 
 #[wasm_bindgen(start)]
 pub fn main() {
     pine::register_all();
+    // Pull in the icons the header + demos actually reference.
+    // Any icon not in this list stays out of the WASM binary.
+    pine_icons::register_icons![
+        "search",
+        "moon",
+        "sun",
+        "chevron-down",
+        "chevron-right",
+        "check",
+        "x",
+    ];
     App::new()
         .register::<WebsiteApp>()
+        .register::<SiteHeader>()
+        .register::<pine_icons::PineIcon>()
         .register::<Hero>()
         .register::<Tutorial>()
         .register::<Showcase>()

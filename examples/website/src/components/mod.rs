@@ -5,9 +5,11 @@
 pub mod hero;
 pub mod showcase;
 pub mod showcase_card;
+pub mod site_header;
 pub mod tutorial;
 
 pub use hero::Hero;
 pub use showcase::Showcase;
 pub use showcase_card::ShowcaseCard;
+pub use site_header::SiteHeader;
 pub use tutorial::Tutorial;

@@ -35,22 +35,36 @@
   flex-wrap: wrap;
   justify-content: center;
 }
-.hero-actions a {
+.hero-actions a,
+.hero-actions button {
   text-decoration: none;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   padding: 0.6rem 1.15rem;
   border-radius: var(--radius);
+  font: inherit;
   font-weight: 500;
   font-size: 0.95rem;
+  cursor: pointer;
+  border: 0;
 }
 .hero-actions .cta-primary {
   background: var(--brand);
   color: var(--brand-fg);
   box-shadow: 0 2px 8px rgba(248, 174, 69, 0.4);
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 .hero-actions .cta-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(248, 174, 69, 0.5); }
+.hero-actions .cta-kbd {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(61, 36, 21, 0.12);
+  color: var(--brand-fg);
+}
 .hero-actions .cta-ghost {
   color: var(--fg);
   border: 1px solid var(--border);

@@ -1,0 +1,13 @@
+<root class="site-header">
+  <div class="site-header-bar">
+    <button class="site-header-search" @click="open_palette" aria-label="Search (Ctrl+K)">
+      <pine-icon name="search" size="14"></pine-icon>
+      <span class="site-header-search-label">Search…</span>
+      <span class="site-header-search-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
+    </button>
+
+    <button class="site-header-theme" @click="toggle_theme" aria-label="Toggle theme">
+      <pine-icon :name="theme == 'dark' ? 'sun' : 'moon'" size="16"></pine-icon>
+    </button>
+  </div>
+</root>

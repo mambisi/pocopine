@@ -7,7 +7,9 @@
     by default, under 50&nbsp;KB.
   </p>
   <div class="hero-actions">
-    <a class="cta-primary" href="#get-started">Get started →</a>
+    <button class="cta-primary" @click="open_site_palette">
+      Get started <kbd class="cta-kbd">⌘K</kbd>
+    </button>
     <a class="cta-ghost" href="https://github.com/mambisi/pocopine">GitHub ↗</a>
   </div>
 </root>

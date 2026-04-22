@@ -1,8 +1,40 @@
 <div>
-  <!-- The whole site is a pocopine app composing three
-       components: hero + tutorial on top, showcase below.
-       No state lives here — each child owns what it needs. -->
-  <hero></hero>
-  <tutorial></tutorial>
-  <showcase></showcase>
+  <!-- App root owns palette state + theme. Children render as
+       siblings; each one's scope chains up to WebsiteApp, so
+       `inject::<Handle<WebsiteApp>>(&WEBSITE_APP)` resolves from
+       anywhere below. -->
+  <site-header></site-header>
+  <hero id="hero"></hero>
+  <tutorial id="install"></tutorial>
+  <showcase id="showcase"></showcase>
+
+  <!-- Site-wide command palette. Bound to the root's `open`
+       field; the header's search button and any page CTA flip
+       this via injected handle. -->
+  <pine-command-root shortcut="Mod+k" pp-model:open="open">
+    <pine-command-portal>
+      <pine-command-overlay></pine-command-overlay>
+      <pine-command-content pp-transition="none">
+        <pine-command-input placeholder="Search docs, sections, actions…"></pine-command-input>
+        <pine-command-list>
+          <pine-command-item value="home" @pp:command:select="go_hero">
+            <span>Go to hero</span>
+          </pine-command-item>
+          <pine-command-item value="install" @pp:command:select="go_tutorial">
+            <span>Jump to install tutorial</span>
+          </pine-command-item>
+          <pine-command-item value="showcase" @pp:command:select="go_showcase">
+            <span>Jump to showcase</span>
+          </pine-command-item>
+          <pine-command-item value="theme" @pp:command:select="cmd_toggle_theme">
+            <span>Toggle dark mode</span>
+          </pine-command-item>
+          <pine-command-item value="github" @pp:command:select="go_github">
+            <span>Open GitHub repo</span>
+          </pine-command-item>
+          <pine-command-empty>No results.</pine-command-empty>
+        </pine-command-list>
+      </pine-command-content>
+    </pine-command-portal>
+  </pine-command-root>
 </div>

@@ -1,0 +1,86 @@
+/* ─── Site header ─────────────────────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  /* Low sticky band — above normal scrolled content, but must
+     stay well below the command-palette overlay (z-index 1000+).
+     `backdrop-filter` creates a stacking context on this element;
+     keeping z-index small makes the ordering predictable. */
+  z-index: 5;
+  padding: 0.5rem 0;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  margin-bottom: 1.5rem;
+}
+.site-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Pill-shaped search trigger — capped at 200px so the header
+   doesn't impersonate a search engine. */
+.site-header-search {
+  flex: 0 1 200px;
+  max-width: 200px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+.site-header-search:hover,
+.site-header-search:focus-visible {
+  background: var(--bg-subtle);
+  border-color: color-mix(in srgb, var(--fg) 15%, var(--border));
+  outline: none;
+}
+.site-header-search-label { flex: 1; }
+.site-header-search-kbd {
+  display: inline-flex;
+  gap: 0.15rem;
+}
+.site-header-search-kbd kbd {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+/* Theme toggle — small square icon, matching the search pill. */
+.site-header-theme {
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  /* <button> defaults to the browser-UA text color, which does NOT
+     inherit `--fg`. Opt back into inheritance so the SVG inside
+     (which uses `stroke="currentColor"`) picks up the theme. */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s, transform 0.15s;
+}
+.site-header-theme:hover { background: var(--bg-subtle); }
+.site-header-theme:active { transform: scale(0.92); }
