@@ -1,10 +1,10 @@
-<table class="pine-calendar-grid"
-       pp-ref="root"
-       tabindex="-1"
-       role="application"
-       :aria-disabled="disabled"
-       :aria-readonly="readonly"
-       :data-disabled="disabled"
-       :data-readonly="readonly">
+<div class="pine-calendar-grid"
+     pp-ref="root"
+     tabindex="-1"
+     role="grid"
+     :aria-disabled="disabled"
+     :aria-readonly="readonly"
+     :data-disabled="disabled"
+     :data-readonly="readonly">
   <slot></slot>
-</table>
+</div>

@@ -43,20 +43,31 @@
 }
 
 .calendar-grid {
-  border-collapse: collapse;
   font-size: 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.calendar-grid .pine-calendar-grid-head {
+  display: grid;
+  grid-template-columns: repeat(7, 2rem);
+  gap: 2px;
+}
+.calendar-grid .pine-calendar-grid-body {
+  display: grid;
+  grid-template-columns: repeat(7, 2rem);
+  gap: 2px;
 }
 .calendar-grid .pine-calendar-head-cell {
   font-weight: 600;
   color: var(--fg-muted);
-  padding: 0.25rem 0.5rem;
   text-align: center;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  padding: 0.25rem 0;
 }
 .calendar-grid .pine-calendar-cell {
-  padding: 1px;
   text-align: center;
 }
 .calendar-grid .pine-calendar-cell-trigger {

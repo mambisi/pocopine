@@ -5,7 +5,7 @@
 //! Vue components. They observe [`super::root::ROOT`] just for
 //! the `disabled` / `readonly` state they mirror onto `data-*`.
 
-use crate::calendar::root::{CalendarMonthView, ROOT};
+use crate::calendar::root::{CalendarCellView, ROOT};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -45,10 +45,12 @@ pub struct PineCalendarGridHead {
 #[handlers]
 impl PineCalendarGridHead {}
 
-/// `<pine-calendar-grid-body>` — `<tbody>` of week rows.
-/// Renders every month's cells internally from `ROOT.months`
-/// so placing `<pine-calendar-grid-body>` is the complete
-/// authoring surface for the common case.
+/// `<pine-calendar-grid-body>` — flat cell container rendered as a
+/// CSS-grid body (not `<tbody>`). Renders every cell from
+/// `ROOT.cells` via a single-level pp-for so nested pp-for diff
+/// bugs (that accumulate stale clones when the source Vec is
+/// reassigned) can't bite. Authors layout the 7-column grid via
+/// their own CSS on `.pine-calendar-grid-body`.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "PineCalendarGridBody.poco",
@@ -57,7 +59,7 @@ impl PineCalendarGridHead {}
 )]
 pub struct PineCalendarGridBody {
     #[observe(ROOT)]
-    pub months: Vec<CalendarMonthView>,
+    pub cells: Vec<CalendarCellView>,
 }
 
 #[handlers]

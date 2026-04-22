@@ -89,6 +89,11 @@ pub struct PineCalendarRoot {
     pub weekdays: Vec<String>,
     /// Grid of months the view is currently showing.
     pub months: Vec<CalendarMonthView>,
+    /// Flat list of every cell across every visible month, in
+    /// display order. Populated alongside `months` so templates
+    /// can iterate a single pp-for (nested pp-for over a reactive
+    /// Vec accumulates stale clones in this Pine revision).
+    pub cells: Vec<CalendarCellView>,
     /// True when the selected value falls outside min/max or is
     /// disabled — flipped onto `data-invalid` for CSS.
     pub invalid: bool,
@@ -105,7 +110,11 @@ impl PineCalendarRoot {
             self.number_of_months = 1;
         }
         provide(&ROOT, this::<Self>());
-        self.reflow();
+        // Deliberately skip the reflow here — on_ready runs one
+        // pass once the scope + props are finalized, and the
+        // watchers pick up any subsequent prop churn. Running a
+        // reflow up here too can render an initial grid against
+        // partial state and leave stale pp-for clones behind.
     }
 
     pub fn on_ready(&self) {
@@ -228,7 +237,9 @@ impl PineCalendarRoot {
             .selected
             .map(|d| s.is_date_out_of_bounds(&d))
             .unwrap_or(false);
-        self.months = build_months(s);
+        let months = build_months(s);
+        self.cells = months.iter().flat_map(|m| m.weeks.iter().flatten().cloned()).collect();
+        self.months = months;
     }
 }
 
