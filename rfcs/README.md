@@ -50,3 +50,4 @@ Conventions:
 | 032 | [Extractor-style `LifecycleContext` params for `on_mount` / `on_ready`](./rfc-032-lifecycle-element-param.md) | Implemented |
 | 033 | [Primitive roles — centralized default-element mapping](./rfc-033-primitive-roles.md) | Implemented |
 | 034 | [`pp-roving.virtual` (activedescendant mode)](./rfc-034-pp-roving-activedescendant.md) | Implemented |
+| 042 | [`class` / `style` parity — arrays, custom properties, `\|important`](./rfc-042-class-style-parity.md) | Draft |
