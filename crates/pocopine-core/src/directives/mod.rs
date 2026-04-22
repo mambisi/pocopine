@@ -97,3 +97,104 @@ pub fn parse_attr(attr: &str) -> Option<(String, Option<String>, Vec<String>)> {
     mods.extend(tail_mods);
     Some((name, arg, mods))
 }
+
+/// Normalize a template-facing prop/field name into the Rust field
+/// key used by component state.
+///
+/// Template syntax is HTML-shaped (`fixed-weeks`, `min-value`);
+/// component fields are Rust-shaped (`fixed_weeks`, `min_value`).
+/// Directive parsing intentionally preserves the authored name, so
+/// callers that cross a component boundary must normalize before
+/// consulting `is_prop()` or writing through the child's proxy.
+pub fn normalize_prop_name(name: &str) -> String {
+    name.replace('-', "_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_prop_name, parse_attr};
+
+    #[test]
+    fn parse_attr_preserves_kebab_case_arg() {
+        let parsed = parse_attr("pp-bind:fixed-weeks.camel").expect("parsed");
+        assert_eq!(parsed.0, "bind");
+        assert_eq!(parsed.1.as_deref(), Some("fixed-weeks"));
+        assert_eq!(parsed.2, vec!["camel"]);
+    }
+
+    #[test]
+    fn parse_attr_keeps_data_and_aria_names_intact() {
+        let bind = parse_attr("pp-bind:aria-labelledby.once").expect("parsed bind");
+        assert_eq!(bind.0, "bind");
+        assert_eq!(bind.1.as_deref(), Some("aria-labelledby"));
+        assert_eq!(bind.2, vec!["once"]);
+
+        let model = parse_attr("pp-model:min-value.lazy").expect("parsed model");
+        assert_eq!(model.0, "model");
+        assert_eq!(model.1.as_deref(), Some("min-value"));
+        assert_eq!(model.2, vec!["lazy"]);
+    }
+
+    #[test]
+    fn parse_attr_collects_head_and_tail_modifiers_in_order() {
+        let parsed =
+            parse_attr("pp-on.window.capture:keydown.enter.prevent.once").expect("parsed");
+        assert_eq!(parsed.0, "on");
+        assert_eq!(parsed.1.as_deref(), Some("keydown"));
+        assert_eq!(
+            parsed.2,
+            vec!["window", "capture", "enter", "prevent", "once"]
+        );
+    }
+
+    #[test]
+    fn parse_attr_supports_modifier_only_directives() {
+        let parsed = parse_attr("pp-show.important.transition").expect("parsed");
+        assert_eq!(parsed.0, "show");
+        assert_eq!(parsed.1, None);
+        assert_eq!(parsed.2, vec!["important", "transition"]);
+    }
+
+    #[test]
+    fn parse_attr_rejects_non_directive_attributes() {
+        assert!(parse_attr("class").is_none());
+        assert!(parse_attr(":fixed-weeks").is_none());
+        assert!(parse_attr("@click").is_none());
+    }
+
+    #[test]
+    fn parse_attr_preserves_empty_arg_when_authored() {
+        let parsed = parse_attr("pp-bind:").expect("parsed");
+        assert_eq!(parsed.0, "bind");
+        assert_eq!(parsed.1.as_deref(), Some(""));
+        assert!(parsed.2.is_empty());
+    }
+
+    #[test]
+    fn normalize_prop_name_maps_kebab_to_snake() {
+        assert_eq!(normalize_prop_name("fixed-weeks"), "fixed_weeks");
+        assert_eq!(normalize_prop_name("min-value"), "min_value");
+        assert_eq!(normalize_prop_name("disabled"), "disabled");
+    }
+
+    #[test]
+    fn normalize_prop_name_leaves_existing_snake_case_unchanged() {
+        assert_eq!(normalize_prop_name("week_starts_on"), "week_starts_on");
+        assert_eq!(normalize_prop_name("model"), "model");
+    }
+
+    #[test]
+    fn normalize_prop_name_handles_repeated_and_edge_hyphens() {
+        assert_eq!(normalize_prop_name("data-test-id"), "data_test_id");
+        assert_eq!(normalize_prop_name("fixed--weeks"), "fixed__weeks");
+        assert_eq!(normalize_prop_name("-leading"), "_leading");
+        assert_eq!(normalize_prop_name("trailing-"), "trailing_");
+    }
+
+    #[test]
+    fn normalize_prop_name_only_rewrites_hyphens() {
+        assert_eq!(normalize_prop_name("aria-labelledby"), "aria_labelledby");
+        assert_eq!(normalize_prop_name("x.y-z"), "x.y_z");
+        assert_eq!(normalize_prop_name("already:mixed-name"), "already:mixed_name");
+    }
+}

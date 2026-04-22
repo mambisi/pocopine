@@ -44,6 +44,7 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
     // Directive arg picks the child's target field; defaults to
     // `model` so plain `pp-model="name"` keeps working unchanged.
     let child_field = call.arg.clone().unwrap_or_else(|| "model".into());
+    let child_field = super::normalize_prop_name(&child_field);
 
     // Resolve the child's scope id once — we need it to consult
     // `is_prop` per RFC-031 before every mirror-in write.

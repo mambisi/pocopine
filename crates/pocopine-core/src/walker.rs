@@ -725,7 +725,7 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
         }
         // HTML kebab-case → Rust snake_case; matches the prop path in
         // `apply_static_props`.
-        let field = name.replace('-', "_");
+        let field = crate::directives::normalize_prop_name(&name);
         if declared.contains(&field) {
             continue;
         }
@@ -800,7 +800,7 @@ fn apply_static_props(el: &Element, scope: &Scope) {
         // HTML attributes are kebab-case by convention (`post-id`); Rust
         // fields are snake_case (`post_id`). Map between them so authors
         // don't have to pick one side's spelling.
-        let field = name.replace('-', "_");
+        let field = crate::directives::normalize_prop_name(&name);
         // RFC-031 — only `#[prop]` fields are writable by parents
         // via static HTML attributes. `#[state]` fields (the
         // default) stay opaque to the parent.

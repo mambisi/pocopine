@@ -50,6 +50,7 @@ pub fn run(call: &DirectiveCall) {
     // each effect tick to consult `is_prop` on the child's state
     // so parents can't write through to `#[state]` fields.
     let child_target = crate::walker::child_component_scope(call.el);
+    let child_field = super::normalize_prop_name(&attr);
 
     // Memo of the last value written to this attribute. Serialised
     // to a String so the compare is cheap + monomorphic (class and
@@ -67,12 +68,12 @@ pub fn run(call: &DirectiveCall) {
                     // state fields so accidental `<pine-thing
                     // loaded="true">` doesn't clobber child state.
                     let is_prop = crate::scope::Scope::find(*child_scope_id)
-                        .map(|s| s.state.borrow().is_prop(&attr))
+                        .map(|s| s.state.borrow().is_prop(&child_field))
                         .unwrap_or(false);
                     if !is_prop {
                         return;
                     }
-                    let _ = Reflect::set(cp, &JsValue::from_str(&attr), &v);
+                    let _ = Reflect::set(cp, &JsValue::from_str(&child_field), &v);
                 }
                 None => apply_memoised(&el, &attr, &v, &prev),
             }
@@ -235,4 +236,3 @@ fn serialise_plain(attr: &str, v: &JsValue) -> Option<String> {
             .unwrap_or_default(),
     )
 }
-
