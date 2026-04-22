@@ -599,9 +599,12 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-collapsible-trigger:hover { background: var(--bg-hover); }
 .pine-collapsible-trigger[data-state="open"] { background: var(--bg-hover); }
 
-.pine-collapsible-content {
-  margin-top: 0.5rem;
+/* Same reason as pine-accordion-content above: put the visual
+ * box on the grid item so the grid container can reach 0 height
+ * without leaving a padded/bordered ghost during close. */
+.pine-collapsible-content > * {
   padding: 0.75rem 1rem;
+  margin: 0.5rem 0 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -630,10 +633,22 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-accordion-trigger:hover { background: var(--bg-hover); }
 .pine-accordion-trigger[data-state="open"] { background: var(--bg-hover); }
 
+/* Padding / background / border live on the GRID ITEM (the
+ * direct child of the outer accordion-content element), not on
+ * the outer container itself. During the collapse animation the
+ * outer's grid-template-rows tweens to 0px — but anything with
+ * physical dimensions (padding, border) declared on the OUTER
+ * persists until the element is unmounted, leaving a ~22px
+ * "ghost row" that pops when pp-if finally removes. Moving the
+ * visual box inside lets the outer truly reach 0 height.
+ */
 .pine-accordion-content {
-  padding: 0.5rem 0.875rem 0.875rem;
   font-size: 0.875rem;
   color: var(--fg-muted);
+}
+.pine-accordion-content > * {
+  padding: 0.5rem 0.875rem 0.875rem;
+  margin: 0;
 }
 
 /* ─── PineAvatar ──────────────────────────────────────────────── */
