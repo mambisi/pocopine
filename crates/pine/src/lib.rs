@@ -87,6 +87,11 @@ pub use toolbar::{
 };
 pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
+pub use calendar::{
+    PineCalendarCell, PineCalendarCellTrigger, PineCalendarGrid, PineCalendarGridBody,
+    PineCalendarGridHead, PineCalendarGridRow, PineCalendarHeadCell, PineCalendarHeader,
+    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
+};
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
 pub use combobox::{
@@ -170,6 +175,18 @@ pub fn register_all() {
     PineAvatarImage::register();
     PineAvatarFallback::register();
     PineButton::register();
+    PineCalendarRoot::register();
+    PineCalendarHeader::register();
+    PineCalendarHeading::register();
+    PineCalendarPrev::register();
+    PineCalendarNext::register();
+    PineCalendarGrid::register();
+    PineCalendarGridHead::register();
+    PineCalendarGridBody::register();
+    PineCalendarGridRow::register();
+    PineCalendarHeadCell::register();
+    PineCalendarCell::register();
+    PineCalendarCellTrigger::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();
