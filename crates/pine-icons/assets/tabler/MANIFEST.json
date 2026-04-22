@@ -1,0 +1,11 @@
+{
+  "source": "https://github.com/tabler/tabler-icons",
+  "ref": "main",
+  "commit": "9b27b65e3d2e72ff4fd219b2dc21da81ea9cbab8",
+  "fetched_at": "2026-04-22T11:44:29Z",
+  "license": "MIT",
+  "counts": {
+    "outline": 5039,
+    "filled": 1053
+  }
+}

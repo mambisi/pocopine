@@ -981,6 +981,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pine-icons"
+version = "0.1.0"
+dependencies = [
+ "pine-icons-macros",
+ "pocopine",
+ "pocopine-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "pine-icons-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn",
+]
+
+[[package]]
 name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1946,6 +1970,7 @@ name = "website"
 version = "0.1.0"
 dependencies = [
  "pine",
+ "pine-icons",
  "pocopine",
  "serde",
  "wasm-bindgen",

@@ -1,0 +1,25 @@
+[package]
+name = "pine-icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tabler Icons (MIT) packaged as a pocopine / Pine primitive. Proc-macro-backed tree-shaking; opt-in template component."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pine-icons-macros = { path = "../pine-icons-macros", version = "0.1.0" }
+pocopine = { path = "../pocopine" }
+pocopine-core = { workspace = true }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["console"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+serde_json = "1"
