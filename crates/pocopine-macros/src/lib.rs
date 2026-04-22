@@ -82,6 +82,18 @@ struct ComponentArgs {
     template: Option<LitStr>,
     style: Option<LitStr>,
     role: Option<LitStr>,
+    /// Force a specific CSS `display` value on the OUTER custom
+    /// tag. Custom elements default to `display: inline`, which
+    /// wraps a block-level rendered root in an inline line-box
+    /// and breaks flex / grid parent-child layout whenever
+    /// compound primitives nest. `display = "contents"` elides
+    /// the custom tag's layout box so the inner root participates
+    /// in its parent's layout directly. Any valid CSS `display`
+    /// value works — `"block"`, `"inline-block"`, `"grid"`, etc.
+    /// — the macro emits `<custom-tag> { display: <value> }` at
+    /// registration time. Events, scope, and a11y are unaffected
+    /// by the display choice.
+    display: Option<LitStr>,
     /// RFC-038 — symmetric enter/leave preset name. Default preset
     /// the primitive animates with; authors override per-instance via
     /// the `transition` HTML attribute.
@@ -121,6 +133,8 @@ impl Parse for ComponentArgs {
                 args.style = Some(lit);
             } else if kv.path.is_ident("role") {
                 args.role = Some(lit);
+            } else if kv.path.is_ident("display") {
+                args.display = Some(lit);
             } else if kv.path.is_ident("transition") {
                 args.transition = Some(lit);
             } else if kv.path.is_ident("transition_in") {
@@ -133,7 +147,7 @@ impl Parse for ComponentArgs {
                 return Err(syn::Error::new_spanned(
                     kv.path,
                     "unknown key — expected one of: name, template, style, role, \
-                     transition, transition_in, transition_out, animate",
+                     display, transition, transition_in, transition_out, animate",
                 ));
             }
         }
@@ -164,6 +178,7 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
 
 /// Kebab-case an ident: `TodoItem` → `todo-item`.
 fn kebab_case(ident: &str) -> String {
@@ -402,6 +417,23 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    // `display = "<value>"` → inject `<custom-tag> { display: <value>; }`
+    // at registration time. Lets primitives declare the outer
+    // custom tag's layout display without authors repeating
+    // `pine-foo { display: contents; }` across every demo
+    // stylesheet. Any valid CSS display value works.
+    let register_display_stmt: proc_macro2::TokenStream = match args.display.as_ref() {
+        Some(lit) => {
+            let value = lit.value();
+            let css = format!("{name_str} {{ display: {value}; }}");
+            let sentinel = format!("{name_str}-display");
+            quote! {
+                ::pocopine::__private::inject_style(#sentinel, #css);
+            }
+        }
+        None => quote! {},
+    };
+
     // Give each registration function a distinct name so multiple components
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
@@ -555,6 +587,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 );
                 #register_template_stmt
                 #register_style_stmt
+                #register_display_stmt
             }
         }
 
