@@ -1,0 +1,88 @@
+<root>
+  <h2>Dropdown menu</h2>
+  <section class="row">
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger>Actions ▾</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content>
+          <pine-dropdown-menu-group>
+            <pine-dropdown-menu-label>Counters</pine-dropdown-menu-label>
+            <pine-dropdown-menu-item @click="action_bump">Increment click count</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_toggle_dark">Toggle dark mode</pine-dropdown-menu-item>
+          </pine-dropdown-menu-group>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-group>
+            <pine-dropdown-menu-label>Danger zone</pine-dropdown-menu-label>
+            <pine-dropdown-menu-item disabled>Export (disabled)</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_reset">Reset demo</pine-dropdown-menu-item>
+          </pine-dropdown-menu-group>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+
+    <!-- Second instance — showcases checkbox-items, radio-group,
+         and ItemIndicator sharing one compound surface. -->
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger>View ▾</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content>
+          <pine-dropdown-menu-label>Show</pine-dropdown-menu-label>
+          <pine-dropdown-menu-checkbox-item pp-model:state="show_muted">
+            <pine-dropdown-menu-item-indicator>✓</pine-dropdown-menu-item-indicator>
+            Muted items
+          </pine-dropdown-menu-checkbox-item>
+          <pine-dropdown-menu-checkbox-item pp-model:state="show_archived">
+            <pine-dropdown-menu-item-indicator>✓</pine-dropdown-menu-item-indicator>
+            Archived
+          </pine-dropdown-menu-checkbox-item>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-label>Density</pine-dropdown-menu-label>
+          <pine-dropdown-menu-radio-group pp-model:value="density">
+            <pine-dropdown-menu-radio-item value="compact">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Compact
+            </pine-dropdown-menu-radio-item>
+            <pine-dropdown-menu-radio-item value="comfortable">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Comfortable
+            </pine-dropdown-menu-radio-item>
+            <pine-dropdown-menu-radio-item value="spacious">
+              <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+              Spacious
+            </pine-dropdown-menu-radio-item>
+          </pine-dropdown-menu-radio-group>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+
+    <!-- Third instance — Arrow + Sub + Content config props
+         (side="top") all on one menu. -->
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger>File ▾</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content side="top" align="start" side_offset="8">
+          <pine-dropdown-menu-arrow></pine-dropdown-menu-arrow>
+          <pine-dropdown-menu-item @click="action_bump">New file</pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="action_bump">Open…</pine-dropdown-menu-item>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-sub>
+            <pine-dropdown-menu-sub-trigger>Share to ▸</pine-dropdown-menu-sub-trigger>
+            <pine-dropdown-menu-sub-content>
+              <pine-dropdown-menu-item @click="action_bump">Email…</pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="action_bump">Slack…</pine-dropdown-menu-item>
+              <pine-dropdown-menu-item @click="action_bump">Copy link</pine-dropdown-menu-item>
+            </pine-dropdown-menu-sub-content>
+          </pine-dropdown-menu-sub>
+          <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+          <pine-dropdown-menu-item @click="action_reset">Quit</pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      actions fired: <strong>{{actions_fired}}</strong>
+    </span>
+  </section>
+
+  <!-- PineContextMenu — right-click menu ──────────────────── -->
+</root>

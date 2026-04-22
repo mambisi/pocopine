@@ -1,0 +1,16 @@
+<root>
+  <h2>Button</h2>
+  <section class="row">
+    <pine-button variant="primary" @click="bump">
+      <span>Primary · </span><span pp-text="clicks"></span>
+    </pine-button>
+    <pine-button variant="destructive">Destructive</pine-button>
+    <pine-button variant="ghost">Ghost</pine-button>
+    <pine-button disabled="true">Disabled</pine-button>
+    <pine-button pp-as variant="ghost">
+      <a href="https://github.com/mambisi/pocopine">Repo ↗</a>
+    </pine-button>
+  </section>
+
+  <!-- PineDialog — compound (Radix-style) ────────────────── -->
+</root>

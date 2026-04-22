@@ -179,6 +179,67 @@ pre.code-block .c-cmd { color: #f8ae45; }
 pre.code-block .c-arg { color: #faf0dc; }
 pre.code-block .c-str { color: #b8d98a; }
 
+/* ─── Showcase card (Preview / Code tabs) ────────────────────── */
+
+showcase, showcase-card { display: block; }
+showcase-card { margin-bottom: 1rem; }
+
+.showcase-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+.showcase-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+.showcase-title { margin: 0; font-size: 1rem; letter-spacing: -0.005em; }
+.showcase-tabs {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.showcase-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: calc(var(--radius) - 3px);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.showcase-tab:hover { color: var(--fg); }
+.showcase-tab[data-active="true"] {
+  background: var(--brand);
+  color: var(--brand-fg);
+  font-weight: 500;
+}
+.showcase-body { padding: 1.25rem; }
+.showcase-body-code { padding: 0; background: #2d1a0f; }
+.showcase-body-code pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: transparent;
+  color: #faf0dc;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-x: auto;
+  border-radius: 0;
+}
+.showcase-body-code pre code { background: transparent; padding: 0; color: inherit; }
+
 /* ─── Section divider ─────────────────────────────────────────── */
 
 .section-divider {

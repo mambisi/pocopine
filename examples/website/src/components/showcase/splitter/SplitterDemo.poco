@@ -1,0 +1,30 @@
+<root>
+  <h2>Splitter</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Resizable panels. Drag the handles, or focus a handle and
+      use arrows / Home / End. Each commit emits the new
+      <code>Vec&lt;f64&gt;</code> on the Group's <code>pp:update:model</code>.
+    </p>
+    <div class="splitter-frame">
+      <pine-splitter-group direction="horizontal" pp-model:sizes="sizes">
+        <pine-splitter-panel default-size="25" min-size="10">
+          <div class="splitter-pane splitter-pane-sidebar">Sidebar</div>
+        </pine-splitter-panel>
+        <pine-splitter-resize-handle></pine-splitter-resize-handle>
+        <pine-splitter-panel default-size="50" min-size="20">
+          <div class="splitter-pane splitter-pane-main">Main content</div>
+        </pine-splitter-panel>
+        <pine-splitter-resize-handle></pine-splitter-resize-handle>
+        <pine-splitter-panel default-size="25" min-size="10">
+          <div class="splitter-pane splitter-pane-details">Details</div>
+        </pine-splitter-panel>
+      </pine-splitter-group>
+    </div>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Current sizes: <strong pp-text="sizes"></strong>
+    </p>
+  </section>
+
+  <!-- PineTree ───────────────────────────────────────────── -->
+</root>

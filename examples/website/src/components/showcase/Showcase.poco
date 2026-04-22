@@ -1,0 +1,42 @@
+<root class="showcase-container">
+  <div class="section-divider">Pine UI — primitive library</div>
+
+  <p class="lead" style="margin-bottom:0.5rem">Unstyled, accessible UI primitives for pocopine.</p>
+  <p style="font-size:0.875rem;margin-bottom:2rem">
+    Every primitive below animates by default — Dialog fades, menus
+    slide, TagsInput chips FLIP on reorder, Collapsibles grow. No
+    handler code, no CSS to copy.
+  </p>
+
+  <basics></basics>
+  <aspect-ratio-demo></aspect-ratio-demo>
+  <toolbar-demo></toolbar-demo>
+  <button-demo></button-demo>
+  <dialog-demo></dialog-demo>
+  <alert-dialog-demo></alert-dialog-demo>
+  <popover-demo></popover-demo>
+  <dropdown-menu-demo></dropdown-menu-demo>
+  <context-menu-demo></context-menu-demo>
+  <avatar-demo></avatar-demo>
+  <collapsible-demo></collapsible-demo>
+  <accordion-demo></accordion-demo>
+  <tabs-demo></tabs-demo>
+  <hover-card-demo></hover-card-demo>
+  <tooltip-demo></tooltip-demo>
+  <radio-group-demo></radio-group-demo>
+  <toggle-demo></toggle-demo>
+  <switch-checkbox-demo></switch-checkbox-demo>
+  <otp-demo></otp-demo>
+  <select-demo></select-demo>
+  <combobox-demo></combobox-demo>
+  <command-demo></command-demo>
+  <slider-demo></slider-demo>
+  <scroll-area-demo></scroll-area-demo>
+  <splitter-demo></splitter-demo>
+  <tree-demo></tree-demo>
+  <tags-input-demo></tags-input-demo>
+  <tags-skills-demo></tags-skills-demo>
+  <tags-mentions-demo></tags-mentions-demo>
+  <cmd-popover-demo></cmd-popover-demo>
+  <stress-demo></stress-demo>
+</root>

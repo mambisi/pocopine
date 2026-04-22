@@ -1,0 +1,16 @@
+<root>
+  <h2>Aspect ratio</h2>
+  <section class="row">
+    <div style="width:280px">
+      <pine-aspect-ratio ratio="1.777">
+        <div class="ar-demo">16 : 9</div>
+      </pine-aspect-ratio>
+    </div>
+    <div style="width:180px">
+      <pine-aspect-ratio ratio="1">
+        <div class="ar-demo">1 : 1</div>
+      </pine-aspect-ratio>
+    </div>
+  </section>
+
+</root>

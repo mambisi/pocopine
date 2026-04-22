@@ -1,0 +1,19 @@
+<root>
+  <h2>Avatar</h2>
+  <section class="row">
+    <pine-avatar-root>
+      <pine-avatar-image src="https://i.pravatar.cc/80?u=pine-a" alt="A"></pine-avatar-image>
+      <pine-avatar-fallback>AB</pine-avatar-fallback>
+    </pine-avatar-root>
+    <pine-avatar-root>
+      <pine-avatar-image src="https://example.invalid/broken.jpg" alt="broken"></pine-avatar-image>
+      <pine-avatar-fallback>??</pine-avatar-fallback>
+    </pine-avatar-root>
+    <span style="font-size:0.875rem;color:var(--fg-muted)">
+      First loads via pravatar; second's URL is broken so its
+      fallback stays visible.
+    </span>
+  </section>
+
+  <!-- PineCollapsible — single-region open/close ─────────── -->
+</root>

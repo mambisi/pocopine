@@ -1,0 +1,44 @@
+<root>
+  <h2>Popover</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      The first popover uses the default <code>slide-down</code>
+      transition. The next two override per-instance — the same
+      mechanism every primitive uses
+      (<code>transition="&lt;preset&gt;"</code> on the Content tag).
+    </p>
+    <div class="row">
+      <pine-popover-root pp-model:open="open">
+        <pine-popover-trigger>
+          <span pp-text="open ? 'Close popover' : 'Default (slide-down)'"></span>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content>
+            <p style="margin:0">Default <code>slide-down</code>.</p>
+            <p style="margin:0.5rem 0 0;font-size:0.8125rem;color:var(--fg-muted)">
+              Click outside or press Escape to close.
+            </p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+      <pine-popover-root>
+        <pine-popover-trigger>Override: zoom</pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content transition="zoom">
+            <p style="margin:0"><code>transition="zoom"</code></p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+      <pine-popover-root>
+        <pine-popover-trigger>Override: none</pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content transition="none">
+            <p style="margin:0"><code>transition="none"</code> — snaps in.</p>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+    </div>
+  </section>
+
+  <!-- PineDropdownMenu — compound (Radix-style) ──────────── -->
+</root>

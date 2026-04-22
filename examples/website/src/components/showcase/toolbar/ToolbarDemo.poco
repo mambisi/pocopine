@@ -1,0 +1,19 @@
+<root>
+  <h2>Toolbar</h2>
+  <section>
+    <pine-toolbar-root>
+      <pine-toolbar-button @click="action_bump">Save</pine-toolbar-button>
+      <pine-toolbar-button @click="action_bump">Undo</pine-toolbar-button>
+      <pine-toolbar-separator></pine-toolbar-separator>
+      <pine-toggle-group-root type="multiple">
+        <pine-toggle-group-item value="bold"><strong>B</strong></pine-toggle-group-item>
+        <pine-toggle-group-item value="italic"><em>I</em></pine-toggle-group-item>
+        <pine-toggle-group-item value="underline"><u>U</u></pine-toggle-group-item>
+      </pine-toggle-group-root>
+      <pine-toolbar-separator></pine-toolbar-separator>
+      <pine-toolbar-link href="#">Docs</pine-toolbar-link>
+    </pine-toolbar-root>
+  </section>
+
+  <!-- PineButton ─────────────────────────────────────────── -->
+</root>

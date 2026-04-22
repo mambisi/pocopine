@@ -1,0 +1,25 @@
+<root>
+  <h2>Radio group</h2>
+  <section>
+    <pine-radio-group-root pp-model:value="plan" name="plan">
+      <pine-radio-group-item value="free">
+        <pine-radio-group-indicator>●</pine-radio-group-indicator>
+        Free
+      </pine-radio-group-item>
+      <pine-radio-group-item value="pro">
+        <pine-radio-group-indicator>●</pine-radio-group-indicator>
+        Pro
+      </pine-radio-group-item>
+      <pine-radio-group-item value="enterprise">
+        <pine-radio-group-indicator>●</pine-radio-group-indicator>
+        Enterprise
+      </pine-radio-group-item>
+    </pine-radio-group-root>
+    <span style="font-size:0.875rem;color:var(--fg-muted);margin-left:0.75rem">
+      Arrow keys rove, Space/Enter selects. Currently:
+      <strong pp-text="plan"></strong>.
+    </span>
+  </section>
+
+  <!-- PineToggle + PineToggleGroup ───────────────────────── -->
+</root>

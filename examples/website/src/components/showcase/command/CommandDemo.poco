@@ -1,0 +1,44 @@
+<root>
+  <h2>Command palette</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Press <kbd>Ctrl</kbd> + <kbd>K</kbd> (or <kbd>⌘</kbd> + <kbd>K</kbd>)
+      to open. Type to filter, Enter to run.
+    </p>
+    <pine-command-root shortcut="Mod+k">
+      <pine-command-portal>
+        <pine-command-overlay></pine-command-overlay>
+        <pine-command-content pp-transition="none">
+          <pine-command-input placeholder="Type a command…"></pine-command-input>
+          <pine-command-list>
+            <pine-command-item value="new" @pp:command:select="cmd_new_file">
+              <span>New File</span>
+              <span class="pine-command-shortcut">⌘N</span>
+            </pine-command-item>
+            <pine-command-item value="open" @pp:command:select="cmd_open_file">
+              <span>Open File</span>
+              <span class="pine-command-shortcut">⌘O</span>
+            </pine-command-item>
+            <pine-command-item value="save" @pp:command:select="cmd_save">
+              <span>Save</span>
+              <span class="pine-command-shortcut">⌘S</span>
+            </pine-command-item>
+            <pine-command-item value="theme" @pp:command:select="cmd_toggle_theme">
+              <span>Toggle dark mode</span>
+            </pine-command-item>
+            <pine-command-item value="settings" @pp:command:select="cmd_settings">
+              <span>Open Settings</span>
+              <span class="pine-command-shortcut">⌘,</span>
+            </pine-command-item>
+            <pine-command-empty>No command matches that query.</pine-command-empty>
+          </pine-command-list>
+        </pine-command-content>
+      </pine-command-portal>
+    </pine-command-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Last command: <strong pp-text="last_command || '(none)'"></strong>
+    </p>
+  </section>
+
+  <!-- PineSlider ─────────────────────────────────────────── -->
+</root>

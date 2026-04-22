@@ -1,0 +1,23 @@
+<root>
+  <h2>Slider</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Drag the thumb, click the track, or focus and use
+      arrows / Home / End / PageUp / PageDown.
+    </p>
+    <pine-slider-root min="0"
+                      max="100"
+                      step="5"
+                      pp-model:value="volume">
+      <pine-slider-track>
+        <pine-slider-range></pine-slider-range>
+      </pine-slider-track>
+      <pine-slider-thumb></pine-slider-thumb>
+    </pine-slider-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Volume: <strong pp-text="volume"></strong>
+    </p>
+  </section>
+
+  <!-- PineScrollArea ─────────────────────────────────────── -->
+</root>

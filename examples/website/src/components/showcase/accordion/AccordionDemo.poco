@@ -1,0 +1,37 @@
+<root>
+  <h2>Accordion</h2>
+  <section>
+    <pine-accordion-root type="single" collapsible="true" pp-model:value="value">
+      <pine-accordion-item value="what">
+        <pine-accordion-trigger>What is Pine?</pine-accordion-trigger>
+        <pine-accordion-content>
+          <div class="faq-answer">
+            Pine is an unstyled, accessible primitive library on
+            pocopine — ships behaviour, keyboard, ARIA. Zero CSS.
+          </div>
+        </pine-accordion-content>
+      </pine-accordion-item>
+      <pine-accordion-item value="how">
+        <pine-accordion-trigger>How do compound components work?</pine-accordion-trigger>
+        <pine-accordion-content>
+          <div class="faq-answer">
+            Root owns state and provides its Handle via RFC-027
+            <code>provide</code>/<code>inject</code>; descendants mirror
+            fields via <code>watch_scope_field</code>.
+          </div>
+        </pine-accordion-content>
+      </pine-accordion-item>
+      <pine-accordion-item value="ship">
+        <pine-accordion-trigger>What's shipped?</pine-accordion-trigger>
+        <pine-accordion-content>
+          <div class="faq-answer">
+            Button, Dialog, Popover, DropdownMenu (13 parts),
+            Collapsible, Accordion, Tabs, Tooltip, Switch, Checkbox.
+          </div>
+        </pine-accordion-content>
+      </pine-accordion-item>
+    </pine-accordion-root>
+  </section>
+
+  <!-- PineTabs — compound (Radix-style) ──────────────────── -->
+</root>

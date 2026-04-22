@@ -1,0 +1,29 @@
+<root>
+  <h2>Alert dialog</h2>
+  <section class="row">
+    <pine-alert-dialog-root pp-model:open="open">
+      <pine-alert-dialog-trigger pp-as>
+        <pine-button variant="destructive">Destroy project</pine-button>
+      </pine-alert-dialog-trigger>
+      <pine-alert-dialog-portal>
+        <pine-alert-dialog-overlay></pine-alert-dialog-overlay>
+        <pine-alert-dialog-content pp-transition="none">
+          <pine-alert-dialog-title>Destroy project?</pine-alert-dialog-title>
+          <pine-alert-dialog-description>
+            All files will be permanently removed. This cannot be undone.
+          </pine-alert-dialog-description>
+          <div class="row" style="margin-top:1rem;justify-content:flex-end">
+            <pine-alert-dialog-cancel pp-as>
+              <pine-button variant="ghost">Keep project</pine-button>
+            </pine-alert-dialog-cancel>
+            <pine-alert-dialog-action pp-as @click="confirm_destroy">
+              <pine-button variant="destructive">Destroy</pine-button>
+            </pine-alert-dialog-action>
+          </div>
+        </pine-alert-dialog-content>
+      </pine-alert-dialog-portal>
+    </pine-alert-dialog-root>
+  </section>
+
+  <!-- PinePopover — compound (Radix-style) ───────────────── -->
+</root>

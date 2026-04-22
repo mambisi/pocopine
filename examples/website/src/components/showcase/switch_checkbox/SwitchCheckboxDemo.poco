@@ -1,0 +1,15 @@
+<root>
+  <h2>Switch &amp; Checkbox</h2>
+  <section>
+    <div class="row" style="margin-bottom:0.75rem">
+      <pine-switch pp-model:checked="dark_mode"></pine-switch>
+      <span>Dark mode: <strong pp-text="dark_mode ? 'on' : 'off'"></strong></span>
+    </div>
+    <div class="row">
+      <pine-checkbox pp-model:state="agree_state"></pine-checkbox>
+      <span>I agree — state: <strong pp-text="agree_state"></strong></span>
+    </div>
+  </section>
+
+  <!-- PineOtpField ───────────────────────────────────────── -->
+</root>

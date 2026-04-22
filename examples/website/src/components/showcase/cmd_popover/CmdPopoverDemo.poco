@@ -1,0 +1,54 @@
+<root>
+  <!-- Command palette in a Popover (not a Dialog) ────────── -->
+  <h2>Command palette — popover variant</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Same <code>pine-command-*</code> primitive, but wrapped in
+      a <code>pine-popover-*</code> instead of its built-in
+      modal shell. No backdrop, anchored to the button, dismiss
+      on outside-click.
+      The <code>no-shortcut="true"</code> prop on the command
+      root stops it from binding a global <kbd>⌘K</kbd> (which
+      would otherwise toggle a palette nobody can see).
+    </p>
+    <pine-popover-root pp-model:open="open">
+      <pine-popover-trigger>
+        <span>Open palette ▾</span>
+      </pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content side="bottom" align="start" side_offset="6" class="cmd-popover-content">
+          <pine-command-root no-shortcut="true" open="true" class="cmd-popover">
+            <pine-command-input placeholder="Type a command…"></pine-command-input>
+            <pine-command-list>
+              <pine-command-item value="new" @pp:command:select="pcmd_new_file">
+                <span>New File</span>
+                <span class="pine-command-shortcut">⌘N</span>
+              </pine-command-item>
+              <pine-command-item value="open" @pp:command:select="pcmd_open_file">
+                <span>Open File</span>
+                <span class="pine-command-shortcut">⌘O</span>
+              </pine-command-item>
+              <pine-command-item value="save" @pp:command:select="pcmd_save">
+                <span>Save</span>
+                <span class="pine-command-shortcut">⌘S</span>
+              </pine-command-item>
+              <pine-command-item value="format" @pp:command:select="pcmd_format">
+                <span>Format Document</span>
+              </pine-command-item>
+              <pine-command-item value="find" @pp:command:select="pcmd_find_file">
+                <span>Find in files…</span>
+                <span class="pine-command-shortcut">⌘P</span>
+              </pine-command-item>
+              <pine-command-empty>No commands match that query.</pine-command-empty>
+            </pine-command-list>
+          </pine-command-root>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Last popover command: <strong pp-text="last || '(none)'"></strong>
+    </p>
+  </section>
+
+  <!-- RFC-039 perf stress fixture ─────────────────────────── -->
+</root>

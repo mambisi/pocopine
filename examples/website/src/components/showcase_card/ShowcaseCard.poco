@@ -1,0 +1,29 @@
+<root class="showcase-card" :id="slug">
+  <header class="showcase-head">
+    <h2 class="showcase-title" pp-text="title"></h2>
+    <div class="showcase-tabs" role="tablist">
+      <button type="button"
+              role="tab"
+              class="showcase-tab"
+              :aria-selected="tab == 'preview' ? 'true' : 'false'"
+              :data-active="tab == 'preview' ? 'true' : 'false'"
+              @click="show_preview">
+        Preview
+      </button>
+      <button type="button"
+              role="tab"
+              class="showcase-tab"
+              :aria-selected="tab == 'code' ? 'true' : 'false'"
+              :data-active="tab == 'code' ? 'true' : 'false'"
+              @click="show_code">
+        Code
+      </button>
+    </div>
+  </header>
+  <div class="showcase-body" pp-show="tab == 'preview'" role="tabpanel">
+    <slot name="preview"></slot>
+  </div>
+  <div class="showcase-body showcase-body-code" pp-show="tab == 'code'" role="tabpanel">
+    <slot name="code"></slot>
+  </div>
+</root>

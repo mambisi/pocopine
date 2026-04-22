@@ -1,0 +1,25 @@
+<root>
+  <h2>Label, Separator, Progress</h2>
+  <section>
+    <div class="row" style="align-items:center;margin-bottom:0.75rem">
+      <pine-label target="demo-name">Name</pine-label>
+      <input id="demo-name" type="text" placeholder="clicking the label focuses me">
+    </div>
+    <pine-separator></pine-separator>
+    <div style="margin:0.75rem 0">
+      <pine-progress-root value="42" max="100">
+        <pine-progress-indicator></pine-progress-indicator>
+      </pine-progress-root>
+    </div>
+    <pine-separator></pine-separator>
+    <div style="margin-top:0.75rem">
+      <pine-progress-root value="-1">
+        <pine-progress-indicator></pine-progress-indicator>
+      </pine-progress-root>
+      <span style="font-size:0.875rem;color:var(--fg-muted);margin-left:0.5rem">
+        indeterminate
+      </span>
+    </div>
+  </section>
+
+</root>

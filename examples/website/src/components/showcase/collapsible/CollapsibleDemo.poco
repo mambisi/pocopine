@@ -1,0 +1,21 @@
+<root>
+  <h2>Collapsible</h2>
+  <section>
+    <pine-collapsible-root pp-model:open="open">
+      <pine-collapsible-trigger>
+        <span pp-text="open ? 'Hide details' : 'Show details'"></span>
+      </pine-collapsible-trigger>
+      <pine-collapsible-content>
+        <div class="faq-panel">
+          Body content revealed by the Collapsible compound.
+          The Root owns <code>open</code>; Trigger and Content both
+          inject the handle and mirror the state via
+          <code>watch_scope_field</code>.
+          <strong>Currently {{open ? 'open' : 'closed'}}.</strong>
+        </div>
+      </pine-collapsible-content>
+    </pine-collapsible-root>
+  </section>
+
+  <!-- PineAccordion — single-open exclusive sections ────── -->
+</root>

@@ -1,0 +1,32 @@
+<root>
+  <h2>Tags input</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Type a tag and press <kbd>Enter</kbd> to add it. Backspace
+      on an empty field removes the last tag. Click × on a chip
+      to remove just that one. Max 8.
+      <strong>Shuffle</strong> rotates the order so you can see the
+      FLIP layout animation (declared via
+      <code>#[component(animate = "flip")]</code> on
+      <code>PineTagsInputItem</code>).
+    </p>
+    <pine-tags-input-root pp-model:values="tags" max="8" class="tags-input-root">
+      <template pp-for="tag in tags" pp-key="tag">
+        <pine-tags-input-item :value="tag">
+          <pine-tags-input-item-text></pine-tags-input-item-text>
+          <pine-tags-input-item-delete aria-label="Remove tag">×</pine-tags-input-item-delete>
+        </pine-tags-input-item>
+      </template>
+      <pine-tags-input-input placeholder="Add tag…"></pine-tags-input-input>
+      <pine-tags-input-clear>Clear</pine-tags-input-clear>
+    </pine-tags-input-root>
+    <div class="row" style="margin-top:0.75rem;align-items:center">
+      <pine-button variant="ghost" @click="shuffle">Shuffle</pine-button>
+      <span style="font-size:0.875rem">
+        Current: <strong pp-text="tags"></strong>
+      </span>
+    </div>
+  </section>
+
+  <!-- Labelled, capped TagsInput with its own look ────────── -->
+</root>

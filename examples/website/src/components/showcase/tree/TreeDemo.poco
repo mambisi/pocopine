@@ -1,0 +1,56 @@
+<root>
+  <h2>Tree</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Click the chevron (▸) to expand / collapse, click the row to
+      select. Focus the tree and use ↑ ↓ → ← / Enter / Home / End.
+    </p>
+    <pine-tree-root type="single" pp-model:value="value" class="tree-demo">
+      <pine-tree-item value="src">
+        <pine-tree-item-toggle>▸</pine-tree-item-toggle>
+        <span>src/</span>
+        <pine-tree-item value="src/lib.rs">
+          <span class="tree-leaf-spacer"></span>
+          <span>lib.rs</span>
+        </pine-tree-item>
+        <pine-tree-item value="src/main.rs">
+          <span class="tree-leaf-spacer"></span>
+          <span>main.rs</span>
+        </pine-tree-item>
+        <pine-tree-item value="src/components">
+          <pine-tree-item-toggle>▸</pine-tree-item-toggle>
+          <span>components/</span>
+          <pine-tree-item value="src/components/Button.rs">
+            <span class="tree-leaf-spacer"></span>
+            <span>Button.rs</span>
+          </pine-tree-item>
+          <pine-tree-item value="src/components/Menu.rs">
+            <span class="tree-leaf-spacer"></span>
+            <span>Menu.rs</span>
+          </pine-tree-item>
+        </pine-tree-item>
+      </pine-tree-item>
+      <pine-tree-item value="tests">
+        <pine-tree-item-toggle>▸</pine-tree-item-toggle>
+        <span>tests/</span>
+        <pine-tree-item value="tests/smoke.rs">
+          <span class="tree-leaf-spacer"></span>
+          <span>smoke.rs</span>
+        </pine-tree-item>
+      </pine-tree-item>
+      <pine-tree-item value="Cargo.toml">
+        <span class="tree-leaf-spacer"></span>
+        <span>Cargo.toml</span>
+      </pine-tree-item>
+      <pine-tree-item value="README.md">
+        <span class="tree-leaf-spacer"></span>
+        <span>README.md</span>
+      </pine-tree-item>
+    </pine-tree-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Selected: <strong pp-text="value || '(none)'"></strong>
+    </p>
+  </section>
+
+  <!-- PineTagsInput ──────────────────────────────────────── -->
+</root>

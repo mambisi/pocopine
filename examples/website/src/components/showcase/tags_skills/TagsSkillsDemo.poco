@@ -1,0 +1,30 @@
+<root>
+  <h2>Tags input — "Skills" variant</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Same primitive, different styling: compact chips, 5-tag
+      cap, explicit label. Shows how authors layer CSS on top
+      of the unstyled Pine anatomy.
+    </p>
+    <div class="form-field">
+      <label class="form-label" for="skills-field">Skills (max 5)</label>
+      <pine-tags-input-root pp-model:values="skills" max="5" class="tags-input-root tags-input-skills">
+        <template pp-for="skill in skills" pp-key="skill">
+          <pine-tags-input-item :value="skill">
+            <pine-tags-input-item-text></pine-tags-input-item-text>
+            <pine-tags-input-item-delete aria-label="Remove skill">×</pine-tags-input-item-delete>
+          </pine-tags-input-item>
+        </template>
+        <pine-tags-input-input placeholder="Type a skill and press Enter…"></pine-tags-input-input>
+        <pine-tags-input-clear>Clear all</pine-tags-input-clear>
+      </pine-tags-input-root>
+    </div>
+    <div class="row" style="margin-top:0.75rem;align-items:center">
+      <pine-button variant="ghost" @click="shuffle">Shuffle</pine-button>
+      <span style="font-size:0.875rem">
+        Skills: <strong pp-text="skills"></strong>
+      </span>
+    </div>
+  </section>
+
+</root>
