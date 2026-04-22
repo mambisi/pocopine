@@ -1,0 +1,7 @@
+<p class="pine-field-error"
+   role="alert"
+   :id="error_id"
+   pp-show="invalid"
+   :data-invalid="invalid">
+  <slot></slot>
+</p>

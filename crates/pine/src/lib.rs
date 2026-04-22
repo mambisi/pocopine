@@ -36,6 +36,7 @@ pub mod command;
 pub mod context_menu;
 pub mod dialog;
 pub mod dropdown_menu;
+pub mod field;
 pub mod form;
 pub mod hover_card;
 pub mod label;
@@ -106,6 +107,9 @@ pub use dropdown_menu::{
     PineDropdownMenuRadioItem, PineDropdownMenuRoot, PineDropdownMenuSeparator,
     PineDropdownMenuSub, PineDropdownMenuSubContent, PineDropdownMenuSubTrigger,
     PineDropdownMenuTrigger,
+};
+pub use field::{
+    PineFieldControl, PineFieldDescription, PineFieldError, PineFieldLabel, PineFieldRoot,
 };
 pub use form::PineFormRoot;
 pub use hover_card::{
@@ -199,6 +203,11 @@ pub fn register_all() {
     PineDropdownMenuSub::register();
     PineDropdownMenuSubTrigger::register();
     PineDropdownMenuSubContent::register();
+    PineFieldRoot::register();
+    PineFieldLabel::register();
+    PineFieldControl::register();
+    PineFieldDescription::register();
+    PineFieldError::register();
     PineFormRoot::register();
     PineHoverCardRoot::register();
     PineHoverCardTrigger::register();

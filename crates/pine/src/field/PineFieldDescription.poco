@@ -1,0 +1,6 @@
+<p class="pine-field-description"
+   :id="description_id"
+   :data-disabled="disabled"
+   :data-invalid="invalid">
+  <slot></slot>
+</p>

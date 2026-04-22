@@ -1,0 +1,10 @@
+<root class="pine-field-root"
+      pp-ref="root"
+      :data-disabled="disabled"
+      :data-invalid="invalid"
+      :data-touched="touched"
+      :data-dirty="dirty"
+      :data-filled="filled"
+      :data-focused="focused">
+  <slot></slot>
+</root>

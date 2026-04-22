@@ -1,0 +1,28 @@
+<root>
+  <h2>Field</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Labeling + validation wiring for any form control. The Label's
+      <code>for</code>, the Control's <code>id</code>, and the
+      Description / Error's <code>aria-describedby</code> /
+      <code>aria-errormessage</code> all link up automatically. Blur
+      the empty input to flip <strong>touched</strong>; native
+      <code>required</code> validation flips <strong>invalid</strong>.
+    </p>
+    <pine-field-root name="fullname" class="field-demo">
+      <pine-field-label>Full name</pine-field-label>
+      <pine-field-control>
+        <input type="text"
+               class="field-demo-input"
+               placeholder="Required"
+               required
+               pp-model:value="name">
+      </pine-field-control>
+      <pine-field-description>Visible on your profile.</pine-field-description>
+      <pine-field-error>Please enter your name.</pine-field-error>
+    </pine-field-root>
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Current: <strong pp-text="name || '(empty)'"></strong>
+    </p>
+  </section>
+</root>

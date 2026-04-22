@@ -1,0 +1,4 @@
+<root class="pine-field-control"
+      pp-ref="slot">
+  <slot></slot>
+</root>

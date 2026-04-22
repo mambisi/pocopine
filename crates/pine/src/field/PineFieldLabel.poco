@@ -1,0 +1,10 @@
+<label class="pine-field-label"
+       :for="control_id"
+       :data-disabled="disabled"
+       :data-invalid="invalid"
+       :data-touched="touched"
+       :data-dirty="dirty"
+       :data-filled="filled"
+       :data-focused="focused">
+  <slot></slot>
+</label>

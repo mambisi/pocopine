@@ -5024,3 +5024,185 @@ async fn form_prevents_default_and_emits_pp_submit() {
     host.remove();
 }
 
+// ─── PineField ────────────────────────────────────────────────────
+
+/// Root generates a unique `control_id`; Label's `for` targets it
+/// and Control stamps it onto the inner `<input>` — so the native
+/// label/control pairing works without any author-side id
+/// plumbing. `aria-describedby` references the Description + Error
+/// ids; `aria-errormessage` references just the Error id.
+#[wasm_bindgen_test]
+async fn field_wires_label_for_control_id_and_describedby() {
+    let host = mount(
+        "<pine-field-root name=\"fullname\">\
+           <pine-field-label>Name</pine-field-label>\
+           <pine-field-control>\
+             <input type=\"text\" placeholder=\"Required\" required>\
+           </pine-field-control>\
+           <pine-field-description>Visible on your profile.</pine-field-description>\
+           <pine-field-error>Please enter your name.</pine-field-error>\
+         </pine-field-root>",
+    );
+    tick().await;
+
+    let label = host.query_selector("label.pine-field-label").unwrap().unwrap();
+    let input = host.query_selector("input").unwrap().unwrap();
+    let desc = host.query_selector("p.pine-field-description").unwrap().unwrap();
+    let err = host.query_selector("p.pine-field-error").unwrap().unwrap();
+
+    let control_id = input.get_attribute("id").expect("control id stamped");
+    assert!(control_id.starts_with("pine-field-control-"));
+    assert_eq!(label.get_attribute("for").as_deref(), Some(control_id.as_str()));
+
+    let desc_id = desc.get_attribute("id").expect("description id set");
+    let err_id = err.get_attribute("id").expect("error id set");
+    assert_eq!(
+        input.get_attribute("aria-describedby").as_deref(),
+        Some(format!("{desc_id} {err_id}").as_str()),
+        "aria-describedby = '{{description_id}} {{error_id}}'"
+    );
+    assert_eq!(input.get_attribute("aria-errormessage").as_deref(), Some(err_id.as_str()));
+    assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("false"));
+
+    host.remove();
+}
+
+/// Focus / blur / input on the inner `<input>` flip Root's
+/// `focused` / `touched` / `dirty` / `filled` flags, which land
+/// on the inner `<div class="pine-field-root">` as `data-*`
+/// attributes. Boolean bindings follow Pine's present-or-absent
+/// convention so each flag is absent from the DOM when false.
+#[wasm_bindgen_test]
+async fn field_state_flags_track_focus_blur_input() {
+    let host = mount(
+        "<pine-field-root name=\"email\">\
+           <pine-field-label>Email</pine-field-label>\
+           <pine-field-control>\
+             <input type=\"text\">\
+           </pine-field-control>\
+         </pine-field-root>",
+    );
+    tick().await;
+
+    let root_div = host.query_selector("div.pine-field-root").unwrap().unwrap();
+    let input = host
+        .query_selector("input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlInputElement>()
+        .unwrap();
+
+    assert!(!root_div.has_attribute("data-focused"));
+    assert!(!root_div.has_attribute("data-touched"));
+    assert!(!root_div.has_attribute("data-dirty"));
+    assert!(!root_div.has_attribute("data-filled"));
+
+    let target: &web_sys::EventTarget = input.as_ref();
+    let fev_init = web_sys::FocusEventInit::new();
+    fev_init.set_bubbles(true);
+    let focus_ev =
+        web_sys::FocusEvent::new_with_focus_event_init_dict("focus", &fev_init).unwrap();
+    target.dispatch_event(&focus_ev).unwrap();
+    tick().await;
+    assert!(root_div.has_attribute("data-focused"));
+
+    input.set_value("abc");
+    target
+        .dispatch_event(&web_sys::Event::new("input").unwrap())
+        .unwrap();
+    tick().await;
+    assert!(root_div.has_attribute("data-dirty"));
+    assert!(root_div.has_attribute("data-filled"));
+
+    let blur_ev =
+        web_sys::FocusEvent::new_with_focus_event_init_dict("blur", &fev_init).unwrap();
+    target.dispatch_event(&blur_ev).unwrap();
+    tick().await;
+    assert!(!root_div.has_attribute("data-focused"));
+    assert!(root_div.has_attribute("data-touched"));
+
+    host.remove();
+}
+
+/// `invalid="true"` on the Root flows onto the inner input's
+/// `aria-invalid` and flips the Error part from hidden (pp-show
+/// on `invalid`) to visible. Mirrors the server-validation story:
+/// set Root.invalid, the UI updates.
+#[wasm_bindgen_test]
+async fn field_invalid_prop_shows_error_and_sets_aria_invalid() {
+    let host = mount(
+        "<pine-field-root name=\"x\" invalid=\"true\">\
+           <pine-field-label>X</pine-field-label>\
+           <pine-field-control>\
+             <input type=\"text\">\
+           </pine-field-control>\
+           <pine-field-error class=\"fd-err\">Bad.</pine-field-error>\
+         </pine-field-root>",
+    );
+    tick().await;
+
+    let input = host.query_selector("input").unwrap().unwrap();
+    assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("true"));
+
+    let err = host
+        .query_selector(".fd-err")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    assert_ne!(
+        err.style().get_property_value("display").unwrap_or_default(),
+        "none",
+        "error row visible when invalid=true"
+    );
+
+    host.remove();
+}
+
+/// Field + Form integration: an `errors` map on the form whose key
+/// matches a Field's `name` flips that Field to `invalid=true`.
+/// Base UI's Form ships this as the server-validation surface —
+/// Pine wires it via `inject`/`watch_scope_field` so a plain
+/// `<pine-field-root>` inside a `<pine-form-root>` picks up the
+/// feedback automatically.
+#[wasm_bindgen_test]
+async fn field_picks_up_form_errors_by_name() {
+    let host = mount(
+        "<pine-form-root errors='{\"email\":\"Required\"}'>\
+           <pine-field-root name=\"email\">\
+             <pine-field-label>Email</pine-field-label>\
+             <pine-field-control>\
+               <input type=\"email\">\
+             </pine-field-control>\
+           </pine-field-root>\
+           <pine-field-root name=\"password\">\
+             <pine-field-label>Password</pine-field-label>\
+             <pine-field-control>\
+               <input type=\"password\">\
+             </pine-field-control>\
+           </pine-field-root>\
+         </pine-form-root>",
+    );
+    tick().await;
+
+    let email_input = host
+        .query_selector("pine-field-root[name=\"email\"] input")
+        .unwrap()
+        .unwrap();
+    let password_input = host
+        .query_selector("pine-field-root[name=\"password\"] input")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        email_input.get_attribute("aria-invalid").as_deref(),
+        Some("true"),
+        "email has a form error → aria-invalid=true"
+    );
+    assert_eq!(
+        password_input.get_attribute("aria-invalid").as_deref(),
+        Some("false"),
+        "password has no form error → aria-invalid=false"
+    );
+
+    host.remove();
+}
