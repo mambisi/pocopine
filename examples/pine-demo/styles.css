@@ -599,10 +599,10 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-collapsible-trigger:hover { background: var(--bg-hover); }
 .pine-collapsible-trigger[data-state="open"] { background: var(--bg-hover); }
 
-/* Visual box on the inner wrapper (see
- * PineCollapsibleContent.poco) so the outer grid container can
- * reach 0 height during close. */
-.pine-collapsible-content-inner {
+/* Collapsible panel styling lives on the author's single child,
+ * not on `.pine-collapsible-content` itself — the outer is the
+ * collapse preset's grid container and must stay unpadded. */
+.faq-panel {
   padding: 0.75rem 1rem;
   margin-top: 0.5rem;
   background: var(--bg);
@@ -633,17 +633,15 @@ pine-dropdown-menu-portal { display: contents; }
 .pine-accordion-trigger:hover { background: var(--bg-hover); }
 .pine-accordion-trigger[data-state="open"] { background: var(--bg-hover); }
 
-/* Padding lives on the INNER wrapper, not the outer grid
- * container. Otherwise the outer can't reach 0 height at the
- * end of the collapse animation — it gets stuck at
- * `padding-top + padding-bottom` and pops when pp-if removes.
- * See PineAccordionContent.poco for the template.
- */
+/* The outer `.pine-accordion-content` is the collapse preset's
+ * grid container — keep it free of padding / border so the grid
+ * row can truly reach 0 at close. Author-owned classes on the
+ * single child (here: `.faq-answer`) carry the visible box. */
 .pine-accordion-content {
   font-size: 0.875rem;
   color: var(--fg-muted);
 }
-.pine-accordion-content-inner {
+.faq-answer {
   padding: 0.5rem 0.875rem 0.875rem;
 }
 

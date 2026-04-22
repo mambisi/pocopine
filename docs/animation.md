@@ -273,46 +273,37 @@ unmount analogue without `transition-behavior: allow-discrete`,
 which requires staying in the DOM via `pp-show` rather than
 `pp-if`.
 
-## Gotcha: put padding/borders on the INNER wrapper, not the collapse container
+## Collapsible / Accordion: pass ONE child, style that child
 
-Pine's Collapsible and Accordion content templates wrap their
-slot in an inner `<div>`:
+Pine's Collapsible and Accordion Content accept a single child
+element and let authors own its styling entirely:
 
 ```html
-<!-- PineAccordionContent.poco, PineCollapsibleContent.poco -->
-<root class="pine-accordion-content" pp-transition="collapse">
-  <div class="pine-accordion-content-inner">
-    <slot></slot>
+<pine-accordion-content>
+  <div class="faq-answer">
+    …your content…
   </div>
-</root>
+</pine-accordion-content>
 ```
-
-Put padding, borders, backgrounds, and any other visual-box
-styles on `.pine-accordion-content-inner`, **not** on
-`.pine-accordion-content`. The outer is the grid container
-driven by the `collapse` preset — its `grid-template-rows`
-tweens to `0fr` at the end of close. If the outer carries
-padding (even 0.5rem each side), those ~16px of padding-box
-persist even when the grid row is zero, leaving a visible
-"ghost bar" that pops when pp-if finally removes the element.
 
 ```css
-/* ✗ outer — leaves a padded ghost at end of close */
-.pine-accordion-content {
-  padding: 0.5rem;
+.faq-answer {
+  padding: 0.5rem 1rem;
   background: var(--bg);
-}
-
-/* ✓ inner wrapper — shrinks cleanly with the grid row */
-.pine-accordion-content-inner {
-  padding: 0.5rem;
-  background: var(--bg);
+  border: 1px solid var(--border);
 }
 ```
 
-The outer can still carry non-dimensional styling — font-size,
-color, data-state hooks, hover targets. Anything that adds
-physical height should sit on the inner wrapper.
+The outer `.pine-accordion-content` is the `collapse` preset's
+grid container — it must stay free of padding / border /
+background so the `grid-template-rows` tween can reach true 0
+at the end of close. Anything with physical dimensions on the
+outer leaves a "ghost row" that pops when the element
+unmounts.
+
+Non-dimensional styling (font-size, color, `[data-state]`
+hooks) is fine on the outer — only box-model properties need
+to move inside.
 
 ## Gotcha: don't center with `transform` if you use scale / slide presets
 

@@ -1,14 +1,9 @@
 <template pp-if="open">
-  <!-- Put visual box styles (padding, border, background) on
-       `.pine-collapsible-content-inner`, not on the outer
-       `.pine-collapsible-content` — the outer is the grid
-       container driven by the `collapse` preset and needs to
-       reach 0 height at the end of close. -->
+  <!-- Expects exactly ONE child element from the author. See
+       PineAccordionContent.poco for why. -->
   <root class="pine-collapsible-content"
         data-state="open"
         pp-transition="collapse">
-    <div class="pine-collapsible-content-inner">
-      <slot></slot>
-    </div>
+    <slot></slot>
   </root>
 </template>

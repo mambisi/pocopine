@@ -1,21 +1,14 @@
 <template pp-if="open">
-  <!-- The outer <root> is the grid container driven by the
-       `collapse` preset: its `grid-template-rows` tweens
-       0fr ↔ 1fr so siblings reflow. Any padding / border /
-       background declared on `.pine-accordion-content-inner`
-       stays inside the clipped grid item, so the outer can
-       truly reach 0 height at the end of close — no ghost
-       row.
-
-       Authors put padding / borders / background on
-       `.pine-accordion-content-inner`, NOT on
-       `.pine-accordion-content`. -->
+  <!-- Expects exactly ONE child element from the author. That
+       child becomes the grid item the `collapse` preset clips;
+       authors put padding / border / background / etc. on their
+       own wrapper class, which is where the box-model should
+       live so the preset's grid row can truly reach 0 at close.
+       The outer grid container stays style-free. -->
   <root class="pine-accordion-content"
         role="region"
         data-state="open"
         pp-transition="collapse">
-    <div class="pine-accordion-content-inner">
-      <slot></slot>
-    </div>
+    <slot></slot>
   </root>
 </template>

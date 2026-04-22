@@ -306,12 +306,13 @@
         <span pp-text="faq_open ? 'Hide details' : 'Show details'"></span>
       </pine-collapsible-trigger>
       <pine-collapsible-content>
-        <p style="margin:0">
+        <div class="faq-panel">
           Body content revealed by the Collapsible compound.
-          The Root owns `open`; Trigger and Content both inject
-          the handle and mirror the state via `watch_scope_field`.
+          The Root owns <code>open</code>; Trigger and Content both
+          inject the handle and mirror the state via
+          <code>watch_scope_field</code>.
           <strong>Currently {faq_open ? 'open' : 'closed'}.</strong>
-        </p>
+        </div>
       </pine-collapsible-content>
     </pine-collapsible-root>
   </section>
@@ -323,23 +324,29 @@
       <pine-accordion-item value="what">
         <pine-accordion-trigger>What is Pine?</pine-accordion-trigger>
         <pine-accordion-content>
-          Pine is an unstyled, accessible primitive library on
-          pocopine — ships behaviour, keyboard, ARIA. Zero CSS.
+          <div class="faq-answer">
+            Pine is an unstyled, accessible primitive library on
+            pocopine — ships behaviour, keyboard, ARIA. Zero CSS.
+          </div>
         </pine-accordion-content>
       </pine-accordion-item>
       <pine-accordion-item value="how">
         <pine-accordion-trigger>How do compound components work?</pine-accordion-trigger>
         <pine-accordion-content>
-          Root owns state and provides its Handle via RFC-027
-          `provide`/`inject`; descendants mirror fields via
-          `watch_scope_field`.
+          <div class="faq-answer">
+            Root owns state and provides its Handle via RFC-027
+            <code>provide</code>/<code>inject</code>; descendants mirror
+            fields via <code>watch_scope_field</code>.
+          </div>
         </pine-accordion-content>
       </pine-accordion-item>
       <pine-accordion-item value="ship">
         <pine-accordion-trigger>What's shipped?</pine-accordion-trigger>
         <pine-accordion-content>
-          Button, Dialog, Popover, DropdownMenu (13 parts),
-          Collapsible, Accordion, Tabs, Tooltip, Switch, Checkbox.
+          <div class="faq-answer">
+            Button, Dialog, Popover, DropdownMenu (13 parts),
+            Collapsible, Accordion, Tabs, Tooltip, Switch, Checkbox.
+          </div>
         </pine-accordion-content>
       </pine-accordion-item>
     </pine-accordion-root>
