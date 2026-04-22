@@ -70,8 +70,9 @@ pub fn run(call: &DirectiveCall) {
     // closure's capture (below) so its JS callable stays valid for
     // the lifetime of the listener — and drops when the listener
     // drops via the element-scoped listener table.
+    type DebouncedInvoke = (Option<Function>, Option<Closure<dyn FnMut()>>);
     let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
-    let (invoke_fn, debounce_closure): (Option<Function>, Option<Closure<dyn FnMut()>>) =
+    let (invoke_fn, debounce_closure): DebouncedInvoke =
         if debounce_ms.is_some() {
             let ast = ast.clone();
             let last_event = last_event.clone();

@@ -33,6 +33,11 @@ pub struct Keyframe {
 
 impl Keyframe {
     /// Construct a keyframe from an iterator of `(prop, value)`.
+    /// Intentionally named `from_iter` — callers use the inherent
+    /// method directly (not via the `FromIterator` trait), so the
+    /// signature stays ergonomic for array literals without
+    /// requiring a trait import at every call site.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_iter<I, V>(iter: I) -> Self
     where
         I: IntoIterator<Item = (&'static str, V)>,
@@ -93,7 +98,7 @@ impl AnimationHandle {
     /// pre-animation state (unless `fill: "forwards"` already
     /// committed).
     pub fn cancel(&self) {
-        let _ = self.inner.cancel();
+        self.inner.cancel();
     }
 
     /// Fast-forward to the end; fires the `finish` event.

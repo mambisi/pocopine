@@ -67,11 +67,11 @@ thread_local! {
     /// Per-panel last-fingerprint, indexed parallel to PANELS. Empty
     /// vec means "no render has happened yet"; growing PANELS always
     /// grows this too.
-    static LAST_FPS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static LAST_FPS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 
     /// One-shot guard so `mount` fires exactly once per panel. Same
     /// indexing as PANELS / LAST_FPS.
-    static MOUNTED: RefCell<Vec<bool>> = RefCell::new(Vec::new());
+    static MOUNTED: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
 
     /// Index of the currently-visible panel. `0` = the default
     /// (scope inspector); future PRs add a tab-strip setter.

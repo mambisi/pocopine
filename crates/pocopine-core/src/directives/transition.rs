@@ -229,7 +229,6 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             return;
         }
     };
-    set_will_change(el);
 
     // Cancel whatever was in flight (leaving, or stale entering).
     {
@@ -335,7 +334,6 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
             return;
         }
     };
-    set_will_change(el);
 
     {
         let mut s = rc.borrow_mut();
@@ -469,20 +467,6 @@ fn parse_duration(s: &str) -> f64 {
         })
         .fold(0.0_f64, f64::max)
 }
-
-/// `will-change` was set on enter / leave during RFC-039 PR 1 to
-/// hint the compositor. In practice it caused a visible end-of-
-/// transition flicker: when the state machine cleared `will-change`
-/// AND the transition's `to` classes at the same instant, the
-/// browser tore down the dedicated GPU layer and re-composited
-/// the element back to the regular paint layer — sub-pixel
-/// anti-aliasing differences read as a pop. Modern browsers (FF
-/// 60+, Chrome 60+, Safari 13+) auto-promote opacity / transform
-/// transitions to the compositor without an explicit hint, so
-/// these helpers are now no-ops kept for API stability.
-fn set_will_change(_el: &Element) {}
-
-fn clear_will_change(_el: &Element) {}
 
 /// Selector matching every element that carries any preset attr
 /// (shorthand or six-attr form). Used by the subtree helpers to

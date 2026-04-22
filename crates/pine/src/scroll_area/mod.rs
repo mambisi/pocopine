@@ -731,7 +731,7 @@ impl PineScrollAreaCorner {
         };
         let r1 = root.clone();
         let h1 = handle.clone();
-        let rc = recompute.clone();
+        let rc = recompute;
         pocopine::watch_scope_field::<bool, _>(root_scope, "v_visible", move |_, _| {
             rc(r1.clone(), h1.clone());
         });

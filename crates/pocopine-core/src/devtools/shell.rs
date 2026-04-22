@@ -172,7 +172,7 @@ pub(super) fn update_meta_line(root: &Element, scopes: &[Scope]) {
 
 /// Paint the tab strip when ≥2 panels are registered; hide it when
 /// 1. Fingerprint is `"<count>|<active>"` so we skip rewrites while
-/// nothing about the strip changes.
+///    nothing about the strip changes.
 pub(super) fn update_tab_strip(root: &Element) {
     let summary = panel::summary();
     if summary.len() < 2 {
