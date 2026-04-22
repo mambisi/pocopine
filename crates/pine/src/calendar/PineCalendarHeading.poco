@@ -1,0 +1,7 @@
+<div class="pine-calendar-heading"
+     pp-ref="root"
+     role="heading"
+     aria-level="2"
+     :data-disabled="disabled">
+  <slot>{{ heading }}</slot>
+</div>
