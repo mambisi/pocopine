@@ -39,6 +39,7 @@ pub mod signal;
 pub mod store;
 pub mod styles;
 pub mod templates;
+pub mod text;
 pub mod tick;
 pub mod walker;
 pub mod watch;
