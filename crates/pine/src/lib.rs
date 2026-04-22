@@ -27,6 +27,7 @@ pub mod compound;
 pub mod calendar;
 pub mod date_picker;
 pub mod datetime;
+pub mod range_calendar;
 pub mod accordion;
 pub mod alert_dialog;
 pub mod aspect_ratio;
