@@ -1,0 +1,15 @@
+<button class="pine-calendar-cell-trigger"
+        pp-ref="root"
+        type="button"
+        role="button"
+        data-pine-calendar-cell-trigger
+        :data-value="date"
+        @click="on_click"
+        @keydown.arrow-left.prevent.stop="on_arrow_left"
+        @keydown.arrow-right.prevent.stop="on_arrow_right"
+        @keydown.arrow-up.prevent.stop="on_arrow_up"
+        @keydown.arrow-down.prevent.stop="on_arrow_down"
+        @keydown.enter.prevent="on_activate"
+        @keydown.space.prevent="on_activate">
+  <slot></slot>
+</button>

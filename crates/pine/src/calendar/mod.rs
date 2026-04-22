@@ -9,11 +9,13 @@
 //! `Next`, `Grid` + `GridHead` / `GridBody` / `GridRow`,
 //! `HeadCell`, `Cell`, `CellTrigger`.
 
+pub mod cell;
 pub mod grid;
 pub mod header;
 pub mod root;
 pub mod state;
 
+pub use cell::{PineCalendarCell, PineCalendarCellTrigger};
 pub use grid::{
     PineCalendarGrid, PineCalendarGridBody, PineCalendarGridHead, PineCalendarGridRow,
     PineCalendarHeadCell,

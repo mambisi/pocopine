@@ -1,0 +1,6 @@
+<td class="pine-calendar-cell"
+    pp-ref="root"
+    role="gridcell"
+    :data-value="date">
+  <slot></slot>
+</td>
