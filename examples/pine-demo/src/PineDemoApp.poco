@@ -1,12 +1,87 @@
 <div>
-  <h1>Pine</h1>
-  <p class="lead">Unstyled, accessible UI primitives for pocopine.</p>
-  <p style="font-size:0.875rem">
-    Every primitive below animates by default — Dialog fades & scales,
-    menus slide, TagsInput chips FLIP on reorder, Collapsibles grow.
-    No handler code, no CSS to copy; see
-    <code>docs/animation.md</code> for the preset catalogue and how
-    to override per instance.
+  <!-- ─── Hero ─────────────────────────────────────────────── -->
+  <section class="hero">
+    <img class="hero-mascot" src="/mascot.svg" alt="pocopine mascot">
+    <h1><span class="brand">poco</span>pine</h1>
+    <p class="tagline">
+      A tiny, reactive Rust/WASM UI framework with a full
+      primitive library — ships server-rendered HTML, animates
+      by default, under 50&nbsp;KB.
+    </p>
+    <div class="hero-actions">
+      <a class="cta-primary" href="#get-started">Get started →</a>
+      <a class="cta-ghost" href="https://github.com/mambisi/pocopine">GitHub ↗</a>
+    </div>
+  </section>
+
+  <!-- ─── Get started / tutorial ──────────────────────────── -->
+  <section class="tutorial" id="get-started">
+    <h2>Get started in 60 seconds</h2>
+    <ol class="tutorial-steps">
+      <li class="tutorial-step">
+        <span class="step-num">1</span>
+        <div class="step-body">
+          <h3>Install the toolchain</h3>
+          <p>You need <code>wasm-pack</code> to build to WebAssembly. Rust nightly works, stable is fine too.</p>
+<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">install wasm-pack</span></code></pre>
+        </div>
+      </li>
+      <li class="tutorial-step">
+        <span class="step-num">2</span>
+        <div class="step-body">
+          <h3>Scaffold an app</h3>
+          <p>Create a new Rust library crate and add <code>pocopine</code>.</p>
+<pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">new --lib hello-pine</span>
+<span class="c-cmd">cd</span> <span class="c-arg">hello-pine</span>
+<span class="c-cmd">cargo</span> <span class="c-arg">add pocopine pine</span></code></pre>
+        </div>
+      </li>
+      <li class="tutorial-step">
+        <span class="step-num">3</span>
+        <div class="step-body">
+          <h3>Write your first component</h3>
+          <p>A component is a Rust struct + a <code>.poco</code> template.</p>
+<pre class="code-block"><code><span class="c-comment">// src/lib.rs</span>
+<span class="c-cmd">use</span> pocopine::prelude::*;
+
+<span class="c-cmd">#[derive(Default, Serialize, Deserialize)]</span>
+<span class="c-cmd">#[component(template = </span><span class="c-str">"Counter.poco"</span><span class="c-cmd">)]</span>
+<span class="c-cmd">pub struct</span> Counter { <span class="c-cmd">pub</span> n: u32 }
+
+<span class="c-cmd">#[handlers]</span>
+<span class="c-cmd">impl</span> Counter {
+    <span class="c-cmd">pub fn</span> bump(&mut self) { self.n += 1; }
+}
+
+<span class="c-cmd">#[wasm_bindgen(start)]</span>
+<span class="c-cmd">pub fn</span> main() {
+    App::new().register::&lt;Counter&gt;().run();
+}</code></pre>
+<pre class="code-block"><code><span class="c-comment">&lt;!-- src/Counter.poco --&gt;</span>
+&lt;button @click=<span class="c-str">"bump"</span>&gt;
+  clicked &lt;strong pp-text=<span class="c-str">"n"</span>&gt;&lt;/strong&gt; times
+&lt;/button&gt;</code></pre>
+        </div>
+      </li>
+      <li class="tutorial-step">
+        <span class="step-num">4</span>
+        <div class="step-body">
+          <h3>Build &amp; serve</h3>
+          <p>Build to wasm and serve the generated <code>pkg/</code> from any static server.</p>
+<pre class="code-block"><code><span class="c-cmd">wasm-pack</span> <span class="c-arg">build --target web --out-dir pkg --dev</span>
+<span class="c-cmd">python3</span> <span class="c-arg">-m http.server 8000</span></code></pre>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <div class="section-divider">Pine UI — primitive library</div>
+
+  <p class="lead" style="margin-bottom:0.5rem">Unstyled, accessible UI primitives for pocopine.</p>
+  <p style="font-size:0.875rem;margin-bottom:2rem">
+    Every primitive below animates by default — Dialog fades, menus
+    slide, TagsInput chips FLIP on reorder, Collapsibles grow. No
+    handler code, no CSS to copy.
   </p>
 
   <!-- Label + Separator + Progress + AspectRatio + Toolbar — -->
