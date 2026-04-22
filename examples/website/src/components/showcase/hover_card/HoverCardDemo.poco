@@ -3,115 +3,108 @@
   <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
     Hover (or focus) any <code>@name</code> to see the user's card.
   </p>
-  <section class="row" style="flex-wrap:wrap;gap:1rem">
-    <span>
-      Mentioned by
-      <pine-hover-card-root open_delay="200" close_delay="200">
-        <pine-hover-card-trigger>
-          <a href="#ada" class="hc-link">@ada</a>
-        </pine-hover-card-trigger>
-        <pine-hover-card-portal>
-          <pine-hover-card-content>
-            <div style="display:flex;gap:0.75rem;align-items:center">
-              <pine-avatar-root>
-                <pine-avatar-image src="https://i.pravatar.cc/48?u=ada" alt="Ada"></pine-avatar-image>
-                <pine-avatar-fallback>AL</pine-avatar-fallback>
-              </pine-avatar-root>
-              <div>
-                <strong style="display:block">Ada Lovelace</strong>
-                <span style="color:var(--fg-muted);font-size:0.875rem">
-                  Mathematician · @ada
-                </span>
-              </div>
+  <div class="hc-prose">
+    Mentioned by
+    <pine-hover-card-root open_delay="200" close_delay="200">
+      <pine-hover-card-trigger>
+        <a href="#ada" class="hc-link">@ada</a>
+      </pine-hover-card-trigger>
+      <pine-hover-card-portal>
+        <pine-hover-card-content>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <pine-avatar-root>
+              <pine-avatar-image src="https://i.pravatar.cc/48?u=ada" alt="Ada"></pine-avatar-image>
+              <pine-avatar-fallback>AL</pine-avatar-fallback>
+            </pine-avatar-root>
+            <div>
+              <strong style="display:block">Ada Lovelace</strong>
+              <span style="color:var(--fg-muted);font-size:0.875rem">
+                Mathematician · @ada
+              </span>
             </div>
-            <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
-              Counted as the first programmer.
-            </p>
-          </pine-hover-card-content>
-        </pine-hover-card-portal>
-      </pine-hover-card-root>
-      and
-      <pine-hover-card-root open_delay="200" close_delay="200">
-        <pine-hover-card-trigger>
-          <a href="#grace" class="hc-link">@grace</a>
-        </pine-hover-card-trigger>
-        <pine-hover-card-portal>
-          <pine-hover-card-content>
-            <div style="display:flex;gap:0.75rem;align-items:center">
-              <pine-avatar-root>
-                <pine-avatar-image src="https://i.pravatar.cc/48?u=grace" alt="Grace"></pine-avatar-image>
-                <pine-avatar-fallback>GH</pine-avatar-fallback>
-              </pine-avatar-root>
-              <div>
-                <strong style="display:block">Grace Hopper</strong>
-                <span style="color:var(--fg-muted);font-size:0.875rem">
-                  Rear Admiral · @grace
-                </span>
-              </div>
+          </div>
+          <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
+            Counted as the first programmer.
+          </p>
+        </pine-hover-card-content>
+      </pine-hover-card-portal>
+    </pine-hover-card-root>
+    and
+    <pine-hover-card-root open_delay="200" close_delay="200">
+      <pine-hover-card-trigger>
+        <a href="#grace" class="hc-link">@grace</a>
+      </pine-hover-card-trigger>
+      <pine-hover-card-portal>
+        <pine-hover-card-content>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <pine-avatar-root>
+              <pine-avatar-image src="https://i.pravatar.cc/48?u=grace" alt="Grace"></pine-avatar-image>
+              <pine-avatar-fallback>GH</pine-avatar-fallback>
+            </pine-avatar-root>
+            <div>
+              <strong style="display:block">Grace Hopper</strong>
+              <span style="color:var(--fg-muted);font-size:0.875rem">
+                Rear Admiral · @grace
+              </span>
             </div>
-            <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
-              Coined "debugging". Built COBOL's parent compiler.
-            </p>
-          </pine-hover-card-content>
-        </pine-hover-card-portal>
-      </pine-hover-card-root>
-      on the thread.
-    </span>
-    <span>
-      Reviewed by
-      <pine-hover-card-root open_delay="200" close_delay="200">
-        <pine-hover-card-trigger>
-          <a href="#alan" class="hc-link">@alan</a>
-        </pine-hover-card-trigger>
-        <pine-hover-card-portal>
-          <pine-hover-card-content>
-            <div style="display:flex;gap:0.75rem;align-items:center">
-              <pine-avatar-root>
-                <pine-avatar-image src="https://i.pravatar.cc/48?u=alan" alt="Alan"></pine-avatar-image>
-                <pine-avatar-fallback>AT</pine-avatar-fallback>
-              </pine-avatar-root>
-              <div>
-                <strong style="display:block">Alan Turing</strong>
-                <span style="color:var(--fg-muted);font-size:0.875rem">
-                  Logician · @alan
-                </span>
-              </div>
+          </div>
+          <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
+            Coined "debugging". Built COBOL's parent compiler.
+          </p>
+        </pine-hover-card-content>
+      </pine-hover-card-portal>
+    </pine-hover-card-root>
+    on the thread. Reviewed by
+    <pine-hover-card-root open_delay="200" close_delay="200">
+      <pine-hover-card-trigger>
+        <a href="#alan" class="hc-link">@alan</a>
+      </pine-hover-card-trigger>
+      <pine-hover-card-portal>
+        <pine-hover-card-content>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <pine-avatar-root>
+              <pine-avatar-image src="https://i.pravatar.cc/48?u=alan" alt="Alan"></pine-avatar-image>
+              <pine-avatar-fallback>AT</pine-avatar-fallback>
+            </pine-avatar-root>
+            <div>
+              <strong style="display:block">Alan Turing</strong>
+              <span style="color:var(--fg-muted);font-size:0.875rem">
+                Logician · @alan
+              </span>
             </div>
-            <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
-              Proved what machines can compute.
-            </p>
-          </pine-hover-card-content>
-        </pine-hover-card-portal>
-      </pine-hover-card-root>.
-    </span>
-    <span>
-      Approved by
-      <pine-hover-card-root open_delay="200" close_delay="200">
-        <pine-hover-card-trigger>
-          <a href="#linus" class="hc-link">@linus</a>
-        </pine-hover-card-trigger>
-        <pine-hover-card-portal>
-          <pine-hover-card-content>
-            <div style="display:flex;gap:0.75rem;align-items:center">
-              <pine-avatar-root>
-                <pine-avatar-image src="https://i.pravatar.cc/48?u=linus" alt="Linus"></pine-avatar-image>
-                <pine-avatar-fallback>LT</pine-avatar-fallback>
-              </pine-avatar-root>
-              <div>
-                <strong style="display:block">Linus Torvalds</strong>
-                <span style="color:var(--fg-muted);font-size:0.875rem">
-                  Kernel dev · @linus
-                </span>
-              </div>
+          </div>
+          <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
+            Proved what machines can compute.
+          </p>
+        </pine-hover-card-content>
+      </pine-hover-card-portal>
+    </pine-hover-card-root>,
+    approved by
+    <pine-hover-card-root open_delay="200" close_delay="200">
+      <pine-hover-card-trigger>
+        <a href="#linus" class="hc-link">@linus</a>
+      </pine-hover-card-trigger>
+      <pine-hover-card-portal>
+        <pine-hover-card-content>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <pine-avatar-root>
+              <pine-avatar-image src="https://i.pravatar.cc/48?u=linus" alt="Linus"></pine-avatar-image>
+              <pine-avatar-fallback>LT</pine-avatar-fallback>
+            </pine-avatar-root>
+            <div>
+              <strong style="display:block">Linus Torvalds</strong>
+              <span style="color:var(--fg-muted);font-size:0.875rem">
+                Kernel dev · @linus
+              </span>
             </div>
-            <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
-              Wrote Linux. Wrote git.
-            </p>
-          </pine-hover-card-content>
-        </pine-hover-card-portal>
-      </pine-hover-card-root>.
-    </span>
-  </section>
+          </div>
+          <p style="margin:0.75rem 0 0;font-size:0.875rem;color:var(--fg-muted)">
+            Wrote Linux. Wrote git.
+          </p>
+        </pine-hover-card-content>
+      </pine-hover-card-portal>
+    </pine-hover-card-root>.
+  </div>
 
   <!-- PineTooltip — compound (Radix-style) ───────────────── -->
 </root>

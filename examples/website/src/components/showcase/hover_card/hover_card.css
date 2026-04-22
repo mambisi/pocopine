@@ -1,8 +1,6 @@
 /* ─── PineHoverCard (compound) ────────────────────────────────
    Floating, interactive card. Shares the overlay z-index band
    with dialogs / popovers; renders as a standard pop panel. */
-.pine-hover-card-root   { display: contents; }
-.pine-hover-card-portal { display: contents; }
 .pine-hover-card-content {
   position: fixed;
   z-index: 45;
@@ -14,4 +12,27 @@
   box-shadow: var(--shadow);
 }
 .hc-link { color: var(--brand); text-decoration: underline; cursor: pointer; }
+
+/* Inline prose wrapper — one element doing two jobs: it carries
+   the showcase card chrome (border, padding, bg) itself, and
+   hosts a flowing paragraph of mentions. No <section> wrapper
+   needed. */
+.hc-prose {
+  margin: 0 0 1rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  line-height: 1.7;
+}
+.hc-prose .hc-link { white-space: nowrap; }
+
+/* The custom tag <pine-hover-card-root> / <pine-hover-card-portal>
+   is `display: contents` at the macro level, which exposes the
+   template's inner <div> to the surrounding flow. Since the scope
+   div carries no visual — it's a pure state container — tell it
+   to disappear from layout too, so inline text flows naturally
+   across sibling mentions. */
+.pine-hover-card-root,
+.pine-hover-card-portal { display: contents; }
 
