@@ -1,0 +1,90 @@
+/* ─── PineCalendar demo ─────────────────────────────────────── */
+
+.calendar {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: var(--bg);
+  user-select: none;
+}
+.calendar-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.calendar-heading {
+  text-align: center;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.calendar-nav {
+  height: 2rem;
+  width: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 1rem;
+}
+.calendar-nav:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+.calendar-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.calendar-grid {
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.calendar-grid .pine-calendar-head-cell {
+  font-weight: 600;
+  color: var(--fg-muted);
+  padding: 0.25rem 0.5rem;
+  text-align: center;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.calendar-grid .pine-calendar-cell {
+  padding: 1px;
+  text-align: center;
+}
+.calendar-grid .pine-calendar-cell-trigger {
+  height: 2rem;
+  width: 2rem;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.calendar-grid .pine-calendar-cell-trigger:hover {
+  background: var(--bg-subtle);
+}
+.calendar-grid .pine-calendar-cell[data-outside-view="true"] .pine-calendar-cell-trigger {
+  color: var(--fg-muted);
+  opacity: 0.45;
+}
+.calendar-grid .pine-calendar-cell[data-selected="true"] .pine-calendar-cell-trigger {
+  background: var(--brand);
+  color: #fff;
+}
+.calendar-grid .pine-calendar-cell[data-disabled="true"] .pine-calendar-cell-trigger {
+  color: var(--fg-muted);
+  opacity: 0.35;
+  cursor: not-allowed;
+}

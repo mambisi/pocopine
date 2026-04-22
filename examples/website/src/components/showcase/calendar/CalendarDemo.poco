@@ -1,0 +1,28 @@
+<root>
+  <h2>Calendar</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Gregorian month grid, reka-ui port. Click to select, or tab
+      in and use arrow keys. The buttons dispatch
+      <code>prev_page</code> / <code>next_page</code> on the root.
+    </p>
+
+    <pine-calendar-root class="calendar"
+                        pp-model:value="value"
+                        pp-model:placeholder="placeholder">
+      <pine-calendar-header class="calendar-header">
+        <pine-calendar-prev class="calendar-nav">‹</pine-calendar-prev>
+        <pine-calendar-heading class="calendar-heading"></pine-calendar-heading>
+        <pine-calendar-next class="calendar-nav">›</pine-calendar-next>
+      </pine-calendar-header>
+      <pine-calendar-grid class="calendar-grid">
+        <pine-calendar-grid-head></pine-calendar-grid-head>
+        <pine-calendar-grid-body></pine-calendar-grid-body>
+      </pine-calendar-grid>
+    </pine-calendar-root>
+
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Selected: <strong pp-text="value || '(none)'"></strong>
+    </p>
+  </section>
+</root>

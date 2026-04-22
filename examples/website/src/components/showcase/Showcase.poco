@@ -43,6 +43,7 @@
   <tags-skills-demo></tags-skills-demo>
   <tags-mentions-demo></tags-mentions-demo>
   <text-demo></text-demo>
+  <calendar-demo></calendar-demo>
   <cmd-popover-demo></cmd-popover-demo>
   <stress-demo></stress-demo>
 </root>
