@@ -1,3 +1,18 @@
 <tbody class="pine-calendar-grid-body" pp-ref="root">
-  <slot></slot>
+  <template pp-for="month in months" pp-key="month.value">
+    <template pp-for="week in month.weeks" pp-key="week[0].date">
+      <tr class="pine-calendar-grid-row">
+        <template pp-for="cell in week" pp-key="cell.date">
+          <td class="pine-calendar-cell"
+              role="gridcell"
+              :data-value="cell.date"
+              :data-outside-view="!cell.is_current_month"
+              :data-selected="cell.is_selected"
+              :data-disabled="cell.is_out_of_bounds || cell.is_disabled">
+            <pine-calendar-cell-trigger :date="cell.date">{{ cell.day }}</pine-calendar-cell-trigger>
+          </td>
+        </template>
+      </tr>
+    </template>
+  </template>
 </tbody>

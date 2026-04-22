@@ -29,7 +29,7 @@ inject_key!(pub ROOT: Handle<PineCalendarRoot>);
 
 /// Per-day cell the template iterates over. All fields scalar so
 /// they cross the WASM / JS boundary cleanly.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalendarCellView {
     pub date: String,
     pub day: u8,
@@ -41,7 +41,7 @@ pub struct CalendarCellView {
 
 /// One month's grid of weeks × days, plus a label the header
 /// can render verbatim.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalendarMonthView {
     pub value: String,
     pub label: String,

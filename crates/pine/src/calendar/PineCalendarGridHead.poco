@@ -1,5 +1,9 @@
 <thead class="pine-calendar-grid-head"
        pp-ref="root"
        aria-hidden="true">
-  <slot></slot>
+  <tr class="pine-calendar-grid-row">
+    <template pp-for="label in weekdays" pp-key="label">
+      <th class="pine-calendar-head-cell" scope="col">{{ label }}</th>
+    </template>
+  </tr>
 </thead>

@@ -5,7 +5,7 @@
 //! Vue components. They observe [`super::root::ROOT`] just for
 //! the `disabled` / `readonly` state they mirror onto `data-*`.
 
-use crate::calendar::root::ROOT;
+use crate::calendar::root::{CalendarMonthView, ROOT};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -28,25 +28,37 @@ impl PineCalendarGrid {}
 // ── Grid parts ───────────────────────────────────────────────────
 
 /// `<pine-calendar-grid-head>` — `<thead>` with weekday labels.
+/// Renders the labels internally from `ROOT.weekdays` so authors
+/// don't hand-iterate for the common case. Drop-in empty slot
+/// override for customization.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "PineCalendarGridHead.poco",
     role = "list",
     display = "contents"
 )]
-pub struct PineCalendarGridHead {}
+pub struct PineCalendarGridHead {
+    #[observe(ROOT)]
+    pub weekdays: Vec<String>,
+}
 
 #[handlers]
 impl PineCalendarGridHead {}
 
-/// `<pine-calendar-grid-body>` — `<tbody>` containing the weeks.
+/// `<pine-calendar-grid-body>` — `<tbody>` of week rows.
+/// Renders every month's cells internally from `ROOT.months`
+/// so placing `<pine-calendar-grid-body>` is the complete
+/// authoring surface for the common case.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     template = "PineCalendarGridBody.poco",
     role = "list",
     display = "contents"
 )]
-pub struct PineCalendarGridBody {}
+pub struct PineCalendarGridBody {
+    #[observe(ROOT)]
+    pub months: Vec<CalendarMonthView>,
+}
 
 #[handlers]
 impl PineCalendarGridBody {}
