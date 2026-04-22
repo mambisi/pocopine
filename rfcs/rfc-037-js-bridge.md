@@ -1,0 +1,733 @@
+# RFC 037 — JS client module bridge
+
+| Field | Value |
+|---|---|
+| **Status** | Draft (sketch) |
+| **Author** | pocopine team |
+| **Created** | 2026-04-21 |
+| **Related** | [RFC 001 — Components](./rfc-001-components.md), [RFC 027 — Provide/Inject](./rfc-027-provide-inject.md) |
+
+## 1. Summary
+
+Give authors a way to pull npm packages (Firebase, Stripe,
+PostHog, a WebSocket SDK, a canvas library…) into a pocopine
+component without breaking the "`.poco` is templates, `.rs` is
+logic" rule. The mechanism is a **client-module island** per
+component:
+
+- **`.poco`** — template, unchanged.
+- **`.rs`** — component state + Rust handlers, unchanged.
+- **`.client.js`** — optional sibling file that default-exports
+  a factory `(scope) => { … }`. Gets the full npm ecosystem.
+  Gains a narrow, typed bridge to the component's proxy state
+  and lifecycle.
+
+Crucially the bridge is **opt-in per component**. 95% of
+components never touch it; components that do get scoped access
+to their own state plus pocopine lifecycle hooks — no
+window-global soup.
+
+## 2. Motivation
+
+Real apps need things pocopine shouldn't re-implement:
+
+- Firebase Auth / Firestore client.
+- Stripe Elements.
+- Analytics SDKs (PostHog, Segment).
+- Canvas / charting (Chart.js, D3, Three.js).
+- Client-side Markdown / Monaco editor.
+- WebRTC / WebSocket client libraries.
+
+Authors today have two bad options:
+
+1. **`wasm-bindgen` everything.** Hand-write JS imports + Rust
+   bindings per SDK. Punishingly verbose for Firebase-shaped
+   SDKs with many entry points.
+2. **Smuggle globals.** Load Firebase via `<script>` in the
+   page, poke at `window.firebase` from Rust. Breaks teardown,
+   typing, SSR-ability, and any serious build pipeline.
+
+The island gives a disciplined third path: a JS file that
+imports from npm normally, runs inside the component's
+lifecycle, and talks to state through one small API.
+
+## 3. File layout
+
+```
+src/
+  FirebaseAuth.poco          <!-- template, as today -->
+  FirebaseAuth.rs            // component state + Rust handlers
+  FirebaseAuth.client.js     // optional island
+```
+
+Presence of the `.client.js` is sensed by the `#[component]`
+macro via an explicit arg:
+
+```rust
+#[component(
+    template = "FirebaseAuth.poco",
+    client   = "FirebaseAuth.client.js",
+)]
+pub struct FirebaseAuth {
+    #[prop] pub project_id: String,
+    pub user: String,     // written by the JS side
+    pub error: String,
+}
+```
+
+No `client =` ⇒ no island ⇒ zero cost. With the arg, the macro
+emits registration code that binds the JS factory (looked up
+from a `window.__pp_client_modules` map) to the component's
+tag name.
+
+## 4. Author surface (JS side)
+
+Vue-Composition-API-shaped. The factory destructures what it
+needs from a `ctx`, registers listeners, and **returns an object**
+whose keys become:
+
+- **Functions** → callable from Rust via `pocopine::js::call`.
+- **`mounted` / `unmounted`** → lifecycle hooks.
+- **Everything else** → reactive state writes on mount.
+
+```js
+// FirebaseAuth.client.js
+import { initializeApp } from "firebase/app";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  onAuthStateChanged,
+} from "firebase/auth";
+
+export default ({ state, watch, refs, emit, inject }) => {
+  const app  = initializeApp({ projectId: state.project_id });
+  const auth = getAuth(app);
+
+  let unsub;
+
+  return {
+    mounted() {
+      unsub = onAuthStateChanged(auth, (u) => {
+        // `state` is a live proxy: writes trigger Rust effects
+        // the same way a proxy `set` trap does.
+        state.user = u ? u.displayName : "";
+      });
+    },
+
+    unmounted() {
+      unsub?.();
+    },
+
+    // Exposed async functions — callable from Rust via
+    // `pocopine::js::call("sign_in_with_popup", &[])`.
+    async sign_in_with_popup() {
+      try {
+        await signInWithPopup(auth, new GoogleAuthProvider());
+      } catch (e) {
+        state.error = e.message;
+      }
+    },
+
+    sign_out: () => auth.signOut(),
+  };
+};
+```
+
+Two-way reactivity is implicit: `state.x` reads subscribe if
+inside a `watch` observer; `state.x = v` writes trigger. No
+explicit `.get()` / `.set()` boilerplate.
+
+Composable-style helpers compose cleanly — this is where the
+Vue shape pays:
+
+```js
+// useAuth.js — author-written composable, reusable across components
+import { getAuth, onAuthStateChanged, signInWithPopup,
+         GoogleAuthProvider } from "firebase/auth";
+
+export function useAuth({ state, onUnmount }) {
+  const auth = getAuth();
+  const unsub = onAuthStateChanged(auth, (u) => {
+    state.user = u ? u.displayName : "";
+  });
+  onUnmount(unsub);
+
+  return {
+    signIn:  () => signInWithPopup(auth, new GoogleAuthProvider()),
+    signOut: () => auth.signOut(),
+  };
+}
+
+// FirebaseAuth.client.js — just spreads the composable in.
+import { useAuth } from "./useAuth.js";
+
+export default (ctx) => {
+  const auth = useAuth(ctx);
+  return {
+    sign_in_with_popup: auth.signIn,
+    sign_out:           auth.signOut,
+    mounted() { /* extra per-component wiring if any */ },
+  };
+};
+```
+
+Spread assembly — the author's instinct of "this feels Vue-ish":
+
+```js
+// WithAnalytics.client.js
+import { usePostHog }   from "./composables/usePostHog.js";
+import { useFirestore } from "./composables/useFirestore.js";
+import { useRouteLog }  from "./composables/useRouteLog.js";
+
+export default (ctx) => ({
+  ...usePostHog(ctx,   { token: ctx.state.posthog_token }),
+  ...useFirestore(ctx, { project: ctx.state.project_id }),
+  ...useRouteLog(ctx),
+  mounted() {
+    ctx.emit("analytics:ready");
+  },
+});
+```
+
+Each `use*` returns `{ mounted, unmounted, some_rpc, ... }`;
+spreading collapses them into one setup-style return. Later
+keys win on conflict — same as Vue's `setup()` merge semantics.
+
+### `ctx` shape
+
+| Member                 | Shape                                      | Notes |
+|------------------------|--------------------------------------------|-------|
+| `ctx.state`            | `Proxy` over the scope's reactive fields   | Read = subscribe-if-inside-`watch`; write = trigger. Respects component boundary same as Rust handlers do. |
+| `ctx.watch(src, cb)`   | `(() => T, (T, T?) => void) => () => void` | Vue-style `watch`: source fn + callback. Returns unsubscribe. Also works with `(key: string, cb)` for quick field watches. |
+| `ctx.onUnmount(fn)`    | `(() => void) => void`                     | Secondary cleanup hook (composables use this; top-level islands can just return `unmounted`). Stacked LIFO. |
+| `ctx.refs(name)`       | `(string) => Element \| null`              | Resolve a `pp-ref="…"` from the template. |
+| `ctx.emit(name, d)`    | `(string, any) => void`                    | Dispatches a `CustomEvent` from the scope's root element. |
+| `ctx.el`               | `Element`                                  | The scope's root DOM element. For libraries that need a mount target. |
+| `ctx.inject(name)`     | `(string) => any`                          | RFC-027 inject by string id — keyed on the `InjectKey`'s debug name. |
+
+### Return-object keys
+
+| Key               | Meaning |
+|-------------------|---------|
+| `mounted()`       | Runs after first walk. One per returned object — but spread merging naturally composes several: wrap each composable's hook into a combined `mounted()` via an author helper, or rely on `ctx.onUnmount` / `ctx.watch` inside the composable body for setup that doesn't need the post-mount signal. |
+| `unmounted()`     | Runs before reactive teardown. Stacked LIFO with any `ctx.onUnmount(fn)` calls. |
+| any `Function`    | Exposed as a Rust-callable RPC. The key name is what Rust passes to `pocopine::js::call("name", &[])`. Async functions return a JS Promise; Rust awaits it via `wasm-bindgen-futures`. |
+| `mounted` + RPC   | Coexist. The runtime inspects the returned object once, extracts lifecycle keys, stashes the rest as the exposed map. |
+| anything else     | Warns in dev (`typeof !== "function"` + name isn't `mounted`/`unmounted`): ignored. Reserved for future expansion (`props`, `provide`, etc.). |
+
+### Why not plain `setup()` Composition style?
+
+Vue returns `{ foo: ref(0) }` from `setup()` and then renders
+them in the template. Pocopine's templates already bind to the
+Rust-owned `state.*` proxy — the island's job is the **side-
+effectful stuff** (SDK init, subscriptions, RPC handlers), not
+declaring state. Mixing Rust-state + JS-declared state would
+force a merge and introduce "which side owns this field"
+ambiguity. The chosen shape keeps state single-sourced in Rust,
+lifecycle + RPCs on the JS side — Vue Composition's *ergonomics*
+without its *ownership ambiguity*.
+
+## 5. Author surface (Rust side)
+
+```rust
+#[handlers]
+impl FirebaseAuth {
+    // Zero JS knowledge in Rust handlers. The bridge routes the
+    // call to the island's exposed function and awaits it via
+    // wasm-bindgen-futures.
+    pub fn click_sign_in(&mut self) {
+        pocopine::js::call::<()>("sign_in_with_popup", &[]);
+    }
+
+    pub fn click_sign_out(&mut self) {
+        pocopine::js::call::<()>("sign_out", &[]);
+    }
+}
+```
+
+Error cases:
+- Component has no island ⇒ `js::call` returns `Err(NoIsland)`.
+- Function name not exposed ⇒ `Err(NotExposed)`.
+- Promise rejects ⇒ `Err(JsError(JsValue))`.
+
+For the happy path we offer an ergonomic variant:
+
+```rust
+pocopine::js::call::<serde_json::Value>("fetch_user_doc", &[user_id])
+    .await?;
+```
+
+Uses `serde-wasm-bindgen` for the return-type round-trip, same
+as `#[server]`.
+
+## 6. Lifecycle + state-sync contract
+
+The island sits inside the existing walker mount pass. Its
+factory runs synchronously between Rust `on_setup` and the
+template clone; its `mounted()` hook fires deferred (microtask)
+after children bind, same tick as Rust `on_ready`.
+
+### Mount timeline
+
+```
+1. Scope::new(state)                       Rust mints scope
+2. context::set_parent(child, parent)      RFC-027 chain wired
+3. Rust on_setup()                         provide(...) lands here
+4. JS factory(ctx) runs once, sync         ★ new
+     · ctx.state, ctx.inject, ctx.refs,
+       ctx.el all live (el = host;
+       refs populate during step 5)
+     · ctx.watch(...) subscriptions
+       register BEFORE children bind, so
+       they catch mutations from step 5
+     · returned object is split:
+         exposed = non-lifecycle fn props
+         mounted, unmounted = lifecycle
+5. Template clone + children walk          pp-bind, pp-on, etc
+6. Rust on_mount(ctx) (if declared)
+7. JS mounted() via tick::next             ★ new (microtask)
+8. trigger_scope(id) sweep                 existing
+9. Rust on_ready via tick::next            existing
+```
+
+Why the factory slots between 3 and 5:
+- Rust `on_setup` is where `provide(...)` lands — a factory in
+  step 4 can `ctx.inject(...)` immediately.
+- Watches register before children bind, so effects fire for
+  any mutation the child walk triggers.
+- The DOM isn't fully bound yet, so DOM-touching work belongs
+  in `mounted()` (step 7), not in the factory body.
+
+### Teardown timeline
+
+```
+1. MutationObserver delivers removal
+2. release_subtree descends leaves-first
+3. Release tracked effects                 existing
+4. JS ctx.onUnmount LIFO stack fires       ★ new
+5. JS unmounted() fires                    ★ new
+6. Release tracked listeners               existing (PR1)
+7. Rust on_unmount() (if declared)
+8. Scope::remove evicts refs/slots/ctx/reactive
+```
+
+JS teardown runs *before* Rust `on_unmount` so Rust observes
+the island's final state writes (e.g. `state.user = ""` on
+sign-out). Reversing the order would let Rust tear down the
+scope while JS still holds it.
+
+### State sync
+
+`ctx.state` IS the scope's existing `js_sys::Proxy` — no second
+reactive system, no mirror, no diff. So:
+
+- **Reads**: `ctx.state.x` → Reflect::get → proxy `get` trap →
+  `track(scope_id, "x")` → subscribes the current effect.
+  Inside `ctx.watch(() => state.x, cb)` the JS closure runs
+  inside an `effect` body, so CURRENT_EFFECT is bound across
+  the JS→Rust call boundary (wasm-bindgen reentrance preserves
+  thread-locals) — `track` sees it and subscribes.
+- **Writes**: `ctx.state.x = v` → proxy `set` trap →
+  `ComponentState::set("x", v)` + `trigger(scope_id, "x")` →
+  queue subscribers → flush on microtask. Same timing model as
+  a `Scope::invoke` mutation — synchronous write, deferred
+  rerun.
+
+#### What flows through `state`
+
+The proxy round-trips values through `serde-wasm-bindgen`.
+Survives:
+
+- `bool`, `f64`/`i32`/`u32`/etc, `String`
+- `Vec<T>`, `Option<T>`, serde-derivable structs
+- `HashMap<String, T>` (JS object form)
+
+**Doesn't survive**: DOM `Element` handles, class instances
+(Firebase `User`, Stripe `Elements`), Function values,
+Map/Set/Date instances.
+
+Rule: keep plain data in Rust state; keep complex JS handles in
+the factory's closure scope. Example:
+
+```js
+export default (ctx) => {
+  // Complex objects stay in closure — never touch ctx.state.
+  const auth = getAuth();
+  let currentUser = null;
+
+  return {
+    mounted() {
+      onAuthStateChanged(auth, (u) => {
+        currentUser = u;                          // closure
+        ctx.state.user_name = u?.displayName ?? "";  // state (String)
+        ctx.state.signed_in = !!u;                    // state (bool)
+      });
+    },
+    async sign_out() {
+      await auth.signOut();
+    },
+  };
+};
+```
+
+### Auto-cleanup
+
+Every effect registered via `ctx.watch` is tracked in the
+scope's `JsIsland` side-table. `release_subtree` releases them
+the same way Rust-registered effects already auto-release via
+`track_effect_on`. The unsubscribe fn `ctx.watch` returns is
+for manual mid-life teardown; forgetting to call it doesn't
+leak.
+
+Same rule for `ctx.onUnmount(fn)` registrations — they fire on
+teardown whether the author tracked them or not.
+
+### Re-mount idempotence
+
+`pp-if="open"` toggling true → false → true rebuilds the
+subtree: fresh `Scope::new`, fresh factory invocation, fresh
+closure state. Islands must tolerate being instantiated
+multiple times in a single session. Firebase / Stripe / etc.
+clients end up created once per mount, which is usually what
+you want — but authors who need a cross-mount singleton (one
+Firebase app per *page*, shared by many islands) hoist the
+`initializeApp` call out of the factory into a module-scope
+const.
+
+### Edge cases
+
+| Scenario | Resolution |
+|---|---|
+| Factory throws synchronously | Mount aborts; `console.error`; Rust `js::call` on this scope returns `NoIsland`. The scope still mounts on the Rust side — the island is the opt-in part. |
+| `mounted()` is async + throws | Unhandled promise rejection; logged; mount continues. Authors wrap in try/catch as usual. |
+| Write to `state.x` during Rust `on_setup` | Runs before the factory exists; can't happen via JS. Rust-side writes in `on_setup` happen pre-step-4, which is fine — factory steps 4 reads `ctx.state` and sees Rust's already-set values. |
+| Write to `state.x` during JS `mounted()` | Same as any proxy write — queues subscribers, flushes next microtask. Rust effects see the new value on the next flush. |
+| Component unmounts before `mounted()` has fired | `mounted()` is skipped; `unmounted()` still runs. `ctx.onUnmount(fn)` stacks still run. (Teardown catches up whether or not mount completed.) |
+| Factory calls `ctx.inject("X")` for a key no ancestor provided | Returns `undefined`. Matches Rust `inject` behaviour. |
+| Two islands in the same app register the same RPC name on different components | Fine — names are per-scope, not global. Two `sign_out`s on different components don't collide. |
+
+## 7. Runtime mechanics
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Build-time                                               │
+│                                                          │
+│  FirebaseAuth.client.js  ─┐                              │
+│  PostHog.client.js        ├─ esbuild bundle ─► app.js    │
+│  Other.client.js          │                              │
+│                          (bare-import resolution via     │
+│                           npm; tree-shaking; source      │
+│                           maps; minification)            │
+└──────────────────────────────────────────────────────────┘
+```
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Bundled app.js (single <script type="module">)           │
+│                                                          │
+│  const R = window.__pp_client_modules ??= {};            │
+│  R["firebase-auth"] = (scope) => { … };                  │
+│  R["pine-post-hog"] = (scope) => { … };                  │
+└──────────────────────────────────────────────────────────┘
+```
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Walker mount path                                        │
+│                                                          │
+│  mount_component(el, name):                              │
+│    scope = Scope::new(...)                               │
+│    ... template clone + walk + Rust on_mount ...         │
+│    if let Some(_) = component_has_client(name):          │
+│        ctx = build_ctx(scope.id, proxy)                  │
+│        factory = window.__pp_client_modules[name]        │
+│        returned = factory(ctx)   // { mounted, ...rpcs } │
+│        split_into(scope.id, returned):                   │
+│          - exposed: object of function values            │
+│          - mounted: optional 0-arg fn                    │
+│          - unmounted: optional 0-arg fn                  │
+│        if mounted: queue_microtask(mounted)              │
+│                                                          │
+│  release_subtree(el):                                    │
+│    ... existing cleanups ...                             │
+│    if has_island(scope.id):                              │
+│        run all ctx.onUnmount(fn) stacked fns (LIFO)      │
+│        run `unmounted()` if returned                     │
+│        drop per-scope JsIsland entry                     │
+└──────────────────────────────────────────────────────────┘
+```
+
+### `ctx` JS wrapper
+
+Built in Rust, handed to the factory as a plain JS object with
+the scope's proxy as `ctx.state`. The proxy is the existing one
+`Scope::into_proxy` already builds — authors get the same
+reactive semantics directives rely on, no separate wrapper.
+
+```rust
+// crates/pocopine-core/src/js_bridge.rs (new)
+
+#[wasm_bindgen]
+pub struct Ctx {
+    scope_id: ScopeId,
+    proxy: JsValue,
+    root_el: Element,
+}
+
+#[wasm_bindgen]
+impl Ctx {
+    #[wasm_bindgen(getter)]
+    pub fn state(&self) -> JsValue { self.proxy.clone() }
+
+    #[wasm_bindgen(getter)]
+    pub fn el(&self) -> Element { self.root_el.clone() }
+
+    /// `ctx.watch(() => state.x, (next, prev) => {...})` — Vue
+    /// signature. Also accepts `(fieldName: string, cb)` as a
+    /// quick-path; the impl sniffs arg types.
+    #[wasm_bindgen]
+    pub fn watch(&self, source: JsValue, cb: Function) -> Function {
+        /* If source is a string: watch_scope_field.
+         * If source is a Function: build a synthetic effect that
+         *   invokes source() inside a `track` context and fires
+         *   cb on distinct values. Returns an unsubscribe fn. */
+    }
+
+    #[wasm_bindgen(js_name = onUnmount)]
+    pub fn on_unmount(&self, cb: Function) { /* push to LIFO stack */ }
+
+    #[wasm_bindgen]
+    pub fn refs(&self, name: &str) -> Option<Element> {
+        /* refs::get_on(scope_id, name) */
+    }
+
+    #[wasm_bindgen]
+    pub fn emit(&self, name: &str, detail: JsValue) {
+        /* emit::emit_from(root_el, name, detail) */
+    }
+
+    #[wasm_bindgen]
+    pub fn inject(&self, name: &str) -> JsValue {
+        /* string-keyed inject — resolves the InjectKey by debug name
+         * via a name → id table populated at provide time. */
+    }
+}
+```
+
+The factory's returned object is then split into
+`(exposed_map, lifecycle)` by a small JS-side splitter
+registered in the runtime bootstrap — no `wasm-bindgen` plumbing
+per component.
+
+### Per-scope JS state
+
+One `thread_local! HashMap<ScopeId, JsIsland>` side-table:
+
+```rust
+struct JsIsland {
+    exposed: JsValue,             // Object from scope.expose(...)
+    onmount: Vec<Function>,       // stack
+    onunmount: Vec<Function>,     // stack
+}
+```
+
+Cleared by `walker::release_subtree` alongside refs/slots/effects.
+
+## 8. CLI integration
+
+### 8.1 Package management
+
+Authors keep `Cargo.toml` + `package.json` at the project root
+as they already do. Pocopine doesn't reinvent either package
+manager; the CLI only *consumes* `target/` (cargo) and
+`node_modules/` (pnpm) at bundle time.
+
+#### Canonical JS package manager: **pnpm**
+
+`pocopine new` scaffolds every project with pnpm — no flag, no
+prompt. Docs, starters, examples all speak pnpm. Reasoning (and
+why it specifically fits a Rust-adjacent audience):
+
+- **Content-addressed global store** (`~/.local/share/pnpm`)
+  mirrors cargo's `~/.cargo/registry/` — one copy per dep-version
+  machine-wide, symlinked into each project's `node_modules/`.
+  Same install-once-link-everywhere model Rust users already
+  live in.
+- **No phantom dependencies** — you can only import what's in
+  your `package.json`. Identical "explicit deps or compile
+  error" discipline to cargo.
+- **YAML lockfile** (`pnpm-lock.yaml`) diffs readably, reviews
+  like `Cargo.lock`. Bun's binary lockfile doesn't.
+- **Workspaces** (`pnpm-workspace.yaml`) coexist cleanly with
+  Cargo workspaces — each tool ignores the other's root file.
+- **wasm-pack / wasm-bindgen** emit to `node_modules/` fine under
+  pnpm's symlinked layout; every modern bundler (esbuild, Vite,
+  Rollup, Turbopack) explicitly supports it.
+- Avoid: yarn berry PnP (virtual-path rewriting has caused real
+  breakage with `wasm-pack`-generated packages).
+
+Teams that inherit or need to migrate to a different manager
+aren't blocked — the runtime only needs `node_modules/` to
+exist, regardless of who populated it.
+
+#### Pass-through subcommands — cargo + JS
+
+```
+# Rust — always cargo, one tool, no detection.
+pocopine cargo add serde
+pocopine cargo add --features=derive serde
+pocopine cargo update
+
+# JS — pnpm by default, explicit names for migrating teams.
+pocopine js add firebase            # → pnpm add firebase (canonical)
+pocopine pnpm add stripe            # explicit
+pocopine npm  install posthog-js    # explicit (inherited npm repo)
+pocopine yarn add @sentry/browser   # explicit (inherited yarn repo)
+pocopine bun  add some-sdk          # explicit
+```
+
+`pocopine js add` auto-detects via lockfile (`pnpm-lock.yaml` →
+pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, default → pnpm).
+The named subcommands forward args verbatim to the named tool
+in the project root.
+
+Authors who want raw `cargo` / `pnpm` can skip the wrappers
+entirely; nothing in the build pipeline depends on them.
+
+On `pocopine serve`: if `node_modules/` is absent the CLI runs
+the detected install command once before starting the bundler,
+so new contributors don't hit a stale-import error on first
+run. `cargo build` runs unconditionally via the existing serve
+path.
+
+### 8.2 Bundling
+
+The CLI grows a tiny "client bundler" step:
+
+1. Scan `src/**/*.client.js`.
+2. Emit a thin entry file:
+   ```js
+   import firebaseAuth from "./FirebaseAuth.client.js";
+   import postHog      from "./PostHog.client.js";
+   const R = (window.__pp_client_modules ??= {});
+   R["firebase-auth"] = firebaseAuth;
+   R["pine-post-hog"] = postHog;
+   ```
+3. Run esbuild:
+   ```
+   esbuild _generated/client-entry.js \
+     --bundle --format=esm --outfile=dist/app-client.js
+   ```
+4. Inject `<script type="module" src="/dist/app-client.js">`
+   into the served HTML.
+
+Dev server watches `*.client.js` and rebundles on save. No
+separate `package.json` in each component dir — one root
+`package.json` with the SDKs the app uses.
+
+## 9. Error / edge cases
+
+| Scenario | Behaviour |
+|---|---|
+| `.client.js` missing but macro declares `client = "..."` | Compile-time error (file not found). |
+| Factory throws | Logged as `console.error`; mount continues; Rust `js::call` returns `NoIsland`. |
+| Factory returns non-object | Dev warning; treated as `{}` (no RPCs, no hooks). |
+| Factory is async | Supported — the `await` lands in `mounted()` (top-level imports stay synchronous — use dynamic `import()` inside `mounted` for late-loaded SDKs). |
+| `state.x = v` on a state-only field | Writes land and trigger; island has full access to its own state, same as Rust handlers do. RFC-031 gates inter-component writes (`pp-bind` / `pp-model`), not intra-component state the component itself owns. |
+| Same component mounted twice | Each mount gets a fresh `ScopeWrap` + island invocation. |
+| Teleport / `pp-if` re-mount | `onUnmount` → `onMount` sequence fires per mount. Island must be idempotent. |
+| SSR hydration | Out of scope — SSR doesn't run the island; first client mount initialises it. |
+| Build without esbuild | Users who can't run esbuild (e.g. WASM-only toolchain) can hand-bundle and publish as a single `.js` file. The runtime just needs `window.__pp_client_modules[name]` populated. |
+
+## 10. Implementation plan
+
+Three PRs, independently mergeable:
+
+**PR 1 — runtime + macro.**
+- `crates/pocopine-core/src/js_bridge.rs` — `ScopeWrap` struct +
+  per-scope `JsIsland` side-table + lifecycle hook calls from
+  walker mount/release.
+- `#[component]` macro — parse `client = "..."`, emit a tag-name
+  registration + the `.client.js` path as build-time metadata.
+- No CLI change yet — authors hand-inject the bundle.
+
+**PR 2 — CLI bundling.**
+- `pocopine-cli` — scan `*.client.js`, generate entry, drive
+  esbuild. Watch mode. Inject `<script>` into served HTML.
+- Dev-server reload path mirrors the Rust hot-reload.
+
+**PR 3 — ergonomics.**
+- `pocopine::js::call<T>(name, args)` wrapper with
+  `serde-wasm-bindgen` return-type parsing.
+- Optional `#[js_handler]` sugar that generates the dispatch
+  boilerplate:
+  ```rust
+  #[js_handler]
+  pub fn sign_in_with_popup() { /* macro fills body */ }
+  ```
+
+## 11. Out of scope
+
+- **TypeScript per-component.** Authors wanting `.client.ts`
+  can run their own tsc/esbuild pipeline; the runtime only sees
+  the built `.js`.
+- **Server-side rendering of islands.** Islands are
+  client-only; SSR emits an empty shell, hydration runs the
+  factory.
+- **Auto-bind of npm packages to Rust handles.** The bridge is
+  string-named + promise-returning; no attempt to magically
+  wrap JS types as Rust structs. That's a different RFC.
+- **Shared module singletons.** If two components both import
+  Firebase, the bundler tree-shares the module — standard
+  esbuild behaviour — but pocopine doesn't guarantee it.
+  Authors who want a singleton make a shared `firebase.js` and
+  import from both islands.
+
+## 12. Open questions
+
+1. **Naming.** `.client.js` vs `.island.js` vs `.js` (bare).
+   Leaning `.client.js` — matches SvelteKit / Nuxt / Remix
+   convention enough that npm-eco authors pattern-match
+   immediately.
+
+2. **`onMount` ordering relative to Rust `on_mount`.** Both fire
+   post-walk. Proposal: **Rust `on_mount` first**, then JS
+   `onMount`. Rationale: Rust wires `provide` etc. before the
+   island reads them. If authors want JS-first, they can
+   `setTimeout(fn, 0)` from Rust.
+
+3. **Should `scope.set` go through `is_prop` gate?** Proposal:
+   **no**, because the island belongs to the component same as
+   its Rust handlers do. Parents still can't reach in —
+   nothing about the bridge changes the inter-component
+   write-boundary.
+
+4. **String-keyed inject.** RFC-030 went hard on `InjectKey<T>`
+   being a typed Symbol-ish. The JS bridge can't carry those
+   types, so `scope.inject("ROOT")` needs a string lookup
+   table. Propose: when the Rust side `provide`s, it also
+   registers `name → key_id` into a devtools-visible table
+   (same one RFC-036's inject-chain view uses). Island injects
+   by name, gets back a wrapped proxy if the stored value is a
+   `Handle<T>`. Typed-in-Rust, stringly-typed-in-JS — the
+   trade is inherent, document it clearly.
+
+## 13. Alternatives considered
+
+- **Svelte-style `<script>` in `.poco`.** Rejected: breaks the
+  templates-only invariant; forces a `.poco` compiler; blurs
+  where logic lives. Authors would eventually put control-flow
+  JS in templates and the boundary collapses.
+- **Rust-only via `wasm-bindgen`.** Possible but verbose per
+  SDK. Fine for a handful of cross-cutting needs (the router,
+  `fetch`), punishing for Firebase-shaped libraries with
+  hundreds of entry points.
+- **Web Components as the boundary.** Author ships a Web
+  Component (`<firebase-auth>`), uses pocopine's `pp-bind` to
+  pass props. Works today with no runtime change, but the
+  author writes the whole integration including lifecycle by
+  hand, and the reactive bridge is lost — Firebase writes
+  don't trigger pocopine effects unless the WC emits a custom
+  event and the host listens. The proposed bridge does that
+  plumbing once.
