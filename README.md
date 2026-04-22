@@ -1,7 +1,15 @@
-# pocopine
+<p align="center">
+  <img src="./docs/assets/mascot.svg" alt="pocopine mascot" width="220">
+</p>
 
-A **client-side reactive runtime** and **component framework** for the web,
-written in Rust and compiled to WebAssembly.
+<h1 align="center">pocopine</h1>
+
+<p align="center">
+  <em>A tiny, reactive Rust/WASM UI framework with a full primitive
+  library — ships server-rendered HTML, animates by default.</em>
+</p>
+
+---
 
 In spirit pocopine is a Rust/WASM port of [Alpine.js][alpine] — the
 directive model, the pragmatism, the "sprinkle-of-JS" ergonomics —
@@ -87,27 +95,73 @@ That's the whole counter. No virtual DOM, no build step beyond
   `enter-start`, `enter-end` (and leave variants) — class strings go
   straight through, no custom CSS language.
 
-## Try an example
+## Get started in 60 seconds
 
-Build the tooling once:
+### 1. Install the CLI
 
-```bash
-cargo install wasm-pack
-cargo build -p pocopine-cli --release
-```
-
-Then pick an example:
+The `pocopine` CLI handles building, serving, and hot-reload —
+one install covers all three.
 
 ```bash
-# static counter
-cargo run -p pocopine-cli -- dev --path examples/counter
-
-# Hacker News clone (Algolia API, comment tree, search with debounce)
-cargo run -p pocopine-cli -- dev --path examples/hn
-
-# SPA with client-side routing
-cargo run -p pocopine-cli -- dev --path examples/spa
+cargo install pocopine-cli
 ```
+
+### 2. Scaffold an app
+
+A pocopine app is a regular Rust library crate. Add `pocopine`
+(runtime) and `pine` (optional UI primitives).
+
+```bash
+cargo new --lib hello-pine
+cd hello-pine
+cargo add pocopine pine
+```
+
+### 3. Write your first component
+
+A component is a Rust struct plus a sibling `.poco` template.
+
+```rust
+// src/lib.rs
+use pocopine::prelude::*;
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "Counter.poco")]
+pub struct Counter { pub n: u32 }
+
+#[handlers]
+impl Counter {
+    pub fn bump(&mut self) { self.n += 1; }
+}
+
+#[wasm_bindgen(start)]
+pub fn main() {
+    App::new().register::<Counter>().run();
+}
+```
+
+```html
+<!-- src/Counter.poco -->
+<button @click="bump">
+  clicked <strong pp-text="n"></strong> times
+</button>
+```
+
+### 4. Run it
+
+`pocopine dev` builds the wasm bundle, serves it on a local
+port, and rebuilds on save.
+
+```bash
+pocopine dev
+# → listening on http://127.0.0.1:5243
+```
+
+Ship with `pocopine build --release`.
+
+## Examples
+
+Drop into any one with `pocopine dev --path examples/<name>`:
 
 | Example | What it shows |
 |---|---|
@@ -116,6 +170,7 @@ cargo run -p pocopine-cli -- dev --path examples/spa
 | [`blog`](./examples/blog) | `App` + `#[server]` + axum server bin |
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
+| [`pine-demo`](./examples/pine-demo) | Pine UI — every primitive, side-by-side |
 | [`site`](./examples/site) | The marketing page, dogfooded |
 | [`tailwind`](./examples/tailwind) | Tailwind v4 + `.poco` scanning (CDN-mode for demo) |
 
