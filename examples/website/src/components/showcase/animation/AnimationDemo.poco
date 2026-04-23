@@ -3,7 +3,7 @@
 
   <section>
     <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
-      Three demos sharing one library. Springs are sampled into a
+      Four demos sharing one library. Springs are sampled into a
       CSS <code>linear()</code> timing function so WAAPI runs them
       on the GPU compositor — no per-frame JavaScript.
     </p>
@@ -77,6 +77,107 @@
         <div class="pm-stagger-cell">10</div>
         <div class="pm-stagger-cell">11</div>
         <div class="pm-stagger-cell">12</div>
+      </div>
+    </div>
+
+    <!-- ── state animation ──────────────────────────────────── -->
+    <div class="pm-subsection">
+      <h3>State animation</h3>
+      <p class="pm-hint">
+        Motion-style target animation: update transform and depth
+        values and the square springs to the new state.
+      </p>
+      <div class="pm-state-demo">
+        <div class="pm-state-stage">
+          <div class="pm-state-box"></div>
+        </div>
+        <div class="pm-state-inputs">
+          <label>
+            <code>x</code>
+            <pine-slider-root min="-260" max="260" step="1" pp-model:value="motion_x">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_x"></span>
+          </label>
+          <label>
+            <code>y</code>
+            <pine-slider-root min="-180" max="180" step="1" pp-model:value="motion_y">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_y"></span>
+          </label>
+          <label>
+            <code>rotate</code>
+            <pine-slider-root min="-360" max="360" step="1" pp-model:value="motion_rotate">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_rotate"></span>
+          </label>
+          <label>
+            <code>scale</code>
+            <pine-slider-root min="0.5" max="1.5" step="0.01" pp-model:value="motion_scale">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_scale"></span>
+          </label>
+          <label>
+            <code>raise</code>
+            <pine-slider-root min="0" max="60" step="1" pp-model:value="motion_raise">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_raise"></span>
+          </label>
+          <label>
+            <code>shadow</code>
+            <pine-slider-root min="0" max="48" step="1" pp-model:value="motion_shadow">
+              <pine-slider-track>
+                <pine-slider-range></pine-slider-range>
+              </pine-slider-track>
+              <pine-slider-thumb></pine-slider-thumb>
+            </pine-slider-root>
+            <span class="pm-state-value" pp-text="motion_shadow"></span>
+          </label>
+          <div class="pm-state-actions">
+            <pine-button variant="ghost" @click="reset_state_motion">Reset</pine-button>
+            <pine-button @click="state_pop">Pop</pine-button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 3D tilt ───────────────────────────────────────────── -->
+    <div class="pm-subsection">
+      <h3>3D tilt card</h3>
+      <p class="pm-hint">
+        A Motion-style card container: pointer position rotates the
+        card, while child layers lift on hover using
+        <code>data-pm-tilt</code>.
+      </p>
+      <div class="pm-tilt-scene">
+        <div class="pm-tilt-card">
+          <div class="pm-tilt-glow"></div>
+          <span class="pm-tilt-kicker">pine-motion</span>
+          <strong class="pm-tilt-title">3D hover depth</strong>
+          <p class="pm-tilt-copy">
+            Container tilt plus independent child depth layers.
+          </p>
+          <div class="pm-tilt-chip">translateZ layers</div>
+        </div>
       </div>
     </div>
 
