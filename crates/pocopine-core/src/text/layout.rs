@@ -203,7 +203,12 @@ mod tests {
 
     #[test]
     fn collapses_and_trims_whitespace() {
-        let p = prepare("  hello   world  ", &font(), PrepareOptions::default(), &Mock);
+        let p = prepare(
+            "  hello   world  ",
+            &font(),
+            PrepareOptions::default(),
+            &Mock,
+        );
         assert_eq!(p.normalized(), "hello world");
     }
 

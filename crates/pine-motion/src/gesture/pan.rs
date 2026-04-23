@@ -94,7 +94,9 @@ where
         let cb = cb.clone();
         let threshold = cfg.distance_threshold_px;
         handle.listen_on_window::<PointerEvent, _>("pointermove", move |ev| {
-            let Some(mut st) = state.borrow_mut().take() else { return };
+            let Some(mut st) = state.borrow_mut().take() else {
+                return;
+            };
             let now = (ev.client_x() as f64, ev.client_y() as f64);
             let t = now_ms();
 
@@ -130,7 +132,9 @@ where
         let state = state.clone();
         let cb = cb.clone();
         handle.listen_on_window::<PointerEvent, _>("pointerup", move |_ev| {
-            let Some(st) = state.borrow_mut().take() else { return };
+            let Some(st) = state.borrow_mut().take() else {
+                return;
+            };
             if st.started {
                 let velocity = instantaneous_velocity(&st);
                 if let Ok(mut f) = cb.try_borrow_mut() {
@@ -143,7 +147,9 @@ where
         let state = state.clone();
         let cb = cb.clone();
         handle.listen_on_window::<PointerEvent, _>("pointercancel", move |_ev| {
-            let Some(st) = state.borrow_mut().take() else { return };
+            let Some(st) = state.borrow_mut().take() else {
+                return;
+            };
             if st.started {
                 if let Ok(mut f) = cb.try_borrow_mut() {
                     f(PanEvent::Cancel);

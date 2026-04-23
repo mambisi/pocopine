@@ -27,13 +27,16 @@ use serde::{Deserialize, Serialize};
 pub struct PineButton {
     /// Arbitrary variant name — becomes `data-variant`. No
     /// built-in values; whatever the author writes gets rendered.
-    #[prop] pub variant: String,
+    #[prop]
+    pub variant: String,
     /// Size variant — becomes `data-size`.
-    #[prop] pub size: String,
+    #[prop]
+    pub size: String,
     /// When true, renders the `disabled` attribute on the inner
     /// `<button>` (blocking native click) and `data-disabled`
     /// for CSS hooks.
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]

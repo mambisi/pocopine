@@ -33,7 +33,9 @@ pub fn lock() {
         return;
     }
 
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let Some(doc) = window.document() else { return };
     let Some(body) = doc.body() else { return };
 
@@ -64,7 +66,10 @@ pub fn lock() {
         // Accept whatever the author already had as base padding and
         // append the compensation. Simpler than parsing the existing
         // value — browsers coalesce repeated shorthand declarations.
-        let base_px = padding_right.trim_end_matches("px").parse::<f64>().unwrap_or(0.0);
+        let base_px = padding_right
+            .trim_end_matches("px")
+            .parse::<f64>()
+            .unwrap_or(0.0);
         let total = base_px + scrollbar_w;
         let _ = style.set_property("padding-right", &format!("{total}px"));
     }
@@ -86,7 +91,9 @@ pub fn unlock() {
         return;
     }
 
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let Some(doc) = window.document() else { return };
     let Some(body) = doc.body() else { return };
 

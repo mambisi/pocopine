@@ -21,7 +21,8 @@ pub struct Comment {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct HnComment {
-    #[prop] pub comment: Comment,
+    #[prop]
+    pub comment: Comment,
 }
 
 #[handlers]

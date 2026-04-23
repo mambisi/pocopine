@@ -149,10 +149,12 @@ pub struct Body(pub HtmlElement);
 
 impl<'a> From<LifecycleContext<'a>> for Body {
     fn from(_: LifecycleContext<'a>) -> Self {
-        Body(web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.body())
-            .expect("Body extractor: no document.body"))
+        Body(
+            web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.body())
+                .expect("Body extractor: no document.body"),
+        )
     }
 }
 

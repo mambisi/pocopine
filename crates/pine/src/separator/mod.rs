@@ -19,11 +19,13 @@ use serde::{Deserialize, Serialize};
 #[component(template = "PineSeparator.poco", role = "panel")]
 pub struct PineSeparator {
     /// `"horizontal"` (default) or `"vertical"`.
-    #[prop] pub orientation: String,
+    #[prop]
+    pub orientation: String,
     /// `true` → `role="none"` + no `aria-orientation`; omit when
     /// the separator adds real structure screen readers should
     /// announce.
-    #[prop] pub decorative: bool,
+    #[prop]
+    pub decorative: bool,
 }
 
 impl Default for PineSeparator {

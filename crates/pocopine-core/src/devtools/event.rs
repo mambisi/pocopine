@@ -38,7 +38,9 @@ pub(super) fn attach(root: &Element) {
 fn attach_click(root: &Element) {
     let cb: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
         let Some(target) = ev.target() else { return };
-        let Ok(start) = target.dyn_into::<Element>() else { return };
+        let Ok(start) = target.dyn_into::<Element>() else {
+            return;
+        };
         let mut cur = Some(start);
         while let Some(el) = cur {
             if let Some(action) = el.get_attribute("data-action") {
@@ -62,7 +64,9 @@ fn attach_hover(root: &Element) {
     // light up the corresponding element on the page.
     let over: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
         let Some(target) = ev.target() else { return };
-        let Ok(start) = target.dyn_into::<Element>() else { return };
+        let Ok(start) = target.dyn_into::<Element>() else {
+            return;
+        };
         let mut cur = Some(start);
         while let Some(el) = cur {
             if let Some(id_str) = el.get_attribute("data-scope-id") {
@@ -163,7 +167,9 @@ fn flash_copied(el: &Element) {
 /// click commits a scope selection, scroll its tree row into view
 /// and flash it so the user sees where it landed.
 pub(super) fn scroll_into_view_and_flash(scope_id: ScopeId) {
-    let Some(root) = shell::panel_root() else { return };
+    let Some(root) = shell::panel_root() else {
+        return;
+    };
     let sel = format!("[data-scope-id=\"{}\"]", scope_id.0);
     if let Ok(Some(row)) = root.query_selector(&sel) {
         row.scroll_into_view();

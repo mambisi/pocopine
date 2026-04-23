@@ -39,18 +39,29 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineInput.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineInput.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineInput {
     /// HTML input `type`. Default `"text"`.
-    #[prop] pub r#type: String,
+    #[prop]
+    pub r#type: String,
     /// Current value. Two-way bindable via
     /// `pp-model:value="my_field"`.
-    #[model] pub value: String,
-    #[prop] pub placeholder: String,
-    #[prop] pub name: String,
-    #[prop] pub disabled: bool,
-    #[prop] pub required: bool,
-    #[prop] pub readonly: bool,
+    #[model]
+    pub value: String,
+    #[prop]
+    pub placeholder: String,
+    #[prop]
+    pub name: String,
+    #[prop]
+    pub disabled: bool,
+    #[prop]
+    pub required: bool,
+    #[prop]
+    pub readonly: bool,
 
     pub focused: bool,
     pub touched: bool,
@@ -89,9 +100,15 @@ impl PineInput {
         // Seed the DOM input's `.value` property from `self.value`.
         // The template's `:value` binding would only touch the HTML
         // attribute, which doesn't round-trip after the user types.
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "root") else { return };
-        let Ok(input) = el.dyn_into::<HtmlInputElement>() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "root") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
+            return;
+        };
         if input.value() != self.value {
             input.set_value(&self.value);
         }
@@ -103,9 +120,15 @@ impl PineInput {
     /// clobber cursor position.
     #[watch(value)]
     fn on_value_change(&mut self, value: String, _prev: Option<String>) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "root") else { return };
-        let Ok(input) = el.dyn_into::<HtmlInputElement>() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "root") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
+            return;
+        };
         if input.value() != value {
             input.set_value(&value);
         }
@@ -122,9 +145,15 @@ impl PineInput {
     }
 
     pub fn on_input(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "root") else { return };
-        let Ok(input) = el.dyn_into::<HtmlInputElement>() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "root") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
+            return;
+        };
         let v = input.value();
         self.dirty = true;
         self.filled = !v.is_empty();

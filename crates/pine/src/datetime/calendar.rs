@@ -68,8 +68,12 @@ pub fn get_days_between(start: &DateValue, end: &DateValue) -> Vec<DateValue> {
 }
 
 pub fn create_year_range(range: &DateRange) -> Vec<DateValue> {
-    let Some(start) = range.start else { return Vec::new() };
-    let Some(end) = range.end else { return Vec::new() };
+    let Some(start) = range.start else {
+        return Vec::new();
+    };
+    let Some(end) = range.end else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut cur = start_of_year(&start);
     while cur.compare(&end) <= 0 {
@@ -80,8 +84,12 @@ pub fn create_year_range(range: &DateRange) -> Vec<DateValue> {
 }
 
 pub fn create_date_range(range: &DateRange) -> Vec<DateValue> {
-    let Some(start) = range.start else { return Vec::new() };
-    let Some(end) = range.end else { return Vec::new() };
+    let Some(start) = range.start else {
+        return Vec::new();
+    };
+    let Some(end) = range.end else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut cur = start;
     while cur.compare(&end) <= 0 {
@@ -109,11 +117,7 @@ pub fn create_date_range(range: &DateRange) -> Vec<DateValue> {
 ///     `[date, date+1, date+2, date+3, date+4]`
 ///   - `create_decade(date, Some(-3), 4)` →
 ///     `[date-3, date-2, date-1, date, date+1, date+2, date+3]`
-pub fn create_decade(
-    date: &DateValue,
-    start_index: Option<i32>,
-    end_index: i32,
-) -> Vec<DateValue> {
+pub fn create_decade(date: &DateValue, start_index: Option<i32>, end_index: i32) -> Vec<DateValue> {
     let start_index = start_index.unwrap_or(0);
     let abs_start = start_index.unsigned_abs() as i32;
     let total = abs_start + end_index;
@@ -217,14 +221,18 @@ pub fn create_month(props: CreateMonthProps<'_>) -> Grid<DateValue> {
     let total = last_month_days.len() + dates.len() + next_month_days.len();
     if fixed_weeks && total < 42 {
         let extra = 42 - total;
-        let mut start_from = next_month_days.last().copied().unwrap_or_else(|| end_of_month(date));
+        let mut start_from = next_month_days
+            .last()
+            .copied()
+            .unwrap_or_else(|| end_of_month(date));
         for _ in 0..extra {
             start_from = start_from.add_days(1);
             next_month_days.push(start_from);
         }
     }
 
-    let mut all: Vec<DateValue> = Vec::with_capacity(last_month_days.len() + dates.len() + next_month_days.len());
+    let mut all: Vec<DateValue> =
+        Vec::with_capacity(last_month_days.len() + dates.len() + next_month_days.len());
     all.extend(last_month_days);
     all.extend(dates);
     all.extend(next_month_days);
@@ -504,10 +512,7 @@ mod tests {
             .into_iter()
             .map(|v| v.year())
             .collect();
-        assert_eq!(
-            years,
-            vec![2020, 2021, 2022, 2023, 2024, 2025, 2026]
-        );
+        assert_eq!(years, vec![2020, 2021, 2022, 2023, 2024, 2025, 2026]);
         assert_eq!(years.len(), 7);
     }
 }

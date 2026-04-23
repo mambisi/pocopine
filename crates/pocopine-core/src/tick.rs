@@ -17,14 +17,18 @@ use wasm_bindgen::JsCast;
 
 /// Schedule `f` on the next microtask.
 pub fn next<F: FnOnce() + 'static>(f: F) {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let js = Closure::once_into_js(f);
     window.queue_microtask(js.unchecked_ref());
 }
 
 /// Schedule `f` on the next animation frame.
 pub fn next_frame<F: FnOnce() + 'static>(f: F) {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let js = Closure::once_into_js(move |_: JsValue| f());
     let _ = window.request_animation_frame(js.unchecked_ref());
 }
@@ -34,10 +38,9 @@ pub fn next_frame<F: FnOnce() + 'static>(f: F) {
 /// DOM mutations like re-focusing an element that the reactive
 /// walk just blurred. Strictly later than [`next`] (microtask).
 pub fn after_flush<F: FnOnce() + 'static>(f: F) {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let js = Closure::once_into_js(f);
-    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-        js.unchecked_ref(),
-        0,
-    );
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(js.unchecked_ref(), 0);
 }

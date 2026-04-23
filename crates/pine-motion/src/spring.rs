@@ -125,13 +125,13 @@ impl Spring {
 
     fn solve(&self) -> SpringSolver {
         let initial_delta = 1.0_f64; // we always normalize to origin=0, target=1
-        // Motion convention: convert user's units/sec to internal
-        // units/ms and negate. Positive user velocity then reads as
-        // "faster initial movement toward target", which is what
-        // authors expect when handing off drag momentum into a
-        // spring. See `motion-dom/src/animation/generators/spring.ts`
-        // line ~256 where the same conversion happens before the
-        // A-coefficient is built.
+                                     // Motion convention: convert user's units/sec to internal
+                                     // units/ms and negate. Positive user velocity then reads as
+                                     // "faster initial movement toward target", which is what
+                                     // authors expect when handing off drag momentum into a
+                                     // spring. See `motion-dom/src/animation/generators/spring.ts`
+                                     // line ~256 where the same conversion happens before the
+                                     // A-coefficient is built.
         let initial_velocity = -self.velocity / 1000.0;
         let undamped_angular_freq = (self.stiffness / self.mass).sqrt() / 1000.0;
         let damping_ratio = self.damping / (2.0 * (self.stiffness * self.mass).sqrt());
@@ -144,10 +144,8 @@ impl Spring {
                 omega: undamped_angular_freq,
             }
         } else if damping_ratio < 1.0 {
-            let angular_freq =
-                undamped_angular_freq * (1.0 - damping_ratio * damping_ratio).sqrt();
-            let a = (initial_velocity
-                + damping_ratio * undamped_angular_freq * initial_delta)
+            let angular_freq = undamped_angular_freq * (1.0 - damping_ratio * damping_ratio).sqrt();
+            let a = (initial_velocity + damping_ratio * undamped_angular_freq * initial_delta)
                 / angular_freq;
             SpringSolver::Underdamped {
                 target: 1.0,

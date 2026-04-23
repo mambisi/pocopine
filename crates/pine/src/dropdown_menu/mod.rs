@@ -41,11 +41,16 @@ inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineDropdownMenuRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
-    #[prop] pub open: bool,
+    #[prop]
+    pub open: bool,
 }
 
 #[handlers]
@@ -83,7 +88,8 @@ impl PineDropdownMenuRoot {
 pub struct PineDropdownMenuTrigger {
     /// Mirrored from Root.open so the template's `:aria-expanded`
     /// and `:data-state` bindings fire reactively.
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -112,11 +118,16 @@ impl PineDropdownMenuTrigger {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuPortal.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineDropdownMenuPortal.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -125,7 +136,11 @@ impl PineDropdownMenuPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuContent.poco", role = "list", transition = "slide-down")]
+#[component(
+    template = "PineDropdownMenuContent.poco",
+    role = "list",
+    transition = "slide-down"
+)]
 pub struct PineDropdownMenuContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// a per-instance selector targeting this root's Trigger
@@ -135,12 +150,15 @@ pub struct PineDropdownMenuContent {
     /// Which side of the trigger the content sits on —
     /// `"top"` / `"bottom"` / `"left"` / `"right"`. Default
     /// `"bottom"`.
-    #[prop] pub side: String,
+    #[prop]
+    pub side: String,
     /// Cross-axis alignment — `"start"` / `"center"` / `"end"`.
     /// Default `"start"`.
-    #[prop] pub align: String,
+    #[prop]
+    pub align: String,
     /// Pixel offset from the trigger. Default `4`.
-    #[prop] pub side_offset: f64,
+    #[prop]
+    pub side_offset: f64,
 }
 
 impl Default for PineDropdownMenuContent {
@@ -221,7 +239,8 @@ impl PineDropdownMenuContent {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuItem.poco", role = "item")]
 pub struct PineDropdownMenuItem {
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]
@@ -270,7 +289,11 @@ fn dispatch_pp_select() -> bool {
 /// v0 is click-to-open (no hover-intent timers). Escape in
 /// SubContent closes just the sub, not the outer menu.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSub.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineDropdownMenuSub.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineDropdownMenuSub {
     pub open: bool,
 }
@@ -294,14 +317,18 @@ impl PineDropdownMenuSub {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuSubTrigger.poco", role = "item")]
 pub struct PineDropdownMenuSubTrigger {
-    #[observe(SUB)] pub open: bool,
-    #[prop] pub disabled: bool,
+    #[observe(SUB)]
+    pub open: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]
 impl PineDropdownMenuSubTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(&SUB) else { return };
+        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(&SUB) else {
+            return;
+        };
         // Stamp so SubContent can auto-anchor.
         if let Some(btn) = refs.get("trigger") {
             compound::stamp_trigger(&btn, sub.scope_id(), SUB_SLUG);
@@ -323,13 +350,20 @@ impl PineDropdownMenuSubTrigger {
 }
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuSubContent.poco", role = "list", transition = "slide-down")]
+#[component(
+    template = "PineDropdownMenuSubContent.poco",
+    role = "list",
+    transition = "slide-down"
+)]
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,
-    #[prop] pub side: String,
-    #[prop] pub align: String,
-    #[prop] pub side_offset: f64,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
 }
 
 impl Default for PineDropdownMenuSubContent {
@@ -382,8 +416,12 @@ impl PineDropdownMenuSubContent {
 /// query for the menu ref.
 fn focus_first_sub_item() {
     pocopine::tick::next(|| {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(menu) = refs::get_on(scope, "menu") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(menu) = refs::get_on(scope, "menu") else {
+            return;
+        };
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
     });
@@ -453,7 +491,9 @@ inject_key!(GROUP_LABEL: String);
 #[handlers]
 impl PineDropdownMenuGroup {
     pub fn on_setup(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         let label_id = format!("pine-dm-group-label-{}", scope.0);
         self.label_id = label_id.clone();
         provide(&GROUP_LABEL, label_id);
@@ -474,8 +514,10 @@ impl PineDropdownMenuGroup {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuCheckboxItem.poco", role = "item")]
 pub struct PineDropdownMenuCheckboxItem {
-    #[model] pub state: String,
-    #[prop] pub disabled: bool,
+    #[model]
+    pub state: String,
+    #[prop]
+    pub disabled: bool,
     /// Computed mirror of `state != "unchecked"` for
     /// ItemIndicator's pp-if. Kept as a bool so
     /// `watch_scope_field::<bool>` in ItemIndicator stays simple.
@@ -569,7 +611,9 @@ impl PineDropdownMenuItemIndicator {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(owner) = inject(&CHECKED_OWNER) else { return };
+        let Some(owner) = inject(&CHECKED_OWNER) else {
+            return;
+        };
         watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
             handle.update(|s| s.checked = c);
         });
@@ -584,9 +628,14 @@ impl PineDropdownMenuItemIndicator {
 /// flows changes both ways via `pp:update:model` bubbling up
 /// from RadioItem clicks.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDropdownMenuRadioGroup.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineDropdownMenuRadioGroup.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineDropdownMenuRadioGroup {
-    #[model] pub value: String,
+    #[model]
+    pub value: String,
 }
 
 // Provide/inject key for a RadioGroup's scope id. RadioItems
@@ -614,13 +663,15 @@ impl PineDropdownMenuRadioGroup {
 #[component(template = "PineDropdownMenuRadioItem.poco", role = "item")]
 pub struct PineDropdownMenuRadioItem {
     /// Author-provided — the value this item represents.
-    #[prop] pub value: String,
+    #[prop]
+    pub value: String,
     /// Mirrored from the group. Only used to derive `checked`.
     pub group_value: String,
     /// Computed: `group_value == value`. Drives aria-checked +
     /// ItemIndicator visibility.
     pub checked: bool,
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]
@@ -641,7 +692,9 @@ impl PineDropdownMenuRadioItem {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(group) = inject(&RADIO_GROUP) else { return };
+        let Some(group) = inject(&RADIO_GROUP) else {
+            return;
+        };
         watch_scope_field::<String, _>(group, "value", move |new, _| {
             let new_v = new.clone();
             handle.update(|s| {
@@ -716,7 +769,9 @@ fn init_roving_tabindex(menu: &Element) {
     let mut first_enabled: Option<Element> = None;
     for i in 0..items.length() {
         let Some(node) = items.item(i) else { continue };
-        let Ok(el) = node.dyn_into::<Element>() else { continue };
+        let Ok(el) = node.dyn_into::<Element>() else {
+            continue;
+        };
         let _ = el.set_attribute("tabindex", "-1");
         let disabled = el.get_attribute("aria-disabled").as_deref() == Some("true")
             || el.has_attribute("disabled");

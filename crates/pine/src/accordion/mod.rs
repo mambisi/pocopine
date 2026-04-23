@@ -39,15 +39,19 @@ inject_key!(ITEM: ScopeId);
 #[component(template = "PineAccordionRoot.poco", role = "panel")]
 pub struct PineAccordionRoot {
     /// `"single"` (default) or `"multiple"`.
-    #[prop] pub r#type: String,
+    #[prop]
+    pub r#type: String,
     /// When type="single" and collapsible=true, clicking the open
     /// item collapses it. When collapsible=false, at least one
     /// item must stay open (clicking the open item is a no-op).
-    #[prop] pub collapsible: bool,
+    #[prop]
+    pub collapsible: bool,
     /// `type="single"` state. `""` when all closed.
-    #[model] pub value: String,
+    #[model]
+    pub value: String,
     /// `type="multiple"` state.
-    #[model] pub values: Vec<String>,
+    #[model]
+    pub values: Vec<String>,
 }
 
 impl Default for PineAccordionRoot {
@@ -112,8 +116,10 @@ impl PineAccordionRoot {
 #[component(template = "PineAccordionItem.poco", role = "panel")]
 pub struct PineAccordionItem {
     /// Stable identifier for this item within the Root.
-    #[prop] pub value: String,
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub value: String,
+    #[prop]
+    pub disabled: bool,
     /// Mirrored from Root's state via `item_open(self.value)`.
     pub open: bool,
 }
@@ -231,12 +237,7 @@ impl PineAccordionContent {
     pub fn on_setup(&mut self) {
         if let Some(item) = inject(&ITEM) {
             if let Some(scope) = Scope::find(item) {
-                self.open = scope
-                    .state
-                    .borrow()
-                    .get("open")
-                    .as_bool()
-                    .unwrap_or(false);
+                self.open = scope.state.borrow().get("open").as_bool().unwrap_or(false);
             }
         }
     }

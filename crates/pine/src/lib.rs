@@ -23,22 +23,21 @@
 //! tag so authors can drop `<pine-dialog>`, `<pine-button>` etc.
 //! into their templates without enumerating the library.
 
-pub mod compound;
-pub mod calendar;
-pub mod date_picker;
-pub mod date_range_picker;
-pub mod datetime;
-pub mod range_calendar;
 pub mod accordion;
 pub mod alert_dialog;
 pub mod aspect_ratio;
 pub mod avatar;
 pub mod button;
+pub mod calendar;
 pub mod checkbox;
 pub mod collapsible;
 pub mod combobox;
 pub mod command;
+pub mod compound;
 pub mod context_menu;
+pub mod date_picker;
+pub mod date_range_picker;
+pub mod datetime;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod field;
@@ -53,6 +52,7 @@ pub mod password_toggle_field;
 pub mod popover;
 pub mod progress;
 pub mod radio_group;
+pub mod range_calendar;
 pub mod scroll_area;
 pub mod select;
 pub mod separator;
@@ -73,35 +73,16 @@ pub use accordion::{
 };
 pub use alert_dialog::{
     PineAlertDialogAction, PineAlertDialogCancel, PineAlertDialogContent,
-    PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal,
-    PineAlertDialogRoot, PineAlertDialogTitle, PineAlertDialogTrigger,
+    PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal, PineAlertDialogRoot,
+    PineAlertDialogTitle, PineAlertDialogTrigger,
 };
 pub use aspect_ratio::PineAspectRatio;
-pub use label::PineLabel;
-pub use progress::{PineProgressIndicator, PineProgressRoot};
-pub use select::{
-    PineSelectContent, PineSelectItem, PineSelectItemIndicator, PineSelectPortal,
-    PineSelectRoot, PineSelectSeparator, PineSelectTrigger, PineSelectValue,
-};
-pub use separator::PineSeparator;
-pub use slider::{PineSliderRange, PineSliderRoot, PineSliderThumb, PineSliderTrack};
-pub use toolbar::{
-    PineToolbarButton, PineToolbarLink, PineToolbarRoot, PineToolbarSeparator,
-};
 pub use avatar::{PineAvatarFallback, PineAvatarImage, PineAvatarRoot};
 pub use button::PineButton;
 pub use calendar::{
     PineCalendarCell, PineCalendarCellTrigger, PineCalendarGrid, PineCalendarGridBody,
     PineCalendarGridHead, PineCalendarGridRow, PineCalendarHeadCell, PineCalendarHeader,
     PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
-};
-pub use date_picker::PineDatePicker;
-pub use date_range_picker::PineDateRangePicker;
-pub use range_calendar::{
-    PineRangeCalendarCell, PineRangeCalendarCellTrigger, PineRangeCalendarGrid,
-    PineRangeCalendarGridBody, PineRangeCalendarGridHead, PineRangeCalendarHeader,
-    PineRangeCalendarHeading, PineRangeCalendarNext, PineRangeCalendarPrev,
-    PineRangeCalendarRoot,
 };
 pub use checkbox::PineCheckbox;
 pub use collapsible::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
@@ -110,16 +91,18 @@ pub use combobox::{
     PineComboboxPortal, PineComboboxRoot,
 };
 pub use command::{
-    PineCommandContent, PineCommandEmpty, PineCommandInput, PineCommandItem,
-    PineCommandList, PineCommandOverlay, PineCommandPortal, PineCommandRoot,
+    PineCommandContent, PineCommandEmpty, PineCommandInput, PineCommandItem, PineCommandList,
+    PineCommandOverlay, PineCommandPortal, PineCommandRoot,
 };
 pub use context_menu::{
     PineContextMenuContent, PineContextMenuItem, PineContextMenuPortal, PineContextMenuRoot,
     PineContextMenuSeparator, PineContextMenuTrigger,
 };
+pub use date_picker::PineDatePicker;
+pub use date_range_picker::PineDateRangePicker;
 pub use dialog::{
-    PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay,
-    PineDialogPortal, PineDialogRoot, PineDialogTitle, PineDialogTrigger,
+    PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay, PineDialogPortal,
+    PineDialogRoot, PineDialogTitle, PineDialogTrigger,
 };
 pub use dropdown_menu::{
     PineDropdownMenuArrow, PineDropdownMenuCheckboxItem, PineDropdownMenuContent,
@@ -138,6 +121,7 @@ pub use hover_card::{
     PineHoverCardContent, PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
 };
 pub use input::PineInput;
+pub use label::PineLabel;
 pub use otp_field::PineOtpField;
 pub use password_toggle_field::{
     PinePasswordToggleFieldInput, PinePasswordToggleFieldRoot, PinePasswordToggleFieldToggle,
@@ -145,26 +129,38 @@ pub use password_toggle_field::{
 pub use popover::{
     PinePopoverClose, PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
+pub use progress::{PineProgressIndicator, PineProgressRoot};
 pub use radio_group::{PineRadioGroupIndicator, PineRadioGroupItem, PineRadioGroupRoot};
+pub use range_calendar::{
+    PineRangeCalendarCell, PineRangeCalendarCellTrigger, PineRangeCalendarGrid,
+    PineRangeCalendarGridBody, PineRangeCalendarGridHead, PineRangeCalendarHeader,
+    PineRangeCalendarHeading, PineRangeCalendarNext, PineRangeCalendarPrev, PineRangeCalendarRoot,
+};
 pub use scroll_area::{
     PineScrollAreaCorner, PineScrollAreaRoot, PineScrollAreaScrollbar, PineScrollAreaThumb,
     PineScrollAreaViewport,
 };
+pub use select::{
+    PineSelectContent, PineSelectItem, PineSelectItemIndicator, PineSelectPortal, PineSelectRoot,
+    PineSelectSeparator, PineSelectTrigger, PineSelectValue,
+};
+pub use separator::PineSeparator;
+pub use slider::{PineSliderRange, PineSliderRoot, PineSliderThumb, PineSliderTrack};
 pub use splitter::{PineSplitterGroup, PineSplitterPanel, PineSplitterResizeHandle};
 pub use switch::PineSwitch;
+pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use tags_input::{
     PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
     PineTagsInputItemText, PineTagsInputRoot,
 };
-pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
-pub use tabs::{PineTabsContent, PineTabsList, PineTabsRoot, PineTabsTrigger};
 pub use text::PineText;
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
+pub use toolbar::{PineToolbarButton, PineToolbarLink, PineToolbarRoot, PineToolbarSeparator};
 pub use tooltip::{
-    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot,
-    PineTooltipTrigger,
+    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot, PineTooltipTrigger,
 };
+pub use tree::{PineTreeItem, PineTreeItemToggle, PineTreeRoot};
 
 /// Register every Pine custom-element tag. Call once at app startup
 /// before mounting.

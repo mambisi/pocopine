@@ -390,9 +390,8 @@ impl PineScrollAreaScrollbar {
         provide(&SCROLLBAR, this::<Self>());
         provide(&SCROLLBAR_ORIENTATION, self.orientation.clone());
         if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
-            let (v_vis, h_vis, has_v, has_h) = root.with(|r| {
-                (r.v_visible, r.h_visible, r.has_vertical, r.has_horizontal)
-            });
+            let (v_vis, h_vis, has_v, has_h) =
+                root.with(|r| (r.v_visible, r.h_visible, r.has_vertical, r.has_horizontal));
             if self.orientation == "horizontal" {
                 self.visible = h_vis;
                 self.has_overflow = has_h;
@@ -474,7 +473,8 @@ pub struct PineScrollAreaThumb {
 #[handlers]
 impl PineScrollAreaThumb {
     pub fn on_setup(&mut self) {
-        self.orientation = inject::<String>(&SCROLLBAR_ORIENTATION).unwrap_or_else(|| "vertical".into());
+        self.orientation =
+            inject::<String>(&SCROLLBAR_ORIENTATION).unwrap_or_else(|| "vertical".into());
         if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
             let (sh, sw, ch, cw, st, sl) = root.with(|r| {
                 (
@@ -551,7 +551,9 @@ impl PineScrollAreaThumb {
         let Some(scrollbar) = inject::<Handle<PineScrollAreaScrollbar>>(&SCROLLBAR) else {
             return;
         };
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         let Some(thumb_el) = refs::get_on(scope, "thumb") else {
             return;
         };
@@ -627,7 +629,12 @@ fn start_drag(
         }
         ev.prevent_default();
         let (sh, sw, ch, cw) = root_for_move.with(|r| {
-            (r.scroll_height, r.scroll_width, r.client_height, r.client_width)
+            (
+                r.scroll_height,
+                r.scroll_width,
+                r.client_height,
+                r.client_width,
+            )
         });
         // Recompute rail size from the current client rect. The
         // rail can resize mid-drag (content changes, window resize)
@@ -756,20 +763,13 @@ fn teardown_runtime(scope: ScopeId) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let t: &EventTarget = doc.as_ref();
         if let Some(c) = rt.pointer_move.as_ref() {
-            let _ = t.remove_event_listener_with_callback(
-                "pointermove",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ =
+                t.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
         }
         if let Some(c) = rt.pointer_up.as_ref() {
-            let _ = t.remove_event_listener_with_callback(
-                "pointerup",
-                c.as_ref().unchecked_ref(),
-            );
-            let _ = t.remove_event_listener_with_callback(
-                "pointercancel",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ = t.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
+            let _ =
+                t.remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
         }
     }
 }

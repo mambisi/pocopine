@@ -48,14 +48,18 @@ pub(super) fn toggle() {
 }
 
 fn attach() {
-    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    let Some(doc) = window().and_then(|w| w.document()) else {
+        return;
+    };
 
     let over: EventClosure = Closure::wrap(Box::new(move |ev: Event| {
         if !INSPECT_MODE.with(|c| c.get()) {
             return;
         }
         let Some(target) = ev.target() else { return };
-        let Ok(el) = target.dyn_into::<Element>() else { return };
+        let Ok(el) = target.dyn_into::<Element>() else {
+            return;
+        };
         if is_inside_panel(&el) {
             return;
         }
@@ -71,7 +75,9 @@ fn attach() {
             return;
         }
         let Some(target) = ev.target() else { return };
-        let Ok(start) = target.dyn_into::<Element>() else { return };
+        let Ok(start) = target.dyn_into::<Element>() else {
+            return;
+        };
         if is_inside_panel(&start) {
             return;
         }
@@ -107,12 +113,11 @@ fn attach() {
 }
 
 fn detach() {
-    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    let Some(doc) = window().and_then(|w| w.document()) else {
+        return;
+    };
     if let Some(cb) = DOC_OVER_CB.with(|c| c.borrow_mut().take()) {
-        let _ = doc.remove_event_listener_with_callback(
-            "mouseover",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = doc.remove_event_listener_with_callback("mouseover", cb.as_ref().unchecked_ref());
     }
     if let Some(cb) = DOC_CLICK_CB.with(|c| c.borrow_mut().take()) {
         let _ = doc.remove_event_listener_with_callback_and_bool(
@@ -124,7 +129,9 @@ fn detach() {
 }
 
 fn is_inside_panel(el: &Element) -> bool {
-    let Some(root) = shell::panel_root() else { return false };
+    let Some(root) = shell::panel_root() else {
+        return false;
+    };
     let root_node: &Node = root.as_ref();
     let el_node: &Node = el.as_ref();
     root_node.contains(Some(el_node))

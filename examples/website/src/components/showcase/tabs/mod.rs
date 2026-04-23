@@ -9,5 +9,7 @@ pub struct TabsDemo {
 
 #[handlers]
 impl TabsDemo {
-    pub fn on_mount(&mut self) { self.tab = "account".into(); }
+    pub fn on_mount(&mut self) {
+        self.tab = "account".into();
+    }
 }

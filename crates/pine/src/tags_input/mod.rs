@@ -57,7 +57,11 @@ inject_key!(ITEM: ScopeId);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineTagsInputRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineTagsInputRoot {
     /// The list of tags. Bind with `pp-model:values="my_tags"`.
     #[model]
@@ -110,8 +114,7 @@ impl PineTagsInputRoot {
     /// Remove the last tag, if any. Called by Input on
     /// Backspace-while-empty.
     pub fn remove_last(&mut self) {
-        if self.values.pop().is_some() {
-        }
+        if self.values.pop().is_some() {}
     }
 
     pub fn clear(&mut self) {
@@ -125,7 +128,13 @@ impl PineTagsInputRoot {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItem.poco", role = "panel", display = "contents", animate = "flip", transition = "scale")]
+#[component(
+    template = "PineTagsInputItem.poco",
+    role = "panel",
+    display = "contents",
+    animate = "flip",
+    transition = "scale"
+)]
 pub struct PineTagsInputItem {
     /// The tag value this Item represents. Passed via
     /// `:value="tag"` from the author's `pp-for`.
@@ -152,7 +161,11 @@ impl PineTagsInputItem {
 // ── ItemText ──────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItemText.poco", role = "visual", display = "contents")]
+#[component(
+    template = "PineTagsInputItemText.poco",
+    role = "visual",
+    display = "contents"
+)]
 pub struct PineTagsInputItemText {
     /// Rendered label. Seeded in `on_setup` from the injected
     /// ITEM value; never mutated after mount since a tag's value
@@ -179,7 +192,9 @@ impl PineTagsInputItemText {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else { return };
+        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+            return;
+        };
         pocopine::watch_scope_field::<String, _>(item_scope, "value", move |v, _| {
             let v = v.clone();
             handle.update(|s| s.text = v);
@@ -190,7 +205,11 @@ impl PineTagsInputItemText {
 // ── ItemDelete ────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputItemDelete.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineTagsInputItemDelete.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineTagsInputItemDelete {
     #[observe(ROOT)]
     pub disabled: bool,
@@ -206,8 +225,12 @@ impl PineTagsInputItemDelete {
         // Item's scope at click time — avoids any cached-at-setup
         // staleness if the chip was reordered or the value
         // binding fired late.
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else { return };
-        let Some(scope) = Scope::find(item_scope) else { return };
+        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+            return;
+        };
+        let Some(scope) = Scope::find(item_scope) else {
+            return;
+        };
         let v = scope
             .state
             .borrow()
@@ -226,7 +249,11 @@ impl PineTagsInputItemDelete {
 // ── Input ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputInput.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineTagsInputInput.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineTagsInputInput {
     #[prop]
     pub placeholder: String,
@@ -239,9 +266,15 @@ impl PineTagsInputInput {
     /// `@keydown.enter.prevent` — read the field value, push it
     /// as a new tag, clear the field.
     pub fn commit(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "field") else { return };
-        let Ok(input) = el.dyn_into::<HtmlInputElement>() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "field") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
+            return;
+        };
         let raw = input.value();
         if raw.trim().is_empty() {
             return;
@@ -255,9 +288,15 @@ impl PineTagsInputInput {
     /// `@keydown.backspace` — only acts when the field is empty.
     /// Otherwise the native backspace edits the input normally.
     pub fn maybe_pop(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "field") else { return };
-        let Ok(input) = el.dyn_into::<HtmlInputElement>() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "field") else {
+            return;
+        };
+        let Ok(input) = el.dyn_into::<HtmlInputElement>() else {
+            return;
+        };
         if !input.value().is_empty() {
             return;
         }
@@ -270,7 +309,11 @@ impl PineTagsInputInput {
 // ── Clear ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineTagsInputClear.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineTagsInputClear.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineTagsInputClear {
     #[observe(ROOT)]
     pub disabled: bool,

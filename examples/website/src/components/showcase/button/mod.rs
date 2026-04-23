@@ -9,5 +9,7 @@ pub struct ButtonDemo {
 
 #[handlers]
 impl ButtonDemo {
-    pub fn bump(&mut self) { self.clicks += 1; }
+    pub fn bump(&mut self) {
+        self.clicks += 1;
+    }
 }

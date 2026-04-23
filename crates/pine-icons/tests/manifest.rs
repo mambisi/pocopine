@@ -20,10 +20,7 @@ fn svg_stems_in(subdir: &str) -> HashSet<String> {
         if path.extension().and_then(|e| e.to_str()) != Some("svg") {
             continue;
         }
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .expect("svg stem");
+        let stem = path.file_stem().and_then(|s| s.to_str()).expect("svg stem");
         out.insert(stem.to_string());
     }
     out
@@ -32,8 +29,8 @@ fn svg_stems_in(subdir: &str) -> HashSet<String> {
 #[test]
 fn manifest_counts_match_disk() {
     let manifest_path = assets_root().join("MANIFEST.json");
-    let raw = fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|e| panic!("read MANIFEST.json: {e}"));
+    let raw =
+        fs::read_to_string(&manifest_path).unwrap_or_else(|e| panic!("read MANIFEST.json: {e}"));
     let json: serde_json::Value =
         serde_json::from_str(&raw).expect("MANIFEST.json is not valid JSON");
 
@@ -91,7 +88,10 @@ fn registry_lookup_returns_registered_icons() {
     assert!(pine_icons::lookup("filled", "star").is_some());
     assert!(pine_icons::lookup("outline", "not-registered").is_none());
     // Sanity — the SVG string should actually start with `<svg`.
-    assert!(pine_icons::lookup("outline", "user").unwrap().trim_start().starts_with("<svg"));
+    assert!(pine_icons::lookup("outline", "user")
+        .unwrap()
+        .trim_start()
+        .starts_with("<svg"));
 }
 
 #[test]

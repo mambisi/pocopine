@@ -10,9 +10,7 @@
 
 use js_sys::Array;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{
-    CustomEvent, Event, FocusEvent, InputEvent, KeyboardEvent, MouseEvent, UiEvent,
-};
+use web_sys::{CustomEvent, Event, FocusEvent, InputEvent, KeyboardEvent, MouseEvent, UiEvent};
 
 pub trait HandlerDispatch {
     fn invoke_handler(&mut self, key: &str, args: &Array) -> JsValue;

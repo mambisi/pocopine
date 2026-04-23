@@ -128,7 +128,9 @@ pub fn resolve_target(selector: &str) -> Option<Element> {
 /// `<body>` itself), so relying on the observer would leak the
 /// clone's scopes + effects.
 pub fn release(el: &Element) {
-    let Some(clone) = take_teleported(el) else { return };
+    let Some(clone) = take_teleported(el) else {
+        return;
+    };
     if let Some(parent) = clone.parent_node() {
         let _ = parent.remove_child(&clone);
     }

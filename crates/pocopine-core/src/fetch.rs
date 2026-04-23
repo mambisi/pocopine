@@ -30,16 +30,16 @@ where
     init.set_body(&JsValue::from_str(&body));
 
     // Content-Type header — axum's `Json` extractor expects it.
-    let headers = web_sys::Headers::new()
-        .map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
+    let headers =
+        web_sys::Headers::new().map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
     let _ = headers.set("content-type", "application/json");
     init.set_headers(&headers);
 
     let request = Request::new_with_str_and_init(url, &init)
         .map_err(|e| ServerError::Network(format!("build request: {e:?}")))?;
 
-    let win = web_sys::window()
-        .ok_or_else(|| ServerError::Network("no window available".to_string()))?;
+    let win =
+        web_sys::window().ok_or_else(|| ServerError::Network("no window available".to_string()))?;
     let resp_js = JsFuture::from(win.fetch_with_request(&request))
         .await
         .map_err(|e| ServerError::Network(format!("fetch failed: {e:?}")))?;

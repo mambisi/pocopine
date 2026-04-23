@@ -43,7 +43,8 @@ pub struct PineFormRoot {
     /// whose `name` appears as a key flip `invalid = true`; the
     /// rest clear their invalid flag. Typically written after a
     /// server-side submit round-trip.
-    #[prop] pub errors: HashMap<String, String>,
+    #[prop]
+    pub errors: HashMap<String, String>,
 }
 
 #[handlers]

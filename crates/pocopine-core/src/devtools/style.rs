@@ -12,11 +12,15 @@ pub(crate) const STYLE_ID: &str = "__pp_devtools_style";
 /// Attach the stylesheet to `<head>` if it isn't there already. No-op
 /// when the element already exists (idempotent install).
 pub(crate) fn inject() {
-    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    let Some(doc) = window().and_then(|w| w.document()) else {
+        return;
+    };
     if doc.get_element_by_id(STYLE_ID).is_some() {
         return;
     }
-    let Ok(style) = doc.create_element("style") else { return };
+    let Ok(style) = doc.create_element("style") else {
+        return;
+    };
     let _ = style.set_attribute("id", STYLE_ID);
     style.set_text_content(Some(STYLESHEET));
     if let Some(head) = doc.head() {

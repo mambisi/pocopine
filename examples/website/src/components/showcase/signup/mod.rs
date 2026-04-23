@@ -28,7 +28,10 @@ impl SignupDemo {
         self.submitted = false;
         let mut errs = HashMap::new();
         if !self.email.contains('@') {
-            errs.insert("email".to_string(), "Please enter a valid email.".to_string());
+            errs.insert(
+                "email".to_string(),
+                "Please enter a valid email.".to_string(),
+            );
         }
         if self.password.len() < 8 {
             errs.insert(
@@ -37,10 +40,7 @@ impl SignupDemo {
             );
         }
         if self.password != self.confirm {
-            errs.insert(
-                "confirm".to_string(),
-                "Passwords do not match.".to_string(),
-            );
+            errs.insert("confirm".to_string(), "Passwords do not match.".to_string());
         }
         self.errors = errs;
         if self.errors.is_empty() {

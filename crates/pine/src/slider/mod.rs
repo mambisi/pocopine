@@ -122,13 +122,10 @@ impl PineSliderRoot {
         self.recompute_percent();
     }
 
-    pub fn on_ready(
-        &self,
-        handle: pocopine::Handle<Self>,
-        refs: pocopine::Refs,
-        scope: ScopeId,
-    ) {
-        let Some(root_el) = refs.get("root") else { return };
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs, scope: ScopeId) {
+        let Some(root_el) = refs.get("root") else {
+            return;
+        };
         install_pointer(scope, root_el, handle);
     }
 
@@ -165,11 +162,7 @@ impl PineSliderRoot {
     }
 }
 
-fn install_pointer(
-    scope: ScopeId,
-    root_el: web_sys::Element,
-    root: Handle<PineSliderRoot>,
-) {
+fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineSliderRoot>) {
     // pointerdown stays on the slider root — snaps to click
     // position + marks the drag as active.
     let root_for_down = root_el.clone();
@@ -198,10 +191,7 @@ fn install_pointer(
     let handle_for_move = root.clone();
     let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
         let active = ROOT_RUNTIME.with(|r| {
-            r.borrow()
-                .get(&scope)
-                .and_then(|rt| rt.dragging_pointer_id)
-                == Some(ev.pointer_id())
+            r.borrow().get(&scope).and_then(|rt| rt.dragging_pointer_id) == Some(ev.pointer_id())
         });
         if !active {
             return;
@@ -230,8 +220,8 @@ fn install_pointer(
         let doc_target: &EventTarget = doc.as_ref();
         let _ = doc_target
             .add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-        let _ = doc_target
-            .add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
+        let _ =
+            doc_target.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
         let _ = doc_target
             .add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
     }
@@ -254,7 +244,9 @@ fn teardown_pointer(scope: ScopeId) {
     let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
         return;
     };
-    let Some(el) = rt.root_el.as_ref() else { return };
+    let Some(el) = rt.root_el.as_ref() else {
+        return;
+    };
     let target: &EventTarget = el.as_ref();
     if let Some(c) = rt.pointer_down.as_ref() {
         let _ =
@@ -263,18 +255,14 @@ fn teardown_pointer(scope: ScopeId) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let doc_target: &EventTarget = doc.as_ref();
         if let Some(c) = rt.pointer_move.as_ref() {
-            let _ = doc_target.remove_event_listener_with_callback(
-                "pointermove",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ = doc_target
+                .remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
         }
         if let Some(c) = rt.pointer_up.as_ref() {
             let _ = doc_target
                 .remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-            let _ = doc_target.remove_event_listener_with_callback(
-                "pointercancel",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ = doc_target
+                .remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
         }
     }
 }
@@ -309,11 +297,17 @@ fn value_from_pointer(
 // ── Track ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderTrack.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineSliderTrack.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineSliderTrack {
     /// Mirrored for the `data-orientation` / `data-disabled` attrs.
-    #[observe(ROOT)] pub orientation: String,
-    #[observe(ROOT)] pub disabled: bool,
+    #[observe(ROOT)]
+    pub orientation: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
 }
 
 #[handlers]
@@ -322,11 +316,18 @@ impl PineSliderTrack {}
 // ── Range ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderRange.poco", role = "visual", display = "contents")]
+#[component(
+    template = "PineSliderRange.poco",
+    role = "visual",
+    display = "contents"
+)]
 pub struct PineSliderRange {
-    #[observe(ROOT)] pub orientation: String,
-    #[observe(ROOT)] pub disabled: bool,
-    #[observe(ROOT)] pub percent: f64,
+    #[observe(ROOT)]
+    pub orientation: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
+    #[observe(ROOT)]
+    pub percent: f64,
 }
 
 #[handlers]
@@ -335,15 +336,25 @@ impl PineSliderRange {}
 // ── Thumb ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSliderThumb.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineSliderThumb.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineSliderThumb {
     /// Mirrored from Root for ARIA + positioning.
-    #[observe(ROOT)] pub value: f64,
-    #[observe(ROOT)] pub min: f64,
-    #[observe(ROOT)] pub max: f64,
-    #[observe(ROOT)] pub percent: f64,
-    #[observe(ROOT)] pub orientation: String,
-    #[observe(ROOT)] pub disabled: bool,
+    #[observe(ROOT)]
+    pub value: f64,
+    #[observe(ROOT)]
+    pub min: f64,
+    #[observe(ROOT)]
+    pub max: f64,
+    #[observe(ROOT)]
+    pub percent: f64,
+    #[observe(ROOT)]
+    pub orientation: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
 }
 
 #[handlers]

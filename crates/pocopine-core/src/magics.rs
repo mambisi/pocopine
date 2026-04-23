@@ -26,7 +26,9 @@ thread_local! {
 
 pub fn resolve(key: &str, scope_id: ScopeId) -> JsValue {
     match key {
-        "$el" => current_el().map(JsValue::from).unwrap_or(JsValue::UNDEFINED),
+        "$el" => current_el()
+            .map(JsValue::from)
+            .unwrap_or(JsValue::UNDEFINED),
         "$refs" => refs::as_object(scope_id),
         "$dispatch" => build_dispatch(),
         "$store" => stores_object(),

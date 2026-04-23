@@ -59,14 +59,17 @@ pub struct PineFieldRoot {
     /// Form field name. Mirrored onto the Root as a hook for
     /// styling / DOM queries; the underlying `<input>`'s own
     /// `name="…"` still drives submission.
-    #[prop] pub name: String,
+    #[prop]
+    pub name: String,
     /// Forwarded onto the Control's inner input and stamped as
     /// `data-disabled` on every Field part.
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
     /// External validity override. Two-way bindable via
     /// `pp-model:invalid="…"`. Gates the Error part and the
     /// Control's `aria-invalid` mirror.
-    #[prop] pub invalid: bool,
+    #[prop]
+    pub invalid: bool,
 
     /// Id the Label's `for` / Control's id share. Generated in
     /// `on_setup` from the Root's scope id.
@@ -127,13 +130,20 @@ impl PineFieldRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldLabel.poco", role = "label")]
 pub struct PineFieldLabel {
-    #[observe(ROOT)] pub control_id: String,
-    #[observe(ROOT)] pub disabled: bool,
-    #[observe(ROOT)] pub invalid: bool,
-    #[observe(ROOT)] pub touched: bool,
-    #[observe(ROOT)] pub dirty: bool,
-    #[observe(ROOT)] pub filled: bool,
-    #[observe(ROOT)] pub focused: bool,
+    #[observe(ROOT)]
+    pub control_id: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
+    #[observe(ROOT)]
+    pub invalid: bool,
+    #[observe(ROOT)]
+    pub touched: bool,
+    #[observe(ROOT)]
+    pub dirty: bool,
+    #[observe(ROOT)]
+    pub filled: bool,
+    #[observe(ROOT)]
+    pub focused: bool,
 }
 
 #[handlers]
@@ -142,7 +152,11 @@ impl PineFieldLabel {}
 // ── Control ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineFieldControl.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineFieldControl.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineFieldControl {}
 
 #[handlers]
@@ -152,7 +166,9 @@ impl PineFieldControl {
             return;
         };
         let Some(wrap) = refs.get("slot") else { return };
-        let Some(inner) = find_control(&wrap) else { return };
+        let Some(inner) = find_control(&wrap) else {
+            return;
+        };
 
         let (control_id, description_id, error_id, invalid, disabled) = root.with(|r| {
             (
@@ -164,10 +180,7 @@ impl PineFieldControl {
             )
         });
         let _ = inner.set_attribute("id", &control_id);
-        let _ = inner.set_attribute(
-            "aria-describedby",
-            &format!("{description_id} {error_id}"),
-        );
+        let _ = inner.set_attribute("aria-describedby", &format!("{description_id} {error_id}"));
         let _ = inner.set_attribute("aria-invalid", if invalid { "true" } else { "false" });
         let _ = inner.set_attribute("aria-errormessage", &error_id);
         if disabled {
@@ -195,10 +208,8 @@ impl PineFieldControl {
         // below) flow onto the DOM.
         let inner_for_invalid = inner.clone();
         watch_scope_field::<bool, _>(root.scope_id(), "invalid", move |&v, _| {
-            let _ = inner_for_invalid.set_attribute(
-                "aria-invalid",
-                if v { "true" } else { "false" },
-            );
+            let _ =
+                inner_for_invalid.set_attribute("aria-invalid", if v { "true" } else { "false" });
         });
         // Reactive: forward Root.disabled onto the inner input.
         let inner_for_disabled = inner.clone();
@@ -217,8 +228,7 @@ impl PineFieldControl {
         let focus_cb = Closure::wrap(Box::new(move |_ev: Event| {
             root_for_focus.update(|r: &mut PineFieldRoot| r.focused = true);
         }) as Box<dyn FnMut(Event)>);
-        let _ = target
-            .add_event_listener_with_callback("focus", focus_cb.as_ref().unchecked_ref());
+        let _ = target.add_event_listener_with_callback("focus", focus_cb.as_ref().unchecked_ref());
         focus_cb.forget();
 
         let root_for_blur = root.clone();
@@ -228,8 +238,7 @@ impl PineFieldControl {
                 r.touched = true;
             });
         }) as Box<dyn FnMut(Event)>);
-        let _ = target
-            .add_event_listener_with_callback("blur", blur_cb.as_ref().unchecked_ref());
+        let _ = target.add_event_listener_with_callback("blur", blur_cb.as_ref().unchecked_ref());
         blur_cb.forget();
 
         let root_for_input = root.clone();
@@ -246,8 +255,7 @@ impl PineFieldControl {
                 r.filled = filled;
             });
         }) as Box<dyn FnMut(Event)>);
-        let _ = target
-            .add_event_listener_with_callback("input", input_cb.as_ref().unchecked_ref());
+        let _ = target.add_event_listener_with_callback("input", input_cb.as_ref().unchecked_ref());
         input_cb.forget();
 
         // Native constraint-validation failure (`required`,
@@ -256,8 +264,8 @@ impl PineFieldControl {
         let native_cb = Closure::wrap(Box::new(move |_ev: Event| {
             root_for_native.update(|r: &mut PineFieldRoot| r.invalid = true);
         }) as Box<dyn FnMut(Event)>);
-        let _ = target
-            .add_event_listener_with_callback("invalid", native_cb.as_ref().unchecked_ref());
+        let _ =
+            target.add_event_listener_with_callback("invalid", native_cb.as_ref().unchecked_ref());
         native_cb.forget();
     }
 }
@@ -279,9 +287,12 @@ fn find_control(wrap: &Element) -> Option<Element> {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldDescription.poco", role = "text")]
 pub struct PineFieldDescription {
-    #[observe(ROOT)] pub description_id: String,
-    #[observe(ROOT)] pub disabled: bool,
-    #[observe(ROOT)] pub invalid: bool,
+    #[observe(ROOT)]
+    pub description_id: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
+    #[observe(ROOT)]
+    pub invalid: bool,
 }
 
 #[handlers]
@@ -292,8 +303,10 @@ impl PineFieldDescription {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldError.poco", role = "text")]
 pub struct PineFieldError {
-    #[observe(ROOT)] pub error_id: String,
-    #[observe(ROOT)] pub invalid: bool,
+    #[observe(ROOT)]
+    pub error_id: String,
+    #[observe(ROOT)]
+    pub invalid: bool,
 }
 
 #[handlers]

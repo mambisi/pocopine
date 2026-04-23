@@ -2,7 +2,11 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "TagsMentionsDemo.poco", style = "../tags_input/tags_input.css", role = "panel")]
+#[component(
+    template = "TagsMentionsDemo.poco",
+    style = "../tags_input/tags_input.css",
+    role = "panel"
+)]
 pub struct TagsMentionsDemo {
     pub mentions: Vec<String>,
 }
@@ -13,7 +17,9 @@ impl TagsMentionsDemo {
         self.mentions = vec!["ada".into(), "grace".into(), "linus".into()];
     }
     pub fn shuffle(&mut self) {
-        if self.mentions.len() < 2 { return; }
+        if self.mentions.len() < 2 {
+            return;
+        }
         let head = self.mentions.remove(0);
         self.mentions.push(head);
     }

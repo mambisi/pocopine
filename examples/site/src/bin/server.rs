@@ -8,12 +8,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use pocopine_server::{
-        axum::Router,
-        serve,
-        static_files,
-        tower_http::services::ServeFile,
-    };
+    use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
     use site::__submit_contact_route;
 
     // Anchor to the crate root so the binary works regardless of CWD.

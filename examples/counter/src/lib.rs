@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct Counter {
-    #[prop] pub count: i32,
-    #[prop] pub label: String,
+    #[prop]
+    pub count: i32,
+    #[prop]
+    pub label: String,
 }
 
 #[handlers]

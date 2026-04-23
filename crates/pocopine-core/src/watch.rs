@@ -78,8 +78,8 @@ where
     V: Clone + PartialEq + Default + DeserializeOwned + 'static,
     C: Fn(&V, Option<&V>) + 'static,
 {
-    let scope_id = current_scope_id()
-        .expect("watch_field called outside a handler / lifecycle context");
+    let scope_id =
+        current_scope_id().expect("watch_field called outside a handler / lifecycle context");
     watch_scope_field(scope_id, field, cb);
 }
 

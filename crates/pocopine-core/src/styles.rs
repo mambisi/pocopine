@@ -24,7 +24,9 @@ pub fn inject_style(component: &'static str, css: &str) {
     }
     let Some(doc) = window_document() else { return };
     let Some(head) = doc.head() else { return };
-    let Ok(style_el) = doc.create_element("style") else { return };
+    let Ok(style_el) = doc.create_element("style") else {
+        return;
+    };
     let _ = style_el.set_attribute("data-pp-component", component);
     if let Ok(style) = style_el.clone().dyn_into::<HtmlElement>() {
         style.set_inner_text(css);

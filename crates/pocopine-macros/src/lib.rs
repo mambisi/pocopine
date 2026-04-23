@@ -25,8 +25,8 @@ use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr,
-    Meta, MetaNameValue, Pat, Path, PatType, Token, Type,
+    Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr, Meta, MetaNameValue,
+    Pat, PatType, Path, Token, Type,
 };
 
 /// Parsed `#[observe(KEY [, field = "name"])]` attribute —
@@ -48,31 +48,119 @@ struct ObserveEntry {
 /// matches one of these is rejected — its custom-element tag would
 /// collide with real HTML markup in parent templates.
 const HTML5_ELEMENTS: &[&str] = &[
-    "a", "abbr", "address", "area", "article", "aside", "audio",
-    "b", "base", "bdi", "bdo", "blockquote", "body", "br", "button",
-    "canvas", "caption", "cite", "code", "col", "colgroup",
-    "data", "datalist", "dd", "del", "details", "dfn", "dialog",
-    "div", "dl", "dt",
-    "em", "embed",
-    "fieldset", "figcaption", "figure", "footer", "form",
-    "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup",
-    "hr", "html",
-    "i", "iframe", "img", "input", "ins",
+    "a",
+    "abbr",
+    "address",
+    "area",
+    "article",
+    "aside",
+    "audio",
+    "b",
+    "base",
+    "bdi",
+    "bdo",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "canvas",
+    "caption",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "data",
+    "datalist",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "i",
+    "iframe",
+    "img",
+    "input",
+    "ins",
     "kbd",
-    "label", "legend", "li", "link",
-    "main", "map", "mark", "math", "menu", "meta", "meter",
-    "nav", "noscript",
-    "object", "ol", "optgroup", "option", "output",
-    "p", "picture", "pre", "progress",
+    "label",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "map",
+    "mark",
+    "math",
+    "menu",
+    "meta",
+    "meter",
+    "nav",
+    "noscript",
+    "object",
+    "ol",
+    "optgroup",
+    "option",
+    "output",
+    "p",
+    "picture",
+    "pre",
+    "progress",
     "q",
-    "rp", "rt", "ruby",
-    "s", "samp", "script", "search", "section", "select", "slot",
-    "small", "source", "span", "strong", "style", "sub", "summary",
-    "sup", "svg",
-    "table", "tbody", "td", "template", "textarea", "tfoot", "th",
-    "thead", "time", "title", "tr", "track",
-    "u", "ul",
-    "var", "video",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "script",
+    "search",
+    "section",
+    "select",
+    "slot",
+    "small",
+    "source",
+    "span",
+    "strong",
+    "style",
+    "sub",
+    "summary",
+    "sup",
+    "svg",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "title",
+    "tr",
+    "track",
+    "u",
+    "ul",
+    "var",
+    "video",
     "wbr",
 ];
 
@@ -112,17 +200,15 @@ struct ComponentArgs {
 
 impl Parse for ComponentArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let pairs: Punctuated<MetaNameValue, Token![,]> =
-            Punctuated::parse_terminated(input)?;
+        let pairs: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
         let mut args = ComponentArgs::default();
         for kv in pairs {
             let lit = match kv.value {
-                Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s,
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) => s,
                 other => {
-                    return Err(syn::Error::new_spanned(
-                        other,
-                        "expected a string literal",
-                    ));
+                    return Err(syn::Error::new_spanned(other, "expected a string literal"));
                 }
             };
             if kv.path.is_ident("name") {
@@ -178,7 +264,6 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 
 /// Kebab-case an ident: `TodoItem` → `todo-item`.
 fn kebab_case(ident: &str) -> String {
@@ -246,7 +331,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // key that routes get/set through the container's serde impl.
     let mut flatten_fields: Vec<(syn::Ident, Vec<String>)> = Vec::new();
     for field in input.fields.iter_mut() {
-        let Some(ident) = field.ident.clone() else { continue };
+        let Some(ident) = field.ident.clone() else {
+            continue;
+        };
         let field_ty = field.ty.clone();
         let mut is_prop = false;
         let mut is_model = false;
@@ -264,77 +351,72 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 //   #[model(name = "…")]                      wire-name rename
                 //   #[model(flatten = ["leaf1", "leaf2"])]    per-leaf wire shape
                 //   #[model(flatten)]                         (reserved — see below)
-                let parsed: syn::Result<(Option<String>, Option<Vec<String>>, bool)> =
-                    match &a.meta {
-                        Meta::Path(_) => Ok((None, None, false)),
-                        Meta::List(_) => a.parse_args_with(
-                            |input: syn::parse::ParseStream| {
-                                let mut wire_name: Option<String> = None;
-                                let mut flatten_leaves: Option<Vec<String>> = None;
-                                let mut bare_flatten = false;
-                                while !input.is_empty() {
-                                    let key: syn::Ident = input.parse()?;
-                                    if input.peek(Token![=]) {
-                                        input.parse::<Token![=]>()?;
-                                        if key == "name" {
-                                            let s: LitStr = input.parse()?;
-                                            wire_name = Some(s.value());
-                                        } else if key == "flatten" {
-                                            let arr: syn::ExprArray = input.parse()?;
-                                            let mut leaves = Vec::with_capacity(
-                                                arr.elems.len(),
-                                            );
-                                            for e in arr.elems.iter() {
-                                                match e {
-                                                    Expr::Lit(ExprLit {
-                                                        lit: Lit::Str(s),
-                                                        ..
-                                                    }) => leaves.push(s.value()),
-                                                    other => {
-                                                        return Err(syn::Error::new_spanned(
-                                                            other,
-                                                            "flatten leaves must be string literals",
-                                                        ));
-                                                    }
-                                                }
+                let parsed: syn::Result<(Option<String>, Option<Vec<String>>, bool)> = match &a.meta
+                {
+                    Meta::Path(_) => Ok((None, None, false)),
+                    Meta::List(_) => a.parse_args_with(|input: syn::parse::ParseStream| {
+                        let mut wire_name: Option<String> = None;
+                        let mut flatten_leaves: Option<Vec<String>> = None;
+                        let mut bare_flatten = false;
+                        while !input.is_empty() {
+                            let key: syn::Ident = input.parse()?;
+                            if input.peek(Token![=]) {
+                                input.parse::<Token![=]>()?;
+                                if key == "name" {
+                                    let s: LitStr = input.parse()?;
+                                    wire_name = Some(s.value());
+                                } else if key == "flatten" {
+                                    let arr: syn::ExprArray = input.parse()?;
+                                    let mut leaves = Vec::with_capacity(arr.elems.len());
+                                    for e in arr.elems.iter() {
+                                        match e {
+                                            Expr::Lit(ExprLit {
+                                                lit: Lit::Str(s), ..
+                                            }) => leaves.push(s.value()),
+                                            other => {
+                                                return Err(syn::Error::new_spanned(
+                                                    other,
+                                                    "flatten leaves must be string literals",
+                                                ));
                                             }
-                                            flatten_leaves = Some(leaves);
-                                        } else {
-                                            return Err(syn::Error::new_spanned(
-                                                key,
-                                                "unknown #[model] key — expected: name, flatten",
-                                            ));
                                         }
-                                    } else if key == "flatten" {
-                                        // Bare `#[model(flatten)]` —
-                                        // auto-discovery form per RFC-044
-                                        // §5.10. Reserved for a follow-up
-                                        // PR that adds the runtime leaves
-                                        // side-table; today's macro emits
-                                        // static match arms and can't
-                                        // produce those without knowing
-                                        // the leaf list.
-                                        bare_flatten = true;
-                                    } else {
-                                        return Err(syn::Error::new_spanned(
-                                            key,
-                                            "expected `=` after #[model] key",
-                                        ));
                                     }
-                                    if input.peek(Token![,]) {
-                                        input.parse::<Token![,]>()?;
-                                    }
+                                    flatten_leaves = Some(leaves);
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        key,
+                                        "unknown #[model] key — expected: name, flatten",
+                                    ));
                                 }
-                                Ok((wire_name, flatten_leaves, bare_flatten))
-                            },
-                        ),
-                        Meta::NameValue(_) => Err(syn::Error::new_spanned(
-                            a,
-                            "#[model] accepts either bare form, \
+                            } else if key == "flatten" {
+                                // Bare `#[model(flatten)]` —
+                                // auto-discovery form per RFC-044
+                                // §5.10. Reserved for a follow-up
+                                // PR that adds the runtime leaves
+                                // side-table; today's macro emits
+                                // static match arms and can't
+                                // produce those without knowing
+                                // the leaf list.
+                                bare_flatten = true;
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    key,
+                                    "expected `=` after #[model] key",
+                                ));
+                            }
+                            if input.peek(Token![,]) {
+                                input.parse::<Token![,]>()?;
+                            }
+                        }
+                        Ok((wire_name, flatten_leaves, bare_flatten))
+                    }),
+                    Meta::NameValue(_) => Err(syn::Error::new_spanned(
+                        a,
+                        "#[model] accepts either bare form, \
                              #[model(name = \"...\")], or \
                              #[model(flatten = [\"leaf1\", \"leaf2\"])]",
-                        )),
-                    };
+                    )),
+                };
                 match parsed {
                     Ok((name, flatten, bare)) => {
                         if bare && flatten.is_none() {
@@ -417,8 +499,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some((key_path, rename)) = observe_spec {
-            let name_on_root = rename
-                .unwrap_or_else(|| ident.to_string().trim_start_matches("r#").to_string());
+            let name_on_root =
+                rename.unwrap_or_else(|| ident.to_string().trim_start_matches("r#").to_string());
             observes.push(ObserveEntry {
                 field_ident: ident.clone(),
                 field_ty: field_ty.clone(),
@@ -457,75 +539,77 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // already walks — the snapshot-diff machinery in
     // `model_runtime.rs` iterates leaves just like any other
     // `is_model` key.
-    let flatten_leaf_get_arms =
-        flatten_fields.iter().flat_map(|(container, leaves)| {
-            leaves.iter().map(move |leaf| {
-                quote! {
-                    #leaf => {
-                        let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
-                            &self.#container,
-                        )
-                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
-                        ::pocopine::__private::js_sys::Reflect::get(
+    let flatten_leaf_get_arms = flatten_fields.iter().flat_map(|(container, leaves)| {
+        leaves.iter().map(move |leaf| {
+            quote! {
+                #leaf => {
+                    let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
+                        &self.#container,
+                    )
+                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
+                    ::pocopine::__private::js_sys::Reflect::get(
+                        &__obj,
+                        &::pocopine::__private::JsValue::from_str(#leaf),
+                    )
+                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
+                },
+            }
+        })
+    });
+
+    let flatten_leaf_set_arms = flatten_fields.iter().flat_map(|(container, leaves)| {
+        leaves.iter().map(move |leaf| {
+            quote! {
+                #leaf => {
+                    let __value = value;
+                    let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
+                        &self.#container,
+                    )
+                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
+                    if __obj.is_object() {
+                        let __normalised =
+                            if __value.as_string().as_deref() == Some("") {
+                                ::pocopine::__private::JsValue::NULL
+                            } else {
+                                __value
+                            };
+                        let _ = ::pocopine::__private::js_sys::Reflect::set(
                             &__obj,
                             &::pocopine::__private::JsValue::from_str(#leaf),
-                        )
-                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
-                    },
-                }
-            })
-        });
-
-    let flatten_leaf_set_arms =
-        flatten_fields.iter().flat_map(|(container, leaves)| {
-            leaves.iter().map(move |leaf| {
-                quote! {
-                    #leaf => {
-                        let __value = value;
-                        let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
-                            &self.#container,
-                        )
-                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
-                        if __obj.is_object() {
-                            let __normalised =
-                                if __value.as_string().as_deref() == Some("") {
-                                    ::pocopine::__private::JsValue::NULL
-                                } else {
-                                    __value
-                                };
-                            let _ = ::pocopine::__private::js_sys::Reflect::set(
-                                &__obj,
-                                &::pocopine::__private::JsValue::from_str(#leaf),
-                                &__normalised,
-                            );
-                            if let Ok(v) =
-                                ::pocopine::__private::serde_wasm_bindgen::from_value(__obj)
-                            {
-                                self.#container = v;
-                            }
+                            &__normalised,
+                        );
+                        if let Ok(v) =
+                            ::pocopine::__private::serde_wasm_bindgen::from_value(__obj)
+                        {
+                            self.#container = v;
                         }
                     }
                 }
-            })
-        });
+            }
+        })
+    });
 
     // `serde_wasm_bindgen::to_value(&None::<T>)` returns `undefined`,
     // but RFC-044 §5.4 promises `None` serialises as `null`. Canonicalise
     // at the boundary so the emit detail, parent mirror-in round-trips,
     // and `get()` reads are all consistent.
-    let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
-        quote! {
-            #name => {
-                let __v = ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
-                    .unwrap_or(::pocopine::__private::JsValue::NULL);
-                if __v.is_undefined() {
-                    ::pocopine::__private::JsValue::NULL
-                } else {
-                    __v
-                }
-            },
-        }
-    }).chain(flatten_leaf_get_arms);
+    let get_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => {
+                    let __v = ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
+                        .unwrap_or(::pocopine::__private::JsValue::NULL);
+                    if __v.is_undefined() {
+                        ::pocopine::__private::JsValue::NULL
+                    } else {
+                        __v
+                    }
+                },
+            }
+        })
+        .chain(flatten_leaf_get_arms);
 
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -676,7 +760,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     //   explicitly set. Missing entirely → "". `animate = "flip"`
     //   sets the animate-kind literal; anything else falls back to
     //   the raw string for forwards compatibility.
-    let transition_sym = args.transition.as_ref().map(|l| l.value()).unwrap_or_default();
+    let transition_sym = args
+        .transition
+        .as_ref()
+        .map(|l| l.value())
+        .unwrap_or_default();
     let transition_in = args
         .transition_in
         .as_ref()
@@ -945,7 +1033,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut methods_to_skip_in_arms: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for impl_item in input.items.iter_mut() {
-        let ImplItem::Fn(method) = impl_item else { continue };
+        let ImplItem::Fn(method) = impl_item else {
+            continue;
+        };
         let mut watch_field: Option<syn::Ident> = None;
         method.attrs.retain(|attr| {
             if attr.path().is_ident("watch") {
@@ -1246,12 +1336,13 @@ struct StoreArgs {
 
 impl Parse for StoreArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let pairs: Punctuated<MetaNameValue, Token![,]> =
-            Punctuated::parse_terminated(input)?;
+        let pairs: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
         let mut args = StoreArgs::default();
         for kv in pairs {
             let lit = match kv.value {
-                Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => s,
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) => s,
                 other => {
                     return Err(syn::Error::new_spanned(other, "expected a string literal"));
                 }
@@ -1306,12 +1397,15 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
         .map(|i| i.to_string().trim_start_matches("r#").to_string())
         .collect();
 
-    let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
-        quote! {
-            #name => ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
-                .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
-        }
-    });
+    let get_arms = field_idents
+        .iter()
+        .zip(field_names.iter())
+        .map(|(id, name)| {
+            quote! {
+                #name => ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
+                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
+            }
+        });
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {

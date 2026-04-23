@@ -38,7 +38,11 @@ where
     handle.listen_on_window::<web_sys::Event, _>("scroll", move |_| {
         if let Some(window) = web_sys::window() {
             let scroll_y = window.scroll_y().unwrap_or(0.0);
-            let inner_h = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let inner_h = window
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let scroll_h = window
                 .document()
                 .and_then(|d| d.document_element())
@@ -69,7 +73,10 @@ pub struct ViewConfig {
 
 impl Default for ViewConfig {
     fn default() -> Self {
-        Self { threshold: 0.1, once: false }
+        Self {
+            threshold: 0.1,
+            once: false,
+        }
     }
 }
 
@@ -111,18 +118,16 @@ where
     let opts = IntersectionObserverInit::new();
     opts.set_threshold(&JsValue::from_f64(cfg.threshold));
 
-    let observer = match IntersectionObserver::new_with_options(
-        closure.as_ref().unchecked_ref(),
-        &opts,
-    ) {
-        Ok(o) => o,
-        Err(_) => {
-            return ScrollHandle {
-                _closure: Some(closure),
-                observer: None,
-            };
-        }
-    };
+    let observer =
+        match IntersectionObserver::new_with_options(closure.as_ref().unchecked_ref(), &opts) {
+            Ok(o) => o,
+            Err(_) => {
+                return ScrollHandle {
+                    _closure: Some(closure),
+                    observer: None,
+                };
+            }
+        };
     observer.observe(el);
     *observer_slot.borrow_mut() = Some(observer.clone());
 

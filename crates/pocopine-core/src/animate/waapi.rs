@@ -158,13 +158,11 @@ impl AnimationHandle {
     pub fn finished(&self) -> impl Future<Output = ()> {
         // `Animation.finished` returns a Promise<Animation>. Wrap it
         // and discard the result.
-        let promise: js_sys::Promise = match Reflect::get(
-            self.inner.as_ref(),
-            &JsValue::from_str("finished"),
-        ) {
-            Ok(v) if !v.is_undefined() => v.unchecked_into(),
-            _ => js_sys::Promise::resolve(&JsValue::UNDEFINED),
-        };
+        let promise: js_sys::Promise =
+            match Reflect::get(self.inner.as_ref(), &JsValue::from_str("finished")) {
+                Ok(v) if !v.is_undefined() => v.unchecked_into(),
+                _ => js_sys::Promise::resolve(&JsValue::UNDEFINED),
+            };
         async move {
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
         }
@@ -254,7 +252,9 @@ pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> An
     let args = Array::new();
     args.push(&kf_array);
     args.push(&opt_obj);
-    let result = animate_fn.apply(el.as_ref(), &args).unwrap_or(JsValue::NULL);
+    let result = animate_fn
+        .apply(el.as_ref(), &args)
+        .unwrap_or(JsValue::NULL);
     let anim = result
         .dyn_into::<web_sys::Animation>()
         .unwrap_or_else(|_| fallback_animation());

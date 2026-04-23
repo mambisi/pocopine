@@ -59,7 +59,9 @@ pub(super) fn is_collapsed() -> bool {
 /// creating one. Used by inspect + event helpers that need the root
 /// for containment checks but shouldn't side-effect the DOM.
 pub(super) fn panel_root() -> Option<Element> {
-    window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(ROOT_ID))
+    window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(ROOT_ID))
 }
 
 /// Resolve or create the panel root. On first call this appends a
@@ -124,10 +126,7 @@ pub(super) fn update_collapse_state(root: &Element) {
     }
     if let Some(btn) = root.query_selector(".__pp_dev_collapse").ok().flatten() {
         btn.set_text_content(Some(if collapsed { "+" } else { "−" }));
-        let _ = btn.set_attribute(
-            "title",
-            if collapsed { "expand" } else { "collapse" },
-        );
+        let _ = btn.set_attribute("title", if collapsed { "expand" } else { "collapse" });
     }
     LAST_COLLAPSED_RENDERED.with(|c| c.set(Some(collapsed)));
 }
@@ -139,7 +138,11 @@ pub(super) fn update_inspect_button(root: &Element) {
     if on == prev {
         return;
     }
-    if let Some(btn) = root.query_selector(&format!("#{INSPECT_BTN_ID}")).ok().flatten() {
+    if let Some(btn) = root
+        .query_selector(&format!("#{INSPECT_BTN_ID}"))
+        .ok()
+        .flatten()
+    {
         if on {
             let _ = btn.set_attribute("class", "__pp_dev_btn __pp_dev_btn_on");
             btn.set_text_content(Some("inspecting…"));
@@ -200,7 +203,9 @@ pub(super) fn update_tab_strip(root: &Element) {
     if !changed {
         return;
     }
-    let Some(tabs) = root.query_selector(&format!("#{TABS_ID}")).ok().flatten() else { return };
+    let Some(tabs) = root.query_selector(&format!("#{TABS_ID}")).ok().flatten() else {
+        return;
+    };
     if let Ok(html_el) = tabs.clone().dyn_into::<HtmlElement>() {
         let _ = html_el.style().remove_property("display");
     }

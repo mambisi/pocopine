@@ -9,5 +9,7 @@ pub struct SliderDemo {
 
 #[handlers]
 impl SliderDemo {
-    pub fn on_mount(&mut self) { self.volume = 40.0; }
+    pub fn on_mount(&mut self) {
+        self.volume = 40.0;
+    }
 }

@@ -36,7 +36,9 @@ pub fn run(call: &DirectiveCall) {
         // Only anchors in v0 — any element with an href could work, but
         // anchors are the canonical case and keep the behaviour
         // predictable.
-        let Some(a) = el.dyn_ref::<HtmlAnchorElement>() else { return };
+        let Some(a) = el.dyn_ref::<HtmlAnchorElement>() else {
+            return;
+        };
 
         if a.target() == "_blank" {
             return;

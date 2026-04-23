@@ -280,6 +280,9 @@ mod tests {
         let v0 = cubic_bezier_at([0.42, 0.0, 0.58, 1.0], 0.0);
         let v1 = cubic_bezier_at([0.42, 0.0, 0.58, 1.0], 1.0);
         assert!(v0.abs() < 1e-3, "ease-in-out at 0 should be 0, got {v0}");
-        assert!((v1 - 1.0).abs() < 1e-3, "ease-in-out at 1 should be 1, got {v1}");
+        assert!(
+            (v1 - 1.0).abs() < 1e-3,
+            "ease-in-out at 1 should be 1, got {v1}"
+        );
     }
 }

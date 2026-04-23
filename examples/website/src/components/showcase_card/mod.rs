@@ -17,7 +17,11 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "ShowcaseCard.poco", style = "showcase_card.css", role = "panel")]
+#[component(
+    template = "ShowcaseCard.poco",
+    style = "showcase_card.css",
+    role = "panel"
+)]
 pub struct ShowcaseCard {
     /// Heading shown in the card header.
     #[prop]

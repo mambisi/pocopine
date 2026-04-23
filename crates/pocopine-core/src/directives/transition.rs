@@ -217,7 +217,8 @@ pub fn enter<F: FnOnce() + 'static>(el: &Element, on_done: F) {
         on_done();
         return;
     }
-    if crate::animate::motion::effective_for(el) == crate::animate::motion::MotionPreference::Reduced
+    if crate::animate::motion::effective_for(el)
+        == crate::animate::motion::MotionPreference::Reduced
     {
         on_done();
         return;
@@ -322,7 +323,8 @@ pub fn leave<F: FnOnce() + 'static>(el: &Element, on_done: F) {
         on_done();
         return;
     }
-    if crate::animate::motion::effective_for(el) == crate::animate::motion::MotionPreference::Reduced
+    if crate::animate::motion::effective_for(el)
+        == crate::animate::motion::MotionPreference::Reduced
     {
         on_done();
         return;
@@ -669,11 +671,7 @@ pub fn enter_subtrees_sequenced(clones: &[Element], stagger_ms: u32) {
 ///
 /// `on_done` fires after the LAST animation settles. Pass
 /// `stagger_ms = 0` for the same behaviour as [`enter_subtree`].
-pub fn enter_subtree_staggered<F: FnOnce() + 'static>(
-    root: &Element,
-    stagger_ms: u32,
-    on_done: F,
-) {
+pub fn enter_subtree_staggered<F: FnOnce() + 'static>(root: &Element, stagger_ms: u32, on_done: F) {
     let elems = collect_animated(root);
     if elems.is_empty() {
         on_done();

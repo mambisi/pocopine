@@ -74,12 +74,15 @@ pub struct PineTooltipProvider {
     /// Default `delay_duration` inherited by descendants. Authors
     /// can still set `delay_duration` on an individual Root to
     /// override.
-    #[prop] pub delay_duration: u32,
+    #[prop]
+    pub delay_duration: u32,
 }
 
 impl Default for PineTooltipProvider {
     fn default() -> Self {
-        Self { delay_duration: 700 }
+        Self {
+            delay_duration: 700,
+        }
     }
 }
 
@@ -129,10 +132,12 @@ struct TriggerRuntime {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTooltipRoot.poco", role = "scope")]
 pub struct PineTooltipRoot {
-    #[prop] pub open: bool,
+    #[prop]
+    pub open: bool,
     /// Delay (ms) before the tooltip appears on hover. Focus
     /// opens immediately (no delay — matches WAI-ARIA).
-    #[prop] pub delay_duration: u32,
+    #[prop]
+    pub delay_duration: u32,
 }
 
 impl Default for PineTooltipRoot {
@@ -335,31 +340,23 @@ fn teardown(scope: ScopeId) {
     let Some(rt) = RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
         return;
     };
-    let Some(trigger_el) = rt.trigger_el.as_ref() else { return };
+    let Some(trigger_el) = rt.trigger_el.as_ref() else {
+        return;
+    };
     let target: &EventTarget = trigger_el.as_ref();
     if let Some(c) = rt.enter.as_ref() {
-        let _ = target.remove_event_listener_with_callback(
-            "mouseenter",
-            c.as_ref().unchecked_ref(),
-        );
+        let _ =
+            target.remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
     }
     if let Some(c) = rt.leave.as_ref() {
-        let _ = target.remove_event_listener_with_callback(
-            "mouseleave",
-            c.as_ref().unchecked_ref(),
-        );
+        let _ =
+            target.remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
     }
     if let Some(c) = rt.focus.as_ref() {
-        let _ = target.remove_event_listener_with_callback(
-            "focusin",
-            c.as_ref().unchecked_ref(),
-        );
+        let _ = target.remove_event_listener_with_callback("focusin", c.as_ref().unchecked_ref());
     }
     if let Some(c) = rt.blur.as_ref() {
-        let _ = target.remove_event_listener_with_callback(
-            "focusout",
-            c.as_ref().unchecked_ref(),
-        );
+        let _ = target.remove_event_listener_with_callback("focusout", c.as_ref().unchecked_ref());
     }
     if let Some(w) = web_sys::window() {
         if let Some(id) = rt.pending_timer {
@@ -373,7 +370,8 @@ fn teardown(scope: ScopeId) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTooltipPortal.poco", role = "scope")]
 pub struct PineTooltipPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -382,12 +380,20 @@ impl PineTooltipPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTooltipContent.poco", role = "panel", transition_in = "scale", transition_out = "fade")]
+#[component(
+    template = "PineTooltipContent.poco",
+    role = "panel",
+    transition_in = "scale",
+    transition_out = "fade"
+)]
 pub struct PineTooltipContent {
     pub anchor: String,
-    #[prop] pub side: String,
-    #[prop] pub align: String,
-    #[prop] pub side_offset: f64,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
 }
 
 impl Default for PineTooltipContent {
@@ -410,7 +416,9 @@ impl PineTooltipContent {
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(content) = refs.get("content") else { return };
+        let Some(content) = refs.get("content") else {
+            return;
+        };
         if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
             if let Some(root) = inject::<Handle<PineTooltipRoot>>(&ROOT) {
                 compound::install_anchor_to_trigger(
@@ -426,4 +434,3 @@ impl PineTooltipContent {
         }
     }
 }
-

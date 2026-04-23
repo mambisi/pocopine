@@ -48,7 +48,11 @@ pub fn activate(scope: ScopeId, content: &Element, modal: bool) {
     deactivate(scope);
 
     let saved = focus::save();
-    let trap = if modal { Some(focus::trap(content)) } else { None };
+    let trap = if modal {
+        Some(focus::trap(content))
+    } else {
+        None
+    };
     let scroll_locked = modal;
     if modal {
         scroll_lock::lock();

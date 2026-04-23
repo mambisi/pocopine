@@ -51,10 +51,7 @@ pub fn current_write_origin() -> WriteOrigin {
 
 pub fn capture_emit_el(scope_id: ScopeId, el: &Element) {
     MODEL_RUNTIME.with(|m| {
-        m.borrow_mut()
-            .entry(scope_id)
-            .or_default()
-            .emit_el = Some(el.clone());
+        m.borrow_mut().entry(scope_id).or_default().emit_el = Some(el.clone());
     });
 }
 
@@ -68,11 +65,7 @@ pub fn clear_scope(scope_id: ScopeId) {
 }
 
 pub fn emit_target(scope_id: ScopeId) -> Option<Element> {
-    MODEL_RUNTIME.with(|m| {
-        m.borrow()
-            .get(&scope_id)
-            .and_then(|rt| rt.emit_el.clone())
-    })
+    MODEL_RUNTIME.with(|m| m.borrow().get(&scope_id).and_then(|rt| rt.emit_el.clone()))
 }
 
 pub fn resolve_model_key(scope_id: ScopeId, wire_name: &str) -> Option<String> {
@@ -89,11 +82,7 @@ pub fn resolve_model_key(scope_id: ScopeId, wire_name: &str) -> Option<String> {
     None
 }
 
-pub fn with_scope_write<R>(
-    scope_id: ScopeId,
-    origin: WriteOrigin,
-    f: impl FnOnce() -> R,
-) -> R {
+pub fn with_scope_write<R>(scope_id: ScopeId, origin: WriteOrigin, f: impl FnOnce() -> R) -> R {
     let before = snapshot_models(scope_id);
     let out = with_write_origin(origin, f);
     let after = snapshot_models(scope_id);
@@ -183,7 +172,11 @@ fn flush_pending() {
                 return (None, Vec::new());
             };
             let emit_el = runtime.emit_el.clone();
-            let pending = runtime.pending.drain().map(|(_, item)| item).collect::<Vec<_>>();
+            let pending = runtime
+                .pending
+                .drain()
+                .map(|(_, item)| item)
+                .collect::<Vec<_>>();
             (emit_el, pending)
         });
         let Some(el) = emit_el else { continue };
@@ -206,9 +199,7 @@ fn flush_pending() {
             //     LocalHandler origin and thus emits).
             if matches!(
                 item.origin,
-                WriteOrigin::ParentModelIn
-                    | WriteOrigin::SetupSeed
-                    | WriteOrigin::ObserveMirror
+                WriteOrigin::ParentModelIn | WriteOrigin::SetupSeed | WriteOrigin::ObserveMirror
             ) {
                 #[cfg(any(debug_assertions, feature = "devtools"))]
                 testing::record_suppressed(scope_id, &item);

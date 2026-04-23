@@ -62,7 +62,11 @@ pub fn computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T> 
         },
     );
 
-    Computed { id, effect_id, state }
+    Computed {
+        id,
+        effect_id,
+        state,
+    }
 }
 
 impl<T: Clone + 'static> Computed<T> {

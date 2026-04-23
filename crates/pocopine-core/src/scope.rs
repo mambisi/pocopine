@@ -217,7 +217,11 @@ impl Scope {
         let id = next_scope_id();
         let erased: Rc<RefCell<dyn ComponentState>> = state.clone();
         let typed: Rc<dyn Any> = Rc::new(state);
-        let scope = Scope { id, state: erased, typed };
+        let scope = Scope {
+            id,
+            state: erased,
+            typed,
+        };
         SCOPES.with(|s| s.borrow_mut().insert(id, scope.clone()));
         scope
     }
@@ -286,11 +290,14 @@ impl Scope {
                 track(scope_id, &key_str);
                 state_for_get.borrow().get(&key_str)
             },
-        ) as Box<dyn Fn(JsValue, JsValue, JsValue) -> JsValue>);
+        )
+            as Box<dyn Fn(JsValue, JsValue, JsValue) -> JsValue>);
 
         let set_closure = Closure::wrap(Box::new(
             move |_target: JsValue, key: JsValue, value: JsValue, _receiver: JsValue| -> bool {
-                let Some(key_str) = key.as_string() else { return false };
+                let Some(key_str) = key.as_string() else {
+                    return false;
+                };
                 let origin = crate::model_runtime::current_write_origin();
                 crate::model_runtime::with_scope_write(scope_id, origin, || {
                     state_for_set.borrow_mut().set(&key_str, value);
@@ -301,10 +308,18 @@ impl Scope {
         )
             as Box<dyn Fn(JsValue, JsValue, JsValue, JsValue) -> bool>);
 
-        Reflect::set(&handler, &"get".into(), get_closure.as_ref().unchecked_ref())
-            .expect("set get trap");
-        Reflect::set(&handler, &"set".into(), set_closure.as_ref().unchecked_ref())
-            .expect("set set trap");
+        Reflect::set(
+            &handler,
+            &"get".into(),
+            get_closure.as_ref().unchecked_ref(),
+        )
+        .expect("set get trap");
+        Reflect::set(
+            &handler,
+            &"set".into(),
+            set_closure.as_ref().unchecked_ref(),
+        )
+        .expect("set set trap");
 
         // Pin the two closures in the per-scope side-table. The
         // handler `Object` holds their JS function pointers; we
@@ -313,13 +328,10 @@ impl Scope {
         // a `.forget()` call leaked both boxes for the life of the
         // process.
         PROXY_CLOSURES.with(|m| {
-            m.borrow_mut()
-                .entry(scope_id)
-                .or_default()
-                .extend([
-                    Box::new(get_closure) as Box<dyn Any>,
-                    Box::new(set_closure) as Box<dyn Any>,
-                ]);
+            m.borrow_mut().entry(scope_id).or_default().extend([
+                Box::new(get_closure) as Box<dyn Any>,
+                Box::new(set_closure) as Box<dyn Any>,
+            ]);
         });
 
         Proxy::new(&target, &handler).into()

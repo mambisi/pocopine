@@ -59,7 +59,11 @@ thread_local! {
 // ── Group ─────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSplitterGroup.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineSplitterGroup.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineSplitterGroup {
     /// `"horizontal"` (panels side-by-side) or `"vertical"`
     /// (panels stacked).
@@ -202,20 +206,13 @@ fn teardown_runtime(scope: ScopeId) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let t: &EventTarget = doc.as_ref();
         if let Some(c) = rt.pointer_move.as_ref() {
-            let _ = t.remove_event_listener_with_callback(
-                "pointermove",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ =
+                t.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
         }
         if let Some(c) = rt.pointer_up.as_ref() {
-            let _ = t.remove_event_listener_with_callback(
-                "pointerup",
-                c.as_ref().unchecked_ref(),
-            );
-            let _ = t.remove_event_listener_with_callback(
-                "pointercancel",
-                c.as_ref().unchecked_ref(),
-            );
+            let _ = t.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
+            let _ =
+                t.remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
         }
     }
 }
@@ -223,7 +220,11 @@ fn teardown_runtime(scope: ScopeId) {
 // ── Panel ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSplitterPanel.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineSplitterPanel.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineSplitterPanel {
     #[prop]
     pub default_size: f64,
@@ -259,7 +260,9 @@ impl PineSplitterPanel {
         let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
             return;
         };
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         let default = if self.default_size > 0.0 {
             self.default_size
         } else {
@@ -303,7 +306,11 @@ impl PineSplitterPanel {
 // ── ResizeHandle ──────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSplitterResizeHandle.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineSplitterResizeHandle.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineSplitterResizeHandle {
     #[prop]
     pub disabled: bool,
@@ -367,7 +374,13 @@ impl PineSplitterResizeHandle {
         let Ok(ev) = ev.dyn_into::<PointerEvent>() else {
             return;
         };
-        start_drag(group, self.before_idx, self.after_idx, self.direction.clone(), ev);
+        start_drag(
+            group,
+            self.before_idx,
+            self.after_idx,
+            self.direction.clone(),
+            ev,
+        );
     }
 
     pub fn step_inc(&mut self) {
@@ -422,7 +435,9 @@ fn neighbour_indices(handle_el: &web_sys::Element) -> (usize, usize) {
     let children = parent.children();
     let mut count = 0usize;
     for i in 0..children.length() {
-        let Some(child) = children.item(i) else { continue };
+        let Some(child) = children.item(i) else {
+            continue;
+        };
         let child_node: &web_sys::Node = child.as_ref();
         let own_tag_node: &web_sys::Node = own_tag.as_ref();
         if child_node.is_same_node(Some(own_tag_node)) {
@@ -515,8 +530,7 @@ fn start_drag(
             }
             false
         });
-        if was_active {
-        }
+        if was_active {}
     }) as Box<dyn FnMut(PointerEvent)>);
 
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {

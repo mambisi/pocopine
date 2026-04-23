@@ -125,10 +125,8 @@ fn find_grid_root(from: &web_sys::Element) -> Option<web_sys::Element> {
     let mut cursor: Option<web_sys::Element> = Some(from.clone());
     while let Some(el) = cursor {
         let tag = el.tag_name().to_ascii_lowercase();
-        if tag == "pine-range-calendar-grid" || tag == "div"
-            && el
-                .class_list()
-                .contains("pine-range-calendar-grid")
+        if tag == "pine-range-calendar-grid"
+            || tag == "div" && el.class_list().contains("pine-range-calendar-grid")
         {
             return Some(el);
         }

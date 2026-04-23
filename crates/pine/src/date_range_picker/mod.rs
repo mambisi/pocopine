@@ -22,9 +22,9 @@
 //! - `close_on_select` — close after `end` commits. `true` by
 //!   default.
 
+use crate::datetime::DateValue;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::datetime::DateValue;
 
 #[derive(Serialize, Deserialize)]
 #[component(

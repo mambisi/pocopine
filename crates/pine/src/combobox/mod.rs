@@ -37,9 +37,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{
-    current_scope_id, inject, inject_key, provide, refs, watch_scope_field,
-};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -51,7 +49,11 @@ inject_key!(ROOT: Handle<PineComboboxRoot>);
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineComboboxRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineComboboxRoot {
     #[model]
     pub open: bool,
@@ -126,9 +128,12 @@ impl PineComboboxRoot {
 pub struct PineComboboxInput {
     #[prop]
     pub placeholder: String,
-    #[observe(ROOT)] pub open: bool,
-    #[observe(ROOT)] pub disabled: bool,
-    #[observe(ROOT)] pub listbox_id: String,
+    #[observe(ROOT)]
+    pub open: bool,
+    #[observe(ROOT)]
+    pub disabled: bool,
+    #[observe(ROOT)]
+    pub listbox_id: String,
 }
 
 #[handlers]
@@ -150,16 +155,10 @@ impl PineComboboxInput {
             // can anchor to `[data-pine-combobox-input="N"]`
             // (same convention the other compound primitives use
             // for Trigger → Content).
-            let _ = input_el.set_attribute(
-                "data-pine-combobox-input",
-                &format!("{}", root_scope.0),
-            );
+            let _ =
+                input_el.set_attribute("data-pine-combobox-input", &format!("{}", root_scope.0));
             let installed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-            schedule_install_virtual(
-                input_el.clone(),
-                listbox_id.clone(),
-                installed.clone(),
-            );
+            schedule_install_virtual(input_el.clone(), listbox_id.clone(), installed.clone());
             let input_for_watch = input_el;
             let listbox_for_watch = listbox_id;
             watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
@@ -182,8 +181,12 @@ impl PineComboboxInput {
     /// avoids re-entrant `Handle::update` from each Item's
     /// query watcher chain.
     pub fn on_input(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "input") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "input") else {
+            return;
+        };
         let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else {
             return;
         };
@@ -208,8 +211,12 @@ impl PineComboboxInput {
     /// Enter selects whichever item currently carries
     /// `aria-activedescendant` via the virtual-mode roving.
     pub fn on_enter(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "input") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "input") else {
+            return;
+        };
         let Some(active_id) = el.get_attribute("aria-activedescendant") else {
             return;
         };
@@ -257,12 +264,7 @@ fn schedule_install_virtual(
         if doc.get_element_by_id(&listbox_id).is_none() {
             return;
         }
-        pocopine_core::directives::roving::install_virtual_on(
-            &input_el,
-            &listbox_id,
-            &[],
-            None,
-        );
+        pocopine_core::directives::roving::install_virtual_on(&input_el, &listbox_id, &[], None);
         installed.set(true);
     });
 }
@@ -270,9 +272,14 @@ fn schedule_install_virtual(
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxPortal.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineComboboxPortal.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineComboboxPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -281,7 +288,11 @@ impl PineComboboxPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineComboboxContent.poco", role = "list", transition = "fade")]
+#[component(
+    template = "PineComboboxContent.poco",
+    role = "list",
+    transition = "fade"
+)]
 pub struct PineComboboxContent {
     pub listbox_id: String,
     /// Selector resolving to the linked Input element; computed
@@ -313,8 +324,7 @@ impl Default for PineComboboxContent {
 impl PineComboboxContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
-            let (lb, scope_id) =
-                root.with(|r| (r.listbox_id.clone(), root.scope_id().0));
+            let (lb, scope_id) = root.with(|r| (r.listbox_id.clone(), root.scope_id().0));
             self.listbox_id = lb;
             self.anchor = format!("[data-pine-combobox-input=\"{scope_id}\"]");
         }
@@ -374,7 +384,11 @@ impl PineComboboxContent {
 // ── Empty ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxEmpty.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineComboboxEmpty.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineComboboxEmpty {
     pub empty: bool,
 }
@@ -400,7 +414,12 @@ impl PineComboboxEmpty {
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineComboboxItem.poco", role = "item", display = "contents", animate = "flip")]
+#[component(
+    template = "PineComboboxItem.poco",
+    role = "item",
+    display = "contents",
+    animate = "flip"
+)]
 pub struct PineComboboxItem {
     #[prop]
     pub value: String,

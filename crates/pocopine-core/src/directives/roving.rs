@@ -63,7 +63,9 @@ pub fn run(call: &DirectiveCall) {
 
 /// Called by `walker::release_subtree` on every released element.
 pub fn release(el: &Element) {
-    let Ok(v) = Reflect::get(el.as_ref(), &STATE_KEY.into()) else { return };
+    let Ok(v) = Reflect::get(el.as_ref(), &STATE_KEY.into()) else {
+        return;
+    };
     if v.is_undefined() || v.is_null() {
         return;
     }
@@ -114,10 +116,8 @@ fn install_roving(
             let Some(action) = action else { return };
 
             let items = query_items(&container_clone, &selector_clone);
-            let enabled: Vec<Element> = items
-                .into_iter()
-                .filter(|i| !is_item_disabled(i))
-                .collect();
+            let enabled: Vec<Element> =
+                items.into_iter().filter(|i| !is_item_disabled(i)).collect();
             if enabled.is_empty() {
                 return;
             }
@@ -160,22 +160,17 @@ fn install_roving(
 
             ev.prevent_default();
             for (i, item) in enabled.iter().enumerate() {
-                let _ = item.set_attribute(
-                    "tabindex",
-                    if i == target_idx { "0" } else { "-1" },
-                );
+                let _ = item.set_attribute("tabindex", if i == target_idx { "0" } else { "-1" });
             }
             if let Ok(html) = enabled[target_idx].clone().dyn_into::<HtmlElement>() {
                 crate::focus::focus_no_scroll(&html);
             }
         }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
+    })
+        as Box<dyn FnMut(KeyboardEvent)>);
 
     let target: &web_sys::EventTarget = container.as_ref();
-    let _ = target.add_event_listener_with_callback(
-        "keydown",
-        closure.as_ref().unchecked_ref(),
-    );
+    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
     closure.forget();
     let _ = Reflect::set(container.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
 }
@@ -185,14 +180,12 @@ fn install_roving(
 /// last, depending on direction) enabled item.
 fn install_palette_entry(input: &Element, orientation: Orientation) {
     let input_clone = input.clone();
-    let listbox_id = input
-        .get_attribute("pp-roving")
-        .or_else(|| {
-            // `call.arg` was parsed out of the attribute name earlier;
-            // we get it from the container here to keep the closure
-            // 'static-lifetime safe.
-            Some(String::new())
-        });
+    let listbox_id = input.get_attribute("pp-roving").or_else(|| {
+        // `call.arg` was parsed out of the attribute name earlier;
+        // we get it from the container here to keep the closure
+        // 'static-lifetime safe.
+        Some(String::new())
+    });
     // Actually capture the raw arg by reading the directive attribute
     // once and leaking the selector into the closure — call.arg is
     // consumed in `run`. We re-read here for locality.
@@ -206,7 +199,9 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
                 Some(KeyAction::Prev) => FocusEdge::Last,
                 _ => return,
             };
-            let Some(id) = listbox_arg.as_deref() else { return };
+            let Some(id) = listbox_arg.as_deref() else {
+                return;
+            };
             let Some(listbox) = web_sys::window()
                 .and_then(|w| w.document())
                 .and_then(|d| d.get_element_by_id(id))
@@ -217,10 +212,8 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
                 return;
             };
             let items = query_items(&listbox, &default_items_selector());
-            let enabled: Vec<Element> = items
-                .into_iter()
-                .filter(|i| !is_item_disabled(i))
-                .collect();
+            let enabled: Vec<Element> =
+                items.into_iter().filter(|i| !is_item_disabled(i)).collect();
             if enabled.is_empty() {
                 return;
             }
@@ -237,22 +230,17 @@ fn install_palette_entry(input: &Element, orientation: Orientation) {
                         FocusEdge::First => i == 0,
                         FocusEdge::Last => i == enabled.len() - 1,
                     };
-                    let _ = item.set_attribute(
-                        "tabindex",
-                        if idx_match { "0" } else { "-1" },
-                    );
+                    let _ = item.set_attribute("tabindex", if idx_match { "0" } else { "-1" });
                 }
                 if let Ok(html) = t.clone().dyn_into::<HtmlElement>() {
                     crate::focus::focus_no_scroll(&html);
                 }
             }
         }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
+    })
+        as Box<dyn FnMut(KeyboardEvent)>);
     let target: &web_sys::EventTarget = input_clone.as_ref();
-    let _ = target.add_event_listener_with_callback(
-        "keydown",
-        closure.as_ref().unchecked_ref(),
-    );
+    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
     closure.forget();
     let _ = Reflect::set(input.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
 }
@@ -274,10 +262,7 @@ fn classify_key(key: &str, orientation: Orientation) -> Option<KeyAction> {
     let (next_keys, prev_keys): (&[&str], &[&str]) = match orientation {
         Orientation::Vertical => (&["ArrowDown"], &["ArrowUp"]),
         Orientation::Horizontal => (&["ArrowRight"], &["ArrowLeft"]),
-        Orientation::Both => (
-            &["ArrowDown", "ArrowRight"],
-            &["ArrowUp", "ArrowLeft"],
-        ),
+        Orientation::Both => (&["ArrowDown", "ArrowRight"], &["ArrowUp", "ArrowLeft"]),
     };
     if next_keys.contains(&key) {
         return Some(KeyAction::Next);
@@ -439,13 +424,11 @@ fn install_virtual(
             let _ = host_clone.set_attribute("aria-activedescendant", &id);
             set_highlighted(&items, Some(target));
         }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
+    })
+        as Box<dyn FnMut(KeyboardEvent)>);
 
     let target: &web_sys::EventTarget = host.as_ref();
-    let _ = target.add_event_listener_with_callback(
-        "keydown",
-        closure.as_ref().unchecked_ref(),
-    );
+    let _ = target.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
     closure.forget();
     let _ = Reflect::set(host.as_ref(), &STATE_KEY.into(), &JsValue::TRUE);
 }
@@ -542,8 +525,7 @@ fn node_list_to_elements(list: &NodeList) -> Vec<Element> {
 }
 
 fn is_item_disabled(item: &Element) -> bool {
-    item.get_attribute("aria-disabled").as_deref() == Some("true")
-        || item.has_attribute("disabled")
+    item.get_attribute("aria-disabled").as_deref() == Some("true") || item.has_attribute("disabled")
 }
 
 fn active_element() -> Option<HtmlElement> {

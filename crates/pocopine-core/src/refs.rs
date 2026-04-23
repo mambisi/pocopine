@@ -82,11 +82,8 @@ pub fn as_object(scope_id: ScopeId) -> wasm_bindgen::JsValue {
     REFS.with(|r| {
         if let Some(map) = r.borrow().get(&scope_id) {
             for (name, el) in map.iter() {
-                let _ = js_sys::Reflect::set(
-                    &obj,
-                    &wasm_bindgen::JsValue::from_str(name),
-                    el.as_ref(),
-                );
+                let _ =
+                    js_sys::Reflect::set(&obj, &wasm_bindgen::JsValue::from_str(name), el.as_ref());
             }
         }
     });

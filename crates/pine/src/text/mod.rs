@@ -80,7 +80,9 @@ impl PineText {
         // Apply the clamp style synchronously — the scope is live
         // in on_ready. Measurement defers because `handle.update`
         // inside on_ready is the RefCell double-borrow trap.
-        let Some(html_el) = self.resolve_root() else { return };
+        let Some(html_el) = self.resolve_root() else {
+            return;
+        };
         apply_clamp_style(&html_el, self.lines);
 
         let handle = this::<Self>();
@@ -91,14 +93,18 @@ impl PineText {
 
     #[watch(lines)]
     fn on_lines_change(&mut self, new: u32, _prev: Option<u32>) {
-        let Some(html_el) = self.resolve_root() else { return };
+        let Some(html_el) = self.resolve_root() else {
+            return;
+        };
         apply_clamp_style(&html_el, new);
         self.schedule_measure(html_el);
     }
 
     #[watch(max_width)]
     fn on_max_width_change(&mut self, _new: f64, _prev: Option<f64>) {
-        let Some(html_el) = self.resolve_root() else { return };
+        let Some(html_el) = self.resolve_root() else {
+            return;
+        };
         self.schedule_measure(html_el);
     }
 }

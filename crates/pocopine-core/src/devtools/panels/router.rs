@@ -95,10 +95,7 @@ fn build_routes_html() -> String {
                 .map(|(k, v)| format!("{}={}", util::escape(k), util::escape(v)))
                 .collect::<Vec<_>>()
                 .join(" ");
-            format!(
-                "<span class=\"__pp_dev_rt_params\">{}</span>",
-                joined
-            )
+            format!("<span class=\"__pp_dev_rt_params\">{}</span>", joined)
         };
         html.push_str(&format!(
             "<div class=\"__pp_dev_rt_row\">\

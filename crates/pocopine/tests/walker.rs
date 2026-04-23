@@ -20,11 +20,11 @@
 
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -39,7 +39,8 @@ struct Row {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "TestRow.html")]
 struct TestRow {
-    #[prop] row: Row,
+    #[prop]
+    row: Row,
 }
 
 #[handlers]
@@ -208,7 +209,8 @@ impl AsButton {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ShortHost.html")]
 struct ShortHost {
-    #[prop] variant: String,
+    #[prop]
+    variant: String,
     count: u32,
 }
 
@@ -319,7 +321,8 @@ impl InterpHost {
 #[component(template = "FallthroughRoot.html")]
 struct FallthroughRoot {
     // `variant` is declared → flows into the prop path, NOT fallthrough.
-    #[prop] variant: String,
+    #[prop]
+    variant: String,
 }
 
 #[handlers]
@@ -329,7 +332,8 @@ impl FallthroughRoot {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ModelChild.html")]
 struct ModelChild {
-    #[prop] model: String,
+    #[prop]
+    model: String,
 }
 
 #[handlers]
@@ -347,8 +351,10 @@ impl ModelParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "ModelPairChild.html")]
 struct ModelPairChild {
-    #[prop] a: String,
-    #[prop] b: String,
+    #[prop]
+    a: String,
+    #[prop]
+    b: String,
 }
 
 #[handlers]
@@ -367,7 +373,8 @@ impl ModelPairParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "OptionalModelChild.html")]
 struct OptionalModelChild {
-    #[prop] value: Option<String>,
+    #[prop]
+    value: Option<String>,
 }
 
 #[handlers]
@@ -385,7 +392,8 @@ impl OptionalModelParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "AutoModelChild.html")]
 struct AutoModelChild {
-    #[model] value: String,
+    #[model]
+    value: String,
 }
 
 #[handlers]
@@ -409,7 +417,8 @@ impl AutoModelParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "RenamedModelChild.html")]
 struct RenamedModelChild {
-    #[model(name = "open")] is_open: bool,
+    #[model(name = "open")]
+    is_open: bool,
 }
 
 #[handlers]
@@ -431,7 +440,8 @@ impl RenamedModelParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "SeededModelChild.html")]
 struct SeededModelChild {
-    #[model] value: String,
+    #[model]
+    value: String,
 }
 
 #[handlers]
@@ -453,7 +463,8 @@ impl SeededModelParent {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "OptionalAutoModelChild.html")]
 struct OptionalAutoModelChild {
-    #[model] value: Option<String>,
+    #[model]
+    value: Option<String>,
 }
 
 #[handlers]
@@ -656,8 +667,7 @@ fn collect_li_clones(container: &Element) -> Vec<Element> {
 fn seed_rows(host: &Element, rows: Vec<Row>) {
     let test_list = host.query_selector("test-list").unwrap().unwrap();
     let root = test_list.first_element_child().unwrap();
-    let (_id, proxy) =
-        pocopine_core::walker::scope_of_element(&root).expect("test-list scope");
+    let (_id, proxy) = pocopine_core::walker::scope_of_element(&root).expect("test-list scope");
     let array = serde_wasm_bindgen::to_value(&rows).unwrap();
     js_sys::Reflect::set(&proxy, &"rows".into(), &array).unwrap();
 }
@@ -671,15 +681,28 @@ async fn component_tag_inside_pp_for_mounts_and_binds() {
     seed_rows(
         &host,
         vec![
-            Row { id: 1, label: "one".into() },
-            Row { id: 2, label: "two".into() },
-            Row { id: 3, label: "three".into() },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 2,
+                label: "two".into(),
+            },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
         ],
     );
     tick().await;
 
     let ul = host.query_selector("ul").unwrap().unwrap();
-    assert_eq!(li_count(&ul), 3, "test-row template body should mount per item");
+    assert_eq!(
+        li_count(&ul),
+        3,
+        "test-row template body should mount per item"
+    );
     assert_eq!(li_texts(&ul), vec!["one", "two", "three"]);
 }
 
@@ -692,9 +715,18 @@ async fn keyed_reorder_reuses_clones() {
     seed_rows(
         &host,
         vec![
-            Row { id: 1, label: "one".into() },
-            Row { id: 2, label: "two".into() },
-            Row { id: 3, label: "three".into() },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 2,
+                label: "two".into(),
+            },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
         ],
     );
     tick().await;
@@ -707,9 +739,18 @@ async fn keyed_reorder_reuses_clones() {
     seed_rows(
         &host,
         vec![
-            Row { id: 3, label: "three".into() },
-            Row { id: 1, label: "one".into() },
-            Row { id: 2, label: "two".into() },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 2,
+                label: "two".into(),
+            },
         ],
     );
     tick().await;
@@ -742,7 +783,10 @@ async fn keyed_reorder_reuses_clones() {
 async fn keyed_reconcile_handles_large_lists() {
     let host = mount("<test-list></test-list>");
     let rows: Vec<Row> = (0..1000)
-        .map(|i| Row { id: i, label: format!("row-{i}") })
+        .map(|i| Row {
+            id: i,
+            label: format!("row-{i}"),
+        })
         .collect();
     seed_rows(&host, rows);
     tick().await;
@@ -758,7 +802,10 @@ async fn keyed_reconcile_handles_large_lists() {
     // to surface bugs on.
     let reversed: Vec<Row> = (0..1000)
         .rev()
-        .map(|i| Row { id: i, label: format!("row-{i}") })
+        .map(|i| Row {
+            id: i,
+            label: format!("row-{i}"),
+        })
         .collect();
     seed_rows(&host, reversed);
     tick().await;
@@ -789,7 +836,10 @@ async fn keyed_reorder_preserves_input_focus_on_unrelated_trigger() {
         .unwrap();
     input.focus().unwrap();
     assert!(
-        doc().active_element().unwrap().is_same_node(Some(input.as_ref())),
+        doc()
+            .active_element()
+            .unwrap()
+            .is_same_node(Some(input.as_ref())),
         "pre-condition: slot 1 is focused"
     );
 
@@ -798,15 +848,17 @@ async fn keyed_reorder_preserves_input_focus_on_unrelated_trigger() {
     // `pp-for` effect — if the reorder pass unconditionally
     // re-emits `insert_before`, focus will fall back to <body>.
     let root = host.query_selector("focus-list").unwrap().unwrap();
-    let (_id, proxy) = pocopine_core::walker::scope_of_element(
-        &root.first_element_child().unwrap(),
-    )
-    .expect("focus-list scope");
+    let (_id, proxy) =
+        pocopine_core::walker::scope_of_element(&root.first_element_child().unwrap())
+            .expect("focus-list scope");
     js_sys::Reflect::set(&proxy, &"tick".into(), &JsValue::from_f64(1.0)).unwrap();
     tick().await;
 
     assert!(
-        doc().active_element().unwrap().is_same_node(Some(input.as_ref())),
+        doc()
+            .active_element()
+            .unwrap()
+            .is_same_node(Some(input.as_ref())),
         "focus survived the flush — pp-for no-op reorder kept the input in place"
     );
 }
@@ -820,9 +872,18 @@ async fn keyed_removal_releases_missing() {
     seed_rows(
         &host,
         vec![
-            Row { id: 1, label: "one".into() },
-            Row { id: 2, label: "two".into() },
-            Row { id: 3, label: "three".into() },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 2,
+                label: "two".into(),
+            },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
         ],
     );
     tick().await;
@@ -830,8 +891,14 @@ async fn keyed_removal_releases_missing() {
     seed_rows(
         &host,
         vec![
-            Row { id: 1, label: "one".into() },
-            Row { id: 3, label: "three".into() },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
         ],
     );
     tick().await;
@@ -847,7 +914,13 @@ async fn keyed_removal_releases_missing() {
 async fn observer_doesnt_double_walk_new_clones() {
     let host = mount("<test-list></test-list>");
 
-    seed_rows(&host, vec![Row { id: 1, label: "only".into() }]);
+    seed_rows(
+        &host,
+        vec![Row {
+            id: 1,
+            label: "only".into(),
+        }],
+    );
     tick().await;
 
     // Pre-fix, the MutationObserver would walk the added clone again
@@ -905,8 +978,7 @@ async fn handler_with_typed_event_arg_receives_the_event() {
     // and invoke the handler directly — same path pp-on uses.
     let init = web_sys::KeyboardEventInit::new();
     init.set_key("Enter");
-    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-        .unwrap();
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
     let args = js_sys::Array::new();
     args.push(ev.as_ref());
     pocopine_core::scope::invoke_handler(scope_id, "on_key", &args);
@@ -954,8 +1026,7 @@ async fn pp_model_child_to_parent_via_update_event() {
     let init = web_sys::CustomEventInit::new();
     init.set_bubbles(true);
     init.set_detail(&JsValue::from_str("bob@example.com"));
-    let ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init)
-        .unwrap();
+    let ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:model", &init).unwrap();
     let _ = child.dispatch_event(&ev).unwrap();
     tick().await;
 
@@ -974,15 +1045,14 @@ async fn pp_model_named_channels_do_not_clobber_each_other() {
     let start_init = web_sys::CustomEventInit::new();
     start_init.set_bubbles(true);
     start_init.set_detail(&JsValue::from_str("one"));
-    let start_ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:a", &start_init)
-        .unwrap();
+    let start_ev =
+        web_sys::CustomEvent::new_with_event_init_dict("pp:update:a", &start_init).unwrap();
     child.dispatch_event(&start_ev).unwrap();
 
     let end_init = web_sys::CustomEventInit::new();
     end_init.set_bubbles(true);
     end_init.set_detail(&JsValue::from_str("two"));
-    let end_ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:b", &end_init)
-        .unwrap();
+    let end_ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:b", &end_init).unwrap();
     child.dispatch_event(&end_ev).unwrap();
     tick().await;
 
@@ -1001,16 +1071,18 @@ async fn model_field_assignment_coalesces_to_one_named_event() {
 
     let child = host.query_selector("auto-model-child").unwrap().unwrap();
     let root = child.first_element_child().unwrap();
-    let (scope_id, _) =
-        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+    let (scope_id, _) = pocopine_core::walker::scope_of_element(&root).expect("child scope");
 
     let seen = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let seen_for_listener = seen.clone();
     let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         seen_for_listener.borrow_mut().push(ev.detail());
     }) as Box<dyn FnMut(web_sys::Event)>);
-    child.add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
+    child
+        .add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
         .unwrap();
     listener.forget();
 
@@ -1030,7 +1102,10 @@ async fn model_field_wire_name_renames_mirror_in_and_out() {
     let host = mount("<renamed-model-parent></renamed-model-parent>");
     tick().await;
 
-    let parent = host.query_selector("renamed-model-parent").unwrap().unwrap();
+    let parent = host
+        .query_selector("renamed-model-parent")
+        .unwrap()
+        .unwrap();
     let parent_root = parent.first_element_child().unwrap();
     let (_id, parent_proxy) =
         pocopine_core::walker::scope_of_element(&parent_root).expect("parent scope");
@@ -1075,10 +1150,13 @@ async fn model_field_setup_seed_stays_silent_and_none_emits_null() {
     let details = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let details_for_listener = details.clone();
     let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         details_for_listener.borrow_mut().push(ev.detail());
     }) as Box<dyn FnMut(web_sys::Event)>);
-    child.add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
+    child
+        .add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
         .unwrap();
     listener.forget();
 
@@ -1161,23 +1239,31 @@ async fn flatten_single_leaf_write_emits_one_channel() {
 
     let child = host.query_selector("flatten-child").unwrap().unwrap();
     let root = child.first_element_child().unwrap();
-    let (scope_id, _) =
-        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+    let (scope_id, _) = pocopine_core::walker::scope_of_element(&root).expect("child scope");
 
     let starts = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let ends = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let starts_clone = starts.clone();
     let ends_clone = ends.clone();
     let start_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         starts_clone.borrow_mut().push(ev.detail());
-    }) as Box<dyn FnMut(web_sys::Event)>);
+    })
+        as Box<dyn FnMut(web_sys::Event)>);
     let end_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         ends_clone.borrow_mut().push(ev.detail());
-    }) as Box<dyn FnMut(web_sys::Event)>);
+    })
+        as Box<dyn FnMut(web_sys::Event)>);
     child
-        .add_event_listener_with_callback("pp:update:start", start_listener.as_ref().unchecked_ref())
+        .add_event_listener_with_callback(
+            "pp:update:start",
+            start_listener.as_ref().unchecked_ref(),
+        )
         .unwrap();
     child
         .add_event_listener_with_callback("pp:update:end", end_listener.as_ref().unchecked_ref())
@@ -1216,23 +1302,31 @@ async fn flatten_whole_container_write_fans_out_per_leaf() {
 
     let child = host.query_selector("flatten-child").unwrap().unwrap();
     let root = child.first_element_child().unwrap();
-    let (scope_id, _) =
-        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+    let (scope_id, _) = pocopine_core::walker::scope_of_element(&root).expect("child scope");
 
     let starts = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let ends = Rc::new(RefCell::new(Vec::<JsValue>::new()));
     let starts_clone = starts.clone();
     let ends_clone = ends.clone();
     let start_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         starts_clone.borrow_mut().push(ev.detail());
-    }) as Box<dyn FnMut(web_sys::Event)>);
+    })
+        as Box<dyn FnMut(web_sys::Event)>);
     let end_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else {
+            return;
+        };
         ends_clone.borrow_mut().push(ev.detail());
-    }) as Box<dyn FnMut(web_sys::Event)>);
+    })
+        as Box<dyn FnMut(web_sys::Event)>);
     child
-        .add_event_listener_with_callback("pp:update:start", start_listener.as_ref().unchecked_ref())
+        .add_event_listener_with_callback(
+            "pp:update:start",
+            start_listener.as_ref().unchecked_ref(),
+        )
         .unwrap();
     child
         .add_event_listener_with_callback("pp:update:end", end_listener.as_ref().unchecked_ref())
@@ -1252,8 +1346,18 @@ async fn flatten_whole_container_write_fans_out_per_leaf() {
 
     let starts = starts.borrow();
     let ends = ends.borrow();
-    assert_eq!(starts.len(), 1, "one coalesced pp:update:start — got {:?}", &*starts);
-    assert_eq!(ends.len(), 1, "one coalesced pp:update:end — got {:?}", &*ends);
+    assert_eq!(
+        starts.len(),
+        1,
+        "one coalesced pp:update:start — got {:?}",
+        &*starts
+    );
+    assert_eq!(
+        ends.len(),
+        1,
+        "one coalesced pp:update:end — got {:?}",
+        &*ends
+    );
     assert_eq!(starts[0].as_string().as_deref(), Some("A"));
     assert_eq!(ends[0].as_string().as_deref(), Some("Z"));
 }
@@ -1405,7 +1509,10 @@ async fn fallthrough_merges_class_and_style_onto_template_root() {
     // style merged (base kept, user appended with `;`).
     let style = root.get_attribute("style").unwrap_or_default();
     assert!(style.contains("color"), "base style preserved: {style:?}");
-    assert!(style.contains("background"), "user style appended: {style:?}");
+    assert!(
+        style.contains("background"),
+        "user style appended: {style:?}"
+    );
 
     // Non-class/style: overwrite semantics — assigned to root.
     assert_eq!(root.get_attribute("id"), Some("my-id".into()));
@@ -1480,8 +1587,7 @@ async fn expressions_evaluate_through_directives() {
 
     let root = host.query_selector("expr-host").unwrap().unwrap();
     let inner = root.first_element_child().unwrap();
-    let (_id, proxy) =
-        pocopine_core::walker::scope_of_element(&inner).expect("expr-host scope");
+    let (_id, proxy) = pocopine_core::walker::scope_of_element(&inner).expect("expr-host scope");
 
     // Seed mixed state.
     js_sys::Reflect::set(&proxy, &"status".into(), &JsValue::from_str("ok")).unwrap();
@@ -1524,7 +1630,7 @@ async fn expressions_evaluate_through_directives() {
     assert!(visible(".eh-and"), "eh-and now visible");
     assert!(!visible(".eh-not"), "eh-not hidden when loading=true");
     assert_eq!(text(".eh-ternary"), "bad"); // status != 'ok'
-    assert_eq!(text(".eh-cmp"), "many");    // count >= 5
+    assert_eq!(text(".eh-cmp"), "many"); // count >= 5
 }
 
 // ─── RFC-013 key modifiers ────────────────────────────────────────
@@ -1536,21 +1642,14 @@ async fn key_modifiers_filter_handlers() {
 
     let input = host.query_selector(".ha-input").unwrap().unwrap();
 
-    fn dispatch_keydown(
-        el: &Element,
-        key: &str,
-        ctrl: bool,
-        meta: bool,
-    ) {
+    fn dispatch_keydown(el: &Element, key: &str, ctrl: bool, meta: bool) {
         let init = web_sys::KeyboardEventInit::new();
         init.set_key(key);
         init.set_ctrl_key(ctrl);
         init.set_meta_key(meta);
         init.set_bubbles(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(
-            "keydown", &init,
-        )
-        .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         let _ = el.dispatch_event(&ev).unwrap();
     }
 
@@ -1573,7 +1672,11 @@ async fn key_modifiers_filter_handlers() {
     let e_html: HtmlElement = escaped.dyn_into().unwrap();
     let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
     assert_eq!(e_html.inner_text().trim(), "1", "escape unchanged on `a`");
-    assert_eq!(k_html.inner_text().trim(), "0", "ctrl+k unchanged on plain a");
+    assert_eq!(
+        k_html.inner_text().trim(),
+        "0",
+        "ctrl+k unchanged on plain a"
+    );
 
     // Ctrl+k → on_ctrl_k fires.
     dispatch_keydown(&input, "k", true, false);
@@ -1587,7 +1690,11 @@ async fn key_modifiers_filter_handlers() {
     tick().await;
     let ctrl_k = host.query_selector(".ha-ctrl-k").unwrap().unwrap();
     let k_html: HtmlElement = ctrl_k.dyn_into().unwrap();
-    assert_eq!(k_html.inner_text().trim(), "1", "plain k doesn't fire ctrl.k");
+    assert_eq!(
+        k_html.inner_text().trim(),
+        "1",
+        "plain k doesn't fire ctrl.k"
+    );
 }
 
 // ─── RFC-014: focus + tick utilities ──────────────────────────────
@@ -1751,9 +1858,7 @@ async fn raf_tick() {
     // tested browser.
     for _ in 0..3 {
         let promise = js_sys::Promise::new(&mut |resolve, _| {
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                &resolve, 16,
-            );
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 16);
         });
         let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
     }
@@ -1764,9 +1869,8 @@ async fn raf_tick() {
 /// dimensions.
 #[wasm_bindgen_test]
 async fn pp_resize_fires_handler_on_initial_observe_and_on_size_change() {
-    let host = mount(
-        "<resize-host style=\"display: block; width: 300px; height: 50px\"></resize-host>",
-    );
+    let host =
+        mount("<resize-host style=\"display: block; width: 300px; height: 50px\"></resize-host>");
     // First: ResizeObserver's synthetic initial entry must fire.
     raf_tick().await;
 
@@ -1784,10 +1888,7 @@ async fn pp_resize_fires_handler_on_initial_observe_and_on_size_change() {
     // template installed, so pick that up via querySelector.
     let root = host.query_selector(".rh-root").unwrap().unwrap();
     let root_html: HtmlElement = root.clone().dyn_into().unwrap();
-    root_html
-        .style()
-        .set_property("width", "600px")
-        .unwrap();
+    root_html.style().set_property("width", "600px").unwrap();
 
     raf_tick().await;
 
@@ -1907,15 +2008,18 @@ async fn roving_navigates_with_arrows_and_skips_disabled() {
     assert_eq!(d.get_attribute("tabindex").as_deref(), Some("-1"));
 
     // Focus A, then ArrowDown → B.
-    a.clone().dyn_into::<HtmlElement>().unwrap().focus().unwrap();
+    a.clone()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .focus()
+        .unwrap();
 
     fn send_arrow(target: &Element, key: &str) {
         let init = web_sys::KeyboardEventInit::new();
         init.set_key(key);
         init.set_bubbles(true);
         let ev =
-            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-                .unwrap();
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         let _ = target.dispatch_event(&ev).unwrap();
     }
 
@@ -1985,8 +2089,8 @@ async fn on_keydown_prevent_respects_key_filter() {
         init.set_key(key);
         init.set_bubbles(true);
         init.set_cancelable(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         input.dispatch_event(&ev).unwrap();
         ev
     };
@@ -2039,7 +2143,9 @@ async fn roving_virtual_moves_activedescendant_without_stealing_focus() {
         "initial activedescendant seeded to first option"
     );
     assert_eq!(
-        item("vrv-opt-1").get_attribute("data-highlighted").as_deref(),
+        item("vrv-opt-1")
+            .get_attribute("data-highlighted")
+            .as_deref(),
         Some("true"),
     );
 
@@ -2055,8 +2161,8 @@ async fn roving_virtual_moves_activedescendant_without_stealing_focus() {
         init.set_key(key);
         init.set_bubbles(true);
         init.set_cancelable(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         target.dispatch_event(&ev).unwrap();
     }
 
@@ -2068,7 +2174,9 @@ async fn roving_virtual_moves_activedescendant_without_stealing_focus() {
         Some("vrv-opt-2"),
     );
     assert_eq!(
-        item("vrv-opt-2").get_attribute("data-highlighted").as_deref(),
+        item("vrv-opt-2")
+            .get_attribute("data-highlighted")
+            .as_deref(),
         Some("true"),
     );
     assert!(!item("vrv-opt-1").has_attribute("data-highlighted"));
@@ -2217,7 +2325,11 @@ async fn id_magic_is_unique_per_instance_and_composes_via_plus() {
 
     let get_text = |root: Element, sel: &str| -> String {
         let el = root.query_selector(sel).unwrap().unwrap();
-        el.dyn_into::<HtmlElement>().unwrap().inner_text().trim().to_string()
+        el.dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
     };
     let get_attr = |root: Element, sel: &str, name: &str| -> String {
         let el = root.query_selector(sel).unwrap().unwrap();
@@ -2229,8 +2341,14 @@ async fn id_magic_is_unique_per_instance_and_composes_via_plus() {
 
     let base1 = get_text(root1.clone(), ".idh-base");
     let base2 = get_text(root2.clone(), ".idh-base");
-    assert!(base1.starts_with("pp-"), "base id is pp-prefixed, got {base1:?}");
-    assert!(base2.starts_with("pp-"), "base id is pp-prefixed, got {base2:?}");
+    assert!(
+        base1.starts_with("pp-"),
+        "base id is pp-prefixed, got {base1:?}"
+    );
+    assert!(
+        base2.starts_with("pp-"),
+        "base id is pp-prefixed, got {base2:?}"
+    );
     assert_ne!(base1, base2, "two instances get distinct ids");
 
     // `+` composition: label[for] === input[id] === `{base}-input`.
@@ -2252,25 +2370,15 @@ async fn id_magic_is_unique_per_instance_and_composes_via_plus() {
 async fn pp_as_hoists_user_element_and_merges_template_attrs() {
     // `href="#"` so the click doesn't navigate the test page
     // even before `.prevent` on the template runs. Belt + braces.
-    let host = mount(
-        "<as-button pp-as><a href=\"#\" class=\"mine\">Read</a></as-button>",
-    );
+    let host = mount("<as-button pp-as><a href=\"#\" class=\"mine\">Read</a></as-button>");
     tick().await;
 
     // The tag should now contain an <a> — NOT a <button>.
     let as_tag = host.query_selector("as-button").unwrap().unwrap();
     let children = as_tag.children();
-    assert_eq!(
-        children.length(),
-        1,
-        "component tag has exactly one child"
-    );
+    assert_eq!(children.length(), 1, "component tag has exactly one child");
     let root = children.item(0).unwrap();
-    assert_eq!(
-        root.local_name(),
-        "a",
-        "hoisted root is <a>, not <button>"
-    );
+    assert_eq!(root.local_name(), "a", "hoisted root is <a>, not <button>");
 
     // Attrs merge: user's `mine` plus template's `as-btn`.
     let cls = root.get_attribute("class").unwrap_or_default();
@@ -2322,17 +2430,10 @@ async fn expr_values_in_pp_on_support_assign_call_and_seq() {
     assert_eq!(read_text(".eo-bumped"), "0");
 
     // Inline assignment: `open = !open`.
-    toggle
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    toggle.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     assert_eq!(read_text(".eo-open"), "on", "assignment flipped open");
-    toggle
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    toggle.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     assert_eq!(read_text(".eo-open"), "off", "second click toggled back");
 

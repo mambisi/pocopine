@@ -310,10 +310,7 @@ fn parse_query(search: &str) -> HashMap<String, String> {
             continue;
         }
         let value = it.next().unwrap_or("");
-        out.insert(
-            url_decode(key),
-            url_decode(value),
-        );
+        out.insert(url_decode(key), url_decode(value));
     }
     out
 }

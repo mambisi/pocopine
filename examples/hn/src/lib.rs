@@ -13,9 +13,9 @@ pub mod app;
 pub mod components;
 pub mod shared;
 
-use shared::{ItemNode, Story};
 #[cfg(not(target_arch = "wasm32"))]
 use shared::SearchResult;
+use shared::{ItemNode, Story};
 
 // ─── server-side helpers ────────────────────────────────────────
 

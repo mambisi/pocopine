@@ -52,7 +52,11 @@ impl Preset {
             // visible/settled state) and animates back to `from`
             // (the extreme), so the directive's `leave-start /
             // leave-end` pair is (to, from).
-            leave: Phase { base, from: to, to: from },
+            leave: Phase {
+                base,
+                from: to,
+                to: from,
+            },
         }
     }
 }
@@ -166,11 +170,7 @@ pub fn register_preset(name: &'static str, preset: Preset) -> Result<(), &'stati
 pub fn lookup(name: &str) -> Option<Preset> {
     // `name` is a runtime `&str`, but the registry is keyed on
     // `&'static str`. We compare by string equality.
-    with_registry(|m| {
-        m.iter()
-            .find(|(k, _)| **k == name)
-            .map(|(_, p)| p.clone())
-    })
+    with_registry(|m| m.iter().find(|(k, _)| **k == name).map(|(_, p)| p.clone()))
 }
 
 /// Stamp the six `pp-transition:*` attributes on `el` so the

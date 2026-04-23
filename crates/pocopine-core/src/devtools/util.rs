@@ -139,15 +139,11 @@ pub(crate) fn build_json_view(v: &JsValue, is_root: bool) -> String {
     }
     if let Some(n) = v.as_f64() {
         let n_str = n.to_string();
-        return format!(
-            "<span class=\"__pp_jv_number\" data-copy=\"{n_str}\">{n_str}</span>"
-        );
+        return format!("<span class=\"__pp_jv_number\" data-copy=\"{n_str}\">{n_str}</span>");
     }
     if let Some(b) = v.as_bool() {
         let b_str = b.to_string();
-        return format!(
-            "<span class=\"__pp_jv_bool\" data-copy=\"{b_str}\">{b_str}</span>"
-        );
+        return format!("<span class=\"__pp_jv_bool\" data-copy=\"{b_str}\">{b_str}</span>");
     }
     if Array::is_array(v) {
         let arr = Array::from(v);
@@ -190,8 +186,7 @@ pub(crate) fn build_json_view(v: &JsValue, is_root: bool) -> String {
         for i in 0..n {
             let key = keys.get(i);
             let key_str = key.as_string().unwrap_or_default();
-            let value =
-                js_sys::Reflect::get(&obj, &key).unwrap_or(JsValue::UNDEFINED);
+            let value = js_sys::Reflect::get(&obj, &key).unwrap_or(JsValue::UNDEFINED);
             rows.push_str(&format!(
                 "<div class=\"__pp_jv_row\">\
                    <span class=\"__pp_jv_key\">{k}</span>\
@@ -250,7 +245,8 @@ mod tests {
 
     #[test]
     fn truncate_keeps_head_and_tail_visible() {
-        let s = "start_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_end";
+        let s =
+            "start_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_end";
         let out = truncate(s);
         // both ends should survive
         assert!(out.starts_with("start"));

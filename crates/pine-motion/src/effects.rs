@@ -117,6 +117,9 @@ mod tests {
             scale: 0.96,
             ..Default::default()
         };
-        assert_eq!(HoverMotion::Scale.active_transform(&shrink), "translateY(0px) scale(0.96)");
+        assert_eq!(
+            HoverMotion::Scale.active_transform(&shrink),
+            "translateY(0px) scale(0.96)"
+        );
     }
 }

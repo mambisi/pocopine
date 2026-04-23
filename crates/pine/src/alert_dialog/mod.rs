@@ -49,15 +49,19 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineAlertDialogRoot.poco", role = "scope")]
 pub struct PineAlertDialogRoot {
-    #[model] pub open: bool,
+    #[model]
+    pub open: bool,
     /// Alert dialogs are modal by definition — kept as a prop for
     /// consistency with Dialog but changing it would undermine the
     /// "interruptive choice" semantic.
-    #[prop] pub modal: bool,
+    #[prop]
+    pub modal: bool,
     /// Defaults to `false`: an alert dialog requires an explicit
     /// Action or Cancel click; clicking the overlay is a no-op.
-    #[prop] pub dismiss_on_overlay: bool,
-    #[prop] pub dismiss_on_escape: bool,
+    #[prop]
+    pub dismiss_on_overlay: bool,
+    #[prop]
+    pub dismiss_on_escape: bool,
     pub title_id: String,
     pub description_id: String,
 }
@@ -78,7 +82,9 @@ impl Default for PineAlertDialogRoot {
 #[handlers]
 impl PineAlertDialogRoot {
     pub fn on_setup(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         self.title_id = format!("pine-alert-dialog-title-{}", scope.0);
         self.description_id = format!("pine-alert-dialog-description-{}", scope.0);
         provide(&ROOT, this::<Self>());
@@ -106,7 +112,8 @@ impl PineAlertDialogRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAlertDialogTrigger.poco", role = "interactive")]
 pub struct PineAlertDialogTrigger {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -123,7 +130,8 @@ impl PineAlertDialogTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAlertDialogPortal.poco", role = "scope")]
 pub struct PineAlertDialogPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -132,7 +140,11 @@ impl PineAlertDialogPortal {}
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogOverlay.poco", role = "panel", transition = "fade")]
+#[component(
+    template = "PineAlertDialogOverlay.poco",
+    role = "panel",
+    transition = "fade"
+)]
 pub struct PineAlertDialogOverlay {}
 
 #[handlers]
@@ -150,7 +162,11 @@ impl PineAlertDialogOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineAlertDialogContent.poco", role = "panel", transition = "fade-scale")]
+#[component(
+    template = "PineAlertDialogContent.poco",
+    role = "panel",
+    transition = "fade-scale"
+)]
 pub struct PineAlertDialogContent {
     pub title_id: String,
     pub description_id: String,
@@ -168,7 +184,9 @@ impl PineAlertDialogContent {
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
-        let Some(content) = refs.get("content") else { return };
+        let Some(content) = refs.get("content") else {
+            return;
+        };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(true);

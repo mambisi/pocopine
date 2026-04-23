@@ -68,9 +68,13 @@ pub fn focus_no_scroll(el: &HtmlElement) {
 /// `activeElement` when "nothing" is focused; blurring it has
 /// surprising side-effects on Safari scroll).
 pub fn blur() {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let Some(doc) = window.document() else { return };
-    let Some(active) = doc.active_element() else { return };
+    let Some(active) = doc.active_element() else {
+        return;
+    };
     if let Some(body) = doc.body() {
         let body_el: &Element = body.as_ref();
         if active == *body_el {
@@ -120,8 +124,8 @@ pub fn trap(container: &Element) -> TrapHandle {
                 return;
             }
             let last_idx = focusables.len() - 1;
-            let cur_idx = active_html_element()
-                .and_then(|a| focusables.iter().position(|f| *f == a));
+            let cur_idx =
+                active_html_element().and_then(|a| focusables.iter().position(|f| *f == a));
             let next_idx = match (ev.shift_key(), cur_idx) {
                 (false, None) => 0,
                 (false, Some(i)) if i >= last_idx => 0,
@@ -135,35 +139,29 @@ pub fn trap(container: &Element) -> TrapHandle {
         }) as Box<dyn FnMut(KeyboardEvent)>);
 
     let container_for_in = container.clone();
-    let focusin: Closure<dyn FnMut(FocusEvent)> =
-        Closure::wrap(Box::new(move |ev: FocusEvent| {
-            let container = &container_for_in;
-            let node: &Node = container.as_ref();
-            if !node.is_connected() {
-                return;
-            }
-            let Some(target) = ev.target() else { return };
-            let Ok(target_node) = target.dyn_into::<Node>() else {
-                return;
-            };
-            if container.contains(Some(&target_node)) {
-                return;
-            }
-            let focusables = collect_focusables(container);
-            if let Some(first) = focusables.first() {
-                focus_no_scroll(first);
-            }
-        }) as Box<dyn FnMut(FocusEvent)>);
+    let focusin: Closure<dyn FnMut(FocusEvent)> = Closure::wrap(Box::new(move |ev: FocusEvent| {
+        let container = &container_for_in;
+        let node: &Node = container.as_ref();
+        if !node.is_connected() {
+            return;
+        }
+        let Some(target) = ev.target() else { return };
+        let Ok(target_node) = target.dyn_into::<Node>() else {
+            return;
+        };
+        if container.contains(Some(&target_node)) {
+            return;
+        }
+        let focusables = collect_focusables(container);
+        if let Some(first) = focusables.first() {
+            focus_no_scroll(first);
+        }
+    })
+        as Box<dyn FnMut(FocusEvent)>);
 
     let target: &web_sys::EventTarget = doc.as_ref();
-    let _ = target.add_event_listener_with_callback(
-        "keydown",
-        keydown.as_ref().unchecked_ref(),
-    );
-    let _ = target.add_event_listener_with_callback(
-        "focusin",
-        focusin.as_ref().unchecked_ref(),
-    );
+    let _ = target.add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref());
+    let _ = target.add_event_listener_with_callback("focusin", focusin.as_ref().unchecked_ref());
 
     TrapHandle {
         inner: Some(TrapInner {
@@ -196,16 +194,14 @@ impl TrapHandle {
     }
 
     fn tear_down(&mut self) {
-        let Some(inner) = self.inner.take() else { return };
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
         let target: &web_sys::EventTarget = inner.doc.as_ref();
-        let _ = target.remove_event_listener_with_callback(
-            "keydown",
-            inner.keydown.as_ref().unchecked_ref(),
-        );
-        let _ = target.remove_event_listener_with_callback(
-            "focusin",
-            inner.focusin.as_ref().unchecked_ref(),
-        );
+        let _ = target
+            .remove_event_listener_with_callback("keydown", inner.keydown.as_ref().unchecked_ref());
+        let _ = target
+            .remove_event_listener_with_callback("focusin", inner.focusin.as_ref().unchecked_ref());
     }
 }
 

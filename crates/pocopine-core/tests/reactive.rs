@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use js_sys::Reflect;
 use pocopine_core::{
-    batch, computed, effect, flush_sync, on_cleanup, release, rw_signal, set_auto_flush,
-    signal, watch, watch_scope_field_now, Scope,
+    batch, computed, effect, flush_sync, on_cleanup, release, rw_signal, set_auto_flush, signal,
+    watch, watch_scope_field_now, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -154,7 +154,11 @@ fn batch_coalesces_multiple_writes_into_one_rerun() {
         set_b.set(2);
     });
     flush_sync();
-    assert_eq!(runs.get(), 2, "batch should coalesce two writes into one rerun");
+    assert_eq!(
+        runs.get(),
+        2,
+        "batch should coalesce two writes into one rerun"
+    );
 
     // Outside a batch, two writes still coalesce into one rerun because
     // they both land in the same HashSet queue.

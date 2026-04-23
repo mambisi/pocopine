@@ -59,7 +59,9 @@ pub fn run(call: &DirectiveCall) {
     let cb_fired = fired_once.clone();
     let cb_holder = obs_holder.clone();
     let closure = Closure::wrap(Box::new(move |entries: JsValue, _obs: JsValue| {
-        let Ok(entries) = entries.dyn_into::<Array>() else { return };
+        let Ok(entries) = entries.dyn_into::<Array>() else {
+            return;
+        };
         for i in 0..entries.length() {
             let Ok(entry) = entries.get(i).dyn_into::<IntersectionObserverEntry>() else {
                 continue;
@@ -116,7 +118,9 @@ pub fn run(call: &DirectiveCall) {
 }
 
 pub fn release(el: &Element) {
-    let Ok(v) = Reflect::get(el.as_ref(), &OBS_KEY.into()) else { return };
+    let Ok(v) = Reflect::get(el.as_ref(), &OBS_KEY.into()) else {
+        return;
+    };
     if v.is_undefined() || v.is_null() {
         return;
     }

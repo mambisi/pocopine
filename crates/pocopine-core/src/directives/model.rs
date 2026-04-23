@@ -100,7 +100,9 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
         format!("pp:update:{child_field}")
     };
     let listener = Closure::wrap(Box::new(move |ev: Event| {
-        let Ok(ce) = ev.dyn_into::<CustomEvent>() else { return };
+        let Ok(ce) = ev.dyn_into::<CustomEvent>() else {
+            return;
+        };
         let detail = ce.detail();
         let _ = write_path(&parent_w, &key_w, &detail);
     }) as Box<dyn FnMut(Event)>);

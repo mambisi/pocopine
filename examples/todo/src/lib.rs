@@ -27,9 +27,12 @@ impl TodoList {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct TodoItem {
-    #[prop] pub id: i32,
-    #[prop] pub label: String,
-    #[prop] pub done: bool,
+    #[prop]
+    pub id: i32,
+    #[prop]
+    pub label: String,
+    #[prop]
+    pub done: bool,
 }
 
 #[handlers]
@@ -48,7 +51,9 @@ pub struct Preferences {
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { theme: "light".into() }
+        Self {
+            theme: "light".into(),
+        }
     }
 }
 

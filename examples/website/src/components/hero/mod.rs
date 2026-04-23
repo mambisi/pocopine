@@ -7,8 +7,8 @@
 //! app-global (palette, theme) because it encloses every other
 //! component's scope — no prop drilling, no shared store.
 
-use pocopine::prelude::*;
 use pocopine::inject;
+use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{WebsiteApp, WEBSITE_APP};

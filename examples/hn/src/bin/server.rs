@@ -6,12 +6,7 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use hn::{__get_item_tree_route, __search_stories_route};
-    use pocopine_server::{
-        axum::Router,
-        serve,
-        static_files,
-        tower_http::services::ServeFile,
-    };
+    use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let index_path = format!("{manifest_dir}/index.html");

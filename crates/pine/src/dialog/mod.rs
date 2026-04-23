@@ -44,10 +44,14 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDialogRoot.poco", role = "scope")]
 pub struct PineDialogRoot {
-    #[model] pub open: bool,
-    #[prop] pub modal: bool,
-    #[prop] pub dismiss_on_overlay: bool,
-    #[prop] pub dismiss_on_escape: bool,
+    #[model]
+    pub open: bool,
+    #[prop]
+    pub modal: bool,
+    #[prop]
+    pub dismiss_on_overlay: bool,
+    #[prop]
+    pub dismiss_on_escape: bool,
     pub title_id: String,
     pub description_id: String,
 }
@@ -68,7 +72,9 @@ impl Default for PineDialogRoot {
 #[handlers]
 impl PineDialogRoot {
     pub fn on_setup(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         self.title_id = format!("pine-dialog-title-{}", scope.0);
         self.description_id = format!("pine-dialog-description-{}", scope.0);
         provide(&ROOT, this::<Self>());
@@ -96,7 +102,8 @@ impl PineDialogRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogTrigger.poco", role = "interactive")]
 pub struct PineDialogTrigger {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -113,7 +120,8 @@ impl PineDialogTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogPortal.poco", role = "scope")]
 pub struct PineDialogPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -122,7 +130,11 @@ impl PineDialogPortal {}
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogOverlay.poco", role = "panel", transition = "fade")]
+#[component(
+    template = "PineDialogOverlay.poco",
+    role = "panel",
+    transition = "fade"
+)]
 pub struct PineDialogOverlay {}
 
 #[handlers]
@@ -140,7 +152,11 @@ impl PineDialogOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineDialogContent.poco", role = "panel", transition = "fade-scale")]
+#[component(
+    template = "PineDialogContent.poco",
+    role = "panel",
+    transition = "fade-scale"
+)]
 pub struct PineDialogContent {
     pub title_id: String,
     pub description_id: String,
@@ -168,7 +184,9 @@ impl PineDialogContent {
         //
         // RFC-032 extractors (`Refs`, `ScopeId`) remove the scope
         // lookup + `refs::get_on` dance from the top of the hook.
-        let Some(content) = refs.get("content") else { return };
+        let Some(content) = refs.get("content") else {
+            return;
+        };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(true);

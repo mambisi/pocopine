@@ -46,8 +46,8 @@ async fn tick() {
 async fn sleep_ms(ms: i32) {
     let p = js_sys::Promise::new(&mut |resolve: js_sys::Function, _reject| {
         let w = web_sys::window().unwrap();
-        let _ = w
-            .set_timeout_with_callback_and_timeout_and_arguments_0(resolve.unchecked_ref(), ms);
+        let _ =
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(resolve.unchecked_ref(), ms);
     });
     let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 }
@@ -58,9 +58,8 @@ async fn sleep_ms(ms: i32) {
 /// native `disabled` attribute lands on the inner `<button>`.
 #[wasm_bindgen_test]
 async fn button_renders_data_attrs_and_disabled() {
-    let host = mount(
-        "<pine-button variant=\"primary\" size=\"sm\" disabled=\"true\">Save</pine-button>",
-    );
+    let host =
+        mount("<pine-button variant=\"primary\" size=\"sm\" disabled=\"true\">Save</pine-button>");
     tick().await;
 
     let btn = host.query_selector("button.pine-btn").unwrap().unwrap();
@@ -150,37 +149,66 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
         .unwrap();
 
     // Initial: A selected.
-    assert_eq!(trig_a.get_attribute("aria-selected").as_deref(), Some("true"));
-    assert_eq!(trig_b.get_attribute("aria-selected").as_deref(), Some("false"));
+    assert_eq!(
+        trig_a.get_attribute("aria-selected").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        trig_b.get_attribute("aria-selected").as_deref(),
+        Some("false")
+    );
     assert_ne!(
-        panel_a.style().get_property_value("display").unwrap_or_default(),
+        panel_a
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none",
         "panel A visible initially"
     );
     assert_eq!(
-        panel_b.style().get_property_value("display").unwrap_or_default(),
+        panel_b
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none",
         "panel B hidden initially"
     );
 
     // aria-labelledby on panels points at their sibling trigger's id.
     let panel_b_el = host.query_selector(".tc-panel-b").unwrap().unwrap();
-    let labelledby = panel_b_el.get_attribute("aria-labelledby").unwrap_or_default();
+    let labelledby = panel_b_el
+        .get_attribute("aria-labelledby")
+        .unwrap_or_default();
     let trig_b_id = trig_b.get_attribute("id").unwrap_or_default();
-    assert_eq!(labelledby, trig_b_id, "panel B aria-labelledby → trigger B id");
+    assert_eq!(
+        labelledby, trig_b_id,
+        "panel B aria-labelledby → trigger B id"
+    );
 
     // Click B → B selected; A mirrors back to inactive.
     trig_b.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
-    assert_eq!(trig_a.get_attribute("aria-selected").as_deref(), Some("false"));
-    assert_eq!(trig_b.get_attribute("aria-selected").as_deref(), Some("true"));
+    assert_eq!(
+        trig_a.get_attribute("aria-selected").as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        trig_b.get_attribute("aria-selected").as_deref(),
+        Some("true")
+    );
     assert_ne!(
-        panel_b.style().get_property_value("display").unwrap_or_default(),
+        panel_b
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none"
     );
     assert_eq!(
-        panel_a.style().get_property_value("display").unwrap_or_default(),
+        panel_a
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none"
     );
 
@@ -269,7 +297,10 @@ async fn switch_toggles_aria_and_emits_model_event() {
         Some("false"),
         "initial aria-checked"
     );
-    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("unchecked"));
+    assert_eq!(
+        btn.get_attribute("data-state").as_deref(),
+        Some("unchecked")
+    );
 
     let last = Rc::new(Cell::new(None::<bool>));
     let lc = last.clone();
@@ -323,7 +354,10 @@ async fn checkbox_tri_state_maps_aria_checked_correctly() {
     btn.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     assert_eq!(btn.get_attribute("aria-checked").as_deref(), Some("false"));
-    assert_eq!(btn.get_attribute("data-state").as_deref(), Some("unchecked"));
+    assert_eq!(
+        btn.get_attribute("data-state").as_deref(),
+        Some("unchecked")
+    );
 
     host.remove();
 }
@@ -481,13 +515,11 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     // + a non-empty `top` + `left`. Without this, the menu lands at
     // (0, 0) from browser defaults — exactly the "at the bottom of
     // the page, not relative to the trigger" failure mode.
-    let menu_style = menu_el
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .style();
+    let menu_style = menu_el.clone().dyn_into::<HtmlElement>().unwrap().style();
     assert_eq!(
-        menu_style.get_property_value("position").unwrap_or_default(),
+        menu_style
+            .get_property_value("position")
+            .unwrap_or_default(),
         "fixed",
         "pp-anchor applied position: fixed"
     );
@@ -578,11 +610,7 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     prevent_cb.forget();
 
     // Click the vetoing item — menu should stay open.
-    keep_li
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    keep_li.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert!(
@@ -669,8 +697,7 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
     use wasm_bindgen::closure::Closure;
     let veto: Closure<dyn FnMut(web_sys::Event)> =
         Closure::wrap(Box::new(|ev: web_sys::Event| ev.prevent_default()));
-    b_li
-        .add_event_listener_with_callback("pp:select", veto.as_ref().unchecked_ref())
+    b_li.add_event_listener_with_callback("pp:select", veto.as_ref().unchecked_ref())
         .unwrap();
     veto.forget();
 
@@ -1015,9 +1042,7 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
         tick().await;
     }
 
-    let portals = doc()
-        .query_selector_all(".pine-dm-sub-portal")
-        .unwrap();
+    let portals = doc().query_selector_all(".pine-dm-sub-portal").unwrap();
     assert_eq!(
         portals.length(),
         0,
@@ -1108,7 +1133,9 @@ async fn dropdown_menu_content_config_props_override_anchor() {
         .dyn_into()
         .unwrap();
     assert_eq!(
-        menu.style().get_property_value("position").unwrap_or_default(),
+        menu.style()
+            .get_property_value("position")
+            .unwrap_or_default(),
         "fixed",
         "programmatic pp-anchor install fired with the author's config"
     );
@@ -1152,12 +1179,8 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
     // the first trigger in the document.
     let b1 = host.query_selector(".t1").unwrap().unwrap();
     let b2 = host.query_selector(".t2").unwrap().unwrap();
-    let id1 = b1
-        .get_attribute("data-pine-dm-trigger")
-        .unwrap_or_default();
-    let id2 = b2
-        .get_attribute("data-pine-dm-trigger")
-        .unwrap_or_default();
+    let id1 = b1.get_attribute("data-pine-dm-trigger").unwrap_or_default();
+    let id2 = b2.get_attribute("data-pine-dm-trigger").unwrap_or_default();
     assert!(!id1.is_empty(), "trigger 1 stamped");
     assert!(!id2.is_empty(), "trigger 2 stamped");
     assert_ne!(id1, id2, "each menu gets its own trigger id");
@@ -1174,7 +1197,10 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
         .expect("menu 2 open");
     let menu_html: HtmlElement = menu.clone().dyn_into().unwrap();
     assert_eq!(
-        menu_html.style().get_property_value("position").unwrap_or_default(),
+        menu_html
+            .style()
+            .get_property_value("position")
+            .unwrap_or_default(),
         "fixed",
         "pp-anchor positioned the menu"
     );
@@ -1208,7 +1234,10 @@ async fn avatar_fallback_hides_after_image_loads() {
         .dyn_into()
         .unwrap();
     assert_ne!(
-        fallback.style().get_property_value("display").unwrap_or_default(),
+        fallback
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none",
         "fallback visible while image not-yet-loaded"
     );
@@ -1221,19 +1250,25 @@ async fn avatar_fallback_hides_after_image_loads() {
         let p = js_sys::Promise::new(&mut |resolve, _| {
             let _ = window()
                 .unwrap()
-                .set_timeout_with_callback_and_timeout_and_arguments_0(
-                    &resolve, 0,
-                );
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0);
         });
         let _ = wasm_bindgen_futures::JsFuture::from(p).await;
         tick().await;
-        if fallback.style().get_property_value("display").unwrap_or_default() == "none" {
+        if fallback
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default()
+            == "none"
+        {
             break;
         }
     }
 
     assert_eq!(
-        fallback.style().get_property_value("display").unwrap_or_default(),
+        fallback
+            .style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none",
         "fallback hidden once the image load fired"
     );
@@ -1315,11 +1350,7 @@ async fn accordion_single_collapsible_exclusive_toggle() {
     );
 
     // Click A → A opens.
-    trig_a
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    trig_a.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert!(
@@ -1332,11 +1363,7 @@ async fn accordion_single_collapsible_exclusive_toggle() {
     );
 
     // Click B → B opens, A closes (single mode).
-    trig_b
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    trig_b.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert!(
@@ -1394,11 +1421,7 @@ async fn collapsible_trigger_toggles_and_content_mounts() {
 
     // Click → Root.open flips, Trigger's mirror fires,
     // Content's mirror fires → pp-if mounts the body.
-    trigger
-        .clone()
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert_eq!(
@@ -1555,9 +1578,8 @@ async fn popover_pp_model_open_round_trips_through_parent() {
 
 #[wasm_bindgen_test]
 async fn date_range_picker_closes_only_after_end_selection() {
-    let host = mount(
-        "<pine-date-range-picker placeholder=\"2024-06-15\"></pine-date-range-picker>",
-    );
+    let host =
+        mount("<pine-date-range-picker placeholder=\"2024-06-15\"></pine-date-range-picker>");
     tick().await;
 
     let trigger = host
@@ -1805,7 +1827,10 @@ async fn dialog_trigger_pp_as_click_opens_dialog() {
         .unwrap()
         .expect("user trigger button in host");
     assert!(
-        trigger.get_attribute("class").unwrap_or_default().contains("pine-dialog-trigger"),
+        trigger
+            .get_attribute("class")
+            .unwrap_or_default()
+            .contains("pine-dialog-trigger"),
         "template class merged onto user root"
     );
 
@@ -2113,11 +2138,9 @@ async fn context_menu_right_click_opens_and_item_closes() {
     let _ = js_sys::Reflect::set(&init, &"clientY".into(), &80.into());
     let ctor = js_sys::Reflect::get(&web_sys::window().unwrap(), &"MouseEvent".into()).unwrap();
     let ctor: js_sys::Function = ctor.dyn_into().unwrap();
-    let ev_js = js_sys::Reflect::construct(
-        &ctor,
-        &js_sys::Array::of2(&"contextmenu".into(), &init),
-    )
-    .unwrap();
+    let ev_js =
+        js_sys::Reflect::construct(&ctor, &js_sys::Array::of2(&"contextmenu".into(), &init))
+            .unwrap();
     let ev: web_sys::Event = ev_js.dyn_into().unwrap();
 
     let surface = host.query_selector(".cm-surface").unwrap().unwrap();
@@ -2298,20 +2321,14 @@ async fn toolbar_orientation_flows_to_separator() {
     );
     tick().await;
 
-    let tb = host
-        .query_selector("[role=\"toolbar\"]")
-        .unwrap()
-        .unwrap();
+    let tb = host.query_selector("[role=\"toolbar\"]").unwrap().unwrap();
     assert_eq!(
         tb.get_attribute("aria-orientation").as_deref(),
         Some("horizontal")
     );
 
     // Horizontal toolbar → vertical separator (perpendicular to item axis).
-    let sep = host
-        .query_selector(".tb-sep")
-        .unwrap()
-        .unwrap();
+    let sep = host.query_selector(".tb-sep").unwrap().unwrap();
     assert_eq!(
         sep.get_attribute("aria-orientation").as_deref(),
         Some("vertical")
@@ -2969,18 +2986,17 @@ async fn otp_field_types_digits_and_emits_value_updates() {
 
     // Four slots rendered.
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
-    let slots = tag
-        .query_selector_all("input.pine-otp-field-slot")
-        .unwrap();
+    let slots = tag.query_selector_all("input.pine-otp-field-slot").unwrap();
     assert_eq!(slots.length(), 4, "4 slots for length=4");
 
     // Listen for pp:update:value bubbling from the OTP field.
     let last_value: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
     let last = last_value.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *last.borrow_mut() = ce.detail().as_string().unwrap_or_default();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *last.borrow_mut() = ce.detail().as_string().unwrap_or_default();
+        }));
     let target: &web_sys::EventTarget = tag.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3080,13 +3096,11 @@ async fn otp_field_delete_on_filled_slot_keeps_focus() {
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
     let slot = |i: u32| -> HtmlInputElement {
-        tag.query_selector(&format!(
-            "input.pine-otp-field-slot[data-index=\"{i}\"]"
-        ))
-        .unwrap()
-        .unwrap()
-        .dyn_into()
-        .unwrap()
+        tag.query_selector(&format!("input.pine-otp-field-slot[data-index=\"{i}\"]"))
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap()
     };
 
     // Fill slots 0..3 with "1234" — user types each digit.
@@ -3139,13 +3153,11 @@ async fn otp_field_backspace_lands_focus_on_previous_slot() {
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
     let slot = |i: u32| -> HtmlInputElement {
-        tag.query_selector(&format!(
-            "input.pine-otp-field-slot[data-index=\"{i}\"]"
-        ))
-        .unwrap()
-        .unwrap()
-        .dyn_into()
-        .unwrap()
+        tag.query_selector(&format!("input.pine-otp-field-slot[data-index=\"{i}\"]"))
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap()
     };
 
     // Fill slots 0..2 so the current "tail" is slot 2 (empty).
@@ -3202,13 +3214,11 @@ async fn otp_field_backspace_on_last_slot_after_fill_still_walks_back() {
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
     let slot = |i: u32| -> HtmlInputElement {
-        tag.query_selector(&format!(
-            "input.pine-otp-field-slot[data-index=\"{i}\"]"
-        ))
-        .unwrap()
-        .unwrap()
-        .dyn_into()
-        .unwrap()
+        tag.query_selector(&format!("input.pine-otp-field-slot[data-index=\"{i}\"]"))
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap()
     };
 
     // Fill all three slots.
@@ -3255,7 +3265,11 @@ async fn otp_field_backspace_on_last_slot_after_fill_still_walks_back() {
     sleep_ms(5).await;
     tick().await;
 
-    assert_eq!(slot(1).value(), "", "backspace walked back + cleared slot 1");
+    assert_eq!(
+        slot(1).value(),
+        "",
+        "backspace walked back + cleared slot 1"
+    );
     let active = doc().active_element().unwrap();
     assert_eq!(
         active.get_attribute("data-index").as_deref(),
@@ -3279,13 +3293,11 @@ async fn otp_field_delete_on_last_slot_clears_and_keeps_focus() {
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
     let slot = |i: u32| -> HtmlInputElement {
-        tag.query_selector(&format!(
-            "input.pine-otp-field-slot[data-index=\"{i}\"]"
-        ))
-        .unwrap()
-        .unwrap()
-        .dyn_into()
-        .unwrap()
+        tag.query_selector(&format!("input.pine-otp-field-slot[data-index=\"{i}\"]"))
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap()
     };
 
     // Fill all three slots by simulating user typing.
@@ -3337,13 +3349,11 @@ async fn otp_field_backspace_walks_back_and_clears() {
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
     let slot = |i: u32| -> HtmlInputElement {
-        tag.query_selector(&format!(
-            "input.pine-otp-field-slot[data-index=\"{i}\"]"
-        ))
-        .unwrap()
-        .unwrap()
-        .dyn_into()
-        .unwrap()
+        tag.query_selector(&format!("input.pine-otp-field-slot[data-index=\"{i}\"]"))
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap()
     };
 
     // Fill slot 0 + slot 1.
@@ -3407,10 +3417,11 @@ async fn slider_keyboard_steps_and_emits_value() {
     // can inspect each step's detail payload.
     let last: Rc<RefCell<Option<f64>>> = Rc::new(RefCell::new(None));
     let l = last.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *l.borrow_mut() = ce.detail().as_f64();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *l.borrow_mut() = ce.detail().as_f64();
+        }));
     let target: &web_sys::EventTarget = root.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3423,8 +3434,8 @@ async fn slider_keyboard_steps_and_emits_value() {
         init.set_bubbles(true);
         init.set_cancelable(true);
         init.set_key(key);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         inner_thumb.dispatch_event(&ev).unwrap();
     };
 
@@ -3495,10 +3506,11 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     // Listener for the emitted value updates.
     let last: Rc<RefCell<Option<f64>>> = Rc::new(RefCell::new(None));
     let l = last.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *l.borrow_mut() = ce.detail().as_f64();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *l.borrow_mut() = ce.detail().as_f64();
+        }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3517,8 +3529,7 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     init.set_client_x(x as i32);
     init.set_client_y(y as i32);
     init.set_pointer_id(1);
-    let ev =
-        web_sys::PointerEvent::new_with_event_init_dict("pointerdown", &init).unwrap();
+    let ev = web_sys::PointerEvent::new_with_event_init_dict("pointerdown", &init).unwrap();
     root_inner.dispatch_event(&ev).unwrap();
     tick().await;
 
@@ -3564,12 +3575,13 @@ async fn slider_drag_updates_value_continuously() {
     // Collect every emitted value so we can verify motion.
     let seen: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
     let s = seen.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        if let Some(v) = ce.detail().as_f64() {
-            s.borrow_mut().push(v);
-        }
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            if let Some(v) = ce.detail().as_f64() {
+                s.borrow_mut().push(v);
+            }
+        }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3663,10 +3675,11 @@ async fn select_click_item_emits_value_and_closes() {
 
     let last: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let l = last.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *l.borrow_mut() = ce.detail().as_string();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *l.borrow_mut() = ce.detail().as_string();
+        }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3822,10 +3835,11 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
 
     let last: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let l = last.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *l.borrow_mut() = ce.detail().as_string();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *l.borrow_mut() = ce.detail().as_string();
+        }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
         .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
@@ -3892,8 +3906,8 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
         init.set_key(key);
         init.set_bubbles(true);
         init.set_cancelable(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         input.dispatch_event(&ev).unwrap();
     };
     press("ArrowDown");
@@ -3979,8 +3993,7 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
     init.set_bubbles(true);
     init.set_cancelable(true);
     init.set_ctrl_key(true);
-    let ev =
-        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
     doc_target.dispatch_event(&ev).unwrap();
     tick().await;
     sleep_ms(5).await;
@@ -3994,10 +4007,11 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
     // from the portal-mounted item).
     let picked: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let p = picked.clone();
-    let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-        let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
-        *p.borrow_mut() = ce.detail().as_string();
-    }));
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
+            *p.borrow_mut() = ce.detail().as_string();
+        }));
     let body = doc().body().unwrap();
     let body_target: &web_sys::EventTarget = body.as_ref();
     body_target
@@ -4221,10 +4235,7 @@ async fn tree_top_level_items_are_never_hidden() {
         Some("true"),
         "top-level items must not be aria-hidden",
     );
-    assert_ne!(
-        b.get_attribute("aria-hidden").as_deref(),
-        Some("true"),
-    );
+    assert_ne!(b.get_attribute("aria-hidden").as_deref(), Some("true"),);
 
     host.remove();
 }
@@ -4279,10 +4290,7 @@ async fn tree_toggle_click_expands_and_shows_children() {
         item_a.get_attribute("aria-expanded").as_deref(),
         Some("true"),
     );
-    assert_eq!(
-        item_a.get_attribute("data-state").as_deref(),
-        Some("open"),
-    );
+    assert_eq!(item_a.get_attribute("data-state").as_deref(), Some("open"),);
 
     host.remove();
 }
@@ -4314,7 +4322,10 @@ async fn tree_leaf_toggle_is_hidden() {
     // (setTimeout(0)), so yield to the macrotask queue first.
     sleep_ms(10).await;
     tick().await;
-    let display = toggle.style().get_property_value("display").unwrap_or_default();
+    let display = toggle
+        .style()
+        .get_property_value("display")
+        .unwrap_or_default();
     assert_eq!(
         display, "none",
         "leaf's Toggle should be display:none via pp-show=\"has_children\"",
@@ -4581,8 +4592,8 @@ async fn tags_input_enter_adds_and_duplicate_rejects() {
         init.set_key("Enter");
         init.set_bubbles(true);
         init.set_cancelable(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         i.dispatch_event(&ev).unwrap();
     };
 
@@ -4659,8 +4670,8 @@ async fn tags_input_backspace_on_empty_pops_last_tag() {
         init.set_key(key);
         init.set_bubbles(true);
         init.set_cancelable(true);
-        let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
-            .unwrap();
+        let ev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
         i.dispatch_event(&ev).unwrap();
     };
 
@@ -4836,11 +4847,7 @@ async fn animate_register_preset_custom() {
     static N: AtomicUsize = AtomicUsize::new(0);
     let id = N.fetch_add(1, Ordering::SeqCst);
     let name: &'static str = Box::leak(format!("custom-tx-{id}").into_boxed_str());
-    let preset = pocopine_core::animate::Preset::symmetric(
-        "my-base",
-        "my-from",
-        "my-to",
-    );
+    let preset = pocopine_core::animate::Preset::symmetric("my-base", "my-from", "my-to");
     pocopine_core::animate::register_preset(name, preset).unwrap();
     assert!(pocopine_core::animate::lookup(name).is_some());
 
@@ -4880,10 +4887,7 @@ async fn animate_flip_applies_inverse_translate() {
     // current position. The FLIP helper should apply a
     // `translate(0, 100px)` at frame 0 since the element appears
     // to have moved DOWN by 100px.
-    let doc_rect = doc()
-        .body()
-        .unwrap()
-        .get_bounding_client_rect();
+    let doc_rect = doc().body().unwrap().get_bounding_client_rect();
     let _ = doc_rect;
     let current = el.get_bounding_client_rect();
     let fake_before = web_sys::DomRect::new_with_x_and_y_and_width_and_height(
@@ -5011,9 +5015,7 @@ async fn animate_macro_animate_kind_stamps_data_attr() {
 /// the ancestor chain and picks up the closest override.
 #[wasm_bindgen_test]
 async fn motion_element_override_picks_subtree_reduce() {
-    let host = mount(
-        "<div data-pp-motion=\"reduce\"><span class=\"target\">x</span></div>",
-    );
+    let host = mount("<div data-pp-motion=\"reduce\"><span class=\"target\">x</span></div>");
     tick().await;
     let target = host.query_selector(".target").unwrap().unwrap();
     assert_eq!(
@@ -5134,17 +5136,16 @@ async fn stagger_enter_subtree_dispatches_to_every_animated_descendant() {
     let root = host.query_selector(".stagger-root").unwrap().unwrap();
     let done = Rc::new(Cell::new(false));
     let done_for_cb = done.clone();
-    pocopine_core::directives::transition::enter_subtree_staggered(
-        &root,
-        20,
-        move || {
-            done_for_cb.set(true);
-        },
-    );
+    pocopine_core::directives::transition::enter_subtree_staggered(&root, 20, move || {
+        done_for_cb.set(true);
+    });
     // 3 elements × 20ms stagger ≈ 60ms; even on the slowest path
     // 200ms is well past that.
     sleep_ms(200).await;
-    assert!(done.get(), "on_done should fire after all staggered enters complete");
+    assert!(
+        done.get(),
+        "on_done should fire after all staggered enters complete"
+    );
     host.remove();
 }
 
@@ -5227,7 +5228,8 @@ async fn setattr_round_trip_normalises_event_shorthand() {
             name.to_string()
         };
         // setAttribute must never throw.
-        dst.set_attribute(&safe, &a.value()).expect("set_attribute must succeed");
+        dst.set_attribute(&safe, &a.value())
+            .expect("set_attribute must succeed");
     }
     // The original `@click` survived as `pp-on:click`.
     assert_eq!(
@@ -5241,10 +5243,7 @@ async fn setattr_round_trip_normalises_event_shorthand() {
     );
     // `:`-prefixed attrs survive setAttribute as-is (DOM allows
     // `:` in attribute names).
-    assert_eq!(
-        dst.get_attribute(":data-x").as_deref(),
-        Some("baz"),
-    );
+    assert_eq!(dst.get_attribute(":data-x").as_deref(), Some("baz"),);
     host.remove();
 }
 
@@ -5285,12 +5284,14 @@ async fn form_prevents_default_and_emits_pp_submit() {
     let submit_init = web_sys::EventInit::new();
     submit_init.set_bubbles(true);
     submit_init.set_cancelable(true);
-    let submit_ev =
-        web_sys::Event::new_with_event_init_dict("submit", &submit_init).unwrap();
+    let submit_ev = web_sys::Event::new_with_event_init_dict("submit", &submit_init).unwrap();
     target.dispatch_event(&submit_ev).unwrap();
     tick().await;
 
-    assert!(submit_ev.default_prevented(), "native submit was preventDefault'd");
+    assert!(
+        submit_ev.default_prevented(),
+        "native submit was preventDefault'd"
+    );
     assert!(saw_pp.get(), "pp:submit re-emitted");
 
     pp_cb.forget();
@@ -5318,14 +5319,23 @@ async fn field_wires_label_for_control_id_and_describedby() {
     );
     tick().await;
 
-    let label = host.query_selector("label.pine-field-label").unwrap().unwrap();
+    let label = host
+        .query_selector("label.pine-field-label")
+        .unwrap()
+        .unwrap();
     let input = host.query_selector("input").unwrap().unwrap();
-    let desc = host.query_selector("p.pine-field-description").unwrap().unwrap();
+    let desc = host
+        .query_selector("p.pine-field-description")
+        .unwrap()
+        .unwrap();
     let err = host.query_selector("p.pine-field-error").unwrap().unwrap();
 
     let control_id = input.get_attribute("id").expect("control id stamped");
     assert!(control_id.starts_with("pine-field-control-"));
-    assert_eq!(label.get_attribute("for").as_deref(), Some(control_id.as_str()));
+    assert_eq!(
+        label.get_attribute("for").as_deref(),
+        Some(control_id.as_str())
+    );
 
     let desc_id = desc.get_attribute("id").expect("description id set");
     let err_id = err.get_attribute("id").expect("error id set");
@@ -5334,8 +5344,14 @@ async fn field_wires_label_for_control_id_and_describedby() {
         Some(format!("{desc_id} {err_id}").as_str()),
         "aria-describedby = '{{description_id}} {{error_id}}'"
     );
-    assert_eq!(input.get_attribute("aria-errormessage").as_deref(), Some(err_id.as_str()));
-    assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("false"));
+    assert_eq!(
+        input.get_attribute("aria-errormessage").as_deref(),
+        Some(err_id.as_str())
+    );
+    assert_eq!(
+        input.get_attribute("aria-invalid").as_deref(),
+        Some("false")
+    );
 
     host.remove();
 }
@@ -5373,8 +5389,7 @@ async fn field_state_flags_track_focus_blur_input() {
     let target: &web_sys::EventTarget = input.as_ref();
     let fev_init = web_sys::FocusEventInit::new();
     fev_init.set_bubbles(true);
-    let focus_ev =
-        web_sys::FocusEvent::new_with_focus_event_init_dict("focus", &fev_init).unwrap();
+    let focus_ev = web_sys::FocusEvent::new_with_focus_event_init_dict("focus", &fev_init).unwrap();
     target.dispatch_event(&focus_ev).unwrap();
     tick().await;
     assert!(root_div.has_attribute("data-focused"));
@@ -5387,8 +5402,7 @@ async fn field_state_flags_track_focus_blur_input() {
     assert!(root_div.has_attribute("data-dirty"));
     assert!(root_div.has_attribute("data-filled"));
 
-    let blur_ev =
-        web_sys::FocusEvent::new_with_focus_event_init_dict("blur", &fev_init).unwrap();
+    let blur_ev = web_sys::FocusEvent::new_with_focus_event_init_dict("blur", &fev_init).unwrap();
     target.dispatch_event(&blur_ev).unwrap();
     tick().await;
     assert!(!root_div.has_attribute("data-focused"));
@@ -5424,7 +5438,9 @@ async fn field_invalid_prop_shows_error_and_sets_aria_invalid() {
         .dyn_into::<HtmlElement>()
         .unwrap();
     assert_ne!(
-        err.style().get_property_value("display").unwrap_or_default(),
+        err.style()
+            .get_property_value("display")
+            .unwrap_or_default(),
         "none",
         "error row visible when invalid=true"
     );
@@ -5509,12 +5525,18 @@ async fn fieldset_wires_legend_id_and_disables_descendants() {
 
     let legend_id = legend.get_attribute("id").expect("legend id");
     assert!(legend_id.starts_with("pine-fieldset-legend-"));
-    assert_eq!(fs.get_attribute("aria-labelledby").as_deref(), Some(legend_id.as_str()));
+    assert_eq!(
+        fs.get_attribute("aria-labelledby").as_deref(),
+        Some(legend_id.as_str())
+    );
 
     // Native `disabled` attr lands on the fieldset; descendants are
     // implicitly disabled by the browser — `:disabled` selector
     // matches them without Pine touching each one.
-    assert!(fs.has_attribute("disabled"), "native disabled attr forwarded");
+    assert!(
+        fs.has_attribute("disabled"),
+        "native disabled attr forwarded"
+    );
     let first = host.query_selector(".fs-first").unwrap().unwrap();
     assert!(
         first.matches(":disabled").unwrap_or(false),

@@ -132,7 +132,9 @@ pub(super) fn ensure_mounted(host_for: impl Fn(usize, &str) -> Option<Element>) 
             continue;
         }
         let id = PANELS.with(|p| p.borrow()[i].id());
-        let Some(host) = host_for(i, id) else { continue };
+        let Some(host) = host_for(i, id) else {
+            continue;
+        };
         PANELS.with(|p| p.borrow()[i].mount(&host));
         MOUNTED.with(|m| m.borrow_mut()[i] = true);
     }

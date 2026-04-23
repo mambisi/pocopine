@@ -197,8 +197,8 @@ fn load_config(path: &Path) -> Result<PocopineConfig> {
         pocopine: PocopineConfig,
     }
 
-    let manifest: Manifest = toml::from_str(&text)
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
+    let manifest: Manifest =
+        toml::from_str(&text).with_context(|| format!("parse {}", manifest_path.display()))?;
     Ok(manifest.package.metadata.pocopine)
 }
 
@@ -255,16 +255,13 @@ fn ensure_tailwind_binary(project: &Path, tw: &TailwindConfig) -> Result<PathBuf
         return Ok(bin_path);
     }
 
-    std::fs::create_dir_all(&bin_dir)
-        .with_context(|| format!("create {}", bin_dir.display()))?;
+    std::fs::create_dir_all(&bin_dir).with_context(|| format!("create {}", bin_dir.display()))?;
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let asset = tailwind_asset_name()?;
         let url = if tw.version == "latest" {
-            format!(
-                "https://github.com/tailwindlabs/tailwindcss/releases/latest/download/{asset}"
-            )
+            format!("https://github.com/tailwindlabs/tailwindcss/releases/latest/download/{asset}")
         } else {
             format!(
                 "https://github.com/tailwindlabs/tailwindcss/releases/download/{version}/{asset}",
@@ -444,11 +441,17 @@ fn spawn_bin(path: &Path, bin: &str, release: bool) -> Result<BinChild> {
     }
     cmd.current_dir(&project);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    println!("▶ spawning `{bin}` (cargo run --bin {bin} in {})", project.display());
+    println!(
+        "▶ spawning `{bin}` (cargo run --bin {bin} in {})",
+        project.display()
+    );
     let child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn server bin `{bin}`"))?;
-    Ok(BinChild { child, bin: bin.into() })
+    Ok(BinChild {
+        child,
+        bin: bin.into(),
+    })
 }
 
 // ---------- static serving ----------
@@ -523,17 +526,17 @@ fn handle(root: &Path, request: tiny_http::Request) {
     if !looks_like_asset {
         let fallback = root.join("index.html");
         if let Ok(body) = std::fs::read(&fallback) {
-            let header =
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
-                    .unwrap();
+            let header = tiny_http::Header::from_bytes(
+                &b"Content-Type"[..],
+                &b"text/html; charset=utf-8"[..],
+            )
+            .unwrap();
             let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
             return;
         }
     }
 
-    let _ = request.respond(
-        tiny_http::Response::from_string("not found").with_status_code(404),
-    );
+    let _ = request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
 }
 
 /// True when the last URL segment has a file extension. Used to decide
@@ -541,7 +544,8 @@ fn handle(root: &Path, request: tiny_http::Request) {
 /// `/pkg/spa.js` → 404, `/blog/42` → index.html.
 fn looks_like_asset_path(rel: &str) -> bool {
     let last = rel.rsplit('/').next().unwrap_or("");
-    last.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
+    last.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
 }
 
 fn mime_of(path: &Path) -> &'static str {

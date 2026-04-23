@@ -49,11 +49,7 @@ pub enum Expr {
     Path(Vec<String>),
     Not(Box<Spanned<Expr>>),
     BinOp(BinOp, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Ternary(
-        Box<Spanned<Expr>>,
-        Box<Spanned<Expr>>,
-        Box<Spanned<Expr>>,
-    ),
+    Ternary(Box<Spanned<Expr>>, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
     /// `ident(arg, arg, ...)` — invokes a handler on the scope.
     /// RFC-024. Handlers resolve via `invoke_handler`; the name is
     /// a single identifier, not a path.
@@ -142,7 +138,10 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Self { src: src.as_bytes(), pos: 0 }
+        Self {
+            src: src.as_bytes(),
+            pos: 0,
+        }
     }
 
     fn peek(&self, offset: usize) -> Option<u8> {
@@ -166,17 +165,46 @@ impl<'a> Lexer<'a> {
             return Ok((Tok::Eof, start..start));
         };
         let tok = match c {
-            b'(' => { self.pos += 1; Tok::LParen }
-            b')' => { self.pos += 1; Tok::RParen }
-            b',' => { self.pos += 1; Tok::Comma }
-            b';' => { self.pos += 1; Tok::Semi }
-            b'+' => { self.pos += 1; Tok::Plus }
-            b'?' => { self.pos += 1; Tok::Question }
-            b':' => { self.pos += 1; Tok::Colon }
-            b'.' => { self.pos += 1; Tok::Dot }
+            b'(' => {
+                self.pos += 1;
+                Tok::LParen
+            }
+            b')' => {
+                self.pos += 1;
+                Tok::RParen
+            }
+            b',' => {
+                self.pos += 1;
+                Tok::Comma
+            }
+            b';' => {
+                self.pos += 1;
+                Tok::Semi
+            }
+            b'+' => {
+                self.pos += 1;
+                Tok::Plus
+            }
+            b'?' => {
+                self.pos += 1;
+                Tok::Question
+            }
+            b':' => {
+                self.pos += 1;
+                Tok::Colon
+            }
+            b'.' => {
+                self.pos += 1;
+                Tok::Dot
+            }
             b'!' => {
                 self.pos += 1;
-                if self.peek(0) == Some(b'=') { self.pos += 1; Tok::BangEq } else { Tok::Bang }
+                if self.peek(0) == Some(b'=') {
+                    self.pos += 1;
+                    Tok::BangEq
+                } else {
+                    Tok::Bang
+                }
             }
             b'=' => {
                 // `==` wins over `=` — peek the next byte before
@@ -192,33 +220,35 @@ impl<'a> Lexer<'a> {
             }
             b'&' => {
                 if self.peek(1) != Some(b'&') {
-                    return Err(self.err(
-                        start..start + 1,
-                        "expected `&&`",
-                        None,
-                    ));
+                    return Err(self.err(start..start + 1, "expected `&&`", None));
                 }
                 self.pos += 2;
                 Tok::AndAnd
             }
             b'|' => {
                 if self.peek(1) != Some(b'|') {
-                    return Err(self.err(
-                        start..start + 1,
-                        "expected `||`",
-                        None,
-                    ));
+                    return Err(self.err(start..start + 1, "expected `||`", None));
                 }
                 self.pos += 2;
                 Tok::OrOr
             }
             b'<' => {
                 self.pos += 1;
-                if self.peek(0) == Some(b'=') { self.pos += 1; Tok::Le } else { Tok::Lt }
+                if self.peek(0) == Some(b'=') {
+                    self.pos += 1;
+                    Tok::Le
+                } else {
+                    Tok::Lt
+                }
             }
             b'>' => {
                 self.pos += 1;
-                if self.peek(0) == Some(b'=') { self.pos += 1; Tok::Ge } else { Tok::Gt }
+                if self.peek(0) == Some(b'=') {
+                    self.pos += 1;
+                    Tok::Ge
+                } else {
+                    Tok::Gt
+                }
             }
             b'"' | b'\'' => self.string(c, start)?,
             b'0'..=b'9' => self.number(start)?,
@@ -265,12 +295,10 @@ impl<'a> Lexer<'a> {
             }
         }
         let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap_or_default();
-        let n = s.parse::<f64>().map_err(|_| {
-            ParseError {
-                message: format!("invalid number literal {s:?}"),
-                span: start..self.pos,
-                hint: None,
-            }
+        let n = s.parse::<f64>().map_err(|_| ParseError {
+            message: format!("invalid number literal {s:?}"),
+            span: start..self.pos,
+            hint: None,
         })?;
         Ok(Tok::NumberLit(n))
     }
@@ -406,8 +434,7 @@ impl Parser {
                 message: "left side of `=` must be a path".to_string(),
                 span,
                 hint: Some(
-                    "only dotted identifiers like `foo` or `foo.bar` are assignable"
-                        .to_string(),
+                    "only dotted identifiers like `foo` or `foo.bar` are assignable".to_string(),
                 ),
             });
         };
@@ -543,23 +570,38 @@ impl Parser {
             }
             Tok::StringLit(s) => {
                 self.pos += 1;
-                Ok(Spanned { value: Expr::Literal(Literal::String(s)), span })
+                Ok(Spanned {
+                    value: Expr::Literal(Literal::String(s)),
+                    span,
+                })
             }
             Tok::NumberLit(n) => {
                 self.pos += 1;
-                Ok(Spanned { value: Expr::Literal(Literal::Number(n)), span })
+                Ok(Spanned {
+                    value: Expr::Literal(Literal::Number(n)),
+                    span,
+                })
             }
             Tok::True => {
                 self.pos += 1;
-                Ok(Spanned { value: Expr::Literal(Literal::Bool(true)), span })
+                Ok(Spanned {
+                    value: Expr::Literal(Literal::Bool(true)),
+                    span,
+                })
             }
             Tok::False => {
                 self.pos += 1;
-                Ok(Spanned { value: Expr::Literal(Literal::Bool(false)), span })
+                Ok(Spanned {
+                    value: Expr::Literal(Literal::Bool(false)),
+                    span,
+                })
             }
             Tok::Null => {
                 self.pos += 1;
-                Ok(Spanned { value: Expr::Literal(Literal::Null), span })
+                Ok(Spanned {
+                    value: Expr::Literal(Literal::Null),
+                    span,
+                })
             }
             Tok::Ident(first) => {
                 self.pos += 1;
@@ -606,7 +648,10 @@ impl Parser {
                         }
                     }
                 }
-                Ok(Spanned { value: Expr::Path(segments), span: start..end })
+                Ok(Spanned {
+                    value: Expr::Path(segments),
+                    span: start..end,
+                })
             }
             _ => Err(ParseError {
                 message: "expected expression".to_string(),
@@ -919,7 +964,10 @@ mod tests {
     #[test]
     fn string_literals_both_quotes() {
         matches!(parse_ok("'hello'").value, Expr::Literal(Literal::String(_)));
-        matches!(parse_ok("\"world\"").value, Expr::Literal(Literal::String(_)));
+        matches!(
+            parse_ok("\"world\"").value,
+            Expr::Literal(Literal::String(_))
+        );
     }
 
     #[test]

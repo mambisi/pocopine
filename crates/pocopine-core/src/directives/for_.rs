@@ -142,7 +142,9 @@ fn run_naive(
 
     effect(move || {
         let items_js = resolve_path(&parent_proxy, &items_expr);
-        let arr: Array = items_js.dyn_into::<Array>().unwrap_or_else(|_| Array::new());
+        let arr: Array = items_js
+            .dyn_into::<Array>()
+            .unwrap_or_else(|_| Array::new());
         let total = arr.length() as usize;
 
         {
@@ -160,7 +162,9 @@ fn run_naive(
             return;
         }
 
-        let Some(parent_node) = template_el.parent_node() else { return };
+        let Some(parent_node) = template_el.parent_node() else {
+            return;
+        };
 
         let mut fresh: Vec<Element> = Vec::with_capacity(total);
         for i in 0..total {
@@ -242,13 +246,14 @@ fn run_keyed(
     // reusing them keeps rehash / grow costs out of the hot path
     // for long-lived lists (N items reconciled K times allocates
     // once, not K times).
-    let pool_cell: Rc<RefCell<HashMap<Rc<str>, PrevItem>>> =
-        Rc::new(RefCell::new(HashMap::new()));
+    let pool_cell: Rc<RefCell<HashMap<Rc<str>, PrevItem>>> = Rc::new(RefCell::new(HashMap::new()));
     let seen_cell: Rc<RefCell<HashSet<Rc<str>>>> = Rc::new(RefCell::new(HashSet::new()));
 
     effect(move || {
         let items_js = resolve_path(&parent_proxy, &items_expr);
-        let arr: Array = items_js.dyn_into::<Array>().unwrap_or_else(|_| Array::new());
+        let arr: Array = items_js
+            .dyn_into::<Array>()
+            .unwrap_or_else(|_| Array::new());
         let total = arr.length() as usize;
 
         let Some(parent_node) = template_el.parent_node() else {
@@ -457,8 +462,8 @@ fn run_keyed(
                 {
                     continue;
                 }
-                let target = first_layout_child(&entry.element)
-                    .unwrap_or_else(|| entry.element.clone());
+                let target =
+                    first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
                 flip_snapshots.insert(
                     entry.key.clone(),
                     (target.clone(), target.get_bounding_client_rect()),
@@ -518,9 +523,7 @@ fn run_keyed(
                 }
             }
             new_indices.sort_unstable();
-            newly_walked.extend(
-                new_indices.into_iter().map(|i| fresh[i].element.clone()),
-            );
+            newly_walked.extend(new_indices.into_iter().map(|i| fresh[i].element.clone()));
         }
         // Walk freshly-inserted clones AFTER they're in the tree so
         // directive setup can look up the enclosing scope via parent
@@ -607,24 +610,21 @@ impl KeyResolver {
         {
             let rest = &trimmed[prefix_len..];
             return Self::ItemPath(
-                rest.split('.').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+                rest.split('.')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
             );
         }
         Self::External(trimmed.to_string())
     }
 
-    fn resolve(
-        &self,
-        item: &JsValue,
-        index: usize,
-        parent_proxy: &JsValue,
-    ) -> JsValue {
+    fn resolve(&self, item: &JsValue, index: usize, parent_proxy: &JsValue) -> JsValue {
         match self {
             Self::Index => JsValue::from_f64(index as f64),
             Self::Item => item.clone(),
             Self::ItemPath(segments) => segments.iter().fold(item.clone(), |acc, segment| {
-                Reflect::get(&acc, &JsValue::from_str(segment))
-                    .unwrap_or(JsValue::UNDEFINED)
+                Reflect::get(&acc, &JsValue::from_str(segment)).unwrap_or(JsValue::UNDEFINED)
             }),
             Self::External(path) => resolve_path(parent_proxy, path),
         }

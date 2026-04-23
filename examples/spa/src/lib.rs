@@ -31,7 +31,8 @@ impl About {}
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct BlogPost {
-    #[prop] pub id: u32,
+    #[prop]
+    pub id: u32,
     pub body: String,
 }
 

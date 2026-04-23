@@ -40,7 +40,8 @@ pub struct PineFieldsetRoot {
     /// Forwarded onto the `<fieldset>`'s native `disabled`
     /// attribute — which disables every descendant form control
     /// automatically, so there's no programmatic cascade.
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 
     /// Id the Legend adopts so the Root can reference it via
     /// `aria-labelledby`. Generated from the Root's scope id.
@@ -62,8 +63,10 @@ impl PineFieldsetRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldsetLegend.poco", role = "heading")]
 pub struct PineFieldsetLegend {
-    #[observe(ROOT)] pub legend_id: String,
-    #[observe(ROOT)] pub disabled: bool,
+    #[observe(ROOT)]
+    pub legend_id: String,
+    #[observe(ROOT)]
+    pub disabled: bool,
 }
 
 #[handlers]

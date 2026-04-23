@@ -59,10 +59,7 @@ pub fn start_on_body() {
 /// Walk `root`, bind directives on it and all descendants, then install a
 /// `MutationObserver` so later DOM mutations are picked up too.
 pub fn start(root: &Element) {
-    crate::styles::inject_style(
-        "__pp_cloak",
-        "[pp-cloak] { display: none !important; }",
-    );
+    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     walk(root);
     install_observer(root);
 }
@@ -131,7 +128,9 @@ fn fire_deferred_init(el: &Element) {
         return;
     };
     let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
-    let Some((scope_id, proxy)) = enclosing_scope(el) else { return };
+    let Some((scope_id, proxy)) = enclosing_scope(el) else {
+        return;
+    };
     dispatch(el, &proxy, scope_id, "pp-init", &value);
 }
 
@@ -305,7 +304,9 @@ fn mount_component(el: &Element, tag: &str) {
         return;
     }
 
-    let Some(scope) = instantiate(tag) else { return };
+    let Some(scope) = instantiate(tag) else {
+        return;
+    };
     // Record the parent scope for RFC-027 `inject` chain-walks.
     // Prefer the explicit `CTX_PARENT_KEY` stamp — set by slot
     // materialisation on slot-inserted elements so compound-
@@ -354,7 +355,9 @@ fn mount_component(el: &Element, tag: &str) {
     // Clone the registered template in. `set_inner_html` drops the
     // tag's former children, which is the "capture" side of the old
     // flow.
-    let Some(html) = template_for(tag) else { return };
+    let Some(html) = template_for(tag) else {
+        return;
+    };
     el.set_inner_html(&html);
 
     // Bind scope to the template's root element and strip pp-data so the
@@ -462,7 +465,9 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     //    RFC-027 inject prefers `CTX_PARENT_KEY` (slot owner) over
     //    `SCOPE_ID_KEY` (slot author) — see `enclosing_inject_parent`
     //    for the rationale.
-    let Some(scope) = instantiate(tag) else { return false };
+    let Some(scope) = instantiate(tag) else {
+        return false;
+    };
     let ctx_parent = get_private(el, CTX_PARENT_KEY)
         .and_then(|v| v.as_f64())
         .map(|n| ScopeId(n as u64))
@@ -485,7 +490,9 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
 
     // 3. Clone the template into a throwaway container to extract
     //    root attrs without touching `el` yet.
-    let Some(html) = template_for(tag) else { return false };
+    let Some(html) = template_for(tag) else {
+        return false;
+    };
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return false;
     };
@@ -520,7 +527,11 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     // 7. Pin scope on the user root. This is what makes `$el`,
     //    `pp-ref`, and fallthrough directives all resolve against
     //    the user's real element.
-    set_private(&user_root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
+    set_private(
+        &user_root,
+        SCOPE_ID_KEY,
+        &JsValue::from_f64(scope.id.0 as f64),
+    );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
     let _ = user_root.remove_attribute("pp-data");
 
@@ -530,7 +541,12 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     // 9. No <slot> materialisation under pp-as — the user's element
     //    IS the content. Install an empty slot store just to keep
     //    lifecycle symmetry with the normal path.
-    slots::put(scope.id, SlotStore { by_name: Default::default() });
+    slots::put(
+        scope.id,
+        SlotStore {
+            by_name: Default::default(),
+        },
+    );
 
     // 10. Drop the marker so the component author's own code in the
     //     template (if they forwarded `pp-as` onto the user root, say)
@@ -549,8 +565,12 @@ fn find_single_child_element_skipping_slot_templates(tag: &Element) -> Option<El
     let children = tag.child_nodes();
     let mut found: Option<Element> = None;
     for i in 0..children.length() {
-        let Some(node) = children.item(i) else { continue };
-        let Ok(el) = node.dyn_into::<Element>() else { continue };
+        let Some(node) = children.item(i) else {
+            continue;
+        };
+        let Ok(el) = node.dyn_into::<Element>() else {
+            continue;
+        };
         if let Some(tpl) = el.dyn_ref::<HtmlTemplateElement>() {
             if tpl.has_attribute("pp-slot") {
                 continue;
@@ -645,7 +665,11 @@ fn setattr_safe_name(name: &str) -> String {
 fn capture_slots(el: &Element) -> SlotStore {
     let doc = match web_sys::window().and_then(|w| w.document()) {
         Some(d) => d,
-        None => return SlotStore { by_name: Default::default() },
+        None => {
+            return SlotStore {
+                by_name: Default::default(),
+            }
+        }
     };
 
     // Resolve the CALLER's scope — the parent template that's
@@ -658,8 +682,7 @@ fn capture_slots(el: &Element) -> SlotStore {
         None => (ScopeId(0), JsValue::UNDEFINED),
     };
 
-    let mut by_name: std::collections::HashMap<String, UserSlot> =
-        std::collections::HashMap::new();
+    let mut by_name: std::collections::HashMap<String, UserSlot> = std::collections::HashMap::new();
     let default_fragment = doc.create_document_fragment();
 
     let children = el.child_nodes();
@@ -891,7 +914,9 @@ fn normalise_shorthand_attr(name: &str) -> String {
 /// matching user-provided content (from the slot store) or the
 /// slot's own default children. Per RFC-011 §5.2.
 fn materialize_slot(slot_el: &Element) {
-    let Some(parent) = slot_el.parent_node() else { return };
+    let Some(parent) = slot_el.parent_node() else {
+        return;
+    };
 
     let slot_name = slot_el
         .get_attribute("name")
@@ -1090,8 +1115,12 @@ pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
 }
 
 fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {
-    let Some((dname, arg, modifiers)) = parse_attr(name) else { return };
-    let Some(handler) = lookup(&dname) else { return };
+    let Some((dname, arg, modifiers)) = parse_attr(name) else {
+        return;
+    };
+    let Some(handler) = lookup(&dname) else {
+        return;
+    };
     let call = DirectiveCall {
         el,
         proxy,
@@ -1261,15 +1290,12 @@ pub fn track_listener_on(
     );
     let slot = listener_slot_for(el);
     LISTENERS.with(|m| {
-        m.borrow_mut()
-            .entry(slot)
-            .or_default()
-            .push(ListenerEntry {
-                target,
-                event: event.to_string(),
-                capture,
-                closure,
-            });
+        m.borrow_mut().entry(slot).or_default().push(ListenerEntry {
+            target,
+            event: event.to_string(),
+            capture,
+            closure,
+        });
     });
 }
 
@@ -1295,15 +1321,12 @@ pub fn track_listener_on_with_opts(
     );
     let slot = listener_slot_for(el);
     LISTENERS.with(|m| {
-        m.borrow_mut()
-            .entry(slot)
-            .or_default()
-            .push(ListenerEntry {
-                target,
-                event: event.to_string(),
-                capture,
-                closure,
-            });
+        m.borrow_mut().entry(slot).or_default().push(ListenerEntry {
+            target,
+            event: event.to_string(),
+            capture,
+            closure,
+        });
     });
 }
 
@@ -1392,7 +1415,9 @@ pub(crate) fn release_subtree(node: &Node) {
 
 fn install_observer(root: &Element) {
     let cb = Closure::wrap(Box::new(move |records: JsValue, _obs: JsValue| {
-        let Ok(arr) = records.dyn_into::<Array>() else { return };
+        let Ok(arr) = records.dyn_into::<Array>() else {
+            return;
+        };
         // Re-read every callback — devtools mounts after `start`, so
         // the panel root isn't present when the observer installs.
         let panel_root = web_sys::window()
@@ -1400,7 +1425,9 @@ fn install_observer(root: &Element) {
             .and_then(|d| d.get_element_by_id("__pp_devtools_root"));
 
         for i in 0..arr.length() {
-            let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else { continue };
+            let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else {
+                continue;
+            };
 
             // Devtools replaces its own innerHTML on a 200ms poll.
             // Those records aren't app state — skip the whole record

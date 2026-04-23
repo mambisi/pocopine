@@ -23,7 +23,10 @@ pub struct Signal<T> {
 
 impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
-        Signal { id: self.id, cell: self.cell.clone() }
+        Signal {
+            id: self.id,
+            cell: self.cell.clone(),
+        }
     }
 }
 
@@ -36,7 +39,10 @@ pub struct Setter<T> {
 
 impl<T> Clone for Setter<T> {
     fn clone(&self) -> Self {
-        Setter { id: self.id, cell: self.cell.clone() }
+        Setter {
+            id: self.id,
+            cell: self.cell.clone(),
+        }
     }
 }
 
@@ -50,7 +56,10 @@ pub struct RwSignal<T> {
 
 impl<T> Clone for RwSignal<T> {
     fn clone(&self) -> Self {
-        RwSignal { id: self.id, cell: self.cell.clone() }
+        RwSignal {
+            id: self.id,
+            cell: self.cell.clone(),
+        }
     }
 }
 
@@ -59,7 +68,10 @@ pub fn signal<T: 'static>(initial: T) -> (Signal<T>, Setter<T>) {
     let id = next_signal_id();
     let cell = Rc::new(RefCell::new(initial));
     (
-        Signal { id, cell: cell.clone() },
+        Signal {
+            id,
+            cell: cell.clone(),
+        },
         Setter { id, cell },
     )
 }
@@ -182,8 +194,14 @@ impl<T: 'static> RwSignal<T> {
     /// storage with `self`.
     pub fn split(self) -> (Signal<T>, Setter<T>) {
         (
-            Signal { id: self.id, cell: self.cell.clone() },
-            Setter { id: self.id, cell: self.cell },
+            Signal {
+                id: self.id,
+                cell: self.cell.clone(),
+            },
+            Setter {
+                id: self.id,
+                cell: self.cell,
+            },
         )
     }
 }

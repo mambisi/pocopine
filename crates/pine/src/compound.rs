@@ -100,8 +100,7 @@ pub fn install_outside_dismiss(
         let content_for_listener = content.clone();
         let inside_for_listener = inside_els.clone();
         type DismissClosure = Closure<dyn FnMut(web_sys::Event)>;
-        let listener_holder: Rc<RefCell<Option<DismissClosure>>> =
-            Rc::new(RefCell::new(None));
+        let listener_holder: Rc<RefCell<Option<DismissClosure>>> = Rc::new(RefCell::new(None));
         let listener_holder_for_cb = listener_holder.clone();
         let listener = Closure::wrap(Box::new(move |ev: web_sys::Event| {
             // Self-GC once the surface detaches.
@@ -119,8 +118,7 @@ pub fn install_outside_dismiss(
                 *listener_holder_for_cb.borrow_mut() = None;
                 return;
             }
-            let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok())
-            else {
+            let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok()) else {
                 return;
             };
             if content_node.contains(Some(&target)) {
@@ -135,8 +133,7 @@ pub fn install_outside_dismiss(
             on_dismiss();
         }) as Box<dyn FnMut(web_sys::Event)>);
         let t: &web_sys::EventTarget = doc.as_ref();
-        let _ =
-            t.add_event_listener_with_callback("mousedown", listener.as_ref().unchecked_ref());
+        let _ = t.add_event_listener_with_callback("mousedown", listener.as_ref().unchecked_ref());
         *listener_holder.borrow_mut() = Some(listener);
         // Leak the Rc — the listener self-references via
         // `listener_holder` so it can remove itself from the

@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSwitch.poco", role = "interactive")]
 pub struct PineSwitch {
-    #[model] pub checked: bool,
-    #[prop] pub disabled: bool,
+    #[model]
+    pub checked: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]

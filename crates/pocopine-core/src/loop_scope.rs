@@ -51,8 +51,7 @@ impl ComponentState for LoopScope {
                 // Fall through — `$store`, `$route`, magics, and any
                 // parent-scope field resolve via the parent proxy's
                 // get trap (which also tracks the dep at that scope).
-                Reflect::get(&self.parent, &JsValue::from_str(key))
-                    .unwrap_or(JsValue::UNDEFINED)
+                Reflect::get(&self.parent, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
             }
         }
     }

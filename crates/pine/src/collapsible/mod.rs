@@ -37,7 +37,8 @@ pub struct PineCollapsibleRoot {
     /// Open/closed. Two-way bindable via
     /// `pp-model:open="my_open"` on the tag; Root emits
     /// `pp:update:model` whenever the value changes.
-    #[model] pub open: bool,
+    #[model]
+    pub open: bool,
 }
 
 #[handlers]
@@ -66,8 +67,10 @@ impl PineCollapsibleRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleTrigger.poco", role = "interactive")]
 pub struct PineCollapsibleTrigger {
-    #[observe(ROOT)] pub open: bool,
-    #[prop] pub disabled: bool,
+    #[observe(ROOT)]
+    pub open: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]
@@ -91,7 +94,8 @@ impl PineCollapsibleTrigger {
 // subtree outside the macro-stamp scope.
 #[component(template = "PineCollapsibleContent.poco", role = "panel")]
 pub struct PineCollapsibleContent {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]

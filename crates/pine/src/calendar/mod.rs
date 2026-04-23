@@ -20,8 +20,6 @@ pub use grid::{
     PineCalendarGrid, PineCalendarGridBody, PineCalendarGridHead, PineCalendarGridRow,
     PineCalendarHeadCell,
 };
-pub use header::{
-    PineCalendarHeader, PineCalendarHeading, PineCalendarNext, PineCalendarPrev,
-};
+pub use header::{PineCalendarHeader, PineCalendarHeading, PineCalendarNext, PineCalendarPrev};
 pub use root::{CalendarCellView, CalendarMonthView, PineCalendarRoot, ROOT};
 pub use state::CalendarState;

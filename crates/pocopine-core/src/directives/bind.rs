@@ -63,8 +63,9 @@ pub fn run(call: &DirectiveCall) {
             let v = expr::evaluate(&ast, &parent_proxy);
             match &child_target {
                 Some((child_scope_id, cp)) => {
-                    let target_field = crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
-                        .unwrap_or_else(|| child_field.clone());
+                    let target_field =
+                        crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
+                            .unwrap_or_else(|| child_field.clone());
                     // RFC-031 — only `#[prop]` fields are writable
                     // from the parent. Silently drop writes to
                     // state fields so accidental `<pine-thing
@@ -92,12 +93,7 @@ pub fn run(call: &DirectiveCall) {
 /// [`apply`] wrapped with a last-value memo. Skips `set_attribute`
 /// / `remove_attribute` when the serialised form matches the last
 /// write.
-fn apply_memoised(
-    el: &Element,
-    attr: &str,
-    v: &JsValue,
-    prev: &Rc<RefCell<Option<String>>>,
-) {
+fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Option<String>>>) {
     // Shape handling diverges on whether this is a *state* attribute
     // (`data-*` / `aria-*`) or a classic HTML attribute, but ONLY
     // on the truthy side:

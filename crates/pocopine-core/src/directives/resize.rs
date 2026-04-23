@@ -41,7 +41,9 @@ pub fn run(call: &DirectiveCall) {
 
     let cb_target = target.clone();
     let closure = Closure::wrap(Box::new(move |entries: JsValue, _obs: JsValue| {
-        let Ok(entries) = entries.dyn_into::<Array>() else { return };
+        let Ok(entries) = entries.dyn_into::<Array>() else {
+            return;
+        };
         let Some(entry) = entries.get(0).dyn_into::<ResizeObserverEntry>().ok() else {
             return;
         };
@@ -73,7 +75,9 @@ pub fn run(call: &DirectiveCall) {
 /// Called by `walker::release_subtree` on every released element.
 /// Disconnects any ResizeObserver stashed under [`OBS_KEY`].
 pub fn release(el: &Element) {
-    let Ok(v) = Reflect::get(el.as_ref(), &OBS_KEY.into()) else { return };
+    let Ok(v) = Reflect::get(el.as_ref(), &OBS_KEY.into()) else {
+        return;
+    };
     if v.is_undefined() || v.is_null() {
         return;
     }

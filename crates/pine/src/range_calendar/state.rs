@@ -123,9 +123,12 @@ impl RangeCalendarState {
             }
         }
         // Keep the grid anchored on the visible month.
-        if !self.cal.grid.iter().any(|g| {
-            g.value.year() == date.year() && g.value.month() == date.month()
-        }) {
+        if !self
+            .cal
+            .grid
+            .iter()
+            .any(|g| g.value.year() == date.year() && g.value.month() == date.month())
+        {
             self.cal.placeholder = date;
             self.cal.rebuild_grid();
         }
@@ -188,9 +191,7 @@ impl RangeCalendarState {
         } else {
             (start, focus)
         };
-        is_same_day(date, &lo)
-            || is_same_day(date, &hi)
-            || is_between(date, &lo, &hi)
+        is_same_day(date, &lo) || is_same_day(date, &hi) || is_between(date, &lo, &hi)
     }
 
     pub fn is_preview_start(&self, date: &DateValue) -> bool {
@@ -200,7 +201,11 @@ impl RangeCalendarState {
         let (Some(start), Some(focus)) = (self.start, self.focused) else {
             return false;
         };
-        let lo = if is_before(&focus, &start) { focus } else { start };
+        let lo = if is_before(&focus, &start) {
+            focus
+        } else {
+            start
+        };
         is_same_day(date, &lo)
     }
 
@@ -211,7 +216,11 @@ impl RangeCalendarState {
         let (Some(start), Some(focus)) = (self.start, self.focused) else {
             return false;
         };
-        let hi = if is_before(&focus, &start) { start } else { focus };
+        let hi = if is_before(&focus, &start) {
+            start
+        } else {
+            focus
+        };
         is_same_day(date, &hi)
     }
 

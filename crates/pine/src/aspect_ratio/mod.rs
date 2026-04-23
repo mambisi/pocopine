@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 pub struct PineAspectRatio {
     /// Width / height ratio. Examples: `1.0` (square), `1.777`
     /// (16:9), `0.5625` (9:16 vertical video).
-    #[prop] pub ratio: f64,
+    #[prop]
+    pub ratio: f64,
 }
 
 impl Default for PineAspectRatio {

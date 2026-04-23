@@ -184,9 +184,7 @@ fn run_effect(id: EffectId, f: &EffectFn) {
     // body (including track calls) but excludes cleanup + dep-clear.
     #[cfg(feature = "devtools")]
     {
-        let dur = std::time::Duration::from_micros(
-            ((now_ms() - start).max(0.0) * 1000.0) as u64,
-        );
+        let dur = std::time::Duration::from_micros(((now_ms() - start).max(0.0) * 1000.0) as u64);
         crate::devtools::hooks::fire_effect_run(id, None, dur);
     }
 }
@@ -208,8 +206,7 @@ fn now_ms() -> f64 {
 
 fn clear_deps_for(id: EffectId) {
     // Proxy-scope deps.
-    let keys: Option<HashSet<(ScopeId, Key)>> =
-        REVERSE.with(|r| r.borrow_mut().remove(&id));
+    let keys: Option<HashSet<(ScopeId, Key)>> = REVERSE.with(|r| r.borrow_mut().remove(&id));
     if let Some(keys) = keys {
         DEPS.with(|d| {
             let mut d = d.borrow_mut();
@@ -229,8 +226,7 @@ fn clear_deps_for(id: EffectId) {
         });
     }
     // Signal deps — own table, indexed on SignalId.
-    let sig_keys: Option<HashSet<SignalId>> =
-        SIGNAL_REVERSE.with(|r| r.borrow_mut().remove(&id));
+    let sig_keys: Option<HashSet<SignalId>> = SIGNAL_REVERSE.with(|r| r.borrow_mut().remove(&id));
     if let Some(sig_keys) = sig_keys {
         SIGNAL_DEPS.with(|d| {
             let mut d = d.borrow_mut();
@@ -247,8 +243,7 @@ fn clear_deps_for(id: EffectId) {
 }
 
 fn run_cleanups(id: EffectId) {
-    let pending: Option<Vec<CleanupFn>> =
-        CLEANUPS.with(|c| c.borrow_mut().remove(&id));
+    let pending: Option<Vec<CleanupFn>> = CLEANUPS.with(|c| c.borrow_mut().remove(&id));
     if let Some(pending) = pending {
         for f in pending {
             f();
@@ -329,16 +324,10 @@ pub fn track_signal(signal_id: SignalId) {
         return;
     }
     SIGNAL_DEPS.with(|d| {
-        d.borrow_mut()
-            .entry(signal_id)
-            .or_default()
-            .insert(id);
+        d.borrow_mut().entry(signal_id).or_default().insert(id);
     });
     SIGNAL_REVERSE.with(|r| {
-        r.borrow_mut()
-            .entry(id)
-            .or_default()
-            .insert(signal_id);
+        r.borrow_mut().entry(id).or_default().insert(signal_id);
     });
 }
 
@@ -415,8 +404,7 @@ pub fn trigger(scope_id: ScopeId, key: &str) {
 /// Signal-targeted trigger. Skips the `(scope_id, key)` lookup path
 /// entirely — signal deps live in their own table keyed on `SignalId`.
 pub fn trigger_signal(signal_id: SignalId) {
-    let subs: Option<HashSet<EffectId>> =
-        SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
+    let subs: Option<HashSet<EffectId>> = SIGNAL_DEPS.with(|d| d.borrow().get(&signal_id).cloned());
     if let Some(subs) = subs {
         dispatch_subs(&subs);
     }
@@ -503,8 +491,7 @@ fn flush() {
     FLUSH_SCHEDULED.with(|f| f.set(false));
     // Snapshot and clear so effects that re-trigger during their run land
     // in the next batch, not the current one.
-    let ids: Vec<EffectId> =
-        QUEUE.with(|q| q.borrow_mut().drain().collect());
+    let ids: Vec<EffectId> = QUEUE.with(|q| q.borrow_mut().drain().collect());
     for id in ids {
         let f = EFFECTS.with(|e| e.borrow().get(&id).cloned());
         if let Some(f) = f {
@@ -535,12 +522,7 @@ pub fn flush_sync() {
 /// gets real numbers.
 #[cfg(any(debug_assertions, feature = "devtools"))]
 pub fn stats() -> (usize, usize) {
-    let dep_count = DEPS.with(|d| {
-        d.borrow()
-            .values()
-            .map(|inner| inner.len())
-            .sum::<usize>()
-    });
+    let dep_count = DEPS.with(|d| d.borrow().values().map(|inner| inner.len()).sum::<usize>());
     (EFFECTS.with(|e| e.borrow().len()), dep_count)
 }
 

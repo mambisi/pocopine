@@ -9,5 +9,7 @@ pub struct SplitterDemo {
 
 #[handlers]
 impl SplitterDemo {
-    pub fn on_mount(&mut self) { self.sizes = vec![25.0, 50.0, 25.0]; }
+    pub fn on_mount(&mut self) {
+        self.sizes = vec![25.0, 50.0, 25.0];
+    }
 }

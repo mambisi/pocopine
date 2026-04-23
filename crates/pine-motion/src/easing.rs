@@ -174,7 +174,10 @@ mod tests {
             .split(", ")
             .filter_map(|s| s.parse::<f64>().ok())
             .any(|v| v > 1.0);
-        assert!(has_overshoot, "wobbly spring's linear() samples should overshoot: {css}");
+        assert!(
+            has_overshoot,
+            "wobbly spring's linear() samples should overshoot: {css}"
+        );
     }
 
     #[test]

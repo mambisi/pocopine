@@ -13,14 +13,18 @@
 //! interactive-root tag per Pine's default-tag rule.
 
 use crate::calendar::root::{PineCalendarRoot, ROOT};
-use pocopine::prelude::*;
 use pocopine::inject;
+use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // ── Header ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarHeader.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineCalendarHeader.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineCalendarHeader {}
 
 #[handlers]
@@ -29,7 +33,11 @@ impl PineCalendarHeader {}
 // ── Heading ──────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarHeading.poco", role = "heading", display = "contents")]
+#[component(
+    template = "PineCalendarHeading.poco",
+    role = "heading",
+    display = "contents"
+)]
 pub struct PineCalendarHeading {
     #[observe(ROOT)]
     pub heading: String,
@@ -43,7 +51,11 @@ impl PineCalendarHeading {}
 // ── Prev ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarPrev.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineCalendarPrev.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineCalendarPrev {
     #[observe(ROOT)]
     pub prev_disabled: bool,
@@ -63,7 +75,11 @@ impl PineCalendarPrev {
 // ── Next ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarNext.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineCalendarNext.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineCalendarNext {
     #[observe(ROOT)]
     pub next_disabled: bool,

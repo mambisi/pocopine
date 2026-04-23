@@ -59,7 +59,8 @@ inject_key!(ROOT: Handle<PineContextMenuRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineContextMenuRoot.poco", role = "scope")]
 pub struct PineContextMenuRoot {
-    #[prop] pub open: bool,
+    #[prop]
+    pub open: bool,
     /// Viewport-relative pointer coordinates captured at the last
     /// `contextmenu` event. Content reads these to position
     /// itself. Stored as f64 for symmetry with `getBoundingClientRect`.
@@ -104,7 +105,9 @@ pub struct PineContextMenuTrigger {}
 impl PineContextMenuTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = inject(&ROOT) else { return };
-        let Some(el) = refs.get("trigger") else { return };
+        let Some(el) = refs.get("trigger") else {
+            return;
+        };
 
         let root_for_closure = root.clone();
         let closure = Closure::wrap(Box::new(move |ev: Event| {
@@ -122,10 +125,8 @@ impl PineContextMenuTrigger {
         }) as Box<dyn FnMut(Event)>);
 
         let target: &EventTarget = el.as_ref();
-        let _ = target.add_event_listener_with_callback(
-            "contextmenu",
-            closure.as_ref().unchecked_ref(),
-        );
+        let _ = target
+            .add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
         closure.forget();
     }
 }
@@ -151,7 +152,11 @@ impl PineContextMenuPortal {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineContextMenuContent.poco", role = "list", transition = "slide-down")]
+#[component(
+    template = "PineContextMenuContent.poco",
+    role = "list",
+    transition = "slide-down"
+)]
 pub struct PineContextMenuContent {
     /// Mirrored from Root on open so the template's inline style
     /// positions this panel at the captured pointer. Read once at
@@ -215,7 +220,8 @@ fn init_roving_tabindex(menu: &web_sys::Element) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineContextMenuItem.poco", role = "item")]
 pub struct PineContextMenuItem {
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]

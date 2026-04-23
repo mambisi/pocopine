@@ -11,5 +11,7 @@ pub struct ToggleDemo {
 
 #[handlers]
 impl ToggleDemo {
-    pub fn on_mount(&mut self) { self.align = "left".into(); }
+    pub fn on_mount(&mut self) {
+        self.align = "left".into();
+    }
 }

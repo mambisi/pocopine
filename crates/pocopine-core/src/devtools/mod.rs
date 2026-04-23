@@ -157,10 +157,9 @@ fn start_render_loop() {
     let cb: RenderClosure = Closure::wrap(Box::new(move || {
         render();
     }));
-    if let Ok(id) = win.set_interval_with_callback_and_timeout_and_arguments_0(
-        cb.as_ref().unchecked_ref(),
-        200,
-    ) {
+    if let Ok(id) =
+        win.set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 200)
+    {
         INTERVAL_ID.with(|c| c.set(Some(id)));
     }
     RENDER_CB.with(|c| *c.borrow_mut() = Some(cb));
@@ -188,12 +187,16 @@ fn render() {
     if !INSTALLED.with(|c| c.get()) {
         return;
     }
-    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    let Some(doc) = window().and_then(|w| w.document()) else {
+        return;
+    };
     let root = shell::ensure_root(&doc);
 
     // Visibility — flip `display` on the root without touching the
     // rest of the shell when the panel is hidden.
-    let Ok(html_el) = root.clone().dyn_into::<HtmlElement>() else { return };
+    let Ok(html_el) = root.clone().dyn_into::<HtmlElement>() else {
+        return;
+    };
     if !shell::is_visible() {
         let _ = html_el.style().set_property("display", "none");
         return;

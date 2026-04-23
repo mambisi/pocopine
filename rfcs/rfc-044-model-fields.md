@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-04-23 |
 | **Supersedes** | Extends [RFC 009](./rfc-009-pp-model-components.md) and [RFC 031](./rfc-031-prop-vs-state.md) |

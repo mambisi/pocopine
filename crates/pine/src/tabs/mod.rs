@@ -37,11 +37,13 @@ inject_key!(ROOT: Handle<PineTabsRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTabsRoot.poco", role = "panel")]
 pub struct PineTabsRoot {
-    #[model] pub value: String,
+    #[model]
+    pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Flows into
     /// `aria-orientation` on List and dictates the roving
     /// nav-axis.
-    #[prop] pub orientation: String,
+    #[prop]
+    pub orientation: String,
 }
 
 impl Default for PineTabsRoot {
@@ -71,7 +73,8 @@ impl PineTabsRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsList.poco", role = "panel")]
 pub struct PineTabsList {
-    #[observe(ROOT)] pub orientation: String,
+    #[observe(ROOT)]
+    pub orientation: String,
 }
 
 #[handlers]
@@ -83,8 +86,10 @@ impl PineTabsList {}
 #[component(template = "PineTabsTrigger.poco", role = "interactive")]
 pub struct PineTabsTrigger {
     /// Author-set id of the tab this trigger activates.
-    #[prop] pub value: String,
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub value: String,
+    #[prop]
+    pub disabled: bool,
     /// Mirrored — `true` when Root.value == self.value.
     pub selected: bool,
     /// ARIA id derived from Root's scope id + value, so Content
@@ -96,11 +101,7 @@ pub struct PineTabsTrigger {
 impl PineTabsTrigger {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.trigger_id = format!(
-                "pine-tabs-trigger-{}-{}",
-                root.scope_id().0,
-                self.value
-            );
+            self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }
@@ -131,7 +132,8 @@ impl PineTabsTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsContent.poco", role = "panel")]
 pub struct PineTabsContent {
-    #[prop] pub value: String,
+    #[prop]
+    pub value: String,
     /// Mirrored.
     pub selected: bool,
     /// `aria-labelledby` target — the matching Trigger's id.
@@ -142,11 +144,7 @@ pub struct PineTabsContent {
 impl PineTabsContent {
     pub fn on_setup(&mut self) {
         if let Some(root) = inject(&ROOT) {
-            self.trigger_id = format!(
-                "pine-tabs-trigger-{}-{}",
-                root.scope_id().0,
-                self.value
-            );
+            self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }

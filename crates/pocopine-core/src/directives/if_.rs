@@ -37,9 +37,7 @@ pub fn run(call: &DirectiveCall) {
     let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
         Ok(t) => t,
         Err(_) => {
-            console::error_1(&JsValue::from_str(
-                "pp-if: must be on a <template> element",
-            ));
+            console::error_1(&JsValue::from_str("pp-if: must be on a <template> element"));
             return;
         }
     };

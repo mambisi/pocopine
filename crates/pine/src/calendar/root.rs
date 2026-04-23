@@ -51,33 +51,48 @@ pub struct CalendarMonthView {
 // ── root ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineCalendarRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineCalendarRoot {
     // ── authored config ─────────────────────────────────────
     /// Visible-month anchor. `None` falls back to today.
-    #[model] pub placeholder: Option<DateValue>,
+    #[model]
+    pub placeholder: Option<DateValue>,
     /// Controlled selected date. `None` = unselected. Two-way
     /// bindable via `pp-model:value="…"`.
-    #[model] pub value: Option<DateValue>,
+    #[model]
+    pub value: Option<DateValue>,
     /// Minimum selectable date (inclusive). `None` = no bound.
-    #[prop] pub min_value: Option<DateValue>,
+    #[prop]
+    pub min_value: Option<DateValue>,
     /// Maximum selectable date (inclusive). `None` = no bound.
-    #[prop] pub max_value: Option<DateValue>,
+    #[prop]
+    pub max_value: Option<DateValue>,
     /// Weekday index the grid starts on. 0 = Sunday … 6 = Saturday.
-    #[prop] pub week_starts_on: u32,
+    #[prop]
+    pub week_starts_on: u32,
     /// When set, renders 6 weeks per month so the grid height
     /// never jumps between shorter / longer months.
-    #[prop] pub fixed_weeks: bool,
+    #[prop]
+    pub fixed_weeks: bool,
     /// How many months to render side by side. `0` normalizes to 1.
-    #[prop] pub number_of_months: u32,
+    #[prop]
+    pub number_of_months: u32,
     /// Advance by `number_of_months` per page instead of 1.
-    #[prop] pub paged_navigation: bool,
+    #[prop]
+    pub paged_navigation: bool,
     /// Clicking a selected date clears it unless this is set.
-    #[prop] pub prevent_deselect: bool,
+    #[prop]
+    pub prevent_deselect: bool,
     /// Disable all interaction.
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
     /// Prevent selection but keep navigation enabled.
-    #[prop] pub readonly: bool,
+    #[prop]
+    pub readonly: bool,
 
     // ── derived state — template-visible ────────────────────
     /// Rendered title for `<pine-calendar-heading>`. E.g.
@@ -205,7 +220,10 @@ impl PineCalendarRoot {
     /// enough to rebuild in every handler — the grid construction
     /// is O(months × 42) scalar ops.
     fn build_state(&self) -> CalendarState {
-        let placeholder = self.placeholder.or(self.value).unwrap_or_else(fallback_today);
+        let placeholder = self
+            .placeholder
+            .or(self.value)
+            .unwrap_or_else(fallback_today);
         let week_starts_on = (self.week_starts_on.min(6)) as u8;
         CalendarState::new(placeholder)
             .with_selected(self.value)
@@ -236,11 +254,13 @@ impl PineCalendarRoot {
             .map(|d| s.is_date_out_of_bounds(&d))
             .unwrap_or(false);
         let months = build_months(s);
-        self.cells = months.iter().flat_map(|m| m.weeks.iter().flatten().cloned()).collect();
+        self.cells = months
+            .iter()
+            .flat_map(|m| m.weeks.iter().flatten().cloned())
+            .collect();
         self.months = months;
     }
 }
-
 
 // ── view-model helpers ──────────────────────────────────────────
 
@@ -286,11 +306,7 @@ fn format_heading(s: &CalendarState) -> String {
     let first_label = format_month_label(first);
     let last_label = format_month_label(last);
     if first.year() == last.year() {
-        format!(
-            "{} – {}",
-            strip_year_suffix(&first_label),
-            last_label,
-        )
+        format!("{} – {}", strip_year_suffix(&first_label), last_label,)
     } else {
         format!("{} – {}", first_label, last_label)
     }

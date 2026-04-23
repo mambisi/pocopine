@@ -45,9 +45,9 @@ use pocopine::prelude::*;
 use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, HtmlElement, KeyboardEvent};
@@ -68,7 +68,11 @@ thread_local! {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineCommandRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineCommandRoot {
     #[model]
     pub open: bool,
@@ -154,11 +158,7 @@ impl PineCommandRoot {
     }
 }
 
-fn install_global_shortcut(
-    scope: ScopeId,
-    handle: Handle<PineCommandRoot>,
-    shortcut: String,
-) {
+fn install_global_shortcut(scope: ScopeId, handle: Handle<PineCommandRoot>, shortcut: String) {
     let parsed = parse_shortcut(&shortcut);
     let cb = Closure::wrap(Box::new({
         move |ev: KeyboardEvent| {
@@ -170,16 +170,11 @@ fn install_global_shortcut(
     }) as Box<dyn FnMut(KeyboardEvent)>);
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let target: &EventTarget = doc.as_ref();
-        let _ =
-            target.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        let _ = target.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
     }
     ROOT_RUNTIME.with(|r| {
-        r.borrow_mut().insert(
-            scope,
-            RootRuntime {
-                shortcut: Some(cb),
-            },
-        );
+        r.borrow_mut()
+            .insert(scope, RootRuntime { shortcut: Some(cb) });
     });
 }
 
@@ -190,8 +185,8 @@ fn teardown_global_shortcut(scope: ScopeId) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let target: &EventTarget = doc.as_ref();
         if let Some(cb) = rt.shortcut.as_ref() {
-            let _ = target
-                .remove_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+            let _ =
+                target.remove_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
         }
     }
 }
@@ -257,9 +252,14 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandPortal.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineCommandPortal.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineCommandPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -268,7 +268,11 @@ impl PineCommandPortal {}
 // ── Overlay ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandOverlay.poco", role = "panel", transition = "fade")]
+#[component(
+    template = "PineCommandOverlay.poco",
+    role = "panel",
+    transition = "fade"
+)]
 pub struct PineCommandOverlay {}
 
 #[handlers]
@@ -283,7 +287,11 @@ impl PineCommandOverlay {
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandContent.poco", role = "panel", transition = "fade-scale")]
+#[component(
+    template = "PineCommandContent.poco",
+    role = "panel",
+    transition = "fade-scale"
+)]
 pub struct PineCommandContent {}
 
 #[handlers]
@@ -318,8 +326,10 @@ impl PineCommandContent {
 pub struct PineCommandInput {
     #[prop]
     pub placeholder: String,
-    #[observe(ROOT)] pub open: bool,
-    #[observe(ROOT)] pub listbox_id: String,
+    #[observe(ROOT)]
+    pub open: bool,
+    #[observe(ROOT)]
+    pub listbox_id: String,
 }
 
 #[handlers]
@@ -338,11 +348,7 @@ impl PineCommandInput {
         if let Some(input_el) = refs.get("input") {
             let listbox_id = root.with(|r| r.listbox_id.clone());
             let installed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-            schedule_install_virtual(
-                input_el.clone(),
-                listbox_id.clone(),
-                installed.clone(),
-            );
+            schedule_install_virtual(input_el.clone(), listbox_id.clone(), installed.clone());
             let input_for_watch = input_el;
             let listbox_for_watch = listbox_id;
             watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
@@ -359,8 +365,12 @@ impl PineCommandInput {
     }
 
     pub fn on_input(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "input") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "input") else {
+            return;
+        };
         let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else {
             return;
         };
@@ -372,8 +382,12 @@ impl PineCommandInput {
     }
 
     pub fn on_enter(&mut self) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(el) = refs::get_on(scope, "input") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(el) = refs::get_on(scope, "input") else {
+            return;
+        };
         let Some(active_id) = el.get_attribute("aria-activedescendant") else {
             return;
         };
@@ -407,12 +421,7 @@ fn schedule_install_virtual(
         if doc.get_element_by_id(&listbox_id).is_none() {
             return;
         }
-        pocopine_core::directives::roving::install_virtual_on(
-            &input_el,
-            &listbox_id,
-            &[],
-            None,
-        );
+        pocopine_core::directives::roving::install_virtual_on(&input_el, &listbox_id, &[], None);
         installed.set(true);
     });
 }
@@ -467,7 +476,8 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandList.poco", role = "list", display = "contents")]
 pub struct PineCommandList {
-    #[observe(ROOT)] pub listbox_id: String,
+    #[observe(ROOT)]
+    pub listbox_id: String,
 }
 
 #[handlers]
@@ -476,7 +486,12 @@ impl PineCommandList {}
 // ── Item ──────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandItem.poco", role = "item", display = "contents", animate = "flip")]
+#[component(
+    template = "PineCommandItem.poco",
+    role = "item",
+    display = "contents",
+    animate = "flip"
+)]
 pub struct PineCommandItem {
     #[prop]
     pub value: String,
@@ -544,7 +559,11 @@ impl PineCommandItem {
 // ── Empty ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCommandEmpty.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineCommandEmpty.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineCommandEmpty {
     pub empty: bool,
 }

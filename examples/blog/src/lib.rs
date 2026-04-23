@@ -26,7 +26,8 @@ pub async fn get_post(post_id: u32) -> ServerResult<Post> {
             title: "Hello from pocopine".into(),
             body: "This body was fetched from a #[server] function over \
                    a typed REST binding, written once in Rust and shared \
-                   across wasm + host builds.".into(),
+                   across wasm + host builds."
+                .into(),
         }),
         _ => Err(pocopine::ServerError::App(format!(
             "no post with id {post_id}"
@@ -37,7 +38,8 @@ pub async fn get_post(post_id: u32) -> ServerResult<Post> {
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct BlogPost {
-    #[prop] pub post_id: u32,
+    #[prop]
+    pub post_id: u32,
     pub title: String,
     pub body: String,
     pub loading: bool,
@@ -49,22 +51,19 @@ impl BlogPost {
     pub fn on_mount(&mut self) {
         self.loading = true;
         let post_id = self.post_id;
-        dispatch!(
-            get_post(post_id).await,
-            |s, result| {
-                s.loading = false;
-                match result {
-                    Ok(p) => {
-                        s.title = p.title;
-                        s.body = p.body;
-                        s.error.clear();
-                    }
-                    Err(e) => {
-                        s.error = e.to_string();
-                    }
+        dispatch!(get_post(post_id).await, |s, result| {
+            s.loading = false;
+            match result {
+                Ok(p) => {
+                    s.title = p.title;
+                    s.body = p.body;
+                    s.error.clear();
                 }
-            },
-        );
+                Err(e) => {
+                    s.error = e.to_string();
+                }
+            }
+        },);
     }
 
     pub fn refresh(&mut self) {

@@ -60,12 +60,8 @@ impl GestureHandle {
     /// handle does — without this, the closure would drop
     /// immediately after `addEventListener` returned and the
     /// callback would be a dangling pointer.
-    pub(crate) fn listen<T, F>(
-        &mut self,
-        target: &EventTarget,
-        event: &'static str,
-        handler: F,
-    ) where
+    pub(crate) fn listen<T, F>(&mut self, target: &EventTarget, event: &'static str, handler: F)
+    where
         T: wasm_bindgen::convert::FromWasmAbi + 'static,
         F: FnMut(T) + 'static,
     {
@@ -90,7 +86,9 @@ impl GestureHandle {
         T: wasm_bindgen::convert::FromWasmAbi + 'static,
         F: FnMut(T) + 'static,
     {
-        let Some(window) = web_sys::window() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         let target: &EventTarget = window.as_ref();
         self.listen(target, event, handler);
     }

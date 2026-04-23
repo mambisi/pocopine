@@ -77,19 +77,11 @@ pub fn compare_year_month(a: &DateValue, b: &DateValue) -> i32 {
     }
 }
 
-pub fn is_month_between_inclusive(
-    date: &DateValue,
-    start: &DateValue,
-    end: &DateValue,
-) -> bool {
+pub fn is_month_between_inclusive(date: &DateValue, start: &DateValue, end: &DateValue) -> bool {
     compare_year_month(date, start) >= 0 && compare_year_month(date, end) <= 0
 }
 
-pub fn is_year_between_inclusive(
-    date: &DateValue,
-    start: &DateValue,
-    end: &DateValue,
-) -> bool {
+pub fn is_year_between_inclusive(date: &DateValue, start: &DateValue, end: &DateValue) -> bool {
     date.year() >= start.year() && date.year() <= end.year()
 }
 
@@ -129,7 +121,11 @@ pub fn get_last_first_day_of_week(date: &DateValue, first_day_of_week: WeekStart
 /// `getNextLastDayOfWeek`.
 pub fn get_next_last_day_of_week(date: &DateValue, first_day_of_week: WeekStartsOn) -> DateValue {
     let day = date.day_of_week().as_u8();
-    let last = if first_day_of_week == 0 { 6 } else { first_day_of_week - 1 };
+    let last = if first_day_of_week == 0 {
+        6
+    } else {
+        first_day_of_week - 1
+    };
 
     if day == last {
         *date
@@ -278,10 +274,7 @@ mod tests {
         // 2025-01-06 is Monday. With Sunday-first (0), last first
         // day is 2025-01-05.
         let mon = d(2025, 1, 6);
-        assert_eq!(
-            get_last_first_day_of_week(&mon, 0),
-            d(2025, 1, 5)
-        );
+        assert_eq!(get_last_first_day_of_week(&mon, 0), d(2025, 1, 5));
         // With Monday-first (1), it returns itself.
         assert_eq!(get_last_first_day_of_week(&mon, 1), mon);
     }

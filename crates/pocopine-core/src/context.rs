@@ -122,8 +122,8 @@ pub fn parent_of(scope: ScopeId) -> Option<ScopeId> {
 /// that couldn't identify its scope is always a programming error
 /// and we'd rather surface it loudly than silently drop.
 pub fn provide<T: Any + 'static>(key: &InjectKey<T>, value: T) {
-    let scope = current_scope_id()
-        .expect("pocopine::provide called outside a handler / lifecycle context");
+    let scope =
+        current_scope_id().expect("pocopine::provide called outside a handler / lifecycle context");
     PROVIDES.with(|p| {
         p.borrow_mut()
             .entry(scope)
@@ -144,8 +144,8 @@ pub fn provide<T: Any + 'static>(key: &InjectKey<T>, value: T) {
 ///
 /// Panics outside a handler / lifecycle context.
 pub fn inject<T: Clone + Any + 'static>(key: &InjectKey<T>) -> Option<T> {
-    let mut scope = current_scope_id()
-        .expect("pocopine::inject called outside a handler / lifecycle context");
+    let mut scope =
+        current_scope_id().expect("pocopine::inject called outside a handler / lifecycle context");
     loop {
         let hit = PROVIDES.with(|p| {
             let map = p.borrow();

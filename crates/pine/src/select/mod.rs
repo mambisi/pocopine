@@ -41,9 +41,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{
-    current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field,
-};
+use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
@@ -136,10 +134,14 @@ impl PineSelectRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectTrigger.poco", role = "interactive")]
 pub struct PineSelectTrigger {
-    #[observe(ROOT)] pub open: bool,
-    #[observe(ROOT)] pub disabled: bool,
-    #[observe(ROOT)] pub value: String,
-    #[observe(ROOT)] pub listbox_id: String,
+    #[observe(ROOT)]
+    pub open: bool,
+    #[observe(ROOT)]
+    pub disabled: bool,
+    #[observe(ROOT)]
+    pub value: String,
+    #[observe(ROOT)]
+    pub listbox_id: String,
 }
 
 #[handlers]
@@ -166,7 +168,11 @@ impl PineSelectTrigger {
 // ── Value ─────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectValue.poco", role = "visual", display = "contents")]
+#[component(
+    template = "PineSelectValue.poco",
+    role = "visual",
+    display = "contents"
+)]
 pub struct PineSelectValue {
     pub display_label: String,
     pub has_value: bool,
@@ -212,9 +218,14 @@ impl PineSelectValue {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectPortal.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineSelectPortal.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineSelectPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -223,7 +234,11 @@ impl PineSelectPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineSelectContent.poco", role = "list", transition = "fade")]
+#[component(
+    template = "PineSelectContent.poco",
+    role = "list",
+    transition = "fade"
+)]
 pub struct PineSelectContent {
     pub anchor: String,
     pub listbox_id: String,
@@ -271,7 +286,9 @@ impl PineSelectContent {
         // Focus the selected item (data-state="checked") if one
         // exists, otherwise the first enabled option.
         let initial = menu
-            .query_selector("[role=\"option\"][data-state=\"checked\"]:not([data-disabled=\"true\"])")
+            .query_selector(
+                "[role=\"option\"][data-state=\"checked\"]:not([data-disabled=\"true\"])",
+            )
             .ok()
             .flatten()
             .or_else(|| {
@@ -425,7 +442,11 @@ impl PineSelectItem {
 // ── ItemIndicator ─────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectItemIndicator.poco", role = "visual", display = "contents")]
+#[component(
+    template = "PineSelectItemIndicator.poco",
+    role = "visual",
+    display = "contents"
+)]
 pub struct PineSelectItemIndicator {
     pub selected: bool,
 }
@@ -454,7 +475,11 @@ impl PineSelectItemIndicator {
 // ── Separator ─────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineSelectSeparator.poco", role = "item", display = "contents")]
+#[component(
+    template = "PineSelectSeparator.poco",
+    role = "item",
+    display = "contents"
+)]
 pub struct PineSelectSeparator {}
 
 #[handlers]

@@ -23,8 +23,8 @@ pub mod model;
 pub mod on;
 pub mod ref_;
 pub mod resize;
-pub mod roving;
 pub mod route;
+pub mod roving;
 pub mod show;
 pub mod teleport;
 pub mod text;
@@ -137,8 +137,7 @@ mod tests {
 
     #[test]
     fn parse_attr_collects_head_and_tail_modifiers_in_order() {
-        let parsed =
-            parse_attr("pp-on.window.capture:keydown.enter.prevent.once").expect("parsed");
+        let parsed = parse_attr("pp-on.window.capture:keydown.enter.prevent.once").expect("parsed");
         assert_eq!(parsed.0, "on");
         assert_eq!(parsed.1.as_deref(), Some("keydown"));
         assert_eq!(
@@ -195,6 +194,9 @@ mod tests {
     fn normalize_prop_name_only_rewrites_hyphens() {
         assert_eq!(normalize_prop_name("aria-labelledby"), "aria_labelledby");
         assert_eq!(normalize_prop_name("x.y-z"), "x.y_z");
-        assert_eq!(normalize_prop_name("already:mixed-name"), "already:mixed_name");
+        assert_eq!(
+            normalize_prop_name("already:mixed-name"),
+            "already:mixed_name"
+        );
     }
 }

@@ -106,8 +106,7 @@ impl<T: 'static> Handle<T> {
 /// the scope's concrete struct. `T` should always be the same type the
 /// surrounding `impl` block is on.
 pub fn this<T: 'static>() -> Handle<T> {
-    let id = current_scope_id()
-        .expect("pocopine::this called outside a handler invocation");
+    let id = current_scope_id().expect("pocopine::this called outside a handler invocation");
     let scope = Scope::find(id).expect("current scope missing from registry");
     let inner = scope.typed::<T>().unwrap_or_else(|| {
         panic!(

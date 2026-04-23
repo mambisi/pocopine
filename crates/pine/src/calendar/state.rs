@@ -130,7 +130,11 @@ impl CalendarState {
         } else {
             1
         };
-        let first = self.grid.first().map(|g| g.value).unwrap_or(self.placeholder);
+        let first = self
+            .grid
+            .first()
+            .map(|g| g.value)
+            .unwrap_or(self.placeholder);
         let new_placeholder = start_of_month(&first.add_months(step));
         self.placeholder = new_placeholder;
         self.rebuild_grid();
@@ -142,7 +146,11 @@ impl CalendarState {
         } else {
             1
         };
-        let first = self.grid.first().map(|g| g.value).unwrap_or(self.placeholder);
+        let first = self
+            .grid
+            .first()
+            .map(|g| g.value)
+            .unwrap_or(self.placeholder);
         let new_placeholder = start_of_month(&first.subtract_months(step));
         self.placeholder = new_placeholder;
         self.rebuild_grid();
@@ -172,7 +180,9 @@ impl CalendarState {
     // ── predicates used by cell / nav renderers ──
 
     pub fn is_date_selected(&self, date: &DateValue) -> bool {
-        self.selected.as_ref().is_some_and(|sel| is_same_day(sel, date))
+        self.selected
+            .as_ref()
+            .is_some_and(|sel| is_same_day(sel, date))
     }
 
     /// True when `date` is outside the caller-enforced min/max
@@ -199,7 +209,9 @@ impl CalendarState {
     /// True when the Prev button should be disabled — `min_value`
     /// is set and the last day of the previous page falls before it.
     pub fn is_prev_button_disabled(&self) -> bool {
-        let Some(min) = self.min_value else { return false };
+        let Some(min) = self.min_value else {
+            return false;
+        };
         if self.disabled || self.grid.is_empty() {
             return self.disabled;
         }
@@ -212,7 +224,9 @@ impl CalendarState {
 
     /// True when the Next button should be disabled.
     pub fn is_next_button_disabled(&self) -> bool {
-        let Some(max) = self.max_value else { return false };
+        let Some(max) = self.max_value else {
+            return false;
+        };
         if self.disabled || self.grid.is_empty() {
             return self.disabled;
         }
@@ -321,7 +335,10 @@ mod tests {
     fn select_outside_view_moves_placeholder() {
         let mut s = CalendarState::new(d(2024, 6, 1));
         s.select_date(d(2024, 9, 10));
-        assert!(s.grid.iter().any(|g| g.value.month() == 9 && g.value.year() == 2024));
+        assert!(s
+            .grid
+            .iter()
+            .any(|g| g.value.month() == 9 && g.value.year() == 2024));
         assert_eq!(s.placeholder, d(2024, 9, 10));
     }
 

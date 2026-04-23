@@ -218,7 +218,13 @@ mod tests {
         );
         let snap = snapshot();
         match snap.first().unwrap() {
-            TimelineEvent::Handler { scope, name, args_summary, dur_us, .. } => {
+            TimelineEvent::Handler {
+                scope,
+                name,
+                args_summary,
+                dur_us,
+                ..
+            } => {
                 assert_eq!(*scope, ScopeId(7));
                 assert_eq!(name, "on_click");
                 assert_eq!(args_summary, "[MouseEvent]");

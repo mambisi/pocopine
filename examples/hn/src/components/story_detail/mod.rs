@@ -11,7 +11,8 @@ use crate::{extract_domain, get_item_tree, humanize_age, performance_now};
 #[derive(Default, Serialize, Deserialize)]
 #[component(style = "story_detail.css")]
 pub struct StoryDetail {
-    #[prop] pub id: u32,
+    #[prop]
+    pub id: u32,
     pub title: String,
     pub author: String,
     pub points: i32,

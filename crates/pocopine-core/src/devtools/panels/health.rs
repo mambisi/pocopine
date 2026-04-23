@@ -151,7 +151,11 @@ fn build_cards_html(samples: &[Sample], leaks: &Leaks) -> String {
 
     let mut html = String::with_capacity(1024);
     for (label, value, peak, series, color, is_leaky) in cards {
-        let leak_cls = if is_leaky { " __pp_dev_hl_card_leak" } else { "" };
+        let leak_cls = if is_leaky {
+            " __pp_dev_hl_card_leak"
+        } else {
+            ""
+        };
         let spark = health::sparkline_svg(series, 200, 28, color);
         html.push_str(&format!(
             "<div class=\"__pp_dev_hl_card{leak}\">\

@@ -19,9 +19,7 @@ use std::rc::Rc;
 use js_sys::Function;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{
-    console, AddEventListenerOptions, Element, Event, EventTarget, KeyboardEvent, Node,
-};
+use web_sys::{console, AddEventListenerOptions, Element, Event, EventTarget, KeyboardEvent, Node};
 
 use super::DirectiveCall;
 use crate::expr::{self, Expr, Spanned};
@@ -29,7 +27,9 @@ use crate::magics::with_current_event;
 use crate::scope::with_current_el;
 
 pub fn run(call: &DirectiveCall) {
-    let Some(event) = call.arg.clone() else { return };
+    let Some(event) = call.arg.clone() else {
+        return;
+    };
     let scope_id = call.scope_id;
     let el = call.el.clone();
     let proxy = call.proxy.clone();
@@ -74,34 +74,33 @@ pub fn run(call: &DirectiveCall) {
     // drops via the element-scoped listener table.
     type DebouncedInvoke = (Option<Function>, Option<Closure<dyn FnMut()>>);
     let last_event: Rc<RefCell<Option<Event>>> = Rc::new(RefCell::new(None));
-    let (invoke_fn, debounce_closure): DebouncedInvoke =
-        if debounce_ms.is_some() {
-            let ast = ast.clone();
-            let last_event = last_event.clone();
-            let el_for_debounce = el.clone();
-            let proxy_for_debounce = proxy.clone();
-            let c = Closure::wrap(Box::new(move || {
-                let ev = last_event.borrow().clone();
-                let ev_js: JsValue = match &ev {
-                    Some(e) => {
-                        let r: &JsValue = e.as_ref();
-                        r.clone()
-                    }
-                    None => JsValue::UNDEFINED,
-                };
-                with_current_el(&el_for_debounce, || {
-                    crate::scope::with_current_scope_id(scope_id, || {
-                        with_current_event(&ev_js, || {
-                            expr::evaluate(&ast, &proxy_for_debounce);
-                        });
+    let (invoke_fn, debounce_closure): DebouncedInvoke = if debounce_ms.is_some() {
+        let ast = ast.clone();
+        let last_event = last_event.clone();
+        let el_for_debounce = el.clone();
+        let proxy_for_debounce = proxy.clone();
+        let c = Closure::wrap(Box::new(move || {
+            let ev = last_event.borrow().clone();
+            let ev_js: JsValue = match &ev {
+                Some(e) => {
+                    let r: &JsValue = e.as_ref();
+                    r.clone()
+                }
+                None => JsValue::UNDEFINED,
+            };
+            with_current_el(&el_for_debounce, || {
+                crate::scope::with_current_scope_id(scope_id, || {
+                    with_current_event(&ev_js, || {
+                        expr::evaluate(&ast, &proxy_for_debounce);
                     });
                 });
-            }) as Box<dyn FnMut()>);
-            let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
-            (Some(f), Some(c))
-        } else {
-            (None, None)
-        };
+            });
+        }) as Box<dyn FnMut()>);
+        let f: Function = c.as_ref().unchecked_ref::<Function>().clone();
+        (Some(f), Some(c))
+    } else {
+        (None, None)
+    };
 
     let window = web_sys::window().expect("window");
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
@@ -160,15 +159,8 @@ pub fn run(call: &DirectiveCall) {
                             if let Some(sel) =
                                 el_for_closure.get_attribute("data-pp-outside-exempt")
                             {
-                                if let Ok(target_el) =
-                                    node.clone().dyn_into::<Element>()
-                                {
-                                    if target_el
-                                        .closest(&sel)
-                                        .ok()
-                                        .flatten()
-                                        .is_some()
-                                    {
+                                if let Ok(target_el) = node.clone().dyn_into::<Element>() {
+                                    if target_el.closest(&sel).ok().flatten().is_some() {
                                         return;
                                     }
                                 }
@@ -215,10 +207,7 @@ pub fn run(call: &DirectiveCall) {
                     window.clear_timeout_with_handle(prev);
                 }
                 let handle = window
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(
-                        invoke_fn,
-                        ms as i32,
-                    )
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(invoke_fn, ms as i32)
                     .unwrap_or(0);
                 timer.set(Some(handle));
             } else {

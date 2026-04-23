@@ -126,9 +126,7 @@ impl Parse for IconSpec {
         if variant != "outline" && variant != "filled" {
             return Err(syn::Error::new(
                 variant_ident.span(),
-                format!(
-                    "unknown icon variant `{variant}` — expected `outline` or `filled`"
-                ),
+                format!("unknown icon variant `{variant}` — expected `outline` or `filled`"),
             ));
         }
         input.parse::<Token![/]>()?;

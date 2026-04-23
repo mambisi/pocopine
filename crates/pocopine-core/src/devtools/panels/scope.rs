@@ -188,14 +188,15 @@ fn build_rows(mode: ViewMode, scopes: &[Scope]) -> Vec<(ScopeId, usize)> {
 /// are appended at the end at depth 0.
 fn build_tree_rows(scopes: &[Scope]) -> Vec<(ScopeId, usize)> {
     let mut out: Vec<(ScopeId, usize)> = Vec::new();
-    let Some(doc) = window().and_then(|w| w.document()) else { return out };
+    let Some(doc) = window().and_then(|w| w.document()) else {
+        return out;
+    };
     let Some(body) = doc.body() else { return out };
     let body_el: Element = body.into();
     let mut depth: usize = 0;
     walk_tree(&body_el, &mut depth, &mut out);
 
-    let seen: std::collections::HashSet<ScopeId> =
-        out.iter().map(|(id, _)| *id).collect();
+    let seen: std::collections::HashSet<ScopeId> = out.iter().map(|(id, _)| *id).collect();
     for s in scopes {
         if !seen.contains(&s.id) {
             out.push((s.id, 0));
@@ -427,10 +428,7 @@ fn build_detail_html(scope: &Scope) -> String {
                     html.push_str(", ");
                 }
                 if let Some(name) = ref_keys.get(i).as_string() {
-                    html.push_str(&format!(
-                        "<code>{}</code>",
-                        util::escape(&name)
-                    ));
+                    html.push_str(&format!("<code>{}</code>", util::escape(&name)));
                 }
             }
             html.push_str("</div>");

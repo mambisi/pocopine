@@ -49,12 +49,18 @@ pub struct OtpSlot {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineOtpField.poco", role = "panel")]
 pub struct PineOtpField {
-    #[prop] pub length: u32,
-    #[model] pub value: String,
-    #[prop] pub r#type: String,
-    #[prop] pub mask: bool,
-    #[prop] pub disabled: bool,
-    #[prop] pub label: String,
+    #[prop]
+    pub length: u32,
+    #[model]
+    pub value: String,
+    #[prop]
+    pub r#type: String,
+    #[prop]
+    pub mask: bool,
+    #[prop]
+    pub disabled: bool,
+    #[prop]
+    pub label: String,
     /// Recomputed when `length` changes.
     pub slots: Vec<OtpSlot>,
     /// Mobile-keyboard hint, derived from `type`.
@@ -198,7 +204,9 @@ impl PineOtpField {
     /// after a user types, the property and the attribute diverge
     /// and only the property is what the browser renders.
     fn sync_slot_display(&self) {
-        let Some(scope) = current_scope_id() else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
         let Some(root_el) = refs::get_on(scope, "root") else {
             return;
         };
@@ -238,8 +246,12 @@ impl PineOtpField {
     /// level, so the focus call can run synchronously here instead
     /// of deferring past the flush (issue #4).
     fn focus_slot(&self, target: u32) {
-        let Some(scope) = current_scope_id() else { return };
-        let Some(root_el) = refs::get_on(scope, "root") else { return };
+        let Some(scope) = current_scope_id() else {
+            return;
+        };
+        let Some(root_el) = refs::get_on(scope, "root") else {
+            return;
+        };
         let selector = format!("input[data-index=\"{target}\"]");
         let Some(el) = root_el.query_selector(&selector).ok().flatten() else {
             return;

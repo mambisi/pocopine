@@ -16,12 +16,11 @@ use serde::{Deserialize, Serialize};
 use components::showcase::{
     AccordionDemo, AlertDialogDemo, AnimationDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CalendarDemo, CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo,
-    DatePickerDemo, DateRangePickerDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo,
-    OtpDemo, PinCardDemo, PopoverDemo, RadioGroupDemo, RangeCalendarDemo,
-    ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo, StressDemo,
-    SwitchCheckboxDemo, TabsDemo,
-    TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo,
-    TooltipDemo, TreeDemo,
+    DatePickerDemo, DateRangePickerDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo,
+    FormDemo, HoverCardDemo, InputDemo, OtpDemo, PinCardDemo, PopoverDemo, RadioGroupDemo,
+    RangeCalendarDemo, ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo,
+    StressDemo, SwitchCheckboxDemo, TabsDemo, TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo,
+    TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{Hero, Showcase, ShowcaseCard, SiteHeader, Tutorial};
 
@@ -51,10 +50,16 @@ impl WebsiteApp {
         provide(&WEBSITE_APP, this::<Self>());
     }
 
-    pub fn open_palette(&mut self) { self.open = true; }
+    pub fn open_palette(&mut self) {
+        self.open = true;
+    }
 
     pub fn toggle_theme(&mut self) {
-        self.theme = if self.theme == "dark" { "light".into() } else { "dark".into() };
+        self.theme = if self.theme == "dark" {
+            "light".into()
+        } else {
+            "dark".into()
+        };
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
             if let Some(root) = doc.document_element() {
                 let _ = root.set_attribute("data-theme", &self.theme);

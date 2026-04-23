@@ -11,7 +11,11 @@ const SIM_BATCH_DELAY_MS: i32 = 20;
 const SIM_TOTAL_ITEMS: usize = 500;
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "StressDemo.poco", style = "../tags_input/tags_input.css", role = "panel")]
+#[component(
+    template = "StressDemo.poco",
+    style = "../tags_input/tags_input.css",
+    role = "panel"
+)]
 pub struct StressDemo {
     pub open: bool,
     pub items: Vec<String>,
@@ -125,7 +129,9 @@ impl StressDemo {
     /// Self-terminating: no timer handle to clear on unmount, the
     /// next scheduled callback just bails on its flags.
     fn schedule_sim_batch(handle: Handle<Self>) {
-        let Some(window) = web_sys::window() else { return };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         let handle_for_cb = handle.clone();
         let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
             let keep_going = handle_for_cb.update(|s: &mut Self| {

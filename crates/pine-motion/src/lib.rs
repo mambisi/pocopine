@@ -24,8 +24,8 @@
 
 pub mod animate;
 pub mod drag;
-pub mod effects;
 pub mod easing;
+pub mod effects;
 pub mod gesture;
 pub mod projection;
 pub mod scroll;
@@ -35,11 +35,9 @@ pub mod tilt;
 
 pub use animate::{animate, AnimationHandle, Channel, IntoTiming, Tween};
 pub use drag::{drag, DragAxis, DragConfig, DragConstraints};
-pub use effects::{hover_motion, raise, scale, HoverMotion, HoverMotionConfig};
 pub use easing::{sample_to_linear_easing, Easing};
-pub use gesture::{
-    focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler,
-};
+pub use effects::{hover_motion, raise, scale, HoverMotion, HoverMotionConfig};
+pub use gesture::{focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler};
 pub use projection::{play_layout, project_with, snapshot_layout, LayoutRect, LayoutSnapshot};
 pub use scroll::{on_view, scroll_progress, ScrollHandle, ViewConfig};
 pub use spring::Spring;

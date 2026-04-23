@@ -85,15 +85,22 @@ struct RootRuntime {
 // ── Root ──────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineHoverCardRoot.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineHoverCardRoot.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineHoverCardRoot {
-    #[prop] pub open: bool,
+    #[prop]
+    pub open: bool,
     /// Delay (ms) before the card appears on hover / focus.
-    #[prop] pub open_delay: u32,
+    #[prop]
+    pub open_delay: u32,
     /// Delay (ms) before the card closes after the pointer leaves
     /// both the trigger and the content. Keeps the card alive
     /// while the user moves their mouse across the gap.
-    #[prop] pub close_delay: u32,
+    #[prop]
+    pub close_delay: u32,
 }
 
 impl Default for PineHoverCardRoot {
@@ -116,7 +123,11 @@ impl PineHoverCardRoot {
 // ── Trigger ───────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineHoverCardTrigger.poco", role = "panel", display = "contents")]
+#[component(
+    template = "PineHoverCardTrigger.poco",
+    role = "panel",
+    display = "contents"
+)]
 pub struct PineHoverCardTrigger {}
 
 #[handlers]
@@ -186,8 +197,12 @@ fn make_open_scheduler(
         // Don't restart the open timer if one is already pending —
         // a second mouseenter on the same surface during the delay
         // window should keep the original countdown.
-        let has_pending_open =
-            RUNTIME.with(|r| r.borrow().get(&root_id).and_then(|e| e.pending_open).is_some());
+        let has_pending_open = RUNTIME.with(|r| {
+            r.borrow()
+                .get(&root_id)
+                .and_then(|e| e.pending_open)
+                .is_some()
+        });
         if has_pending_open {
             return;
         }
@@ -293,16 +308,12 @@ fn teardown_trigger(root_id: ScopeId) {
         let mut map = r.borrow_mut();
         if let Some(e) = map.get_mut(&root_id) {
             if let Some(c) = e.trigger_enter.take() {
-                let _ = target.remove_event_listener_with_callback(
-                    "mouseenter",
-                    c.as_ref().unchecked_ref(),
-                );
+                let _ = target
+                    .remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
             }
             if let Some(c) = e.trigger_leave.take() {
-                let _ = target.remove_event_listener_with_callback(
-                    "mouseleave",
-                    c.as_ref().unchecked_ref(),
-                );
+                let _ = target
+                    .remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
             }
             if let Some(c) = e.trigger_focus.take() {
                 let _ = target
@@ -321,9 +332,14 @@ fn teardown_trigger(root_id: ScopeId) {
 // ── Portal ────────────────────────────────────────────────────────
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineHoverCardPortal.poco", role = "scope", display = "contents")]
+#[component(
+    template = "PineHoverCardPortal.poco",
+    role = "scope",
+    display = "contents"
+)]
 pub struct PineHoverCardPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -332,12 +348,19 @@ impl PineHoverCardPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineHoverCardContent.poco", role = "panel", transition = "fade-scale")]
+#[component(
+    template = "PineHoverCardContent.poco",
+    role = "panel",
+    transition = "fade-scale"
+)]
 pub struct PineHoverCardContent {
     pub anchor: String,
-    #[prop] pub side: String,
-    #[prop] pub align: String,
-    #[prop] pub side_offset: f64,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
 }
 
 impl Default for PineHoverCardContent {
@@ -360,7 +383,9 @@ impl PineHoverCardContent {
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(content) = refs.get("content") else { return };
+        let Some(content) = refs.get("content") else {
+            return;
+        };
         let Some(root) = inject(&ROOT) else { return };
         let root_id = root.scope_id();
 
@@ -387,10 +412,10 @@ impl PineHoverCardContent {
         let leave = make_close_scheduler(root_id, root);
 
         let target: &EventTarget = content.as_ref();
-        let _ = target
-            .add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref());
-        let _ = target
-            .add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
+        let _ =
+            target.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref());
+        let _ =
+            target.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
 
         RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
@@ -420,18 +445,13 @@ fn teardown_content(root_id: ScopeId) {
         let mut map = r.borrow_mut();
         if let Some(e) = map.get_mut(&root_id) {
             if let Some(c) = e.content_enter.take() {
-                let _ = target.remove_event_listener_with_callback(
-                    "mouseenter",
-                    c.as_ref().unchecked_ref(),
-                );
+                let _ = target
+                    .remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
             }
             if let Some(c) = e.content_leave.take() {
-                let _ = target.remove_event_listener_with_callback(
-                    "mouseleave",
-                    c.as_ref().unchecked_ref(),
-                );
+                let _ = target
+                    .remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
             }
         }
     });
 }
-

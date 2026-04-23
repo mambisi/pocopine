@@ -59,9 +59,11 @@ impl PineRangeCalendarGridBody {
     /// the calendar.
     pub fn clear_hover(&mut self) {
         if let Some(root) = inject(&RANGE_ROOT) {
-            root.update(|r: &mut crate::range_calendar::root::PineRangeCalendarRoot| {
-                r.clear_hover();
-            });
+            root.update(
+                |r: &mut crate::range_calendar::root::PineRangeCalendarRoot| {
+                    r.clear_hover();
+                },
+            );
         }
     }
 }

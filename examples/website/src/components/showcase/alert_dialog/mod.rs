@@ -2,7 +2,11 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "AlertDialogDemo.poco", style = "alert_dialog.css", role = "panel")]
+#[component(
+    template = "AlertDialogDemo.poco",
+    style = "alert_dialog.css",
+    role = "panel"
+)]
 pub struct AlertDialogDemo {
     pub open: bool,
     pub last_action: String,
@@ -10,5 +14,7 @@ pub struct AlertDialogDemo {
 
 #[handlers]
 impl AlertDialogDemo {
-    pub fn confirm_destroy(&mut self) { self.last_action = "destroyed".into(); }
+    pub fn confirm_destroy(&mut self) {
+        self.last_action = "destroyed".into();
+    }
 }

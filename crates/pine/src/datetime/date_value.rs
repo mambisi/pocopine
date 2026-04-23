@@ -13,9 +13,9 @@
 //! so we can grow this into a sum type in v2 (CalendarDateTime,
 //! ZonedDateTime) without breaking callers.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::{Date, Duration, Month};
 
 use crate::datetime::types::DayOfWeek;
@@ -158,7 +158,13 @@ impl PartialOrd for DateValue {
 impl fmt::Display for DateValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // ISO-8601 `YYYY-MM-DD`.
-        write!(f, "{:04}-{:02}-{:02}", self.year(), self.month(), self.day())
+        write!(
+            f,
+            "{:04}-{:02}-{:02}",
+            self.year(),
+            self.month(),
+            self.day()
+        )
     }
 }
 
@@ -177,9 +183,8 @@ impl<'de> Deserialize<'de> for DateValue {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Self::parse_iso(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid ISO date `{}`", s.trim()))
-        })
+        Self::parse_iso(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid ISO date `{}`", s.trim())))
     }
 }
 
@@ -288,7 +293,10 @@ mod tests {
     fn parse_iso_roundtrips_display() {
         let d = DateValue::new(2024, 6, 15).unwrap();
         assert_eq!(DateValue::parse_iso(&d.to_string()), Some(d));
-        assert_eq!(DateValue::parse_iso("  2024-12-31 "), DateValue::new(2024, 12, 31));
+        assert_eq!(
+            DateValue::parse_iso("  2024-12-31 "),
+            DateValue::new(2024, 12, 31)
+        );
         assert_eq!(DateValue::parse_iso("2024/06/15"), None);
         assert_eq!(DateValue::parse_iso("2024-13-01"), None);
         assert_eq!(DateValue::parse_iso(""), None);

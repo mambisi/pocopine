@@ -7,10 +7,7 @@ pub fn chunk<T: Clone>(slice: &[T], size: usize) -> Vec<Vec<T>> {
     if size == 0 {
         return Vec::new();
     }
-    slice
-        .chunks(size)
-        .map(|c| c.to_vec())
-        .collect()
+    slice.chunks(size).map(|c| c.to_vec()).collect()
 }
 
 #[cfg(test)]

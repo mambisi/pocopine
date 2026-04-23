@@ -92,9 +92,11 @@ where
 /// ancestor is the original press target. Matches Motion's
 /// `isNodeOrChild` logic.
 fn landed_on_target(press_target: &Element, event: &PointerEvent) -> bool {
-    let Ok(up_target) = event.target().ok_or(()).and_then(|t| {
-        t.dyn_into::<Node>().map_err(|_| ())
-    }) else {
+    let Ok(up_target) = event
+        .target()
+        .ok_or(())
+        .and_then(|t| t.dyn_into::<Node>().map_err(|_| ()))
+    else {
         return false;
     };
     let press_node: &Node = press_target.as_ref();

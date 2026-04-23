@@ -92,7 +92,8 @@ impl LayoutSnapshot {
 pub fn snapshot_layout(root: &Element) -> LayoutSnapshot {
     let mut out = LayoutSnapshot::default();
     collect_tagged(root, LAYOUT_ID_ATTR, |el, id| {
-        out.rects.insert(id, LayoutRect::from_dom(&el.get_bounding_client_rect()));
+        out.rects
+            .insert(id, LayoutRect::from_dom(&el.get_bounding_client_rect()));
     });
     out
 }
@@ -129,9 +130,7 @@ pub fn play_layout(root: &Element, snapshot: LayoutSnapshot, spring: Spring) {
         if dx.abs() < 0.5 && dy.abs() < 0.5 && (sx - 1.0).abs() < 1e-3 && (sy - 1.0).abs() < 1e-3 {
             return;
         }
-        let from = format!(
-            "translate({dx}px, {dy}px) scale({sx}, {sy})"
-        );
+        let from = format!("translate({dx}px, {dy}px) scale({sx}, {sy})");
         let to = "translate(0px, 0px) scale(1, 1)".to_string();
 
         // Transform-origin: top-left so the translate + scale
@@ -174,11 +173,7 @@ fn collect_tagged(root: &Element, attr: &str, mut on_match: impl FnMut(&Element,
     collect_tagged_inner(root, attr, &mut on_match);
 }
 
-fn collect_tagged_inner(
-    root: &Element,
-    attr: &str,
-    on_match: &mut dyn FnMut(&Element, String),
-) {
+fn collect_tagged_inner(root: &Element, attr: &str, on_match: &mut dyn FnMut(&Element, String)) {
     if let Some(id) = root.get_attribute(attr) {
         on_match(root, id);
     }

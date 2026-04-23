@@ -31,7 +31,6 @@ impl PinCardDemo {
 
 impl PinCardDemo {
     fn recompute_complete(&mut self) {
-        self.complete = self.card_number.chars().count() == 16
-            && self.pin.chars().count() == 4;
+        self.complete = self.card_number.chars().count() == 16 && self.pin.chars().count() == 4;
     }
 }

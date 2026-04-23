@@ -92,7 +92,9 @@ impl PineTreeRoot {
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root_el) = refs.get("tree") else { return };
+        let Some(root_el) = refs.get("tree") else {
+            return;
+        };
         let tree_id = self.tree_id.clone();
         // Defer the install: Items must be in the DOM first so
         // the initial activedescendant seeds against a real item.
@@ -108,19 +110,25 @@ impl PineTreeRoot {
 
     /// Select the item currently virtually-highlighted (Enter / Space).
     pub fn select_active(&mut self) {
-        let Some(val) = active_item_value() else { return };
+        let Some(val) = active_item_value() else {
+            return;
+        };
         self.select_value(val);
     }
 
     /// Expand the highlighted item (→).
     pub fn expand_active(&mut self) {
-        let Some(val) = active_item_value() else { return };
+        let Some(val) = active_item_value() else {
+            return;
+        };
         self.expand_item(val);
     }
 
     /// Collapse the highlighted item (←).
     pub fn collapse_active(&mut self) {
-        let Some(val) = active_item_value() else { return };
+        let Some(val) = active_item_value() else {
+            return;
+        };
         self.collapse_item(val);
     }
 
@@ -231,8 +239,7 @@ impl PineTreeItem {
         self.parent_visible = true;
         if let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) {
             let my_value = self.value.clone();
-            let (sel, exp) =
-                root.with(|r| (r.is_selected(&my_value), r.is_expanded(&my_value)));
+            let (sel, exp) = root.with(|r| (r.is_selected(&my_value), r.is_expanded(&my_value)));
             self.selected = sel;
             self.expanded = exp;
         }
@@ -394,7 +401,9 @@ impl PineTreeItemToggle {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item) = inject::<ScopeId>(&ITEM) else { return };
+        let Some(item) = inject::<ScopeId>(&ITEM) else {
+            return;
+        };
         let h_exp = handle.clone();
         pocopine::watch_scope_field::<bool, _>(item, "expanded", move |&v, _| {
             h_exp.update(|s| s.expanded = v);
@@ -406,9 +415,15 @@ impl PineTreeItemToggle {
     }
 
     pub fn click(&mut self) {
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else { return };
-        let Some(scope) = Scope::find(item_scope) else { return };
-        let Some(inner) = scope.typed::<PineTreeItem>() else { return };
+        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+            return;
+        };
+        let Some(scope) = Scope::find(item_scope) else {
+            return;
+        };
+        let Some(inner) = scope.typed::<PineTreeItem>() else {
+            return;
+        };
         Handle::new(inner, item_scope).update(|s: &mut PineTreeItem| s.toggle());
     }
 }

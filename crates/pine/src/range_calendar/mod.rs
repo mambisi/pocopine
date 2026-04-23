@@ -18,8 +18,7 @@ pub mod state;
 pub use cell::{PineRangeCalendarCell, PineRangeCalendarCellTrigger};
 pub use grid::{PineRangeCalendarGrid, PineRangeCalendarGridBody, PineRangeCalendarGridHead};
 pub use header::{
-    PineRangeCalendarHeader, PineRangeCalendarHeading, PineRangeCalendarNext,
-    PineRangeCalendarPrev,
+    PineRangeCalendarHeader, PineRangeCalendarHeading, PineRangeCalendarNext, PineRangeCalendarPrev,
 };
 pub use root::{PineRangeCalendarRoot, RangeCellView, RANGE_ROOT};
 pub use state::RangeCalendarState;

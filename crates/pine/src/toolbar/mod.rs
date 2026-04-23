@@ -43,12 +43,15 @@ pub struct PineToolbarRoot {
     /// `aria-orientation` + `data-orientation`; descendant
     /// Separator reads it via inject so it can swap its own
     /// orientation automatically.
-    #[prop] pub orientation: String,
+    #[prop]
+    pub orientation: String,
 }
 
 impl Default for PineToolbarRoot {
     fn default() -> Self {
-        Self { orientation: "horizontal".into() }
+        Self {
+            orientation: "horizontal".into(),
+        }
     }
 }
 
@@ -64,7 +67,8 @@ impl PineToolbarRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineToolbarButton.poco", role = "interactive")]
 pub struct PineToolbarButton {
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub disabled: bool,
 }
 
 #[handlers]
@@ -75,7 +79,8 @@ impl PineToolbarButton {}
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineToolbarLink.poco", role = "link")]
 pub struct PineToolbarLink {
-    #[prop] pub href: String,
+    #[prop]
+    pub href: String,
 }
 
 #[handlers]

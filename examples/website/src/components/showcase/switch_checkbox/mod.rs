@@ -2,7 +2,11 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "SwitchCheckboxDemo.poco", style = "switch_checkbox.css", role = "panel")]
+#[component(
+    template = "SwitchCheckboxDemo.poco",
+    style = "switch_checkbox.css",
+    role = "panel"
+)]
 pub struct SwitchCheckboxDemo {
     pub dark_mode: bool,
     pub agree_state: String,

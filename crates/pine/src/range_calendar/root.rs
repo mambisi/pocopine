@@ -198,7 +198,10 @@ impl PineRangeCalendarRoot {
 
 impl PineRangeCalendarRoot {
     fn build_state(&self) -> RangeCalendarState {
-        let placeholder = self.placeholder.or(self.start).unwrap_or_else(fallback_today);
+        let placeholder = self
+            .placeholder
+            .or(self.start)
+            .unwrap_or_else(fallback_today);
         let week_starts_on = self.week_starts_on.min(6) as u8;
         RangeCalendarState::new(placeholder)
             .with_start(self.start)
@@ -241,8 +244,7 @@ fn build_cells(s: &RangeCalendarState) -> Vec<RangeCellView> {
                 row.iter().map(move |date| RangeCellView {
                     date: date.to_string(),
                     day: date.day(),
-                    is_current_month: date.year() == anchor_year
-                        && date.month() == anchor_month,
+                    is_current_month: date.year() == anchor_year && date.month() == anchor_month,
                     is_selection_start: s.is_selection_start(date),
                     is_selection_end: s.is_selection_end(date),
                     is_in_range: s.is_in_range(date),
@@ -267,7 +269,11 @@ fn format_heading(s: &RangeCalendarState) -> String {
     if first.year() == last.year() && first.month() == last.month() {
         return format_month_label(first);
     }
-    format!("{} – {}", format_month_label(first), format_month_label(last))
+    format!(
+        "{} – {}",
+        format_month_label(first),
+        format_month_label(last)
+    )
 }
 
 fn format_month_label(date: &DateValue) -> String {

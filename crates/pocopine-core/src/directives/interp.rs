@@ -55,7 +55,9 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
     }
 
     for text in texts {
-        let Some(data) = text.node_value() else { continue };
+        let Some(data) = text.node_value() else {
+            continue;
+        };
         // Fast path: no `{{` anywhere means nothing to interpolate.
         // A single `{` never triggers the scanner — unambiguous
         // per RFC-040.
@@ -103,8 +105,8 @@ fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Seg
                             return;
                         };
                         let fallback = doc.create_text_node(&format!("{{{{{src}}}}}"));
-                        let _ = parent_node
-                            .insert_before(fallback.as_ref(), Some(original.as_ref()));
+                        let _ =
+                            parent_node.insert_before(fallback.as_ref(), Some(original.as_ref()));
                         continue;
                     }
                 };

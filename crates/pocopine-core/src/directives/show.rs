@@ -16,7 +16,9 @@ use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
 
 pub fn run(call: &DirectiveCall) {
-    let Ok(html_el): Result<HtmlElement, _> = call.el.clone().dyn_into() else { return };
+    let Ok(html_el): Result<HtmlElement, _> = call.el.clone().dyn_into() else {
+        return;
+    };
     let proxy = call.proxy.clone();
     let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
         Ok(a) => a,

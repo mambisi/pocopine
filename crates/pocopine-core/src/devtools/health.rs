@@ -122,9 +122,7 @@ pub(crate) fn sparkline_svg(values: &[usize], width: u32, height: u32, color: &s
     for (i, v) in values.iter().enumerate() {
         let x = (i as f64) * dx;
         // Invert Y so higher values paint upward.
-        let y = (height as f64)
-            - (((v - min) as f64 / span as f64) * (height as f64 - 2.0))
-            - 1.0;
+        let y = (height as f64) - (((v - min) as f64 / span as f64) * (height as f64 - 2.0)) - 1.0;
         if i > 0 {
             points.push(' ');
         }

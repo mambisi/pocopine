@@ -43,11 +43,14 @@ impl PineAvatarRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAvatarImage.poco", role = "visual")]
 pub struct PineAvatarImage {
-    #[prop] pub src: String,
-    #[prop] pub alt: String,
+    #[prop]
+    pub src: String,
+    #[prop]
+    pub alt: String,
     /// Mirrored from Root. Drives `pp-show` so the browser's
     /// broken-image glyph never flashes during load.
-    #[observe(ROOT)] pub loaded: bool,
+    #[observe(ROOT)]
+    pub loaded: bool,
 }
 
 #[handlers]
@@ -74,7 +77,8 @@ impl PineAvatarImage {
 pub struct PineAvatarFallback {
     /// Mirrored from Root. Fallback's `pp-if="!loaded"` reads it
     /// — present during load, unmounted once the image lands.
-    #[observe(ROOT)] pub loaded: bool,
+    #[observe(ROOT)]
+    pub loaded: bool,
 }
 
 #[handlers]

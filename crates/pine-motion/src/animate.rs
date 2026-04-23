@@ -159,10 +159,7 @@ pub fn animate<T: IntoTiming>(
         .iter()
         .map(|(p, _, to)| (*p, (*to).to_string()))
         .collect();
-    let keyframes = [
-        Keyframe { props: from_props },
-        Keyframe { props: to_props },
-    ];
+    let keyframes = [Keyframe { props: from_props }, Keyframe { props: to_props }];
 
     // Stringify easing at the chosen duration. Springs compile to
     // `linear(...)`; cubic-beziers/named easings land as their native

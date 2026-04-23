@@ -2,8 +2,8 @@
 //! Rust handlers can reach it via [`crate::refs`]. Setup-only: no
 //! reactive effect is registered.
 
-use web_sys::console;
 use wasm_bindgen::JsValue;
+use web_sys::console;
 
 use super::DirectiveCall;
 use crate::refs;

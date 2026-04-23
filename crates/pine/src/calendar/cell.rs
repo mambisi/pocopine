@@ -33,7 +33,11 @@ use web_sys::HtmlElement;
 /// `date` prop exists so the trigger inside can forward it without
 /// the author re-writing it twice.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarCell.poco", role = "item", display = "contents")]
+#[component(
+    template = "PineCalendarCell.poco",
+    role = "item",
+    display = "contents"
+)]
 pub struct PineCalendarCell {
     /// ISO `YYYY-MM-DD` date this cell represents.
     #[prop]

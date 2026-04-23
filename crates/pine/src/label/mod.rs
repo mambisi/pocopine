@@ -22,7 +22,8 @@ use serde::{Deserialize, Serialize};
 pub struct PineLabel {
     /// `id` of the form control this label is paired with.
     /// Flows to the underlying `<label>`'s `for` attribute.
-    #[prop] pub target: String,
+    #[prop]
+    pub target: String,
 }
 
 #[handlers]

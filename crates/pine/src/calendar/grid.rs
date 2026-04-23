@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 /// `<pine-calendar-grid>` — the outermost `<table role="application">`
 /// wrapping one month's worth of cells.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PineCalendarGrid.poco", role = "list", display = "contents")]
+#[component(
+    template = "PineCalendarGrid.poco",
+    role = "list",
+    display = "contents"
+)]
 pub struct PineCalendarGrid {
     #[observe(ROOT)]
     pub disabled: bool,

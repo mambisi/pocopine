@@ -44,7 +44,9 @@ pub fn install() {
         }
         installed.set(true);
     });
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let Ok(Some(mql)) = window.match_media("(prefers-reduced-motion: reduce)") else {
         return;
     };
@@ -57,8 +59,7 @@ pub fn install() {
         };
         REDUCED.with(|c| c.set(mql.matches()));
     });
-    let _ = mql
-        .add_event_listener_with_callback("change", listener.as_ref().unchecked_ref());
+    let _ = mql.add_event_listener_with_callback("change", listener.as_ref().unchecked_ref());
     listener.forget();
 }
 

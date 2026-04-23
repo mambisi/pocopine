@@ -56,18 +56,9 @@ pub fn compile_template(raw: &str, name: &str, role: Option<(&str, &str)>) -> St
 /// every occurrence in a `.poco` file is unambiguously the placeholder.
 fn rewrite_root_placeholder(raw: &str, tag: &str, prefix_attrs: &str) -> String {
     let attrs = prefix_attrs.trim();
-    let step1 = raw.replace(
-        "<root>",
-        &format!("<{tag} {attrs}>"),
-    );
-    let step2 = step1.replace(
-        "<root ",
-        &format!("<{tag} {attrs} "),
-    );
-    let step3 = step2.replace(
-        "<root/>",
-        &format!("<{tag} {attrs}/>"),
-    );
+    let step1 = raw.replace("<root>", &format!("<{tag} {attrs}>"));
+    let step2 = step1.replace("<root ", &format!("<{tag} {attrs} "));
+    let step3 = step2.replace("<root/>", &format!("<{tag} {attrs}/>"));
     step3.replace("</root>", &format!("</{tag}>"))
 }
 
@@ -75,7 +66,9 @@ fn rewrite_root_placeholder(raw: &str, tag: &str, prefix_attrs: &str) -> String 
 /// `needle` (case-insensitive). Only looks inside the placeholder's
 /// own opening tag — ignores siblings and children.
 fn root_placeholder_has_attr(raw: &str, needle: &str) -> bool {
-    let Some(pos) = raw.find("<root") else { return false };
+    let Some(pos) = raw.find("<root") else {
+        return false;
+    };
     let after = pos + "<root".len();
     let boundary = raw.as_bytes().get(after).copied();
     if !matches!(
@@ -172,7 +165,10 @@ pub fn inject_pp_data(raw: &str, name: &str) -> String {
 }
 
 fn find_byte(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
-    bytes[start..].iter().position(|&b| b == needle).map(|p| start + p)
+    bytes[start..]
+        .iter()
+        .position(|&b| b == needle)
+        .map(|p| start + p)
 }
 
 fn find_seq(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
@@ -273,7 +269,9 @@ mod tests {
             "pine-switch",
             Some(("button", "interactive")),
         );
-        assert!(out.starts_with(r#"<button data-pine-role="interactive" type="button" class="pine-switch""#));
+        assert!(out.starts_with(
+            r#"<button data-pine-role="interactive" type="button" class="pine-switch""#
+        ));
         assert!(out.ends_with("</button>"));
     }
 
@@ -291,11 +289,7 @@ mod tests {
 
     #[test]
     fn role_panel_rewrites_to_div() {
-        let out = compile_template(
-            "<root><slot/></root>",
-            "p",
-            Some(("div", "panel")),
-        );
+        let out = compile_template("<root><slot/></root>", "p", Some(("div", "panel")));
         assert_eq!(
             out,
             r#"<div data-pine-role="panel" pp-data="p"><slot/></div>"#

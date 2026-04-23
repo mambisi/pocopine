@@ -39,17 +39,22 @@ inject_key!(ROOT: ScopeId);
 #[component(template = "PineToggleGroupRoot.poco", role = "panel")]
 pub struct PineToggleGroupRoot {
     /// `"single"` (default) or `"multiple"`.
-    #[prop] pub r#type: String,
+    #[prop]
+    pub r#type: String,
     /// Single-mode current value. `""` when nothing is pressed.
-    #[model] pub value: String,
+    #[model]
+    pub value: String,
     /// Multiple-mode current values.
-    #[model] pub values: Vec<String>,
+    #[model]
+    pub values: Vec<String>,
     /// `"horizontal"` (default) / `"vertical"` — flows to
     /// `data-orientation` for styling. Roving is `.both` either
     /// way so keyboard nav works without orientation-specific
     /// configuration.
-    #[prop] pub orientation: String,
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub orientation: String,
+    #[prop]
+    pub disabled: bool,
 }
 
 impl Default for PineToggleGroupRoot {
@@ -115,8 +120,10 @@ impl PineToggleGroupRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineToggleGroupItem.poco", role = "interactive")]
 pub struct PineToggleGroupItem {
-    #[prop] pub value: String,
-    #[prop] pub disabled: bool,
+    #[prop]
+    pub value: String,
+    #[prop]
+    pub disabled: bool,
     /// Mirrored from Root's selection. Watched via
     /// `watch_scope_field` on both `value` and `values`; exactly
     /// one applies per tick based on Root's `type`.
@@ -166,7 +173,9 @@ impl PineToggleGroupItem {
             return;
         }
         let Some(root) = inject(&ROOT) else { return };
-        let Some(scope) = Scope::find(root) else { return };
+        let Some(scope) = Scope::find(root) else {
+            return;
+        };
         if scope
             .state
             .borrow()

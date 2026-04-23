@@ -14,9 +14,7 @@ use js_sys::{Function, Reflect};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{
-    AddEventListenerOptions, Element, Event, EventTarget, HtmlElement, ResizeObserver,
-};
+use web_sys::{AddEventListenerOptions, Element, Event, EventTarget, HtmlElement, ResizeObserver};
 
 use super::DirectiveCall;
 use crate::refs;
@@ -141,7 +139,10 @@ pub fn install(
             reposition(&guard);
         }) as Box<dyn FnMut()>)
     };
-    let reposition_fn: Function = reposition_closure.as_ref().unchecked_ref::<Function>().clone();
+    let reposition_fn: Function = reposition_closure
+        .as_ref()
+        .unchecked_ref::<Function>()
+        .clone();
 
     // Kick off once on the next microtask so the floater has a chance
     // to commit its initial measured size.
@@ -291,9 +292,19 @@ struct AnchorState {
 }
 
 fn reposition(inner: &AnchorInner) {
-    let Some(window) = web_sys::window() else { return };
-    let vw = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let vh = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let vw = window
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let vh = window
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
 
     let a = inner.anchor.get_bounding_client_rect();
     let f = inner.floater.get_bounding_client_rect();
@@ -449,8 +460,7 @@ fn resolve_anchor(call: &DirectiveCall) -> Option<Element> {
     // current scope's proxy; if it's a non-empty string, try it as
     // a ref / selector.
     if is_identifier(raw) {
-        let v = Reflect::get(call.proxy, &JsValue::from_str(raw))
-            .unwrap_or(JsValue::UNDEFINED);
+        let v = Reflect::get(call.proxy, &JsValue::from_str(raw)).unwrap_or(JsValue::UNDEFINED);
         if let Some(s) = v.as_string() {
             let s = s.trim();
             if !s.is_empty() {

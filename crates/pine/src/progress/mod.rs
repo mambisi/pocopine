@@ -35,15 +35,20 @@ pub struct PineProgressRoot {
     /// Current progress. Negative (e.g. `-1`) marks an
     /// indeterminate state — spinner-style loading with no known
     /// percentage.
-    #[prop] pub value: f64,
+    #[prop]
+    pub value: f64,
     /// Maximum value. Defaults to 100 so authors can pass a
     /// percentage directly.
-    #[prop] pub max: f64,
+    #[prop]
+    pub max: f64,
 }
 
 impl Default for PineProgressRoot {
     fn default() -> Self {
-        Self { value: 0.0, max: 100.0 }
+        Self {
+            value: 0.0,
+            max: 100.0,
+        }
     }
 }
 
@@ -62,8 +67,10 @@ pub struct PineProgressIndicator {
     /// Mirrored from Root for template bindings. Authors style
     /// the indicator's transform/width with CSS reading
     /// `data-value` / `data-max`.
-    #[observe(ROOT)] pub value: f64,
-    #[observe(ROOT)] pub max: f64,
+    #[observe(ROOT)]
+    pub value: f64,
+    #[observe(ROOT)]
+    pub max: f64,
 }
 
 #[handlers]

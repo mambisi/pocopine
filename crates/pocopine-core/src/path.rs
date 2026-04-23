@@ -38,11 +38,12 @@ pub fn resolve_truthy(root: &JsValue, src: &str) -> bool {
 /// Returns `true` if the write succeeded.
 pub fn write_path(root: &JsValue, path: &str, value: &JsValue) -> bool {
     let mut segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
-    let Some(last) = segments.pop() else { return false };
+    let Some(last) = segments.pop() else {
+        return false;
+    };
     let mut target = root.clone();
     for segment in segments {
-        let next = Reflect::get(&target, &JsValue::from_str(segment))
-            .unwrap_or(JsValue::UNDEFINED);
+        let next = Reflect::get(&target, &JsValue::from_str(segment)).unwrap_or(JsValue::UNDEFINED);
         if next.is_undefined() || next.is_null() {
             return false;
         }

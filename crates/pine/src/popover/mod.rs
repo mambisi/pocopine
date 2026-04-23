@@ -28,9 +28,7 @@
 use crate::compound;
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{
-    current_scope_id, inject, inject_key, provide, watch_scope_field,
-};
+use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -43,12 +41,16 @@ inject_key!(ROOT: Handle<PinePopoverRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PinePopoverRoot.poco", role = "scope")]
 pub struct PinePopoverRoot {
-    #[model] pub open: bool,
+    #[model]
+    pub open: bool,
     /// Non-modal by default — matches reka-ui. Set `true` to get
     /// a focus trap + scroll lock via the shared overlay helper.
-    #[prop] pub modal: bool,
-    #[prop] pub dismiss_on_outside: bool,
-    #[prop] pub dismiss_on_escape: bool,
+    #[prop]
+    pub modal: bool,
+    #[prop]
+    pub dismiss_on_outside: bool,
+    #[prop]
+    pub dismiss_on_escape: bool,
 }
 
 impl Default for PinePopoverRoot {
@@ -88,13 +90,16 @@ impl PinePopoverRoot {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverTrigger.poco", role = "interactive")]
 pub struct PinePopoverTrigger {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
 impl PinePopoverTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) else { return };
+        let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) else {
+            return;
+        };
         // Stamp the button so Content's pp-anchor can target it
         // uniquely, mirroring DropdownMenu's auto-anchor scheme.
         if let Some(btn) = refs.get("trigger") {
@@ -114,7 +119,8 @@ impl PinePopoverTrigger {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverPortal.poco", role = "scope")]
 pub struct PinePopoverPortal {
-    #[observe(ROOT)] pub open: bool,
+    #[observe(ROOT)]
+    pub open: bool,
 }
 
 #[handlers]
@@ -123,15 +129,22 @@ impl PinePopoverPortal {}
 // ── Content ───────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PinePopoverContent.poco", role = "panel", transition = "slide-down")]
+#[component(
+    template = "PinePopoverContent.poco",
+    role = "panel",
+    transition = "slide-down"
+)]
 pub struct PinePopoverContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// per-instance selector for anchor. Matches the
     /// `data-pine-popover-trigger="N"` stamp Trigger adds.
     pub anchor: String,
-    #[prop] pub side: String,
-    #[prop] pub align: String,
-    #[prop] pub side_offset: f64,
+    #[prop]
+    pub side: String,
+    #[prop]
+    pub align: String,
+    #[prop]
+    pub side_offset: f64,
 }
 
 impl Default for PinePopoverContent {
@@ -154,7 +167,9 @@ impl PinePopoverContent {
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
-        let Some(content) = refs.get("content") else { return };
+        let Some(content) = refs.get("content") else {
+            return;
+        };
         let modal = inject(&ROOT)
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(false);
