@@ -197,7 +197,12 @@ impl PineCalendarRoot {
         s.select_date(date);
         self.value = s.selected.map(|d| d.to_string()).unwrap_or_default();
         self.placeholder = s.placeholder.to_string();
-        pocopine::emit_model(self.value.clone());
+        // Authors conventionally bind the pick via
+        // `pp-model:value="…"`, which listens for
+        // `pp:update:value` on the new per-field channel — the
+        // unadorned `emit_model` (→ `pp:update:model`) wouldn't
+        // reach them.
+        pocopine::emit_model_field("value", self.value.clone());
         self.apply(&s);
     }
 }

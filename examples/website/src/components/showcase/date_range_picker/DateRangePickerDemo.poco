@@ -10,12 +10,10 @@
     </p>
 
     <div class="date-range-picker-row">
-      <pine-date-range-picker :start="start"
-                              :end="end"
+      <pine-date-range-picker pp-model:start="start"
+                              pp-model:end="end"
                               :placeholder="placeholder"
-                              placeholder-text="Pick a date range"
-                              @pp:update:start="on_start_update"
-                              @pp:update:end="on_end_update"></pine-date-range-picker>
+                              placeholder-text="Pick a date range"></pine-date-range-picker>
 
       <button type="button" class="date-range-picker-clear" @click="clear">Clear</button>
     </div>
