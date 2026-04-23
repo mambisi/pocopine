@@ -96,8 +96,19 @@ pub fn create_date_range(range: &DateRange) -> Vec<DateValue> {
 /// Build a contiguous decade window centered loosely on `date`.
 /// `start_index` defaults to 0, `end_index` is the (exclusive)
 /// upper bound: the total length is `|start_index| + end_index`
-/// years, with indices < `|start_index|` subtracted from `date`
-/// and indices ≥ `|start_index|` added.
+/// years, with indices `< |start_index|` subtracted from `date`
+/// and indices `≥ |start_index|` added.
+///
+/// Ported from reka-ui's `createDecade`. The math expressed as a
+/// single offset `k = i − |start_index|`: negative `k` subtracts
+/// `|k|` years, non-negative `k` adds `k`. That way the output is
+/// monotone ascending by construction, so no post-sort is needed.
+///
+/// Examples:
+///   - `create_decade(date, None, 5)` →
+///     `[date, date+1, date+2, date+3, date+4]`
+///   - `create_decade(date, Some(-3), 4)` →
+///     `[date-3, date-2, date-1, date, date+1, date+2, date+3]`
 pub fn create_decade(
     date: &DateValue,
     start_index: Option<i32>,
@@ -106,18 +117,17 @@ pub fn create_decade(
     let start_index = start_index.unwrap_or(0);
     let abs_start = start_index.unsigned_abs() as i32;
     let total = abs_start + end_index;
-    let mut out: Vec<DateValue> = (0..total)
+    (0..total)
         .map(|i| {
-            let anchor = if i <= abs_start {
-                date.subtract_years(i).set_day(1).set_month(1)
+            let offset = i - abs_start;
+            let anchor = if offset < 0 {
+                date.subtract_years(-offset)
             } else {
-                date.add_years(i - end_index).set_day(1).set_month(1)
+                date.add_years(offset)
             };
-            anchor
+            anchor.set_day(1).set_month(1)
         })
-        .collect();
-    out.sort_by_key(|d| d.year());
-    out
+        .collect()
 }
 
 /// Twelve first-of-months for a year, or a `numberOfMonths`-step
@@ -471,5 +481,33 @@ mod tests {
                 day
             );
         }
+    }
+
+    #[test]
+    fn create_decade_default_walks_forward_from_anchor() {
+        // reka-ui parity: default call shape is "forward-only window
+        // starting AT the anchor". Previous implementation walked
+        // backwards and produced [date-4, date-3, date-2, date-1, date].
+        let years: Vec<i32> = create_decade(&d(2023, 1, 1), None, 5)
+            .into_iter()
+            .map(|v| v.year())
+            .collect();
+        assert_eq!(years, vec![2023, 2024, 2025, 2026, 2027]);
+    }
+
+    #[test]
+    fn create_decade_negative_start_wraps_around_anchor() {
+        // reka-ui parity: `Some(-3), 4` yields 7 distinct ascending
+        // years centred on the anchor. Previous impl double-counted
+        // the anchor (off-by-one pivot) and dropped `date+3`.
+        let years: Vec<i32> = create_decade(&d(2023, 1, 1), Some(-3), 4)
+            .into_iter()
+            .map(|v| v.year())
+            .collect();
+        assert_eq!(
+            years,
+            vec![2020, 2021, 2022, 2023, 2024, 2025, 2026]
+        );
+        assert_eq!(years.len(), 7);
     }
 }
