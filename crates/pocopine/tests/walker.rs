@@ -459,7 +459,6 @@ struct OptionalAutoModelChild {
 #[handlers]
 impl OptionalAutoModelChild {
     pub fn clear_value(&mut self) {
-        self.value = Some("temp".into());
         self.value = None;
     }
 }
@@ -471,7 +470,18 @@ struct OptionalAutoModelParent {
 }
 
 #[handlers]
-impl OptionalAutoModelParent {}
+impl OptionalAutoModelParent {
+    /// Seed parent `maybe` to Some so the pp-model effect drives
+    /// child.value = Some("initial"). Then when `clear_value` runs
+    /// on the child, the snapshot diff sees a genuine Some→None
+    /// transition and emits null. Without this seed the child would
+    /// already be None by the time the test runs (pp-model mirrors
+    /// the parent's default None into the child before the handler
+    /// fires), and None→None would coalesce to zero emits.
+    pub fn on_setup(&mut self) {
+        self.maybe = Some("initial".into());
+    }
+}
 
 // RFC-044 §5.10 — `#[model(flatten = [...])]`. `FlattenRange` is a
 // plain serde struct held in the child's `range` field; each leaf is
@@ -2315,9 +2325,9 @@ async fn inline_expr_interpolation_splits_text_and_reactively_updates() {
     // Two segments in one text node, plus surrounding statics.
     assert_eq!(read(".ih-greeting"), "Hello, Ada! You have 3 new.");
 
-    // Escaped braces survive as literal `{` / `}`; real `{count}`
-    // still binds alongside them.
-    assert_eq!(read(".ih-escape"), "{literal} 3");
+    // Escaped `\{{` survives as literal `{{`; the real `{{count}}`
+    // segment still binds alongside it.
+    assert_eq!(read(".ih-escape"), "{{literal}} 3");
 
     // Single-segment line — no surrounding literal.
     assert_eq!(read(".ih-only"), "3");
@@ -2343,7 +2353,7 @@ async fn inline_expr_interpolation_splits_text_and_reactively_updates() {
     tick().await;
 
     assert_eq!(read(".ih-greeting"), "Hello, Ada! You have 4 new.");
-    assert_eq!(read(".ih-escape"), "{literal} 4");
+    assert_eq!(read(".ih-escape"), "{{literal}} 4");
     assert_eq!(read(".ih-only"), "4");
     assert_eq!(read(".ih-nested"), "outer 4 mid Ada tail");
 

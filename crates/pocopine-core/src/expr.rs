@@ -30,7 +30,7 @@
 use std::ops::Range;
 
 use js_sys::Reflect;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 /// Byte-range span into the original source string.
 pub type Span = Range<usize>;
@@ -707,6 +707,23 @@ pub fn evaluate(expr: &Spanned<Expr>, scope: &JsValue) -> JsValue {
             let arr = js_sys::Array::new();
             for a in args {
                 arr.push(&evaluate(a, scope));
+            }
+            // Magics in call position: `$dispatch(name, detail)` —
+            // `magics::resolve` returns a JS `Function`, which we
+            // `.apply()` with the evaluated args. Without this branch
+            // the lookup went through `invoke_handler` and silently
+            // returned `undefined` because there's no user handler
+            // named `$dispatch`.
+            if name.starts_with('$') {
+                if let Some(id) = scope_id_for(scope) {
+                    let fn_val = crate::magics::resolve(name, id);
+                    if let Some(f) = fn_val.dyn_ref::<js_sys::Function>() {
+                        return f
+                            .apply(&JsValue::UNDEFINED, &arr)
+                            .unwrap_or(JsValue::UNDEFINED);
+                    }
+                }
+                return JsValue::UNDEFINED;
             }
             match scope_id_for(scope) {
                 Some(id) => crate::scope::invoke_handler(id, name, &arr),

@@ -509,10 +509,21 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
         });
 
+    // `serde_wasm_bindgen::to_value(&None::<T>)` returns `undefined`,
+    // but RFC-044 §5.4 promises `None` serialises as `null`. Canonicalise
+    // at the boundary so the emit detail, parent mirror-in round-trips,
+    // and `get()` reads are all consistent.
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
-            #name => ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
-                .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
+            #name => {
+                let __v = ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
+                    .unwrap_or(::pocopine::__private::JsValue::NULL);
+                if __v.is_undefined() {
+                    ::pocopine::__private::JsValue::NULL
+                } else {
+                    __v
+                }
+            },
         }
     }).chain(flatten_leaf_get_arms);
 
@@ -620,10 +631,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return None;
             }
             Some(quote! {
-                #field_name => ::pocopine::__private::serde_wasm_bindgen::to_value(
-                    &self.#field_ident,
-                )
-                .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
+                #field_name => {
+                    let __v = ::pocopine::__private::serde_wasm_bindgen::to_value(
+                        &self.#field_ident,
+                    )
+                    .unwrap_or(::pocopine::__private::JsValue::NULL);
+                    if __v.is_undefined() {
+                        ::pocopine::__private::JsValue::NULL
+                    } else {
+                        __v
+                    }
+                },
             })
         });
 
