@@ -137,6 +137,7 @@ fn run_naive(
                 index: i,
                 total,
                 parent: parent_proxy.clone(),
+                parent_scope_id,
             };
             let scope = Scope::new(Rc::new(RefCell::new(loop_state)));
             crate::context::set_parent(scope.id, parent_scope_id);
@@ -248,6 +249,7 @@ fn run_keyed(
                     index: i,
                     total,
                     parent: parent_proxy.clone(),
+                    parent_scope_id,
                 }));
                 let scope = Scope::new(loop_rc.clone());
                 crate::context::set_parent(scope.id, parent_scope_id);

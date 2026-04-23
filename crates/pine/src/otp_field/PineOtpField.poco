@@ -12,6 +12,10 @@
            :inputmode="input_mode"
            :pattern="pattern"
            :aria-label="slot.aria_label"
-           :disabled="disabled">
+           :disabled="disabled"
+           @input="on_slot_input($event, slot.index)"
+           @keydown.backspace="on_slot_backspace($event, slot.index)"
+           @keydown.left.prevent="focus_delta(slot.index, -1)"
+           @keydown.right.prevent="focus_delta(slot.index, 1)">
   </template>
 </root>

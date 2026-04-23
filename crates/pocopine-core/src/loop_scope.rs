@@ -11,6 +11,7 @@
 use js_sys::{Array, Reflect};
 use wasm_bindgen::JsValue;
 
+use crate::reactive::ScopeId;
 use crate::scope::ComponentState;
 
 pub struct LoopScope {
@@ -26,6 +27,11 @@ pub struct LoopScope {
     /// The parent (enclosing component or outer loop) proxy. Used for
     /// fall-through reads of keys that aren't loop-local.
     pub parent: JsValue,
+    /// Scope id of the enclosing component / outer loop. Used for
+    /// `invoke()` fall-through so `@click="bump"` inside a `pp-for`
+    /// calls the enclosing component's `bump` handler instead of
+    /// silently no-op'ing.
+    pub parent_scope_id: ScopeId,
 }
 
 impl ComponentState for LoopScope {
@@ -61,7 +67,12 @@ impl ComponentState for LoopScope {
         &[]
     }
 
-    fn invoke(&mut self, _key: &str, _args: &Array) -> JsValue {
-        JsValue::UNDEFINED
+    fn invoke(&mut self, key: &str, args: &Array) -> JsValue {
+        // Delegate handler calls to the enclosing component scope —
+        // mirrors the `get` fall-through so `@click="bump"` or
+        // `@input="type(slot.index)"` inside `pp-for` reaches the
+        // outer component's handler table. Without this, bindings
+        // inside a loop body silently no-op.
+        crate::scope::invoke_handler(self.parent_scope_id, key, args)
     }
 }
