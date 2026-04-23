@@ -463,20 +463,39 @@ the parent side — parents move from `pp-model:start` /
 `pp-model:end` to `pp-model:range`. For components that can't
 break that contract, see §5.10.
 
-### 5.10 `#[model(flatten = [...])]` — parent-side per-field wire shape
+### 5.10 `#[model(flatten)]` — parent-side per-field wire shape
 
 When a component wants struct-typed internals (for code
 organisation / atomic local mutation) but needs to preserve a
 parent binding surface that's one wire-key per leaf, declare
-`flatten` with the explicit list of wire names:
+the inner struct `#[model_struct]` and apply `#[model(flatten)]`
+on the component field:
 
 ```rust
+#[model_struct]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct DateRange {
+    pub start: Option<DateValue>,
+    pub end: Option<DateValue>,
+}
+
 #[component(...)]
 pub struct PineRangeCalendarRoot {
-    #[model(flatten = ["start", "end"])]
+    #[model(flatten)]
     pub range: DateRange,
 }
 ```
+
+`#[model_struct]` is a companion attribute on the struct. It
+generates an impl of a hidden
+`pocopine::__private::ModelFlattenable` trait that advertises
+the struct's leaf names + typed get/set closures. The
+`#[component]` macro, when it sees `#[model(flatten)]` without
+an explicit list, consults that impl at registration time and
+splices one synthetic model-field entry per leaf into the
+component's `ComponentState`. Adding a field to `DateRange`
+auto-flattens into the model surface — no RFC-author sync
+required.
 
 Wire semantics under `flatten`:
 
@@ -487,27 +506,40 @@ Wire semantics under `flatten`:
   **Atomicity is lost on the wire** — parents see N independent
   events per handler, same as the pre-struct flat layout would
   have produced.
-- Inbound mirror-in writes land on `self.range.<leaf>` —
-  authors still see the struct internally.
+- Inbound mirror-in writes land on `self.range.<leaf>` via the
+  trait's `set_leaf` routing — authors still see the struct
+  internally.
 
 `flatten` is the **backwards-compatibility escape valve** for
 components whose existing parent contract is flat. New
 components with atomic contracts should use the plain
 struct-typed form (§5.9) and take the atomicity benefit.
 
-Constraints in v1:
+#### 5.10.1 Fallback: explicit leaf list for foreign structs
 
-- Author explicitly lists the wire names (`flatten = ["start",
-  "end"]`) — the macro doesn't introspect the inner struct's
-  fields. This is intentional: it lets the leaf list diverge
-  from the struct's serde shape when needed, and keeps the
-  macro from reaching into foreign types.
-- Each listed name must be both a valid Rust field on the inner
-  struct AND a valid wire name; pocopine doesn't (yet) support
-  `flatten_rename` or per-leaf serde overrides.
+When the author cannot modify the inner struct (it lives in
+another crate, or the wire leaf list must diverge from the
+struct's real fields), the explicit-list form still works:
+
+```rust
+#[model(flatten = ["start", "end"])]
+pub range: SomeForeignCrate::DateRange,  // no #[model_struct] available
+```
+
+The explicit list disables the trait lookup and drives the
+flattening from the author's string list instead. Each listed
+name must still be a valid Rust field on the inner struct.
+
+Constraints in v1 (both forms):
+
 - `flatten` is incompatible with `#[model(name = "...")]` —
   there's no single wire name to rename when the field is
-  exploded.
+  exploded. Per-leaf rename is future work.
+- No `flatten_rename` or per-leaf serde overrides yet — a leaf's
+  wire name equals its Rust field name.
+- Nested flattening (a `#[model_struct]` containing another
+  `#[model_struct]`) is not supported in v1; use a single flat
+  level.
 
 ## 6. Rationale
 
@@ -838,10 +870,13 @@ This RFC takes the following positions:
    no new runtime machinery — the existing `#[model]` path emits
    whatever the field's serde shape is.
 6. **Flatten is opt-in per struct-typed field (§5.10).**
-   `#[model(flatten = ["start", "end"])]` explodes a struct
-   field back into per-leaf wire emission for components whose
-   parent contract must stay flat. It trades atomicity for
-   backwards-compat on the parent binding surface.
+   `#[model(flatten)]` on a `#[model_struct]`-annotated inner
+   struct explodes it back into per-leaf wire emission for
+   components whose parent contract must stay flat. The leaf
+   list auto-derives from the struct's declared fields, so
+   adding a field stays a one-place edit. Foreign-struct
+   fallback via `flatten = ["start", "end"]` handles the case
+   where the author can't add `#[model_struct]`.
 
 Future work, intentionally deferred:
 
@@ -852,12 +887,12 @@ Future work, intentionally deferred:
    public contract"). The current struct-typed form covers
    single-unit atomicity; cross-unit atomicity is the open
    frontier.
-2. **`flatten` without explicit leaf names.**
-   The v1 `flatten = [...]` list is authored by hand. A future
-   pass could inspect an inner struct's serde schema to emit the
-   leaf list automatically, but that requires either a companion
-   derive on the inner struct or per-call syn introspection,
-   both of which deserve their own RFC.
+2. **Per-leaf rename + nested flatten.**
+   `#[model(flatten)]` today maps a leaf's wire name 1:1 to its
+   Rust field name, and forbids nesting. A future pass could
+   support `flatten_rename` (author-chosen per-leaf wire names)
+   and nested flattening (a `#[model_struct]` containing another
+   `#[model_struct]`). Both are additive and don't block v1.
 
 ## 12. Why this helps others understand the system
 
