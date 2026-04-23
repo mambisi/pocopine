@@ -239,6 +239,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_is_model: Vec<bool> = Vec::new();
     let mut field_model_names: Vec<Option<String>> = Vec::new();
     let mut observes: Vec<ObserveEntry> = Vec::new();
+    // RFC-044 §5.10 — `#[model(flatten = [...])]` fields. Each entry
+    // is `(container_ident, leaf_names)`. The container itself is a
+    // normal state field in `field_*` — not prop, not model — and
+    // each leaf is synthesised as an independent prop+model public
+    // key that routes get/set through the container's serde impl.
+    let mut flatten_fields: Vec<(syn::Ident, Vec<String>)> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else { continue };
         let field_ty = field.ty.clone();
@@ -253,36 +259,111 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return false;
             }
             if a.path().is_ident("model") {
-                is_prop = true;
-                is_model = true;
-                let parsed: syn::Result<Option<String>> = match &a.meta {
-                    Meta::Path(_) => Ok(None),
-                    Meta::List(_) => a.parse_args_with(|input: syn::parse::ParseStream| {
-                        if input.is_empty() {
-                            return Ok(None);
-                        }
-                        let kv: MetaNameValue = input.parse()?;
-                        if !kv.path.is_ident("name") {
-                            return Err(syn::Error::new_spanned(
-                                kv.path,
-                                "unknown #[model] key — expected: name",
-                            ));
-                        }
-                        match kv.value {
-                            Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => Ok(Some(s.value())),
-                            other => Err(syn::Error::new_spanned(
-                                other,
-                                "`name` must be a string literal",
-                            )),
-                        }
-                    }),
-                    Meta::NameValue(_) => Err(syn::Error::new_spanned(
-                        a,
-                        "#[model] accepts either bare form or #[model(name = \"...\")]",
-                    )),
-                };
+                // Shapes accepted:
+                //   #[model]                                  bare
+                //   #[model(name = "…")]                      wire-name rename
+                //   #[model(flatten = ["leaf1", "leaf2"])]    per-leaf wire shape
+                //   #[model(flatten)]                         (reserved — see below)
+                let parsed: syn::Result<(Option<String>, Option<Vec<String>>, bool)> =
+                    match &a.meta {
+                        Meta::Path(_) => Ok((None, None, false)),
+                        Meta::List(_) => a.parse_args_with(
+                            |input: syn::parse::ParseStream| {
+                                let mut wire_name: Option<String> = None;
+                                let mut flatten_leaves: Option<Vec<String>> = None;
+                                let mut bare_flatten = false;
+                                while !input.is_empty() {
+                                    let key: syn::Ident = input.parse()?;
+                                    if input.peek(Token![=]) {
+                                        input.parse::<Token![=]>()?;
+                                        if key == "name" {
+                                            let s: LitStr = input.parse()?;
+                                            wire_name = Some(s.value());
+                                        } else if key == "flatten" {
+                                            let arr: syn::ExprArray = input.parse()?;
+                                            let mut leaves = Vec::with_capacity(
+                                                arr.elems.len(),
+                                            );
+                                            for e in arr.elems.iter() {
+                                                match e {
+                                                    Expr::Lit(ExprLit {
+                                                        lit: Lit::Str(s),
+                                                        ..
+                                                    }) => leaves.push(s.value()),
+                                                    other => {
+                                                        return Err(syn::Error::new_spanned(
+                                                            other,
+                                                            "flatten leaves must be string literals",
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            flatten_leaves = Some(leaves);
+                                        } else {
+                                            return Err(syn::Error::new_spanned(
+                                                key,
+                                                "unknown #[model] key — expected: name, flatten",
+                                            ));
+                                        }
+                                    } else if key == "flatten" {
+                                        // Bare `#[model(flatten)]` —
+                                        // auto-discovery form per RFC-044
+                                        // §5.10. Reserved for a follow-up
+                                        // PR that adds the runtime leaves
+                                        // side-table; today's macro emits
+                                        // static match arms and can't
+                                        // produce those without knowing
+                                        // the leaf list.
+                                        bare_flatten = true;
+                                    } else {
+                                        return Err(syn::Error::new_spanned(
+                                            key,
+                                            "expected `=` after #[model] key",
+                                        ));
+                                    }
+                                    if input.peek(Token![,]) {
+                                        input.parse::<Token![,]>()?;
+                                    }
+                                }
+                                Ok((wire_name, flatten_leaves, bare_flatten))
+                            },
+                        ),
+                        Meta::NameValue(_) => Err(syn::Error::new_spanned(
+                            a,
+                            "#[model] accepts either bare form, \
+                             #[model(name = \"...\")], or \
+                             #[model(flatten = [\"leaf1\", \"leaf2\"])]",
+                        )),
+                    };
                 match parsed {
-                    Ok(name) => model_name = name,
+                    Ok((name, flatten, bare)) => {
+                        if bare && flatten.is_none() {
+                            observe_err = Some(syn::Error::new_spanned(
+                                a,
+                                "bare #[model(flatten)] auto-discovery is not yet \
+                                 implemented — provide an explicit leaf list: \
+                                 #[model(flatten = [\"field1\", \"field2\"])]",
+                            ));
+                        } else if let Some(leaves) = flatten {
+                            // Container is internal — not prop, not
+                            // model. Leaves take those roles (added
+                            // to `flatten_fields` below, spliced into
+                            // codegen after the per-field loop).
+                            is_prop = false;
+                            is_model = false;
+                            model_name = None;
+                            // Stash for post-loop splice. Can't push
+                            // directly yet because `ident` hasn't been
+                            // fully cloned out of the enclosing scope.
+                            // Using a sentinel: empty Vec means "will
+                            // populate after parse".
+                            flatten_fields.push((ident.clone(), leaves));
+                        } else {
+                            is_prop = true;
+                            is_model = true;
+                            model_name = name;
+                        }
+                    }
                     Err(e) => observe_err = Some(e),
                 }
                 return false;
@@ -354,12 +435,86 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         field_model_names.push(model_name.or_else(|| is_model.then_some(rust_name)));
     }
 
+    // RFC-044 §5.10 flatten-leaf codegen. For each
+    // `#[model(flatten = ["a", "b"])]` container field, each leaf
+    // becomes a synthetic public key that:
+    //
+    //   - `get(leaf)` / `get_model_value(leaf)`: serialise the
+    //     container once, read the leaf key off the resulting
+    //     JS object.
+    //   - `set(leaf, value)`: serialise the container, splice the
+    //     leaf, deserialise back into the container field.
+    //   - `keys()` includes the leaf (without it, `snapshot_models`
+    //     in the model runtime wouldn't iterate it and emits would
+    //     never fire).
+    //   - `is_prop(leaf)` / `is_model(leaf)`: true (parent
+    //     mirror-in via pp-model:leaf; emit via per-leaf channel).
+    //   - `model_name(leaf)`: the leaf itself.
+    //
+    // One serde round-trip per inbound mirror-in write; same order
+    // as the pre-landing `Option<T>` empty-string shim. Outbound
+    // emission uses the same path the non-flatten struct form
+    // already walks — the snapshot-diff machinery in
+    // `model_runtime.rs` iterates leaves just like any other
+    // `is_model` key.
+    let flatten_leaf_get_arms =
+        flatten_fields.iter().flat_map(|(container, leaves)| {
+            leaves.iter().map(move |leaf| {
+                quote! {
+                    #leaf => {
+                        let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
+                            &self.#container,
+                        )
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
+                        ::pocopine::__private::js_sys::Reflect::get(
+                            &__obj,
+                            &::pocopine::__private::JsValue::from_str(#leaf),
+                        )
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
+                    },
+                }
+            })
+        });
+
+    let flatten_leaf_set_arms =
+        flatten_fields.iter().flat_map(|(container, leaves)| {
+            leaves.iter().map(move |leaf| {
+                quote! {
+                    #leaf => {
+                        let __value = value;
+                        let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(
+                            &self.#container,
+                        )
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
+                        if __obj.is_object() {
+                            let __normalised =
+                                if __value.as_string().as_deref() == Some("") {
+                                    ::pocopine::__private::JsValue::NULL
+                                } else {
+                                    __value
+                                };
+                            let _ = ::pocopine::__private::js_sys::Reflect::set(
+                                &__obj,
+                                &::pocopine::__private::JsValue::from_str(#leaf),
+                                &__normalised,
+                            );
+                            if let Ok(v) =
+                                ::pocopine::__private::serde_wasm_bindgen::from_value(__obj)
+                            {
+                                self.#container = v;
+                            }
+                        }
+                    }
+                }
+            })
+        });
+
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#id)
                 .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
         }
-    });
+    }).chain(flatten_leaf_get_arms);
 
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -376,18 +531,30 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
-    });
+    }).chain(flatten_leaf_set_arms);
 
-    let keys_arr = field_names.iter().map(|n| quote! { #n });
+    let flatten_leaf_names: Vec<&String> = flatten_fields
+        .iter()
+        .flat_map(|(_, leaves)| leaves.iter())
+        .collect();
+
+    let keys_arr = field_names
+        .iter()
+        .chain(flatten_leaf_names.iter().copied())
+        .map(|n| quote! { #n });
 
     // RFC-031 — `is_prop(key)` returns true only for fields
     // annotated `#[prop]`. Everything else is state — parents
     // stay out. Runtime consults this in `apply_static_props`,
     // `pp-bind` child-prop write, and `pp-model` mirror-in.
+    //
+    // Flatten leaves always count as props (parent-writable via
+    // `pp-model:<leaf>`) and as models (emit via `pp:update:<leaf>`).
     let prop_field_names: Vec<&String> = field_names
         .iter()
         .zip(field_is_prop.iter())
         .filter_map(|(n, is_prop)| is_prop.then_some(n))
+        .chain(flatten_leaf_names.iter().copied())
         .collect();
     // `matches!(key, a | b | c)` needs at least one pattern —
     // fall back to a `false` literal when no field is a prop.
@@ -401,6 +568,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .zip(field_is_model.iter())
         .filter_map(|(n, is_model)| is_model.then_some(n))
+        .chain(flatten_leaf_names.iter().copied())
         .collect();
     let is_model_body = if model_field_names.is_empty() {
         quote! { let _ = key; false }
@@ -419,7 +587,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             Some(quote! {
                 #field_name => ::core::option::Option::Some(#wire_name),
             })
-        });
+        })
+        .chain(flatten_leaf_names.iter().copied().map(|leaf| {
+            // Leaves have no separate wire-name rename — the leaf
+            // literal IS the wire name.
+            quote! {
+                #leaf => ::core::option::Option::Some(#leaf),
+            }
+        }));
     // `#[model]` emission sends the field's value as the CustomEvent
     // detail — no parent struct, no key-value context. So we serialize
     // the field directly and let any `#[serde(serialize_with = ...)]`
