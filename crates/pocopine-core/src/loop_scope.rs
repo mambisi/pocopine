@@ -8,6 +8,8 @@
 //!
 //! See `rfcs/rfc-004-pp-for.md` §5.3 for the resolution order.
 
+use std::rc::Rc;
+
 use js_sys::{Array, Reflect};
 use wasm_bindgen::JsValue;
 
@@ -15,8 +17,10 @@ use crate::reactive::ScopeId;
 use crate::scope::ComponentState;
 
 pub struct LoopScope {
-    /// The loop variable's identifier (e.g. `"story"`).
-    pub item_name: String,
+    /// The loop variable's identifier (e.g. `"story"`). Shared as
+    /// `Rc<str>` across every loop iteration so new clones only
+    /// bump the refcount instead of cloning the underlying bytes.
+    pub item_name: Rc<str>,
     /// The current item — a `JsValue` (typically a JS object from
     /// serialized Rust data, or a primitive).
     pub item: JsValue,
@@ -36,7 +40,7 @@ pub struct LoopScope {
 
 impl ComponentState for LoopScope {
     fn get(&self, key: &str) -> JsValue {
-        if key == self.item_name.as_str() {
+        if key == &*self.item_name {
             return self.item.clone();
         }
         match key {

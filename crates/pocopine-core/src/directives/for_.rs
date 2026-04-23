@@ -104,6 +104,7 @@ fn run_naive(
     template: HtmlTemplateElement,
     template_el: Element,
 ) -> crate::reactive::EffectId {
+    let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
 
     effect(move || {
@@ -132,7 +133,7 @@ fn run_naive(
         for i in 0..total {
             let item = arr.get(i as u32);
             let loop_state = LoopScope {
-                item_name: item_name.clone(),
+                item_name: Rc::clone(&item_name),
                 item,
                 index: i,
                 total,
@@ -192,6 +193,7 @@ fn run_keyed(
     template: HtmlTemplateElement,
     template_el: Element,
 ) -> crate::reactive::EffectId {
+    let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
     // Pool + seen-keys set carry allocated capacity across effect
     // re-runs. Both are fully drained at the end of each run so
@@ -276,7 +278,7 @@ fn run_keyed(
             } else {
                 // New. Fresh loop scope + clone.
                 let loop_rc = Rc::new(RefCell::new(LoopScope {
-                    item_name: item_name.clone(),
+                    item_name: Rc::clone(&item_name),
                     item,
                     index: i,
                     total,
