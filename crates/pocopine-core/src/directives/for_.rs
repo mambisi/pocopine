@@ -310,19 +310,53 @@ fn run_keyed(
                 .insert(entry.key.clone(), (target.clone(), target.get_bounding_client_rect()));
         }
 
-        // Reorder + walk new clones. For each entry in the new
-        // sequence, position it before the template anchor. For
-        // already-attached clones this moves them if needed and
-        // is a no-op when the position is already correct.
+        // Reorder + walk new clones. See issue #4 for motivation —
+        // an unconditional `insert_before` blurs focused descendants
+        // on every reactive flush because each move is spec-defined
+        // as remove + re-insert.
+        //
+        // Short-circuit: if the DOM already matches the new order
+        // (every `fresh[i]` is parented at `parent_node` AND its
+        // next sibling is `fresh[i+1]` or `template_el` for the
+        // last slot), there's nothing to do and we skip the entire
+        // reorder pass. Otherwise fall through to an unconditional
+        // insert loop — per-iter "skip if in place" is locally
+        // correct but globally wrong during a reorder (can leave
+        // elements stranded in their old positions).
+        let already_ordered = fresh.iter().enumerate().all(|(i, entry)| {
+            let correct_parent = entry
+                .element
+                .parent_node()
+                .map(|p| p.is_same_node(Some(parent_node.as_ref())))
+                .unwrap_or(false);
+            let expected_next: &Node = if i + 1 < fresh.len() {
+                fresh[i + 1].element.as_ref()
+            } else {
+                template_el.as_ref()
+            };
+            let correct_next = entry
+                .element
+                .next_sibling()
+                .map(|n| n.is_same_node(Some(expected_next)))
+                .unwrap_or(false);
+            correct_parent && correct_next
+        });
+
         let mut newly_walked: Vec<Element> = Vec::new();
-        for entry in &fresh {
-            let was_attached = entry.element.parent_node().is_some();
-            let _ = parent_node.insert_before(
-                entry.element.as_ref(),
-                Some(template_el.as_ref()),
-            );
-            if !was_attached {
-                newly_walked.push(entry.element.clone());
+        if !already_ordered {
+            for entry in &fresh {
+                let was_in_place = entry
+                    .element
+                    .parent_node()
+                    .map(|p| p.is_same_node(Some(parent_node.as_ref())))
+                    .unwrap_or(false);
+                let _ = parent_node.insert_before(
+                    entry.element.as_ref(),
+                    Some(template_el.as_ref()),
+                );
+                if !was_in_place {
+                    newly_walked.push(entry.element.clone());
+                }
             }
         }
         // Walk freshly-inserted clones AFTER they're in the tree so

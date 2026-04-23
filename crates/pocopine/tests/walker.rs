@@ -483,6 +483,28 @@ impl OptionalAutoModelParent {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct FocusSlot {
+    id: u32,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "FocusList.html")]
+struct FocusList {
+    slots: Vec<FocusSlot>,
+    /// Unrelated field the test mutates to trigger a sweep without
+    /// changing `slots` — exercises the `pp-for` no-op reorder
+    /// path from issue #4.
+    tick: u32,
+}
+
+#[handlers]
+impl FocusList {
+    pub fn on_setup(&mut self) {
+        self.slots = (0..3).map(|i| FocusSlot { id: i }).collect();
+    }
+}
+
 // RFC-044 §5.10 — `#[model(flatten = [...])]`. `FlattenRange` is a
 // plain serde struct held in the child's `range` field; each leaf is
 // exposed as its own prop+model key on the wire. Parent binds
@@ -554,6 +576,7 @@ fn register_all() {
     OptionalAutoModelParent::register();
     FlattenChild::register();
     FlattenParent::register();
+    FocusList::register();
     FallthroughRoot::register();
     NamedSlotHost::register();
     ScopedSlotHost::register();
@@ -704,6 +727,48 @@ async fn keyed_reorder_reuses_clones() {
     assert!(after[2].is_same_node(Some(before[1].as_ref())));
 
     assert_eq!(li_texts(&ul), vec!["three", "one", "two"]);
+}
+
+// ─── keyed reorder preserves focus + selection ────────────────────
+
+/// Focused `<input>` inside a `pp-for` clone survives a parent-scope
+/// mutation that triggers a full reactive sweep. Before the issue #4
+/// fix, `pp-for`'s keyed reconcile called `Node::insertBefore` on
+/// every reused clone on every flush — that remove + re-insert
+/// blurred any focused descendant back to `<body>`.
+#[wasm_bindgen_test]
+async fn keyed_reorder_preserves_input_focus_on_unrelated_trigger() {
+    let host = mount("<focus-list></focus-list>");
+    tick().await;
+
+    let input: HtmlElement = host
+        .query_selector("input.fl-slot[data-index=\"1\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    input.focus().unwrap();
+    assert!(
+        doc().active_element().unwrap().is_same_node(Some(input.as_ref())),
+        "pre-condition: slot 1 is focused"
+    );
+
+    // Mutate a field that isn't the iteration source. The sweep-
+    // trigger runs every effect on the parent scope, including the
+    // `pp-for` effect — if the reorder pass unconditionally
+    // re-emits `insert_before`, focus will fall back to <body>.
+    let root = host.query_selector("focus-list").unwrap().unwrap();
+    let (_id, proxy) = pocopine_core::walker::scope_of_element(
+        &root.first_element_child().unwrap(),
+    )
+    .expect("focus-list scope");
+    js_sys::Reflect::set(&proxy, &"tick".into(), &JsValue::from_f64(1.0)).unwrap();
+    tick().await;
+
+    assert!(
+        doc().active_element().unwrap().is_same_node(Some(input.as_ref())),
+        "focus survived the flush — pp-for no-op reorder kept the input in place"
+    );
 }
 
 // ─── 3. keyed removal: missing keys get unmounted ─────────────────

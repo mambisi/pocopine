@@ -229,38 +229,32 @@ impl PineOtpField {
         }
     }
 
-    /// Schedule focus on the slot at `target` after the current
-    /// reactive flush completes. `pp-for`'s keyed reconcile calls
-    /// `Node::insertBefore` on every reused clone even when the
-    /// position is unchanged — that move blurs any focused input
-    /// inside it. Deferring the focus write until after the flush
-    /// lands it on a clone that won't get moved out from under us.
-    ///
-    /// When `target`'s slot is already the active element we skip
-    /// the `.focus()` call. Re-focusing an already-focused `<input>`
-    /// resets its caret to position 0 on most browsers, which turns
-    /// the next Backspace into a no-op (nothing before the caret)
-    /// — the exact symptom users hit after filling the last slot.
+    /// Move focus to the slot at `target`, unless it's already the
+    /// active element (re-focusing an already-focused input resets
+    /// the caret to 0 on most browsers, which turns the next
+    /// Backspace into a no-op). `pp-for`'s keyed reconcile used to
+    /// blur the focused clone via an unconditional
+    /// `insert_before` every reactive flush — fixed at the walker
+    /// level, so the focus call can run synchronously here instead
+    /// of deferring past the flush (issue #4).
     fn focus_slot(&self, target: u32) {
         let Some(scope) = current_scope_id() else { return };
-        pocopine::tick::after_flush(move || {
-            let Some(root_el) = refs::get_on(scope, "root") else { return };
-            let selector = format!("input[data-index=\"{target}\"]");
-            let Some(el) = root_el.query_selector(&selector).ok().flatten() else {
+        let Some(root_el) = refs::get_on(scope, "root") else { return };
+        let selector = format!("input[data-index=\"{target}\"]");
+        let Some(el) = root_el.query_selector(&selector).ok().flatten() else {
+            return;
+        };
+        let active = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.active_element());
+        if let Some(active) = active {
+            if active.is_same_node(Some(el.as_ref())) {
                 return;
-            };
-            let active = web_sys::window()
-                .and_then(|w| w.document())
-                .and_then(|d| d.active_element());
-            if let Some(active) = active {
-                if active.is_same_node(Some(el.as_ref())) {
-                    return;
-                }
             }
-            if let Ok(html) = el.dyn_into::<HtmlElement>() {
-                let _ = html.focus();
-            }
-        });
+        }
+        if let Ok(html) = el.dyn_into::<HtmlElement>() {
+            let _ = html.focus();
+        }
     }
 
     /// Dense-prefix semantics: `self.value` is always a contiguous
