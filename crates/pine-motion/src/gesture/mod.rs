@@ -29,10 +29,12 @@
 
 pub mod focus;
 pub mod hover;
+pub mod pan;
 pub mod press;
 
 pub use focus::focus;
 pub use hover::hover;
+pub use pan::{pan, PanConfig, PanEvent};
 pub use press::{press, PressEndHandler};
 
 use wasm_bindgen::JsCast;

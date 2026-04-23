@@ -17,11 +17,14 @@ js-sys = { workspace = true }
 [dependencies.web-sys]
 version = "0.3"
 features = [
+    "CssStyleDeclaration",
     "Element",
     "Event",
     "EventTarget",
     "FocusEvent",
+    "HtmlElement",
     "Node",
+    "Performance",
     "PointerEvent",
     "Window",
 ]

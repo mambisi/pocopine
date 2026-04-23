@@ -23,13 +23,17 @@
 //! `scroll`, `projection`.
 
 pub mod animate;
+pub mod drag;
 pub mod easing;
 pub mod gesture;
 pub mod spring;
 pub mod stagger;
 
 pub use animate::{animate, Channel, IntoTiming, Tween};
+pub use drag::{drag, DragAxis, DragConfig, DragConstraints};
 pub use easing::{sample_to_linear_easing, Easing};
-pub use gesture::{focus, hover, press, GestureHandle, PressEndHandler};
+pub use gesture::{
+    focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler,
+};
 pub use spring::Spring;
 pub use stagger::{stagger, Origin, Stagger};

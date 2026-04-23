@@ -27,8 +27,11 @@ use web_sys::Element;
 use crate::easing::Easing;
 use crate::spring::Spring;
 
-/// A single animated property with its from/to values.
-pub type Channel = (&'static str, &'static str, &'static str);
+/// A single animated property with its from/to values. The CSS
+/// property name is `&'static str` (CSS properties are always
+/// literals); the from/to values are `&str` so callers can pass
+/// either literals or formatted runtime strings without leaking.
+pub type Channel<'a> = (&'static str, &'a str, &'a str);
 
 /// Author-facing animation options. Build with [`Tween::new`] or
 /// pass a [`Spring`] directly via `Into`.
@@ -140,7 +143,7 @@ impl IntoTiming for Easing {
 /// in sync.
 pub fn animate<T: IntoTiming>(
     el: &Element,
-    channels: &[Channel],
+    channels: &[Channel<'_>],
     timing: T,
 ) -> AnimationHandle {
     let tween = timing.into_timing();
@@ -148,11 +151,11 @@ pub fn animate<T: IntoTiming>(
     // Build `from` and `to` keyframes from the channel list.
     let from_props: Vec<(&'static str, String)> = channels
         .iter()
-        .map(|(p, from, _)| (*p, (*from).into()))
+        .map(|(p, from, _)| (*p, (*from).to_string()))
         .collect();
     let to_props: Vec<(&'static str, String)> = channels
         .iter()
-        .map(|(p, _, to)| (*p, (*to).into()))
+        .map(|(p, _, to)| (*p, (*to).to_string()))
         .collect();
     let keyframes = [
         Keyframe { props: from_props },
