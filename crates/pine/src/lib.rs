@@ -26,6 +26,7 @@
 pub mod compound;
 pub mod calendar;
 pub mod date_picker;
+pub mod date_range_picker;
 pub mod datetime;
 pub mod range_calendar;
 pub mod accordion;
@@ -95,6 +96,7 @@ pub use calendar::{
     PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
 };
 pub use date_picker::PineDatePicker;
+pub use date_range_picker::PineDateRangePicker;
 pub use range_calendar::{
     PineRangeCalendarCell, PineRangeCalendarCellTrigger, PineRangeCalendarGrid,
     PineRangeCalendarGridBody, PineRangeCalendarGridHead, PineRangeCalendarHeader,
@@ -207,6 +209,7 @@ pub fn register_all() {
     PineRangeCalendarGridBody::register();
     PineRangeCalendarCell::register();
     PineRangeCalendarCellTrigger::register();
+    PineDateRangePicker::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();

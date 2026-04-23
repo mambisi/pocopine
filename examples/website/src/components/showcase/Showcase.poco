@@ -46,6 +46,7 @@
   <calendar-demo></calendar-demo>
   <range-calendar-demo></range-calendar-demo>
   <date-picker-demo></date-picker-demo>
+  <date-range-picker-demo></date-range-picker-demo>
   <cmd-popover-demo></cmd-popover-demo>
   <stress-demo></stress-demo>
 </root>

@@ -1,0 +1,152 @@
+/* ─── DateRangePickerDemo ────────────────────────────────────── */
+
+.date-range-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pine-date-range-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 16rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+}
+.pine-date-range-picker-trigger:hover {
+  background: var(--bg-subtle);
+}
+.pine-date-range-picker-trigger[data-state="open"] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+}
+.pine-date-range-picker-content {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 0.5rem;
+  min-width: 20rem;
+}
+.pine-date-range-picker-calendar {
+  display: block;
+  width: 100%;
+}
+.pine-date-range-picker-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+}
+.pine-date-range-picker-heading {
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.pine-date-range-picker-nav {
+  height: 1.75rem;
+  width: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.pine-date-range-picker-nav:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+.pine-date-range-picker-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pine-date-range-picker-grid {
+  font-size: 0.8125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.pine-date-range-picker-grid .pine-range-calendar-grid-head,
+.pine-date-range-picker-grid .pine-range-calendar-grid-body {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+.pine-date-range-picker-grid .pine-range-calendar-head-cell {
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-align: center;
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.25rem 0;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell {
+  min-width: 0;
+  position: relative;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell-trigger {
+  height: 2rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell-trigger:hover {
+  background: var(--bg-subtle);
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell[data-outside-view="true"] .pine-range-calendar-cell-trigger {
+  color: var(--fg-muted);
+  opacity: 0.45;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell[data-selection-start="true"] .pine-range-calendar-cell-trigger,
+.pine-date-range-picker-grid .pine-range-calendar-cell[data-selection-end="true"] .pine-range-calendar-cell-trigger {
+  background: var(--brand);
+  color: #fff;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell[data-in-range="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 3px 0;
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  pointer-events: none;
+}
+.pine-date-range-picker-grid .pine-range-calendar-cell[data-in-preview="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 3px 0;
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  pointer-events: none;
+}
+.date-range-picker-clear {
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.date-range-picker-clear:hover {
+  background: var(--bg-subtle);
+}

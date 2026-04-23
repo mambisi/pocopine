@@ -1,0 +1,26 @@
+<root>
+  <h2>Date range picker</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Drop-in combo of <code>&lt;pine-popover&gt;</code> +
+      <code>&lt;pine-range-calendar-root&gt;</code>. Click once to
+      set <code>start</code>; the trigger shows
+      <code>start …</code> while you pick the second endpoint.
+      Popover closes automatically once <code>end</code> commits.
+    </p>
+
+    <div class="date-range-picker-row">
+      <pine-date-range-picker pp-model:start="start"
+                              pp-model:end="end"
+                              :placeholder="placeholder"
+                              placeholder-text="Pick a date range"></pine-date-range-picker>
+
+      <button type="button" class="date-range-picker-clear" @click="clear">Clear</button>
+    </div>
+
+    <p style="margin:0.75rem 0 0;font-size:0.875rem">
+      Start: <strong pp-text="start || '(none)'"></strong> · End:
+      <strong pp-text="end || '(none)'"></strong>
+    </p>
+  </section>
+</root>
