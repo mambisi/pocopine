@@ -24,15 +24,18 @@
 
 pub mod animate;
 pub mod drag;
+pub mod effects;
 pub mod easing;
 pub mod gesture;
 pub mod projection;
 pub mod scroll;
 pub mod spring;
 pub mod stagger;
+pub mod tilt;
 
-pub use animate::{animate, Channel, IntoTiming, Tween};
+pub use animate::{animate, AnimationHandle, Channel, IntoTiming, Tween};
 pub use drag::{drag, DragAxis, DragConfig, DragConstraints};
+pub use effects::{hover_motion, raise, scale, HoverMotion, HoverMotionConfig};
 pub use easing::{sample_to_linear_easing, Easing};
 pub use gesture::{
     focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler,
@@ -41,3 +44,14 @@ pub use projection::{play_layout, project_with, snapshot_layout, LayoutRect, Lay
 pub use scroll::{on_view, scroll_progress, ScrollHandle, ViewConfig};
 pub use spring::Spring;
 pub use stagger::{stagger, Origin, Stagger};
+pub use tilt::{tilt, TiltConfig};
+
+/// Thread-local slot for handles whose lifetime must outlive the
+/// setup call that installed them.
+pub type HandleSlot<T> = std::cell::RefCell<Option<T>>;
+
+/// Common slot for gesture listener handles.
+pub type GestureHandleSlot = HandleSlot<GestureHandle>;
+
+/// Common slot for imperative WAAPI animation handles.
+pub type AnimationHandleSlot = HandleSlot<AnimationHandle>;

@@ -21,7 +21,9 @@
 
 use std::borrow::Cow;
 
-use pocopine_core::animate::{AnimateOptions, AnimationHandle, Keyframe};
+pub use pocopine_core::animate::AnimationHandle;
+
+use pocopine_core::animate::{AnimateOptions, Keyframe};
 use web_sys::Element;
 
 use crate::easing::Easing;
