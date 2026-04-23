@@ -168,11 +168,16 @@ fn run_naive(
 
 /// One previously-rendered clone. `loop_state` lets us mutate the
 /// `LoopScope` in place on reuse without serializing through JS.
+///
+/// The key is shared between `PrevItem`, the pool lookup, and the
+/// dedup-tracking set via `Rc<str>` — one allocation per unique
+/// key per reconcile instead of two (the HashSet insert used to
+/// clone a fresh `String`).
 struct PrevItem {
     element: Element,
     scope_id: ScopeId,
     loop_state: Rc<RefCell<LoopScope>>,
-    key: String,
+    key: Rc<str>,
 }
 
 /// Keyed iteration. Reuses clones whose keys still appear, fires
@@ -193,9 +198,9 @@ fn run_keyed(
     // reusing them keeps rehash / grow costs out of the hot path
     // for long-lived lists (N items reconciled K times allocates
     // once, not K times).
-    let pool_cell: Rc<RefCell<HashMap<String, PrevItem>>> =
+    let pool_cell: Rc<RefCell<HashMap<Rc<str>, PrevItem>>> =
         Rc::new(RefCell::new(HashMap::new()));
-    let seen_cell: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+    let seen_cell: Rc<RefCell<HashSet<Rc<str>>>> = Rc::new(RefCell::new(HashSet::new()));
 
     effect(move || {
         let items_js = resolve_path(&parent_proxy, &items_expr);
@@ -240,21 +245,21 @@ fn run_keyed(
         for i in 0..total {
             let item = arr.get(i as u32);
             let key_val = resolve_key(&item_name, &item, i, &parent_proxy, &key_expr);
-            let raw_key = stringify_key(&key_val);
+            let raw_key: Rc<str> = stringify_key(&key_val).into();
 
             // Make sure duplicate keys in one pass don't collapse
             // onto the first clone — the second (and later) hit gets
             // disambiguated and warned.
-            let key = if seen.contains(&raw_key) {
+            let key: Rc<str> = if seen.insert(raw_key.clone()) {
+                raw_key
+            } else {
                 console::warn_1(&JsValue::from_str(&format!(
-                    "pp-for: duplicate pp-key {raw_key:?} at index {i}; treating as new"
+                    "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
+                    &*raw_key
                 )));
-                let dup = format!("{raw_key}__dup_{i}");
+                let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
                 seen.insert(dup.clone());
                 dup
-            } else {
-                seen.insert(raw_key.clone());
-                raw_key
             };
 
             if let Some(entry) = pool.remove(&key) {
@@ -335,7 +340,7 @@ fn run_keyed(
             entry.element.parent_node().is_some()
                 && entry.element.get_attribute("data-pp-animate").as_deref() == Some("flip")
         });
-        let mut flip_snapshots: HashMap<String, (Element, web_sys::DomRect)> = HashMap::new();
+        let mut flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> = HashMap::new();
         if flip_opted_in {
             for entry in &fresh {
                 if entry.element.parent_node().is_none()
