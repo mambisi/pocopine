@@ -1,6 +1,7 @@
 <div class="pine-range-calendar-grid-body"
      pp-ref="root"
-     role="rowgroup">
+     role="rowgroup"
+     @mouseleave="clear_hover">
   <template pp-for="cell in cells">
     <div class="pine-range-calendar-cell"
          role="gridcell"

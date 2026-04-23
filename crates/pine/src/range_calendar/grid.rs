@@ -4,6 +4,7 @@
 //! flags) rather than the plain Calendar's cells.
 
 use crate::range_calendar::root::{RangeCellView, RANGE_ROOT};
+use pocopine::inject;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -49,4 +50,18 @@ pub struct PineRangeCalendarGridBody {
 }
 
 #[handlers]
-impl PineRangeCalendarGridBody {}
+impl PineRangeCalendarGridBody {
+    /// `@mouseleave` on the grid body — clears the Root's
+    /// `focused` cursor so the range-preview tint stops painting
+    /// once the pointer leaves every cell. Per-cell `mouseleave`
+    /// would flicker across cell boundaries; one listener on the
+    /// whole grid body only fires when the pointer actually exits
+    /// the calendar.
+    pub fn clear_hover(&mut self) {
+        if let Some(root) = inject(&RANGE_ROOT) {
+            root.update(|r: &mut crate::range_calendar::root::PineRangeCalendarRoot| {
+                r.clear_hover();
+            });
+        }
+    }
+}
