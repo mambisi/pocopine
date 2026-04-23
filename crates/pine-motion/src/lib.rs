@@ -24,10 +24,12 @@
 
 pub mod animate;
 pub mod easing;
+pub mod gesture;
 pub mod spring;
 pub mod stagger;
 
 pub use animate::{animate, Channel, IntoTiming, Tween};
 pub use easing::{sample_to_linear_easing, Easing};
+pub use gesture::{focus, hover, press, GestureHandle, PressEndHandler};
 pub use spring::Spring;
 pub use stagger::{stagger, Origin, Stagger};
