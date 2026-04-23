@@ -10,9 +10,9 @@
 //! v1 scope vs. reka:
 //! - Single-select only (no array modelValue). Multi-select will
 //!   layer on later by widening `value`.
-//! - Dates are authored as ISO `YYYY-MM-DD` strings so the prop
-//!   surface stays JSON-friendly without wiring serde for
-//!   `DateValue`.
+//! - Dates cross the prop boundary as ISO `YYYY-MM-DD` strings,
+//!   but deserialize directly into [`DateValue`] / `Option<DateValue>`
+//!   so component state stays typed.
 //! - Locale-aware labels are deferred — month names hardcode
 //!   English. `weekday_format` picks a label length from a
 //!   fixed English table.
@@ -54,16 +54,15 @@ pub struct CalendarMonthView {
 #[component(template = "PineCalendarRoot.poco", role = "scope", display = "contents")]
 pub struct PineCalendarRoot {
     // ── authored config ─────────────────────────────────────
-    /// Visible-month anchor. ISO `YYYY-MM-DD`. Empty falls back
-    /// to today; invalid strings silently fall back to today.
-    #[prop] pub placeholder: String,
-    /// Controlled selected date. Empty = unselected. Two-way
+    /// Visible-month anchor. `None` falls back to today.
+    #[prop] pub placeholder: Option<DateValue>,
+    /// Controlled selected date. `None` = unselected. Two-way
     /// bindable via `pp-model:value="…"`.
-    #[prop] pub value: String,
-    /// Minimum selectable date (inclusive). ISO. Empty = no bound.
-    #[prop] pub min_value: String,
-    /// Maximum selectable date (inclusive). ISO. Empty = no bound.
-    #[prop] pub max_value: String,
+    #[prop] pub value: Option<DateValue>,
+    /// Minimum selectable date (inclusive). `None` = no bound.
+    #[prop] pub min_value: Option<DateValue>,
+    /// Maximum selectable date (inclusive). `None` = no bound.
+    #[prop] pub max_value: Option<DateValue>,
     /// Weekday index the grid starts on. 0 = Sunday … 6 = Saturday.
     #[prop] pub week_starts_on: u32,
     /// When set, renders 6 weeks per month so the grid height
@@ -130,19 +129,19 @@ impl PineCalendarRoot {
     }
 
     #[watch(placeholder)]
-    fn on_placeholder_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_placeholder_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(value)]
-    fn on_value_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_value_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(min_value)]
-    fn on_min_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_min_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(max_value)]
-    fn on_max_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_max_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(fixed_weeks)]
@@ -165,7 +164,8 @@ impl PineCalendarRoot {
         }
         let mut s = self.build_state();
         s.next_page();
-        self.placeholder = s.placeholder.to_string();
+        self.placeholder = Some(s.placeholder);
+        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -176,7 +176,8 @@ impl PineCalendarRoot {
         }
         let mut s = self.build_state();
         s.prev_page();
-        self.placeholder = s.placeholder.to_string();
+        self.placeholder = Some(s.placeholder);
+        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -195,14 +196,15 @@ impl PineCalendarRoot {
             return;
         }
         s.select_date(date);
-        self.value = s.selected.map(|d| d.to_string()).unwrap_or_default();
-        self.placeholder = s.placeholder.to_string();
+        self.value = s.selected;
+        self.placeholder = Some(s.placeholder);
         // Authors conventionally bind the pick via
         // `pp-model:value="…"`, which listens for
         // `pp:update:value` on the new per-field channel — the
         // unadorned `emit_model` (→ `pp:update:model`) wouldn't
         // reach them.
-        pocopine::emit_model_field("value", self.value.clone());
+        pocopine::emit_model_field("value", maybe_date_string(self.value));
+        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 }
@@ -212,14 +214,12 @@ impl PineCalendarRoot {
     /// enough to rebuild in every handler — the grid construction
     /// is O(months × 42) scalar ops.
     fn build_state(&self) -> CalendarState {
-        let placeholder = DateValue::parse_iso(&self.placeholder)
-            .or_else(|| DateValue::parse_iso(&self.value))
-            .unwrap_or_else(fallback_today);
+        let placeholder = self.placeholder.or(self.value).unwrap_or_else(fallback_today);
         let week_starts_on = (self.week_starts_on.min(6)) as u8;
         CalendarState::new(placeholder)
-            .with_selected(DateValue::parse_iso(&self.value))
-            .with_min(DateValue::parse_iso(&self.min_value))
-            .with_max(DateValue::parse_iso(&self.max_value))
+            .with_selected(self.value)
+            .with_min(self.min_value)
+            .with_max(self.max_value)
             .with_fixed_weeks(self.fixed_weeks)
             .with_number_of_months(self.number_of_months.max(1))
             .with_week_starts_on(week_starts_on)
@@ -248,6 +248,10 @@ impl PineCalendarRoot {
         self.cells = months.iter().flat_map(|m| m.weeks.iter().flatten().cloned()).collect();
         self.months = months;
     }
+}
+
+fn maybe_date_string(value: Option<DateValue>) -> String {
+    value.map(|d| d.to_string()).unwrap_or_default()
 }
 
 // ── view-model helpers ──────────────────────────────────────────

@@ -15,6 +15,7 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::{Date, Duration, Month};
 
 use crate::datetime::types::DayOfWeek;
@@ -161,6 +162,27 @@ impl fmt::Display for DateValue {
     }
 }
 
+impl Serialize for DateValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for DateValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::parse_iso(&s).ok_or_else(|| {
+            serde::de::Error::custom(format!("invalid ISO date `{}`", s.trim()))
+        })
+    }
+}
+
 fn month_from_u8(n: u8) -> Option<Month> {
     match n {
         1 => Some(Month::January),
@@ -182,6 +204,22 @@ fn month_from_u8(n: u8) -> Option<Month> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serde_roundtrip_uses_iso_strings() {
+        let d = DateValue::new(2024, 6, 15).unwrap();
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(json, "\"2024-06-15\"");
+
+        let back: DateValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, d);
+    }
+
+    #[test]
+    fn serde_rejects_invalid_iso_string() {
+        let err = serde_json::from_str::<DateValue>("\"2024-02-30\"").unwrap_err();
+        assert!(err.to_string().contains("invalid ISO date"));
+    }
 
     #[test]
     fn ymd_roundtrip() {

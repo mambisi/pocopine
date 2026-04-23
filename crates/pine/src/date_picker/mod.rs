@@ -8,12 +8,13 @@
 //! `<pine-popover-root>` wrapping `<pine-calendar-root>` directly.
 //!
 //! Props:
-//! - `value` — two-way bindable via `pp-model:value="…"`. ISO
-//!   `YYYY-MM-DD`; empty = unselected.
-//! - `placeholder` — visible-month anchor. Empty = today.
+//! - `value` — two-way bindable via `pp-model:value="…"`.
+//!   `Option<DateValue>` at the Rust boundary; ISO strings in
+//!   templates still deserialize into it. `None` = unselected.
+//! - `placeholder` — visible-month anchor. `None` = today.
 //! - `placeholder_text` — label shown on the trigger when
 //!   `value` is empty. Defaults to `"Pick a date"`.
-//! - `min_value` / `max_value` — ISO bounds forwarded to the
+//! - `min_value` / `max_value` — optional bounds forwarded to the
 //!   inner calendar.
 //! - `week_starts_on` (0-6), `fixed_weeks`, `disabled`, `readonly` —
 //!   forwarded unchanged.
@@ -25,6 +26,8 @@
 //! - `data-has-value` — `true` when `value` is set.
 //! - `data-disabled` — forwarded.
 
+use crate::datetime::DateValue;
+use pocopine::emit_model_field;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -36,15 +39,15 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct PineDatePicker {
     #[prop]
-    pub value: String,
+    pub value: Option<DateValue>,
     #[prop]
-    pub placeholder: String,
+    pub placeholder: Option<DateValue>,
     #[prop]
     pub placeholder_text: String,
     #[prop]
-    pub min_value: String,
+    pub min_value: Option<DateValue>,
     #[prop]
-    pub max_value: String,
+    pub max_value: Option<DateValue>,
     #[prop]
     pub week_starts_on: u32,
     #[prop]
@@ -65,11 +68,11 @@ pub struct PineDatePicker {
 impl Default for PineDatePicker {
     fn default() -> Self {
         Self {
-            value: String::new(),
-            placeholder: String::new(),
+            value: None,
+            placeholder: None,
             placeholder_text: "Pick a date".into(),
-            min_value: String::new(),
-            max_value: String::new(),
+            min_value: None,
+            max_value: None,
             week_starts_on: 0,
             fixed_weeks: false,
             disabled: false,
@@ -91,16 +94,21 @@ impl PineDatePicker {
     /// Close on real pick — ignore the initial no-op flow and the
     /// user-initiated deselect (value becomes empty again).
     #[watch(value)]
-    fn on_value_change(&mut self, new: String, prev: Option<String>) {
+    fn on_value_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
+        emit_model_field("value", maybe_date_string(new));
         if !self.close_on_select {
             return;
         }
-        if new.is_empty() {
+        if new.is_none() {
             return;
         }
-        if prev.as_deref() == Some(new.as_str()) {
+        if prev == Some(new) {
             return;
         }
         self.open = false;
     }
+}
+
+fn maybe_date_string(value: Option<DateValue>) -> String {
+    value.map(|d| d.to_string()).unwrap_or_default()
 }

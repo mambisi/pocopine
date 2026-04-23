@@ -1,17 +1,19 @@
+use pine::datetime::DateValue;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "CalendarDemo.poco", style = "calendar.css", role = "panel")]
 pub struct CalendarDemo {
-    /// Selected date as ISO `YYYY-MM-DD`. Two-way bound via
-    /// `pp-model:value` on the calendar root.
-    pub value: String,
+    /// Selected date. Two-way bound via `pp-model:value` on the
+    /// calendar root; authored template strings still deserialize
+    /// into it.
+    pub value: Option<DateValue>,
     /// Visible-month anchor. Bound via `pp-model:placeholder` so
     /// Prev/Next writes flow back into demo state.
-    pub placeholder: String,
-    pub min_value: String,
-    pub max_value: String,
+    pub placeholder: Option<DateValue>,
+    pub min_value: Option<DateValue>,
+    pub max_value: Option<DateValue>,
     pub week_starts_on: u32,
     pub fixed_weeks: bool,
     pub prevent_deselect: bool,
@@ -31,8 +33,8 @@ impl CalendarDemo {
         // Use a month that naturally renders as 5 weeks for both
         // Sunday- and Monday-start layouts so the "Fixed weeks"
         // toggle has an obvious visual effect in the demo.
-        if self.placeholder.is_empty() {
-            self.placeholder = "2024-02-15".into();
+        if self.placeholder.is_none() {
+            self.placeholder = DateValue::parse_iso("2024-02-15");
         }
     }
 
@@ -50,15 +52,15 @@ impl CalendarDemo {
             let y = js.get_full_year() as i32;
             let m = (js.get_month() + 1) as u32;
             let d = js.get_date() as u32;
-            self.placeholder = format!("{y:04}-{m:02}-{d:02}");
+            self.placeholder = DateValue::new(y, m as u8, d as u8);
         }
     }
 
     pub fn clear_all(&mut self) {
-        self.value = String::new();
-        self.min_value = String::new();
-        self.max_value = String::new();
-        self.placeholder = "2024-02-15".into();
+        self.value = None;
+        self.min_value = None;
+        self.max_value = None;
+        self.placeholder = DateValue::parse_iso("2024-02-15");
         self.week_starts_on = 0;
         self.fixed_weeks = false;
         self.prevent_deselect = false;

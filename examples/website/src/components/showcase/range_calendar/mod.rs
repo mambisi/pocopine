@@ -1,3 +1,4 @@
+use pine::datetime::DateValue;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -8,21 +9,21 @@ use serde::{Deserialize, Serialize};
     role = "panel"
 )]
 pub struct RangeCalendarDemo {
-    pub start: String,
-    pub end: String,
-    pub placeholder: String,
+    pub start: Option<DateValue>,
+    pub end: Option<DateValue>,
+    pub placeholder: Option<DateValue>,
 }
 
 #[handlers]
 impl RangeCalendarDemo {
     pub fn on_mount(&mut self) {
-        if self.placeholder.is_empty() {
-            self.placeholder = "2024-06-15".into();
+        if self.placeholder.is_none() {
+            self.placeholder = DateValue::parse_iso("2024-06-15");
         }
     }
 
     pub fn clear(&mut self) {
-        self.start = String::new();
-        self.end = String::new();
+        self.start = None;
+        self.end = None;
     }
 }

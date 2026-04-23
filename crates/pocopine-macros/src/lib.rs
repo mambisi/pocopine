@@ -321,8 +321,15 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
-                if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(value) {
+                let __value = value;
+                if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(__value.clone()) {
                     self.#id = v;
+                } else if __value.as_string().as_deref() == Some("") {
+                    if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(
+                        ::pocopine::__private::JsValue::NULL,
+                    ) {
+                        self.#id = v;
+                    }
                 }
             }
         }
@@ -999,8 +1006,15 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
             #name => {
-                if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(value) {
+                let __value = value;
+                if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(__value.clone()) {
                     self.#id = v;
+                } else if __value.as_string().as_deref() == Some("") {
+                    if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(
+                        ::pocopine::__private::JsValue::NULL,
+                    ) {
+                        self.#id = v;
+                    }
                 }
             }
         }

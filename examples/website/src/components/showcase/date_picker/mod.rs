@@ -1,3 +1,4 @@
+use pine::datetime::DateValue;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -15,16 +16,16 @@ use serde::{Deserialize, Serialize};
     role = "panel"
 )]
 pub struct DatePickerDemo {
-    pub value: String,
-    pub placeholder: String,
+    pub value: Option<DateValue>,
+    pub placeholder: Option<DateValue>,
     pub open: bool,
 }
 
 #[handlers]
 impl DatePickerDemo {
     pub fn on_mount(&mut self) {
-        if self.placeholder.is_empty() {
-            self.placeholder = "2024-06-15".into();
+        if self.placeholder.is_none() {
+            self.placeholder = DateValue::parse_iso("2024-06-15");
         }
     }
 
@@ -32,19 +33,19 @@ impl DatePickerDemo {
     /// `pp-model:value`. Used for the close-on-select behavior
     /// plus keeping the trigger label in sync.
     #[watch(value)]
-    fn on_value_change(&mut self, new: String, prev: Option<String>) {
+    fn on_value_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
         // Ignore the no-op initial flow — only close when the
         // user actually picked a non-empty date.
-        if new.is_empty() {
+        if new.is_none() {
             return;
         }
-        if prev.as_deref() == Some(new.as_str()) {
+        if prev == Some(new) {
             return;
         }
         self.open = false;
     }
 
     pub fn clear(&mut self) {
-        self.value = String::new();
+        self.value = None;
     }
 }

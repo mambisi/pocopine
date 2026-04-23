@@ -1,7 +1,7 @@
 //! `<pine-range-calendar-root>` — state owner + context provider
 //! for the range-selection calendar. Mirrors
 //! [`crate::calendar::root::PineCalendarRoot`] but tracks
-//! **two** ISO dates (`start` / `end`) plus a `focused` cursor
+//! **two** typed dates (`start` / `end`) plus a `focused` cursor
 //! for hover preview.
 //!
 //! Props: `start`, `end`, `placeholder`, `min_value`, `max_value`,
@@ -42,15 +42,15 @@ pub struct RangeCellView {
 )]
 pub struct PineRangeCalendarRoot {
     #[prop]
-    pub start: String,
+    pub start: Option<DateValue>,
     #[prop]
-    pub end: String,
+    pub end: Option<DateValue>,
     #[prop]
-    pub placeholder: String,
+    pub placeholder: Option<DateValue>,
     #[prop]
-    pub min_value: String,
+    pub min_value: Option<DateValue>,
     #[prop]
-    pub max_value: String,
+    pub max_value: Option<DateValue>,
     #[prop]
     pub week_starts_on: u32,
     #[prop]
@@ -73,7 +73,7 @@ pub struct PineRangeCalendarRoot {
     pub next_disabled: bool,
     /// ISO of the currently-focused cell (mouse hover or keyboard
     /// focus). Drives the live range preview while `end` is unset.
-    pub focused: String,
+    pub focused: Option<DateValue>,
 }
 
 #[handlers]
@@ -91,23 +91,23 @@ impl PineRangeCalendarRoot {
     }
 
     #[watch(start)]
-    fn on_start_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_start_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(end)]
-    fn on_end_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_end_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(placeholder)]
-    fn on_placeholder_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_placeholder_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(min_value)]
-    fn on_min_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_min_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(max_value)]
-    fn on_max_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_max_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.reflow();
     }
     #[watch(fixed_weeks)]
@@ -123,7 +123,7 @@ impl PineRangeCalendarRoot {
         self.reflow();
     }
     #[watch(focused)]
-    fn on_focused_change(&mut self, _new: String, _prev: Option<String>) {
+    fn on_focused_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         // Focus changes don't rebuild the grid — only the preview
         // flags on the cells. Cheap enough to re-run reflow().
         self.reflow();
@@ -135,7 +135,8 @@ impl PineRangeCalendarRoot {
         }
         let mut s = self.build_state();
         s.next_page();
-        self.placeholder = s.cal.placeholder.to_string();
+        self.placeholder = Some(s.cal.placeholder);
+        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -145,7 +146,8 @@ impl PineRangeCalendarRoot {
         }
         let mut s = self.build_state();
         s.prev_page();
-        self.placeholder = s.cal.placeholder.to_string();
+        self.placeholder = Some(s.cal.placeholder);
+        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -170,11 +172,12 @@ impl PineRangeCalendarRoot {
             return;
         }
         s.select_date(date);
-        self.start = s.start.map(|d| d.to_string()).unwrap_or_default();
-        self.end = s.end.map(|d| d.to_string()).unwrap_or_default();
-        self.placeholder = s.cal.placeholder.to_string();
-        emit_model_field("start", self.start.clone());
-        emit_model_field("end", self.end.clone());
+        self.start = s.start;
+        self.end = s.end;
+        self.placeholder = Some(s.cal.placeholder);
+        emit_model_field("start", maybe_date_string(self.start));
+        emit_model_field("end", maybe_date_string(self.end));
+        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -182,17 +185,17 @@ impl PineRangeCalendarRoot {
     /// preview (`is_in_preview` / `is_preview_start` / `_end` on
     /// every cell view).
     pub fn hover_date(&mut self, iso: String) {
-        self.focused = iso;
+        self.focused = DateValue::parse_iso(&iso);
     }
 
     pub fn clear_hover(&mut self) {
-        self.focused = String::new();
+        self.focused = None;
     }
 
     pub fn clear(&mut self) {
-        self.start = String::new();
-        self.end = String::new();
-        self.focused = String::new();
+        self.start = None;
+        self.end = None;
+        self.focused = None;
         let s = self.build_state();
         self.apply(&s);
     }
@@ -200,16 +203,14 @@ impl PineRangeCalendarRoot {
 
 impl PineRangeCalendarRoot {
     fn build_state(&self) -> RangeCalendarState {
-        let placeholder = DateValue::parse_iso(&self.placeholder)
-            .or_else(|| DateValue::parse_iso(&self.start))
-            .unwrap_or_else(fallback_today);
+        let placeholder = self.placeholder.or(self.start).unwrap_or_else(fallback_today);
         let week_starts_on = self.week_starts_on.min(6) as u8;
         RangeCalendarState::new(placeholder)
-            .with_start(DateValue::parse_iso(&self.start))
-            .with_end(DateValue::parse_iso(&self.end))
-            .with_focused(DateValue::parse_iso(&self.focused))
-            .with_min(DateValue::parse_iso(&self.min_value))
-            .with_max(DateValue::parse_iso(&self.max_value))
+            .with_start(self.start)
+            .with_end(self.end)
+            .with_focused(self.focused)
+            .with_min(self.min_value)
+            .with_max(self.max_value)
             .with_fixed_weeks(self.fixed_weeks)
             .with_number_of_months(self.number_of_months.max(1))
             .with_week_starts_on(week_starts_on)
@@ -230,6 +231,10 @@ impl PineRangeCalendarRoot {
         self.invalid = s.is_invalid();
         self.cells = build_cells(s);
     }
+}
+
+fn maybe_date_string(value: Option<DateValue>) -> String {
+    value.map(|d| d.to_string()).unwrap_or_default()
 }
 
 // ── helpers (mostly mirror the single-date Calendar root) ─────

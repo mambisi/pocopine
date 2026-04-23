@@ -989,6 +989,7 @@ dependencies = [
  "pocopine",
  "pocopine-core",
  "serde",
+ "serde_json",
  "time",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2028,6 +2029,7 @@ dependencies = [
 name = "website"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "pine",
  "pine-icons",
  "pocopine",

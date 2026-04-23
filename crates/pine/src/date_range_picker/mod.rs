@@ -7,7 +7,8 @@
 //! `<pine-range-calendar-root>`.
 //!
 //! Props:
-//! - `start`, `end` — two-way ISO `YYYY-MM-DD` dates. Bind both
+//! - `start`, `end` — two-way `Option<DateValue>` endpoints. ISO
+//!   strings in templates still deserialize into them. Bind both
 //!   on the same element with `pp-model:start="…"` +
 //!   `pp-model:end="…"`; updates flow through the per-field
 //!   `pp:update:start` / `pp:update:end` channels.
@@ -24,6 +25,7 @@
 use pocopine::emit_model_field;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+use crate::datetime::DateValue;
 
 #[derive(Serialize, Deserialize)]
 #[component(
@@ -33,19 +35,19 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct PineDateRangePicker {
     #[prop]
-    pub start: String,
+    pub start: Option<DateValue>,
     #[prop]
-    pub end: String,
+    pub end: Option<DateValue>,
     #[prop]
-    pub placeholder: String,
+    pub placeholder: Option<DateValue>,
     #[prop]
     pub placeholder_text: String,
     #[prop]
     pub separator: String,
     #[prop]
-    pub min_value: String,
+    pub min_value: Option<DateValue>,
     #[prop]
-    pub max_value: String,
+    pub max_value: Option<DateValue>,
     #[prop]
     pub week_starts_on: u32,
     #[prop]
@@ -66,13 +68,13 @@ pub struct PineDateRangePicker {
 impl Default for PineDateRangePicker {
     fn default() -> Self {
         Self {
-            start: String::new(),
-            end: String::new(),
-            placeholder: String::new(),
+            start: None,
+            end: None,
+            placeholder: None,
             placeholder_text: "Pick a date range".into(),
             separator: " – ".into(),
-            min_value: String::new(),
-            max_value: String::new(),
+            min_value: None,
+            max_value: None,
             week_starts_on: 0,
             fixed_weeks: false,
             disabled: false,
@@ -96,32 +98,39 @@ impl PineDateRangePicker {
         self.recompute_label();
     }
 
-    /// Close-on-select only fires once `end` commits — picking
-    /// `start` alone keeps the popover open so the user can
-    /// continue clicking through to the second endpoint.
+    /// Close-on-select only fires when a **complete range**
+    /// commits — the popover stays open after the first click
+    /// (which sets `start` and leaves `end` empty) and only
+    /// closes once the second click lands a non-empty `end` on
+    /// top of a non-empty `start`.
+    ///
+    /// The `self.open` guard keeps initial pp-model flow from
+    /// tripping the close on mount, e.g. when the author seeds
+    /// `start` / `end` with defaults — the watcher fires once
+    /// but `open` is still `false`, so it's a no-op.
     #[watch(end)]
-    fn on_end_change(&mut self, new: String, prev: Option<String>) {
+    fn on_end_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
         self.recompute_label();
         // Re-emit so the author's `pp-model:end="…"` sees the
         // change even when it originated inside the inner range
         // calendar (which writes the prop directly via pp-model).
-        emit_model_field("end", new.clone());
-        if !self.close_on_select {
+        emit_model_field("end", maybe_date_string(new));
+        if !self.close_on_select || !self.open {
             return;
         }
-        if new.is_empty() {
+        if self.start.is_none() || new.is_none() {
             return;
         }
-        if prev.as_deref() == Some(new.as_str()) {
+        if prev == Some(new) {
             return;
         }
         self.open = false;
     }
 
     #[watch(start)]
-    fn on_start_change(&mut self, new: String, _prev: Option<String>) {
+    fn on_start_change(&mut self, new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.recompute_label();
-        emit_model_field("start", new);
+        emit_model_field("start", maybe_date_string(new));
     }
 }
 
@@ -130,11 +139,15 @@ impl PineDateRangePicker {
         // Rendered via `pp-text` bound to `display_label` on the
         // trigger below; keeps the two branches (empty / one-
         // endpoint / full range) in one place.
-        self.display_label = match (self.start.as_str(), self.end.as_str()) {
-            ("", "") => self.placeholder_text.clone(),
-            (s, "") => format!("{s}{}…", self.separator),
-            ("", e) => format!("…{}{e}", self.separator),
-            (s, e) => format!("{s}{}{e}", self.separator),
+        self.display_label = match (self.start, self.end) {
+            (None, None) => self.placeholder_text.clone(),
+            (Some(s), None) => format!("{}{}…", s, self.separator),
+            (None, Some(e)) => format!("…{}{}", self.separator, e),
+            (Some(s), Some(e)) => format!("{}{}{}", s, self.separator, e),
         };
     }
+}
+
+fn maybe_date_string(value: Option<DateValue>) -> String {
+    value.map(|d| d.to_string()).unwrap_or_default()
 }
