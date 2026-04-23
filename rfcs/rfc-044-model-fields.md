@@ -67,12 +67,20 @@ From that one declaration, the framework knows:
 6. devtools/docs can present it as a two-way public field rather
    than just a prop.
 
-This RFC does **not** make child writes auto-emit from every plain
-assignment. That would be too magical and would reintroduce
-reentrancy problems RFC-009 explicitly avoided. Instead it gives
-component authors a **generated, typed helper path** so the model
-contract is declared once and the emitting mechanism stays
-consistent.
+This RFC **does** make `#[model]` assignments advance the public
+two-way contract, but only under explicit runtime rules:
+
+- parent mirror-in writes do not echo back out,
+- setup / initial seeding does not emit,
+- multiple writes in one turn coalesce to the final value,
+- emission uses the field's canonical serde shape.
+
+So the author model becomes:
+
+- `self.value = next` on a `#[model]` field means "update the field
+  and publish the new public value",
+- unmarked state and `#[prop]` fields keep today's plain local-write
+  semantics.
 
 ## 2. Motivation
 
@@ -139,11 +147,6 @@ the **model contract role**.
 
 ## 3. Non-goals
 
-- **Automatic emit on every plain assignment.** `self.value = …`
-  should stay a normal Rust field assignment. Auto-emitting from the
-  proxy/set trap would create hard-to-see feedback loops and emit on
-  internal bookkeeping writes that are not user-visible contract
-  changes.
 - **Replacing `#[prop]`.** `#[prop]` remains the one-way "public
   input" role. `#[model]` is additive, not a rename.
 - **A second runtime channel beyond `pp-model`.** This RFC refines
@@ -154,6 +157,10 @@ the **model contract role**.
 - **Removing backwards compatibility for string-authored attrs in
   v1.** Static HTML attrs still arrive as strings. Serde remains the
   boundary normalizer.
+- **Unconditional echo on every model-field write.** `#[model]`
+  assignment is only safe if the runtime tracks write origin,
+  suppresses mirror-in echo, silences setup seeding, and coalesces
+  multiple writes in one turn.
 
 ## 4. Surface
 
@@ -183,32 +190,39 @@ pub is_open: bool,
 This is deliberately symmetric with future `#[prop(name = "…")]`
 work if that ever lands.
 
-### 4.3 Generated helpers
+### 4.3 Assignment semantics
 
-For each `#[model]` field, the macro generates:
-
-1. metadata saying the field is a model field,
-2. its public model event name,
-3. a helper that updates the field and emits the correct
-   `pp:update:<name>` event in one place,
-4. the captured emit target for that component instance so model
-   emission does not depend on a handwritten `pp-ref="root"`.
-
-Sketch:
+For `#[model]` fields, plain assignment becomes the public-contract
+advance point:
 
 ```rust
+#[component(template = "PineCalendarRoot.poco")]
+pub struct PineCalendarRoot {
+    #[model]
+    pub value: Option<DateValue>,
+}
+
+#[handlers]
 impl PineCalendarRoot {
-    pub fn set_model_value(&mut self, value: Option<DateValue>) {
-        self.value = value;
-        self.__pocopine_emit_model("value");
+    pub fn select_date(&mut self, next: Option<DateValue>) {
+        self.value = next;
     }
 }
 ```
 
-The exact helper spelling is implementation-defined, but the key
-point is: authors stop hand-writing `emit_model_field("value", …)`
-strings throughout handlers, and stop depending on template-local
-refs to make model emission work.
+The runtime treats that write as:
+
+1. update the field,
+2. mark the model field dirty for this turn,
+3. coalesce repeated writes,
+4. emit `pp:update:value` from the captured component host/root when
+   the turn completes,
+5. skip that emit when the write origin says the change came from
+   parent mirror-in or setup seeding.
+
+So authors stop hand-writing `emit_model_field("value", …)` strings
+throughout handlers, and stop depending on template-local refs to
+make model emission work.
 
 ### 4.4 Interaction with `#[observe(KEY)]` (RFC-036)
 
@@ -230,7 +244,7 @@ outbound half declarative when the field is also a model field.
 
 ### 5.1 Role semantics
 
-| role | parent can write | child can emit via generated model helper | participates in devtools as public contract |
+| role | parent can write | plain assignment publishes | participates in devtools as public contract |
 |---|---:|---:|---:|
 | `#[prop]` | yes | no | yes |
 | `#[model]` | yes | yes | yes |
@@ -277,7 +291,33 @@ This is an important simplification: `#[model]` should not require
 manual `maybe_date_string(...)`-style helpers just to express "emit
 this field's public value".
 
-### 5.5 Dispatch origin
+### 5.5 Assignment-driven emission semantics
+
+The runtime tracks the origin of every `#[model]` write. Minimum
+origins for v1:
+
+- **ParentModelIn** — a `pp-model` mirror-in write from the parent,
+- **LocalHandler** — a write performed inside the component's own
+  handler / lifecycle code,
+- **SetupSeed** — mount/setup/initial hydration seeding,
+- **ObserveMirror** — a write originating from `#[observe(KEY)]` or
+  equivalent context mirroring.
+
+Emission rules:
+
+- **LocalHandler** writes are publishable,
+- **ParentModelIn** writes do not echo back out,
+- **SetupSeed** writes do not emit,
+- **ObserveMirror** writes follow LocalHandler semantics unless a
+  future RFC narrows that further.
+
+Multiple writes to the same `#[model]` field in one turn coalesce to
+the final value before the outbound event fires.
+
+This is the core runtime cost that makes assignment-driven model
+syntax safe rather than deceptively clean.
+
+### 5.6 Dispatch origin
 
 Generated model emit paths dispatch from the component's captured
 host/root element, obtained from lifecycle context during mount or
@@ -288,7 +328,7 @@ This is a core part of the contract. Two-way fields should work from
 their declaration alone; they should not depend on an additional
 template convention that authors can forget.
 
-### 5.6 Backwards compatibility: empty-string clear shim
+### 5.7 Backwards compatibility: empty-string clear shim
 
 Fields of type `Option<T>` accept an incoming `""` as `None` at the
 proxy set trap. This is a migration affordance for static HTML and
@@ -308,7 +348,7 @@ This makes the contract more typed without breaking authored markup
 overnight. The shim is explicitly scoped to be removable by a future
 RFC once the ecosystem has migrated.
 
-### 5.7 Author ergonomics
+### 5.8 Author ergonomics
 
 Before:
 
@@ -319,8 +359,6 @@ pub fn select_date(&mut self, iso: String) {
     s.select_date(date);
     self.value = s.selected;
     self.placeholder = Some(s.placeholder);
-    emit_model_field("value", maybe_date_string(self.value));
-    emit_model_field("placeholder", maybe_date_string(self.placeholder));
 }
 ```
 
@@ -331,38 +369,31 @@ pub fn select_date(&mut self, iso: String) {
     let Some(date) = DateValue::parse_iso(&iso) else { return };
     let mut s = self.build_state();
     s.select_date(date);
-    self.set_model_value(s.selected);
-    self.set_model_placeholder(Some(s.placeholder));
+    self.value = s.selected;
+    self.placeholder = Some(s.placeholder);
 }
 ```
 
 Still explicit, but no stringly event names, no duplicated payload
-normalization logic, and no separation between "this is public" and
-"this emits".
+normalization logic, and no extra helper vocabulary at the callsite.
 
 ## 6. Rationale
 
-### 6.1 Why not auto-emit on every write?
+### 6.1 Why assignment-driven emission anyway?
 
-Because component state writes have more meanings than "publish a new
-public model value".
+Because it is the cleanest author-facing model.
 
-Examples:
+The desired component code is:
 
-- intermediate writes during a multi-step handler,
-- mirrored state updates while reconciling parent input,
-- restoring an invariant before the final user-visible state,
-- internal cache or focus bookkeeping.
+- assign to the field,
+- let the runtime publish the two-way contract once per turn.
 
-If assignment itself emitted, authors would lose control over when
-the public contract advances, and loops would become easier to
-create accidentally.
+That is easier to teach, easier to read, and much harder to forget
+than a separate emit call or generated helper method.
 
-Generated helpers preserve explicitness:
-
-- **assignment** stays local mutation,
-- **set-model helper** means "this write is part of the public
-  two-way contract".
+The price is runtime machinery: origin tracking, setup silence, and
+coalescing. This RFC accepts that price because the API surface is
+worth it.
 
 ### 6.2 Why not just keep `#[prop]` + manual `emit_model_field`?
 
@@ -410,14 +441,10 @@ Generate:
 - `is_prop(key)` returning true for `Prop` and `Model`,
 - `is_model(key)` for devtools/runtime helpers,
 - `model_name(key) -> Option<&'static str>`,
-- typed `set_model_<field>(value)` helpers for each model field,
-- hidden per-field emit helpers that serialize from the field's real
-  type, not from ad hoc handwritten payload code.
-
-If a user-defined inherent method would collide with a generated
-helper name like `set_model_value`, macro expansion fails with a
-compile error and a rename suggestion. Silent shadowing would
-recreate exactly the ambiguity this RFC is trying to remove.
+- hidden metadata tying each model field to its event name and
+  serializer,
+- write hooks or scope metadata that let the runtime mark a model
+  field dirty when assignment happens.
 
 ### 7.2 `crates/pocopine-core/src/scope.rs`
 
@@ -428,7 +455,24 @@ fn is_model(&self, key: &str) -> bool { false }
 fn model_name(&self, key: &str) -> Option<&'static str> { None }
 ```
 
-### 7.3 `crates/pocopine-core/src/lifecycle.rs`
+### 7.3 `crates/pocopine-core/src/reactive.rs` / scope write path
+
+Assignment-driven `#[model]` requires runtime involvement when the
+field is written.
+
+The minimum viable design is:
+
+- the generated setter/write path marks model fields dirty with their
+  current write origin,
+- dirty model fields are queued for a per-turn flush,
+- the flush serializes the final value once and emits one
+  `pp:update:<field>` event,
+- flush skips dirty entries whose last origin is `ParentModelIn` or
+  `SetupSeed`.
+
+This is where coalescing and loop suppression live.
+
+### 7.4 `crates/pocopine-core/src/lifecycle.rs`
 
 The generated model helper needs a stable dispatch origin captured
 from lifecycle context. That policy belongs here, not in template
@@ -439,11 +483,11 @@ The minimal design is:
 - during generated `on_ready`, capture the component's host/root
   element from lifecycle context,
 - store it in hidden component-managed state or a runtime side table,
-- have model helpers emit through `emit_from(&captured_el, ...)`.
+- have the model-field flush emit through `emit_from(&captured_el, ...)`.
 
 This makes model emission independent of `pp-ref="root"`.
 
-### 7.4 `crates/pocopine-core/src/emit.rs`
+### 7.5 `crates/pocopine-core/src/emit.rs`
 
 Add a helper that emits the canonical serde shape of a model field
 by name from the component's `pp-ref="root"`:
@@ -456,16 +500,18 @@ Or equivalent generated code using the existing `emit_from` path and
 the captured lifecycle element from §7.3.
 
 The important part is centralizing the serialization and event-name
-lookup.
+lookup. The runtime flush path, not handwritten component code, owns
+when this helper is called.
 
-### 7.5 `crates/pocopine-core/src/directives/model.rs`
+### 7.6 `crates/pocopine-core/src/directives/model.rs`
 
 No semantic rewrite required. It already listens on
 `pp:update:<field>` for named model bindings. The main runtime
-benefit is that the outbound emit path now uses the same macro-owned
-field metadata instead of handwritten strings.
+benefit is that mirror-in writes can explicitly tag their origin as
+`ParentModelIn`, so assignment-driven publication does not echo them
+back out.
 
-### 7.6 Existing migration targets
+### 7.7 Existing migration targets
 
 The initial Pine migration targets are the components currently
 hand-writing model emits:
@@ -481,7 +527,7 @@ hand-writing model emits:
 Those are precisely the places where the split contract has already
 caused regressions.
 
-### 7.7 Devtools
+### 7.8 Devtools
 
 Show three buckets:
 
@@ -553,29 +599,24 @@ Rejected because it leaves the same recurring bug class intact and
 does not give reviewers or tooling any machine-readable way to tell
 that a field is supposed to round-trip.
 
-### 10.2 Auto-emit on proxy writes
+### 10.2 Explicit helper-only emission
 
-Rejected for reentrancy and surprise reasons (§6.1).
+Generate `set_model_<field>(...)` helpers and require authors to call
+them manually.
+
+Rejected as the primary design because it keeps too much of the old
+failure mode alive: authors still need to remember a second callsite
+to advance the public contract. It is safer than handwritten
+`emit_model_field`, but not as clean as assignment-driven semantics.
 
 ### 10.3 Watch-based automatic emit after mount
 
 Have `#[handlers]` auto-install hidden field watchers for every
 `#[model]` field and emit on all post-mount changes.
 
-This is attractive because it removes even the generated-helper call
-site, but it has two drawbacks for v1:
-
-1. parent mirror-in writes may be echoed straight back out unless the
-   runtime grows explicit cycle suppression,
-2. it becomes harder to express "this field changed internally, but
-   the public model contract should not advance yet".
-
-That may still be a good follow-up once the runtime has a clearer
-transaction / origin story. This is not rejected on fundamental
-feasibility grounds; it is deferred until a future transaction/origin
-RFC can make cycle suppression and "public contract advances now"
-semantics explicit. For the initial RFC, explicit generated helpers
-keep the contract visible and predictable.
+Rejected for v1 because the runtime needs to understand write origin
+at the assignment boundary anyway. A watch-only approach adds another
+layer while still needing cycle suppression and coalescing.
 
 ### 10.4 `#[prop(model)]` instead of `#[model]`
 
@@ -587,9 +628,9 @@ main concept authors need to see is "this field participates in
 
 This RFC takes the following positions:
 
-1. **Generated helpers both assign and emit.**
-   Splitting those actions would reintroduce the exact sync problem
-   the RFC is trying to remove.
+1. **`#[model]` assignment is assignment-driven publication.**
+   Plain writes to model fields advance the public contract subject
+   to origin-aware suppression and per-turn coalescing.
 2. **Outbound model payloads canonicalize immediately to serde
    shape.**
    For `Option<T>`, that means `null` for `None`. The inbound
@@ -609,10 +650,9 @@ Future work, intentionally deferred:
    together (`value` + `placeholder`, `start` + `end`). A future
    extension like `#[model(group = "date")]` could offer grouped
    emission semantics. Out of scope for v1.
-2. **Watch-based auto-emit with transaction/origin tracking.**
-   That remains possible in principle, but needs a future runtime
-   transaction/origin RFC so parent mirror-in writes are not blindly
-   echoed back out.
+2. **Richer origin / transaction semantics.**
+   The v1 origin set is intentionally minimal. A future RFC may add
+   explicit transaction scopes or atomic grouped model updates.
 
 ## 12. Why this helps others understand the system
 
