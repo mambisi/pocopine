@@ -8,6 +8,7 @@
 
 pub mod accordion;
 pub mod alert_dialog;
+pub mod animation;
 pub mod aspect_ratio;
 pub mod avatar;
 pub mod basics;
@@ -51,6 +52,7 @@ pub mod tree;
 
 pub use accordion::AccordionDemo;
 pub use alert_dialog::AlertDialogDemo;
+pub use animation::AnimationDemo;
 pub use aspect_ratio::AspectRatioDemo;
 pub use avatar::AvatarDemo;
 pub use basics::Basics;

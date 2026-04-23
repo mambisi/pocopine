@@ -1,0 +1,138 @@
+/* pine-motion demo styles.
+ *
+ * Each sub-demo is laid out in a `.pm-subsection` block with its own
+ * title + hint. The spring boxes, stagger cells, and drag card pick
+ * up the same accent palette used elsewhere in the showcase so the
+ * new section visually fits.
+ */
+
+.pm-subsection {
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+}
+.pm-subsection:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.pm-subsection h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: var(--fg);
+}
+.pm-hint {
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  margin: 0 0 0.75rem;
+  max-width: 60ch;
+}
+
+/* ── spring presets ──────────────────────────────────────────── */
+
+.pm-spring-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.pm-spring-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+}
+.pm-spring-box {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--fg);
+  width: 88px;
+  height: 88px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+  /* Spring animation lives on `transform` and is driven by the
+   * runtime via WAAPI. Keep the browser from interpolating our
+   * transform itself so the WAAPI `linear()` drives uncontested. */
+  transform-origin: center;
+}
+.pm-spring-box:hover {
+  border-color: var(--accent);
+}
+.pm-spring-box.gentle   { border-left: 3px solid #3b82f6; }
+.pm-spring-box.stiff    { border-left: 3px solid #10b981; }
+.pm-spring-box.wobbly   { border-left: 3px solid #f59e0b; }
+
+.pm-spring-caption {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pm-spring-readout {
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  align-self: center;
+}
+
+/* ── stagger grid ────────────────────────────────────────────── */
+
+.pm-stagger-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pm-stagger-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  max-width: 360px;
+}
+.pm-stagger-cell {
+  aspect-ratio: 1;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* ── drag ────────────────────────────────────────────────────── */
+
+.pm-drag-stage {
+  width: 100%;
+  max-width: 440px;
+  height: 220px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-alt);
+}
+.pm-drag-card {
+  width: 96px;
+  height: 96px;
+  background: var(--accent);
+  color: white;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+.pm-drag-card:active {
+  cursor: grabbing;
+}

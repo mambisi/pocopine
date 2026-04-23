@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pine = { path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
+pine-motion = { path = "../../crates/pine-motion" }
 pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }

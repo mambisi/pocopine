@@ -50,4 +50,14 @@
   <date-range-picker-demo></date-range-picker-demo>
   <cmd-popover-demo></cmd-popover-demo>
   <stress-demo></stress-demo>
+
+  <div class="section-divider">pine-motion — animation library</div>
+  <p class="lead" style="margin-bottom:0.5rem">Motion.dev-style springs, stagger, drag, and shared-layout animations.</p>
+  <p style="font-size:0.875rem;margin-bottom:2rem">
+    Springs compile to CSS <code>linear()</code> timing functions so
+    the browser's compositor runs them on the GPU — no per-frame JS.
+    Gesture primitives return disposable handles. Author API is
+    imperative: <code>animate(&amp;el, channels, Spring::gentle())</code>.
+  </p>
+  <animation-demo></animation-demo>
 </root>

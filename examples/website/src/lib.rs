@@ -14,7 +14,7 @@ use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 use components::showcase::{
-    AccordionDemo, AlertDialogDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
+    AccordionDemo, AlertDialogDemo, AnimationDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CalendarDemo, CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo,
     DatePickerDemo, DateRangePickerDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo,
     OtpDemo, PinCardDemo, PopoverDemo, RadioGroupDemo, RangeCalendarDemo,
@@ -165,5 +165,6 @@ pub fn main() {
         .register::<TextDemo>()
         .register::<CmdPopoverDemo>()
         .register::<StressDemo>()
+        .register::<AnimationDemo>()
         .run();
 }

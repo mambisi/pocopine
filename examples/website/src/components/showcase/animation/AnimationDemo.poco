@@ -1,0 +1,96 @@
+<root>
+  <h2>pine-motion — spring feel, stagger, drag</h2>
+
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Three demos sharing one library. Springs are sampled into a
+      CSS <code>linear()</code> timing function so WAAPI runs them
+      on the GPU compositor — no per-frame JavaScript.
+    </p>
+
+    <!-- ── spring presets ────────────────────────────────────── -->
+    <div class="pm-subsection">
+      <h3>Spring presets</h3>
+      <p class="pm-hint">
+        Click any box to see its spring feel. Presets are the
+        canonical react-motion / flip-toolkit names, so
+        authors coming from that ecosystem know what to expect.
+      </p>
+      <div class="pm-spring-row">
+        <div class="pm-spring-slot">
+          <button class="pm-spring-box gentle" @click="pop_gentle">
+            gentle
+          </button>
+          <span class="pm-spring-caption">120 / 14</span>
+        </div>
+        <div class="pm-spring-slot">
+          <button class="pm-spring-box stiff" @click="pop_stiff">
+            stiff
+          </button>
+          <span class="pm-spring-caption">260 / 26</span>
+        </div>
+        <div class="pm-spring-slot">
+          <button class="pm-spring-box wobbly" @click="pop_wobbly">
+            wobbly
+          </button>
+          <span class="pm-spring-caption">180 / 12</span>
+        </div>
+        <span class="pm-spring-readout" pp-show="last_spring">
+          last fired: <strong pp-text="last_spring"></strong>
+        </span>
+      </div>
+    </div>
+
+    <!-- ── stagger grid ──────────────────────────────────────── -->
+    <div class="pm-subsection">
+      <h3>Stagger</h3>
+      <p class="pm-hint">
+        Per-index delay with selectable origin. Center emanates
+        outward; first is the familiar top-down cascade; last is
+        reverse.
+      </p>
+      <div class="pm-stagger-controls">
+        <pine-button variant="ghost" @click="set_origin_first">
+          From First
+        </pine-button>
+        <pine-button variant="ghost" @click="set_origin_center">
+          From Center
+        </pine-button>
+        <pine-button variant="ghost" @click="set_origin_last">
+          From Last
+        </pine-button>
+        <pine-button @click="stagger_play">Play</pine-button>
+        <span class="pm-hint" style="align-self:center">
+          origin: <strong pp-text="stagger_origin || 'first'"></strong>
+        </span>
+      </div>
+      <div class="pm-stagger-grid">
+        <div class="pm-stagger-cell">1</div>
+        <div class="pm-stagger-cell">2</div>
+        <div class="pm-stagger-cell">3</div>
+        <div class="pm-stagger-cell">4</div>
+        <div class="pm-stagger-cell">5</div>
+        <div class="pm-stagger-cell">6</div>
+        <div class="pm-stagger-cell">7</div>
+        <div class="pm-stagger-cell">8</div>
+        <div class="pm-stagger-cell">9</div>
+        <div class="pm-stagger-cell">10</div>
+        <div class="pm-stagger-cell">11</div>
+        <div class="pm-stagger-cell">12</div>
+      </div>
+    </div>
+
+    <!-- ── drag ──────────────────────────────────────────────── -->
+    <div class="pm-subsection">
+      <h3>Drag with momentum</h3>
+      <p class="pm-hint">
+        Drag the card inside the dashed area. On release, a gentle
+        spring continues the fling velocity to a rest position.
+        Clamped to the box so the card stays visible.
+      </p>
+      <div class="pm-drag-stage">
+        <div class="pm-drag-card">drag me</div>
+      </div>
+    </div>
+  </section>
+</root>
