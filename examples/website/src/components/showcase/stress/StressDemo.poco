@@ -7,8 +7,10 @@
       compound with a <code>scale</code> mount transition and
       <code>flip</code> layout animation. <strong>Shuffle</strong>
       rotates the list and reports the wall-clock time for the
-      reactive update. Use this to spot regressions in the
-      RFC-039 dispatch path.
+      reactive update, measured across the full reconcile
+      (handler start → after reactive flush). Use this to spot
+      regressions in the RFC-039 dispatch path or the pp-for
+      reconcile.
     </p>
     <div class="row" style="margin-bottom:0.75rem">
       <pine-button @click="mount_fixture">
@@ -18,10 +20,10 @@
         Shuffle
       </pine-button>
       <span pp-show="open" style="font-size:0.875rem;align-self:center">
-        last shuffle: <strong pp-text="last_shuffle_ms"></strong> ms
+        last shuffle: <strong pp-text="shuffle_display"></strong>
       </span>
     </div>
-    <template pp-if="stress_open">
+    <template pp-if="open">
       <pine-tags-input-root pp-model:values="items" class="tags-input-root">
         <template pp-for="item in items" pp-key="item">
           <pine-tags-input-item :value="item">
