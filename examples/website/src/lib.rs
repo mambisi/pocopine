@@ -17,7 +17,7 @@ use components::showcase::{
     AccordionDemo, AlertDialogDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CalendarDemo, CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo,
     DatePickerDemo, DateRangePickerDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo,
-    OtpDemo, PopoverDemo, RadioGroupDemo, RangeCalendarDemo,
+    OtpDemo, PinCardDemo, PopoverDemo, RadioGroupDemo, RangeCalendarDemo,
     ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo, StressDemo,
     SwitchCheckboxDemo, TabsDemo,
     TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo,
@@ -146,6 +146,7 @@ pub fn main() {
         .register::<ToggleDemo>()
         .register::<SwitchCheckboxDemo>()
         .register::<OtpDemo>()
+        .register::<PinCardDemo>()
         .register::<InputDemo>()
         .register::<FieldDemo>()
         .register::<FieldsetDemo>()

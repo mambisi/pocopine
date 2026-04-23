@@ -27,6 +27,7 @@
   <toggle-demo></toggle-demo>
   <switch-checkbox-demo></switch-checkbox-demo>
   <otp-demo></otp-demo>
+  <pin-card-demo></pin-card-demo>
   <input-demo></input-demo>
   <field-demo></field-demo>
   <fieldset-demo></fieldset-demo>
