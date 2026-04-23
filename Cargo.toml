@@ -4,6 +4,7 @@ members = [
     "crates/pine",
     "crates/pine-icons",
     "crates/pine-icons-macros",
+    "crates/pine-motion",
     "crates/pocopine",
     "crates/pocopine-cli",
     "crates/pocopine-core",

@@ -17,6 +17,7 @@
 //!   motion (so `finish` callbacks still fire at the natural moment).
 
 use js_sys::{Array, Object, Reflect};
+use std::borrow::Cow;
 use std::future::Future;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -55,10 +56,13 @@ impl Keyframe {
 pub struct AnimateOptions {
     /// Animation duration in milliseconds. Default `200`.
     pub duration_ms: f64,
-    /// CSS easing string — `"linear"`, `"ease-out"`, or a
-    /// `"cubic-bezier(…)"`. Default `"cubic-bezier(0, 0, 0.2, 1)"`
-    /// (ease-out).
-    pub easing: &'static str,
+    /// CSS easing string — `"linear"`, `"ease-out"`, a
+    /// `"cubic-bezier(…)"`, or a sampled `"linear(v0, v1, …)"` (the
+    /// latter lets pine-motion run springs on the compositor).
+    /// Default `"cubic-bezier(0, 0, 0.2, 1)"` (ease-out). A `Cow` so
+    /// callers can pass either a `&'static str` literal or an owned
+    /// `String` without a per-call allocation on the static path.
+    pub easing: Cow<'static, str>,
     /// Pre-delay in ms. Default `0`.
     pub delay_ms: f64,
     /// What to do once the animation finishes — one of `"none"`,
@@ -77,7 +81,7 @@ impl Default for AnimateOptions {
     fn default() -> Self {
         Self {
             duration_ms: 200.0,
-            easing: "cubic-bezier(0, 0, 0.2, 1)",
+            easing: Cow::Borrowed("cubic-bezier(0, 0, 0.2, 1)"),
             delay_ms: 0.0,
             fill: "forwards",
             respect_motion_preference: true,
@@ -220,7 +224,7 @@ pub fn animate(el: &Element, keyframes: &[Keyframe], opts: AnimateOptions) -> An
     let _ = Reflect::set(
         &opt_obj,
         &JsValue::from_str("easing"),
-        &JsValue::from_str(opts.easing),
+        &JsValue::from_str(opts.easing.as_ref()),
     );
     if opts.delay_ms > 0.0 {
         let _ = Reflect::set(

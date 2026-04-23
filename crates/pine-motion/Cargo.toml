@@ -1,0 +1,25 @@
+[package]
+name = "pine-motion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Motion.dev-style animation library for pocopine — springs, gestures, drag, scroll, and shared-layout projection built on top of pocopine-core's WAAPI primitives."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocopine-core = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Element",
+    "Window",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

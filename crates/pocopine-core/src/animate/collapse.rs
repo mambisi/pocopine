@@ -9,6 +9,8 @@
 //! Accordion, Tree child wrapper) — authors don't hit this module
 //! directly unless they're hand-rolling.
 
+use std::borrow::Cow;
+
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement};
 
@@ -20,14 +22,14 @@ pub struct CollapseOptions {
     /// Duration in ms. Default 200.
     pub duration_ms: f64,
     /// CSS easing string.
-    pub easing: &'static str,
+    pub easing: Cow<'static, str>,
 }
 
 impl Default for CollapseOptions {
     fn default() -> Self {
         Self {
             duration_ms: 200.0,
-            easing: "cubic-bezier(0.2, 0, 0, 1)",
+            easing: Cow::Borrowed("cubic-bezier(0.2, 0, 0, 1)"),
         }
     }
 }

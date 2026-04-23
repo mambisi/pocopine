@@ -16,6 +16,8 @@
 //! - [`flip_batch`] — iterator of pre-measured [`FlipTarget`]s.
 //! - [`flip`] — measure + mutate + play, convenience.
 
+use std::borrow::Cow;
+
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Animation, DomRect, Element};
@@ -28,7 +30,7 @@ const FLIP_ANIM_KEY: &str = "__pp_flip_anim";
 #[derive(Clone, Debug)]
 pub struct FlipOptions {
     pub duration_ms: f64,
-    pub easing: &'static str,
+    pub easing: Cow<'static, str>,
     pub min_delta_px: f64,
 }
 
@@ -39,10 +41,12 @@ impl Default for FlipOptions {
         // motion language as the pp-transition presets. The long
         // settle tail is what reads as "springy" without an actual
         // spring simulation (motion.dev / react-flip-toolkit's
-        // signature feel, ported to a plain WAAPI tween).
+        // signature feel, ported to a plain WAAPI tween). pine-motion
+        // callers can substitute a sampled `linear(...)` string here
+        // to get a real spring on the compositor.
         Self {
             duration_ms: 320.0,
-            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+            easing: Cow::Borrowed("cubic-bezier(0.16, 1, 0.3, 1)"),
             min_delta_px: 2.0,
         }
     }
