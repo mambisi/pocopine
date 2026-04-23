@@ -473,6 +473,55 @@ struct OptionalAutoModelParent {
 #[handlers]
 impl OptionalAutoModelParent {}
 
+// RFC-044 §5.10 — `#[model(flatten = [...])]`. `FlattenRange` is a
+// plain serde struct held in the child's `range` field; each leaf is
+// exposed as its own prop+model key on the wire. Parent binds
+// `pp-model:start` / `pp-model:end` and the child transparently
+// splices the write into `self.range.<leaf>`; local handler writes
+// to the leaves or to the whole struct emit per-leaf
+// `pp:update:<leaf>` events.
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct FlattenRange {
+    start: String,
+    end: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "FlattenChild.html")]
+struct FlattenChild {
+    #[model(flatten = ["start", "end"])]
+    range: FlattenRange,
+}
+
+#[handlers]
+impl FlattenChild {
+    /// Mutate a single leaf — should emit exactly one
+    /// `pp:update:start` event, not an event for `end`.
+    pub fn set_start(&mut self, value: String) {
+        self.range.start = value;
+    }
+
+    /// Reassign the whole container — both leaves change, so both
+    /// `pp:update:start` and `pp:update:end` must fire (one each,
+    /// coalesced by the per-scope pending map).
+    pub fn swap_range(&mut self) {
+        self.range = FlattenRange {
+            start: "A".into(),
+            end: "Z".into(),
+        };
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "FlattenParent.html")]
+struct FlattenParent {
+    host_start: String,
+    host_end: String,
+}
+
+#[handlers]
+impl FlattenParent {}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
@@ -493,6 +542,8 @@ fn register_all() {
     SeededModelParent::register();
     OptionalAutoModelChild::register();
     OptionalAutoModelParent::register();
+    FlattenChild::register();
+    FlattenParent::register();
     FallthroughRoot::register();
     NamedSlotHost::register();
     ScopedSlotHost::register();
@@ -931,6 +982,165 @@ async fn model_field_setup_seed_stays_silent_and_none_emits_null() {
     let details = details.borrow();
     assert_eq!(details.len(), 1);
     assert!(details[0].is_null());
+}
+
+// ─── RFC-044 §5.10 flatten — parent ⇄ child through leaves ────────
+
+/// Parent writes a flatten leaf key (`host_start` → `pp-model:start`);
+/// the child's `self.range.start` must reflect it without disturbing
+/// `self.range.end`. Exercises the serde splice path in the
+/// generated leaf set-arm.
+#[wasm_bindgen_test]
+async fn flatten_leaf_parent_to_child_splices_container() {
+    let host = mount("<flatten-parent></flatten-parent>");
+    tick().await;
+
+    let parent = host.query_selector("flatten-parent").unwrap().unwrap();
+    let parent_root = parent.first_element_child().unwrap();
+    let (_id, parent_proxy) =
+        pocopine_core::walker::scope_of_element(&parent_root).expect("parent scope");
+
+    js_sys::Reflect::set(
+        &parent_proxy,
+        &"host_start".into(),
+        &JsValue::from_str("2025-01-01"),
+    )
+    .unwrap();
+    js_sys::Reflect::set(
+        &parent_proxy,
+        &"host_end".into(),
+        &JsValue::from_str("2025-12-31"),
+    )
+    .unwrap();
+    tick().await;
+
+    let start_el = host.query_selector(".fc-start").unwrap().unwrap();
+    let end_el = host.query_selector(".fc-end").unwrap().unwrap();
+    let start_text: HtmlElement = start_el.dyn_into().unwrap();
+    let end_text: HtmlElement = end_el.dyn_into().unwrap();
+    assert_eq!(start_text.inner_text().trim(), "2025-01-01");
+    assert_eq!(end_text.inner_text().trim(), "2025-12-31");
+
+    // Partial update: only host_start moves. Child's `end` must
+    // survive the serde round-trip (splice reads container, writes
+    // one leaf, deserialises — the other leaf must not be clobbered).
+    js_sys::Reflect::set(
+        &parent_proxy,
+        &"host_start".into(),
+        &JsValue::from_str("2026-06-01"),
+    )
+    .unwrap();
+    tick().await;
+
+    assert_eq!(start_text.inner_text().trim(), "2026-06-01");
+    assert_eq!(end_text.inner_text().trim(), "2025-12-31");
+}
+
+/// Child's handler mutates a single leaf through the container
+/// (`self.range.start = ...`). Only `pp:update:start` should fire;
+/// the `end` leaf never changed, so no `pp:update:end`.
+#[wasm_bindgen_test]
+async fn flatten_single_leaf_write_emits_one_channel() {
+    let host = mount("<flatten-parent></flatten-parent>");
+    tick().await;
+
+    let child = host.query_selector("flatten-child").unwrap().unwrap();
+    let root = child.first_element_child().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+
+    let starts = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let ends = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let starts_clone = starts.clone();
+    let ends_clone = ends.clone();
+    let start_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        starts_clone.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    let end_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        ends_clone.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    child
+        .add_event_listener_with_callback("pp:update:start", start_listener.as_ref().unchecked_ref())
+        .unwrap();
+    child
+        .add_event_listener_with_callback("pp:update:end", end_listener.as_ref().unchecked_ref())
+        .unwrap();
+    start_listener.forget();
+    end_listener.forget();
+
+    let args = js_sys::Array::new();
+    args.push(&JsValue::from_str("2030-05-05"));
+    pocopine_core::scope::invoke_handler(scope_id, "set_start", &args);
+    tick().await;
+
+    // Parent-side reflection confirms the publish reached outward.
+    let parent_start = host.query_selector(".fp-start").unwrap().unwrap();
+    let parent_end = host.query_selector(".fp-end").unwrap().unwrap();
+    let parent_start: HtmlElement = parent_start.dyn_into().unwrap();
+    let parent_end: HtmlElement = parent_end.dyn_into().unwrap();
+    assert_eq!(parent_start.inner_text().trim(), "2030-05-05");
+    assert_eq!(parent_end.inner_text().trim(), "");
+
+    let starts = starts.borrow();
+    let ends = ends.borrow();
+    assert_eq!(starts.len(), 1, "one pp:update:start — got {:?}", &*starts);
+    assert_eq!(starts[0].as_string().as_deref(), Some("2030-05-05"));
+    assert_eq!(ends.len(), 0, "end never changed — no pp:update:end");
+}
+
+/// Reassigning the whole container (`self.range = FlattenRange {...}`)
+/// must fan out as per-leaf emits — one `pp:update:start`, one
+/// `pp:update:end`. The snapshot-diff sees both leaves move and
+/// queues independent pending entries.
+#[wasm_bindgen_test]
+async fn flatten_whole_container_write_fans_out_per_leaf() {
+    let host = mount("<flatten-parent></flatten-parent>");
+    tick().await;
+
+    let child = host.query_selector("flatten-child").unwrap().unwrap();
+    let root = child.first_element_child().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+
+    let starts = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let ends = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let starts_clone = starts.clone();
+    let ends_clone = ends.clone();
+    let start_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        starts_clone.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    let end_listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        ends_clone.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    child
+        .add_event_listener_with_callback("pp:update:start", start_listener.as_ref().unchecked_ref())
+        .unwrap();
+    child
+        .add_event_listener_with_callback("pp:update:end", end_listener.as_ref().unchecked_ref())
+        .unwrap();
+    start_listener.forget();
+    end_listener.forget();
+
+    pocopine_core::scope::invoke_handler(scope_id, "swap_range", &js_sys::Array::new());
+    tick().await;
+
+    let parent_start = host.query_selector(".fp-start").unwrap().unwrap();
+    let parent_end = host.query_selector(".fp-end").unwrap().unwrap();
+    let parent_start: HtmlElement = parent_start.dyn_into().unwrap();
+    let parent_end: HtmlElement = parent_end.dyn_into().unwrap();
+    assert_eq!(parent_start.inner_text().trim(), "A");
+    assert_eq!(parent_end.inner_text().trim(), "Z");
+
+    let starts = starts.borrow();
+    let ends = ends.borrow();
+    assert_eq!(starts.len(), 1, "one coalesced pp:update:start — got {:?}", &*starts);
+    assert_eq!(ends.len(), 1, "one coalesced pp:update:end — got {:?}", &*ends);
+    assert_eq!(starts[0].as_string().as_deref(), Some("A"));
+    assert_eq!(ends[0].as_string().as_deref(), Some("Z"));
 }
 
 #[wasm_bindgen_test]
