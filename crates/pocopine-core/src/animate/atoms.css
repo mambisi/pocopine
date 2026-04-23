@@ -48,8 +48,8 @@
   --pp-tx-fade-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --pp-tx-collapse-duration: 180ms;
   --pp-tx-collapse-easing: cubic-bezier(0.4, 0, 0.2, 1);
-  --pp-tx-flip-duration: 260ms;
-  --pp-tx-flip-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --pp-tx-flip-duration: 320ms;
+  --pp-tx-flip-easing: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ── fade ─────────────────────────────────────────────────────── */

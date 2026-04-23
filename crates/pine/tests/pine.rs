@@ -4931,11 +4931,14 @@ struct AnimateFadeHost {
 impl AnimateFadeHost {}
 
 /// `#[component(transition = "fade")]` stamps the six pp-transition:*
-/// class attrs on the OUTER custom-element tag — that's the element
-/// `pp-if` / `pp-show` hand to `transition::enter` / `leave`, so the
-/// directive's state machine needs to find them there. Opacity and
-/// transform inherit through the outer tag's stacking context to
-/// reach the visually-styled inner root.
+/// class attrs on the INNER rendered root — not the outer custom
+/// tag. Pine compounds often carry `display: contents` on their
+/// custom tag, which has no layout box; opacity / transform on a
+/// box-less element don't visually render, so the classes only
+/// matter on the inner root that actually has a box.
+/// `transition::enter_subtree` walks descendants and picks the
+/// attrs up regardless, so pp-if/pp-show/pp-for still drive the
+/// enter/leave sequence from the outer tag.
 #[wasm_bindgen_test]
 async fn animate_macro_transition_stamps_preset_on_root() {
     pocopine_core::animate::install();
@@ -4943,10 +4946,11 @@ async fn animate_macro_transition_stamps_preset_on_root() {
     let host = mount("<animate-fade-host></animate-fade-host>");
     tick().await;
     tick().await;
-    let inner = host
+    let outer = host
         .query_selector("animate-fade-host")
         .unwrap()
         .expect("custom tag in DOM");
+    let inner = outer.first_element_child().expect("rendered inner root");
     assert_eq!(
         inner.get_attribute("pp-transition:enter").as_deref(),
         Some("pp-tx-fade-base"),
@@ -4959,6 +4963,11 @@ async fn animate_macro_transition_stamps_preset_on_root() {
         inner.get_attribute("pp-transition:leave-end").as_deref(),
         Some("pp-tx-fade-from"),
     );
+    // And the outer tag should NOT have them — keeps consumers that
+    // read the outer tag's attribute set (e.g. walking the
+    // host-level DOM for per-instance animation config) free of
+    // confusing sibling copies.
+    assert!(outer.get_attribute("pp-transition:enter").is_none());
     host.remove();
 }
 

@@ -44,7 +44,10 @@ pub mod waapi;
 
 // Flat re-exports — authors import from `pocopine::animate::*`.
 pub use collapse::{collapse_to, CollapseOptions};
-pub use flip::{flip, flip_from_snapshot, FlipOptions};
+pub use flip::{
+    flip, flip_batch, flip_from_snapshot, flip_with_new_rect, measure_layout_rect, FlipOptions,
+    FlipTarget,
+};
 pub use motion::{is_reduced as motion_is_reduced, MotionPreference};
 pub use presets::{apply_preset, lookup, register_preset, Phase, Preset};
 pub use waapi::{animate, AnimateOptions, AnimationHandle, Keyframe};

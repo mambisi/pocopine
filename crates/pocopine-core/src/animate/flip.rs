@@ -1,112 +1,136 @@
 //! FLIP — _First, Last, Invert, Play_. Layout-animation helper for
 //! reordered / moved elements.
 //!
-//! Use case: a keyed `pp-for` list mutates its order in place (or
-//! the author's code moves an element to a new position). The user
-//! sees an instant jump; FLIP makes it animate smoothly to the new
-//! spot.
+//! Every FLIP runs as a single `Element.animate()` call with a
+//! two-key transform keyframe. WAAPI runs on its own layer, so it
+//! composes with author transforms/transitions without fighting
+//! over the inline `style.transform` / `style.transition` slots.
 //!
-//! ## How it works
+//! Rapid reorders: the returned `Animation` handle is stashed on
+//! the element so a subsequent FLIP can cancel its predecessor.
+//! `fill: "none"` ensures the transform contribution fully clears
+//! when the animation settles — no lingering stacking context.
 //!
-//! 1. **First** — snapshot the element's bounding rect before the
-//!    layout change.
-//! 2. **Last** — DOM mutation happens (caller's responsibility, or
-//!    it has already happened by the time we're here).
-//! 3. **Invert** — compute delta `(old.x - new.x, old.y - new.y)`
-//!    and apply an `inverse` transform so the element LOOKS like it
-//!    hasn't moved. Browser paints the inverted frame.
-//! 4. **Play** — on the next frame, transition the transform back
-//!    to `none`; the user sees the element glide from its old spot
-//!    to its new one.
-//!
-//! The two public shapes here:
-//! - [`flip_from_snapshot`] — you already have the old rect (the
-//!   pp-for keyed-diff path does), hand it in.
-//! - [`flip`] — you don't; pass a `mutate` closure and a snapshot
-//!   phase runs before it.
+//! Entry points:
+//! - [`flip_from_snapshot`] / [`flip_with_new_rect`] — single element.
+//! - [`flip_batch`] — iterator of pre-measured [`FlipTarget`]s.
+//! - [`flip`] — measure + mutate + play, convenience.
 
-use wasm_bindgen::JsCast;
-use web_sys::{DomRect, Element, HtmlElement};
+use js_sys::Reflect;
+use wasm_bindgen::{JsCast, JsValue};
+use web_sys::{Animation, DomRect, Element};
 
 use super::waapi::{animate, AnimateOptions, Keyframe};
 
-/// Options for a FLIP animation.
+/// Private slot for the most recent FLIP `Animation` handle.
+const FLIP_ANIM_KEY: &str = "__pp_flip_anim";
+
 #[derive(Clone, Debug)]
 pub struct FlipOptions {
-    /// Duration of the "play" phase in ms. Default 260.
     pub duration_ms: f64,
-    /// CSS easing. Default a gentle ease-out curve that feels
-    /// natural for layout shifts.
     pub easing: &'static str,
-    /// If the total movement is under this threshold in pixels, skip
-    /// the animation entirely. Default 2 (sub-pixel / no-op moves).
     pub min_delta_px: f64,
 }
 
 impl Default for FlipOptions {
     fn default() -> Self {
+        // Apple-style sharp deceleration — matches the global
+        // `--pp-tx-easing` so FLIP reads as part of the same
+        // motion language as the pp-transition presets. The long
+        // settle tail is what reads as "springy" without an actual
+        // spring simulation (motion.dev / react-flip-toolkit's
+        // signature feel, ported to a plain WAAPI tween).
         Self {
-            duration_ms: 260.0,
-            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+            duration_ms: 320.0,
+            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
             min_delta_px: 2.0,
         }
     }
 }
 
-/// Run a FLIP animation on `el` given its rect **before** the
-/// mutation. The current rect is measured now, the delta computed,
-/// and a Web Animation plays `transform: translate(old-new)` →
-/// `transform: translate(0)`.
-///
-/// Safe to call on every frame of a keyed reconcile — if the
-/// element hasn't moved past `min_delta_px`, it returns without
-/// scheduling an animation.
+pub struct FlipTarget {
+    pub element: Element,
+    pub old_rect: DomRect,
+    pub new_rect: DomRect,
+}
+
 pub fn flip_from_snapshot(el: &Element, old_rect: DomRect, opts: FlipOptions) {
     let new_rect = el.get_bounding_client_rect();
+    flip_with_new_rect(el, old_rect, new_rect, opts);
+}
+
+pub fn flip_with_new_rect(el: &Element, old_rect: DomRect, new_rect: DomRect, opts: FlipOptions) {
     let dx = old_rect.left() - new_rect.left();
     let dy = old_rect.top() - new_rect.top();
     if dx.abs() < opts.min_delta_px && dy.abs() < opts.min_delta_px {
         return;
     }
-
-    // Cancel any in-flight transform animation on this element —
-    // rapid re-orders shouldn't stack.
-    if let Ok(html) = el.clone().dyn_into::<HtmlElement>() {
-        // Clear any previously-applied transform inline style so
-        // the new keyframe starts from a known state. The
-        // `fill: "forwards"` on the prior animation might still
-        // hold the final transform; a fresh animate() overrides.
-        let _ = html.style().remove_property("transform");
-    }
-
-    let from_transform = format!("translate({}px, {}px)", dx, dy);
-    animate(
+    cancel_prior(el);
+    let from = format!("translate({dx}px, {dy}px)");
+    let handle = animate(
         el,
         &[
-            Keyframe::from_iter([("transform", from_transform.as_str())]),
+            Keyframe::from_iter([("transform", from.as_str())]),
             Keyframe::from_iter([("transform", "translate(0, 0)")]),
         ],
         AnimateOptions {
             duration_ms: opts.duration_ms,
             easing: opts.easing,
             delay_ms: 0.0,
-            // `none` so the transform fully clears once the
-            // animation finishes — otherwise the element would
-            // keep `transform: translate(0, 0)` forever, which can
-            // block stacking-context-sensitive layout.
             fill: "none",
             respect_motion_preference: true,
         },
     );
+    stash(el, handle.raw());
 }
 
-/// Measure `el`'s rect, run `mutate`, then FLIP-animate the
-/// difference. Convenience for the "I know the mutation about to
-/// happen" case. For keyed `pp-for` — where the walker mutates the
-/// DOM internally — use [`flip_from_snapshot`] with the rect
-/// captured before the walker runs.
+pub fn flip_batch<I>(targets: I, opts: FlipOptions)
+where
+    I: IntoIterator<Item = FlipTarget>,
+{
+    for t in targets {
+        flip_with_new_rect(&t.element, t.old_rect, t.new_rect, opts.clone());
+    }
+}
+
 pub fn flip(el: &Element, mutate: impl FnOnce(), opts: FlipOptions) {
     let rect = el.get_bounding_client_rect();
     mutate();
     flip_from_snapshot(el, rect, opts);
+}
+
+/// Backwards-compatible re-export. The name survives for callers
+/// that used to need a pause-and-jump dance to read a clean
+/// layout rect; the WAAPI path's stashed-handle cancellation makes
+/// that unnecessary, so this is now just a thin wrapper around
+/// `get_bounding_client_rect`.
+pub fn measure_layout_rect(el: &Element) -> DomRect {
+    el.get_bounding_client_rect()
+}
+
+fn cancel_prior(el: &Element) {
+    if let Some(anim) = stashed(el) {
+        anim.cancel();
+    }
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(FLIP_ANIM_KEY),
+        &JsValue::UNDEFINED,
+    );
+}
+
+fn stash(el: &Element, anim: &Animation) {
+    let _ = Reflect::set(
+        el.as_ref(),
+        &JsValue::from_str(FLIP_ANIM_KEY),
+        anim.as_ref(),
+    );
+}
+
+fn stashed(el: &Element) -> Option<Animation> {
+    let raw = Reflect::get(el.as_ref(), &JsValue::from_str(FLIP_ANIM_KEY)).ok()?;
+    if raw.is_undefined() || raw.is_null() {
+        return None;
+    }
+    raw.dyn_into::<Animation>().ok()
 }

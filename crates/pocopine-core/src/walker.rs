@@ -369,21 +369,26 @@ fn mount_component(el: &Element, tag: &str) {
 
         // RFC-038 — if the component declared default transition
         // presets via `#[component(transition = "…")]` (or the
-        // asymmetric `transition_in` / `transition_out` split), stamp
-        // them on the OUTER custom-element tag (`el`). `pp-if` /
-        // `pp-show` call `transition::enter`/`leave` on the clone
-        // root — which IS the custom tag — so that's where the
-        // directive's state machine looks for the six
-        // `pp-transition:*` class attrs. Preset classes set opacity
-        // / transform which propagate to the inner rendered root
-        // via inheritance and shared stacking context.
+        // asymmetric `transition_in` / `transition_out` split),
+        // stamp them on the INNER rendered root (`root`) rather
+        // than the outer custom tag (`el`). The custom tag often
+        // carries `display: contents` (tags-input-item, combobox
+        // items, command items, etc.), and opacity/transform on a
+        // box-less element don't visually apply — users saw the
+        // classes flip but nothing animated.
         //
-        // Author-side attrs on the custom tag win — apply_preset
-        // only fills in what isn't already there. `pp-transition`
+        // `pp-if` / `pp-show` / `pp-for` all drive transitions via
+        // `transition::enter_subtree` which walks the clone
+        // subtree for elements carrying `pp-transition:*` attrs,
+        // so stamping on `root` still gets picked up from an
+        // enter call on the outer custom tag.
+        //
+        // Author-side attrs on EITHER the outer or the inner win —
+        // apply_preset only fills in what isn't already set on the
+        // inner root (where we're writing). `pp-transition`
         // shorthand on the tag has already expanded in
         // `get_or_init` via `expand_preset_shorthand` by the time
-        // this runs, so the "has six attrs?" guard covers both
-        // hand-wired six-attr form AND author-shorthand form.
+        // this runs.
         let (tr_in, tr_out, ak) = {
             let s = scope.state.borrow();
             (
@@ -395,7 +400,16 @@ fn mount_component(el: &Element, tag: &str) {
         if !tr_in.is_empty() || !tr_out.is_empty() {
             let effective_in = if tr_in.is_empty() { "none" } else { tr_in };
             let effective_out = if tr_out.is_empty() { "none" } else { tr_out };
-            let already_set = el.has_attribute("pp-transition:enter")
+            let already_set = root.has_attribute("pp-transition:enter")
+                || root.has_attribute("pp-transition:enter-start")
+                || root.has_attribute("pp-transition:enter-end")
+                || root.has_attribute("pp-transition:leave")
+                || root.has_attribute("pp-transition:leave-start")
+                || root.has_attribute("pp-transition:leave-end")
+                || root.has_attribute("pp-transition")
+                || root.has_attribute("pp-transition:in")
+                || root.has_attribute("pp-transition:out")
+                || el.has_attribute("pp-transition:enter")
                 || el.has_attribute("pp-transition:enter-start")
                 || el.has_attribute("pp-transition:enter-end")
                 || el.has_attribute("pp-transition:leave")
@@ -405,7 +419,7 @@ fn mount_component(el: &Element, tag: &str) {
                 || el.has_attribute("pp-transition:in")
                 || el.has_attribute("pp-transition:out");
             if !already_set {
-                crate::animate::apply_preset(el, effective_in, effective_out);
+                crate::animate::apply_preset(&root, effective_in, effective_out);
             }
         }
         // Stamp `data-pp-animate="<kind>"` on the outer custom tag

@@ -536,6 +536,132 @@ pub fn enter_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
     }
 }
 
+/// Stagger the enter transition across many clones in one batch.
+///
+/// `enter_subtree` fires every clone's enter simultaneously;
+/// `enter_subtree_staggered` delays the whole enter call per index
+/// (so clone `i` waits `i * stagger_ms` ms). The big difference is
+/// that `staggered` lets clones render at their natural state
+/// during the delay, then snap to the start state when their turn
+/// comes — visible "pop then shrink" artefact.
+///
+/// This batched variant fixes that by:
+///
+///   1. Walking every clone and stamping the `enter-start` class
+///      on each animated descendant synchronously.
+///   2. Doing ONE forced reflow across the batch so every clone
+///      commits its start state before any transition fires.
+///   3. Scheduling each clone's end-class swap at
+///      `i * stagger_ms` ms, independently per clone.
+///
+/// Net effect for a 500-item mount: every chip is invisible /
+/// scaled-down at the instant it enters the DOM, then animates in
+/// at its assigned delay. No flash of default state.
+///
+/// Respects `prefers-reduced-motion` and the per-element
+/// `data-pp-motion="always"` opt-out (the normal `enter` path).
+pub fn enter_subtrees_sequenced(clones: &[Element], stagger_ms: u32) {
+    // Resolved + filtered per-clone descendant lists + their state
+    // rcs, so the deferred finisher doesn't re-walk.
+    struct Pending {
+        el: Element,
+        rc: Rc<RefCell<State>>,
+        epoch: u64,
+    }
+    let mut batch: Vec<Vec<Pending>> = Vec::with_capacity(clones.len());
+    for root in clones {
+        let mut per_clone: Vec<Pending> = Vec::new();
+        for el in collect_animated(root) {
+            if is_disabled() {
+                continue;
+            }
+            if crate::animate::motion::effective_for(&el)
+                == crate::animate::motion::MotionPreference::Reduced
+            {
+                continue;
+            }
+            let Some(rc) = get_or_init(&el) else { continue };
+            {
+                let mut s = rc.borrow_mut();
+                cancel(&mut s, &el);
+                s.phase = Phase::Entering;
+            }
+            let epoch = rc.borrow().epoch;
+            let cl = el.class_list();
+            {
+                let s = rc.borrow();
+                for c in &s.enter_start {
+                    let _ = cl.add_1(c);
+                }
+            }
+            per_clone.push(Pending { el, rc, epoch });
+        }
+        batch.push(per_clone);
+    }
+
+    // ONE forced reflow across everyone. Commits the start-state
+    // class writes synchronously so the browser caches state-A
+    // before we queue state-B swaps.
+    if let Some(first_clone) = batch.iter().flatten().next() {
+        let _ = first_clone.el.client_width();
+    }
+
+    // Schedule all class swaps through `next_frame` so they land
+    // AFTER the browser has painted the enter-start state. Without
+    // this, applying start + end classes in the same JS task can
+    // cause the browser to coalesce both writes into a single
+    // style recalc — no transition fires because the engine never
+    // sees the start values as a distinct "previous" state.
+    //
+    // Inside the rAF callback, each clone's end-class swap fires
+    // at `i * stagger_ms` ms via `setTimeout`. Clone 0 fires
+    // immediately within the frame; the rest shift in sequence.
+    crate::tick::next_frame(move || {
+        for (i, per_clone) in batch.into_iter().enumerate() {
+            let delay = (i as u32).saturating_mul(stagger_ms);
+            let finish = move || {
+                for Pending { el, rc, epoch } in per_clone {
+                    // Epoch check — if a leave dispatched between
+                    // start-class and this delayed finish (e.g. the
+                    // pp-for condition flipped, the clone got
+                    // removed), bail so we don't apply end classes
+                    // to a detached element.
+                    if rc.borrow().epoch != epoch {
+                        continue;
+                    }
+                    let cl = el.class_list();
+                    {
+                        let s = rc.borrow();
+                        for c in &s.enter_start {
+                            let _ = cl.remove_1(c);
+                        }
+                        for c in &s.enter {
+                            let _ = cl.add_1(c);
+                        }
+                        for c in &s.enter_end {
+                            let _ = cl.add_1(c);
+                        }
+                    }
+                    let rc_for_end = rc.clone();
+                    schedule_end(&el, rc.clone(), epoch, move || {
+                        let mut s = rc_for_end.borrow_mut();
+                        s.phase = Phase::Idle;
+                    });
+                }
+            };
+            if delay == 0 {
+                finish();
+            } else if let Some(window) = window() {
+                let cb = Closure::once_into_js(finish);
+                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    cb.unchecked_ref(),
+                    delay as i32,
+                );
+            }
+        }
+    });
+}
+
 /// Like [`enter_subtree`] but each animated descendant fires with
 /// an additional `i * stagger_ms` delay (where `i` is its index in
 /// the collected list). Useful for sequenced reveals on `pp-for`
@@ -588,6 +714,17 @@ pub fn enter_subtree_staggered<F: FnOnce() + 'static>(
 /// every animated element in the subtree in parallel; the caller's
 /// `on_done` (typically the actual DOM removal) fires once they all
 /// complete. Synchronous when no element animates.
+///
+/// A safety timeout backstops the counter. When a different caller
+/// dispatches leaves onto the same elements (for example, pp-if
+/// wrapping a pp-for — pp-if's subtree walk finds every chip while
+/// pp-for ALSO dispatches per-chip leaves, and the second `leave`
+/// call cancels the first's `schedule_end`), some of this caller's
+/// counter callbacks never fire. Without the backstop, `on_done`
+/// never runs and the caller's clone (e.g. pp-if's wrapper) stays
+/// stranded in the DOM. The backstop gives the real transitions
+/// plenty of time to land first — if they don't, we fire `on_done`
+/// anyway so the DOM doesn't leak.
 pub fn leave_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
     let elems = collect_animated(root);
     if elems.is_empty() {
@@ -596,6 +733,29 @@ pub fn leave_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
     }
     let remaining = Rc::new(Cell::new(elems.len()));
     let on_done_cell = Rc::new(RefCell::new(Some(on_done)));
+
+    // Safety backstop — one second is well past any default Pine
+    // transition (the longest preset is 300 ms). Enough buffer
+    // that an overlapping leave's cancellation doesn't leave the
+    // caller's counter stuck; soon enough that a leaked clone
+    // doesn't linger for the user.
+    const SAFETY_MS: i32 = 1000;
+    let remaining_for_safety = remaining.clone();
+    let on_done_for_safety = on_done_cell.clone();
+    let safety = Closure::once_into_js(move || {
+        if remaining_for_safety.get() > 0 {
+            if let Some(cb) = on_done_for_safety.borrow_mut().take() {
+                cb();
+            }
+        }
+    });
+    if let Some(w) = window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+            safety.unchecked_ref(),
+            SAFETY_MS,
+        );
+    }
+
     for el in elems {
         let remaining = remaining.clone();
         let on_done_cell = on_done_cell.clone();

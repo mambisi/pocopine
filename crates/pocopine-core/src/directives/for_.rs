@@ -47,6 +47,27 @@ fn first_layout_child(el: &Element) -> Option<Element> {
     children.item(0)
 }
 
+fn retract_from_prior(prior: &Rc<RefCell<Vec<PrevItem>>>, key: &Rc<str>) {
+    let mut p = prior.borrow_mut();
+    p.retain(|item| !(Rc::ptr_eq(&item.key, key) && item.leaving));
+}
+
+/// Fire enter-subtree on every `el` in `clones`, spacing them by
+/// `stagger_ms * index`. `stagger_ms == 0` fires every clone
+/// simultaneously with no per-element timer overhead; the non-zero
+/// path routes through `transition::enter_subtrees_sequenced` so
+/// clones snap to their start state at insertion time (no flash of
+/// natural state while waiting for a delayed `enter` call).
+fn fire_staggered_enter(clones: &[Element], stagger_ms: u32) {
+    if stagger_ms == 0 {
+        for el in clones {
+            crate::directives::transition::enter_subtree(el, || {});
+        }
+        return;
+    }
+    crate::directives::transition::enter_subtrees_sequenced(clones, stagger_ms);
+}
+
 pub fn run(call: &DirectiveCall) {
     let Some((item_name, items_expr)) = parse_expr(&call.value) else {
         console::error_1(&JsValue::from_str(&format!(
@@ -70,6 +91,15 @@ pub fn run(call: &DirectiveCall) {
     let parent_scope_id = call.scope_id;
     let template_el: Element = call.el.clone();
     let key_expr = template_el.get_attribute("pp-key");
+    // `pp-stagger="<ms>"` on the template spreads the enter
+    // animation of newly-inserted clones across time — `i * stagger`
+    // ms delay per clone, in insertion order. Keeps a batch mount
+    // of a big list (stress fixture dropping 500 tags at once)
+    // from firing every scale-in simultaneously.
+    let stagger_ms: u32 = template_el
+        .get_attribute("pp-stagger")
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
 
     let effect_id = match key_expr {
         Some(key) if !key.trim().is_empty() => run_keyed(
@@ -80,6 +110,7 @@ pub fn run(call: &DirectiveCall) {
             parent_scope_id,
             template,
             template_el,
+            stagger_ms,
         ),
         _ => run_naive(
             item_name,
@@ -88,6 +119,7 @@ pub fn run(call: &DirectiveCall) {
             parent_scope_id,
             template,
             template_el,
+            stagger_ms,
         ),
     };
 
@@ -103,6 +135,7 @@ fn run_naive(
     parent_scope_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
+    stagger_ms: u32,
 ) -> crate::reactive::EffectId {
     let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
@@ -157,11 +190,11 @@ fn run_naive(
                 .is_ok()
             {
                 walker::walk(&clone_root);
-                let clone_for_enter = clone_root.clone();
-                crate::directives::transition::enter_subtree(&clone_for_enter, || {});
                 fresh.push(clone_root);
             }
         }
+
+        fire_staggered_enter(&fresh, stagger_ms);
 
         *prior.borrow_mut() = fresh;
     })
@@ -174,11 +207,18 @@ fn run_naive(
 /// dedup-tracking set via `Rc<str>` — one allocation per unique
 /// key per reconcile instead of two (the HashSet insert used to
 /// clone a fresh `String`).
+///
+/// `leaving` is true while the clone is mid-leave (its transition
+/// is playing; the remove-from-DOM callback hasn't fired). We keep
+/// such entries in `prior` so a rapid re-mount whose items contain
+/// the same key can reverse the leave and reuse the clone instead
+/// of spawning a fresh one next to the still-leaving original.
 struct PrevItem {
     element: Element,
     scope_id: ScopeId,
     loop_state: Rc<RefCell<LoopScope>>,
     key: Rc<str>,
+    leaving: bool,
 }
 
 /// Keyed iteration. Reuses clones whose keys still appear, fires
@@ -192,7 +232,9 @@ fn run_keyed(
     parent_scope_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
+    stagger_ms: u32,
 ) -> crate::reactive::EffectId {
+    let key_resolver = KeyResolver::parse(&item_name, &key_expr);
     let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
     // Pool + seen-keys set carry allocated capacity across effect
@@ -246,7 +288,7 @@ fn run_keyed(
 
         for i in 0..total {
             let item = arr.get(i as u32);
-            let key_val = resolve_key(&item_name, &item, i, &parent_proxy, &key_expr);
+            let key_val = key_resolver.resolve(&item, i, &parent_proxy);
             let raw_key: Rc<str> = stringify_key(&key_val).into();
 
             // Make sure duplicate keys in one pass don't collapse
@@ -264,9 +306,17 @@ fn run_keyed(
                 dup
             };
 
-            if let Some(entry) = pool.remove(&key) {
-                // Reuse. Update the loop state in place; fire
-                // trigger_scope so effects bound to this loop re-run.
+            if let Some(mut entry) = pool.remove(&key) {
+                // Reuse. If the entry was mid-leave (prior reconcile
+                // started its unmount but the transition hadn't
+                // finished), cancel the leave by running enter — the
+                // clone is still in the DOM and its scope is intact.
+                if entry.leaving {
+                    crate::directives::transition::enter_subtree(&entry.element, || {});
+                    entry.leaving = false;
+                }
+                // Update the loop state in place; fire trigger_scope
+                // so effects bound to this loop re-run.
                 {
                     let mut st = entry.loop_state.borrow_mut();
                     st.item = item;
@@ -302,66 +352,44 @@ fn run_keyed(
                     scope_id: scope.id,
                     loop_state: loop_rc,
                     key,
+                    leaving: false,
                 });
             }
         }
 
-        // Anything left in the pool is no longer present — leave +
-        // remove. RFC-038: route through `transition::leave_subtree`
+        // Anything left in the pool is no longer in the iteration
+        // source. RFC-038: route through `transition::leave_subtree`
         // so any animated descendants (Pine compounds with
         // `transition = "..."`) play their leave keyframes before
-        // the actual remove_child fires. The MutationObserver-driven
-        // `release_subtree` runs after the removal as before.
-        for (_, entry) in pool.drain() {
-            let el = entry.element.clone();
-            let el_cap = el.clone();
-            crate::directives::transition::leave_subtree(&el, move || {
-                if let Some(parent) = el_cap.parent_node() {
-                    let _ = parent.remove_child(&el_cap);
-                }
-            });
-        }
-
-        // RFC-038 — FLIP prep: snapshot client rects for every
-        // reused clone BEFORE the insert_before loop below moves
-        // them. We check `data-pp-animate="flip"` to skip scopes
-        // that don't opt in (no motion tax on normal lists).
+        // the actual remove_child fires.
         //
-        // For Pine compounds the clone_root is an outer custom
-        // element (`<pine-tags-input-item>`) with no display box —
-        // `getBoundingClientRect` on it returns zero. The visible
-        // layout box lives on the inner rendered root (the first
-        // element child). Snapshot + animate that.
-        //
-        // All clones descend from the same template, so if the
-        // first reused clone doesn't carry `data-pp-animate="flip"`
-        // none of them will. Cheap probe lets non-animated lists
-        // skip the whole N-item snapshot walk + `get_bounding_client_rect`
-        // per item (each one is a JS crossing + layout read).
-        let flip_opted_in = fresh.iter().any(|entry| {
-            entry.element.parent_node().is_some()
-                && entry.element.get_attribute("data-pp-animate").as_deref() == Some("flip")
-        });
-        let mut flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> = HashMap::new();
-        if flip_opted_in {
-            for entry in &fresh {
-                if entry.element.parent_node().is_none()
-                    || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
-                {
-                    continue;
-                }
-                let target =
-                    first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
-                flip_snapshots
-                    .insert(entry.key.clone(), (target.clone(), target.get_bounding_client_rect()));
+        // Crucially, we KEEP leaving entries tracked in `prior` until
+        // their remove callback fires. If an item's key reappears
+        // while its clone is still mid-leave (rapid mount→unmount→
+        // mount on a stress list), the next reconcile's pool includes
+        // the leaving entry, matches the key, cancels the leave, and
+        // reuses the clone — instead of spawning a duplicate next to
+        // the still-leaving original. The remove callback retracts
+        // the entry from `prior` once the clone is truly gone.
+        let n_new: usize = fresh.len();
+        let mut leavers: Vec<PrevItem> = Vec::new();
+        for (_, mut entry) in pool.drain() {
+            if !entry.leaving {
+                entry.leaving = true;
+                let el = entry.element.clone();
+                let el_for_cb = el.clone();
+                let key_for_retract = Rc::clone(&entry.key);
+                let prior_for_retract = prior.clone();
+                crate::directives::transition::leave_subtree(&el, move || {
+                    if let Some(parent) = el_for_cb.parent_node() {
+                        let _ = parent.remove_child(&el_for_cb);
+                    }
+                    retract_from_prior(&prior_for_retract, &key_for_retract);
+                });
             }
+            leavers.push(entry);
         }
 
-        // Reorder + walk new clones. See issue #4 for motivation —
-        // an unconditional `insert_before` blurs focused descendants
-        // on every reactive flush because each move is spec-defined
-        // as remove + re-insert.
-        //
         // Short-circuit: if the DOM already matches the new order
         // (every `fresh[i]` is parented at `parent_node` AND its
         // next sibling is `fresh[i+1]` or `template_el` for the
@@ -409,6 +437,35 @@ fn run_keyed(
             correct_parent && correct_next
         });
 
+        // RFC-038 FLIP prep — snapshot client rects for every
+        // reused clone BEFORE the insert_before loop below moves
+        // them. We only bother when there's actually a reorder
+        // incoming; `already_ordered` skips to keep no-op sweeps
+        // (an unrelated field changed, trigger_scope fired, but
+        // the list hasn't moved) from paying N forced layouts.
+        //
+        // For Pine compounds the clone_root is an outer custom
+        // element (`<pine-tags-input-item>`) with no display box —
+        // `getBoundingClientRect` on it returns zero. The visible
+        // layout box lives on the inner rendered root (the first
+        // element child). Snapshot + animate that.
+        let mut flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> = HashMap::new();
+        if !already_ordered {
+            for entry in &fresh {
+                if entry.element.parent_node().is_none()
+                    || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
+                {
+                    continue;
+                }
+                let target = first_layout_child(&entry.element)
+                    .unwrap_or_else(|| entry.element.clone());
+                flip_snapshots.insert(
+                    entry.key.clone(),
+                    (target.clone(), target.get_bounding_client_rect()),
+                );
+            }
+        }
+
         let mut newly_walked: Vec<Element> = Vec::new();
         if !already_ordered {
             // Iterate back-to-front and use the next fresh entry
@@ -429,6 +486,14 @@ fn run_keyed(
             // — each one still blurs / restarts transitions /
             // invalidates layout. Now it does exactly the moves
             // the mutation demands.
+            // Back-to-front insert order keeps the local skip
+            // check correct during a reorder. But the stagger
+            // enter downstream wants clones in FORWARD order so a
+            // 500-item mount paints top → bottom, not bottom → top.
+            // Record new clones into a separate Vec indexed by
+            // fresh position so we can restore the forward order
+            // after this loop.
+            let mut new_indices: Vec<usize> = Vec::new();
             for i in (0..fresh.len()).rev() {
                 let entry = &fresh[i];
                 let was_in_place = entry
@@ -449,9 +514,13 @@ fn run_keyed(
                     let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
                 }
                 if !was_in_place {
-                    newly_walked.push(entry.element.clone());
+                    new_indices.push(i);
                 }
             }
+            new_indices.sort_unstable();
+            newly_walked.extend(
+                new_indices.into_iter().map(|i| fresh[i].element.clone()),
+            );
         }
         // Walk freshly-inserted clones AFTER they're in the tree so
         // directive setup can look up the enclosing scope via parent
@@ -461,70 +530,105 @@ fn run_keyed(
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /
-        // etc. plays its mount preset.
-        for el in newly_walked {
-            crate::directives::transition::enter_subtree(&el, || {});
-        }
+        // etc. plays its mount preset. When the author set
+        // `pp-stagger="<ms>"`, space the enters by that per-item
+        // delay instead of all firing at once.
+        fire_staggered_enter(&newly_walked, stagger_ms);
 
-        // RFC-038 — FLIP play phase. For each reused clone that was
-        // snapshotted, kick off the inverse-transform-to-identity
-        // animation via WAAPI. Runs AFTER the walker stamps
+        // RFC-038 — FLIP play phase. Runs AFTER the walker stamps
         // `data-pp-animate` + inserts, so the elements' new
         // positions are real.
+        //
+        // `flip_batch` handles the two-pass invert-reflow-play
+        // dance in a single forced layout for the whole list —
+        // the per-element work is ~4 inline style writes instead
+        // of an `Element.animate()` call per item (WAAPI allocates
+        // a fresh `Animation` object each time, which was the
+        // dominant cost of a 500-item shuffle).
         if !flip_snapshots.is_empty() {
+            let mut pending: Vec<crate::animate::FlipTarget> =
+                Vec::with_capacity(flip_snapshots.len());
             for entry in &fresh {
                 if let Some((target, old_rect)) = flip_snapshots.remove(&entry.key) {
-                    crate::animate::flip_from_snapshot(
-                        &target,
+                    let new_rect = target.get_bounding_client_rect();
+                    pending.push(crate::animate::FlipTarget {
+                        element: target,
                         old_rect,
-                        crate::animate::FlipOptions::default(),
-                    );
+                        new_rect,
+                    });
                 }
             }
+            crate::animate::flip_batch(pending, crate::animate::FlipOptions::default());
         }
 
+        // `prior` holds everything the next reconcile can reuse:
+        // the `fresh` list (current iteration order) plus any clones
+        // that are mid-leave. The leaver's remove callback will
+        // retract it from `prior` once the leave finishes; until
+        // then, a re-appearing key can cancel the leave and reuse
+        // that clone instead of spawning a duplicate.
+        let _ = n_new; // kept for clarity when reading the function
+        fresh.extend(leavers);
         *prior.borrow_mut() = fresh;
     })
 }
 
-/// Resolve the `pp-key` expression for one iteration without
-/// creating a throw-away `Scope` + proxy. Handles the three forms
-/// we actually see in practice:
-///
-/// * `"<item_name>"` → the raw item.
-/// * `"<item_name>.<path>"` → walk `path` segments on the item via
-///   `Reflect::get`. Non-tracked, matches the per-iteration read we
-///   want — we don't subscribe the outer pp-for effect to any of
-///   the item's own fields.
-/// * `"$index"` → the current index.
-/// * anything else → fall through to a normal `resolve_path` against
-///   the parent proxy so keys like `"$store.selected_id"` still work.
-fn resolve_key(
-    item_name: &str,
-    item: &JsValue,
-    index: usize,
-    parent_proxy: &JsValue,
-    expr: &str,
-) -> JsValue {
-    let trimmed = expr.trim();
-    if trimmed == "$index" {
-        return JsValue::from_f64(index as f64);
+/// Pre-compiled form of `pp-key="..."`. Parsed once at `run_keyed`
+/// entry; dispatched per-item without re-parsing the expression.
+/// The big win vs. the old `resolve_key(&str)` was dropping the
+/// per-iteration `format!("{item_name}.")` + string-compare chain
+/// — for a 500-item list that allocation + match fires 500 times
+/// per reconcile, and is entirely redundant when the expression
+/// hasn't changed.
+enum KeyResolver {
+    Index,
+    Item,
+    /// `item.a.b.c` — pre-split `[a, b, c]` so we walk
+    /// `Reflect::get` per segment without re-splitting per item.
+    ItemPath(Vec<String>),
+    /// Any other expression — falls through to `resolve_path`
+    /// against the parent proxy (e.g. `$store.selected_id`).
+    External(String),
+}
+
+impl KeyResolver {
+    fn parse(item_name: &str, expr: &str) -> Self {
+        let trimmed = expr.trim();
+        if trimmed == "$index" {
+            return Self::Index;
+        }
+        if trimmed == item_name {
+            return Self::Item;
+        }
+        let prefix_len = item_name.len() + 1;
+        if trimmed.len() > prefix_len
+            && trimmed.starts_with(item_name)
+            && trimmed.as_bytes().get(item_name.len()) == Some(&b'.')
+        {
+            let rest = &trimmed[prefix_len..];
+            return Self::ItemPath(
+                rest.split('.').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+            );
+        }
+        Self::External(trimmed.to_string())
     }
-    if trimmed == item_name {
-        return item.clone();
-    }
-    let prefix = format!("{item_name}.");
-    if let Some(rest) = trimmed.strip_prefix(&prefix) {
-        return rest.split('.').fold(item.clone(), |acc, segment| {
-            if segment.is_empty() {
-                acc
-            } else {
+
+    fn resolve(
+        &self,
+        item: &JsValue,
+        index: usize,
+        parent_proxy: &JsValue,
+    ) -> JsValue {
+        match self {
+            Self::Index => JsValue::from_f64(index as f64),
+            Self::Item => item.clone(),
+            Self::ItemPath(segments) => segments.iter().fold(item.clone(), |acc, segment| {
                 Reflect::get(&acc, &JsValue::from_str(segment))
                     .unwrap_or(JsValue::UNDEFINED)
-            }
-        });
+            }),
+            Self::External(path) => resolve_path(parent_proxy, path),
+        }
     }
-    resolve_path(parent_proxy, trimmed)
 }
 
 /// Canonicalise a key value to a string. Strings come through

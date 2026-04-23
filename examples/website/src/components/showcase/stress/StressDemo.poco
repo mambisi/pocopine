@@ -2,20 +2,30 @@
   <h2>Animation perf stress (500 keyed items)</h2>
   <section>
     <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
-      Mounts a <code>pine-tags-input-root</code> with 500 keyed
+      Mounts a <code>pine-tags-input-root</code> with up to 500 keyed
       <code>pine-tags-input-item</code> chips — each one a Pine
       compound with a <code>scale</code> mount transition and
-      <code>flip</code> layout animation. <strong>Rotate</strong>
-      moves the head to the tail (a minimal reorder);
-      <strong>Shuffle</strong> Fisher-Yates-shuffles the whole
-      list (every item moves). Both report the wall-clock time
-      across the full reconcile (handler start → after reactive
-      flush). Use these to spot regressions in the RFC-039
-      dispatch path or the pp-for reconcile.
+      <code>flip</code> layout animation.
+      <strong>Mount</strong> dumps all 500 at once (with
+      <code>pp-stagger="2"</code> spacing the enters across ~1s).
+      <strong>Simulate streamed load</strong> adds 10 chips every
+      20&nbsp;ms — a realistic "data arriving in batches" flow that
+      exercises the incremental-insert path (new keys stream in
+      while existing ones stay put).
+      <strong>Rotate</strong> moves the head to the tail (a
+      minimal reorder); <strong>Shuffle</strong>
+      Fisher-Yates-shuffles the whole list (every item moves). The
+      last two report wall-clock time across the full reconcile
+      (handler start → after reactive flush). Use these to spot
+      regressions in the RFC-039 dispatch path or the pp-for
+      reconcile.
     </p>
     <div class="row" style="margin-bottom:0.75rem">
       <pine-button @click="mount_fixture">
         <span pp-text="open ? 'Unmount stress fixture' : 'Mount 500-row stress fixture'"></span>
+      </pine-button>
+      <pine-button variant="ghost" @click="simulate_add" pp-show="!open">
+        Simulate streamed load
       </pine-button>
       <pine-button variant="ghost" @click="rotate" pp-show="open">
         Rotate
@@ -23,14 +33,17 @@
       <pine-button variant="ghost" @click="shuffle" pp-show="open">
         Shuffle
       </pine-button>
-      <span pp-show="open" style="font-size:0.875rem;align-self:center">
+      <span pp-show="open && last_op" style="font-size:0.875rem;align-self:center">
         last <strong pp-text="last_op"></strong>:
         <strong pp-text="shuffle_display"></strong>
+      </span>
+      <span pp-show="simulating" style="font-size:0.875rem;align-self:center;color:var(--fg-muted)">
+        streaming… <strong pp-text="items.length"></strong> / 500
       </span>
     </div>
     <template pp-if="open">
       <pine-tags-input-root pp-model:values="items" class="tags-input-root">
-        <template pp-for="item in items" pp-key="item">
+        <template pp-for="item in items" pp-key="item" pp-stagger="2">
           <pine-tags-input-item :value="item">
             <pine-tags-input-item-text></pine-tags-input-item-text>
             <pine-tags-input-item-delete aria-label="Remove">×</pine-tags-input-item-delete>
