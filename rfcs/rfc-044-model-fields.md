@@ -281,15 +281,35 @@ That means:
 - `DateValue` can serialize to an ISO string because its serde impl
   chooses that representation.
 
-Field-level serde attributes are respected, because the generated
-model helper serializes the real field value through serde rather
-than through a hand-written per-component adapter. That includes
-attributes like `rename`, `skip_serializing_if`, and
-`serialize_with`.
+Value-transforming serde attributes on the field are respected,
+because the generated model helper serializes the real field
+value through its natural serde impl rather than through a
+hand-written per-component adapter. Specifically:
 
-This is an important simplification: `#[model]` should not require
-manual `maybe_date_string(...)`-style helpers just to express "emit
-this field's public value".
+- `#[serde(serialize_with = "…")]` and `#[serde(with = "…")]`
+  apply — they shape how the value is encoded, which is exactly
+  what an emit needs.
+
+Key-affecting serde attributes are semantically inapplicable here
+and have **no effect** on model emission:
+
+- `#[serde(rename = "…")]` — renames the field's KEY in a parent
+  struct's output. Model emission sends the value as
+  `CustomEvent.detail`, with the wire name set by the Rust field
+  identifier (or `#[model(name = "…")]`). There is no key to
+  rename.
+- `#[serde(skip_serializing_if = "…")]` — controls whether the
+  field is INCLUDED in a parent struct's output. Model emission
+  always fires when a publishable write is flushed; RFC-044's
+  §5.5 origin suppression is the mechanism for conditional
+  emission. `Option<T>::None` canonicalises to `null` on the
+  wire because that's the natural serde shape.
+
+This keeps `#[model]` from needing manual
+`maybe_date_string(...)`-style helpers to express "emit this
+field's public value," while avoiding the footgun where a
+key-affecting attr appears to work in the struct context but
+produces `undefined` on the model wire.
 
 ### 5.5 Assignment-driven emission semantics
 

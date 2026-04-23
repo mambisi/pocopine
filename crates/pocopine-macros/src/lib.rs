@@ -25,7 +25,7 @@ use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Attribute, Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr,
+    Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr,
     Meta, MetaNameValue, Pat, Path, PatType, Token, Type,
 };
 
@@ -234,12 +234,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // the emitted struct so rustc doesn't see an unknown
     // attribute.
     let mut field_idents: Vec<syn::Ident> = Vec::new();
-    let mut field_tys: Vec<Type> = Vec::new();
     let mut field_names: Vec<String> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
     let mut field_is_model: Vec<bool> = Vec::new();
     let mut field_model_names: Vec<Option<String>> = Vec::new();
-    let mut field_serde_attrs: Vec<Vec<Attribute>> = Vec::new();
     let mut observes: Vec<ObserveEntry> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else { continue };
@@ -348,19 +346,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             });
         }
         let rust_name = ident.to_string().trim_start_matches("r#").to_string();
+        let _ = field_ty;
         field_names.push(rust_name.clone());
         field_idents.push(ident);
-        field_tys.push(field_ty);
         field_is_prop.push(is_prop);
         field_is_model.push(is_model);
         field_model_names.push(model_name.or_else(|| is_model.then_some(rust_name)));
-        field_serde_attrs.push(
-            field.attrs
-                .iter()
-                .filter(|a| a.path().is_ident("serde"))
-                .cloned()
-                .collect(),
-        );
     }
 
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
@@ -429,32 +420,35 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #field_name => ::core::option::Option::Some(#wire_name),
             })
         });
+    // `#[model]` emission sends the field's value as the CustomEvent
+    // detail — no parent struct, no key-value context. So we serialize
+    // the field directly and let any `#[serde(serialize_with = ...)]`
+    // / `#[serde(with = ...)]` on the field take effect through its
+    // natural serde impl. Key-affecting attrs (`rename`,
+    // `skip_serializing_if`) are semantically inapplicable here —
+    // there's no enclosing struct whose key they could rename or
+    // whose presence they could control. A previous revision wrapped
+    // the field in a `__PocoModelField { value: &T }` struct + read
+    // back via `Reflect::get("value")`, but that broke silently under
+    // `rename` (wrapper serialised to `{"foo": …}`, hard-coded lookup
+    // returned UNDEFINED) and under `skip_serializing_if` on
+    // `Option<T>::None` (wrapper serialised to `{}`, lookup returned
+    // UNDEFINED — contradicting RFC-044 §5.4's "None canonicalises to
+    // null" promise). Direct serialisation gets the canonical serde
+    // shape (including `null` for `None`) for free.
     let model_value_arms = field_idents
         .iter()
-        .zip(field_tys.iter())
         .zip(field_names.iter())
         .zip(field_is_model.iter())
-        .zip(field_serde_attrs.iter())
-        .filter_map(|((((field_ident, field_ty), field_name), is_model), serde_attrs)| {
+        .filter_map(|((field_ident, field_name), is_model)| {
             if !is_model {
                 return None;
             }
             Some(quote! {
-                #field_name => {
-                    #[derive(::serde::Serialize)]
-                    struct __PocoModelField<'a> {
-                        #(#serde_attrs)*
-                        value: &'a #field_ty,
-                    }
-                    let __wrapped = __PocoModelField { value: &self.#field_ident };
-                    let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(&__wrapped)
-                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
-                    ::pocopine::__private::js_sys::Reflect::get(
-                        &__obj,
-                        &::pocopine::__private::JsValue::from_str("value"),
-                    )
-                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
-                }
+                #field_name => ::pocopine::__private::serde_wasm_bindgen::to_value(
+                    &self.#field_ident,
+                )
+                .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
             })
         });
 
