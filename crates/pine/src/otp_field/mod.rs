@@ -235,15 +235,30 @@ impl PineOtpField {
     /// position is unchanged — that move blurs any focused input
     /// inside it. Deferring the focus write until after the flush
     /// lands it on a clone that won't get moved out from under us.
+    ///
+    /// When `target`'s slot is already the active element we skip
+    /// the `.focus()` call. Re-focusing an already-focused `<input>`
+    /// resets its caret to position 0 on most browsers, which turns
+    /// the next Backspace into a no-op (nothing before the caret)
+    /// — the exact symptom users hit after filling the last slot.
     fn focus_slot(&self, target: u32) {
         let Some(scope) = current_scope_id() else { return };
         pocopine::tick::after_flush(move || {
             let Some(root_el) = refs::get_on(scope, "root") else { return };
             let selector = format!("input[data-index=\"{target}\"]");
-            if let Some(el) = root_el.query_selector(&selector).ok().flatten() {
-                if let Ok(html) = el.dyn_into::<HtmlElement>() {
-                    let _ = html.focus();
+            let Some(el) = root_el.query_selector(&selector).ok().flatten() else {
+                return;
+            };
+            let active = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.active_element());
+            if let Some(active) = active {
+                if active.is_same_node(Some(el.as_ref())) {
+                    return;
                 }
+            }
+            if let Ok(html) = el.dyn_into::<HtmlElement>() {
+                let _ = html.focus();
             }
         });
     }

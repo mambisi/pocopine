@@ -3186,6 +3186,147 @@ async fn otp_field_backspace_lands_focus_on_previous_slot() {
     host.remove();
 }
 
+/// The last slot regression the user reported in the demo: type
+/// `123`, then press Backspace on the focused last slot. The
+/// browser's default action consumes Backspace to delete the
+/// character under the caret — *if* the caret is at position 1.
+/// Our post-handler `.focus()` resetting the caret to 0 would
+/// neutralise the default action and leave slot 2 holding "3"
+/// forever. This test simulates the browser-initiated input event
+/// that follows a successful backspace, then asserts that
+/// pressing backspace again (now on an empty slot) walks back.
+#[wasm_bindgen_test]
+async fn otp_field_backspace_on_last_slot_after_fill_still_walks_back() {
+    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slot = |i: u32| -> HtmlInputElement {
+        tag.query_selector(&format!(
+            "input.pine-otp-field-slot[data-index=\"{i}\"]"
+        ))
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+    };
+
+    // Fill all three slots.
+    for i in 0..3 {
+        let el = slot(i);
+        el.focus().unwrap();
+        el.set_value(&(i + 1).to_string());
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        el.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+        sleep_ms(5).await;
+        tick().await;
+    }
+
+    // After fill, slot 2 is focused and holds "3". The browser
+    // would dispatch a Backspace keydown — our handler runs first,
+    // sees el.value() != "", and lets the browser delete. Simulate
+    // the followup input event to mirror the OS.
+    let s2 = slot(2);
+    s2.focus().unwrap();
+    s2.set_value("");
+    let input_init = web_sys::EventInit::new();
+    input_init.set_bubbles(true);
+    s2.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &input_init).unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+    assert_eq!(s2.value(), "", "first backspace cleared slot 2");
+
+    // Now the REAL bug the user saw: press Backspace again on the
+    // now-empty slot 2. This is a keydown with no default browser
+    // action to consume — our @keydown.backspace handler must walk
+    // focus back to slot 1 and clear it. If after_flush re-focus
+    // logic somehow skipped this path, slot 1 would stay "2" and
+    // focus would stay on slot 2.
+    let kd_init = web_sys::KeyboardEventInit::new();
+    kd_init.set_bubbles(true);
+    kd_init.set_cancelable(true);
+    kd_init.set_key("Backspace");
+    let ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kd_init).unwrap();
+    s2.dispatch_event(&ev).unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert_eq!(slot(1).value(), "", "backspace walked back + cleared slot 1");
+    let active = doc().active_element().unwrap();
+    assert_eq!(
+        active.get_attribute("data-index").as_deref(),
+        Some("1"),
+        "focus walked back to slot 1"
+    );
+
+    host.remove();
+}
+
+/// After the code is fully entered focus stays on the last slot,
+/// which now holds a digit. Pressing Delete (the browser clears
+/// the content and fires `input` with `""`) must clear the last
+/// slot and leave focus there so the user can retype. Regression
+/// test: a short-lived variant returned early from the handler
+/// when the field was full and left the last digit intact.
+#[wasm_bindgen_test]
+async fn otp_field_delete_on_last_slot_clears_and_keeps_focus() {
+    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
+    let slot = |i: u32| -> HtmlInputElement {
+        tag.query_selector(&format!(
+            "input.pine-otp-field-slot[data-index=\"{i}\"]"
+        ))
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap()
+    };
+
+    // Fill all three slots by simulating user typing.
+    for i in 0..3 {
+        let el = slot(i);
+        el.focus().unwrap();
+        el.set_value(&(i + 1).to_string());
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        el.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+            .unwrap();
+        sleep_ms(5).await;
+        tick().await;
+    }
+
+    // After filling the last slot, focus stays on slot 2 (clamped).
+    // Simulate the browser clearing the last slot's value + firing
+    // the `input` event — same sequence the OS dispatches when the
+    // user presses Backspace or Delete on a filled slot.
+    let s2 = slot(2);
+    s2.focus().unwrap();
+    s2.set_value("");
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    s2.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+        .unwrap();
+    sleep_ms(5).await;
+    tick().await;
+
+    assert_eq!(slot(2).value(), "", "last slot cleared after delete");
+    assert_eq!(slot(1).value(), "2", "earlier slots left intact");
+    let active = doc().active_element().unwrap();
+    assert_eq!(
+        active.get_attribute("data-index").as_deref(),
+        Some("2"),
+        "focus stays on the cleared last slot so the user can retype"
+    );
+
+    host.remove();
+}
+
 /// Backspace on an empty slot walks focus back and clears the
 /// previously-filled slot. Auto-advance means a completed-then-
 /// backspaced field leaves focus in the correct place.
