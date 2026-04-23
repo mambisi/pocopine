@@ -19,10 +19,21 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  width: 100%;
 }
 
-/* Pill-shaped search trigger — capped at 200px so the header
-   doesn't impersonate a search engine. */
+.site-header-center {
+  display: flex;
+  align-items: center;
+  flex: row;
+  justify-content: space-between;
+  width: 100%;
+  max-width: var(--max-site-width);
+  padding: 0 var(--site-padding-x);
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .site-header-search {
   flex: 0 1 200px;
   max-width: 200px;
@@ -62,7 +73,35 @@
   color: var(--fg-muted);
 }
 
-/* Theme toggle — small square icon, matching the search pill. */
+.site-header-github {
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  /* <button> defaults to the browser-UA text color, which does NOT
+     inherit `--fg`. Opt back into inheritance so the SVG inside
+     (which uses `stroke="currentColor"`) picks up the theme. */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s, transform 0.15s;
+}
+.site-header-github:hover,
+.site-header-github:focus-visible {
+  background: var(--bg-subtle);
+  border-color: color-mix(in srgb, var(--fg) 15%, var(--border));
+  outline: none;
+}
+.site-header-github:active {
+  transform: translateY(1px);
+}
+
 .site-header-theme {
   width: 1.9rem;
   height: 1.9rem;

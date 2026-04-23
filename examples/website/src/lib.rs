@@ -30,6 +30,7 @@ pub struct WebsiteApp {
     pub open: bool,
     pub theme: String,
     pub last: String,
+    pub show_header_github: bool,
 }
 
 impl Default for WebsiteApp {
@@ -38,6 +39,7 @@ impl Default for WebsiteApp {
             open: false,
             theme: "light".into(),
             last: String::new(),
+            show_header_github: false,
         }
     }
 }
@@ -65,6 +67,14 @@ impl WebsiteApp {
                 let _ = root.set_attribute("data-theme", &self.theme);
             }
         }
+    }
+
+    pub fn show_header_github(&mut self) {
+        self.show_header_github = true;
+    }
+
+    pub fn hide_header_github(&mut self) {
+        self.show_header_github = false;
     }
 
     pub fn go_hero(&mut self) {
@@ -116,6 +126,7 @@ pub fn main() {
         "chevron-down",
         "chevron-right",
         "check",
+        "brand-github",
         "x",
     ];
     App::new()

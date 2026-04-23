@@ -6,7 +6,9 @@
     primitive library — ships server-rendered HTML, animates
     by default, under 50&nbsp;KB.
   </p>
-  <div class="hero-actions">
+  <div class="hero-actions"
+       pp-intersect:enter.margin.-72="hide_header_github"
+       pp-intersect:leave.margin.-72="show_header_github">
     <button class="cta-primary" @click="open_site_palette">
       Get started <kbd class="cta-kbd">⌘K</kbd>
     </button>

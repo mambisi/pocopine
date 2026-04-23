@@ -19,6 +19,8 @@ use crate::{WebsiteApp, WEBSITE_APP};
 pub struct SiteHeader {
     #[observe(crate::WEBSITE_APP)]
     pub theme: String,
+    #[observe(crate::WEBSITE_APP)]
+    pub show_header_github: bool,
 }
 
 #[handlers]
@@ -32,6 +34,12 @@ impl SiteHeader {
     pub fn toggle_theme(&mut self) {
         if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
             app.update(|a: &mut WebsiteApp| a.toggle_theme());
+        }
+    }
+
+    pub fn open_github(&mut self) {
+        if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
+            app.update(|a: &mut WebsiteApp| a.go_github());
         }
     }
 }

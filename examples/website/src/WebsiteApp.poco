@@ -4,9 +4,11 @@
        `inject::<Handle<WebsiteApp>>(&WEBSITE_APP)` resolves from
        anywhere below. -->
   <site-header></site-header>
-  <hero id="hero"></hero>
-  <tutorial id="install"></tutorial>
-  <showcase id="showcase"></showcase>
+  <div class="site-content">
+    <hero id="hero"></hero>
+    <install-tutorial id="install"></install-tutorial>
+    <showcase id="showcase"></showcase>
+  </div>
 
   <!-- Site-wide command palette. Bound to the root's `open`
        field; the header's search button and any page CTA flip

@@ -1,13 +1,24 @@
 <root class="site-header">
   <div class="site-header-bar">
-    <button class="site-header-search" @click="open_palette" aria-label="Search (Ctrl+K)">
-      <pine-icon name="search" size="14"></pine-icon>
-      <span class="site-header-search-label">Search…</span>
-      <span class="site-header-search-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
-    </button>
+    <div class="site-header-center">
+      <button class="site-header-search" @click="open_palette" aria-label="Search (Ctrl+K)">
+        <pine-icon name="search" size="14"></pine-icon>
+        <span class="site-header-search-label">Search…</span>
+        <span class="site-header-search-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
+      </button>
 
-    <button class="site-header-theme" @click="toggle_theme" aria-label="Toggle theme">
-      <pine-icon :name="theme == 'dark' ? 'sun' : 'moon'" size="16"></pine-icon>
-    </button>
+      <div>
+        <button class="site-header-github"
+              pp-show="show_header_github"
+              @click="open_github"
+              aria-label="Open GitHub repo">
+          <pine-icon name="brand-github" size="16"></pine-icon>
+        </button>
+
+        <button class="site-header-theme" @click="toggle_theme" aria-label="Toggle theme">
+          <pine-icon :name="theme == 'dark' ? 'sun' : 'moon'" size="16"></pine-icon>
+        </button>
+      </div>
+    </div>
   </div>
 </root>

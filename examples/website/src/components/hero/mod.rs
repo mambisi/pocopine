@@ -24,4 +24,16 @@ impl Hero {
             app.update(|a: &mut WebsiteApp| a.open_palette());
         }
     }
+
+    pub fn show_header_github(&mut self) {
+        if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
+            app.update(|a: &mut WebsiteApp| a.show_header_github());
+        }
+    }
+
+    pub fn hide_header_github(&mut self) {
+        if let Some(app) = inject::<Handle<WebsiteApp>>(&WEBSITE_APP) {
+            app.update(|a: &mut WebsiteApp| a.hide_header_github());
+        }
+    }
 }
