@@ -25,7 +25,9 @@
 pub mod animate;
 pub mod easing;
 pub mod spring;
+pub mod stagger;
 
 pub use animate::{animate, Channel, IntoTiming, Tween};
 pub use easing::{sample_to_linear_easing, Easing};
 pub use spring::Spring;
+pub use stagger::{stagger, Origin, Stagger};
