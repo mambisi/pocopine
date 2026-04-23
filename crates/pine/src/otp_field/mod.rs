@@ -248,10 +248,12 @@ impl PineOtpField {
         });
     }
 
-    /// Fold a slot's post-keystroke `.value` into `self.value`.
-    /// Returns the slot index that should receive focus, or
-    /// `None` when focus should stay put (deletion / filter
-    /// rejection).
+    /// Dense-prefix semantics: `self.value` is always a contiguous
+    /// prefix of filled slots. Types at slot `index` replace-or-append
+    /// (clamped to the fill prefix); deletes / backspaces truncate
+    /// so everything at or past this position empties. Matches
+    /// standard OTP UX — the user can only fill / rewind from the
+    /// right edge.
     fn apply_input(&mut self, index: usize, typed: &str) -> Option<u32> {
         let filtered = self.filter(typed);
         let typed_chars: Vec<char> = filtered.chars().collect();
@@ -260,11 +262,9 @@ impl PineOtpField {
 
         if typed_chars.is_empty() {
             if typed.is_empty() {
-                // User genuinely cleared the slot (cut / delete).
-                if index < value_chars.len() {
-                    value_chars.remove(index);
-                }
-                value_chars.truncate(len);
+                // Delete / Backspace on a filled slot — clear
+                // every slot at or past this position.
+                value_chars.truncate(index);
                 self.value = value_chars.iter().collect();
                 return None;
             }
@@ -273,44 +273,39 @@ impl PineOtpField {
             return None;
         }
 
-        let focus = if typed_chars.len() == 1 {
-            let c = typed_chars[0];
-            if index < value_chars.len() {
-                value_chars[index] = c;
-            } else if value_chars.len() < len {
-                value_chars.push(c);
+        // Clamp the insertion point to the end of the current fill
+        // prefix: typing at slot 5 when only slots 0-2 are filled
+        // should write into slot 3 (next empty), not leave a hole.
+        let write_at = index.min(value_chars.len());
+        let advance = typed_chars.len();
+
+        for (i, c) in typed_chars.iter().enumerate() {
+            let slot = write_at + i;
+            if slot >= len {
+                break;
             }
-            (index + 1).min(len.saturating_sub(1)) as u32
-        } else {
-            // Paste / autofill — spread across remaining slots.
-            for (i, c) in typed_chars.iter().enumerate() {
-                let slot = index + i;
-                if slot >= len {
-                    break;
-                }
-                if slot < value_chars.len() {
-                    value_chars[slot] = *c;
-                } else {
-                    value_chars.push(*c);
-                }
+            if slot < value_chars.len() {
+                value_chars[slot] = *c;
+            } else {
+                value_chars.push(*c);
             }
-            (index + typed_chars.len()).min(len.saturating_sub(1)) as u32
-        };
+        }
 
         value_chars.truncate(len);
         self.value = value_chars.iter().collect();
-        Some(focus)
+        Some((write_at + advance).min(len.saturating_sub(1)) as u32)
     }
 
     fn apply_backspace(&mut self, index: usize) -> Option<u32> {
         if index == 0 {
             return None;
         }
-        let mut value_chars: Vec<char> = self.value.chars().collect();
+        // Walk focus back and clear every slot from the previous
+        // slot onwards — same dense-prefix semantics as
+        // `apply_input`'s delete branch.
         let target = index - 1;
-        if target < value_chars.len() {
-            value_chars.remove(target);
-        }
+        let mut value_chars: Vec<char> = self.value.chars().collect();
+        value_chars.truncate(target);
         self.value = value_chars.iter().collect();
         Some(target as u32)
     }
