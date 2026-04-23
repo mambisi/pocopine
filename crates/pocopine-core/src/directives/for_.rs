@@ -370,6 +370,28 @@ fn run_keyed(
         // insert loop — per-iter "skip if in place" is locally
         // correct but globally wrong during a reorder (can leave
         // elements stranded in their old positions).
+        // Walk next-siblings past any still-present leaving
+        // clones so the "correct next" check lines up with what
+        // the layout will be once the leave animations finish.
+        // Without this, deleting the last (or any tail-adjacent)
+        // item in a keyed list flips `already_ordered` to false
+        // — the insert loop then reshuffles every fresh clone
+        // past the leaving element, and FLIP fires on items that
+        // wouldn't actually have moved if we'd just let the
+        // leaver finish and drop.
+        fn next_non_leaving(node: Option<web_sys::Node>) -> Option<web_sys::Node> {
+            let mut cursor = node;
+            while let Some(n) = cursor.clone() {
+                if let Ok(el) = n.dyn_into::<Element>() {
+                    if crate::directives::transition::is_leaving(&el) {
+                        cursor = el.next_sibling();
+                        continue;
+                    }
+                }
+                return cursor;
+            }
+            None
+        }
         let already_ordered = fresh.iter().enumerate().all(|(i, entry)| {
             let correct_parent = entry
                 .element
@@ -381,9 +403,7 @@ fn run_keyed(
             } else {
                 template_el.as_ref()
             };
-            let correct_next = entry
-                .element
-                .next_sibling()
+            let correct_next = next_non_leaving(entry.element.next_sibling())
                 .map(|n| n.is_same_node(Some(expected_next)))
                 .unwrap_or(false);
             correct_parent && correct_next
@@ -391,16 +411,26 @@ fn run_keyed(
 
         let mut newly_walked: Vec<Element> = Vec::new();
         if !already_ordered {
-            for entry in &fresh {
+            // Iterate back-to-front and use the next fresh entry
+            // (or template_el for the last) as the insert anchor.
+            // That keeps leaving siblings in their original DOM
+            // slots instead of pushing every fresh item past them
+            // — deleting a middle item no longer reorders the
+            // flex flow around the leaver, so FLIP only plays on
+            // items whose slot actually moves.
+            for i in (0..fresh.len()).rev() {
+                let entry = &fresh[i];
                 let was_in_place = entry
                     .element
                     .parent_node()
                     .map(|p| p.is_same_node(Some(parent_node_ref)))
                     .unwrap_or(false);
-                let _ = parent_node.insert_before(
-                    entry.element.as_ref(),
-                    Some(template_el.as_ref()),
-                );
+                let anchor: &Node = if i + 1 < fresh.len() {
+                    fresh[i + 1].element.as_ref()
+                } else {
+                    template_el.as_ref()
+                };
+                let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
                 if !was_in_place {
                     newly_walked.push(entry.element.clone());
                 }
