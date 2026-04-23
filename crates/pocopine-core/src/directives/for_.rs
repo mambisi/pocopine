@@ -68,6 +68,56 @@ fn fire_staggered_enter(clones: &[Element], stagger_ms: u32) {
     crate::directives::transition::enter_subtrees_sequenced(clones, stagger_ms);
 }
 
+fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
+    if entry.element.parent_node().is_none()
+        || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
+    {
+        return None;
+    }
+    Some(first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone()))
+}
+
+fn lift_leaver_out_of_layout(entry: &PrevItem) {
+    let Some(target) = flip_target_for_entry(entry) else {
+        return;
+    };
+    let rect = target.get_bounding_client_rect();
+    let Some(html) = target.dyn_ref::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let style = html.style();
+    let _ = style.set_property("position", "fixed");
+    let _ = style.set_property("left", &format!("{}px", rect.left()));
+    let _ = style.set_property("top", &format!("{}px", rect.top()));
+    let _ = style.set_property("width", &format!("{}px", rect.width()));
+    let _ = style.set_property("height", &format!("{}px", rect.height()));
+    let _ = style.set_property("margin", "0");
+    let _ = style.set_property("z-index", "1");
+    let _ = style.set_property("pointer-events", "none");
+}
+
+fn restore_leaver_layout(entry: &PrevItem) {
+    let Some(target) = flip_target_for_entry(entry) else {
+        return;
+    };
+    let Some(html) = target.dyn_ref::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let style = html.style();
+    for prop in [
+        "position",
+        "left",
+        "top",
+        "width",
+        "height",
+        "margin",
+        "z-index",
+        "pointer-events",
+    ] {
+        let _ = style.remove_property(prop);
+    }
+}
+
 pub fn run(call: &DirectiveCall) {
     let Some((item_name, items_expr)) = parse_expr(&call.value) else {
         console::error_1(&JsValue::from_str(&format!(
@@ -317,6 +367,7 @@ fn run_keyed(
                 // finished), cancel the leave by running enter — the
                 // clone is still in the DOM and its scope is intact.
                 if entry.leaving {
+                    restore_leaver_layout(&entry);
                     crate::directives::transition::enter_subtree(&entry.element, || {});
                     entry.leaving = false;
                 }
@@ -376,11 +427,30 @@ fn run_keyed(
         // reuses the clone — instead of spawning a duplicate next to
         // the still-leaving original. The remove callback retracts
         // the entry from `prior` once the clone is truly gone.
+        let mut leaver_flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> =
+            if pool.is_empty() {
+                HashMap::new()
+            } else {
+                let mut snapshots = HashMap::new();
+                for entry in &fresh {
+                    let Some(target) = flip_target_for_entry(entry) else {
+                        continue;
+                    };
+                    snapshots.insert(
+                        entry.key.clone(),
+                        (target.clone(), target.get_bounding_client_rect()),
+                    );
+                }
+                snapshots
+            };
+
+        let has_leavers = !pool.is_empty();
         let n_new: usize = fresh.len();
         let mut leavers: Vec<PrevItem> = Vec::new();
         for (_, mut entry) in pool.drain() {
             if !entry.leaving {
                 entry.leaving = true;
+                lift_leaver_out_of_layout(&entry);
                 let el = entry.element.clone();
                 let el_for_cb = el.clone();
                 let key_for_retract = Rc::clone(&entry.key);
@@ -455,15 +525,13 @@ fn run_keyed(
         // layout box lives on the inner rendered root (the first
         // element child). Snapshot + animate that.
         let mut flip_snapshots: HashMap<Rc<str>, (Element, web_sys::DomRect)> = HashMap::new();
-        if !already_ordered {
+        if has_leavers {
+            flip_snapshots = std::mem::take(&mut leaver_flip_snapshots);
+        } else if !already_ordered {
             for entry in &fresh {
-                if entry.element.parent_node().is_none()
-                    || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
-                {
+                let Some(target) = flip_target_for_entry(entry) else {
                     continue;
-                }
-                let target =
-                    first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
+                };
                 flip_snapshots.insert(
                     entry.key.clone(),
                     (target.clone(), target.get_bounding_client_rect()),
