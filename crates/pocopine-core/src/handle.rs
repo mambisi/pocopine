@@ -75,7 +75,10 @@ impl<T: 'static> Handle<T> {
     /// invoked from an async task outside any `Scope::invoke` chain.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let sid = self.scope_id;
-        let out = with_current_scope_id(sid, || f(&mut self.inner.borrow_mut()));
+        let origin = crate::model_runtime::current_write_origin();
+        let out = crate::model_runtime::with_scope_write(sid, origin, || {
+            with_current_scope_id(sid, || f(&mut self.inner.borrow_mut()))
+        });
         trigger_scope(sid);
         out
     }

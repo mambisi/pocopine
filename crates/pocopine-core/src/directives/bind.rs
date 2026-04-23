@@ -63,17 +63,24 @@ pub fn run(call: &DirectiveCall) {
             let v = expr::evaluate(&ast, &parent_proxy);
             match &child_target {
                 Some((child_scope_id, cp)) => {
+                    let target_field = crate::model_runtime::resolve_model_key(*child_scope_id, &child_field)
+                        .unwrap_or_else(|| child_field.clone());
                     // RFC-031 — only `#[prop]` fields are writable
                     // from the parent. Silently drop writes to
                     // state fields so accidental `<pine-thing
                     // loaded="true">` doesn't clobber child state.
                     let is_prop = crate::scope::Scope::find(*child_scope_id)
-                        .map(|s| s.state.borrow().is_prop(&child_field))
+                        .map(|s| s.state.borrow().is_prop(&target_field))
                         .unwrap_or(false);
                     if !is_prop {
                         return;
                     }
-                    let _ = Reflect::set(cp, &JsValue::from_str(&child_field), &v);
+                    crate::model_runtime::with_write_origin(
+                        crate::model_runtime::WriteOrigin::ParentModelIn,
+                        || {
+                            let _ = Reflect::set(cp, &JsValue::from_str(&target_field), &v);
+                        },
+                    );
                 }
                 None => apply_memoised(&el, &attr, &v, &prev),
             }

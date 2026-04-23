@@ -335,10 +335,15 @@ fn mount_component(el: &Element, tag: &str) {
     // bind.
     if scope.state.borrow().has_setup() {
         crate::scope::with_current_scope_id(scope.id, || {
-            scope.state.borrow_mut().setup();
+            crate::model_runtime::with_scope_write(
+                scope.id,
+                crate::model_runtime::WriteOrigin::SetupSeed,
+                || scope.state.borrow_mut().setup(),
+            );
         });
     }
     let proxy = scope.into_proxy();
+    crate::model_runtime::capture_emit_el(scope.id, el);
 
     // Capture slot content. Named slot templates go into the slot
     // store keyed by the component's scope id; everything else lands
@@ -454,10 +459,15 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     apply_static_props(el, &scope);
     if scope.state.borrow().has_setup() {
         crate::scope::with_current_scope_id(scope.id, || {
-            scope.state.borrow_mut().setup();
+            crate::model_runtime::with_scope_write(
+                scope.id,
+                crate::model_runtime::WriteOrigin::SetupSeed,
+                || scope.state.borrow_mut().setup(),
+            );
         });
     }
     let proxy = scope.into_proxy();
+    crate::model_runtime::capture_emit_el(scope.id, el);
 
     // 3. Clone the template into a throwaway container to extract
     //    root attrs without touching `el` yet.
@@ -809,7 +819,11 @@ fn apply_static_props(el: &Element, scope: &Scope) {
         }
         let raw = a.value();
         let js = coerce_attr_value(&raw);
-        scope.state.borrow_mut().set(&field, js);
+        crate::model_runtime::with_scope_write(
+            scope.id,
+            crate::model_runtime::WriteOrigin::SetupSeed,
+            || scope.state.borrow_mut().set(&field, js),
+        );
     }
 }
 

@@ -42,6 +42,27 @@ pub trait ComponentState: 'static {
         false
     }
 
+    /// True iff `key` is a `#[model]` field. Runtime uses this for
+    /// assignment-driven model publication and devtools metadata.
+    fn is_model(&self, key: &str) -> bool {
+        let _ = key;
+        false
+    }
+
+    /// Public wire name reserved by a `#[model]` field. Returns `None`
+    /// for non-model keys.
+    fn model_name(&self, key: &str) -> Option<&'static str> {
+        let _ = key;
+        None
+    }
+
+    /// Serialize a model field with any field-level serde attrs still
+    /// in play. Defaults to the plain field getter so non-component
+    /// scopes keep compiling.
+    fn get_model_value(&self, key: &str) -> JsValue {
+        self.get(key)
+    }
+
     /// Invoke a named method on `&mut self` with JS-land arguments.
     /// Returns a JsValue (or `JsValue::UNDEFINED` for void methods).
     fn invoke(&mut self, key: &str, args: &Array) -> JsValue;
@@ -227,6 +248,7 @@ impl Scope {
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);
         crate::reactive::clear_scope(id);
+        crate::model_runtime::clear_scope(id);
         // Drop the proxy-trap closures that were pinned in
         // `into_proxy`. The `Box<dyn Any>` drop chain runs the
         // `Closure` destructor, which releases the underlying
@@ -269,7 +291,10 @@ impl Scope {
         let set_closure = Closure::wrap(Box::new(
             move |_target: JsValue, key: JsValue, value: JsValue, _receiver: JsValue| -> bool {
                 let Some(key_str) = key.as_string() else { return false };
-                state_for_set.borrow_mut().set(&key_str, value);
+                let origin = crate::model_runtime::current_write_origin();
+                crate::model_runtime::with_scope_write(scope_id, origin, || {
+                    state_for_set.borrow_mut().set(&key_str, value);
+                });
                 trigger(scope_id, &key_str);
                 true
             },
@@ -306,7 +331,11 @@ impl Scope {
         let prev = CURRENT_SCOPE_ID.with(|c| c.replace(Some(self.id)));
         #[cfg(feature = "devtools")]
         let start = crate::devtools::ring::now_ms_for_scope();
-        let out = self.state.borrow_mut().invoke(key, args);
+        let out = crate::model_runtime::with_scope_write(
+            self.id,
+            crate::model_runtime::WriteOrigin::LocalHandler,
+            || self.state.borrow_mut().invoke(key, args),
+        );
         CURRENT_SCOPE_ID.with(|c| c.set(prev));
         trigger_scope(self.id);
         // Devtools hook — fired after trigger_scope so any effect

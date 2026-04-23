@@ -58,7 +58,9 @@ pub fn emit_from_host<T: Serialize>(name: &str, detail: T) {
 /// root used to duplicate.
 pub fn emit_model<T: Serialize>(value: T) {
     let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    let root_el = crate::model_runtime::emit_target(scope)
+        .or_else(|| refs::get_on(scope, "root"));
+    let Some(root_el) = root_el else { return };
     emit_from(&root_el, "pp:update:model", value);
 }
 
@@ -68,7 +70,9 @@ pub fn emit_model<T: Serialize>(value: T) {
 /// one child don't collide on the shared `pp:update:model` event.
 pub fn emit_model_field<T: Serialize>(field: &str, value: T) {
     let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    let root_el = crate::model_runtime::emit_target(scope)
+        .or_else(|| refs::get_on(scope, "root"));
+    let Some(root_el) = root_el else { return };
     emit_from(&root_el, &format!("pp:update:{field}"), value);
 }
 

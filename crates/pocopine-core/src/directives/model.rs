@@ -66,12 +66,21 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
         with_current_el(&el_for_track.clone(), || {
             let v = resolve_path(&parent_r, &key_r);
             if let Some(cid) = child_scope_id {
+                let target_field = crate::model_runtime::resolve_model_key(cid, &child_field_w)
+                    .unwrap_or_else(|| child_field_w.clone());
                 let is_prop = crate::scope::Scope::find(cid)
-                    .map(|s| s.state.borrow().is_prop(&child_field_w))
+                    .map(|s| s.state.borrow().is_prop(&target_field))
                     .unwrap_or(false);
                 if !is_prop {
                     return;
                 }
+                crate::model_runtime::with_write_origin(
+                    crate::model_runtime::WriteOrigin::ParentModelIn,
+                    || {
+                        let _ = Reflect::set(&child_r, &JsValue::from_str(&target_field), &v);
+                    },
+                );
+                return;
             }
             let _ = Reflect::set(&child_r, &JsValue::from_str(&child_field_w), &v);
         });

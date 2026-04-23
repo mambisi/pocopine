@@ -25,8 +25,8 @@ use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr, MetaNameValue,
-    Pat, Path, PatType, Token, Type,
+    Attribute, Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr,
+    Meta, MetaNameValue, Pat, Path, PatType, Token, Type,
 };
 
 /// Parsed `#[observe(KEY [, field = "name"])]` attribute —
@@ -234,18 +234,59 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // the emitted struct so rustc doesn't see an unknown
     // attribute.
     let mut field_idents: Vec<syn::Ident> = Vec::new();
+    let mut field_tys: Vec<Type> = Vec::new();
     let mut field_names: Vec<String> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
+    let mut field_is_model: Vec<bool> = Vec::new();
+    let mut field_model_names: Vec<Option<String>> = Vec::new();
+    let mut field_serde_attrs: Vec<Vec<Attribute>> = Vec::new();
     let mut observes: Vec<ObserveEntry> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else { continue };
         let field_ty = field.ty.clone();
         let mut is_prop = false;
+        let mut is_model = false;
+        let mut model_name: Option<String> = None;
         let mut observe_spec: Option<(Path, Option<String>)> = None;
         let mut observe_err: Option<syn::Error> = None;
         field.attrs.retain(|a| {
             if a.path().is_ident("prop") {
                 is_prop = true;
+                return false;
+            }
+            if a.path().is_ident("model") {
+                is_prop = true;
+                is_model = true;
+                let parsed: syn::Result<Option<String>> = match &a.meta {
+                    Meta::Path(_) => Ok(None),
+                    Meta::List(_) => a.parse_args_with(|input: syn::parse::ParseStream| {
+                        if input.is_empty() {
+                            return Ok(None);
+                        }
+                        let kv: MetaNameValue = input.parse()?;
+                        if !kv.path.is_ident("name") {
+                            return Err(syn::Error::new_spanned(
+                                kv.path,
+                                "unknown #[model] key — expected: name",
+                            ));
+                        }
+                        match kv.value {
+                            Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => Ok(Some(s.value())),
+                            other => Err(syn::Error::new_spanned(
+                                other,
+                                "`name` must be a string literal",
+                            )),
+                        }
+                    }),
+                    Meta::NameValue(_) => Err(syn::Error::new_spanned(
+                        a,
+                        "#[model] accepts either bare form or #[model(name = \"...\")]",
+                    )),
+                };
+                match parsed {
+                    Ok(name) => model_name = name,
+                    Err(e) => observe_err = Some(e),
+                }
                 return false;
             }
             if a.path().is_ident("observe") {
@@ -301,14 +342,25 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .unwrap_or_else(|| ident.to_string().trim_start_matches("r#").to_string());
             observes.push(ObserveEntry {
                 field_ident: ident.clone(),
-                field_ty,
+                field_ty: field_ty.clone(),
                 field_name_on_root: name_on_root,
                 key_path,
             });
         }
-        field_names.push(ident.to_string().trim_start_matches("r#").to_string());
+        let rust_name = ident.to_string().trim_start_matches("r#").to_string();
+        field_names.push(rust_name.clone());
         field_idents.push(ident);
+        field_tys.push(field_ty);
         field_is_prop.push(is_prop);
+        field_is_model.push(is_model);
+        field_model_names.push(model_name.or_else(|| is_model.then_some(rust_name)));
+        field_serde_attrs.push(
+            field.attrs
+                .iter()
+                .filter(|a| a.path().is_ident("serde"))
+                .cloned()
+                .collect(),
+        );
     }
 
     let get_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
@@ -353,6 +405,58 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! { matches!(key, #(#prop_field_names)|*) }
     };
+
+    let model_field_names: Vec<&String> = field_names
+        .iter()
+        .zip(field_is_model.iter())
+        .filter_map(|(n, is_model)| is_model.then_some(n))
+        .collect();
+    let is_model_body = if model_field_names.is_empty() {
+        quote! { let _ = key; false }
+    } else {
+        quote! { matches!(key, #(#model_field_names)|*) }
+    };
+    let model_name_arms = field_names
+        .iter()
+        .zip(field_is_model.iter())
+        .zip(field_model_names.iter())
+        .filter_map(|((field_name, is_model), wire_name)| {
+            if !is_model {
+                return None;
+            }
+            let wire_name = wire_name.as_ref()?;
+            Some(quote! {
+                #field_name => ::core::option::Option::Some(#wire_name),
+            })
+        });
+    let model_value_arms = field_idents
+        .iter()
+        .zip(field_tys.iter())
+        .zip(field_names.iter())
+        .zip(field_is_model.iter())
+        .zip(field_serde_attrs.iter())
+        .filter_map(|((((field_ident, field_ty), field_name), is_model), serde_attrs)| {
+            if !is_model {
+                return None;
+            }
+            Some(quote! {
+                #field_name => {
+                    #[derive(::serde::Serialize)]
+                    struct __PocoModelField<'a> {
+                        #(#serde_attrs)*
+                        value: &'a #field_ty,
+                    }
+                    let __wrapped = __PocoModelField { value: &self.#field_ident };
+                    let __obj = ::pocopine::__private::serde_wasm_bindgen::to_value(&__wrapped)
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED);
+                    ::pocopine::__private::js_sys::Reflect::get(
+                        &__obj,
+                        &::pocopine::__private::JsValue::from_str("value"),
+                    )
+                    .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
+                }
+            })
+        });
 
     // Resolve `role = "..."` → canonical HTML tag name. An unknown
     // role is a compile-time error; an explicitly-omitted role
@@ -479,7 +583,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     #field_name_on_root,
                     move |__v, _| {
                         let __v: #field_ty = ::core::clone::Clone::clone(__v);
-                        __h.update(|__s| __s.#field_ident = __v);
+                        ::pocopine::__private::with_write_origin(
+                            ::pocopine::__private::WriteOrigin::ObserveMirror,
+                            || __h.update(|__s| __s.#field_ident = __v),
+                        );
                     },
                 );
             }
@@ -525,6 +632,21 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn is_prop(&self, key: &str) -> bool {
                 #is_prop_body
+            }
+            fn is_model(&self, key: &str) -> bool {
+                #is_model_body
+            }
+            fn model_name(&self, key: &str) -> ::core::option::Option<&'static str> {
+                match key {
+                    #(#model_name_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+            fn get_model_value(&self, key: &str) -> ::pocopine::__private::JsValue {
+                match key {
+                    #(#model_value_arms)*
+                    _ => self.get(key),
+                }
             }
             fn invoke(
                 &mut self,

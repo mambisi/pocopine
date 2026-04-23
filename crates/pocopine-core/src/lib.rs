@@ -24,6 +24,7 @@ pub mod handler;
 pub mod id;
 pub mod loop_scope;
 pub mod magics;
+pub mod model_runtime;
 pub mod slot_scope;
 pub mod slots;
 pub mod path;
@@ -58,6 +59,7 @@ pub use lifecycle::{
     Refs, ScopePath, Slots, TagName, TeleportHost, TypedEl, Win,
 };
 pub use magics::dispatch_event;
+pub use model_runtime::{with_write_origin, WriteOrigin};
 pub use server::{Result as ServerResult, ServerError};
 pub use store::{
     register_store_scope, store, store_scope, stores_object, Store, StoreHandle,
