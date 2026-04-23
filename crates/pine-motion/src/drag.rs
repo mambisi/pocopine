@@ -28,11 +28,15 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement};
 
+use pocopine_core::animate::AnimationHandle;
+
 use crate::animate::animate;
 use crate::easing::Easing;
 use crate::gesture::pan::{pan, PanConfig, PanEvent};
 use crate::gesture::GestureHandle;
 use crate::spring::Spring;
+
+const MOMENTUM_POWER_SECONDS: f64 = 0.35;
 
 /// Which axis the element is allowed to move along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +59,12 @@ pub struct DragConstraints {
 
 impl DragConstraints {
     pub fn rect(left: f64, right: f64, top: f64, bottom: f64) -> Self {
-        Self { left, right, top, bottom }
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+        }
     }
 }
 
@@ -89,23 +98,31 @@ impl Default for DragConfig {
 /// drop removes the underlying pan listeners.
 pub fn drag(el: &Element, cfg: DragConfig) -> GestureHandle {
     let cfg = Rc::new(cfg);
-    let last_delta: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
+    let current_delta: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
+    let drag_origin_delta: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
+    let active_release: Rc<RefCell<Option<AnimationHandle>>> = Rc::new(RefCell::new(None));
     let html = el.clone().dyn_into::<HtmlElement>().ok();
 
     let cfg_cb = cfg.clone();
-    let last_cb = last_delta.clone();
+    let current_cb = current_delta.clone();
+    let origin_cb = drag_origin_delta.clone();
+    let active_cb = active_release.clone();
     let el_cb = el.clone();
     let html_cb = html.clone();
 
     pan(el, PanConfig::default(), move |event| {
         match event {
             PanEvent::Start { .. } => {
-                // Nothing to do at start — transform is whatever the
-                // element already had.
+                if let Some(handle) = active_cb.borrow_mut().take() {
+                    handle.cancel();
+                }
+                *origin_cb.borrow_mut() = *current_cb.borrow();
             }
             PanEvent::Move { delta, .. } => {
-                let clamped = clamp_delta(delta, &cfg_cb);
-                *last_cb.borrow_mut() = clamped;
+                let origin = *origin_cb.borrow();
+                let next = (origin.0 + delta.0, origin.1 + delta.1);
+                let clamped = clamp_delta(next, &cfg_cb);
+                *current_cb.borrow_mut() = clamped;
                 if let Some(h) = &html_cb {
                     let _ = h.style().set_property(
                         "transform",
@@ -114,32 +131,54 @@ pub fn drag(el: &Element, cfg: DragConfig) -> GestureHandle {
                 }
             }
             PanEvent::End { velocity } => {
-                let final_delta = *last_cb.borrow();
+                let final_delta = *current_cb.borrow();
                 if cfg_cb.snap_to_origin {
-                    spring_to_origin(&el_cb, final_delta, &cfg_cb.release_spring);
-                } else if cfg_cb.momentum {
-                    // Continue the fling. For v0 we don't run a true
-                    // inertia solver — instead we spring from the
-                    // current position to an estimated rest position
-                    // based on the velocity and the spring's settle
-                    // time. This matches Motion's behaviour for a
-                    // spring-backed drag (vs inertia-based).
-                    let estimated_rest =
-                        extrapolate_rest(final_delta, velocity, &cfg_cb.release_spring);
-                    let clamped_rest = clamp_delta(estimated_rest, &cfg_cb);
-                    *last_cb.borrow_mut() = clamped_rest;
-                    let from = translate_css(final_delta);
-                    let to = translate_css(clamped_rest);
-                    animate(
+                    let target = (0.0, 0.0);
+                    *current_cb.borrow_mut() = target;
+                    spring_to(
                         &el_cb,
-                        &[("transform", &from, &to)],
-                        Easing::Spring(cfg_cb.release_spring),
+                        html_cb.clone(),
+                        active_cb.clone(),
+                        final_delta,
+                        target,
+                        cfg_cb.release_spring,
+                    );
+                } else if cfg_cb.momentum {
+                    // Motion's drag momentum is inertia-first: project a
+                    // likely rest point from release velocity, then animate
+                    // there. We use a small fixed power window because this
+                    // API exposes a spring-only release primitive for now.
+                    let estimated_rest = extrapolate_rest(final_delta, velocity);
+                    let clamped_rest = clamp_delta(estimated_rest, &cfg_cb);
+                    *current_cb.borrow_mut() = clamped_rest;
+                    let spring = spring_with_projected_velocity(
+                        cfg_cb.release_spring,
+                        final_delta,
+                        clamped_rest,
+                        velocity,
+                    );
+                    spring_to(
+                        &el_cb,
+                        html_cb.clone(),
+                        active_cb.clone(),
+                        final_delta,
+                        clamped_rest,
+                        spring,
                     );
                 }
             }
             PanEvent::Cancel => {
-                spring_to_origin(&el_cb, *last_cb.borrow(), &cfg_cb.release_spring);
-                *last_cb.borrow_mut() = (0.0, 0.0);
+                let from = *current_cb.borrow();
+                let target = (0.0, 0.0);
+                *current_cb.borrow_mut() = target;
+                spring_to(
+                    &el_cb,
+                    html_cb.clone(),
+                    active_cb.clone(),
+                    from,
+                    target,
+                    cfg_cb.release_spring,
+                );
             }
         }
     })
@@ -160,29 +199,94 @@ fn clamp_delta(delta: (f64, f64), cfg: &DragConfig) -> (f64, f64) {
     }
 }
 
-fn spring_to_origin(el: &Element, from: (f64, f64), spring: &Spring) {
+fn spring_to(
+    el: &Element,
+    html: Option<HtmlElement>,
+    active_release: Rc<RefCell<Option<AnimationHandle>>>,
+    from: (f64, f64),
+    to: (f64, f64),
+    spring: Spring,
+) {
     let from_css = translate_css(from);
-    animate(
+    let to_css = translate_css(to);
+    let handle = animate(
         el,
-        &[("transform", &from_css, "translate(0px, 0px)")],
-        Easing::Spring(*spring),
+        &[("transform", &from_css, &to_css)],
+        Easing::Spring(spring),
     );
+    handle.on_finish({
+        let active_release = active_release.clone();
+        move || {
+            if let Some(h) = html {
+                let _ = h.style().set_property("transform", &to_css);
+            }
+            // Commit the final transform into inline style, then remove
+            // the filled WAAPI effect so the next drag owns transform again.
+            if let Some(handle) = active_release.borrow_mut().take() {
+                handle.cancel();
+            }
+        }
+    });
+    *active_release.borrow_mut() = Some(handle);
 }
 
-/// Estimate a rest position for a release fling. The spring's
-/// critically-damped settle distance under an initial velocity `v`
-/// is roughly `v / (stiffness/mass)`; we take the vector form and
-/// add to the current delta.
-fn extrapolate_rest(
-    current: (f64, f64),
+/// Estimate a rest position for a release fling. Motion's inertia
+/// projects from velocity before applying constraints; this is the
+/// same idea with a conservative fixed power window.
+fn extrapolate_rest(current: (f64, f64), velocity: (f64, f64)) -> (f64, f64) {
+    let factor = MOMENTUM_POWER_SECONDS;
+    (
+        current.0 + velocity.0 * factor,
+        current.1 + velocity.1 * factor,
+    )
+}
+
+fn spring_with_projected_velocity(
+    spring: Spring,
+    from: (f64, f64),
+    to: (f64, f64),
     velocity: (f64, f64),
-    spring: &Spring,
-) -> (f64, f64) {
-    let k_over_m = spring.stiffness / spring.mass;
-    let factor = 1.0 / k_over_m.max(1e-3);
-    (current.0 + velocity.0 * factor, current.1 + velocity.1 * factor)
+) -> Spring {
+    let travel = (to.0 - from.0, to.1 - from.1);
+    let distance_sq = travel.0 * travel.0 + travel.1 * travel.1;
+    if distance_sq <= 1e-6 {
+        return spring;
+    }
+    let projected_velocity = (velocity.0 * travel.0 + velocity.1 * travel.1) / distance_sq;
+    spring.with_velocity(projected_velocity)
 }
 
 fn translate_css(delta: (f64, f64)) -> String {
     format!("translate({}px, {}px)", delta.0, delta.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn momentum_rest_projects_far_enough_to_read_as_a_fling() {
+        let rest = extrapolate_rest((10.0, -5.0), (1000.0, -400.0));
+        assert_eq!(rest, (360.0, -145.0));
+    }
+
+    #[test]
+    fn drag_delta_is_clamped_after_accumulating_from_current_position() {
+        let cfg = DragConfig {
+            constraints: Some(DragConstraints::rect(-20.0, 120.0, -10.0, 80.0)),
+            ..Default::default()
+        };
+        assert_eq!(clamp_delta((130.0, 90.0), &cfg), (120.0, 80.0));
+    }
+
+    #[test]
+    fn projected_release_velocity_is_normalized_to_travel() {
+        let spring = spring_with_projected_velocity(
+            Spring::gentle(),
+            (0.0, 0.0),
+            (100.0, 0.0),
+            (500.0, 250.0),
+        );
+        assert_eq!(spring.velocity, 5.0);
+    }
 }
