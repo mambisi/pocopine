@@ -328,11 +328,22 @@ Emission rules:
 - **LocalHandler** writes are publishable,
 - **ParentModelIn** writes do not echo back out,
 - **SetupSeed** writes do not emit,
-- **ObserveMirror** writes follow LocalHandler semantics unless a
-  future RFC narrows that further.
+- **ObserveMirror** writes do not emit. Re-publishing every
+  observed change would ping-pong whenever the observed root's
+  field is itself driven by a `pp-model` binding from an outer
+  parent. If an author wants an observed change to advance their
+  own two-way contract, they write an explicit handler — which
+  runs under `LocalHandler` and emits.
 
-Multiple writes to the same `#[model]` field in one turn coalesce to
-the final value before the outbound event fires.
+### Flush timing
+
+Writes to the same `#[model]` field within a single **reactive-
+flush microtask** (one `tick::next` drain — the same queue that
+drives the scope proxy's effect rerun path) coalesce to the
+final value before the outbound event fires. Writes that span a
+yield point (an `.await`, a `tick::next`, a spawned task
+boundary) land in separate flush turns and will each fire their
+own `pp:update:<field>` event.
 
 This is the core runtime cost that makes assignment-driven model
 syntax safe rather than deceptively clean.
@@ -582,6 +593,58 @@ Migrate fields like:
 - `placeholder` where it intentionally round-trips,
 
 from `#[prop]` + handwritten emit code to `#[model]`.
+
+### 8.2.1 Hazard: assignment semantics change silently
+
+Moving a field from `#[prop]` to `#[model]` changes the meaning
+of plain assignment. Before: `self.x = 5` on a `#[prop]` field
+is a local write. After: `self.x = 5` on a `#[model]` field
+schedules a `pp:update:x` DOM event once per reactive-flush
+microtask the write survives in.
+
+Specifically, a handler that writes the same model field twice
+within one flush boundary is fine — coalescing collapses it to
+one emit. But a handler that writes, yields at an `.await` or
+`tick::next`, then writes again, will emit **twice** — once per
+flush. That's usually correct (two user-visible state
+transitions = two public announcements), but it's different from
+the pre-migration behaviour where manual `emit_model_field`
+calls controlled the emit cadence explicitly.
+
+Migration checklist per field:
+
+- List every method in the `#[handlers]` block that assigns the
+  migrating field. For each, walk the method body and confirm
+  each assignment is a public-contract advance (not an
+  intermediate state writable during mid-handler bookkeeping).
+- If a handler performs two assignments separated by an `.await`,
+  assess whether both should emit. If not, refactor to compute
+  the final value first, then assign once.
+- Parent tests that assumed a single `pp:update:<field>` per
+  handler invocation may need adjustment if the post-migration
+  handler legitimately emits multiple times.
+
+### 8.2.2 Hazard: multi-field handlers emit N separate events
+
+Components that advance several `#[model]` fields in one handler
+(calendar `value` + `placeholder`, range calendar `start` +
+`end`) previously interleaved manual `emit_model_field` calls.
+Post-migration, each assignment queues its own entry in the
+pending-emit map and the flush fires **N separate** `pp:update:*`
+events on the same microtask.
+
+This is usually fine — each event carries the correct final
+value, and a parent whose `pp-model:start` and `pp-model:end`
+bindings are independent sees both updates in the same tick.
+It's **not** equivalent to a single atomic transaction, though.
+Parents that validate multi-field invariants across a single
+event (e.g. "both endpoints must be set or both cleared") will
+observe a brief inconsistent intermediate state between the two
+emits within the tick.
+
+Components with a strict atomic-advance contract should wait
+for the `#[model(group = "…")]` extension flagged in §11 as
+future work.
 
 ### 8.3 Compat strategy
 
