@@ -22,7 +22,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{emit_model, inject, inject_key, provide};
+use pocopine::{inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 // Provide/inject key for the Root handle. Descendants (Trigger,
@@ -37,7 +37,7 @@ pub struct PineCollapsibleRoot {
     /// Open/closed. Two-way bindable via
     /// `pp-model:open="my_open"` on the tag; Root emits
     /// `pp:update:model` whenever the value changes.
-    #[prop] pub open: bool,
+    #[model] pub open: bool,
 }
 
 #[handlers]
@@ -49,18 +49,15 @@ impl PineCollapsibleRoot {
     pub fn open_self(&mut self) {
         if !self.open {
             self.open = true;
-            emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_model(self.open);
     }
 }
 

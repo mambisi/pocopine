@@ -56,7 +56,7 @@ pub struct OtpSlot {
 pub struct PineOtpField {
     #[prop]
     pub length: u32,
-    #[prop]
+    #[model]
     pub value: String,
     #[prop]
     pub r#type: String,
@@ -164,8 +164,6 @@ impl PineOtpField {
             // focus put.
             let focus_target =
                 h.update(|s| s.pending_focus.take()).unwrap_or(idx as u32);
-            let new_value = h.with(|s| s.value.clone());
-            pocopine::emit_from(&root_for_input, "pp:update:model", new_value);
 
             // `h.update` can trigger reactive flushes that walk
             // the template and blur the focused input. Re-apply
@@ -208,8 +206,6 @@ impl PineOtpField {
                     let focus_target = h2
                         .update(|s| s.pending_focus.take())
                         .unwrap_or(idx as u32);
-                    let new_value = h2.with(|s| s.value.clone());
-                    pocopine::emit_from(&root_for_kd, "pp:update:model", new_value);
                     schedule_focus(root_for_kd.clone(), focus_target);
                 }
                 "ArrowLeft" => {

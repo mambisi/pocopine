@@ -73,7 +73,7 @@ pub struct PineSplitterGroup {
     /// parent-side change), and so authors who only want one-way
     /// binding via `<pine-splitter-group sizes="[25, 50, 25]">`
     /// hit the standard attribute → prop pipeline.
-    #[prop]
+    #[model]
     pub sizes: Vec<f64>,
     pub min_sizes: Vec<f64>,
     pub max_sizes: Vec<f64>,
@@ -191,13 +191,6 @@ impl PineSplitterGroup {
         self.sizes[before_idx] = b_cur + final_delta;
         self.sizes[after_idx] = a_cur - final_delta;
         final_delta
-    }
-
-    /// Emit the current `sizes` on the Group's `pp:update:model`
-    /// channel. Called after every committed resize (drag end +
-    /// keyboard step).
-    pub fn emit_sizes(&self) {
-        emit_model(self.sizes.clone());
     }
 }
 
@@ -409,7 +402,6 @@ impl PineSplitterResizeHandle {
         let after = self.after_idx;
         group.update(|g: &mut PineSplitterGroup| {
             g.resize(before, after, delta);
-            g.emit_sizes();
         });
     }
 }
@@ -512,7 +504,6 @@ fn start_drag(
         });
     }) as Box<dyn FnMut(PointerEvent)>);
 
-    let group_for_up = group;
     let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
         let was_active = GROUP_RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
@@ -525,7 +516,6 @@ fn start_drag(
             false
         });
         if was_active {
-            group_for_up.update(|g: &mut PineSplitterGroup| g.emit_sizes());
         }
     }) as Box<dyn FnMut(PointerEvent)>);
 

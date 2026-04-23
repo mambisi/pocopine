@@ -37,7 +37,7 @@
 
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineAlertDialogRoot>);
@@ -49,7 +49,7 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineAlertDialogRoot.poco", role = "scope")]
 pub struct PineAlertDialogRoot {
-    #[prop] pub open: bool,
+    #[model] pub open: bool,
     /// Alert dialogs are modal by definition — kept as a prop for
     /// consistency with Dialog but changing it would undermine the
     /// "interruptive choice" semantic.
@@ -89,18 +89,15 @@ impl PineAlertDialogRoot {
     pub fn open_dialog(&mut self) {
         if !self.open {
             self.open = true;
-            emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_model(self.open);
     }
 }
 

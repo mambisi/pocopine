@@ -11,7 +11,7 @@
 use crate::datetime::DateValue;
 use crate::range_calendar::state::RangeCalendarState;
 use pocopine::prelude::*;
-use pocopine::{emit_model_field, inject_key, provide};
+use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 inject_key!(pub RANGE_ROOT: Handle<PineRangeCalendarRoot>);
@@ -41,11 +41,11 @@ pub struct RangeCellView {
     display = "contents"
 )]
 pub struct PineRangeCalendarRoot {
-    #[prop]
+    #[model]
     pub start: Option<DateValue>,
-    #[prop]
+    #[model]
     pub end: Option<DateValue>,
-    #[prop]
+    #[model]
     pub placeholder: Option<DateValue>,
     #[prop]
     pub min_value: Option<DateValue>,
@@ -136,7 +136,6 @@ impl PineRangeCalendarRoot {
         let mut s = self.build_state();
         s.next_page();
         self.placeholder = Some(s.cal.placeholder);
-        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -147,7 +146,6 @@ impl PineRangeCalendarRoot {
         let mut s = self.build_state();
         s.prev_page();
         self.placeholder = Some(s.cal.placeholder);
-        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -175,9 +173,6 @@ impl PineRangeCalendarRoot {
         self.start = s.start;
         self.end = s.end;
         self.placeholder = Some(s.cal.placeholder);
-        emit_model_field("start", maybe_date_string(self.start));
-        emit_model_field("end", maybe_date_string(self.end));
-        emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -231,10 +226,6 @@ impl PineRangeCalendarRoot {
         self.invalid = s.is_invalid();
         self.cells = build_cells(s);
     }
-}
-
-fn maybe_date_string(value: Option<DateValue>) -> String {
-    value.map(|d| d.to_string()).unwrap_or_default()
 }
 
 // ── helpers (mostly mirror the single-date Calendar root) ─────

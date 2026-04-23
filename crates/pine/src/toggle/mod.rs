@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[component(template = "PineToggle.poco", role = "interactive")]
 pub struct PineToggle {
     /// Two-way bindable via `pp-model:pressed="bool"`.
-    #[prop] pub pressed: bool,
+    #[model] pub pressed: bool,
     #[prop] pub disabled: bool,
 }
 
@@ -31,10 +31,5 @@ impl PineToggle {
             return;
         }
         self.pressed = !self.pressed;
-        // pp-model listens on `pp:update:model` — the `:field` arg
-        // on `pp-model:pressed="…"` only picks which child prop to
-        // write *into* on parent→child, not the event name the
-        // child emits on child→parent.
-        emit("pp:update:model", self.pressed);
     }
 }

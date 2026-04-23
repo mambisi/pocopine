@@ -60,7 +60,7 @@ inject_key!(ITEM: ScopeId);
 #[component(template = "PineTagsInputRoot.poco", role = "scope", display = "contents")]
 pub struct PineTagsInputRoot {
     /// The list of tags. Bind with `pp-model:values="my_tags"`.
-    #[prop]
+    #[model]
     pub values: Vec<String>,
     /// When `false` (default), `add_tag` silently drops values
     /// that already exist in the list.
@@ -98,14 +98,12 @@ impl PineTagsInputRoot {
             return;
         }
         self.values.push(trimmed.to_string());
-        emit_model(self.values.clone());
     }
 
     /// Remove the first tag whose value equals `v`.
     pub fn remove_value(&mut self, v: String) {
         if let Some(i) = self.values.iter().position(|x| x == &v) {
             self.values.remove(i);
-            emit_model(self.values.clone());
         }
     }
 
@@ -113,7 +111,6 @@ impl PineTagsInputRoot {
     /// Backspace-while-empty.
     pub fn remove_last(&mut self) {
         if self.values.pop().is_some() {
-            emit_model(self.values.clone());
         }
     }
 
@@ -122,7 +119,6 @@ impl PineTagsInputRoot {
             return;
         }
         self.values.clear();
-        emit_model(self.values.clone());
     }
 }
 

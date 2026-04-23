@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSwitch.poco", role = "interactive")]
 pub struct PineSwitch {
-    #[prop] pub checked: bool,
+    #[model] pub checked: bool,
     #[prop] pub disabled: bool,
 }
 
@@ -26,6 +26,5 @@ impl PineSwitch {
             return;
         }
         self.checked = !self.checked;
-        emit("pp:update:model", self.checked);
     }
 }

@@ -27,7 +27,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{emit_model, inject, inject_key, provide, watch_scope_field};
+use pocopine::{inject, inject_key, provide, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
 inject_key!(ROOT: Handle<PineTabsRoot>);
@@ -37,7 +37,7 @@ inject_key!(ROOT: Handle<PineTabsRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTabsRoot.poco", role = "panel")]
 pub struct PineTabsRoot {
-    #[prop] pub value: String,
+    #[model] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Flows into
     /// `aria-orientation` on List and dictates the roving
     /// nav-axis.
@@ -61,12 +61,7 @@ impl PineTabsRoot {
 
     pub fn select(&mut self, value: String) {
         if self.value != value {
-            self.value = value.clone();
-            // pp-model always listens for `pp:update:model`; the
-            // `:field` arg on `pp-model:value="…"` only picks the
-            // child prop on parent→child, not the event name on
-            // child→parent.
-            emit_model(value);
+            self.value = value;
         }
     }
 }
@@ -166,4 +161,3 @@ impl PineTabsContent {
         });
     }
 }
-

@@ -44,7 +44,7 @@ inject_key!(DESCRIPTION_ID: String);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDialogRoot.poco", role = "scope")]
 pub struct PineDialogRoot {
-    #[prop] pub open: bool,
+    #[model] pub open: bool,
     #[prop] pub modal: bool,
     #[prop] pub dismiss_on_overlay: bool,
     #[prop] pub dismiss_on_escape: bool,
@@ -76,29 +76,18 @@ impl PineDialogRoot {
         provide(&DESCRIPTION_ID, self.description_id.clone());
     }
 
-    // Note: emit from Root's own element (`pp-ref="root"`) via
-    // `emit_from`, not plain `emit`. Plain `emit` uses
-    // `current_el` which during a close initiated from Content
-    // (teleported to <body>) isn't in Root's bubble path; the
-    // pp-model listener on `<pine-dialog-root>` would miss the
-    // event. Dispatching from Root's own element guarantees the
-    // listener catches it regardless of who triggered the
-    // handler (Trigger, Content.escape, Close, Overlay).
     pub fn open_dialog(&mut self) {
         if !self.open {
             self.open = true;
-            pocopine::emit_model(true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            pocopine::emit_model(false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        pocopine::emit_model(self.open);
     }
 }
 

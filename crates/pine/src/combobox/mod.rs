@@ -38,7 +38,7 @@
 use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{
-    current_scope_id, emit_model, inject, inject_key, provide, refs, watch_scope_field,
+    current_scope_id, inject, inject_key, provide, refs, watch_scope_field,
 };
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -53,9 +53,9 @@ inject_key!(ROOT: Handle<PineComboboxRoot>);
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineComboboxRoot.poco", role = "scope", display = "contents")]
 pub struct PineComboboxRoot {
-    #[prop]
+    #[model]
     pub open: bool,
-    #[prop]
+    #[model]
     pub value: String,
     #[prop]
     pub default_value: String,
@@ -104,8 +104,7 @@ impl PineComboboxRoot {
 
     pub fn select_value(&mut self, value: String, label: String) {
         if self.value != value {
-            self.value = value.clone();
-            emit_model(value);
+            self.value = value;
         }
         // Reflect the picked label in the input so the user
         // sees what they selected.

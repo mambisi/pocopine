@@ -42,7 +42,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -70,7 +70,7 @@ thread_local! {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandRoot.poco", role = "scope", display = "contents")]
 pub struct PineCommandRoot {
-    #[prop]
+    #[model]
     pub open: bool,
     /// Live search query. Mirrored into Items' `visible` via
     /// `watch_scope_field`, same pattern as PineCombobox.
@@ -123,7 +123,6 @@ impl PineCommandRoot {
             self.open = true;
             self.query = String::new();
             self.has_matches = true;
-            emit_model(true);
         }
     }
 
@@ -131,7 +130,6 @@ impl PineCommandRoot {
         if self.open {
             self.open = false;
             self.query = String::new();
-            emit_model(false);
         }
     }
 

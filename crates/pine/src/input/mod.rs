@@ -33,7 +33,7 @@
 //! keeps tracking its own state.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, emit_model, refs};
+use pocopine::{current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
@@ -45,7 +45,7 @@ pub struct PineInput {
     #[prop] pub r#type: String,
     /// Current value. Two-way bindable via
     /// `pp-model:value="my_field"`.
-    #[prop] pub value: String,
+    #[model] pub value: String,
     #[prop] pub placeholder: String,
     #[prop] pub name: String,
     #[prop] pub disabled: bool,
@@ -129,8 +129,7 @@ impl PineInput {
         self.dirty = true;
         self.filled = !v.is_empty();
         if self.value != v {
-            self.value = v.clone();
-            emit_model(v);
+            self.value = v;
         }
     }
 }

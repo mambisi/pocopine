@@ -27,7 +27,6 @@
 //! - `data-disabled` — forwarded.
 
 use crate::datetime::DateValue;
-use pocopine::emit_model_field;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +37,9 @@ use serde::{Deserialize, Serialize};
     display = "contents"
 )]
 pub struct PineDatePicker {
-    #[prop]
+    #[model]
     pub value: Option<DateValue>,
-    #[prop]
+    #[model]
     pub placeholder: Option<DateValue>,
     #[prop]
     pub placeholder_text: String,
@@ -95,7 +94,6 @@ impl PineDatePicker {
     /// user-initiated deselect (value becomes empty again).
     #[watch(value)]
     fn on_value_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
-        emit_model_field("value", maybe_date_string(new));
         if !self.close_on_select {
             return;
         }
@@ -107,8 +105,4 @@ impl PineDatePicker {
         }
         self.open = false;
     }
-}
-
-fn maybe_date_string(value: Option<DateValue>) -> String {
-    value.map(|d| d.to_string()).unwrap_or_default()
 }

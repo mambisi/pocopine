@@ -55,10 +55,10 @@ pub struct PineTreeRoot {
     pub r#type: String,
     /// Currently selected value for `type="single"`. `""` for
     /// "no selection".
-    #[prop]
+    #[model]
     pub value: String,
     /// Currently selected values for `type="multiple"`.
-    #[prop]
+    #[model]
     pub values: Vec<String>,
     /// Expanded item values. Serialized as Vec for the prop /
     /// serde round-trip; membership checks are linear scans
@@ -133,12 +133,10 @@ impl PineTreeRoot {
                 } else {
                     self.values.push(v);
                 }
-                emit_model(self.values.clone());
             }
             _ => {
                 if self.value != v {
-                    self.value = v.clone();
-                    emit_model(v);
+                    self.value = v;
                 }
             }
         }

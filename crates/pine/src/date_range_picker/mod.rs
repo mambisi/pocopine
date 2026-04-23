@@ -22,7 +22,6 @@
 //! - `close_on_select` — close after `end` commits. `true` by
 //!   default.
 
-use pocopine::emit_model_field;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::datetime::DateValue;
@@ -34,11 +33,11 @@ use crate::datetime::DateValue;
     display = "contents"
 )]
 pub struct PineDateRangePicker {
-    #[prop]
+    #[model]
     pub start: Option<DateValue>,
-    #[prop]
+    #[model]
     pub end: Option<DateValue>,
-    #[prop]
+    #[model]
     pub placeholder: Option<DateValue>,
     #[prop]
     pub placeholder_text: String,
@@ -111,10 +110,6 @@ impl PineDateRangePicker {
     #[watch(end)]
     fn on_end_change(&mut self, new: Option<DateValue>, prev: Option<Option<DateValue>>) {
         self.recompute_label();
-        // Re-emit so the author's `pp-model:end="…"` sees the
-        // change even when it originated inside the inner range
-        // calendar (which writes the prop directly via pp-model).
-        emit_model_field("end", maybe_date_string(new));
         if !self.close_on_select || !self.open {
             return;
         }
@@ -128,9 +123,8 @@ impl PineDateRangePicker {
     }
 
     #[watch(start)]
-    fn on_start_change(&mut self, new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
+    fn on_start_change(&mut self, _new: Option<DateValue>, _prev: Option<Option<DateValue>>) {
         self.recompute_label();
-        emit_model_field("start", maybe_date_string(new));
     }
 }
 
@@ -146,8 +140,4 @@ impl PineDateRangePicker {
             (Some(s), Some(e)) => format!("{}{}{}", s, self.separator, e),
         };
     }
-}
-
-fn maybe_date_string(value: Option<DateValue>) -> String {
-    value.map(|d| d.to_string()).unwrap_or_default()
 }

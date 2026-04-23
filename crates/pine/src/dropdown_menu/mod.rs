@@ -474,7 +474,7 @@ impl PineDropdownMenuGroup {
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuCheckboxItem.poco", role = "item")]
 pub struct PineDropdownMenuCheckboxItem {
-    #[prop] pub state: String,
+    #[model] pub state: String,
     #[prop] pub disabled: bool,
     /// Computed mirror of `state != "unchecked"` for
     /// ItemIndicator's pp-if. Kept as a bool so
@@ -531,7 +531,6 @@ impl PineDropdownMenuCheckboxItem {
             "checked" => "unchecked".into(),
             _ => "checked".into(),
         };
-        emit("pp:update:model", self.state.clone());
 
         let prevented = dispatch_pp_select();
         if prevented {
@@ -587,7 +586,7 @@ impl PineDropdownMenuItemIndicator {
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuRadioGroup.poco", role = "panel", display = "contents")]
 pub struct PineDropdownMenuRadioGroup {
-    #[prop] pub value: String,
+    #[model] pub value: String,
 }
 
 // Provide/inject key for a RadioGroup's scope id. RadioItems
@@ -656,9 +655,7 @@ impl PineDropdownMenuRadioItem {
         if self.disabled {
             return;
         }
-        // Write the new value into the group; the group's
-        // pp-model-bound parent picks this up via the
-        // pp:update:model event we emit next.
+        // Write the new value into the group.
         if let Some(group) = inject(&RADIO_GROUP) {
             if let Some(scope) = Scope::find(group) {
                 let new_value = self.value.clone();
@@ -672,7 +669,6 @@ impl PineDropdownMenuRadioItem {
                 }
             }
         }
-        emit("pp:update:model", self.value.clone());
 
         let prevented = dispatch_pp_select();
         if prevented {

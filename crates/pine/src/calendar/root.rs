@@ -55,10 +55,10 @@ pub struct CalendarMonthView {
 pub struct PineCalendarRoot {
     // ── authored config ─────────────────────────────────────
     /// Visible-month anchor. `None` falls back to today.
-    #[prop] pub placeholder: Option<DateValue>,
+    #[model] pub placeholder: Option<DateValue>,
     /// Controlled selected date. `None` = unselected. Two-way
     /// bindable via `pp-model:value="…"`.
-    #[prop] pub value: Option<DateValue>,
+    #[model] pub value: Option<DateValue>,
     /// Minimum selectable date (inclusive). `None` = no bound.
     #[prop] pub min_value: Option<DateValue>,
     /// Maximum selectable date (inclusive). `None` = no bound.
@@ -165,7 +165,6 @@ impl PineCalendarRoot {
         let mut s = self.build_state();
         s.next_page();
         self.placeholder = Some(s.placeholder);
-        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -177,7 +176,6 @@ impl PineCalendarRoot {
         let mut s = self.build_state();
         s.prev_page();
         self.placeholder = Some(s.placeholder);
-        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 
@@ -198,13 +196,6 @@ impl PineCalendarRoot {
         s.select_date(date);
         self.value = s.selected;
         self.placeholder = Some(s.placeholder);
-        // Authors conventionally bind the pick via
-        // `pp-model:value="…"`, which listens for
-        // `pp:update:value` on the new per-field channel — the
-        // unadorned `emit_model` (→ `pp:update:model`) wouldn't
-        // reach them.
-        pocopine::emit_model_field("value", maybe_date_string(self.value));
-        pocopine::emit_model_field("placeholder", maybe_date_string(self.placeholder));
         self.apply(&s);
     }
 }
@@ -250,9 +241,6 @@ impl PineCalendarRoot {
     }
 }
 
-fn maybe_date_string(value: Option<DateValue>) -> String {
-    value.map(|d| d.to_string()).unwrap_or_default()
-}
 
 // ── view-model helpers ──────────────────────────────────────────
 

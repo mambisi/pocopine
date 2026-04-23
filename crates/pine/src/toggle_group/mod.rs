@@ -41,9 +41,9 @@ pub struct PineToggleGroupRoot {
     /// `"single"` (default) or `"multiple"`.
     #[prop] pub r#type: String,
     /// Single-mode current value. `""` when nothing is pressed.
-    #[prop] pub value: String,
+    #[model] pub value: String,
     /// Multiple-mode current values.
-    #[prop] pub values: Vec<String>,
+    #[model] pub values: Vec<String>,
     /// `"horizontal"` (default) / `"vertical"` — flows to
     /// `data-orientation` for styling. Roving is `.both` either
     /// way so keyboard nav works without orientation-specific
@@ -81,12 +81,6 @@ impl PineToggleGroupRoot {
                 } else {
                     self.values.push(item_value);
                 }
-                // pp-model listens on `pp:update:model` only; the
-                // `:field` arg on `pp-model:values="…"` picks the
-                // child prop on parent→child but not the event
-                // name on child→parent. The event detail carries
-                // the new value (Vec<String> here).
-                emit("pp:update:model", self.values.clone());
             }
             _ => {
                 // single — click on the currently-pressed item
@@ -96,7 +90,6 @@ impl PineToggleGroupRoot {
                 } else {
                     self.value = item_value;
                 }
-                emit("pp:update:model", self.value.clone());
             }
         }
     }

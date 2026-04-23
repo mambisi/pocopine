@@ -29,7 +29,7 @@ use crate::compound;
 use crate::overlay;
 use pocopine::prelude::*;
 use pocopine::{
-    current_scope_id, emit_model_field, inject, inject_key, provide, watch_scope_field,
+    current_scope_id, inject, inject_key, provide, watch_scope_field,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -43,7 +43,7 @@ inject_key!(ROOT: Handle<PinePopoverRoot>);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PinePopoverRoot.poco", role = "scope")]
 pub struct PinePopoverRoot {
-    #[prop] pub open: bool,
+    #[model] pub open: bool,
     /// Non-modal by default — matches reka-ui. Set `true` to get
     /// a focus trap + scroll lock via the shared overlay helper.
     #[prop] pub modal: bool,
@@ -71,18 +71,15 @@ impl PinePopoverRoot {
     pub fn open_popover(&mut self) {
         if !self.open {
             self.open = true;
-            emit_model_field("open", true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_model_field("open", false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_model_field("open", self.open);
     }
 }
 

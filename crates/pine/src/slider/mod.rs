@@ -32,7 +32,7 @@
 //! range sliders wait for a follow-up.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs};
+use pocopine::{current_scope_id, inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -64,7 +64,7 @@ thread_local! {
 pub struct PineSliderRoot {
     /// Current value. Two-way bindable via
     /// `pp-model:value="my_volume"` on the tag.
-    #[prop]
+    #[model]
     pub value: f64,
     #[prop]
     pub min: f64,
@@ -146,8 +146,7 @@ impl PineSliderRoot {
         self.percent = pct.clamp(0.0, 100.0);
     }
 
-    /// Clamp + snap to the nearest `step` and commit. Emits
-    /// `pp:update:model` when the value actually changed.
+    /// Clamp + snap to the nearest `step` and commit.
     pub fn set_value(&mut self, v: f64) {
         if self.disabled {
             return;
@@ -158,22 +157,12 @@ impl PineSliderRoot {
         let final_v = snapped.clamp(self.min, self.max);
         if (self.value - final_v).abs() > f64::EPSILON {
             self.value = final_v;
-            emit_value_update(final_v);
         }
     }
 
     pub fn step_by(&mut self, multiplier: f64) {
         self.set_value(self.value + self.step * multiplier);
     }
-}
-
-/// Emit `pp:update:model` from Root's own element so a parent's
-/// `pp-model:value` catches the change regardless of which Slider
-/// sub-part triggered it.
-fn emit_value_update(value: f64) {
-    let Some(scope) = current_scope_id() else { return };
-    let Some(root_el) = refs::get_on(scope, "root") else { return };
-    pocopine::emit_from(&root_el, "pp:update:model", value);
 }
 
 fn install_pointer(

@@ -45,9 +45,9 @@ pub struct PineAccordionRoot {
     /// item must stay open (clicking the open item is a no-op).
     #[prop] pub collapsible: bool,
     /// `type="single"` state. `""` when all closed.
-    #[prop] pub value: String,
+    #[model] pub value: String,
     /// `type="multiple"` state.
-    #[prop] pub values: Vec<String>,
+    #[model] pub values: Vec<String>,
 }
 
 impl Default for PineAccordionRoot {
@@ -76,9 +76,6 @@ impl PineAccordionRoot {
                 } else {
                     self.values.push(item_value);
                 }
-                // pp-model listens on `pp:update:model` only —
-                // see the matching note in tabs::emit_from_self.
-                emit("pp:update:model", self.values.clone());
             }
             _ => {
                 // single
@@ -90,7 +87,6 @@ impl PineAccordionRoot {
                 } else {
                     self.value = item_value;
                 }
-                emit("pp:update:model", self.value.clone());
             }
         }
     }

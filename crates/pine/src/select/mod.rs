@@ -42,7 +42,7 @@
 use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{
-    current_scope_id, emit_model, focus, inject, inject_key, provide, refs, watch_scope_field,
+    current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,10 +59,10 @@ inject_key!(ROOT: Handle<PineSelectRoot>);
 #[component(template = "PineSelectRoot.poco", role = "scope", display = "contents")]
 pub struct PineSelectRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`.
-    #[prop]
+    #[model]
     pub open: bool,
     /// Selected value. Two-way bindable via `pp-model:value="current"`.
-    #[prop]
+    #[model]
     pub value: String,
     /// Initial value applied on mount if `value` is still blank —
     /// mirrors the native `<select>` `defaultValue` convention.
@@ -125,8 +125,7 @@ impl PineSelectRoot {
 
     pub fn select_value(&mut self, value: String) {
         if self.value != value {
-            self.value = value.clone();
-            emit_model(value);
+            self.value = value;
         }
         self.open = false;
     }

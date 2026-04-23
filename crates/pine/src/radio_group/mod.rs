@@ -43,7 +43,7 @@ inject_key!(CHECKED_OWNER: ScopeId);
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineRadioGroupRoot.poco", role = "panel")]
 pub struct PineRadioGroupRoot {
-    #[prop] pub value: String,
+    #[model] pub value: String,
     /// `"horizontal"` (default) or `"vertical"`. Drives both the
     /// `data-orientation` attribute and the roving direction —
     /// horizontal uses Arrow-Left / Arrow-Right, vertical uses
@@ -127,9 +127,7 @@ impl PineRadioGroupItem {
         });
     }
 
-    /// Click handler — wires the selected value into Root and
-    /// emits `pp:update:model` from Root's element so
-    /// `pp-model:value` on the Root tag picks it up.
+    /// Click handler — wires the selected value into Root.
     pub fn select(&mut self) {
         if self.disabled {
             return;
@@ -151,12 +149,6 @@ impl PineRadioGroupItem {
             handle.update(|g: &mut PineRadioGroupRoot| {
                 g.value = new_value;
             });
-        }
-        // Emit from Root's element so the pp-model listener on the
-        // <pine-radio-group-root> tag catches it — matches the
-        // Dialog / AlertDialog pattern.
-        if let Some(root_el) = pocopine_core::walker::find_element_for_scope(root) {
-            pocopine::emit_from(&root_el, "pp:update:model", self.value.clone());
         }
     }
 }

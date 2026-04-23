@@ -43,7 +43,7 @@ inject_key!(ROOT: Handle<PinePasswordToggleFieldRoot>);
 pub struct PinePasswordToggleFieldRoot {
     /// Whether the password is currently shown. Two-way
     /// bindable via `pp-model:visible`.
-    #[prop] pub visible: bool,
+    #[model] pub visible: bool,
 }
 
 #[handlers]
@@ -54,7 +54,6 @@ impl PinePasswordToggleFieldRoot {
 
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
-        emit("pp:update:model", self.visible);
     }
 }
 

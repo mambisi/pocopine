@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineCheckbox.poco", role = "interactive")]
 pub struct PineCheckbox {
-    #[prop] pub state: String,
+    #[model] pub state: String,
     #[prop] pub disabled: bool,
 }
 
@@ -43,6 +43,5 @@ impl PineCheckbox {
             "checked" => "unchecked".into(),
             _ => "checked".into(), // unchecked OR indeterminate → checked
         };
-        emit("pp:update:model", self.state.clone());
     }
 }
