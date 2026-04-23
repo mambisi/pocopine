@@ -26,6 +26,7 @@ pub mod animate;
 pub mod drag;
 pub mod easing;
 pub mod gesture;
+pub mod scroll;
 pub mod spring;
 pub mod stagger;
 
@@ -35,5 +36,6 @@ pub use easing::{sample_to_linear_easing, Easing};
 pub use gesture::{
     focus, hover, pan, press, GestureHandle, PanConfig, PanEvent, PressEndHandler,
 };
+pub use scroll::{on_view, scroll_progress, ScrollHandle, ViewConfig};
 pub use spring::Spring;
 pub use stagger::{stagger, Origin, Stagger};

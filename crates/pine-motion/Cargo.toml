@@ -18,11 +18,15 @@ js-sys = { workspace = true }
 version = "0.3"
 features = [
     "CssStyleDeclaration",
+    "Document",
     "Element",
     "Event",
     "EventTarget",
     "FocusEvent",
     "HtmlElement",
+    "IntersectionObserver",
+    "IntersectionObserverEntry",
+    "IntersectionObserverInit",
     "Node",
     "Performance",
     "PointerEvent",
