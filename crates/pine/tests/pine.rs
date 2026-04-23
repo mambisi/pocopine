@@ -279,12 +279,12 @@ async fn switch_toggles_aria_and_emits_model_event() {
         }));
     let target: &web_sys::EventTarget = tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:checked", cb.as_ref().unchecked_ref())
         .unwrap();
 
     btn.clone().dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
-    assert_eq!(last.take(), Some(true), "pp:update:model fired with true");
+    assert_eq!(last.take(), Some(true), "pp:update:checked fired with true");
     assert_eq!(btn.get_attribute("aria-checked").as_deref(), Some("true"));
     assert_eq!(btn.get_attribute("data-state").as_deref(), Some("checked"));
 
@@ -2403,7 +2403,7 @@ async fn toggle_click_flips_state_and_emits() {
         let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
         *s.borrow_mut() = ce.detail().as_bool();
     });
-    tag.add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+    tag.add_event_listener_with_callback("pp:update:pressed", cb.as_ref().unchecked_ref())
         .unwrap();
     cb.forget();
 
@@ -2553,14 +2553,14 @@ async fn radio_group_click_selects_and_emits() {
         .unwrap()
         .expect("root element");
 
-    // Listen for the pp:update:model event on the Root tag.
+    // Listen for the pp:update:value event on the Root tag.
     let emitted = Rc::new(RefCell::new(None::<String>));
     let em = emitted.clone();
     let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
         let ce: web_sys::CustomEvent = ev.dyn_into().unwrap();
         *em.borrow_mut() = ce.detail().as_string();
     });
-    root.add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+    root.add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
     cb.forget();
 
@@ -2577,7 +2577,7 @@ async fn radio_group_click_selects_and_emits() {
     assert_eq!(
         emitted.borrow().as_deref(),
         Some("b"),
-        "pp:update:model fires with selected value"
+        "pp:update:value fires with selected value"
     );
 
     // States reflected on buttons.
@@ -2974,7 +2974,7 @@ async fn otp_field_types_digits_and_emits_value_updates() {
         .unwrap();
     assert_eq!(slots.length(), 4, "4 slots for length=4");
 
-    // Listen for pp:update:model bubbling from the OTP field.
+    // Listen for pp:update:value bubbling from the OTP field.
     let last_value: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
     let last = last_value.clone();
     let cb: Closure<dyn FnMut(web_sys::Event)> = Closure::wrap(Box::new(move |ev: web_sys::Event| {
@@ -2983,7 +2983,7 @@ async fn otp_field_types_digits_and_emits_value_updates() {
     }));
     let target: &web_sys::EventTarget = tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     // Helper: simulate typing `ch` into the slot at `index`.
@@ -3272,7 +3272,7 @@ async fn slider_keyboard_steps_and_emits_value() {
     }));
     let target: &web_sys::EventTarget = root.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     // Helper: dispatch a keydown with the given key on the thumb's
@@ -3360,7 +3360,7 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     // Compute a click position ~70% across the slider's width.
@@ -3431,7 +3431,7 @@ async fn slider_drag_updates_value_continuously() {
     }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     let rect = root_inner.get_bounding_client_rect();
@@ -3528,7 +3528,7 @@ async fn select_click_item_emits_value_and_closes() {
     }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     // Initial: closed, aria-expanded=false.
@@ -3563,7 +3563,7 @@ async fn select_click_item_emits_value_and_closes() {
     assert_eq!(
         last.borrow().as_deref(),
         Some("b"),
-        "pp:update:model emitted the selected value"
+        "pp:update:value emitted the selected value"
     );
     // Listbox closes (pp-if unmounts the portal).
     assert!(
@@ -3687,7 +3687,7 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
     }));
     let target: &web_sys::EventTarget = root_tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     // Focus the input — opens the listbox.
@@ -5413,7 +5413,7 @@ async fn input_seeds_value_and_emits_model_on_type() {
         }));
     let target: &web_sys::EventTarget = tag.as_ref();
     target
-        .add_event_listener_with_callback("pp:update:model", cb.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("pp:update:value", cb.as_ref().unchecked_ref())
         .unwrap();
 
     input.set_value("hello world");
@@ -5426,7 +5426,7 @@ async fn input_seeds_value_and_emits_model_on_type() {
     assert_eq!(
         last.borrow().clone(),
         Some("hello world".into()),
-        "pp:update:model fired with new value"
+        "pp:update:value fired with new value"
     );
 
     cb.forget();
