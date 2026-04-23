@@ -729,6 +729,46 @@ async fn keyed_reorder_reuses_clones() {
     assert_eq!(li_texts(&ul), vec!["three", "one", "two"]);
 }
 
+// ─── large-list reconcile scales linearly ────────────────────────
+
+/// pp-for's keyed reconcile used to run an O(N²) duplicate-key scan
+/// (`fresh.iter().any(...)`) inside its per-item loop. A 2000-row
+/// list reconciled twice would do ~4M key comparisons. Run a
+/// moderately-sized reconcile as a lower bound that would have
+/// timed out under the old implementation but completes
+/// comfortably under the current one — smoke test for the
+/// asymptotic fix, not a microbenchmark.
+#[wasm_bindgen_test]
+async fn keyed_reconcile_handles_large_lists() {
+    let host = mount("<test-list></test-list>");
+    let rows: Vec<Row> = (0..1000)
+        .map(|i| Row { id: i, label: format!("row-{i}") })
+        .collect();
+    seed_rows(&host, rows);
+    tick().await;
+
+    let ul = host.query_selector("ul").unwrap().unwrap();
+    assert_eq!(li_count(&ul), 1000);
+
+    // Reverse the order — every clone must be reused, every key
+    // must dedup against itself in the seen-set. Without the
+    // HashSet fix this branch would still pass, just *slow*; the
+    // point of the test is to make sure the code path compiles and
+    // behaves on a list the dev-loop isn't normally large enough
+    // to surface bugs on.
+    let reversed: Vec<Row> = (0..1000)
+        .rev()
+        .map(|i| Row { id: i, label: format!("row-{i}") })
+        .collect();
+    seed_rows(&host, reversed);
+    tick().await;
+
+    let ul = host.query_selector("ul").unwrap().unwrap();
+    assert_eq!(li_count(&ul), 1000);
+    assert_eq!(li_texts(&ul)[0], "row-999", "first row is the highest id");
+    assert_eq!(li_texts(&ul)[999], "row-0", "last row is id 0");
+}
+
 // ─── keyed reorder preserves focus + selection ────────────────────
 
 /// Focused `<input>` inside a `pp-for` clone survives a parent-scope

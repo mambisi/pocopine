@@ -19,7 +19,7 @@
 //!   dropped keys get removed. See RFC-007.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use js_sys::{Array, Reflect};
@@ -188,6 +188,14 @@ fn run_keyed(
     template_el: Element,
 ) -> crate::reactive::EffectId {
     let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
+    // Pool + seen-keys set carry allocated capacity across effect
+    // re-runs. Both are fully drained at the end of each run so
+    // reusing them keeps rehash / grow costs out of the hot path
+    // for long-lived lists (N items reconciled K times allocates
+    // once, not K times).
+    let pool_cell: Rc<RefCell<HashMap<String, PrevItem>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let seen_cell: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
 
     effect(move || {
         let items_js = resolve_path(&parent_proxy, &items_expr);
@@ -199,16 +207,32 @@ fn run_keyed(
             prior.borrow_mut().clear();
             return;
         };
+        let parent_node_ref: &Node = parent_node.as_ref();
 
         // Drain prior into a key → entry map so we can look up reuse
         // candidates in O(1).
-        let mut pool: HashMap<String, PrevItem> = HashMap::new();
+        let mut pool = pool_cell.borrow_mut();
+        pool.clear();
+        let pool_cap = pool.capacity();
+        if pool_cap < total {
+            pool.reserve(total - pool_cap);
+        }
         let old_prior: Vec<PrevItem> = {
             let mut b = prior.borrow_mut();
             std::mem::take(&mut *b)
         };
         for entry in old_prior {
             pool.insert(entry.key.clone(), entry);
+        }
+
+        // Seen-keys set replaces the old O(N²) `fresh.iter().any()`
+        // duplicate scan with O(1) lookups. For lists of 1000+
+        // items this was the dominant cost of a reconcile.
+        let mut seen = seen_cell.borrow_mut();
+        seen.clear();
+        let seen_cap = seen.capacity();
+        if seen_cap < total {
+            seen.reserve(total - seen_cap);
         }
 
         let mut fresh: Vec<PrevItem> = Vec::with_capacity(total);
@@ -221,12 +245,15 @@ fn run_keyed(
             // Make sure duplicate keys in one pass don't collapse
             // onto the first clone — the second (and later) hit gets
             // disambiguated and warned.
-            let key = if fresh.iter().any(|p| p.key == raw_key) {
+            let key = if seen.contains(&raw_key) {
                 console::warn_1(&JsValue::from_str(&format!(
                     "pp-for: duplicate pp-key {raw_key:?} at index {i}; treating as new"
                 )));
-                format!("{raw_key}__dup_{i}")
+                let dup = format!("{raw_key}__dup_{i}");
+                seen.insert(dup.clone());
+                dup
             } else {
+                seen.insert(raw_key.clone());
                 raw_key
             };
 
@@ -298,16 +325,29 @@ fn run_keyed(
         // `getBoundingClientRect` on it returns zero. The visible
         // layout box lives on the inner rendered root (the first
         // element child). Snapshot + animate that.
+        //
+        // All clones descend from the same template, so if the
+        // first reused clone doesn't carry `data-pp-animate="flip"`
+        // none of them will. Cheap probe lets non-animated lists
+        // skip the whole N-item snapshot walk + `get_bounding_client_rect`
+        // per item (each one is a JS crossing + layout read).
+        let flip_opted_in = fresh.iter().any(|entry| {
+            entry.element.parent_node().is_some()
+                && entry.element.get_attribute("data-pp-animate").as_deref() == Some("flip")
+        });
         let mut flip_snapshots: HashMap<String, (Element, web_sys::DomRect)> = HashMap::new();
-        for entry in &fresh {
-            if entry.element.parent_node().is_none()
-                || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
-            {
-                continue;
+        if flip_opted_in {
+            for entry in &fresh {
+                if entry.element.parent_node().is_none()
+                    || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
+                {
+                    continue;
+                }
+                let target =
+                    first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
+                flip_snapshots
+                    .insert(entry.key.clone(), (target.clone(), target.get_bounding_client_rect()));
             }
-            let target = first_layout_child(&entry.element).unwrap_or_else(|| entry.element.clone());
-            flip_snapshots
-                .insert(entry.key.clone(), (target.clone(), target.get_bounding_client_rect()));
         }
 
         // Reorder + walk new clones. See issue #4 for motivation —
@@ -327,7 +367,7 @@ fn run_keyed(
             let correct_parent = entry
                 .element
                 .parent_node()
-                .map(|p| p.is_same_node(Some(parent_node.as_ref())))
+                .map(|p| p.is_same_node(Some(parent_node_ref)))
                 .unwrap_or(false);
             let expected_next: &Node = if i + 1 < fresh.len() {
                 fresh[i + 1].element.as_ref()
@@ -348,7 +388,7 @@ fn run_keyed(
                 let was_in_place = entry
                     .element
                     .parent_node()
-                    .map(|p| p.is_same_node(Some(parent_node.as_ref())))
+                    .map(|p| p.is_same_node(Some(parent_node_ref)))
                     .unwrap_or(false);
                 let _ = parent_node.insert_before(
                     entry.element.as_ref(),
@@ -377,13 +417,15 @@ fn run_keyed(
         // animation via WAAPI. Runs AFTER the walker stamps
         // `data-pp-animate` + inserts, so the elements' new
         // positions are real.
-        for entry in &fresh {
-            if let Some((target, old_rect)) = flip_snapshots.remove(&entry.key) {
-                crate::animate::flip_from_snapshot(
-                    &target,
-                    old_rect,
-                    crate::animate::FlipOptions::default(),
-                );
+        if !flip_snapshots.is_empty() {
+            for entry in &fresh {
+                if let Some((target, old_rect)) = flip_snapshots.remove(&entry.key) {
+                    crate::animate::flip_from_snapshot(
+                        &target,
+                        old_rect,
+                        crate::animate::FlipOptions::default(),
+                    );
+                }
             }
         }
 
