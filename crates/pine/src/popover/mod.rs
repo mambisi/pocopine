@@ -28,7 +28,9 @@
 use crate::compound;
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, emit_model, inject, inject_key, provide, watch_scope_field};
+use pocopine::{
+    current_scope_id, emit_model_field, inject, inject_key, provide, watch_scope_field,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -69,18 +71,18 @@ impl PinePopoverRoot {
     pub fn open_popover(&mut self) {
         if !self.open {
             self.open = true;
-            emit_model(true);
+            emit_model_field("open", true);
         }
     }
     pub fn close(&mut self) {
         if self.open {
             self.open = false;
-            emit_model(false);
+            emit_model_field("open", false);
         }
     }
     pub fn toggle(&mut self) {
         self.open = !self.open;
-        emit_model(self.open);
+        emit_model_field("open", self.open);
     }
 }
 

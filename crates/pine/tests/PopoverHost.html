@@ -1,0 +1,12 @@
+<div>
+  <button class="ph-open" @click="open_it">open</button>
+  <span class="ph-state" pp-text="popover_open ? 'open' : 'closed'"></span>
+  <pine-popover-root pp-model:open="popover_open">
+    <pine-popover-trigger class="ph-trigger">toggle</pine-popover-trigger>
+    <pine-popover-portal>
+      <pine-popover-content>
+        <button class="ph-inside">OK</button>
+      </pine-popover-content>
+    </pine-popover-portal>
+  </pine-popover-root>
+</div>

@@ -8,6 +8,7 @@ pub use pocopine_core::{animate, focus, id, refs, scroll_lock, text, tick};
 pub use pocopine_core::{
     batch, computed, current_effect, current_scope_id, dispatch_event, effect, effect_with,
     emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
+    emit_model_field,
     fetch, flush_sync, inject, on_cleanup, provide, release, run, run_now, rw_signal,
     set_auto_flush, signal, store, this, trigger_scope, watch, watch_field, watch_scope_field,
     watch_scope_field_now, App, Body, Component, ComponentState, Computed, Doc, EffectId,
@@ -25,6 +26,7 @@ pub mod prelude {
     pub use crate::{
         batch, component, computed, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
+        emit_model_field,
         handlers, inject_key, on_cleanup, run, rw_signal, signal, store, this, watch,
         App, Component, ComponentState, Computed, Handle, InjectKey, RwSignal, Scope,
         ScopeId, ServerError, ServerResult, Setter, Signal, Store,

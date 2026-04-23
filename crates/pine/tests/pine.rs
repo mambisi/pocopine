@@ -1487,6 +1487,129 @@ async fn popover_opens_anchors_and_closes_on_escape() {
 // ─── PineDialog (pp-model:open round-trip) ────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template = "PopoverHost.html")]
+struct PopoverHost {
+    popover_open: bool,
+}
+
+#[handlers]
+impl PopoverHost {
+    pub fn open_it(&mut self) {
+        self.popover_open = true;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn popover_pp_model_open_round_trips_through_parent() {
+    PopoverHost::register();
+    let host = mount("<popover-host></popover-host>");
+    tick().await;
+
+    let state_text = |host: &Element| -> String {
+        host.query_selector(".ph-state")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(state_text(&host), "closed");
+
+    let open_btn = host
+        .query_selector(".ph-open")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    open_btn.click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_some(),
+        "popover mounted after parent set open=true"
+    );
+    assert_eq!(state_text(&host), "open");
+
+    let popover = doc()
+        .query_selector("[role=\"dialog\"].pine-popover-content")
+        .unwrap()
+        .unwrap();
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    popover.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert_eq!(state_text(&host), "closed");
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn date_range_picker_closes_only_after_end_selection() {
+    let host = mount(
+        "<pine-date-range-picker placeholder=\"2024-06-15\"></pine-date-range-picker>",
+    );
+    tick().await;
+
+    let trigger = host
+        .query_selector(".pine-date-range-picker-trigger")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    trigger.click();
+    tick().await;
+    tick().await;
+
+    let popover_selector = "[role=\"dialog\"].pine-popover-content";
+    assert!(
+        doc().query_selector(popover_selector).unwrap().is_some(),
+        "popover opens from the trigger"
+    );
+
+    let start = doc()
+        .query_selector("[data-pine-range-calendar-cell-trigger][data-value=\"2024-06-10\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    start.click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc().query_selector(popover_selector).unwrap().is_some(),
+        "popover stays open after selecting only the start date"
+    );
+
+    let end = doc()
+        .query_selector("[data-pine-range-calendar-cell-trigger][data-value=\"2024-06-20\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    end.click();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc().query_selector(popover_selector).unwrap().is_none(),
+        "popover closes after the end date commits"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template = "DialogHost.html")]
 struct DialogHost {
     dialog_open: bool,

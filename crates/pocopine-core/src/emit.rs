@@ -62,6 +62,16 @@ pub fn emit_model<T: Serialize>(value: T) {
     emit_from(&root_el, "pp:update:model", value);
 }
 
+/// Emit `pp:update:<field>` from the current scope's
+/// `pp-ref="root"` element with `value` as detail. Use this for
+/// named `pp-model:<field>` channels so multiple model bindings on
+/// one child don't collide on the shared `pp:update:model` event.
+pub fn emit_model_field<T: Serialize>(field: &str, value: T) {
+    let Some(scope) = current_scope_id() else { return };
+    let Some(root_el) = refs::get_on(scope, "root") else { return };
+    emit_from(&root_el, &format!("pp:update:{field}"), value);
+}
+
 /// Variant of [`emit`] that dispatches from an explicit element.
 /// Needed by overlays whose emitting handlers run inside a
 /// teleported subtree: bubbling from the teleport target would

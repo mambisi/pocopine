@@ -342,6 +342,44 @@ struct ModelParent {
 #[handlers]
 impl ModelParent {}
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ModelPairChild.html")]
+struct ModelPairChild {
+    #[prop] a: String,
+    #[prop] b: String,
+}
+
+#[handlers]
+impl ModelPairChild {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "ModelPairParent.html")]
+struct ModelPairParent {
+    host_a: String,
+    host_b: String,
+}
+
+#[handlers]
+impl ModelPairParent {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "OptionalModelChild.html")]
+struct OptionalModelChild {
+    #[prop] value: Option<String>,
+}
+
+#[handlers]
+impl OptionalModelChild {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "OptionalModelParent.html")]
+struct OptionalModelParent {
+    maybe: Option<String>,
+}
+
+#[handlers]
+impl OptionalModelParent {}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
@@ -350,6 +388,10 @@ fn register_all() {
     HandlerArgs::register();
     ModelChild::register();
     ModelParent::register();
+    ModelPairChild::register();
+    ModelPairParent::register();
+    OptionalModelChild::register();
+    OptionalModelParent::register();
     FallthroughRoot::register();
     NamedSlotHost::register();
     ScopedSlotHost::register();
@@ -653,6 +695,36 @@ async fn pp_model_child_to_parent_via_update_event() {
     let parent_shown = host.query_selector(".mp-shown").unwrap().unwrap();
     let txt: HtmlElement = parent_shown.dyn_into().unwrap();
     assert_eq!(txt.inner_text().trim(), "bob@example.com");
+}
+
+#[wasm_bindgen_test]
+async fn pp_model_named_channels_do_not_clobber_each_other() {
+    let host = mount("<model-pair-parent></model-pair-parent>");
+    tick().await;
+
+    let child = host.query_selector("model-pair-child").unwrap().unwrap();
+
+    let start_init = web_sys::CustomEventInit::new();
+    start_init.set_bubbles(true);
+    start_init.set_detail(&JsValue::from_str("one"));
+    let start_ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:a", &start_init)
+        .unwrap();
+    child.dispatch_event(&start_ev).unwrap();
+
+    let end_init = web_sys::CustomEventInit::new();
+    end_init.set_bubbles(true);
+    end_init.set_detail(&JsValue::from_str("two"));
+    let end_ev = web_sys::CustomEvent::new_with_event_init_dict("pp:update:b", &end_init)
+        .unwrap();
+    child.dispatch_event(&end_ev).unwrap();
+    tick().await;
+
+    let shown_a = host.query_selector(".mpp-a").unwrap().unwrap();
+    let shown_b = host.query_selector(".mpp-b").unwrap().unwrap();
+    let shown_a: HtmlElement = shown_a.dyn_into().unwrap();
+    let shown_b: HtmlElement = shown_b.dyn_into().unwrap();
+    assert_eq!(shown_a.inner_text().trim(), "one");
+    assert_eq!(shown_b.inner_text().trim(), "two");
 }
 
 #[wasm_bindgen_test]
@@ -1037,6 +1109,48 @@ fn focus_utilities_save_restore_and_auto_focus() {
         outside,
         "restore returned focus to the element that had it before"
     );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pp_model_empty_string_clears_option_value() {
+    let host = mount("<optional-model-parent></optional-model-parent>");
+    tick().await;
+
+    let state_text = |host: &Element| -> String {
+        host.query_selector(".omp-value")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .inner_text()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(state_text(&host), "(none)");
+
+    let fill = host
+        .query_selector(".omc-fill")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    fill.click();
+    tick().await;
+    tick().await;
+    assert_eq!(state_text(&host), "set");
+
+    let clear = host
+        .query_selector(".omc-clear")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    clear.click();
+    tick().await;
+    tick().await;
+    assert_eq!(state_text(&host), "(none)");
 
     host.remove();
 }

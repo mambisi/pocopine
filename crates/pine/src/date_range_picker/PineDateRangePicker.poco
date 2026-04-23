@@ -1,6 +1,6 @@
-<pine-popover-root pp-model:open="open">
+<pine-popover-root pp-ref="root" pp-model:open="open">
   <pine-popover-trigger class="pine-date-range-picker-trigger"
-                        :data-has-value="start !== '' || end !== ''"
+                        :data-has-value="start != null || end != null"
                         :data-disabled="disabled">
     <span class="pine-date-range-picker-value" pp-text="display_label"></span>
   </pine-popover-trigger>

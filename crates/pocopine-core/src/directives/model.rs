@@ -9,7 +9,9 @@
 //!   Per [RFC-009](../../../../rfcs/rfc-009-pp-model-components.md):
 //!   effect mirrors parent's `proxy[key]` into the child's
 //!   `<child-field>` prop (default: `model`); listener on
-//!   `pp:update:model` writes `event.detail` back to `proxy[key]`.
+//!   `pp:update:<child-field>` (or `pp:update:model` for the
+//!   default arg-less case) writes `event.detail` back to
+//!   `proxy[key]`.
 //!
 //! `pp-model:open="dialog_open"` writes parent's `dialog_open` to
 //! child's `open` field — Vue-3-style `v-model:prop` shape. Without
@@ -76,18 +78,25 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
     });
     track_effect_on(call.el, id);
 
-    // Child → parent: `pp:update:model` custom event. `event.detail`
-    // is the new value. Write it back through `write_path` so dotted
-    // keys (`$store.foo.bar`) continue to work.
+    // Child → parent: named `pp:update:<field>` channel for
+    // `pp-model:<field>`, falling back to `pp:update:model` for the
+    // arg-less default. `event.detail` is the new value. Write it
+    // back through `write_path` so dotted keys (`$store.foo.bar`)
+    // continue to work.
     let parent_w = parent_proxy;
     let key_w = key;
+    let update_event = if child_field == "model" {
+        "pp:update:model".to_string()
+    } else {
+        format!("pp:update:{child_field}")
+    };
     let listener = Closure::wrap(Box::new(move |ev: Event| {
         let Ok(ce) = ev.dyn_into::<CustomEvent>() else { return };
         let detail = ce.detail();
         let _ = write_path(&parent_w, &key_w, &detail);
     }) as Box<dyn FnMut(Event)>);
     let target: web_sys::EventTarget = el.clone().into();
-    track_listener_on(call.el, target, "pp:update:model", false, listener);
+    track_listener_on(call.el, target, &update_event, false, listener);
 }
 
 // ─── native input path ────────────────────────────────────────────
