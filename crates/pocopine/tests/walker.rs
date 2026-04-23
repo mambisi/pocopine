@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -380,6 +382,97 @@ struct OptionalModelParent {
 #[handlers]
 impl OptionalModelParent {}
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "AutoModelChild.html")]
+struct AutoModelChild {
+    #[model] value: String,
+}
+
+#[handlers]
+impl AutoModelChild {
+    pub fn set_many(&mut self) {
+        self.value = "alpha".into();
+        self.value = "beta".into();
+        self.value = "gamma".into();
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "AutoModelParent.html")]
+struct AutoModelParent {
+    email: String,
+}
+
+#[handlers]
+impl AutoModelParent {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "RenamedModelChild.html")]
+struct RenamedModelChild {
+    #[model(name = "open")] is_open: bool,
+}
+
+#[handlers]
+impl RenamedModelChild {
+    pub fn toggle_open(&mut self) {
+        self.is_open = !self.is_open;
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "RenamedModelParent.html")]
+struct RenamedModelParent {
+    open_state: bool,
+}
+
+#[handlers]
+impl RenamedModelParent {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "SeededModelChild.html")]
+struct SeededModelChild {
+    #[model] value: String,
+}
+
+#[handlers]
+impl SeededModelChild {
+    pub fn on_setup(&mut self) {
+        self.value = "seeded".into();
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "SeededModelParent.html")]
+struct SeededModelParent {
+    email: String,
+}
+
+#[handlers]
+impl SeededModelParent {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "OptionalAutoModelChild.html")]
+struct OptionalAutoModelChild {
+    #[model] value: Option<String>,
+}
+
+#[handlers]
+impl OptionalAutoModelChild {
+    pub fn clear_value(&mut self) {
+        self.value = Some("temp".into());
+        self.value = None;
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "OptionalAutoModelParent.html")]
+struct OptionalAutoModelParent {
+    maybe: Option<String>,
+}
+
+#[handlers]
+impl OptionalAutoModelParent {}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
@@ -392,6 +485,14 @@ fn register_all() {
     ModelPairParent::register();
     OptionalModelChild::register();
     OptionalModelParent::register();
+    AutoModelChild::register();
+    AutoModelParent::register();
+    RenamedModelChild::register();
+    RenamedModelParent::register();
+    SeededModelChild::register();
+    SeededModelParent::register();
+    OptionalAutoModelChild::register();
+    OptionalAutoModelParent::register();
     FallthroughRoot::register();
     NamedSlotHost::register();
     ScopedSlotHost::register();
@@ -725,6 +826,111 @@ async fn pp_model_named_channels_do_not_clobber_each_other() {
     let shown_b: HtmlElement = shown_b.dyn_into().unwrap();
     assert_eq!(shown_a.inner_text().trim(), "one");
     assert_eq!(shown_b.inner_text().trim(), "two");
+}
+
+#[wasm_bindgen_test]
+async fn model_field_assignment_coalesces_to_one_named_event() {
+    let host = mount("<auto-model-parent></auto-model-parent>");
+    tick().await;
+
+    let child = host.query_selector("auto-model-child").unwrap().unwrap();
+    let root = child.first_element_child().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root).expect("child scope");
+
+    let seen = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let seen_for_listener = seen.clone();
+    let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        seen_for_listener.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    child.add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
+        .unwrap();
+    listener.forget();
+
+    pocopine_core::scope::invoke_handler(scope_id, "set_many", &js_sys::Array::new());
+    tick().await;
+
+    let parent_shown = host.query_selector(".amp-email").unwrap().unwrap();
+    let txt: HtmlElement = parent_shown.dyn_into().unwrap();
+    assert_eq!(txt.inner_text().trim(), "gamma");
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].as_string().as_deref(), Some("gamma"));
+}
+
+#[wasm_bindgen_test]
+async fn model_field_wire_name_renames_mirror_in_and_out() {
+    let host = mount("<renamed-model-parent></renamed-model-parent>");
+    tick().await;
+
+    let parent = host.query_selector("renamed-model-parent").unwrap().unwrap();
+    let parent_root = parent.first_element_child().unwrap();
+    let (_id, parent_proxy) =
+        pocopine_core::walker::scope_of_element(&parent_root).expect("parent scope");
+    js_sys::Reflect::set(&parent_proxy, &"open_state".into(), &JsValue::TRUE).unwrap();
+    tick().await;
+
+    let child_shown = host.query_selector(".rmc-open").unwrap().unwrap();
+    let child_shown: HtmlElement = child_shown.dyn_into().unwrap();
+    assert_eq!(child_shown.inner_text().trim(), "true");
+
+    let child = host.query_selector("renamed-model-child").unwrap().unwrap();
+    let child_root = child.first_element_child().unwrap();
+    let (child_scope, _) =
+        pocopine_core::walker::scope_of_element(&child_root).expect("child scope");
+    pocopine_core::scope::invoke_handler(child_scope, "toggle_open", &js_sys::Array::new());
+    tick().await;
+
+    let parent_shown = host.query_selector(".rmp-open").unwrap().unwrap();
+    let parent_shown: HtmlElement = parent_shown.dyn_into().unwrap();
+    assert_eq!(parent_shown.inner_text().trim(), "false");
+}
+
+#[wasm_bindgen_test]
+async fn model_field_setup_seed_stays_silent_and_none_emits_null() {
+    let host = mount(
+        "<div><seeded-model-parent></seeded-model-parent><optional-auto-model-parent></optional-auto-model-parent></div>",
+    );
+    tick().await;
+
+    let seeded_parent = host.query_selector(".smp-email").unwrap().unwrap();
+    let seeded_parent: HtmlElement = seeded_parent.dyn_into().unwrap();
+    assert_eq!(seeded_parent.inner_text().trim(), "");
+
+    let child = host
+        .query_selector("optional-auto-model-child")
+        .unwrap()
+        .unwrap();
+    let root = child.first_element_child().unwrap();
+    let (scope_id, _) =
+        pocopine_core::walker::scope_of_element(&root).expect("optional child scope");
+
+    let details = Rc::new(RefCell::new(Vec::<JsValue>::new()));
+    let details_for_listener = details.clone();
+    let listener = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+        let Ok(ev) = ev.dyn_into::<web_sys::CustomEvent>() else { return };
+        details_for_listener.borrow_mut().push(ev.detail());
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    child.add_event_listener_with_callback("pp:update:value", listener.as_ref().unchecked_ref())
+        .unwrap();
+    listener.forget();
+
+    pocopine_core::scope::invoke_handler(scope_id, "clear_value", &js_sys::Array::new());
+    tick().await;
+
+    let parent = host
+        .query_selector("optional-auto-model-parent")
+        .unwrap()
+        .unwrap();
+    let parent_root = parent.first_element_child().unwrap();
+    let (parent_scope, _) =
+        pocopine_core::walker::scope_of_element(&parent_root).expect("optional parent scope");
+    let scope = pocopine_core::scope::Scope::find(parent_scope).expect("live parent scope");
+    assert!(scope.state.borrow().get("maybe").is_null());
+    let details = details.borrow();
+    assert_eq!(details.len(), 1);
+    assert!(details[0].is_null());
 }
 
 #[wasm_bindgen_test]
