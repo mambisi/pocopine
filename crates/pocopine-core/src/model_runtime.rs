@@ -188,9 +188,34 @@ fn flush_pending() {
         });
         let Some(el) = emit_el else { continue };
         for item in pending {
-            if matches!(item.origin, WriteOrigin::ParentModelIn | WriteOrigin::SetupSeed) {
+            // RFC-044 §5.5 origin suppression — none of these should
+            // advance the public two-way contract outward:
+            //
+            //   ParentModelIn — a parent's `pp-model:<field>` write.
+            //     Echoing it back out would immediately rewrite the
+            //     same value on the parent; hard loop.
+            //   SetupSeed — initial hydration. Not a user-visible
+            //     contract advance; parent already drove the value.
+            //   ObserveMirror — a `#[observe(KEY)]` mirror from a
+            //     provided root Handle. Re-publishing on every
+            //     observed change would ping-pong: Root write →
+            //     observe fires → child emit → outer parent's
+            //     pp-model listener → Root write back. Authors who
+            //     want observed changes to re-publish must do so
+            //     from an explicit handler (which runs under
+            //     LocalHandler origin and thus emits).
+            if matches!(
+                item.origin,
+                WriteOrigin::ParentModelIn
+                    | WriteOrigin::SetupSeed
+                    | WriteOrigin::ObserveMirror
+            ) {
+                #[cfg(any(debug_assertions, feature = "devtools"))]
+                testing::record_suppressed(scope_id, &item);
                 continue;
             }
+            #[cfg(any(debug_assertions, feature = "devtools"))]
+            testing::record_emitted(scope_id, &item);
             let init = CustomEventInit::new();
             init.set_bubbles(true);
             init.set_detail(&item.detail);
@@ -199,5 +224,106 @@ fn flush_pending() {
                 let _ = el.dispatch_event(&ev);
             }
         }
+    }
+}
+
+/// Cfg-gated model-emission log for unit tests.
+///
+/// Mirrors the `stats()` / `listener_count()` pattern used elsewhere
+/// in the crate — compiled under `debug_assertions` and when the
+/// `devtools` feature is on, absent from release binaries built
+/// `--no-default-features --release`.
+///
+/// Usage from an author test:
+///
+/// ```ignore
+/// use pocopine_core::model_runtime::testing::{drain_emitted, reset};
+///
+/// reset();
+/// scope.invoke("select_date", js_sys::Array::of1(&"2024-06-15".into()).as_ref());
+/// pocopine_core::tick::flush_sync();
+/// let events = drain_emitted();
+/// assert_eq!(events.len(), 1);
+/// assert_eq!(events[0].wire_name, "value");
+/// ```
+///
+/// Semantics:
+///   - `drain_emitted` / `drain_suppressed` snapshot + clear the
+///     corresponding log. Subsequent calls return `Vec::new()`
+///     until new events land.
+///   - Entries are recorded at flush time, AFTER origin-based
+///     suppression has run — so `drain_emitted` contains only
+///     writes the runtime chose to publish, and `drain_suppressed`
+///     contains writes it silenced (ParentModelIn / SetupSeed /
+///     ObserveMirror). Inspecting the latter is how a test verifies
+///     "parent mirror-in did NOT echo back out" or "observe-driven
+///     write did NOT re-publish."
+///   - `reset` clears both logs + the pending-emit queue; use
+///     between tests that share a thread-local runtime.
+#[cfg(any(debug_assertions, feature = "devtools"))]
+pub mod testing {
+    use super::{PendingModel, WriteOrigin};
+    use crate::reactive::ScopeId;
+    use std::cell::RefCell;
+    use wasm_bindgen::JsValue;
+
+    /// One observed model emission / suppression, snapshotted at
+    /// flush time.
+    #[derive(Clone, Debug)]
+    pub struct ModelEvent {
+        pub scope_id: ScopeId,
+        pub wire_name: String,
+        pub detail: JsValue,
+        pub origin: WriteOrigin,
+    }
+
+    thread_local! {
+        static EMITTED_LOG: RefCell<Vec<ModelEvent>> = const { RefCell::new(Vec::new()) };
+        static SUPPRESSED_LOG: RefCell<Vec<ModelEvent>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record_emitted(scope_id: ScopeId, item: &PendingModel) {
+        EMITTED_LOG.with(|l| {
+            l.borrow_mut().push(ModelEvent {
+                scope_id,
+                wire_name: item.wire_name.clone(),
+                detail: item.detail.clone(),
+                origin: item.origin,
+            });
+        });
+    }
+
+    pub(super) fn record_suppressed(scope_id: ScopeId, item: &PendingModel) {
+        SUPPRESSED_LOG.with(|l| {
+            l.borrow_mut().push(ModelEvent {
+                scope_id,
+                wire_name: item.wire_name.clone(),
+                detail: item.detail.clone(),
+                origin: item.origin,
+            });
+        });
+    }
+
+    /// Snapshot + clear every model event emitted to the DOM since
+    /// the last call. Ordered by flush arrival.
+    pub fn drain_emitted() -> Vec<ModelEvent> {
+        EMITTED_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+
+    /// Snapshot + clear every model write the runtime suppressed
+    /// via origin rules. Use this to assert that e.g. a parent
+    /// `pp-model` write didn't echo back out.
+    pub fn drain_suppressed() -> Vec<ModelEvent> {
+        SUPPRESSED_LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+
+    /// Clear both logs AND the pending-emit queue. Call between
+    /// tests that share the thread-local model runtime.
+    pub fn reset() {
+        EMITTED_LOG.with(|l| l.borrow_mut().clear());
+        SUPPRESSED_LOG.with(|l| l.borrow_mut().clear());
+        super::MODEL_RUNTIME.with(|m| m.borrow_mut().clear());
+        super::FLUSH_PENDING.with(|q| q.borrow_mut().clear());
+        super::FLUSH_SCHEDULED.with(|f| f.set(false));
     }
 }
