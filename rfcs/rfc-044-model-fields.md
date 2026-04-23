@@ -408,6 +408,107 @@ pub fn select_date(&mut self, iso: String) {
 Still explicit, but no stringly event names, no duplicated payload
 normalization logic, and no extra helper vocabulary at the callsite.
 
+### 5.9 Struct-typed model fields (atomic groups)
+
+Components that need to advance several related values as one
+public-contract unit declare a struct-valued `#[model]` field
+rather than N sibling fields:
+
+```rust
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct DateRange {
+    pub start: Option<DateValue>,
+    pub end: Option<DateValue>,
+}
+
+#[component(template = "PineRangeCalendarRoot.poco")]
+pub struct PineRangeCalendarRoot {
+    #[model]
+    pub range: DateRange,
+
+    #[model]
+    pub placeholder: Option<DateValue>,
+}
+```
+
+This is the supported way to express "these values advance
+together." Properties:
+
+- **Atomicity** — one emit carries the whole struct as
+  `detail`. Parents bind the unit with a single `pp-model:range`
+  and receive one `pp:update:range` event per flush. A parent
+  validating multi-field invariants across one event boundary
+  (e.g. "both endpoints must be set or both cleared") sees only
+  one consistent state per tick.
+- **Internal granularity stays free** — assignment-driven
+  emission is driven by the runtime's snapshot-diff (§5.5), not
+  by the proxy set trap. So internal Rust-level mutations like
+  `self.range.start = x` and `self.range.end = y` within one
+  handler are picked up by the same post-handler snapshot, diffed
+  as one `range` change, and emit as one coalesced event.
+- **Type-enforced shape on both sides** — the parent can only
+  bind a `DateRange`-compatible payload. Today's bug of forgetting
+  the second `pp-model:end` binding becomes a type error.
+- **No new runtime machinery** — the existing `#[model]` path
+  emits whatever the field's serde shape is. For a struct-typed
+  field, that's `{ start, end }`.
+
+Authors mix atomic groups with independent fields freely — in
+the example above, `range` is atomic; `placeholder` is its own
+independent `pp-model:placeholder` channel on the same component.
+
+Migration from a pre-existing flat layout (two `#[prop]` fields
+`start` and `end`) to the struct form is a contract change on
+the parent side — parents move from `pp-model:start` /
+`pp-model:end` to `pp-model:range`. For components that can't
+break that contract, see §5.10.
+
+### 5.10 `#[model(flatten = [...])]` — parent-side per-field wire shape
+
+When a component wants struct-typed internals (for code
+organisation / atomic local mutation) but needs to preserve a
+parent binding surface that's one wire-key per leaf, declare
+`flatten` with the explicit list of wire names:
+
+```rust
+#[component(...)]
+pub struct PineRangeCalendarRoot {
+    #[model(flatten = ["start", "end"])]
+    pub range: DateRange,
+}
+```
+
+Wire semantics under `flatten`:
+
+- Parent binds per-leaf: `pp-model:start="my_start"`
+  `pp-model:end="my_end"` as before.
+- Outbound emission fires per-leaf: `pp:update:start` with
+  scalar `Option<DateValue>` detail, `pp:update:end` likewise.
+  **Atomicity is lost on the wire** — parents see N independent
+  events per handler, same as the pre-struct flat layout would
+  have produced.
+- Inbound mirror-in writes land on `self.range.<leaf>` —
+  authors still see the struct internally.
+
+`flatten` is the **backwards-compatibility escape valve** for
+components whose existing parent contract is flat. New
+components with atomic contracts should use the plain
+struct-typed form (§5.9) and take the atomicity benefit.
+
+Constraints in v1:
+
+- Author explicitly lists the wire names (`flatten = ["start",
+  "end"]`) — the macro doesn't introspect the inner struct's
+  fields. This is intentional: it lets the leaf list diverge
+  from the struct's serde shape when needed, and keeps the
+  macro from reaching into foreign types.
+- Each listed name must be both a valid Rust field on the inner
+  struct AND a valid wire name; pocopine doesn't (yet) support
+  `flatten_rename` or per-leaf serde overrides.
+- `flatten` is incompatible with `#[model(name = "...")]` —
+  there's no single wire name to rename when the field is
+  exploded.
+
 ## 6. Rationale
 
 ### 6.1 Why assignment-driven emission anyway?
@@ -642,9 +743,14 @@ event (e.g. "both endpoints must be set or both cleared") will
 observe a brief inconsistent intermediate state between the two
 emits within the tick.
 
-Components with a strict atomic-advance contract should wait
-for the `#[model(group = "…")]` extension flagged in §11 as
-future work.
+Components with a strict atomic-advance contract should declare
+their grouped fields as a single **struct-typed `#[model]`
+field** — see §5.9. The struct-form emits one event per flush
+carrying the whole struct as `detail`, which is exactly the
+atomic-advance contract this hazard would otherwise surface.
+Components that need struct-typed internals but must preserve
+a pre-existing flat parent binding surface use `#[model(flatten
+= [...])]` (§5.10) as the escape valve.
 
 ### 8.3 Compat strategy
 
@@ -725,17 +831,33 @@ This RFC takes the following positions:
 4. **Devtools should show `#[model]` as a distinct bucket.**
    It is not just "a prop that happens to emit"; it is a different
    public contract role.
+5. **Atomic groups are struct-typed `#[model]` fields (§5.9).**
+   Authors express "these fields advance together" by grouping
+   them under a single `#[model]` struct field. One emit per
+   flush carries the whole struct as `detail`. No new attribute,
+   no new runtime machinery — the existing `#[model]` path emits
+   whatever the field's serde shape is.
+6. **Flatten is opt-in per struct-typed field (§5.10).**
+   `#[model(flatten = ["start", "end"])]` explodes a struct
+   field back into per-leaf wire emission for components whose
+   parent contract must stay flat. It trades atomicity for
+   backwards-compat on the parent binding surface.
 
 Future work, intentionally deferred:
 
-1. **Atomic model groups.**
-   Some components conceptually advance multiple model fields
-   together (`value` + `placeholder`, `start` + `end`). A future
-   extension like `#[model(group = "date")]` could offer grouped
-   emission semantics. Out of scope for v1.
-2. **Richer origin / transaction semantics.**
+1. **Richer origin / transaction semantics.**
    The v1 origin set is intentionally minimal. A future RFC may add
-   explicit transaction scopes or atomic grouped model updates.
+   explicit transaction scopes spanning multiple struct-typed
+   fields (e.g. "these three `#[model]` structs advance as one
+   public contract"). The current struct-typed form covers
+   single-unit atomicity; cross-unit atomicity is the open
+   frontier.
+2. **`flatten` without explicit leaf names.**
+   The v1 `flatten = [...]` list is authored by hand. A future
+   pass could inspect an inner struct's serde schema to emit the
+   leaf list automatically, but that requires either a companion
+   derive on the inner struct or per-call syn introspection,
+   both of which deserve their own RFC.
 
 ## 12. Why this helps others understand the system
 
