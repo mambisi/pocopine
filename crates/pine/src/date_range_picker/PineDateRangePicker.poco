@@ -7,8 +7,10 @@
   <pine-popover-portal>
     <pine-popover-content class="pine-date-range-picker-content">
       <pine-range-calendar-root class="pine-date-range-picker-calendar"
-                                pp-model:start="start"
-                                pp-model:end="end"
+                                :start="start"
+                                :end="end"
+                                @pp:update:start="on_inner_start"
+                                @pp:update:end="on_inner_end"
                                 :placeholder="placeholder"
                                 :min-value="min_value"
                                 :max-value="max_value"

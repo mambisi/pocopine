@@ -20,7 +20,9 @@
 //!   default.
 
 use pocopine::prelude::*;
+use pocopine::{current_scope_id, emit_from, refs};
 use serde::{Deserialize, Serialize};
+use web_sys::CustomEvent;
 
 #[derive(Serialize, Deserialize)]
 #[component(
@@ -115,9 +117,37 @@ impl PineDateRangePicker {
     fn on_start_change(&mut self, _new: String, _prev: Option<String>) {
         self.recompute_label();
     }
+
+    // Inner range calendar writes back via per-field custom events
+    // (Pine's pp-model:X clobbers when there's more than one on the
+    // same element — see gh #3). Catch them here, update our own
+    // prop, and re-emit so the author's parent scope sees them too.
+    pub fn on_inner_start(&mut self, ev: CustomEvent) {
+        let v = ev.detail().as_string().unwrap_or_default();
+        if self.start != v {
+            self.start = v.clone();
+            self.reemit("pp:update:start", v);
+        }
+    }
+
+    pub fn on_inner_end(&mut self, ev: CustomEvent) {
+        let v = ev.detail().as_string().unwrap_or_default();
+        if self.end != v {
+            self.end = v.clone();
+            self.reemit("pp:update:end", v);
+        }
+    }
 }
 
 impl PineDateRangePicker {
+    fn reemit(&self, name: &str, value: String) {
+        let Some(scope) = current_scope_id() else { return };
+        let Some(root_el) = refs::get_on(scope, "root") else {
+            return;
+        };
+        emit_from(&root_el, name, value);
+    }
+
     fn recompute_label(&mut self) {
         // Rendered via `pp-text` bound to `display_label` on the
         // trigger below; keeps the two branches (empty / one-

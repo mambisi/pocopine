@@ -10,9 +10,11 @@
 
     <div class="range-calendar-layout">
       <pine-range-calendar-root class="range-calendar"
-                                pp-model:start="start"
-                                pp-model:end="end"
-                                pp-model:placeholder="placeholder">
+                                :start="start"
+                                :end="end"
+                                pp-model:placeholder="placeholder"
+                                @pp:update:start="on_start_update"
+                                @pp:update:end="on_end_update">
         <pine-range-calendar-header class="range-calendar-header">
           <pine-range-calendar-prev class="range-calendar-nav">‹</pine-range-calendar-prev>
           <pine-range-calendar-heading class="range-calendar-heading"></pine-range-calendar-heading>

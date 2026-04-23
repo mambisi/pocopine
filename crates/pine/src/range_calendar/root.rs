@@ -11,7 +11,7 @@
 use crate::datetime::DateValue;
 use crate::range_calendar::state::RangeCalendarState;
 use pocopine::prelude::*;
-use pocopine::{inject_key, provide};
+use pocopine::{current_scope_id, emit_from, inject_key, provide, refs};
 use serde::{Deserialize, Serialize};
 
 inject_key!(pub RANGE_ROOT: Handle<PineRangeCalendarRoot>);
@@ -151,6 +151,14 @@ impl PineRangeCalendarRoot {
 
     /// Two-step range selection. Cells dispatch this through
     /// `inject(&RANGE_ROOT).update(|r| r.select_date(...))`.
+    ///
+    /// Emits `pp:update:start` and `pp:update:end` as separate
+    /// `CustomEvent`s so parents can keep two fields in sync.
+    /// (Pine's `pp-model:X` listens for the generic
+    /// `pp:update:model`, so two `pp-model:*` bindings on the
+    /// same child clobber each other — see gh issue #3. Authors
+    /// bind with `:start` / `:end` + `@pp:update:start` /
+    /// `@pp:update:end` handlers instead.)
     pub fn select_date(&mut self, iso: String) {
         if self.disabled || self.readonly {
             return;
@@ -166,6 +174,12 @@ impl PineRangeCalendarRoot {
         self.start = s.start.map(|d| d.to_string()).unwrap_or_default();
         self.end = s.end.map(|d| d.to_string()).unwrap_or_default();
         self.placeholder = s.cal.placeholder.to_string();
+        if let (Some(scope), _) = (current_scope_id(), ()) {
+            if let Some(root_el) = refs::get_on(scope, "root") {
+                emit_from(&root_el, "pp:update:start", self.start.clone());
+                emit_from(&root_el, "pp:update:end", self.end.clone());
+            }
+        }
         self.apply(&s);
     }
 
