@@ -6,12 +6,16 @@ use serde::{Deserialize, Serialize};
 pub struct StressDemo {
     pub open: bool,
     pub items: Vec<String>,
-    /// End-to-end shuffle duration in ms (handler start → after the
-    /// reactive flush finishes the DOM reconcile). Formatted into
-    /// `shuffle_display` for the readout; kept separate so it's easy
-    /// to grep / bind numerically from tests.
+    /// End-to-end duration in ms for the most recent reorder
+    /// (handler start → after the reactive flush finishes the DOM
+    /// reconcile). Formatted into `shuffle_display` for the
+    /// readout; kept numerically for tests / devtools.
     pub last_shuffle_ms: f64,
     pub shuffle_display: String,
+    /// Label of the last operation — `"rotate"` or `"shuffle"`.
+    /// Drives the readout text so the user can tell which timing
+    /// they're looking at.
+    pub last_op: String,
 }
 
 #[handlers]
@@ -26,30 +30,61 @@ impl StressDemo {
         }
     }
 
+    /// Rotate: pop the first item and push it onto the tail. One
+    /// item actually moves; a keyed pp-for + FLIP stack should
+    /// animate only that one.
+    pub fn rotate(&mut self) {
+        if self.items.len() < 2 {
+            return;
+        }
+        let start = now_ms();
+        let head = self.items.remove(0);
+        self.items.push(head);
+        self.time_reconcile(start, "rotate");
+    }
+
+    /// Full Fisher-Yates shuffle via `Math.random()` — every item
+    /// moves. Stresses the keyed pp-for reconcile + the FLIP
+    /// snapshot / play loop across the whole list at once.
     pub fn shuffle(&mut self) {
         if self.items.len() < 2 {
             return;
         }
-
-        // End-to-end timing: start before we mutate `items`, stop
-        // after `pp-for`'s reconcile (and every item's transition
-        // scheduler) has run. The reconcile fires synchronously on
-        // handler return via `trigger_scope`, but the tick-driven
-        // tail work (RFC-039 FLIP play + scheduled enter/leave
-        // triggers) lands on the next microtask — so we stop the
-        // clock in `after_flush`.
         let start = now_ms();
-        let head = self.items.remove(0);
-        self.items.push(head);
+        fisher_yates(&mut self.items);
+        self.time_reconcile(start, "shuffle");
+    }
+}
 
+impl StressDemo {
+    /// Stop the timer inside a `tick::after_flush` callback so the
+    /// reading covers the full reactive reconcile (trigger →
+    /// pp-for walk → FLIP play), not just the Rust-side Vec
+    /// mutation.
+    fn time_reconcile(&mut self, start: f64, op: &'static str) {
         let handle = this::<Self>();
         pocopine::tick::after_flush(move || {
             let dur = now_ms() - start;
             handle.update(|s: &mut Self| {
                 s.last_shuffle_ms = dur;
                 s.shuffle_display = format!("{dur:.1} ms");
+                s.last_op = op.into();
             });
         });
+    }
+}
+
+/// In-place Fisher-Yates shuffle. Uses `Math.random()` for the
+/// swap index — seedless, which is fine for a visual stress demo.
+fn fisher_yates<T>(xs: &mut [T]) {
+    let len = xs.len();
+    if len < 2 {
+        return;
+    }
+    for i in (1..len).rev() {
+        let j = (js_sys::Math::random() * (i as f64 + 1.0)) as usize;
+        let j = j.min(i);
+        xs.swap(i, j);
     }
 }
 

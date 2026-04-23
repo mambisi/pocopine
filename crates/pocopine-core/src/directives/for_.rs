@@ -418,6 +418,17 @@ fn run_keyed(
             // — deleting a middle item no longer reorders the
             // flex flow around the leaver, so FLIP only plays on
             // items whose slot actually moves.
+            //
+            // Per-iter skip: back-to-front means by the time we
+            // consider fresh[i], fresh[i+1] is already in its
+            // final position. So we only need to move fresh[i]
+            // if its next sibling isn't already fresh[i+1]
+            // (skipping any leavers in between). A rotate of N
+            // items where only one moved used to do N no-op
+            // insert_before round-trips through `remove + insert`
+            // — each one still blurs / restarts transitions /
+            // invalidates layout. Now it does exactly the moves
+            // the mutation demands.
             for i in (0..fresh.len()).rev() {
                 let entry = &fresh[i];
                 let was_in_place = entry
@@ -430,7 +441,13 @@ fn run_keyed(
                 } else {
                     template_el.as_ref()
                 };
-                let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
+                let already_here = was_in_place
+                    && next_non_leaving(entry.element.next_sibling())
+                        .map(|n| n.is_same_node(Some(anchor)))
+                        .unwrap_or(false);
+                if !already_here {
+                    let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
+                }
                 if !was_in_place {
                     newly_walked.push(entry.element.clone());
                 }

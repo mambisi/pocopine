@@ -5,22 +5,27 @@
       Mounts a <code>pine-tags-input-root</code> with 500 keyed
       <code>pine-tags-input-item</code> chips — each one a Pine
       compound with a <code>scale</code> mount transition and
-      <code>flip</code> layout animation. <strong>Shuffle</strong>
-      rotates the list and reports the wall-clock time for the
-      reactive update, measured across the full reconcile
-      (handler start → after reactive flush). Use this to spot
-      regressions in the RFC-039 dispatch path or the pp-for
-      reconcile.
+      <code>flip</code> layout animation. <strong>Rotate</strong>
+      moves the head to the tail (a minimal reorder);
+      <strong>Shuffle</strong> Fisher-Yates-shuffles the whole
+      list (every item moves). Both report the wall-clock time
+      across the full reconcile (handler start → after reactive
+      flush). Use these to spot regressions in the RFC-039
+      dispatch path or the pp-for reconcile.
     </p>
     <div class="row" style="margin-bottom:0.75rem">
       <pine-button @click="mount_fixture">
         <span pp-text="open ? 'Unmount stress fixture' : 'Mount 500-row stress fixture'"></span>
       </pine-button>
+      <pine-button variant="ghost" @click="rotate" pp-show="open">
+        Rotate
+      </pine-button>
       <pine-button variant="ghost" @click="shuffle" pp-show="open">
         Shuffle
       </pine-button>
       <span pp-show="open" style="font-size:0.875rem;align-self:center">
-        last shuffle: <strong pp-text="shuffle_display"></strong>
+        last <strong pp-text="last_op"></strong>:
+        <strong pp-text="shuffle_display"></strong>
       </span>
     </div>
     <template pp-if="open">
