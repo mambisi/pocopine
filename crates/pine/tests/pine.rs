@@ -5657,3 +5657,168 @@ async fn input_tracks_focused_touched_dirty_filled() {
 
     host.remove();
 }
+
+/// Focusing a date segment selects the whole segment. The first
+/// typed digit must replace the existing value, not append to it.
+/// Regression: `01` + type `2` used to become `12` because the
+/// handler reused the committed segment digits as an edit prefix.
+#[wasm_bindgen_test]
+async fn date_field_first_digit_replaces_selected_segment() {
+    let host = mount("<pine-date-field value=\"2024-01-15\"></pine-date-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-date-field").unwrap().unwrap();
+    let month: HtmlElement = tag
+        .query_selector("[data-part=\"month\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    month.focus().unwrap();
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_key("2");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    month.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    assert_eq!(month.inner_text().trim(), "02");
+    host.remove();
+}
+
+/// Same selected-segment replacement semantics for time fields.
+/// Regression: `01:30` + type `2` on the selected hour used to
+/// become `12` instead of `02`.
+#[wasm_bindgen_test]
+async fn time_field_first_digit_replaces_selected_segment() {
+    let host = mount("<pine-time-field value=\"01:30\"></pine-time-field>");
+    tick().await;
+
+    let tag = host.query_selector("pine-time-field").unwrap().unwrap();
+    let hour: HtmlElement = tag
+        .query_selector("[data-part=\"hour\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    hour.focus().unwrap();
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_key("2");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    hour.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    assert_eq!(hour.inner_text().trim(), "02");
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn date_range_field_tab_bridges_start_end_edges() {
+    let host = mount("<pine-date-range-field></pine-date-range-field>");
+    tick().await;
+
+    let tag = host
+        .query_selector("pine-date-range-field")
+        .unwrap()
+        .unwrap();
+    let start_year: HtmlElement = tag
+        .query_selector(".pine-date-range-field-start [data-part=\"year\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    start_year.focus().unwrap();
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_key("Tab");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    start_year.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    let active = doc().active_element().unwrap();
+    assert_eq!(active.get_attribute("data-part").as_deref(), Some("month"));
+    assert!(active
+        .closest("pine-date-field.pine-date-range-field-end")
+        .unwrap()
+        .is_some());
+
+    let end_month: HtmlElement = active.dyn_into().unwrap();
+    let shift_init = web_sys::KeyboardEventInit::new();
+    shift_init.set_bubbles(true);
+    shift_init.set_cancelable(true);
+    shift_init.set_key("Tab");
+    shift_init.set_shift_key(true);
+    let shift_ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &shift_init).unwrap();
+    end_month.dispatch_event(&shift_ev).unwrap();
+    tick().await;
+
+    let active = doc().active_element().unwrap();
+    assert_eq!(active.get_attribute("data-part").as_deref(), Some("year"));
+    assert!(active
+        .closest("pine-date-field.pine-date-range-field-start")
+        .unwrap()
+        .is_some());
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn time_range_field_tab_bridges_start_end_edges() {
+    let host = mount("<pine-time-range-field step=\"60\"></pine-time-range-field>");
+    tick().await;
+
+    let tag = host
+        .query_selector("pine-time-range-field")
+        .unwrap()
+        .unwrap();
+    let start_minute: HtmlElement = tag
+        .query_selector(".pine-time-range-field-start [data-part=\"minute\"]")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    start_minute.focus().unwrap();
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_key("Tab");
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    start_minute.dispatch_event(&ev).unwrap();
+    tick().await;
+
+    let active = doc().active_element().unwrap();
+    assert_eq!(active.get_attribute("data-part").as_deref(), Some("hour"));
+    assert!(active
+        .closest("pine-time-field.pine-time-range-field-end")
+        .unwrap()
+        .is_some());
+
+    let end_hour: HtmlElement = active.dyn_into().unwrap();
+    let shift_init = web_sys::KeyboardEventInit::new();
+    shift_init.set_bubbles(true);
+    shift_init.set_cancelable(true);
+    shift_init.set_key("Tab");
+    shift_init.set_shift_key(true);
+    let shift_ev =
+        web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &shift_init).unwrap();
+    end_hour.dispatch_event(&shift_ev).unwrap();
+    tick().await;
+
+    let active = doc().active_element().unwrap();
+    assert_eq!(active.get_attribute("data-part").as_deref(), Some("minute"));
+    assert!(active
+        .closest("pine-time-field.pine-time-range-field-start")
+        .unwrap()
+        .is_some());
+
+    host.remove();
+}

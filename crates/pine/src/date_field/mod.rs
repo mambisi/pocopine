@@ -31,7 +31,11 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineDateField.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineDateField.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineDateField {
     /// Two-way bound date. `None` while any segment is empty or
     /// the combination is invalid.
@@ -56,6 +60,9 @@ pub struct PineDateField {
     /// `"year"` / `""` (nothing focused). Template uses this to
     /// flip `data-focused="true"` on the right segment.
     pub active_part: String,
+    /// Focus selects the whole segment, so the first digit
+    /// replaces it rather than appending to the committed value.
+    pub part_selected: bool,
 
     /// Rendered display strings for each segment — either a
     /// placeholder (`"MM"` / `"DD"` / `"YYYY"`) or the committed
@@ -81,6 +88,7 @@ impl Default for PineDateField {
             readonly: false,
             required: false,
             active_part: String::new(),
+            part_selected: false,
             month_display: DatePart::Month.placeholder().into(),
             day_display: DatePart::Day.placeholder().into(),
             year_display: DatePart::Year.placeholder().into(),
@@ -113,21 +121,20 @@ impl PineDateField {
     // ── focus bookkeeping (fired by @focus on each segment) ──
 
     pub fn focus_month(&mut self) {
-        self.active_part = DatePart::Month.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(DatePart::Month), true);
     }
     pub fn focus_day(&mut self) {
-        self.active_part = DatePart::Day.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(DatePart::Day), true);
     }
     pub fn focus_year(&mut self) {
-        self.active_part = DatePart::Year.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(DatePart::Year), true);
     }
 
-    pub fn on_blur(&mut self) {
-        self.active_part = String::new();
-        self.focused = false;
+    pub fn on_blur(&mut self, ev: web_sys::FocusEvent) {
+        if self.blur_stays_within_field(&ev) {
+            return;
+        }
+        self.set_active_part(None, false);
         self.touched = true;
     }
 
@@ -138,9 +145,10 @@ impl PineDateField {
     /// digits, arrows, Backspace, and Tab without a zoo of
     /// modifier-specific entries.
     pub fn on_key(&mut self, ev: web_sys::KeyboardEvent) {
-        let Some(part) = self.active_part() else {
+        let Some(part) = self.part_from_event(&ev).or_else(|| self.active_part()) else {
             return;
         };
+        self.set_active_part(Some(part), self.part_selected);
         if self.disabled || self.readonly {
             return;
         }
@@ -152,6 +160,7 @@ impl PineDateField {
             "ArrowLeft" => {
                 ev.prevent_default();
                 if let Some(prev) = part.prev() {
+                    self.set_active_part(Some(prev), true);
                     self.focus_segment_in_dom(prev);
                 }
                 return;
@@ -159,6 +168,7 @@ impl PineDateField {
             "ArrowRight" => {
                 ev.prevent_default();
                 if let Some(next) = part.next() {
+                    self.set_active_part(Some(next), true);
                     self.focus_segment_in_dom(next);
                 }
                 return;
@@ -182,6 +192,7 @@ impl PineDateField {
             "Enter" => {
                 ev.prevent_default();
                 if let Some(next) = part.next() {
+                    self.set_active_part(Some(next), true);
                     self.focus_segment_in_dom(next);
                 }
                 return;
@@ -193,10 +204,15 @@ impl PineDateField {
                     return;
                 };
                 ev.prevent_default();
+                if self.part_selected {
+                    segs.clear_part(part);
+                }
                 let advanced = segs.type_digit(part, digit as u8);
+                self.part_selected = false;
                 self.commit_segments(&segs);
                 if advanced {
                     if let Some(next) = part.next() {
+                        self.set_active_part(Some(next), true);
                         self.focus_segment_in_dom(next);
                     }
                 }
@@ -210,6 +226,12 @@ impl PineDateField {
 }
 
 impl PineDateField {
+    fn set_active_part(&mut self, part: Option<DatePart>, selected: bool) {
+        self.active_part = part.map(DatePart::as_str).unwrap_or("").into();
+        self.focused = part.is_some();
+        self.part_selected = part.is_some() && selected;
+    }
+
     fn active_part(&self) -> Option<DatePart> {
         match self.active_part.as_str() {
             "month" => Some(DatePart::Month),
@@ -217,6 +239,35 @@ impl PineDateField {
             "year" => Some(DatePart::Year),
             _ => None,
         }
+    }
+
+    fn part_from_event(&self, ev: &web_sys::KeyboardEvent) -> Option<DatePart> {
+        let el = ev
+            .current_target()
+            .or_else(|| ev.target())
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())?;
+        match el.get_attribute("data-part").as_deref() {
+            Some("month") => Some(DatePart::Month),
+            Some("day") => Some(DatePart::Day),
+            Some("year") => Some(DatePart::Year),
+            _ => None,
+        }
+    }
+
+    fn blur_stays_within_field(&self, ev: &web_sys::FocusEvent) -> bool {
+        let Some(scope) = current_scope_id() else {
+            return false;
+        };
+        let Some(root) = refs::get_on(scope, "root") else {
+            return false;
+        };
+        let Some(next) = ev.related_target() else {
+            return false;
+        };
+        let Ok(next_node) = next.dyn_into::<web_sys::Node>() else {
+            return false;
+        };
+        root.contains(Some(&next_node))
     }
 
     fn segments_from_value(&self) -> DateSegments {

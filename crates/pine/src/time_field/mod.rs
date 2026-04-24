@@ -26,7 +26,11 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
 #[derive(Serialize, Deserialize)]
-#[component(template = "PineTimeField.poco", role = "interactive", display = "contents")]
+#[component(
+    template = "PineTimeField.poco",
+    role = "interactive",
+    display = "contents"
+)]
 pub struct PineTimeField {
     /// Two-way bound time as `HH:MM` / `HH:MM:SS`. Empty = unset.
     #[model]
@@ -53,6 +57,9 @@ pub struct PineTimeField {
     /// Currently-focused segment — `"hour"` / `"minute"` /
     /// `"second"` / `""`.
     pub active_part: String,
+    /// Focus selects the whole segment, so the first digit
+    /// replaces it rather than appending to the committed value.
+    pub part_selected: bool,
 
     pub hour_display: String,
     pub minute_display: String,
@@ -77,6 +84,7 @@ impl Default for PineTimeField {
             readonly: false,
             required: false,
             active_part: String::new(),
+            part_selected: false,
             hour_display: TimePart::Hour.placeholder().into(),
             minute_display: TimePart::Minute.placeholder().into(),
             second_display: TimePart::Second.placeholder().into(),
@@ -116,30 +124,30 @@ impl PineTimeField {
     // ── focus bookkeeping ──────────────────────────────────────
 
     pub fn focus_hour(&mut self) {
-        self.active_part = TimePart::Hour.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(TimePart::Hour), true);
     }
     pub fn focus_minute(&mut self) {
-        self.active_part = TimePart::Minute.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(TimePart::Minute), true);
     }
     pub fn focus_second(&mut self) {
-        self.active_part = TimePart::Second.as_str().into();
-        self.focused = true;
+        self.set_active_part(Some(TimePart::Second), true);
     }
 
-    pub fn on_blur(&mut self) {
-        self.active_part = String::new();
-        self.focused = false;
+    pub fn on_blur(&mut self, ev: web_sys::FocusEvent) {
+        if self.blur_stays_within_field(&ev) {
+            return;
+        }
+        self.set_active_part(None, false);
         self.touched = true;
     }
 
     // ── keydown dispatcher ─────────────────────────────────────
 
     pub fn on_key(&mut self, ev: web_sys::KeyboardEvent) {
-        let Some(part) = self.active_part() else {
+        let Some(part) = self.part_from_event(&ev).or_else(|| self.active_part()) else {
             return;
         };
+        self.set_active_part(Some(part), self.part_selected);
         if self.disabled || self.readonly {
             return;
         }
@@ -153,6 +161,7 @@ impl PineTimeField {
             "ArrowLeft" => {
                 ev.prevent_default();
                 if let Some(prev) = part.prev(self.has_seconds) {
+                    self.set_active_part(Some(prev), true);
                     self.focus_segment_in_dom(prev);
                 }
                 return;
@@ -160,6 +169,7 @@ impl PineTimeField {
             "ArrowRight" => {
                 ev.prevent_default();
                 if let Some(next) = part.next(self.has_seconds) {
+                    self.set_active_part(Some(next), true);
                     self.focus_segment_in_dom(next);
                 }
                 return;
@@ -180,6 +190,7 @@ impl PineTimeField {
             "Enter" => {
                 ev.prevent_default();
                 if let Some(next) = part.next(self.has_seconds) {
+                    self.set_active_part(Some(next), true);
                     self.focus_segment_in_dom(next);
                 }
                 return;
@@ -190,10 +201,15 @@ impl PineTimeField {
                     return;
                 };
                 ev.prevent_default();
+                if self.part_selected {
+                    segs.clear_part(part);
+                }
                 let advanced = segs.type_digit(part, digit as u8);
+                self.part_selected = false;
                 self.commit_segments(&segs);
                 if advanced {
                     if let Some(next) = part.next(self.has_seconds) {
+                        self.set_active_part(Some(next), true);
                         self.focus_segment_in_dom(next);
                     }
                 }
@@ -207,6 +223,12 @@ impl PineTimeField {
 }
 
 impl PineTimeField {
+    fn set_active_part(&mut self, part: Option<TimePart>, selected: bool) {
+        self.active_part = part.map(TimePart::as_str).unwrap_or("").into();
+        self.focused = part.is_some();
+        self.part_selected = part.is_some() && selected;
+    }
+
     fn active_part(&self) -> Option<TimePart> {
         match self.active_part.as_str() {
             "hour" => Some(TimePart::Hour),
@@ -214,6 +236,35 @@ impl PineTimeField {
             "second" if self.has_seconds => Some(TimePart::Second),
             _ => None,
         }
+    }
+
+    fn part_from_event(&self, ev: &web_sys::KeyboardEvent) -> Option<TimePart> {
+        let el = ev
+            .current_target()
+            .or_else(|| ev.target())
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())?;
+        match el.get_attribute("data-part").as_deref() {
+            Some("hour") => Some(TimePart::Hour),
+            Some("minute") => Some(TimePart::Minute),
+            Some("second") if self.has_seconds => Some(TimePart::Second),
+            _ => None,
+        }
+    }
+
+    fn blur_stays_within_field(&self, ev: &web_sys::FocusEvent) -> bool {
+        let Some(scope) = current_scope_id() else {
+            return false;
+        };
+        let Some(root) = refs::get_on(scope, "root") else {
+            return false;
+        };
+        let Some(next) = ev.related_target() else {
+            return false;
+        };
+        let Ok(next_node) = next.dyn_into::<web_sys::Node>() else {
+            return false;
+        };
+        root.contains(Some(&next_node))
     }
 
     /// Pull partial digits from the rendered placeholders — the

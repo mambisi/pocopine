@@ -1,9 +1,11 @@
 <div class="pine-time-range-field"
      pp-ref="root"
      role="group"
+     @keydown="on_key"
      :data-disabled="disabled"
      :data-readonly="readonly">
   <pine-time-field class="pine-time-range-field-start"
+                   pp-ref="start-field"
                    pp-model:value="start"
                    :min-value="min_value"
                    :max-value="effective_start_max()"
@@ -14,6 +16,7 @@
                    :required="required"></pine-time-field>
   <span class="pine-time-range-field-separator" aria-hidden="true" pp-text="separator"></span>
   <pine-time-field class="pine-time-range-field-end"
+                   pp-ref="end-field"
                    pp-model:value="end"
                    :min-value="effective_end_min()"
                    :max-value="max_value"
