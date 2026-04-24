@@ -56,6 +56,16 @@ pub struct CalendarMonthView {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — a Calendar is exactly a Header + a Grid. Any other
+// direct child (stray labels, extra wrappers, arbitrary elements)
+// breaks the visual and a11y contract: the Header owns month
+// navigation, the Grid owns the date selection. Authors who want
+// surrounding chrome wrap the whole `<pine-calendar-root>`, not
+// its interior.
+#[slot(default, only = [
+    super::header::PineCalendarHeader,
+    super::grid::PineCalendarGrid,
+])]
 pub struct PineCalendarRoot {
     // ── authored config ─────────────────────────────────────
     /// Visible-month anchor. `None` falls back to today.

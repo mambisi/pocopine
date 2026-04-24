@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
     role = "panel",
     display = "contents"
 )]
+// RFC 049 — mirror of PineCalendarHeader: exactly Prev + Heading
+// + Next for month navigation.
+#[slot(default, only = [
+    PineRangeCalendarPrev,
+    PineRangeCalendarHeading,
+    PineRangeCalendarNext,
+])]
 pub struct PineRangeCalendarHeader {}
 
 #[handlers]

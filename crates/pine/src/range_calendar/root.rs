@@ -40,6 +40,13 @@ pub struct RangeCellView {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — mirror of PineCalendarRoot's contract: exactly a
+// Header + a Grid. The range variant has identical structural
+// invariants, just different state (two-date selection vs one).
+#[slot(default, only = [
+    super::header::PineRangeCalendarHeader,
+    super::grid::PineRangeCalendarGrid,
+])]
 pub struct PineRangeCalendarRoot {
     #[model]
     pub start: Option<DateValue>,

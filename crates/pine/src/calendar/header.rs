@@ -25,6 +25,12 @@ use serde::{Deserialize, Serialize};
     role = "panel",
     display = "contents"
 )]
+// RFC 049 — a Header holds exactly Prev + Heading + Next.
+// The three parts cooperate on month navigation (Prev/Next
+// shift the visible-month; Heading labels it); dropping a
+// stray button or div here confuses screen readers about the
+// navigation unit.
+#[slot(default, only = [PineCalendarPrev, PineCalendarHeading, PineCalendarNext])]
 pub struct PineCalendarHeader {}
 
 #[handlers]

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
     role = "list",
     display = "contents"
 )]
+// RFC 049 — mirror of PineCalendarGrid: GridHead + GridBody.
+#[slot(default, only = [PineRangeCalendarGridHead, PineRangeCalendarGridBody])]
 pub struct PineRangeCalendarGrid {
     #[observe(RANGE_ROOT)]
     pub disabled: bool,

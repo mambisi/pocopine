@@ -19,6 +19,10 @@ use serde::{Deserialize, Serialize};
     role = "list",
     display = "contents"
 )]
+// RFC 049 — a Grid pairs a GridHead (weekday labels) with a
+// GridBody (the dates). Other content inside the grid confuses
+// `role="grid"` semantics and breaks `aria-rowindex` numbering.
+#[slot(default, only = [PineCalendarGridHead, PineCalendarGridBody])]
 pub struct PineCalendarGrid {
     #[observe(ROOT)]
     pub disabled: bool,
