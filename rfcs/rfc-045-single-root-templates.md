@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Implemented |
+| **Status** | Implemented (amendment in flight — see §9) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-24 |
 | **Supersedes** | — |
-| **Related** | [RFC 001](./rfc-001-components.md), [RFC 033](./rfc-033-primitive-roles.md) |
+| **Related** | [RFC 001](./rfc-001-components.md), [RFC 033](./rfc-033-primitive-roles.md), [RFC 050](./rfc-050-html5ever-compile-time-parser.md) §4.5 |
 
 ## 1. Summary
 
@@ -396,3 +396,149 @@ render that drops half the template.
 4. No documentation page yet — this RFC is the spec; once
    Implemented, a line goes into `docs/poco/` describing the
    one-root rule and the two failure messages.
+
+## 8. In-flight migration — RFC 050 §4.5
+
+The v1 implementation (shipped and marked Implemented) uses a
+`const fn check_single_root` called from a `const _: () =
+match ...` block, so failure surfaces as an `E0080` const-eval
+panic attached to the `#[component]` attribute.
+
+RFC 050 §4.5 migrates the check to run inside the proc-macro
+on the `html5ever`-produced `TemplateAst`:
+`ast.element_roots().count() == 1`. The rule is the same; the
+diagnostic improves to a pre-rendered `annotate-snippets`
+block pointing at the offending `.poco` line. That migration
+is the reference consumer for RFC 050's parser and lands on
+the same branch.
+
+Updated wiring in `#[component]`:
+
+```rust
+match ::pocopine_macros::template_parser::parse_strict(
+    include_str!(#template_path),
+    #template_path_for_diagnostics,
+) {
+    Ok(ast) => match ast.element_roots().count() {
+        1 => { /* OK */ }
+        0 => return emit_rendered_error("has no root element", …),
+        _ => return emit_rendered_error("has more than one root element", …),
+    },
+    Err(parser_errors) => return emit_rendered_errors(parser_errors),
+}
+```
+
+The `element_roots()` helper — not `roots.len()` — is the
+canonical count, because RFC 050 surfaces text, comments, and
+synthetic nodes at `TemplateAst.roots` for diagnostic reasons.
+
+## 9. Developer escape hatch — `POCOPINE_TEMPLATES_LENIENT`
+
+Strict-by-default (§1 + §4.8 in RFC 050) is the right policy
+for CI and release builds. During local iteration it's a
+papercut: a half-written template broken for 30 seconds stops
+the whole workspace from compiling, making it hard to see
+the error *in its rendered context* alongside the rest of the
+running app.
+
+The escape hatch is an environment variable read by
+`#[component]` at macro expansion:
+
+```text
+POCOPINE_TEMPLATES_LENIENT=1 cargo check
+POCOPINE_TEMPLATES_LENIENT=1 cargo run
+```
+
+When set to a truthy value (`1`, `true`, `yes` — case-
+insensitive), **every template-strictness rule governed by
+the `#[component]` macro downgrades to a compile-time
+warning**:
+
+- single-root violation (this RFC),
+- forbidden self-close syntax (RFC 050 §4.8),
+- any `parse_strict`-level parse error (RFC 050 §4.8),
+- future static checks (RFC 049's slot contracts, etc.)
+  that build on the same pipeline.
+
+The mechanism is one `env::var_os("POCOPINE_TEMPLATES_LENIENT")`
+call in the diagnostic-emission path: if lenient, the
+`annotate-snippets`-rendered error is still composed but is
+attached to a `syn::Attribute` as a deprecation-style warning
+instead of a `syn::Error`. The template walker still produces
+the AST, and `#[component]` still emits `register_template(…)`
+using whatever the walker produced — so the app compiles and
+the author sees the rendered error block alongside a live
+render that reflects the parser's best-effort interpretation.
+
+### 9.1 Constraints
+
+- **Not a per-component attribute.** No `#[component(lenient =
+  true)]`. A per-call flag invites drift — once set, nobody
+  remembers to remove it — and inverts the default. The env
+  var is ambient: toggle on for a session, forget it, the
+  next clean build reverts.
+- **Not a `Cargo.toml` feature.** Features are compile-time;
+  toggling would rebuild every dependency and land in
+  `Cargo.lock`. Env-var is a local-session knob that requires
+  no workspace changes.
+- **Not observable at runtime.** The flag only affects
+  whether `#[component]` emits errors or warnings. The
+  generated code is byte-identical in both modes; no
+  `cfg(pocopine_lenient)` branches in runtime code.
+- **CI must not set it.** Document the guard-rail in
+  `docs/poco/` and encourage teams to add a CI check that
+  `POCOPINE_TEMPLATES_LENIENT` is unset in the build
+  environment. Making it easy to opt out is worth the risk;
+  the build-green-in-CI invariant is unchanged.
+
+### 9.2 What it does not relax
+
+- **`parse()` vs `parse_strict()` inside the parser module.**
+  The module contract is unchanged — `parse_strict` still
+  returns `Err` on any error. The env var is read by the
+  `#[component]` macro layer, above the parser, to decide
+  how to *surface* errors.
+- **Correctness of the template.** A lenient build of a
+  multi-root `.poco` still silently drops the second root at
+  walker time (the runtime behaviour RFC 045 was created to
+  eliminate). The warning is the only visible signal; the
+  render is as wrong as it was before RFC 045 shipped. That's
+  the trade — we're reconnecting the historical runtime
+  behaviour for dev-only iteration.
+
+### 9.3 Diagnostic shape in lenient mode
+
+```text
+warning: pocopine: template for component `my-menu` has more
+         than one root element — only the first root will
+         render at runtime (second and subsequent roots are
+         dropped by the walker). Set `POCOPINE_TEMPLATES_LENIENT`
+         to `0` or unset to turn this into a hard error.
+  --> src/MyMenu.poco:14:1
+   |
+14 | <div>second root</div>
+   | ^^^^^^^^^^^^^^^^^^^^^^ additional root — drops at runtime
+```
+
+The warning body explicitly names the consequence ("dropped
+by the walker") so authors aren't surprised by the
+difference between dev and CI.
+
+### 9.4 Implementation notes
+
+1. `crates/pocopine-macros/src/lib.rs` — a helper that reads
+   `env::var_os("POCOPINE_TEMPLATES_LENIENT")` once at macro
+   entry and threads a `Strictness` enum into the error
+   emitters. Cached per `#[component]` invocation; re-read
+   per macro call (not per workspace-compile) so toggling
+   takes effect on the next `cargo check`.
+2. Warnings are emitted via `#[allow(...)]`-style attributes
+   on a `const _: () = ();` item with a `#[deprecated(note =
+   "…")]` attribute carrying the rendered message — rustc
+   surfaces `deprecated` at the `const _` site with our
+   multi-line message body. (The `deprecated` mechanism is
+   misnamed for this use case but is the cleanest way to emit
+   a stable warning from a proc-macro on stable Rust.)
+3. `trybuild` tests gate both modes: strict mode rejects,
+   lenient mode accepts-with-warning. The warning body is
+   snapshotted via `trybuild`'s stderr comparison.
