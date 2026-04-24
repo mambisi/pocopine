@@ -82,8 +82,11 @@ use markup5ever_rcdom::{Handle, NodeData, RcDom};
 /// `source` and `file_path` are carried alongside the tree so
 /// diagnostic renderers (RFC 049's `annotate-snippets` path)
 /// can build source-highlighted errors without re-reading the
-/// file.
+/// file. RFC 045 doesn't currently read them — RFC 049 will —
+/// so we document the intent and silence dead-code warnings
+/// at the struct level.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are public AST contract; RFC 049 consumes them
 pub struct TemplateAst {
     /// Raw `.poco` bytes, verbatim. Retained for diagnostic
     /// rendering against byte-range annotations.
@@ -132,6 +135,7 @@ impl TemplateAst {
 
 /// One element in the template tree.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields are public AST contract; RFC 049 consumes them
 pub struct Element {
     /// Lowercase HTML local name (`"div"`, `"pine-context-menu-item"`).
     pub tag: String,
@@ -162,6 +166,7 @@ pub struct Element {
 
 /// Any top-level or nested template node.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // variant payloads are public AST contract; RFC 049 consumes them
 pub enum Node {
     Element(Element),
     Text(String, Range<usize>),
