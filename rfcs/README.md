@@ -54,3 +54,4 @@ Conventions:
 | 043 | [`pocopine::text` layout engine](./rfc-043-text-layout.md) | Implemented |
 | 044 | [`#[model]` field role for two-way component contracts](./rfc-044-model-fields.md) | Draft |
 | 045 | [Single-root `.poco` templates enforced at compile time](./rfc-045-single-root-templates.md) | Implemented |
+| 048 | [Scoped async tasks and extractor-driven `#[computed]`](./rfc-048-hooks.md) | Implemented |
