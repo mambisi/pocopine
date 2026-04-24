@@ -46,6 +46,11 @@ mod diagnostics;
 // RFC 049 — `#[slot]` helper-attribute parsing + marker-trait
 // emission. Inert helper consumed by `#[component]`.
 mod slot;
+// RFC 049 — `uses = [...]` list parsing for consumer
+// `#[component]` macros. Builds the local tag → TypePath table
+// the consumer-side scan (task #14) resolves child tags
+// against.
+mod uses;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -431,6 +436,12 @@ struct ComponentArgs {
     /// `"flip"` is recognised; any other value is a no-op so the arg
     /// is forwards-compatible with future modes (slide, stagger, …).
     animate: Option<LitStr>,
+    /// RFC 049 — resolved `tag → TypePath` table built from
+    /// `uses = [...]`. `None` when the consumer didn't opt in;
+    /// the consumer-side scan skips validation entirely in that
+    /// case. Empty table means "declared but zero entries" —
+    /// still opted-in for future use but no tags resolve.
+    uses: Option<uses::UsesTable>,
 }
 
 impl Parse for ComponentArgs {
@@ -438,6 +449,16 @@ impl Parse for ComponentArgs {
         let pairs: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
         let mut args = ComponentArgs::default();
         for kv in pairs {
+            // `uses = [...]` is the one non-string-valued key;
+            // handle it first so the string-lit extraction below
+            // doesn't reject it.
+            if kv.path.is_ident("uses") {
+                let entries = uses::parse_uses_array(kv.value)?;
+                let table = uses::resolve_uses(entries)?;
+                args.uses = Some(table);
+                continue;
+            }
+
             let lit = match kv.value {
                 Expr::Lit(ExprLit {
                     lit: Lit::Str(s), ..
@@ -468,7 +489,7 @@ impl Parse for ComponentArgs {
                 return Err(syn::Error::new_spanned(
                     kv.path,
                     "unknown key — expected one of: name, template, style, role, \
-                     display, transition, transition_in, transition_out, animate",
+                     display, transition, transition_in, transition_out, animate, uses",
                 ));
             }
         }
@@ -501,7 +522,7 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
 }
 
 /// Kebab-case an ident: `TodoItem` → `todo-item`.
-fn kebab_case(ident: &str) -> String {
+pub(crate) fn kebab_case(ident: &str) -> String {
     let mut out = String::with_capacity(ident.len() + 2);
     for (i, c) in ident.chars().enumerate() {
         if c.is_ascii_uppercase() && i > 0 {
