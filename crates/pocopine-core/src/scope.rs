@@ -252,7 +252,9 @@ impl Scope {
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);
         crate::reactive::clear_scope(id);
+        crate::component_computed::clear_scope(id);
         crate::model_runtime::clear_scope(id);
+        crate::task::clear_scope(id);
         // Drop the proxy-trap closures that were pinned in
         // `into_proxy`. The `Box<dyn Any>` drop chain runs the
         // `Closure` destructor, which releases the underlying

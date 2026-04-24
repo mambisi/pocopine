@@ -44,6 +44,19 @@ struct ObserveEntry {
     key_path: Path,
 }
 
+struct ComputedMethod {
+    method_ident: syn::Ident,
+    field_name: String,
+    ret_ty: Type,
+    params: Vec<ComputedParam>,
+}
+
+struct ComputedParam {
+    ident: syn::Ident,
+    ty: Type,
+    is_computed_dep: bool,
+}
+
 /// HTML Living Standard element names. A struct whose kebab-case ident
 /// matches one of these is rejected — its custom-element tag would
 /// collide with real HTML markup in parent templates.
@@ -917,7 +930,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
                 match key {
                     #(#get_arms)*
-                    _ => ::pocopine::__private::JsValue::UNDEFINED,
+                    _ => <Self as ::pocopine::__private::HandlerDispatch>::computed_get(self, key)
+                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
                 }
             }
             fn set(&mut self, key: &str, value: ::pocopine::__private::JsValue) {
@@ -927,7 +941,16 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
             fn keys(&self) -> &'static [&'static str] {
-                &[#(#keys_arr),*]
+                static __POCOPINE_KEYS: ::std::sync::OnceLock<&'static [&'static str]> =
+                    ::std::sync::OnceLock::new();
+                *__POCOPINE_KEYS.get_or_init(|| {
+                    let mut __keys = vec![#(#keys_arr),*];
+                    __keys.extend_from_slice(
+                        <Self as ::pocopine::__private::HandlerDispatch>::computed_keys(),
+                    );
+                    let __boxed: ::std::boxed::Box<[&'static str]> = __keys.into_boxed_slice();
+                    ::std::boxed::Box::leak(__boxed)
+                })
             }
             fn is_prop(&self, key: &str) -> bool {
                 #is_prop_body
@@ -1049,6 +1072,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // method. The macro auto-generates an `on_ready` that wires a
     // `watch_field` per entry.
     let mut watches: Vec<(syn::Ident, syn::Ident, syn::Type)> = Vec::new();
+    let mut computed_methods: Vec<ComputedMethod> = Vec::new();
 
     // First pass: collect watch metadata while the `#[watch(...)]`
     // attribute is still on each method. Strip the attribute in the
@@ -1061,12 +1085,16 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
         let mut watch_field: Option<syn::Ident> = None;
+        let mut is_computed = false;
         method.attrs.retain(|attr| {
             if attr.path().is_ident("watch") {
                 if let Ok(ident) = attr.parse_args::<syn::Ident>() {
                     watch_field = Some(ident);
                 }
                 false // strip
+            } else if attr.path().is_ident("computed") {
+                is_computed = true;
+                false
             } else {
                 true
             }
@@ -1080,6 +1108,80 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let Some(v_ty) = v_ty else { continue };
             methods_to_skip_in_arms.insert(method.sig.ident.to_string());
             watches.push((method.sig.ident.clone(), field_ident, v_ty));
+        }
+        if is_computed {
+            if method.sig.receiver().is_some() {
+                return syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "#[computed] methods must not take self; declare dependencies as parameters",
+                )
+                .to_compile_error()
+                .into();
+            }
+            let ret_ty = match &method.sig.output {
+                syn::ReturnType::Type(_, ty) => (**ty).clone(),
+                syn::ReturnType::Default => {
+                    return syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "#[computed] methods must declare a return type",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            };
+            methods_to_skip_in_arms.insert(method.sig.ident.to_string());
+            computed_methods.push(ComputedMethod {
+                method_ident: method.sig.ident.clone(),
+                field_name: method.sig.ident.to_string().trim_start_matches("r#").to_string(),
+                ret_ty,
+                params: Vec::new(),
+            });
+        }
+    }
+
+    let computed_names: std::collections::HashSet<String> = computed_methods
+        .iter()
+        .map(|entry| entry.field_name.clone())
+        .collect();
+
+    for entry in computed_methods.iter_mut() {
+        let method = input.items.iter().find_map(|item| match item {
+            ImplItem::Fn(method) if method.sig.ident == entry.method_ident => Some(method),
+            _ => None,
+        });
+        let Some(method) = method else {
+            continue;
+        };
+        for arg in method.sig.inputs.iter() {
+            let FnArg::Typed(PatType { pat, ty, .. }) = arg else {
+                continue;
+            };
+            let Pat::Ident(pat_ident) = pat.as_ref() else {
+                return syn::Error::new_spanned(
+                    pat,
+                    "#[computed] parameters must be simple identifiers",
+                )
+                .to_compile_error()
+                .into();
+            };
+            let dep_name = pat_ident.ident.to_string().trim_start_matches("r#").to_string();
+            entry.params.push(ComputedParam {
+                ident: pat_ident.ident.clone(),
+                ty: (**ty).clone(),
+                is_computed_dep: computed_names.contains(&dep_name),
+            });
+        }
+    }
+    for entry in &computed_methods {
+        for param in entry.params.iter().filter(|param| param.is_computed_dep) {
+            if matches!(param.ty, Type::Reference(_)) {
+                return syn::Error::new_spanned(
+                    &param.ident,
+                    "#[computed] cannot borrow another computed value by reference in v1",
+                )
+                .to_compile_error()
+                .into();
+            }
         }
     }
 
@@ -1174,9 +1276,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let setup_impl = Some(quote! {
         fn setup(&mut self) {
             <Self>::__pocopine_observe_seed(self);
+            let __state_ptr = ::pocopine::__private::component_computed::state_ptr(self);
             let __me = ::pocopine::this::<Self>();
-            <Self>::__pocopine_observe_install(__me);
             #user_on_setup_call
+            <Self>::__pocopine_computed_install(__me.scope_id(), __state_ptr, __me.clone());
+            <Self>::__pocopine_observe_install(__me);
         }
         fn has_setup(&self) -> bool { true }
     });
@@ -1269,6 +1373,179 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
     let has_watches = !watches.is_empty();
+    let has_computed = !computed_methods.is_empty();
+
+    let mut computed_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (idx, entry) in computed_methods.iter().enumerate() {
+        computed_index.insert(entry.field_name.clone(), idx);
+    }
+    let mut indegree = vec![0_usize; computed_methods.len()];
+    let mut edges: Vec<Vec<usize>> = vec![Vec::new(); computed_methods.len()];
+    for (idx, entry) in computed_methods.iter().enumerate() {
+        for param in entry.params.iter().filter(|param| param.is_computed_dep) {
+            let dep_name = param.ident.to_string().trim_start_matches("r#").to_string();
+            if let Some(dep_idx) = computed_index.get(&dep_name).copied() {
+                indegree[idx] += 1;
+                edges[dep_idx].push(idx);
+            }
+        }
+    }
+    let mut ready: Vec<usize> = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, degree)| (*degree == 0).then_some(idx))
+        .collect();
+    let mut topo = Vec::with_capacity(computed_methods.len());
+    while let Some(idx) = ready.pop() {
+        topo.push(idx);
+        for next in &edges[idx] {
+            indegree[*next] -= 1;
+            if indegree[*next] == 0 {
+                ready.push(*next);
+            }
+        }
+    }
+    if topo.len() != computed_methods.len() {
+        let offender = computed_methods
+            .iter()
+            .enumerate()
+            .find_map(|(idx, entry)| (indegree[idx] > 0).then_some(entry.method_ident.clone()))
+            .unwrap_or_else(|| format_ident!("computed"));
+        return syn::Error::new_spanned(
+            offender,
+            "#[computed] dependency graph contains a cycle",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let computed_install_stmts = topo.iter().map(|idx| {
+        let entry = &computed_methods[*idx];
+        let method_ident = &entry.method_ident;
+        let field_name = &entry.field_name;
+        let ret_ty = &entry.ret_ty;
+        let arg_bindings: Vec<_> = entry
+            .params
+            .iter()
+            .map(|param| {
+                let ident = &param.ident;
+                let ty = &param.ty;
+                let dep_name = ident.to_string().trim_start_matches("r#").to_string();
+                if param.is_computed_dep {
+                    quote! {
+                        let #ident: #ty = ::pocopine::__private::serde_wasm_bindgen::from_value(
+                            ::pocopine::__private::component_computed::get(__scope, #dep_name)
+                                .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
+                        )
+                        .expect("failed to deserialize a computed dependency");
+                    }
+                } else if matches!(ty, Type::Reference(_)) {
+                    let dep_ident = ident;
+                    quote! {
+                        let #ident: #ty = &__s.#dep_ident;
+                    }
+                } else {
+                    let dep_ident = ident;
+                    quote! {
+                        let #ident: #ty = ::core::clone::Clone::clone(&__s.#dep_ident);
+                    }
+                }
+            })
+            .collect();
+        let track_fields = entry
+            .params
+            .iter()
+            .filter(|param| !param.is_computed_dep)
+            .map(|param| {
+                let dep_name = param.ident.to_string().trim_start_matches("r#").to_string();
+                quote! {
+                    ::pocopine::__private::track(__scope, #dep_name);
+                }
+            });
+        let args = entry.params.iter().map(|param| {
+            let ident = &param.ident;
+            quote! { #ident }
+        });
+        quote! {
+            {
+                let __computed_handle = __handle.clone();
+                __entries.push((
+                    #field_name,
+                    ::std::rc::Rc::new(::pocopine::__private::runtime_computed(move || {
+                        #(#track_fields)*
+                        __computed_handle.with(|__s| {
+                            #(#arg_bindings)*
+                            let __out: #ret_ty = Self::#method_ident(#(#args),*);
+                            let __js = ::pocopine::__private::serde_wasm_bindgen::to_value(&__out)
+                                .unwrap_or(::pocopine::__private::JsValue::NULL);
+                            if __js.is_undefined() {
+                                ::pocopine::__private::JsValue::NULL
+                            } else {
+                                __js
+                            }
+                        })
+                    })),
+                ));
+            }
+        }
+    });
+    let computed_keys = computed_methods.iter().map(|entry| {
+        let field_name = &entry.field_name;
+        quote! { #field_name }
+    });
+    let computed_dispatch_impl = if has_computed {
+        quote! {
+            fn computed_keys() -> &'static [&'static str]
+            where
+                Self: Sized,
+            {
+                &[#(#computed_keys),*]
+            }
+
+            fn computed_get(
+                &self,
+                key: &str,
+            ) -> ::core::option::Option<::pocopine::__private::JsValue> {
+                let __ptr = ::pocopine::__private::component_computed::state_ptr(self);
+                ::pocopine::__private::component_computed::get_for_state_ptr(__ptr, key)
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let computed_impl = if has_computed {
+        quote! {
+            impl #ty {
+                #[doc(hidden)]
+                pub fn __pocopine_computed_install(
+                    __scope: ::pocopine::ScopeId,
+                    __state_ptr: usize,
+                    __handle: ::pocopine::Handle<Self>,
+                ) {
+                    let mut __entries = ::std::vec::Vec::new();
+                    #(#computed_install_stmts)*
+                    ::pocopine::__private::component_computed::install(
+                        __scope,
+                        __state_ptr,
+                        __entries,
+                    );
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl #ty {
+                #[doc(hidden)]
+                pub fn __pocopine_computed_install(
+                    _scope: ::pocopine::ScopeId,
+                    _state_ptr: usize,
+                    _handle: ::pocopine::Handle<Self>,
+                ) {
+                }
+            }
+        }
+    };
 
     // RFC-032 — same extractor-forwarding logic as mount. Zero-arg
     // user signature stays zero-arg; any extractor params become
@@ -1332,6 +1609,8 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let out = quote! {
         #input
 
+        #computed_impl
+
         impl ::pocopine::__private::HandlerDispatch for #ty {
             fn invoke_handler(
                 &mut self,
@@ -1347,6 +1626,7 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #mount_impl
             #on_ready_impl
             #unmount_impl
+            #computed_dispatch_impl
         }
     };
 

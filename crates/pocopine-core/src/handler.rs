@@ -107,6 +107,21 @@ pub trait HandlerDispatch {
     fn animate_kind(&self) -> &'static str {
         ""
     }
+
+    /// Component-level synthetic readonly fields generated from
+    /// `#[computed]` methods. Empty by default.
+    fn computed_keys() -> &'static [&'static str]
+    where
+        Self: Sized,
+    {
+        &[]
+    }
+
+    /// Resolve a synthetic computed field by name.
+    fn computed_get(&self, key: &str) -> Option<JsValue> {
+        let _ = key;
+        None
+    }
 }
 
 /// Convert a raw `JsValue` into the handler-argument type the author

@@ -15,7 +15,8 @@ pub use pocopine_core::{
     watch_scope_field_now, App, Body, Component, ComponentState, Computed, Doc, EffectId,
     EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported, LifecycleContext,
     MountEpoch, ParentId, Refs, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
-    Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TeleportHost, TypedEl, Win,
+    Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle, TeleportHost,
+    TypedEl, Win, spawn, spawn_latest, spawn_scoped,
 };
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
@@ -25,8 +26,9 @@ pub mod prelude {
     pub use crate::{
         batch, component, computed, cx, dispatch, dispatch_event, effect, emit, emit_cancelable,
         emit_cancelable_from, emit_from, emit_from_host, emit_model, emit_model_field, handlers,
-        inject_key, on_cleanup, run, rw_signal, signal, store, this, watch, App, Component,
-        ComponentState, Computed, Handle, InjectKey, RwSignal, Scope, ScopeId, ServerError,
+        inject_key, on_cleanup, run, rw_signal, signal, spawn, spawn_latest, spawn_scoped, store,
+        this, watch, App, Component, ComponentState, Computed, Handle, InjectKey, RwSignal,
+        Scope, ScopeId, ServerError,
         ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
@@ -38,9 +40,11 @@ pub mod __private {
     pub use js_sys;
     pub use pocopine_core::{
         check_single_root, compile_template, inject_pp_data, inject_style, register_component,
-        register_store_scope, register_template, store_scope, with_write_origin, Component,
+        register_store_scope, register_template, store_scope, track, with_write_origin, Component,
         ComponentState, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, RootCheck,
-        Scope, Store, WriteOrigin,
+        Scope, Store, WriteOrigin, component_computed, computed as runtime_computed,
+        spawn as runtime_spawn, spawn_latest as runtime_spawn_latest,
+        spawn_scoped as runtime_spawn_scoped, task::TaskHandle,
     };
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;

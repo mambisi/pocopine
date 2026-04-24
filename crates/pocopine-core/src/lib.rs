@@ -10,6 +10,7 @@
 
 pub mod animate;
 pub mod app;
+pub mod component_computed;
 pub mod computed;
 pub mod context;
 #[cfg(feature = "devtools")]
@@ -41,6 +42,7 @@ pub mod store;
 pub mod styles;
 pub mod templates;
 pub mod text;
+pub mod task;
 pub mod tick;
 pub mod walker;
 pub mod watch;
@@ -62,7 +64,8 @@ pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
 pub use reactive::{
     batch, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run_now,
-    set_auto_flush, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
+    set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
+    SIGNAL_SCOPE,
 };
 pub use registry::{register_component, ComponentCtor, ComponentEntry, COMPONENT_ENTRIES};
 pub use router::{navigate, register_route};
@@ -70,6 +73,7 @@ pub use scope::{current_scope_id, ComponentState, Scope};
 pub use server::{Result as ServerResult, ServerError};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
+pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
 pub use styles::inject_style;
 pub use templates::{
     check_single_root, compile_template, inject_pp_data, is_registered, register_template,

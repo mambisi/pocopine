@@ -9,7 +9,7 @@ use std::rc::Rc;
 use js_sys::Reflect;
 use pocopine_core::{
     batch, computed, effect, flush_sync, on_cleanup, release, rw_signal, set_auto_flush, signal,
-    watch, watch_scope_field_now, Scope,
+    spawn_latest, spawn_scoped, watch, watch_scope_field_now, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -305,6 +305,43 @@ fn watch_scope_field_now_reads_existing_value_on_install() {
 
     assert_eq!(hits.get(), 1);
     assert_eq!(seen.borrow().as_str(), "2024-06-15");
+}
+
+#[wasm_bindgen_test]
+fn spawn_scoped_cancels_when_scope_is_removed() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let handle = pocopine_core::scope::with_current_scope_id(scope.id, || {
+        spawn_scoped(async move {})
+    });
+
+    assert!(!handle.is_cancelled());
+    Scope::remove(scope.id);
+    assert!(handle.is_cancelled());
+}
+
+#[wasm_bindgen_test]
+fn spawn_latest_cancels_previous_task_in_same_slot() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let (first, second) = pocopine_core::scope::with_current_scope_id(scope.id, || {
+        let first = spawn_latest("search", async move {});
+        let second = spawn_latest("search", async move {});
+        (first, second)
+    });
+
+    assert!(first.is_cancelled(), "older latest-wins task should be cancelled");
+    assert!(
+        !second.is_cancelled(),
+        "newest latest-wins task should stay active until scope teardown"
+    );
+
+    Scope::remove(scope.id);
+    assert!(second.is_cancelled());
 }
 
 #[wasm_bindgen_test]

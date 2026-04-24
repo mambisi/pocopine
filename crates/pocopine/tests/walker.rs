@@ -565,6 +565,50 @@ struct FlattenParent {
 #[handlers]
 impl FlattenParent {}
 
+#[derive(Serialize, Deserialize)]
+#[component(template = "ComputedHost.html")]
+struct ComputedHost {
+    first: String,
+    last: String,
+    loading: bool,
+}
+
+impl Default for ComputedHost {
+    fn default() -> Self {
+        Self {
+            first: "Ada".into(),
+            last: "Lovelace".into(),
+            loading: false,
+        }
+    }
+}
+
+#[handlers]
+impl ComputedHost {
+    #[computed]
+    fn full_name(first: String, last: String) -> String {
+        format!("{first} {last}")
+    }
+
+    #[computed]
+    fn summary(loading: bool, full_name: String) -> String {
+        if loading {
+            format!("Loading {full_name}")
+        } else {
+            full_name
+        }
+    }
+
+    pub fn rename(&mut self) {
+        self.first = "Grace".into();
+        self.last = "Hopper".into();
+    }
+
+    pub fn toggle_loading(&mut self) {
+        self.loading = !self.loading;
+    }
+}
+
 fn register_all() {
     TestRow::register();
     TestList::register();
@@ -587,6 +631,7 @@ fn register_all() {
     OptionalAutoModelParent::register();
     FlattenChild::register();
     FlattenParent::register();
+    ComputedHost::register();
     FocusList::register();
     FallthroughRoot::register();
     NamedSlotHost::register();
@@ -2562,6 +2607,41 @@ async fn inline_expr_interpolation_splits_text_and_reactively_updates() {
     assert_eq!(read(".ih-escape"), "{{literal}} 4");
     assert_eq!(read(".ih-only"), "4");
     assert_eq!(read(".ih-nested"), "outer 4 mid Ada tail");
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn computed_fields_render_and_update_reactively() {
+    let host = mount("<computed-host></computed-host>");
+    tick().await;
+
+    let full = host.query_selector("#full").unwrap().unwrap();
+    let summary = host.query_selector("#summary").unwrap().unwrap();
+    assert_eq!(full.text_content().as_deref(), Some("Ada Lovelace"));
+    assert_eq!(summary.text_content().as_deref(), Some("Ada Lovelace"));
+
+    let rename = host.query_selector("#rename").unwrap().unwrap();
+    rename
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    assert_eq!(full.text_content().as_deref(), Some("Grace Hopper"));
+    assert_eq!(summary.text_content().as_deref(), Some("Grace Hopper"));
+
+    let toggle = host.query_selector("#toggle").unwrap().unwrap();
+    toggle
+        .dyn_ref::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+
+    assert_eq!(
+        summary.text_content().as_deref(),
+        Some("Loading Grace Hopper")
+    );
 
     host.remove();
 }
