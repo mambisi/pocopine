@@ -189,6 +189,16 @@ pub struct ParseError {
 /// only when a diagnostic path genuinely needs the AST
 /// alongside the errors.
 pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
+    // Pre-parse: pocopine-specific syntax rules that html5ever
+    // would either accept permissively or reject with wording
+    // that doesn't map to our semantics. Running these first
+    // gives authors a framework-owned diagnostic on the exact
+    // tag (with byte range), instead of relying on html5ever's
+    // generic "Unacknowledged self-closing tag" message that
+    // has no position anchor.
+    let mut errors: Vec<ParseError> = Vec::new();
+    detect_forbidden_self_close(source, &mut errors);
+
     let opts = ParseOpts {
         tree_builder: TreeBuilderOpts {
             drop_doctype: true,
@@ -208,14 +218,19 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
     )
     .one(source);
 
-    let mut errors: Vec<ParseError> = dom
-        .errors
-        .iter()
-        .map(|e| ParseError {
-            message: e.as_ref().to_string(),
+    for e in dom.errors.iter() {
+        let msg = e.as_ref().to_string();
+        // Suppress html5ever's own "Unacknowledged self-closing
+        // tag" wording — our pre-scan already emitted a
+        // framework-owned error with an exact byte range.
+        if msg == "Unacknowledged self-closing tag" {
+            continue;
+        }
+        errors.push(ParseError {
+            message: msg,
             byte_range: 0..0,
-        })
-        .collect();
+        });
+    }
 
     // Fragment parsing wraps the content in a single synthetic
     // root; walk into it to find the real top-level nodes.
@@ -308,6 +323,20 @@ impl<'a> Mapper<'a> {
         let Some(close_gt) = find_tag_end(self.source, open_lt) else {
             return;
         };
+
+        // Verify the tag at `cursor` is actually this element's
+        // opening. Foster-parenting / html5ever reparenting can
+        // put tree-DFS order out of sync with source order; in
+        // that case we'd otherwise claim someone else's range.
+        //
+        // Safer contract: if the source tag doesn't match, leave
+        // ranges at 0..0 and don't advance the cursor. Callers
+        // filtering by `byte_range != 0..0` get only elements
+        // whose positions are trustworthy.
+        if !source_tag_matches(self.source, open_lt, &el.tag) {
+            return;
+        }
+
         el.opening_tag_range = open_lt..close_gt + 1;
         self.cursor = close_gt + 1;
 
@@ -480,6 +509,143 @@ const VOID_ELEMENTS: &[&str] = &[
 
 fn is_void_element(tag: &str) -> bool {
     VOID_ELEMENTS.iter().any(|v| v.eq_ignore_ascii_case(tag))
+}
+
+/// Tags whose contents are parsed as foreign-namespace content
+/// (SVG / MathML). Inside them, self-closing syntax is valid
+/// for any element per HTML5; we skip self-close checks while
+/// the walker's depth counter says we're inside one.
+const FOREIGN_CONTENT_ROOTS: &[&str] = &["svg", "math"];
+
+fn is_foreign_content_root(tag: &str) -> bool {
+    FOREIGN_CONTENT_ROOTS.iter().any(|v| v.eq_ignore_ascii_case(tag))
+}
+
+/// RFC 050 explicit rule: `<tagname/>` self-close is only valid
+/// for HTML void elements (`<br/>`, `<img/>`, etc.) and foreign-
+/// content elements (anywhere inside `<svg>` / `<math>`). Using
+/// it on a regular element or a pocopine pseudo-element
+/// (`<slot/>`, `<root/>`, `<pine-foo/>`) is a framework-owned
+/// parse error with an exact byte range.
+///
+/// Authors who want an empty element must write the explicit
+/// close: `<slot></slot>` instead of `<slot/>`. All 241
+/// `.poco` files already follow this convention (audited on
+/// RFC 050 implementation) — this rule prevents regression
+/// from a permissive parser interpretation.
+fn detect_forbidden_self_close(source: &str, errors: &mut Vec<ParseError>) {
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut foreign_depth: u32 = 0;
+
+    while i < len {
+        // Skip comments so `<!-- <slot/> -->` doesn't false-flag.
+        if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
+            match find_seq(bytes, i + 4, b"-->") {
+                Some(end) => {
+                    i = end + 3;
+                    continue;
+                }
+                None => return,
+            }
+        }
+        // Doctype / PI — skip.
+        if i + 2 <= len && bytes[i] == b'<' && bytes[i + 1] == b'!' {
+            match find_byte(bytes, i, b'>') {
+                Some(end) => {
+                    i = end + 1;
+                    continue;
+                }
+                None => return,
+            }
+        }
+        if i + 2 <= len && bytes[i] == b'<' && bytes[i + 1] == b'?' {
+            match find_seq(bytes, i + 2, b"?>") {
+                Some(end) => {
+                    i = end + 2;
+                    continue;
+                }
+                None => return,
+            }
+        }
+
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        // Closing tag — track foreign-content exit, then skip.
+        if i + 1 < len && bytes[i + 1] == b'/' {
+            let name_start = i + 2;
+            let name_end = read_tag_name_end(bytes, name_start);
+            if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) {
+                if is_foreign_content_root(name) && foreign_depth > 0 {
+                    foreign_depth -= 1;
+                }
+            }
+            i = find_byte(bytes, i, b'>').map(|e| e + 1).unwrap_or(i + 1);
+            continue;
+        }
+        // Opening / self-closing tag.
+        let name_start = i + 1;
+        if name_start >= len || !bytes[name_start].is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let name_end = read_tag_name_end(bytes, name_start);
+        let tag = std::str::from_utf8(&bytes[name_start..name_end]).unwrap_or("");
+        let Some(gt) = find_tag_end(bytes, i) else {
+            return;
+        };
+        let self_closing = gt > i && bytes[gt - 1] == b'/';
+
+        if self_closing && foreign_depth == 0 && !is_void_element(tag) {
+            errors.push(ParseError {
+                message: format!(
+                    "self-closing syntax `<{tag}/>` is not allowed for `<{tag}>` in .poco templates — write `<{tag}></{tag}>` instead"
+                ),
+                byte_range: i..gt + 1,
+            });
+        }
+
+        if !self_closing && is_foreign_content_root(tag) {
+            foreign_depth += 1;
+        }
+        i = gt + 1;
+    }
+}
+
+/// Read from `start` until a tag-delimiter byte (whitespace,
+/// `/`, `>`) or end-of-input.
+fn read_tag_name_end(bytes: &[u8], start: usize) -> usize {
+    let mut end = start;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b.is_ascii_whitespace() || b == b'/' || b == b'>' {
+            break;
+        }
+        end += 1;
+    }
+    end
+}
+
+/// `true` if the opening tag beginning at `open_lt` (a `<`)
+/// names the given tag (case-insensitive). Used to sanity-check
+/// the source-mapping pass before claiming a range.
+fn source_tag_matches(bytes: &[u8], open_lt: usize, tag: &str) -> bool {
+    let name_start = open_lt + 1;
+    if name_start >= bytes.len() || bytes[open_lt] != b'<' {
+        return false;
+    }
+    let name_end = read_tag_name_end(bytes, name_start);
+    if name_end - name_start != tag.len() {
+        return false;
+    }
+    let tag_bytes = tag.as_bytes();
+    bytes[name_start..name_end]
+        .iter()
+        .zip(tag_bytes)
+        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
 }
 
 /// RcDom's fragment parsing nests the user's content inside an
@@ -956,5 +1122,160 @@ mod tests {
         let root = ast.element_roots().next().unwrap();
         assert_eq!(slice(src, &root.opening_tag_range), "<div class=x id=y>");
         assert_eq!(slice(src, &root.byte_range), src);
+    }
+
+    // ── Foster-parenting / reparenting fixtures (Codex #1) ────
+
+    #[test]
+    fn foster_parented_element_keeps_ranges_safe() {
+        // html5ever's spec-mandated recovery: a `<p>` inside
+        // `<table>` but outside a table-cell is relocated to
+        // **before** the `<table>` in the tree. The mapper's
+        // DFS assumption breaks — the `<p>` is tree-first but
+        // source-second (or vice-versa).
+        //
+        // Contract: when the source tag at the cursor doesn't
+        // match the tree element's name, the mapper bails on
+        // that element and leaves its ranges as 0..0. The AST
+        // is never handed a bogus range that slices out of a
+        // different tag. This is what makes byte ranges safe
+        // for diagnostic renderers: a non-zero range is a
+        // trustworthy range.
+        let src = "<table><p>bad</p></table>";
+        let (ast, _errors) = parse(src, "test.poco");
+
+        // Every non-zero opening_tag_range slices a substring
+        // whose first byte is `<` AND whose tag name actually
+        // matches the element's tag. This is the invariant we
+        // care about.
+        fn check(el: &Element, src: &str) {
+            if el.opening_tag_range != (0..0) {
+                let text = &src[el.opening_tag_range.clone()];
+                assert!(
+                    text.starts_with(&format!("<{}", el.tag)[..])
+                        || text
+                            .to_ascii_lowercase()
+                            .starts_with(&format!("<{}", el.tag)),
+                    "mapped opening range {:?} for <{}> doesn't actually name <{}>: {:?}",
+                    el.opening_tag_range,
+                    el.tag,
+                    el.tag,
+                    text,
+                );
+            }
+            for c in &el.children {
+                if let Node::Element(child) = c {
+                    check(child, src);
+                }
+            }
+        }
+        for node in &ast.roots {
+            if let Node::Element(el) = node {
+                check(el, src);
+            }
+        }
+    }
+
+    #[test]
+    fn foster_parented_stray_text_emits_parser_error() {
+        // "Non-space table text" is a spec-mandated html5ever
+        // diagnostic — we surface it via `errors`, not drop it.
+        // Per RFC 050 §4.8, `parse_strict` rejects this input;
+        // `parse` returns the tree for diagnostic rendering.
+        let src = "<table>stray<tr><td>x</td></tr></table>";
+        let (_ast, errors) = parse(src, "test.poco");
+        assert!(
+            !errors.is_empty(),
+            "stray text in <table> must surface as a parse error"
+        );
+        assert!(
+            parse_strict(src, "test.poco").is_err(),
+            "parse_strict must reject foster-parenting-triggering input"
+        );
+    }
+
+    // ── Self-close rule (Codex #3) ───────────────────────────
+
+    #[test]
+    fn self_close_on_pocopine_pseudo_tag_is_rejected() {
+        // `<slot/>` used to be incidentally rejected by
+        // html5ever with an un-anchored "unacknowledged self-
+        // closing tag" message. RFC 050 requires an explicit
+        // framework-owned error with a byte range at the tag.
+        let src = "<root><slot/></root>";
+        let (_ast, errors) = parse(src, "test.poco");
+        assert!(
+            errors.iter().any(|e| e.message.contains("`<slot/>`")),
+            "expected framework-owned self-close error, got: {errors:?}"
+        );
+        let err = errors
+            .iter()
+            .find(|e| e.message.contains("`<slot/>`"))
+            .unwrap();
+        // Byte range must point at the offending tag.
+        assert_eq!(slice(src, &err.byte_range), "<slot/>");
+    }
+
+    #[test]
+    fn self_close_on_custom_element_is_rejected() {
+        let src = "<div><pine-foo/></div>";
+        let (_ast, errors) = parse(src, "test.poco");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("`<pine-foo/>`")),
+            "expected self-close error on custom element, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn self_close_on_void_element_is_allowed() {
+        // `<br/>` / `<img/>` / `<input/>` etc. — HTML void
+        // elements can self-close; don't flag.
+        let src = r#"<div><br/><img src="x"/><input type="text"/></div>"#;
+        let (_ast, errors) = parse(src, "test.poco");
+        let self_close_errs: Vec<_> = errors
+            .iter()
+            .filter(|e| e.message.contains("self-closing"))
+            .collect();
+        assert!(
+            self_close_errs.is_empty(),
+            "void-element self-close incorrectly flagged: {self_close_errs:?}"
+        );
+    }
+
+    #[test]
+    fn self_close_inside_svg_is_allowed() {
+        // Inside `<svg>` the parser uses foreign-content rules
+        // and self-close is valid for any element.
+        let src = r#"<svg><circle r="5"/><rect/></svg>"#;
+        let (_ast, errors) = parse(src, "test.poco");
+        let self_close_errs: Vec<_> = errors
+            .iter()
+            .filter(|e| e.message.contains("self-closing"))
+            .collect();
+        assert!(
+            self_close_errs.is_empty(),
+            "SVG content self-close incorrectly flagged: {self_close_errs:?}"
+        );
+    }
+
+    #[test]
+    fn self_close_in_comment_is_ignored() {
+        // A literal `<slot/>` inside a comment must NOT be
+        // flagged — it's not real markup.
+        let src = "<!-- <slot/> --><div>x</div>";
+        let (_ast, errors) = parse(src, "test.poco");
+        assert!(
+            errors.is_empty(),
+            "comment-commented self-close incorrectly flagged: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn parse_strict_rejects_forbidden_self_close() {
+        let src = "<root><slot/></root>";
+        let err = parse_strict(src, "test.poco").err();
+        assert!(err.is_some(), "parse_strict must reject forbidden self-close");
     }
 }
