@@ -27,6 +27,10 @@ inject_key!(ROOT: Handle<PineAvatarRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAvatarRoot.poco", role = "visual")]
+// RFC 049 — an Avatar wraps exactly Image + Fallback. The
+// Image loads; when load fails the Fallback renders in its
+// place. Any other direct child breaks the load/fail swap.
+#[slot(default, only = [PineAvatarImage, PineAvatarFallback])]
 pub struct PineAvatarRoot {
     pub loaded: bool,
 }

@@ -55,6 +55,9 @@ inject_key!(ROOT: Handle<PineSelectRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectRoot.poco", role = "scope", display = "contents")]
+// RFC 049 — Select's Root is Trigger + Portal. Same topology
+// as Popover / DropdownMenu.
+#[slot(default, only = [PineSelectTrigger, PineSelectPortal])]
 pub struct PineSelectRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`.
     #[model]
@@ -133,6 +136,10 @@ impl PineSelectRoot {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectTrigger.poco", role = "interactive")]
+// RFC 049 — Trigger typically wraps a Value indicator + icon
+// + caret. `accepts` because authors customise the trigger's
+// look heavily (icons, separators, custom layouts).
+#[slot(default, accepts = [PineSelectValue])]
 pub struct PineSelectTrigger {
     #[observe(ROOT)]
     pub open: bool,
@@ -223,6 +230,8 @@ impl PineSelectValue {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Portal wraps the dropdown Content.
+#[slot(default, only = [PineSelectContent])]
 pub struct PineSelectPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -239,6 +248,10 @@ impl PineSelectPortal {}
     role = "list",
     transition = "fade"
 )]
+// RFC 049 — Content is the listbox surface; Item + Separator
+// are the semantic parts. Strict rejection of stray content
+// keeps the `role="listbox"` contract honest.
+#[slot(default, only = [PineSelectItem, PineSelectSeparator])]
 pub struct PineSelectContent {
     pub anchor: String,
     pub listbox_id: String,
@@ -374,6 +387,9 @@ fn schedule_trigger_focus(root_scope: pocopine::ScopeId) {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineSelectItem.poco", role = "item", display = "contents")]
+// RFC 049 — an Item holds the user's label + an optional
+// ItemIndicator (checkmark for the selected row).
+#[slot(default, accepts = [PineSelectItemIndicator])]
 pub struct PineSelectItem {
     #[prop]
     pub value: String,

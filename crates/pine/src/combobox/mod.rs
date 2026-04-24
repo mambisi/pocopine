@@ -54,6 +54,10 @@ inject_key!(ROOT: Handle<PineComboboxRoot>);
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Combobox's Root pairs an Input with a Portal
+// (the filtered dropdown). The Input is both the typing
+// surface and the aria-controls/combobox anchor.
+#[slot(default, only = [PineComboboxInput, PineComboboxPortal])]
 pub struct PineComboboxRoot {
     #[model]
     pub open: bool,
@@ -277,6 +281,8 @@ fn schedule_install_virtual(
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Portal wraps Content.
+#[slot(default, only = [PineComboboxContent])]
 pub struct PineComboboxPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -293,6 +299,9 @@ impl PineComboboxPortal {}
     role = "list",
     transition = "fade"
 )]
+// RFC 049 — the listbox surface holds Items + optional Empty
+// (for "no results" state).
+#[slot(default, only = [PineComboboxItem, PineComboboxEmpty])]
 pub struct PineComboboxContent {
     pub listbox_id: String,
     /// Selector resolving to the linked Input element; computed

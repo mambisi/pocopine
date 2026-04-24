@@ -74,6 +74,15 @@ thread_local! {
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineScrollAreaRoot.poco", role = "scope")]
+// RFC 049 — a ScrollArea composes a Viewport (the scrollable
+// surface), Scrollbar(s) (usually two: horizontal + vertical),
+// and an optional Corner (for the small square where the two
+// scrollbars meet).
+#[slot(default, only = [
+    PineScrollAreaViewport,
+    PineScrollAreaScrollbar,
+    PineScrollAreaCorner,
+])]
 pub struct PineScrollAreaRoot {
     /// Visibility model for the custom scrollbars. See the module
     /// docs for semantics.
@@ -364,6 +373,10 @@ fn schedule_fade(root: Handle<PineScrollAreaRoot>) {
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineScrollAreaScrollbar.poco", role = "panel")]
+// RFC 049 — a Scrollbar contains exactly its Thumb. The
+// Thumb's position is the visual indicator of scroll
+// progress; nothing else belongs inside the bar.
+#[slot(default, only = [PineScrollAreaThumb])]
 pub struct PineScrollAreaScrollbar {
     /// `"vertical"` (default) or `"horizontal"`.
     #[prop]

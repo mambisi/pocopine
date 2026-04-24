@@ -48,6 +48,10 @@ inject_key!(ITEM: ScopeId);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTreeRoot.poco", role = "scope")]
+// RFC 049 — Tree's Root holds Items at the top level. Items
+// themselves nest (Item→Item) but that's the Item's slot
+// contract; here we reject bare leaves and unrelated content.
+#[slot(default, only = [PineTreeItem])]
 pub struct PineTreeRoot {
     /// `"single"` (default) or `"multiple"`. Drives
     /// `aria-multiselectable` on Root.
@@ -196,6 +200,12 @@ fn active_item_value() -> Option<String> {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTreeItem.poco", role = "panel")]
+// RFC 049 — a TreeItem typically contains its label + an
+// optional ItemToggle + nested Items (for branches). `accepts`
+// because the label content is author-owned (text, icons,
+// custom markup); the pocopine parts we recognize are the
+// toggle and nested items.
+#[slot(default, accepts = [PineTreeItemToggle, PineTreeItem])]
 pub struct PineTreeItem {
     #[prop]
     pub value: String,

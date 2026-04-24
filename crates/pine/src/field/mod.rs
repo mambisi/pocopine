@@ -55,6 +55,16 @@ inject_key!(ROOT: Handle<PineFieldRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldRoot.poco", role = "scope", display = "contents")]
+// RFC 049 — a Field bundles a Label + Control + optional
+// Description + optional Error message. `accepts` because
+// the actual input element lives inside Control as author
+// content, and authors commonly drop icons / layout wrappers.
+#[slot(default, accepts = [
+    PineFieldLabel,
+    PineFieldControl,
+    PineFieldDescription,
+    PineFieldError,
+])]
 pub struct PineFieldRoot {
     /// Form field name. Mirrored onto the Root as a hook for
     /// styling / DOM queries; the underlying `<input>`'s own

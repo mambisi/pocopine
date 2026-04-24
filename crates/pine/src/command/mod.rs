@@ -73,6 +73,11 @@ thread_local! {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Command palette usually teleports (ctrl+k
+// overlay) so the Root holds a Portal; authors can also
+// embed a command palette inline by dropping Content
+// directly (no Portal). `accepts` handles both shapes.
+#[slot(default, accepts = [PineCommandPortal, PineCommandContent])]
 pub struct PineCommandRoot {
     #[model]
     pub open: bool,
@@ -257,6 +262,9 @@ fn matches_shortcut(ev: &KeyboardEvent, spec: &ShortcutMatch) -> bool {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — teleport wrapper holds an Overlay (dim layer)
+// + Content.
+#[slot(default, only = [PineCommandOverlay, PineCommandContent])]
 pub struct PineCommandPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -292,6 +300,10 @@ impl PineCommandOverlay {
     role = "panel",
     transition = "fade-scale"
 )]
+// RFC 049 — Command Content is the search surface: an Input
+// up top + a List below. `only` because any other direct
+// child would break the search/result split.
+#[slot(default, only = [PineCommandInput, PineCommandList])]
 pub struct PineCommandContent {}
 
 #[handlers]
@@ -475,6 +487,9 @@ fn refresh_match_state(root: &Handle<PineCommandRoot>) {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCommandList.poco", role = "list", display = "contents")]
+// RFC 049 — the results surface. Items + an optional Empty
+// (shown when filtering yields zero hits).
+#[slot(default, only = [PineCommandItem, PineCommandEmpty])]
 pub struct PineCommandList {
     #[observe(ROOT)]
     pub listbox_id: String,

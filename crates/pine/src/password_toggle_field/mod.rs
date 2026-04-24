@@ -40,6 +40,10 @@ inject_key!(ROOT: Handle<PinePasswordToggleFieldRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePasswordToggleFieldRoot.poco", role = "panel")]
+// RFC 049 — this compound pairs an Input (the password field)
+// with a Toggle (the show/hide button). `only` rejects stray
+// markup that would confuse the visibility-swap behaviour.
+#[slot(default, only = [PinePasswordToggleFieldInput, PinePasswordToggleFieldToggle])]
 pub struct PinePasswordToggleFieldRoot {
     /// Whether the password is currently shown. Two-way
     /// bindable via `pp-model:visible`.

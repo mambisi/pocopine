@@ -38,6 +38,16 @@ inject_key!(ORIENTATION: String);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineToolbarRoot.poco", role = "panel")]
+// RFC 049 — a Toolbar accepts Button / Link / Separator as
+// its semantic items. `accepts` (not `only`) because authors
+// commonly group toolbar items with `<div class="group">` or
+// drop in icons + labels alongside — layout wrappers are fine,
+// non-toolbar components would break roving-tabindex walking.
+#[slot(default, accepts = [
+    PineToolbarButton,
+    PineToolbarLink,
+    PineToolbarSeparator,
+])]
 pub struct PineToolbarRoot {
     /// `"horizontal"` (default) or `"vertical"`. Flows to
     /// `aria-orientation` + `data-orientation`; descendant

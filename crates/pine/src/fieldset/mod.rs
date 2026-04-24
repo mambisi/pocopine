@@ -36,6 +36,11 @@ inject_key!(ROOT: Handle<PineFieldsetRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFieldsetRoot.poco", role = "panel")]
+// RFC 049 — a Fieldset groups form controls under a Legend.
+// `accepts` so authors can drop Input / Label / custom
+// controls alongside; the Legend is the only semantic part
+// pocopine contributes here.
+#[slot(default, accepts = [PineFieldsetLegend])]
 pub struct PineFieldsetRoot {
     /// Forwarded onto the `<fieldset>`'s native `disabled`
     /// attribute — which disables every descendant form control

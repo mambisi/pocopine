@@ -62,6 +62,15 @@ inject_key!(ITEM: ScopeId);
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — TagsInput Root holds Items (the tag pills) + one
+// Input (for typing new tags) + an optional Clear button.
+// `accepts` because authors often wrap items in containers or
+// add separator labels.
+#[slot(default, accepts = [
+    PineTagsInputItem,
+    PineTagsInputInput,
+    PineTagsInputClear,
+])]
 pub struct PineTagsInputRoot {
     /// The list of tags. Bind with `pp-model:values="my_tags"`.
     #[model]
@@ -135,6 +144,10 @@ impl PineTagsInputRoot {
     animate = "flip",
     transition = "scale"
 )]
+// RFC 049 — each tag pill holds its ItemText (label) + an
+// ItemDelete (the × button). Authors may drop icons or
+// additional markup, so `accepts` rather than `only`.
+#[slot(default, accepts = [PineTagsInputItemText, PineTagsInputItemDelete])]
 pub struct PineTagsInputItem {
     /// The tag value this Item represents. Passed via
     /// `:value="tag"` from the author's `pp-for`.

@@ -64,6 +64,10 @@ thread_local! {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — a Splitter Group alternates Panels with
+// ResizeHandles. Any other direct child breaks the sizing
+// algorithm that walks consecutive Panel/Handle pairs.
+#[slot(default, only = [PineSplitterPanel, PineSplitterResizeHandle])]
 pub struct PineSplitterGroup {
     /// `"horizontal"` (panels side-by-side) or `"vertical"`
     /// (panels stacked).
