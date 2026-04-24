@@ -780,8 +780,32 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let transition_out_literal = proc_macro2::Literal::string(&transition_out);
     let animate_literal = proc_macro2::Literal::string(&animate_kind);
 
+    // RFC 045 — enforce the single-root rule at Rust compile time.
+    // `check_single_root` is a `const fn`, so a failed template shows
+    // up as a `rustc` const-eval error (E0080) with the panic message
+    // below, pointing at the `#[component]` span. Split messages for
+    // "no root" vs "too many roots" — they're different bugs.
+    let missing_root_msg = format!(
+        "pocopine: template for component `{name_str}` has no root element \
+         (pocopine templates require exactly one root)"
+    );
+    let multiple_roots_msg = format!(
+        "pocopine: template for component `{name_str}` has more than one root element \
+         (pocopine templates require exactly one root)"
+    );
+    let assert_single_root_stmt = quote! {
+        const _: () = match ::pocopine::__private::check_single_root(
+            include_str!(#template_path),
+        ) {
+            ::pocopine::__private::RootCheck::Ok => (),
+            ::pocopine::__private::RootCheck::Missing => ::core::panic!(#missing_root_msg),
+            ::pocopine::__private::RootCheck::Multiple => ::core::panic!(#multiple_roots_msg),
+        };
+    };
+
     let register_template_stmt = quote! {
         const _: &str = include_str!(#template_path);
+        #assert_single_root_stmt
         ::pocopine::__private::register_template(
             #name_str,
             ::pocopine::__private::compile_template(

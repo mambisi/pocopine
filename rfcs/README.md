@@ -53,3 +53,4 @@ Conventions:
 | 042 | [`class` / `style` parity — arrays, custom properties, `\|important`](./rfc-042-class-style-parity.md) | Draft |
 | 043 | [`pocopine::text` layout engine](./rfc-043-text-layout.md) | Implemented |
 | 044 | [`#[model]` field role for two-way component contracts](./rfc-044-model-fields.md) | Draft |
+| 045 | [Single-root `.poco` templates enforced at compile time](./rfc-045-single-root-templates.md) | Implemented |

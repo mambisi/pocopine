@@ -37,9 +37,10 @@ pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
     pub use pocopine_core::{
-        compile_template, inject_pp_data, inject_style, register_component, register_store_scope,
-        register_template, store_scope, with_write_origin, Component, ComponentState,
-        FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope, Store, WriteOrigin,
+        check_single_root, compile_template, inject_pp_data, inject_style, register_component,
+        register_store_scope, register_template, store_scope, with_write_origin, Component,
+        ComponentState, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, RootCheck,
+        Scope, Store, WriteOrigin,
     };
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;

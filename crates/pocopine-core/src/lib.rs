@@ -72,7 +72,8 @@ pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
 pub use styles::inject_style;
 pub use templates::{
-    compile_template, inject_pp_data, is_registered, register_template, template_for,
+    check_single_root, compile_template, inject_pp_data, is_registered, register_template,
+    template_for, RootCheck,
 };
 pub use walker::{start, start_on_body};
 pub use watch::{watch, watch_field, watch_scope_field, watch_scope_field_now};
