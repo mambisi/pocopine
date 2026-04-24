@@ -175,8 +175,9 @@ Forms accepted:
 
 | Form | Meaning |
 |---|---|
-| `#[slot(default, accepts = [A, B])]` | Constrain the default slot. |
-| `#[slot(name = "footer", accepts = [A])]` | Constrain a named slot. |
+| `#[slot(default, accepts = [A, B])]` | Constrain the default slot loosely: accepted component children are checked when directly present, but HTML wrappers still pass. |
+| `#[slot(name = "footer", accepts = [A])]` | Constrain a named slot loosely. |
+| `#[slot(default, only = [A, B])]` | Constrain the slot strictly: every direct child element must be one of the listed accepted component tags. |
 | `#[slot(default)]` with no `accepts` | Declare the slot exists; accept anything (opt-in to typed yield in §4.4 without locking the child set). |
 | Repeat `#[slot]` per named slot | One attribute per slot keeps each contract readable. |
 
@@ -261,7 +262,8 @@ conservative (see §4.7 for why):
    template uses, so the macro never has to "read" anything
    from a type path.
 2. **Plain HTML tags (`<div>`, `<span>`, text nodes)** —
-   skipped; the contract doesn't constrain them.
+   skipped in `accepts` mode; the contract doesn't constrain
+   them unless the parent used `only = [...]` on that slot.
 3. **Unknown custom-element tags not in `uses`** — skipped
    silently. v1 deliberately doesn't emit a warning here;
    warning-level proc-macro diagnostics aren't a stable
@@ -269,6 +271,12 @@ conservative (see §4.7 for why):
    legitimately covers both typos and not-yet-registered
    external components. Authors who want the check add the
    component to their `uses` list.
+4. **`only` slots** — any direct child element that is not one
+   of the listed accepted component tags is rejected. That
+   includes plain HTML wrappers like `<div>` and `<span>`.
+   `only = [...]` exists for compounds whose semantics depend
+   on direct-child structure (`aria-*` distribution, roving
+   focus, `parent > child` selectors, dismiss wiring, etc.).
 
 `uses` is a **local registry for this consumer only**. It does
 not inherit from parents, from the app root, or from any
@@ -448,13 +456,36 @@ braces), while the primary diagnostic path is the
 `annotate-snippets` render.
 
 **Plain HTML children.** A `<div>` inside a typed slot has no
-associated pocopine-component type. v1 **silently passes**
-them: the scan sees a plain HTML tag, finds no matching entry
-in the consumer's `uses` list, and emits no assertion — so no
-snippet renders. Authors who want ad-hoc HTML wrappers
-(`<div class="stack">…</div>`) keep working. A warn-on-HTML
-variant could be proposed later once pocopine has an
-established warning-diagnostic path; v1 ships errors only.
+associated pocopine-component type. In the default mode it
+**silently passes**: the scan sees a plain HTML tag, finds no
+matching entry in the consumer's `uses` list, and emits no
+assertion — so no snippet renders. Authors who want ad-hoc
+HTML wrappers (`<div class="stack">…</div>`) keep working.
+
+For compounds that must preserve direct-child structure, the
+parent uses `only = [...]` instead of `accepts = [...]`:
+
+```rust
+#[slot(default, only = [PineContextMenuItem, PineContextMenuSeparator])]
+```
+
+In an `only` slot, any direct child element that is **not**
+one of the listed accepted component tags is rejected,
+including raw HTML wrappers:
+
+```html
+<pine-context-menu-content>
+  <div class="list">
+    <pine-context-menu-item/>
+  </div>
+</pine-context-menu-content>
+```
+
+The `<div>` is the direct child, so the consumer gets a
+compile-time error pointing at that wrapper. Nested accepted
+children do not "redeem" an invalid wrapper. This keeps
+structural compounds honest without forcing every slot in the
+framework to forbid layout wrappers.
 
 **Alternative renderers.** `codespan-reporting`, `ariadne`,
 and `miette` all produce similar output. Picked

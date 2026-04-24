@@ -60,3 +60,4 @@ Conventions:
 | 049 | [Typed slot contracts — compile-time child constraints](./rfc-049-typed-slot-contracts.md) | Draft |
 | 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Draft |
 | 051 | [Component registry safety — aliases, prefixes, boot verification](./rfc-051-component-registry-safety.md) | Draft |
+| 052 | [Typed structural parent extractors](./rfc-052-parent-extractors.md) | Draft |
