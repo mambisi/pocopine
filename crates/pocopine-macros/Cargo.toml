@@ -17,3 +17,6 @@ syn = { workspace = true }
 # never linked into the consumer's wasm output.
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
+# RFC 049 / RFC 050 §4.6 — rustc-flavoured diagnostic renderer.
+# Host-only, same as the parser crates above.
+annotate-snippets = "0.11"

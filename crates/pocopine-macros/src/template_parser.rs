@@ -102,17 +102,31 @@ pub struct TemplateAst {
 
 impl TemplateAst {
     /// Iterator over top-level nodes that are **authored
-    /// elements** — non-synthetic, non-text, non-comment.
+    /// elements that map to an actual source position** —
+    /// non-synthetic, non-text, non-comment, **and with a
+    /// non-zero byte range**.
+    ///
+    /// Rationale: html5ever's spec-mandated recovery can
+    /// foster-parent content out of its authored parent
+    /// (e.g. `<slot>` inside `<tr>` gets hoisted to the tree
+    /// root). Foster-parented elements get mapped to `0..0`
+    /// by the source-mapping pass (their position in the tree
+    /// doesn't match their position in source), so filtering
+    /// on a non-zero byte range excludes them from root
+    /// counts.
     ///
     /// RFC 045's "exactly one root" rule is defined as
     /// `element_roots().count() == 1`, not `roots.len() == 1`:
-    /// the former excludes top-level text / comments / html5ever's
-    /// synthetic insertions.
+    /// the former excludes top-level text / comments /
+    /// html5ever's synthetic insertions / foster-parented
+    /// descendants that bubbled up out of their authored
+    /// parent.
     pub fn element_roots(&self) -> impl Iterator<Item = &Element> {
         self.roots
             .iter()
             .filter_map(Node::as_element)
             .filter(|e| !e.synthetic)
+            .filter(|e| e.opening_tag_range.end > e.opening_tag_range.start)
     }
 }
 
@@ -207,16 +221,22 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
         ..ParseOpts::default()
     };
 
-    // Fragment-parse in the context of a `<template>` element so
-    // html5ever doesn't insert implicit `<html>/<head>/<body>`
-    // wrappers around our tree.
-    let dom = parse_fragment(
-        RcDom::default(),
-        opts,
-        QualName::new(None, ns!(html), local_name!("template")),
-        Vec::new(),
-    )
-    .one(source);
+    // Fragment-parse in a context element chosen based on the
+    // source's first real opening tag. HTML5's fragment parser
+    // picks an insertion mode from the context element; using
+    // a blanket `<div>` or `<template>` would reject `<tr>`,
+    // `<td>`, `<tbody>` etc. at the root because those only
+    // parse inside a table-ish ancestor.
+    //
+    // The pocopine walker calls `set_inner_html` on whatever
+    // custom-element tag the component uses, and the browser
+    // picks the right insertion mode from that. We mirror that
+    // by detecting the first tag and choosing an equivalent
+    // context: `<tr>` root → `<tbody>` context, `<td>/<th>` →
+    // `<tr>`, `<tbody>/<thead>/<tfoot>/<caption>/<colgroup>` →
+    // `<table>`, everything else → `<div>`.
+    let context = detect_fragment_context(source);
+    let dom = parse_fragment(RcDom::default(), opts, context, Vec::new()).one(source);
 
     for e in dom.errors.iter() {
         let msg = e.as_ref().to_string();
@@ -251,18 +271,30 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
 }
 
 /// Same as [`parse`] but enforces the RFC 050 §4.8 policy at
-/// the type level: any parse error terminates with `Err`. The
-/// AST is discarded on error; callers that want the AST for
-/// diagnostic rendering use [`parse`] directly.
+/// the type level: a **framework-owned** parse error
+/// terminates with `Err`. html5ever's own spec-mandated
+/// recovery notices (foster-parenting, "Unexpected token"
+/// etc.) come back with `byte_range = 0..0` and are treated
+/// as informational — they'd reject templates that Pine uses
+/// in practice (`<tr>` / `<th>` roots that trigger table-
+/// insertion-mode recovery), without any actionable author
+/// signal. Framework-owned rules (our self-close check,
+/// future pocopine diagnostics) always ship with a non-zero
+/// byte range and DO fail strict parsing.
 ///
-/// This is the variant `#[component]` will adopt when the
-/// parser starts gating structural validation.
+/// This is the variant `#[component]` uses to gate RFC 045
+/// structural validation.
 pub fn parse_strict(source: &str, file_path: &str) -> Result<TemplateAst, Vec<ParseError>> {
     let (ast, errors) = parse(source, file_path);
-    if errors.is_empty() {
+    let fatal: Vec<_> = errors
+        .iter()
+        .filter(|e| e.byte_range.end > e.byte_range.start)
+        .cloned()
+        .collect();
+    if fatal.is_empty() {
         Ok(ast)
     } else {
-        Err(errors)
+        Err(fatal)
     }
 }
 
@@ -629,6 +661,73 @@ fn read_tag_name_end(bytes: &[u8], start: usize) -> usize {
     end
 }
 
+/// Pick a fragment-parsing context element based on the
+/// source's first real opening tag. See the call site in
+/// `parse` for rationale.
+fn detect_fragment_context(source: &str) -> QualName {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'<' {
+            break;
+        }
+        // Comment / doctype / PI — skip.
+        if i + 4 <= bytes.len() && &bytes[i..i + 4] == b"<!--" {
+            match find_seq(bytes, i + 4, b"-->") {
+                Some(end) => {
+                    i = end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if i + 2 <= bytes.len() && bytes[i + 1] == b'!' {
+            match find_byte(bytes, i, b'>') {
+                Some(end) => {
+                    i = end + 1;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if i + 2 <= bytes.len() && bytes[i + 1] == b'?' {
+            match find_seq(bytes, i + 2, b"?>") {
+                Some(end) => {
+                    i = end + 2;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        break;
+    }
+
+    let default_ctx = || QualName::new(None, ns!(html), local_name!("div"));
+    if i >= bytes.len() || bytes[i] != b'<' {
+        return default_ctx();
+    }
+    let name_start = i + 1;
+    let name_end = read_tag_name_end(bytes, name_start);
+    if name_end <= name_start {
+        return default_ctx();
+    }
+    let tag = std::str::from_utf8(&bytes[name_start..name_end])
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match tag.as_str() {
+        "tr" => QualName::new(None, ns!(html), local_name!("tbody")),
+        "td" | "th" => QualName::new(None, ns!(html), local_name!("tr")),
+        "tbody" | "thead" | "tfoot" | "caption" | "colgroup" => {
+            QualName::new(None, ns!(html), local_name!("table"))
+        }
+        "col" => QualName::new(None, ns!(html), local_name!("colgroup")),
+        _ => default_ctx(),
+    }
+}
+
 /// `true` if the opening tag beginning at `open_lt` (a `<`)
 /// names the given tag (case-insensitive). Used to sanity-check
 /// the source-mapping pass before claiming a range.
@@ -842,9 +941,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_strict_errors_on_malformed() {
-        let err = parse_strict(r#"<div a="1" a="2">x</div>"#, "test.poco").err();
-        assert!(err.is_some(), "parse_strict should reject duplicate-attr input");
+    fn parse_strict_only_rejects_framework_owned_errors() {
+        // Duplicate-attr is an html5ever spec-recovery error
+        // with no byte range in v1 — parse_strict tolerates it
+        // (the tree is useful; downstream consumers decide
+        // what to surface). Framework-owned errors like the
+        // forbidden self-close DO fail.
+        let dup_ok = parse_strict(r#"<div a="1" a="2">x</div>"#, "test.poco");
+        assert!(
+            dup_ok.is_ok(),
+            "parse_strict tolerates html5ever recovery errors (no byte range)"
+        );
+        let self_close_err = parse_strict("<root><slot/></root>", "test.poco");
+        assert!(
+            self_close_err.is_err(),
+            "parse_strict rejects framework-owned self-close error"
+        );
     }
 
     #[test]
@@ -1179,18 +1291,16 @@ mod tests {
     #[test]
     fn foster_parented_stray_text_emits_parser_error() {
         // "Non-space table text" is a spec-mandated html5ever
-        // diagnostic — we surface it via `errors`, not drop it.
-        // Per RFC 050 §4.8, `parse_strict` rejects this input;
-        // `parse` returns the tree for diagnostic rendering.
+        // diagnostic — we surface it via `errors`, not drop
+        // it. It comes without a byte range, so `parse_strict`
+        // tolerates it per the framework-owned-error-only
+        // policy; callers that want to be strict here inspect
+        // `errors` from `parse` directly.
         let src = "<table>stray<tr><td>x</td></tr></table>";
         let (_ast, errors) = parse(src, "test.poco");
         assert!(
             !errors.is_empty(),
             "stray text in <table> must surface as a parse error"
-        );
-        assert!(
-            parse_strict(src, "test.poco").is_err(),
-            "parse_strict must reject foster-parenting-triggering input"
         );
     }
 
@@ -1277,5 +1387,38 @@ mod tests {
         let src = "<root><slot/></root>";
         let err = parse_strict(src, "test.poco").err();
         assert!(err.is_some(), "parse_strict must reject forbidden self-close");
+    }
+
+    // ── Table-rooted templates (Pine calendar regression) ───
+
+    #[test]
+    fn tr_as_root_single_element_root() {
+        // `<tr class="foo"><slot></slot></tr>` is a real
+        // PineCalendarGridRow template. html5ever's "in row"
+        // insertion mode foster-parents the `<slot>` out of
+        // the `<tr>` — it becomes a sibling at the tree root,
+        // but with a `0..0` byte range because its source
+        // position doesn't match the reparented location.
+        // element_roots() filters on non-zero byte range, so
+        // only the `<tr>` counts as a root.
+        let src = "<tr class=\"foo\">\n  <slot></slot>\n</tr>\n";
+        let (ast, _errors) = parse(src, "test.poco");
+        assert_eq!(
+            ast.element_roots().count(),
+            1,
+            "tr-rooted template must register as single-root"
+        );
+        let tr = ast.element_roots().next().unwrap();
+        assert_eq!(tr.tag, "tr");
+        assert_eq!(slice(src, &tr.opening_tag_range), "<tr class=\"foo\">");
+    }
+
+    #[test]
+    fn th_as_root_single_element_root() {
+        // PineCalendarHeadCell — `<th scope="col">`.
+        let src = "<th scope=\"col\"><slot></slot></th>";
+        let (ast, _errors) = parse(src, "test.poco");
+        assert_eq!(ast.element_roots().count(), 1);
+        assert_eq!(ast.element_roots().next().unwrap().tag, "th");
     }
 }

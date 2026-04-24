@@ -18,6 +18,16 @@
 //! A struct ident whose kebab-case matches a known HTML element is rejected
 //! at compile time, since a collision would mask a real HTML element in
 //! parent templates.
+//!
+//! RFC 050 §4.5 — the `#[component]` macro now runs the `.poco`
+//! through `template_parser::parse_strict` at macro expansion
+//! time and emits `syn::Error`-shaped diagnostics rendered via
+//! `annotate-snippets` (one error block per offending construct).
+//! Reading the template off disk at expansion time requires
+//! `proc_macro_span` on nightly — the pocopine workspace is
+//! already pinned to nightly rustc.
+
+#![feature(proc_macro_span)]
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
@@ -29,11 +39,214 @@ use syn::{
     Pat, PatType, Path, Token, Type,
 };
 
-// RFC 050 — compile-time `.poco` template parser. Currently unused
-// by `#[component]`; future RFCs (045 migration, 049 consumer scan)
-// will consume its `TemplateAst`.
-#[allow(dead_code)]
+// RFC 050 — compile-time `.poco` template parser + diagnostic
+// renderer. Both host-only (proc-macro crate), invisible to wasm.
 mod template_parser;
+mod diagnostics;
+
+/// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
+/// it with `template_parser::parse_strict`, and enforce the
+/// single-root rule.
+///
+/// In **strict mode** (default), a failure returns `Err` with
+/// a `compile_error!` `TokenStream` whose message is a pre-
+/// rendered `annotate-snippets` block pointing at the offending
+/// line. The caller replaces its expansion output with this
+/// `TokenStream`, terminating compilation for the component.
+///
+/// In **lenient mode** (`POCOPINE_TEMPLATES_LENIENT=1`), any
+/// issue returns `Ok(Some(warning_tokens))`. The caller
+/// appends the warnings to its normal expansion so the
+/// component still registers; rustc surfaces the warning via
+/// a `#[deprecated]`-attribute trick (RFC 045 §9.4).
+///
+/// Returns `Ok(None)` when the template is clean.
+fn validate_template_or_emit_errors(
+    template_path: &LitStr,
+    component_name: &str,
+) -> Result<Option<proc_macro2::TokenStream>, TokenStream> {
+    let lenient = is_lenient_mode();
+
+    // Resolve the `.poco` path relative to the .rs file that
+    // invoked `#[component]`. On nightly `proc_macro_span`
+    // exposes the source-file path for free via `local_file()`.
+    let caller_rs = match template_path.span().unwrap().local_file() {
+        Some(path) => path,
+        None => {
+            // Can't resolve — emit a file-less error.
+            let msg = diagnostics::render_fileless_error(
+                &template_path.value(),
+                &format!(
+                    "pocopine: cannot resolve template path for component `{component_name}`"
+                ),
+                "proc_macro_span couldn't locate the calling source file",
+            );
+            return surface_diagnostic(template_path, &msg, lenient);
+        }
+    };
+    let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let resolved_path = caller_dir.join(template_path.value());
+    let file_path_str = resolved_path.to_string_lossy().to_string();
+
+    // Display path: relative to CARGO_MANIFEST_DIR if we can
+    // compute it, else the raw resolved path. This is what
+    // shows up in the `--> path:line:col` line of the
+    // rendered error — nicer than an absolute /home/... path.
+    let display_path = manifest_relative(&resolved_path);
+
+    let source = match std::fs::read_to_string(&resolved_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = diagnostics::render_fileless_error(
+                &display_path,
+                &format!(
+                    "pocopine: cannot read template for component `{component_name}`"
+                ),
+                &format!("{} ({})", e, file_path_str),
+            );
+            return surface_diagnostic(template_path, &msg, lenient);
+        }
+    };
+
+    let ast = match template_parser::parse_strict(&source, &display_path) {
+        Ok(ast) => ast,
+        Err(parse_errors) => {
+            let mut rendered_blocks: Vec<String> = Vec::new();
+            for err in parse_errors {
+                if err.byte_range.end > err.byte_range.start
+                    && err.byte_range.end <= source.len()
+                {
+                    rendered_blocks.push(diagnostics::render_template_error(
+                        &source,
+                        &display_path,
+                        err.byte_range,
+                        &format!(
+                            "pocopine: invalid template for component `{component_name}` — {}",
+                            err.message
+                        ),
+                        &err.message,
+                    ));
+                } else {
+                    rendered_blocks.push(diagnostics::render_fileless_error(
+                        &display_path,
+                        &format!(
+                            "pocopine: invalid template for component `{component_name}`"
+                        ),
+                        &err.message,
+                    ));
+                }
+            }
+            let combined = rendered_blocks.join("\n\n");
+            return surface_diagnostic(template_path, &combined, lenient);
+        }
+    };
+
+    // Single-root rule — canonical form uses element_roots()
+    // per RFC 045 §8 migration note, which filters out text /
+    // comments / synthetic elements / foster-parented content.
+    let roots: Vec<_> = ast.element_roots().collect();
+    match roots.len() {
+        1 => Ok(None),
+        0 => {
+            let msg = diagnostics::render_fileless_error(
+                &display_path,
+                &format!(
+                    "pocopine: template for component `{component_name}` has no root element"
+                ),
+                "pocopine templates require exactly one root",
+            );
+            surface_diagnostic(template_path, &msg, lenient)
+        }
+        _ => {
+            // Anchor the error at the SECOND root — that's the
+            // offending one from the author's perspective.
+            let second = &roots[1];
+            let msg = diagnostics::render_template_error(
+                &source,
+                &display_path,
+                second.opening_tag_range.clone(),
+                &format!(
+                    "pocopine: template for component `{component_name}` has more than one root element"
+                ),
+                "additional root — drops at runtime",
+            );
+            surface_diagnostic(template_path, &msg, lenient)
+        }
+    }
+}
+
+/// Package a rendered diagnostic. Strict → `Err(fatal tokens)`
+/// replaces the expansion output. Lenient → `Ok(Some(warning
+/// tokens))` gets appended to the normal output so the
+/// component still registers.
+fn surface_diagnostic(
+    anchor: &LitStr,
+    rendered: &str,
+    lenient: bool,
+) -> Result<Option<proc_macro2::TokenStream>, TokenStream> {
+    if lenient {
+        Ok(Some(build_warning_tokens(rendered)))
+    } else {
+        Err(
+            syn::Error::new(anchor.span(), rendered)
+                .to_compile_error()
+                .into(),
+        )
+    }
+}
+
+/// Build a `#[deprecated]`-decorated `const _` item that
+/// surfaces `rendered` as a rustc warning. Per RFC 045 §9.4.
+/// rustc emits `warning: use of deprecated const '<ident>':
+/// <rendered>` when the emitted `let _ = <ident>;` is
+/// evaluated.
+fn build_warning_tokens(rendered: &str) -> proc_macro2::TokenStream {
+    let ident = format_ident!("__pocopine_template_warning_{:x}", fxhash(rendered));
+    quote! {
+        const _: () = {
+            #[deprecated(note = #rendered)]
+            #[allow(non_upper_case_globals)]
+            const #ident: () = ();
+            // Use the const so rustc's deprecated-use lint fires.
+            let _ = #ident;
+        };
+    }
+}
+
+/// RFC 045 §9 — the `POCOPINE_TEMPLATES_LENIENT` env-var
+/// escape hatch. Truthy values: `1`, `true`, `yes` (case-
+/// insensitive). Anything else is strict mode.
+fn is_lenient_mode() -> bool {
+    match std::env::var("POCOPINE_TEMPLATES_LENIENT") {
+        Ok(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
+        Err(_) => false,
+    }
+}
+
+/// Compute a display path relative to `CARGO_MANIFEST_DIR`
+/// when we can; fall back to the raw absolute path otherwise.
+fn manifest_relative(path: &std::path::Path) -> String {
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        if let Ok(rel) = path.strip_prefix(&manifest_dir) {
+            return rel.to_string_lossy().to_string();
+        }
+    }
+    path.to_string_lossy().to_string()
+}
+
+/// Tiny FNV-1a over the rendered message — just enough
+/// variability so two warnings don't emit colliding idents.
+/// Not cryptographic; not stable across platforms.
+fn fxhash(s: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut h = FNV_OFFSET;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
 
 /// Parsed `#[observe(KEY [, field = "name"])]` attribute —
 /// RFC-036. Each entry emits a `watch_scope_field` install that
@@ -799,32 +1012,26 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let transition_out_literal = proc_macro2::Literal::string(&transition_out);
     let animate_literal = proc_macro2::Literal::string(&animate_kind);
 
-    // RFC 045 — enforce the single-root rule at Rust compile time.
-    // `check_single_root` is a `const fn`, so a failed template shows
-    // up as a `rustc` const-eval error (E0080) with the panic message
-    // below, pointing at the `#[component]` span. Split messages for
-    // "no root" vs "too many roots" — they're different bugs.
-    let missing_root_msg = format!(
-        "pocopine: template for component `{name_str}` has no root element \
-         (pocopine templates require exactly one root)"
-    );
-    let multiple_roots_msg = format!(
-        "pocopine: template for component `{name_str}` has more than one root element \
-         (pocopine templates require exactly one root)"
-    );
-    let assert_single_root_stmt = quote! {
-        const _: () = match ::pocopine::__private::check_single_root(
-            include_str!(#template_path),
-        ) {
-            ::pocopine::__private::RootCheck::Ok => (),
-            ::pocopine::__private::RootCheck::Missing => ::core::panic!(#missing_root_msg),
-            ::pocopine::__private::RootCheck::Multiple => ::core::panic!(#multiple_roots_msg),
-        };
+    // RFC 045 + RFC 050 §4.5 — validate the `.poco` at macro
+    // expansion time using the html5ever-backed parser. Strict
+    // mode: errors replace the expansion output via
+    // `syn::Error` with a pre-rendered `annotate-snippets`
+    // block pointing at the exact `.poco` line. Lenient mode
+    // (POCOPINE_TEMPLATES_LENIENT=1, RFC 045 §9): warnings
+    // ride alongside the normal expansion so the component
+    // still registers.
+    let template_warnings = match validate_template_or_emit_errors(
+        &template_path,
+        &name_str,
+    ) {
+        Ok(Some(warning_tokens)) => warning_tokens,
+        Ok(None) => proc_macro2::TokenStream::new(),
+        Err(token_stream) => return token_stream,
     };
 
     let register_template_stmt = quote! {
+        #template_warnings
         const _: &str = include_str!(#template_path);
-        #assert_single_root_stmt
         ::pocopine::__private::register_template(
             #name_str,
             ::pocopine::__private::compile_template(

@@ -76,8 +76,7 @@ pub use store::{register_store_scope, store, store_scope, stores_object, Store, 
 pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
 pub use styles::inject_style;
 pub use templates::{
-    check_single_root, compile_template, inject_pp_data, is_registered, register_template,
-    template_for, RootCheck,
+    compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
 pub use walker::{start, start_on_body};
 pub use watch::{watch, watch_field, watch_scope_field, watch_scope_field_now};
