@@ -29,6 +29,12 @@ use syn::{
     Pat, PatType, Path, Token, Type,
 };
 
+// RFC 050 — compile-time `.poco` template parser. Currently unused
+// by `#[component]`; future RFCs (045 migration, 049 consumer scan)
+// will consume its `TemplateAst`.
+#[allow(dead_code)]
+mod template_parser;
+
 /// Parsed `#[observe(KEY [, field = "name"])]` attribute —
 /// RFC-036. Each entry emits a `watch_scope_field` install that
 /// writes back into `field_ident` whenever the parent's

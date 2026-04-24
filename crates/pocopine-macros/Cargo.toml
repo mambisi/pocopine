@@ -13,3 +13,7 @@ proc-macro = true
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true }
+# RFC 050 — compile-time HTML parser. Host-only (proc-macro crate),
+# never linked into the consumer's wasm output.
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
