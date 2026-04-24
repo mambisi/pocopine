@@ -48,9 +48,13 @@ mod diagnostics;
 mod slot;
 // RFC 049 — `uses = [...]` list parsing for consumer
 // `#[component]` macros. Builds the local tag → TypePath table
-// the consumer-side scan (task #14) resolves child tags
-// against.
+// the consumer-side scan resolves child tags against.
 mod uses;
+// RFC 049 — consumer-side template scan that emits the trait-
+// bound assertions enforcing slot contracts. Consumes the
+// TemplateAst parsed by `template_parser` and the UsesTable
+// built by `uses`.
+mod slot_assertions;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -72,7 +76,7 @@ mod uses;
 fn validate_template_or_emit_errors(
     template_path: &LitStr,
     component_name: &str,
-) -> Result<Option<proc_macro2::TokenStream>, TokenStream> {
+) -> Result<(Option<proc_macro2::TokenStream>, Option<template_parser::TemplateAst>), TokenStream> {
     let lenient = is_lenient_mode();
 
     // Resolve the `.poco` path relative to the .rs file that
@@ -89,7 +93,7 @@ fn validate_template_or_emit_errors(
                 ),
                 "proc_macro_span couldn't locate the calling source file",
             );
-            return surface_diagnostic(template_path, &msg, lenient);
+            return surface_diagnostic(template_path, &msg, lenient, None);
         }
     };
     let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -112,7 +116,7 @@ fn validate_template_or_emit_errors(
                 ),
                 &format!("{} ({})", e, file_path_str),
             );
-            return surface_diagnostic(template_path, &msg, lenient);
+            return surface_diagnostic(template_path, &msg, lenient, None);
         }
     };
 
@@ -145,7 +149,7 @@ fn validate_template_or_emit_errors(
                 }
             }
             let combined = rendered_blocks.join("\n\n");
-            return surface_diagnostic(template_path, &combined, lenient);
+            return surface_diagnostic(template_path, &combined, lenient, None);
         }
     };
 
@@ -154,7 +158,7 @@ fn validate_template_or_emit_errors(
     // comments / synthetic elements / foster-parented content.
     let roots: Vec<_> = ast.element_roots().collect();
     match roots.len() {
-        1 => Ok(None),
+        1 => Ok((None, Some(ast))),
         0 => {
             let msg = diagnostics::render_fileless_error(
                 &display_path,
@@ -163,22 +167,24 @@ fn validate_template_or_emit_errors(
                 ),
                 "pocopine templates require exactly one root",
             );
-            surface_diagnostic(template_path, &msg, lenient)
+            drop(roots);
+            surface_diagnostic(template_path, &msg, lenient, Some(ast))
         }
         _ => {
             // Anchor the error at the SECOND root — that's the
             // offending one from the author's perspective.
-            let second = &roots[1];
+            let second_range = roots[1].opening_tag_range.clone();
             let msg = diagnostics::render_template_error(
                 &source,
                 &display_path,
-                second.opening_tag_range.clone(),
+                second_range,
                 &format!(
                     "pocopine: template for component `{component_name}` has more than one root element"
                 ),
                 "additional root — drops at runtime",
             );
-            surface_diagnostic(template_path, &msg, lenient)
+            drop(roots);
+            surface_diagnostic(template_path, &msg, lenient, Some(ast))
         }
     }
 }
@@ -187,13 +193,18 @@ fn validate_template_or_emit_errors(
 /// replaces the expansion output. Lenient → `Ok(Some(warning
 /// tokens))` gets appended to the normal output so the
 /// component still registers.
+///
+/// `ast` carries the parsed template (if any) through for
+/// downstream RFC 049 slot-contract scanning — a file-read or
+/// pre-parse failure sets this to `None`.
 fn surface_diagnostic(
     anchor: &LitStr,
     rendered: &str,
     lenient: bool,
-) -> Result<Option<proc_macro2::TokenStream>, TokenStream> {
+    ast: Option<template_parser::TemplateAst>,
+) -> Result<(Option<proc_macro2::TokenStream>, Option<template_parser::TemplateAst>), TokenStream> {
     if lenient {
-        Ok(Some(build_warning_tokens(rendered)))
+        Ok((Some(build_warning_tokens(rendered)), ast))
     } else {
         Err(
             syn::Error::new(anchor.span(), rendered)
@@ -1058,13 +1069,30 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // (POCOPINE_TEMPLATES_LENIENT=1, RFC 045 §9): warnings
     // ride alongside the normal expansion so the component
     // still registers.
-    let template_warnings = match validate_template_or_emit_errors(
+    //
+    // Also keeps the parsed AST in scope for RFC 049's
+    // consumer-side slot-contract scan, run below when the
+    // consumer declared a `uses = [...]` list.
+    let (template_warnings, template_ast) = match validate_template_or_emit_errors(
         &template_path,
         &name_str,
     ) {
-        Ok(Some(warning_tokens)) => warning_tokens,
-        Ok(None) => proc_macro2::TokenStream::new(),
+        Ok((warning, ast)) => (
+            warning.unwrap_or_else(proc_macro2::TokenStream::new),
+            ast,
+        ),
         Err(token_stream) => return token_stream,
+    };
+
+    // RFC 049 consumer-side scan — emit trait-bound assertions
+    // for each (parent, child) pair where both tags resolve
+    // through the consumer's `uses` list. Empty when `uses` is
+    // absent or the template has no recognised typed parents.
+    let slot_assertions_tokens = match (&args.uses, &template_ast) {
+        (Some(uses_table), Some(ast)) => {
+            slot_assertions::emit_slot_assertions(ast, uses_table)
+        }
+        _ => proc_macro2::TokenStream::new(),
     };
 
     let register_template_stmt = quote! {
@@ -1180,6 +1208,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // this struct. Empty when no #[slot] declared or all
         // slots use the bare `#[slot(default)]` form.
         #slot_traits_tokens
+
+        // RFC 049 — consumer-side slot-contract assertions:
+        // one `const _: fn() = || assert_child::<...>();` per
+        // (parent-tag, child-tag) pair resolved against the
+        // consumer's `uses = [...]` list. Empty when the
+        // consumer didn't opt in or the template has no
+        // recognised typed parents.
+        #slot_assertions_tokens
 
         #observe_impl
 

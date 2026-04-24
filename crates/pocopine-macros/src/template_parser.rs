@@ -825,6 +825,7 @@ fn convert_node(
         NodeData::Element {
             name,
             attrs: attrs_ref,
+            template_contents,
             ..
         } => {
             let tag = name.local.to_string().to_ascii_lowercase();
@@ -844,6 +845,22 @@ fn convert_node(
                 .collect();
 
             let mut children: Vec<Node> = Vec::new();
+
+            // `<template>` element contents live in a separate
+            // document fragment at `template_contents`, not in
+            // the normal `children` collection — that's how
+            // HTML5 fragment parsing handles the "inert clone"
+            // semantics of `<template>`. For structural checks
+            // (RFC 049 `pp-slot` detection, etc.) we want to
+            // treat those as if they were direct children.
+            if let Some(contents) = template_contents.borrow().as_ref() {
+                for child in contents.children.borrow().iter() {
+                    if let Some(c) = convert_node(child, source, errors) {
+                        children.push(c);
+                    }
+                }
+            }
+
             for child in handle.children.borrow().iter() {
                 if let Some(c) = convert_node(child, source, errors) {
                     children.push(c);
