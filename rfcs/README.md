@@ -55,3 +55,7 @@ Conventions:
 | 044 | [`#[model]` field role for two-way component contracts](./rfc-044-model-fields.md) | Draft |
 | 045 | [Single-root `.poco` templates enforced at compile time](./rfc-045-single-root-templates.md) | Implemented |
 | 048 | [Scoped async tasks and extractor-driven `#[computed]`](./rfc-048-hooks.md) | Implemented |
+| 046 | [`Children` extractor on `LifecycleContext`](./rfc-046-children-extractor.md) | Draft |
+| 047 | [`$slots` magic + slot-presence probes](./rfc-047-slots-magic.md) | Draft |
+| 049 | [Typed slot contracts — compile-time child constraints](./rfc-049-typed-slot-contracts.md) | Draft |
+| 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Draft |
