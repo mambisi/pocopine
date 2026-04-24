@@ -42,6 +42,11 @@ inject_key!(CHECKED_OWNER: ScopeId);
 /// Items can read + write it through `Scope::find` + Handle::update.
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineRadioGroupRoot.poco", role = "panel")]
+// RFC 049 — only `<pine-radio-group-item>` is a semantically
+// meaningful direct child of the group. Items own the `role="radio"`
+// contract and keyboard navigation; anything else here either breaks
+// roving-tabindex or confuses screen readers about group size.
+#[slot(default, only = [PineRadioGroupItem])]
 pub struct PineRadioGroupRoot {
     #[model]
     pub value: String,

@@ -46,6 +46,10 @@ inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — a DropdownMenu's Root holds exactly the Trigger plus
+// a Portal (the menu itself teleports). No bare Content at root
+// level, no unrelated wrappers.
+#[slot(default, only = [PineDropdownMenuTrigger, PineDropdownMenuPortal])]
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
@@ -123,6 +127,11 @@ impl PineDropdownMenuTrigger {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Portal is the teleport wrapper; exactly one Content
+// is expected inside. Any other element drops at runtime because
+// the Content owns the menu surface and its ARIA / keyboard
+// bindings.
+#[slot(default, only = [PineDropdownMenuContent])]
 pub struct PineDropdownMenuPortal {
     /// Mirrored from Root.open so the template's `pp-if` fires the
     /// teleport when Root opens / closes.
@@ -141,6 +150,21 @@ impl PineDropdownMenuPortal {}
     role = "list",
     transition = "slide-down"
 )]
+// RFC 049 — the menu surface accepts the semantically-valid menu
+// children only. `pp-roving` + `role="menu"` depend on these
+// contracts: wrapping items in a <div> moves them out of the
+// roving tab chain; unrelated components break keyboard navigation
+// and ARIA announcements.
+#[slot(default, only = [
+    PineDropdownMenuItem,
+    PineDropdownMenuCheckboxItem,
+    PineDropdownMenuSeparator,
+    PineDropdownMenuLabel,
+    PineDropdownMenuGroup,
+    PineDropdownMenuRadioGroup,
+    PineDropdownMenuSub,
+    PineDropdownMenuArrow,
+])]
 pub struct PineDropdownMenuContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// a per-instance selector targeting this root's Trigger
@@ -294,6 +318,10 @@ fn dispatch_pp_select() -> bool {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — a Sub is always exactly SubTrigger + SubContent.
+// SubContent renders teleported, but the Sub wrapper owns both
+// halves in source order.
+#[slot(default, only = [PineDropdownMenuSubTrigger, PineDropdownMenuSubContent])]
 pub struct PineDropdownMenuSub {
     pub open: bool,
 }
@@ -355,6 +383,18 @@ impl PineDropdownMenuSubTrigger {
     role = "list",
     transition = "slide-down"
 )]
+// RFC 049 — SubContent hosts the same menu-items surface as
+// Content. Same accepts list.
+#[slot(default, only = [
+    PineDropdownMenuItem,
+    PineDropdownMenuCheckboxItem,
+    PineDropdownMenuSeparator,
+    PineDropdownMenuLabel,
+    PineDropdownMenuGroup,
+    PineDropdownMenuRadioGroup,
+    PineDropdownMenuSub,
+    PineDropdownMenuArrow,
+])]
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,
@@ -477,6 +517,14 @@ impl PineDropdownMenuSeparator {}
 /// nested Label so their ids match up for `aria-labelledby`.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuGroup.poco", role = "panel")]
+// RFC 049 — Groups hold a Label + items. Authors sometimes stack
+// CheckboxItems or mix Separators inside one group; all permitted.
+#[slot(default, only = [
+    PineDropdownMenuLabel,
+    PineDropdownMenuItem,
+    PineDropdownMenuCheckboxItem,
+    PineDropdownMenuSeparator,
+])]
 pub struct PineDropdownMenuGroup {
     /// Computed — id of the Label inside this group, for
     /// `aria-labelledby` on the group's root. Populated in
@@ -633,6 +681,15 @@ impl PineDropdownMenuItemIndicator {
     role = "panel",
     display = "contents"
 )]
+// RFC 049 — RadioGroups hold RadioItems + an optional Label +
+// Separators. Regular Items are intentionally NOT accepted
+// (the whole group is exclusive-choice; a non-radio item would
+// break the selection semantic).
+#[slot(default, only = [
+    PineDropdownMenuRadioItem,
+    PineDropdownMenuLabel,
+    PineDropdownMenuSeparator,
+])]
 pub struct PineDropdownMenuRadioGroup {
     #[model]
     pub value: String,

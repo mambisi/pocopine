@@ -37,6 +37,9 @@ inject_key!(ITEM: ScopeId);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineAccordionRoot.poco", role = "panel")]
+// RFC 049 — Accordion structure is strict at both levels. At the
+// Root only Items are allowed (no bare triggers, no labels).
+#[slot(default, only = [PineAccordionItem])]
 pub struct PineAccordionRoot {
     /// `"single"` (default) or `"multiple"`.
     #[prop]
@@ -114,6 +117,10 @@ impl PineAccordionRoot {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAccordionItem.poco", role = "panel")]
+// RFC 049 — each Item expects exactly Trigger + Content (in that
+// order by convention, though order isn't enforced by slot
+// contracts). `only` rejects stray wrappers and unrelated content.
+#[slot(default, only = [PineAccordionTrigger, PineAccordionContent])]
 pub struct PineAccordionItem {
     /// Stable identifier for this item within the Root.
     #[prop]
