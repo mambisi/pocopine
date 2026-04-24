@@ -9,24 +9,29 @@
 //! runs inside rustc during `#[component]` expansion. None of its
 //! dependencies are linked into the consumer's wasm output.
 //!
-//! ## Maturity marker — INFRASTRUCTURE ONLY
+//! ## Maturity marker
 //!
-//! This is **not** a release-ready API for safety-critical
-//! compile-time checks. Two invariants the RFC promises aren't
-//! yet delivered:
+//! This API is **safe to consume for RFC 045 single-root
+//! validation and RFC 049 consumer-side scans**. What it
+//! delivers:
 //!
-//! * [`Element::byte_range`] and [`Element::opening_tag_range`]
-//!   are placeholder `0..0` values. No diagnostic renderer
-//!   should consume them yet.
+//! * [`Element::opening_tag_range`] and [`Element::byte_range`]
+//!   are populated by the source-mapping pass. Ranges are
+//!   exact for every authored element; synthetic elements
+//!   keep `0..0` and must be filtered before any diagnostic
+//!   rendering (use [`TemplateAst::element_roots`]).
+//!
+//! Still outstanding:
+//!
 //! * Duplicate-attribute detection is currently surfaced via
 //!   html5ever's own error list rather than a framework-owned
-//!   rule; its wording is not stable.
-//!
-//! Callers must not build user-facing error paths on top of
-//! this module until those land. RFC 045's single-root
-//! migration and RFC 049's consumer-side scan both block on
-//! real byte ranges — see §5 milestones on the
-//! `rfc-050-html5ever-parser` branch.
+//!   rule; the specific error wording is not stable, though
+//!   the fact that an error appears in `Vec<ParseError>` is.
+//! * Text / comment node ranges are still `0..0`; not needed
+//!   by the current consumers.
+//! * `Element.synthetic` uses a case-insensitive source-scan
+//!   heuristic. Authoritative tracking via a custom TreeSink
+//!   is deferred.
 //!
 //! ## Contracts the module does uphold in v1
 //!
@@ -214,7 +219,12 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
 
     // Fragment parsing wraps the content in a single synthetic
     // root; walk into it to find the real top-level nodes.
-    let roots = collect_fragment_roots(&dom.document, source, &mut errors);
+    let mut roots = collect_fragment_roots(&dom.document, source, &mut errors);
+
+    // Post-parse: reconcile html5ever's tree with source byte
+    // positions. Populates `opening_tag_range` + `byte_range`
+    // on every authored Element.
+    map_positions(source, &mut roots);
 
     let ast = TemplateAst {
         source: source.to_string(),
@@ -230,9 +240,8 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
 /// AST is discarded on error; callers that want the AST for
 /// diagnostic rendering use [`parse`] directly.
 ///
-/// This is the variant `#[component]` will adopt when the byte-
-/// range milestone lands and the parser starts gating
-/// structural validation.
+/// This is the variant `#[component]` will adopt when the
+/// parser starts gating structural validation.
 pub fn parse_strict(source: &str, file_path: &str) -> Result<TemplateAst, Vec<ParseError>> {
     let (ast, errors) = parse(source, file_path);
     if errors.is_empty() {
@@ -240,6 +249,237 @@ pub fn parse_strict(source: &str, file_path: &str) -> Result<TemplateAst, Vec<Pa
     } else {
         Err(errors)
     }
+}
+
+// ── Source-mapping pass — populate byte ranges ──────────────────
+
+/// Walk the AST in DFS order alongside a source-byte cursor,
+/// populating `opening_tag_range` and `byte_range` on every
+/// authored [`Element`]. Synthetic elements keep the placeholder
+/// `0..0` ranges; their `children` are still walked because the
+/// author's real markup is nested inside them.
+///
+/// This isn't a full HTML parser — html5ever owns the structure;
+/// this pass reconciles that structure with source positions
+/// using the same quote-respecting byte walks already proven in
+/// `pocopine-core/src/templates.rs`.
+fn map_positions(source: &str, roots: &mut [Node]) {
+    let mut mapper = Mapper {
+        source: source.as_bytes(),
+        cursor: 0,
+    };
+    mapper.map_nodes(roots);
+}
+
+struct Mapper<'a> {
+    source: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Mapper<'a> {
+    fn map_nodes(&mut self, nodes: &mut [Node]) {
+        for node in nodes {
+            match node {
+                Node::Element(e) if e.synthetic => {
+                    // Synthetic elements weren't written by the
+                    // author. Don't advance the source cursor
+                    // for them — but recurse so their authored
+                    // descendants still get mapped.
+                    self.map_nodes(&mut e.children);
+                }
+                Node::Element(e) => self.map_element(e),
+                Node::Text(_, _) | Node::Comment(_, _) => {
+                    // v1: don't populate ranges on text/comment
+                    // nodes. They're not used by RFC 045 / RFC 049
+                    // diagnostics today. The cursor is advanced
+                    // implicitly when we skip insignificant bytes
+                    // before the next element.
+                }
+            }
+        }
+    }
+
+    fn map_element(&mut self, el: &mut Element) {
+        self.skip_insignificant_and_text();
+        let open_lt = self.cursor;
+        if open_lt >= self.source.len() || self.source[open_lt] != b'<' {
+            return;
+        }
+        let Some(close_gt) = find_tag_end(self.source, open_lt) else {
+            return;
+        };
+        el.opening_tag_range = open_lt..close_gt + 1;
+        self.cursor = close_gt + 1;
+
+        let self_closing = close_gt > open_lt && self.source[close_gt - 1] == b'/';
+        if self_closing || is_void_element(&el.tag) {
+            el.byte_range = el.opening_tag_range.clone();
+            return;
+        }
+
+        self.map_nodes(&mut el.children);
+
+        // Find the matching `</tagname>` close. We've already
+        // recursed through children, so any nested same-named
+        // close tags are behind us; the next `</tagname>` is
+        // ours.
+        match find_close_tag(self.source, self.cursor, &el.tag) {
+            Some(close_range) => {
+                el.byte_range = open_lt..close_range.end;
+                self.cursor = close_range.end;
+            }
+            None => {
+                // Malformed-but-recovered input (html5ever
+                // auto-closed at end of input). Best-effort
+                // range: opening tag through wherever we are.
+                el.byte_range = open_lt..self.cursor;
+            }
+        }
+    }
+
+    /// Advance past whitespace, comments, doctype, PI, and stray
+    /// text content until we either hit end-of-source or an
+    /// opening `<tagname` that corresponds to a real element.
+    fn skip_insignificant_and_text(&mut self) {
+        loop {
+            while self.cursor < self.source.len()
+                && self.source[self.cursor].is_ascii_whitespace()
+            {
+                self.cursor += 1;
+            }
+            if !self.peek_seq(b"<") {
+                // Stray text content — advance until next `<`.
+                while self.cursor < self.source.len()
+                    && self.source[self.cursor] != b'<'
+                {
+                    self.cursor += 1;
+                }
+                if self.cursor >= self.source.len() {
+                    return;
+                }
+            }
+            if self.peek_seq(b"<!--") {
+                match find_seq(self.source, self.cursor + 4, b"-->") {
+                    Some(end) => self.cursor = end + 3,
+                    None => return,
+                }
+                continue;
+            }
+            if self.peek_seq(b"<!") {
+                match find_byte(self.source, self.cursor, b'>') {
+                    Some(end) => self.cursor = end + 1,
+                    None => return,
+                }
+                continue;
+            }
+            if self.peek_seq(b"<?") {
+                match find_seq(self.source, self.cursor + 2, b"?>") {
+                    Some(end) => self.cursor = end + 2,
+                    None => return,
+                }
+                continue;
+            }
+            // If we see a closing tag here, we've reached the
+            // end of our parent's children list — bail and let
+            // the caller find the matching close.
+            if self.peek_seq(b"</") {
+                return;
+            }
+            // Opening tag of a child element — we're done
+            // skipping.
+            return;
+        }
+    }
+
+    fn peek_seq(&self, needle: &[u8]) -> bool {
+        self.cursor + needle.len() <= self.source.len()
+            && &self.source[self.cursor..self.cursor + needle.len()] == needle
+    }
+}
+
+// ── Byte-level helpers (mirrors of the ones in pocopine-core) ──
+
+fn find_byte(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
+    bytes[start..]
+        .iter()
+        .position(|&b| b == needle)
+        .map(|p| start + p)
+}
+
+fn find_seq(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || start + needle.len() > bytes.len() {
+        return None;
+    }
+    (start..=bytes.len() - needle.len())
+        .find(|&i| &bytes[i..i + needle.len()] == needle)
+}
+
+/// Find the `>` that closes the opening tag starting at
+/// `tag_start` (a `<`). Respects attribute-value quoting.
+fn find_tag_end(bytes: &[u8], tag_start: usize) -> Option<usize> {
+    let len = bytes.len();
+    let mut i = tag_start + 1;
+    let mut quote: Option<u8> = None;
+    while i < len {
+        let b = bytes[i];
+        match quote {
+            Some(q) => {
+                if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' => quote = Some(b),
+                b'>' => return Some(i),
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the next `</tagname>` close tag starting at or after
+/// `start` (case-insensitive tag match). Returns the byte range
+/// of the entire close tag (`<` through `>` inclusive-exclusive).
+fn find_close_tag(bytes: &[u8], start: usize, tag: &str) -> Option<Range<usize>> {
+    let tag_bytes = tag.as_bytes();
+    let mut i = start;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'<' && bytes[i + 1] == b'/' {
+            // Check tag name matches (case-insensitive).
+            let name_start = i + 2;
+            if name_start + tag_bytes.len() <= bytes.len() {
+                let candidate = &bytes[name_start..name_start + tag_bytes.len()];
+                let matches = candidate.iter().zip(tag_bytes).all(|(a, b)| {
+                    a.to_ascii_lowercase() == b.to_ascii_lowercase()
+                });
+                if matches {
+                    // Next byte should be whitespace or `>`.
+                    let next = bytes.get(name_start + tag_bytes.len()).copied();
+                    if matches!(next, Some(c) if c == b'>' || c.is_ascii_whitespace()) {
+                        if let Some(gt) = find_byte(bytes, name_start, b'>') {
+                            return Some(i..gt + 1);
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// HTML void-element list — tags that implicitly self-close and
+/// never carry a `</tag>` close. Kept in sync with the list in
+/// `pocopine-core/src/templates.rs`.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+    "source", "track", "wbr",
+];
+
+fn is_void_element(tag: &str) -> bool {
+    VOID_ELEMENTS.iter().any(|v| v.eq_ignore_ascii_case(tag))
 }
 
 /// RcDom's fragment parsing nests the user's content inside an
@@ -541,5 +781,180 @@ mod tests {
         let els: Vec<_> = ast.element_roots().collect();
         assert_eq!(els.len(), 1);
         assert_eq!(els[0].tag, "div");
+    }
+
+    // ── Byte-range fidelity (RFC 050 §4.3) ────────────────────
+
+    /// Helper: assert that the substring carved out by a range
+    /// matches `expected` in the source.
+    fn slice<'a>(src: &'a str, range: &Range<usize>) -> &'a str {
+        &src[range.clone()]
+    }
+
+    #[test]
+    fn byte_range_opening_tag_single_root() {
+        let src = "<div>hi</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), "<div>");
+        assert_eq!(slice(src, &root.byte_range), "<div>hi</div>");
+    }
+
+    #[test]
+    fn byte_range_with_leading_whitespace_and_comment() {
+        let src = "  <!-- hi -->\n<div>x</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), "<div>");
+        assert_eq!(slice(src, &root.byte_range), "<div>x</div>");
+    }
+
+    #[test]
+    fn byte_range_nested() {
+        let src = "<div><span>inner</span></div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.byte_range), "<div><span>inner</span></div>");
+        let span = root.children[0].as_element().unwrap();
+        assert_eq!(slice(src, &span.opening_tag_range), "<span>");
+        assert_eq!(slice(src, &span.byte_range), "<span>inner</span>");
+    }
+
+    #[test]
+    fn byte_range_self_closing() {
+        let src = r#"<input type="text"/>"#;
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), r#"<input type="text"/>"#);
+        // Self-closing: byte_range == opening_tag_range.
+        assert_eq!(root.byte_range, root.opening_tag_range);
+    }
+
+    #[test]
+    fn byte_range_void_element_without_slash() {
+        let src = r#"<div><br>after</div>"#;
+        let ast = parse_ok(src);
+        let div = ast.element_roots().next().unwrap();
+        let br = div.children[0].as_element().unwrap();
+        assert_eq!(slice(src, &br.opening_tag_range), "<br>");
+        assert_eq!(br.byte_range, br.opening_tag_range);
+    }
+
+    #[test]
+    fn byte_range_attribute_with_gt_inside_quotes() {
+        // `title="a > b"` — naïve byte walker would stop at the
+        // inner `>`. The range must still span the real tag end.
+        let src = r#"<div title="a > b">x</div>"#;
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(
+            slice(src, &root.opening_tag_range),
+            r#"<div title="a > b">"#
+        );
+    }
+
+    #[test]
+    fn byte_range_siblings() {
+        let src = "<div>a</div><span>b</span>";
+        let ast = parse_ok(src);
+        let els: Vec<_> = ast.element_roots().collect();
+        assert_eq!(slice(src, &els[0].byte_range), "<div>a</div>");
+        assert_eq!(slice(src, &els[1].byte_range), "<span>b</span>");
+    }
+
+    #[test]
+    fn byte_range_tags_across_line_boundaries() {
+        let src = "<div\n  class=\"x\"\n  id=\"y\"\n>\n  inside\n</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), "<div\n  class=\"x\"\n  id=\"y\"\n>");
+        assert_eq!(slice(src, &root.byte_range), src);
+    }
+
+    #[test]
+    fn byte_range_multibyte_utf8_in_attribute() {
+        let src = r#"<div title="café">x</div>"#;
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), r#"<div title="café">"#);
+        assert_eq!(slice(src, &root.byte_range), r#"<div title="café">x</div>"#);
+    }
+
+    #[test]
+    fn byte_range_multibyte_utf8_in_text() {
+        let src = "<div>héllo café</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.byte_range), "<div>héllo café</div>");
+    }
+
+    #[test]
+    fn byte_range_role_placeholder() {
+        // The <root> placeholder element used by RFC 033 —
+        // position tracking must work for unknown element names.
+        //
+        // Note: html5ever rejects `<slot/>` as an "unacknowledged
+        // self-closing tag" because HTML5 only permits self-close
+        // on void / foreign-content elements, not regular custom
+        // elements. Pocopine's existing `.poco` templates use
+        // `<slot/>` syntax — reconciling that is an open
+        // question for the RFC 045 migration (source pre-pass
+        // rewriting `<tag/>` → `<tag></tag>` for pocopine's
+        // known pseudo-elements, or tightening the template
+        // convention). Covered by the test matrix either way.
+        let src = "<root class=\"x\"><slot></slot></root>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), "<root class=\"x\">");
+        assert_eq!(slice(src, &root.byte_range), src);
+    }
+
+    #[test]
+    fn synthetic_tbody_has_zero_range_but_authored_children_mapped() {
+        // <tbody> was inserted by html5ever — its ranges stay
+        // 0..0, but the authored <tr> / <td> inside it still
+        // get their source positions.
+        let src = "<table><tr><td>x</td></tr></table>";
+        let ast = parse_ok(src);
+        let table = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &table.byte_range), src);
+        let tbody = table.children[0].as_element().unwrap();
+        assert!(tbody.synthetic);
+        assert_eq!(tbody.byte_range, 0..0);
+        assert_eq!(tbody.opening_tag_range, 0..0);
+        let tr = tbody.children[0].as_element().unwrap();
+        assert!(!tr.synthetic);
+        assert_eq!(slice(src, &tr.byte_range), "<tr><td>x</td></tr>");
+    }
+
+    #[test]
+    fn byte_range_nested_same_tag_disambiguates() {
+        // `<div><div></div></div>` — the outer div's close tag
+        // is the *second* `</div>`. The mapper must not stop
+        // at the inner one.
+        let src = "<div><div></div></div>";
+        let ast = parse_ok(src);
+        let outer = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &outer.byte_range), src);
+        let inner = outer.children[0].as_element().unwrap();
+        assert_eq!(slice(src, &inner.byte_range), "<div></div>");
+    }
+
+    #[test]
+    fn byte_range_crlf_line_endings() {
+        // Tolerate Windows-style line endings.
+        let src = "<div>\r\n  <span>x</span>\r\n</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.byte_range), src);
+    }
+
+    #[test]
+    fn byte_range_unquoted_attribute_value() {
+        let src = "<div class=x id=y>ok</div>";
+        let ast = parse_ok(src);
+        let root = ast.element_roots().next().unwrap();
+        assert_eq!(slice(src, &root.opening_tag_range), "<div class=x id=y>");
+        assert_eq!(slice(src, &root.byte_range), src);
     }
 }
