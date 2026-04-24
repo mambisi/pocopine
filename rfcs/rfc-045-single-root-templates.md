@@ -527,18 +527,44 @@ difference between dev and CI.
 ### 9.4 Implementation notes
 
 1. `crates/pocopine-macros/src/lib.rs` — a helper that reads
-   `env::var_os("POCOPINE_TEMPLATES_LENIENT")` once at macro
-   entry and threads a `Strictness` enum into the error
-   emitters. Cached per `#[component]` invocation; re-read
-   per macro call (not per workspace-compile) so toggling
-   takes effect on the next `cargo check`.
-2. Warnings are emitted via `#[allow(...)]`-style attributes
-   on a `const _: () = ();` item with a `#[deprecated(note =
-   "…")]` attribute carrying the rendered message — rustc
-   surfaces `deprecated` at the `const _` site with our
-   multi-line message body. (The `deprecated` mechanism is
-   misnamed for this use case but is the cleanest way to emit
-   a stable warning from a proc-macro on stable Rust.)
+   `env::var("POCOPINE_TEMPLATES_LENIENT")` once per
+   `#[component]` invocation and branches the diagnostic
+   path. Re-read per macro call (not per workspace-compile),
+   so toggling takes effect on the next `cargo check`.
+2. Warnings are emitted as a `const _: () = { ... }` item
+   containing a nested `#[deprecated(note = "…")]`-decorated
+   `const` whose identifier is immediately "used" via
+   `let _ = <ident>;`. rustc's deprecated-use lint fires on
+   the use, surfacing the full multi-line `note` body as a
+   warning with our `annotate-snippets`-rendered snippet
+   intact. This is the cleanest way to emit a custom multi-
+   line warning from a proc-macro on stable Rust.
 3. `trybuild` tests gate both modes: strict mode rejects,
    lenient mode accepts-with-warning. The warning body is
    snapshotted via `trybuild`'s stderr comparison.
+
+### 9.5 Known limitation — `deny(deprecated)` / `deny(warnings)`
+
+The lenient-mode mechanism rides rustc's deprecated-use lint.
+A consumer crate (or its workspace) that sets
+`#![deny(deprecated)]` or `#![deny(warnings)]` in `lib.rs` /
+`Cargo.toml` `[lints]` will turn the warning back into a
+hard error — even with `POCOPINE_TEMPLATES_LENIENT=1` set.
+
+This is acceptable because:
+
+- Strict lint policies are a deliberate team choice. A team
+  that's strict enough to `deny(warnings)` is also the
+  audience least likely to need the lenient mode in the
+  first place.
+- The env var is for local iteration; teams that have
+  warning-denying lints in CI still get the fail-fast they
+  want.
+- Adding `#[allow(deprecated)]` at the consumer level would
+  silence ALL deprecated-use warnings, not just ours —
+  worse cure than the disease.
+
+Document this limitation under `docs/poco/` alongside the
+env-var's usage, with the workaround: authors on
+`deny(deprecated)` projects either temporarily unset the
+deny, or fix the template.

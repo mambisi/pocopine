@@ -43,10 +43,13 @@ future RFC that builds on it:
    are **legacy transformation machinery** — not a parallel
    source of truth. No new correctness-sensitive behaviour
    may be added to them.
-2. **Parse errors are fatal.** Any parser error from
-   `html5ever` fails `#[component]` compilation. Recovery
-   is allowed only so the tree can be rendered for
-   diagnostics; it never permits the build through.
+2. **Framework-owned errors are fatal.** pocopine pre-parse
+   and post-parse rules with anchored byte ranges (the
+   self-close rule, future duplicate-attr rule, pp-ref
+   uniqueness, etc.) fail `#[component]` compilation.
+   html5ever's own spec-recovery notices are surfaced but
+   not fatal — their wording isn't a stable contract we
+   can match against. See §4.8 for the full split.
 3. **Fail closed, not silent.** If a compile-time check
    can't confidently interpret a template construct, it
    errors — it does not skip the check and let potentially-
@@ -464,58 +467,73 @@ No byte walker, no edge cases around `pp-if` /
 `<template>` wrappers (the AST represents them
 uniformly), no state machine.
 
-### 4.8 Parse-error policy — fail closed
+### 4.8 Parse-error policy — framework-owned errors are fatal
 
 `html5ever` is permissive by design: it recovers from
 malformed input the way a browser would (foster-parenting
-stray content, implicit `</tag>` insertion, tag-name
-normalisation on bad characters). That's right for a
-browser. It's wrong for a compile-time safety rail.
+stray content, implicit `</tag>` insertion, attribute
+deduping, tag-name normalisation on bad characters). Some of
+its recovery is visible via its parser-error stream; some
+isn't.
 
-The policy for pocopine-macros is **fail closed**:
+The policy splits by **who owns the error**:
 
-1. `parse()` returns `(TemplateAst, Vec<ParseError>)` —
-   never hides errors. The AST reflects html5ever's
-   recovered tree so diagnostics can be rendered on top of
-   it.
-2. Any `ParseError` in the returned `Vec` is **fatal**.
-   `#[component]` checks `errors.is_empty()` before
-   proceeding to structural validation; on non-empty, it
-   renders each error with `annotate-snippets` (pointing at
-   the error's `byte_range`) and emits a `syn::Error` that
-   fails the build.
-3. **Recovery is for diagnostics only.** The tree exists so
-   we can show the author where their template misbehaves.
-   It never unlocks the rest of the pipeline. No "permissive
-   mode" flag, no build-override.
-4. **No silent recovery anywhere downstream.** Any future
-   compile-time check that can't confidently interpret a
-   template construct **must fail**, not skip. Best-effort
-   behaviour quietly lets bad templates through; that's the
-   failure mode RFC 050 exists to eliminate.
+1. **Framework-owned errors** — produced by pocopine's own
+   pre-parse / post-parse rules, always carry a non-zero
+   `byte_range` anchored at the offending source position.
+   Currently covers the `<tagname/>` self-close rule
+   (§4.x). Future checks will add the framework-owned
+   duplicate-attr diagnostic, pp-ref uniqueness, etc. These
+   are **fatal** — `parse_strict` rejects, `#[component]`
+   emits `syn::Error` with an `annotate-snippets`-rendered
+   block, build fails.
+2. **html5ever spec-recovery notices** — produced by
+   html5ever's tokenizer / tree-builder. `byte_range ==
+   0..0` (html5ever doesn't expose source positions for its
+   errors on stable). Surface through `parse()`'s full
+   error list for diagnostic rendering, but **do not** gate
+   compilation in `parse_strict`.
 
-**What counts as a parse error.** We treat every html5ever
-error report as fatal by default. Specifically this
-includes:
+The rule: **pocopine-macros does not turn html5ever into a
+general HTML validity gate.** Matching on an html5ever
+message-string to decide fatality is not a stable contract;
+their wording changes across versions. Instead, any pocopine
+correctness invariant we want to enforce strictly gets its
+own framework-owned rule with an anchored byte range, which
+automatically flows through the fatal path.
 
-- Unclosed tags (no matching close tag by end-of-input).
-- Duplicate attributes on the same element.
-- Tags with invalid characters in the name.
-- Mis-nested close tags (`<a><b></a></b>`).
-- `<html>` / `<head>` / `<body>` / full-document markers in
-  a fragment context.
-- Any other html5ever error (NUL bytes, bad character
-  references, etc.).
+**Compile-time enforced today** (framework-owned rules):
 
-Browsers forgive all of these at runtime. We don't.
+- Forbidden `<tag/>` self-close on non-void / non-foreign
+  elements (RFC 050 §4.x). Points at the offending tag.
+- RFC 045 single-root rule (via `element_roots().count()` —
+  the root count itself is framework logic, not an html5ever
+  error).
 
-**What counts as html5ever-recovered but *not* an error.**
-Some html5ever behaviours aren't error-reported but are
-structural recovery (e.g. elements auto-closed at the end
-of input). For those, we don't emit an error — we rely on
-the AST's `byte_range` contract (§4.3) to make sure
-author-authored spans stay truthful. If that's not enough,
-we'll tighten in a follow-up; not a v1 blocker.
+**Surfaced but not fatal** (html5ever-sourced recovery):
+
+- Unclosed tags (html5ever auto-closes at end-of-input).
+- Duplicate attributes (html5ever keeps the first).
+- Mis-nested close tags.
+- `<html>` / `<head>` / `<body>` inside a fragment.
+- "Non-space table text" foster-parenting.
+- Other html5ever tokenizer/tree-builder recovery messages.
+
+Each of these is *observable* through `parse()`'s
+`Vec<ParseError>` — diagnostic renderers can show them to
+authors as informational warnings in the future. They just
+don't stop the build today. A follow-up RFC can promote any
+specific case to framework-owned fatal status by writing a
+pocopine pre-parse scanner for it (following the same shape
+as the self-close rule).
+
+**No silent recovery for framework-owned checks.** Any
+future pocopine rule that can't confidently interpret a
+template construct **must fail**, not skip. Best-effort
+behaviour quietly lets bad templates through; that's the
+failure mode RFC 050 exists to eliminate. The boundary is
+about *what pocopine chooses to enforce*, not about what
+html5ever can recover from.
 
 ## 5. Implementation
 
