@@ -9,34 +9,60 @@
 //! runs inside rustc during `#[component]` expansion. None of its
 //! dependencies are linked into the consumer's wasm output.
 //!
-//! Public API — consumers call [`parse`] and walk the returned
-//! tree; nothing from the `html5ever` surface leaks out.
+//! ## Maturity marker — INFRASTRUCTURE ONLY
 //!
-//! ## Contracts this module upholds (RFC 050)
+//! This is **not** a release-ready API for safety-critical
+//! compile-time checks. Two invariants the RFC promises aren't
+//! yet delivered:
+//!
+//! * [`Element::byte_range`] and [`Element::opening_tag_range`]
+//!   are placeholder `0..0` values. No diagnostic renderer
+//!   should consume them yet.
+//! * Duplicate-attribute detection is currently surfaced via
+//!   html5ever's own error list rather than a framework-owned
+//!   rule; its wording is not stable.
+//!
+//! Callers must not build user-facing error paths on top of
+//! this module until those land. RFC 045's single-root
+//! migration and RFC 049's consumer-side scan both block on
+//! real byte ranges — see §5 milestones on the
+//! `rfc-050-html5ever-parser` branch.
+//!
+//! ## Contracts the module does uphold in v1
 //!
 //! * Tag names are **lowercase HTML local names**. `<DIV>` and
 //!   `<div>` both produce `"div"`.
 //! * Attribute ordering on an element reflects source order.
-//! * Duplicate attributes on the same element are reported as a
-//!   `ParseError` (fatal at the caller's discretion).
-//! * `Element.byte_range` spans the opening `<` of the element
-//!   through the `>` of its closing tag (inclusive). For void or
-//!   self-closing elements it spans just the opening tag.
-//! * `Element.opening_tag_range` spans `<` through `>` of the
-//!   opening tag only.
 //! * `TemplateAst.roots` contains **all** top-level nodes —
 //!   elements, text, comments — in source order. Callers that
 //!   only care about element roots filter with
-//!   [`Node::as_element`].
-//! * Implicit tags produced by html5ever's fragment parsing
-//!   (synthetic `<html>`, `<head>`, `<body>`) are **not**
-//!   surfaced; the walker unwraps them.
+//!   [`Node::as_element`] or the convenience helper
+//!   [`TemplateAst::element_roots`].
+//! * The fragment-parse wrapper `<html>` is unwrapped before
+//!   the caller sees anything.
+//! * Elements the author did **not** write (html5ever's
+//!   auto-inserted `<tbody>` etc.) are marked
+//!   [`Element::synthetic = true`]. Callers running structural
+//!   checks **must** ignore synthetic nodes; they are retained
+//!   only so tree shape round-trips for diagnostic purposes.
+//!   The heuristic used is a source-scan for `<tagname` — good
+//!   enough for v1, to be replaced by authoritative tracking
+//!   from a custom `TreeSink` in the byte-range milestone.
 //!
-//! Byte-range population is scheduled for a follow-up within the
-//! RFC 050 branch: the v1 module emits structurally correct ASTs
-//! with placeholder `0..0` ranges. RFC 045's single-root check
-//! (the first consumer) doesn't need ranges; RFC 049's consumer-
-//! side scan does, and lands together with range support.
+//! ## Parse-error policy
+//!
+//! Per RFC 050 §4.8, any `ParseError` is **fatal in
+//! `#[component]`**. This module offers two entry points:
+//!
+//! * [`parse`] returns `(TemplateAst, Vec<ParseError>)` — the
+//!   AST is populated even on error so diagnostic renderers can
+//!   reason about the author's intended shape. Callers must
+//!   inspect `errors.is_empty()` before proceeding with any
+//!   structural validation.
+//! * [`parse_strict`] returns `Result<TemplateAst,
+//!   Vec<ParseError>>` — use when the caller's policy is
+//!   "errors terminate the build." `#[component]` will use
+//!   this variant once it migrates.
 
 use std::ops::Range;
 
@@ -63,7 +89,26 @@ pub struct TemplateAst {
     /// All top-level nodes in source order. Not restricted to
     /// elements — text and comments at the template root are
     /// preserved so downstream checks can reason about them.
+    /// **Includes synthetic elements** — callers running
+    /// structural checks must filter with
+    /// [`TemplateAst::element_roots`] or equivalent.
     pub roots: Vec<Node>,
+}
+
+impl TemplateAst {
+    /// Iterator over top-level nodes that are **authored
+    /// elements** — non-synthetic, non-text, non-comment.
+    ///
+    /// RFC 045's "exactly one root" rule is defined as
+    /// `element_roots().count() == 1`, not `roots.len() == 1`:
+    /// the former excludes top-level text / comments / html5ever's
+    /// synthetic insertions.
+    pub fn element_roots(&self) -> impl Iterator<Item = &Element> {
+        self.roots
+            .iter()
+            .filter_map(Node::as_element)
+            .filter(|e| !e.synthetic)
+    }
 }
 
 /// One element in the template tree.
@@ -84,6 +129,16 @@ pub struct Element {
     /// Byte range covering just the opening tag (`<foo ...>`
     /// or `<foo ... />`).
     pub opening_tag_range: Range<usize>,
+    /// `true` if html5ever inserted this element during tree
+    /// construction and the author did **not** write it (e.g.
+    /// `<tbody>` auto-inserted inside `<table>`).
+    ///
+    /// Detected in v1 by a case-insensitive source-scan for
+    /// `<tagname` — good enough for the compound-authoring
+    /// patterns `.poco` files typically use. An authoritative
+    /// signal will come from a custom `TreeSink` when byte-
+    /// range tracking lands.
+    pub synthetic: bool,
 }
 
 /// Any top-level or nested template node.
@@ -121,8 +176,13 @@ pub struct ParseError {
 /// Returns the structural AST alongside any parser errors. The
 /// tree is populated regardless of errors so diagnostic paths
 /// can reason about the author's intended shape even when the
-/// markup is malformed; consumers decide whether to proceed on
-/// non-empty `Vec<ParseError>`.
+/// markup is malformed.
+///
+/// **Callers running structural validation must treat a non-
+/// empty error list as fatal** (RFC 050 §4.8). Prefer
+/// [`parse_strict`] when that is the policy; use this variant
+/// only when a diagnostic path genuinely needs the AST
+/// alongside the errors.
 pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
     let opts = ParseOpts {
         tree_builder: TreeBuilderOpts {
@@ -154,7 +214,7 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
 
     // Fragment parsing wraps the content in a single synthetic
     // root; walk into it to find the real top-level nodes.
-    let roots = collect_fragment_roots(&dom.document, &mut errors);
+    let roots = collect_fragment_roots(&dom.document, source, &mut errors);
 
     let ast = TemplateAst {
         source: source.to_string(),
@@ -165,11 +225,32 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
     (ast, errors)
 }
 
+/// Same as [`parse`] but enforces the RFC 050 §4.8 policy at
+/// the type level: any parse error terminates with `Err`. The
+/// AST is discarded on error; callers that want the AST for
+/// diagnostic rendering use [`parse`] directly.
+///
+/// This is the variant `#[component]` will adopt when the byte-
+/// range milestone lands and the parser starts gating
+/// structural validation.
+pub fn parse_strict(source: &str, file_path: &str) -> Result<TemplateAst, Vec<ParseError>> {
+    let (ast, errors) = parse(source, file_path);
+    if errors.is_empty() {
+        Ok(ast)
+    } else {
+        Err(errors)
+    }
+}
+
 /// RcDom's fragment parsing nests the user's content inside an
 /// implicit `<html>` wrapper under `document`. This peels that
 /// wrapper so `TemplateAst::roots` reflects exactly what the
 /// author wrote at the template top level.
-fn collect_fragment_roots(document: &Handle, errors: &mut Vec<ParseError>) -> Vec<Node> {
+fn collect_fragment_roots(
+    document: &Handle,
+    source: &str,
+    errors: &mut Vec<ParseError>,
+) -> Vec<Node> {
     let doc = document.children.borrow();
     for doc_child in doc.iter() {
         if let NodeData::Element { ref name, .. } = doc_child.data {
@@ -177,7 +258,7 @@ fn collect_fragment_roots(document: &Handle, errors: &mut Vec<ParseError>) -> Ve
                 let html_children = doc_child.children.borrow();
                 let mut out = Vec::with_capacity(html_children.len());
                 for child in html_children.iter() {
-                    if let Some(node) = convert_node(child, errors) {
+                    if let Some(node) = convert_node(child, source, errors) {
                         out.push(node);
                     }
                 }
@@ -188,14 +269,18 @@ fn collect_fragment_roots(document: &Handle, errors: &mut Vec<ParseError>) -> Ve
     // Defensive fallback — document contained no `<html>` wrapper.
     let mut out = Vec::new();
     for child in doc.iter() {
-        if let Some(node) = convert_node(child, errors) {
+        if let Some(node) = convert_node(child, source, errors) {
             out.push(node);
         }
     }
     out
 }
 
-fn convert_node(handle: &Handle, errors: &mut Vec<ParseError>) -> Option<Node> {
+fn convert_node(
+    handle: &Handle,
+    source: &str,
+    errors: &mut Vec<ParseError>,
+) -> Option<Node> {
     match &handle.data {
         NodeData::Element {
             name,
@@ -204,29 +289,28 @@ fn convert_node(handle: &Handle, errors: &mut Vec<ParseError>) -> Option<Node> {
         } => {
             let tag = name.local.to_string().to_ascii_lowercase();
 
-            let mut attrs: Vec<(String, String)> = Vec::new();
-            let mut seen: Vec<String> = Vec::new();
-            for a in attrs_ref.borrow().iter() {
-                let attr_name = a.name.local.to_string().to_ascii_lowercase();
-                if seen.iter().any(|s| s == &attr_name) {
-                    errors.push(ParseError {
-                        message: format!(
-                            "duplicate attribute `{attr_name}` on <{tag}>"
-                        ),
-                        byte_range: 0..0,
-                    });
-                    continue;
-                }
-                seen.push(attr_name.clone());
-                attrs.push((attr_name, a.value.to_string()));
-            }
+            // Attribute list as html5ever saw it (already deduped
+            // by the tokenizer — duplicates show up in `errors`
+            // from html5ever itself in v1; a framework-owned
+            // duplicate rule needs byte ranges and lands with
+            // the TreeSink milestone).
+            let attrs: Vec<(String, String)> = attrs_ref
+                .borrow()
+                .iter()
+                .map(|a| (
+                    a.name.local.to_string().to_ascii_lowercase(),
+                    a.value.to_string(),
+                ))
+                .collect();
 
             let mut children: Vec<Node> = Vec::new();
             for child in handle.children.borrow().iter() {
-                if let Some(c) = convert_node(child, errors) {
+                if let Some(c) = convert_node(child, source, errors) {
                     children.push(c);
                 }
             }
+
+            let synthetic = !source_contains_tag_opener(source, &tag);
 
             Some(Node::Element(Element {
                 tag,
@@ -234,6 +318,7 @@ fn convert_node(handle: &Handle, errors: &mut Vec<ParseError>) -> Option<Node> {
                 children,
                 byte_range: 0..0,
                 opening_tag_range: 0..0,
+                synthetic,
             }))
         }
         NodeData::Text { contents } => {
@@ -248,6 +333,45 @@ fn convert_node(handle: &Handle, errors: &mut Vec<ParseError>) -> Option<Node> {
         // inside a fragment tree.
         _ => None,
     }
+}
+
+/// Case-insensitive scan for `<tagname` followed by a
+/// tag-delimiter byte (whitespace, `>`, `/`). Used as a v1
+/// heuristic for synthetic-element detection until a custom
+/// `TreeSink` gives us authoritative authored-vs-inserted
+/// information.
+fn source_contains_tag_opener(source: &str, tag: &str) -> bool {
+    let src = source.as_bytes();
+    let needle = format!("<{tag}");
+    let needle = needle.as_bytes();
+    let n = needle.len();
+    if n == 0 || src.len() < n {
+        return false;
+    }
+    let mut i = 0;
+    while i + n <= src.len() {
+        let candidate = &src[i..i + n];
+        if candidate
+            .iter()
+            .zip(needle)
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+        {
+            // Confirm next byte is a tag delimiter.
+            match src.get(i + n) {
+                None => return true,
+                Some(&b) => {
+                    if b.is_ascii_whitespace()
+                        || b == b'>'
+                        || b == b'/'
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -267,13 +391,8 @@ mod tests {
     #[test]
     fn single_root_element() {
         let ast = parse_ok("<div>hi</div>");
-        let els: Vec<_> = ast
-            .roots
-            .iter()
-            .filter_map(Node::as_element)
-            .collect();
-        assert_eq!(els.len(), 1);
-        assert_eq!(els[0].tag, "div");
+        assert_eq!(ast.element_roots().count(), 1);
+        assert_eq!(ast.element_roots().next().unwrap().tag, "div");
     }
 
     #[test]
@@ -302,39 +421,45 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_attribute_is_reported() {
+    fn duplicate_attribute_is_reported_by_parser() {
+        // v1 note: duplicate-attr detection is currently sourced
+        // from html5ever's own error list rather than a
+        // framework-owned rule. A stable-wording pocopine
+        // diagnostic will land with byte ranges; this test only
+        // pins down that we *do* surface an error today.
         let (ast, errors) = parse(r#"<div a="1" a="2">x</div>"#, "test.poco");
-        // html5ever itself reports duplicate-attribute too; we
-        // augment with our own diagnostic via the walker.
-        assert!(!errors.is_empty(), "expected duplicate-attr error");
+        assert!(!errors.is_empty(), "expected parser error for duplicate attr");
         let root = elem(&ast.roots[0]);
-        // The retained attribute is the first one seen.
+        // html5ever retains the first occurrence; we don't
+        // invent additional deduping on top.
         assert_eq!(root.attrs, vec![("a".into(), "1".into())]);
+    }
+
+    #[test]
+    fn parse_strict_errors_on_malformed() {
+        let err = parse_strict(r#"<div a="1" a="2">x</div>"#, "test.poco").err();
+        assert!(err.is_some(), "parse_strict should reject duplicate-attr input");
+    }
+
+    #[test]
+    fn parse_strict_passes_on_clean_input() {
+        let ast = parse_strict("<div>hi</div>", "test.poco").expect("clean input");
+        assert_eq!(ast.element_roots().count(), 1);
     }
 
     #[test]
     fn multiple_roots_surface_independently() {
         let ast = parse_ok("<div>a</div><span>b</span>");
-        let els: Vec<_> = ast
-            .roots
-            .iter()
-            .filter_map(Node::as_element)
-            .collect();
-        assert_eq!(els.len(), 2);
-        assert_eq!(els[0].tag, "div");
-        assert_eq!(els[1].tag, "span");
+        assert_eq!(ast.element_roots().count(), 2);
+        let tags: Vec<_> = ast.element_roots().map(|e| e.tag.as_str()).collect();
+        assert_eq!(tags, vec!["div", "span"]);
     }
 
     #[test]
-    fn zero_roots_on_comment_only() {
+    fn zero_element_roots_on_comment_only() {
         let ast = parse_ok("<!-- nothing here -->");
-        let els: Vec<_> = ast
-            .roots
-            .iter()
-            .filter_map(Node::as_element)
-            .collect();
-        assert!(els.is_empty());
-        // The comment itself is preserved at top level.
+        assert_eq!(ast.element_roots().count(), 0);
+        // Raw `roots` still contains the comment.
         assert!(matches!(ast.roots.first(), Some(Node::Comment(_, _))));
     }
 
@@ -377,5 +502,44 @@ mod tests {
         assert_eq!(root.attrs, vec![("class".into(), "x".into())]);
         let slot = elem(&root.children[0]);
         assert_eq!(slot.tag, "slot");
+    }
+
+    // ── Synthetic-node handling ───────────────────────────────
+
+    #[test]
+    fn authored_element_is_not_synthetic() {
+        let ast = parse_ok("<div>hi</div>");
+        let root = elem(&ast.roots[0]);
+        assert!(!root.synthetic, "div was written by the author");
+    }
+
+    #[test]
+    fn html5ever_inserted_tbody_is_synthetic() {
+        // <table><tr>...</tr></table> causes html5ever to
+        // insert <tbody> between <table> and <tr>. The author
+        // did not write <tbody>, so it must be flagged
+        // synthetic so compile-time checks can skip it.
+        let ast = parse_ok("<table><tr><td>x</td></tr></table>");
+        let table = elem(&ast.roots[0]);
+        assert_eq!(table.tag, "table");
+        assert!(!table.synthetic, "author wrote <table>");
+        // Expect a <tbody> child that was inserted by the parser.
+        let tbody = elem(&table.children[0]);
+        assert_eq!(tbody.tag, "tbody");
+        assert!(tbody.synthetic, "tbody was inserted, not authored");
+        // The <tr> below it is authored.
+        let tr = elem(&tbody.children[0]);
+        assert_eq!(tr.tag, "tr");
+        assert!(!tr.synthetic);
+    }
+
+    #[test]
+    fn element_roots_filters_synthetic_and_non_elements() {
+        // Mixed top level: text, authored element, comment.
+        // element_roots() returns only the authored element.
+        let ast = parse_ok("hello<div>x</div><!-- end -->");
+        let els: Vec<_> = ast.element_roots().collect();
+        assert_eq!(els.len(), 1);
+        assert_eq!(els[0].tag, "div");
     }
 }
