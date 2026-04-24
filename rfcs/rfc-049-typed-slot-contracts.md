@@ -270,6 +270,13 @@ conservative (see §4.7 for why):
    external components. Authors who want the check add the
    component to their `uses` list.
 
+`uses` is a **local registry for this consumer only**. It does
+not inherit from parents, from the app root, or from any
+workspace-global table. A component moved to another subtree
+should not change validity because some distant ancestor
+happened to import a different tag set; the contract must stay
+readable from the component's own source.
+
 Assertions run per-consumer, per-usage. If `MyMenu` uses
 `<pine-context-menu-content>` three times in its template,
 three independent assertion blocks are emitted, each with the
@@ -479,9 +486,13 @@ The macro:
    `uses` token stream. Both sides are literal — the type
    path as `syn::Path`, the tag as `LitStr`.
 2. Builds a local `tag → TypePath` table from the pairs.
-3. For each `<tag>` in the template, looks up the type path
+3. Rejects duplicate tag mappings inside the same `uses`
+   list. Two entries resolving to the same tag string are a
+   hard compile error on the consumer, because picking one
+   silently would make slot checks nondeterministic.
+4. For each `<tag>` in the template, looks up the type path
    in the table. Unknown → skipped (raw HTML or external).
-4. Emits assertions only for tags present in the table.
+5. Emits assertions only for tags present in the table.
 
 **Shorthand for the common case.** `#[component]`'s default
 kebab-casing rule (`PineContextMenuItem` → `"pine-context-menu-item"`)
@@ -502,6 +513,17 @@ carry an explicit override. No cross-crate type inspection at
 any point — the tag is either deterministic from the ident or
 explicit from the tuple, both readable from the consumer's
 own source.
+
+`uses` is therefore best understood as a **localized registry**
+owned by the consumer component:
+
+- local in scope — visible only to this template's compile-time
+  checks,
+- explicit in source — no linker or runtime discovery,
+- conflict-checked — duplicate tag strings are rejected at
+  macro expansion,
+- intentionally non-inherited — descendants declare their own
+  `uses` when they need slot-contract validation.
 
 **Alternatives considered (§6).** A `linkme` distributed
 slice lets components register themselves at link time, but
