@@ -56,18 +56,42 @@
 //!
 //! ## Parse-error policy
 //!
-//! Per RFC 050 §4.8, any `ParseError` is **fatal in
-//! `#[component]`**. This module offers two entry points:
+//! `ParseError` values fall into two categories distinguished
+//! by whether they carry an anchored byte range:
 //!
-//! * [`parse`] returns `(TemplateAst, Vec<ParseError>)` — the
-//!   AST is populated even on error so diagnostic renderers can
-//!   reason about the author's intended shape. Callers must
-//!   inspect `errors.is_empty()` before proceeding with any
-//!   structural validation.
+//! 1. **Framework-owned errors** (`byte_range.end > start`) —
+//!    produced by our own pre-parse validators (the
+//!    `<tagname/>` self-close rule today, future pocopine
+//!    checks). These are **fatal** in `parse_strict` and must
+//!    terminate the build in `#[component]`.
+//! 2. **html5ever spec-recovery notices** (`byte_range ==
+//!    0..0`) — produced when html5ever's tree builder applies
+//!    HTML5 recovery rules (foster-parenting, "Unexpected
+//!    token", duplicate-attr deduping, etc.). These come
+//!    through `parse()`'s error list for diagnostic purposes
+//!    but **do not** gate compilation in `parse_strict`;
+//!    they represent html5ever-internal observations, not
+//!    pocopine-owned correctness rules. Callers running
+//!    strict validation over their own invariants must install
+//!    framework-owned rules to gate those — matching an
+//!    html5ever wording string is not a stable contract.
+//!
+//! This module offers two entry points:
+//!
+//! * [`parse`] returns `(TemplateAst, Vec<ParseError>)` —
+//!   surfaces **all** parse issues (both categories) alongside
+//!   the AST. Use for diagnostic rendering that wants to show
+//!   every observation.
 //! * [`parse_strict`] returns `Result<TemplateAst,
-//!   Vec<ParseError>>` — use when the caller's policy is
-//!   "errors terminate the build." `#[component]` will use
-//!   this variant once it migrates.
+//!   Vec<ParseError>>` — only rejects on framework-owned
+//!   errors per the rule above. `#[component]` uses this
+//!   variant for the RFC 045 single-root migration.
+//!
+//! The rationale: pocopine should not turn html5ever into a
+//! general HTML validity gate mid-migration. RFC 049 and
+//! future consumers will install their own framework-owned
+//! rules (duplicate-attr wording, specific template-shape
+//! constraints) and those will flow through the fatal path.
 
 use std::ops::Range;
 
@@ -197,16 +221,22 @@ pub struct ParseError {
 
 /// Parse a `.poco` template source.
 ///
-/// Returns the structural AST alongside any parser errors. The
-/// tree is populated regardless of errors so diagnostic paths
-/// can reason about the author's intended shape even when the
-/// markup is malformed.
+/// Returns the structural AST alongside **every** parser
+/// observation — both framework-owned errors (anchored byte
+/// range) and html5ever spec-recovery notices (unanchored,
+/// `byte_range == 0..0`). See the module-level "Parse-error
+/// policy" section for the distinction.
 ///
-/// **Callers running structural validation must treat a non-
-/// empty error list as fatal** (RFC 050 §4.8). Prefer
-/// [`parse_strict`] when that is the policy; use this variant
-/// only when a diagnostic path genuinely needs the AST
-/// alongside the errors.
+/// The tree is populated regardless of errors so diagnostic
+/// paths can reason about the author's intended shape even
+/// when the markup is malformed.
+///
+/// Callers that want to gate compilation on errors must
+/// filter the returned `Vec<ParseError>` by byte range —
+/// anchored entries are framework-owned and safe to treat as
+/// fatal; unanchored entries are html5ever recovery and
+/// should not drive hard errors. Most consumers should use
+/// [`parse_strict`], which already applies this rule.
 pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
     // Pre-parse: pocopine-specific syntax rules that html5ever
     // would either accept permissively or reject with wording
