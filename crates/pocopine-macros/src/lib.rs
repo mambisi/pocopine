@@ -81,19 +81,26 @@ fn validate_template_or_emit_errors(
 
     // Resolve the `.poco` path relative to the .rs file that
     // invoked `#[component]`. On nightly `proc_macro_span`
-    // exposes the source-file path for free via `local_file()`.
+    // exposes the source-file path via `local_file()`.
+    //
+    // rust-analyzer runs speculative proc-macro expansions
+    // (for hover, completion, inlay hints, etc.) in which the
+    // span is synthetic and `local_file()` returns `None`.
+    // Erroring there floods the editor with false-negative
+    // diagnostics for every component — even ones where the
+    // template is perfectly valid. Instead: skip validation
+    // silently and emit only the normal component registration.
+    // The real `cargo check` / `cargo build` passes a
+    // file-backed span and runs the check as usual.
     let caller_rs = match template_path.span().unwrap().local_file() {
         Some(path) => path,
         None => {
-            // Can't resolve — emit a file-less error.
-            let msg = diagnostics::render_fileless_error(
-                &template_path.value(),
-                &format!(
-                    "pocopine: cannot resolve template path for component `{component_name}`"
-                ),
-                "proc_macro_span couldn't locate the calling source file",
-            );
-            return surface_diagnostic(template_path, &msg, lenient, None);
+            // rust-analyzer or other tooling with a synthetic
+            // span — don't surface anything. Caller gets
+            // `Ok((None, None))` and the outer pipeline treats
+            // it as "no validation ran, no warnings to
+            // propagate, no AST to feed RFC 049's scan."
+            return Ok((None, None));
         }
     };
     let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
