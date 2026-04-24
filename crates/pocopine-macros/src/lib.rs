@@ -43,6 +43,9 @@ use syn::{
 // renderer. Both host-only (proc-macro crate), invisible to wasm.
 mod template_parser;
 mod diagnostics;
+// RFC 049 — `#[slot]` helper-attribute parsing + marker-trait
+// emission. Inert helper consumed by `#[component]`.
+mod slot;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -542,6 +545,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         Some(s) => s.clone(),
         None => LitStr::new(&format!("{ident_str}.poco"), struct_ident.span()),
     };
+
+    // RFC 049 — `#[slot(...)]` helper attributes on the struct.
+    // Parse them off `input.attrs` (strips them from the
+    // emitted struct so rustc doesn't see an unknown attribute)
+    // and hold onto the declarations for trait emission below.
+    let slot_decls = match slot::parse_and_strip_slots(&mut input.attrs) {
+        Ok(s) => s,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let slot_traits_tokens = slot::emit_slot_traits(
+        &struct_ident,
+        &name_str,
+        &slot_decls,
+    );
 
     // RFC-031 — `#[prop]` is the explicit "parent contract"
     // marker; everything else defaults to state (internal,
@@ -1136,6 +1153,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let out = quote! {
         #input
+
+        // RFC 049 — marker traits + blanket impls for each
+        // #[slot(accepts=...)] / #[slot(only=...)] declared on
+        // this struct. Empty when no #[slot] declared or all
+        // slots use the bare `#[slot(default)]` form.
+        #slot_traits_tokens
 
         #observe_impl
 
