@@ -79,32 +79,29 @@ fn validate_template_or_emit_errors(
 ) -> Result<(Option<proc_macro2::TokenStream>, Option<template_parser::TemplateAst>), TokenStream> {
     let lenient = is_lenient_mode();
 
-    // Resolve the `.poco` path relative to the .rs file that
-    // invoked `#[component]`. On nightly `proc_macro_span`
-    // exposes the source-file path via `local_file()`.
+    // Resolve the `.poco` file via a two-tier strategy.
     //
-    // rust-analyzer runs speculative proc-macro expansions
-    // (for hover, completion, inlay hints, etc.) in which the
-    // span is synthetic and `local_file()` returns `None`.
-    // Erroring there floods the editor with false-negative
-    // diagnostics for every component — even ones where the
-    // template is perfectly valid. Instead: skip validation
-    // silently and emit only the normal component registration.
-    // The real `cargo check` / `cargo build` passes a
-    // file-backed span and runs the check as usual.
-    let caller_rs = match template_path.span().unwrap().local_file() {
-        Some(path) => path,
-        None => {
-            // rust-analyzer or other tooling with a synthetic
-            // span — don't surface anything. Caller gets
-            // `Ok((None, None))` and the outer pipeline treats
-            // it as "no validation ran, no warnings to
-            // propagate, no AST to feed RFC 049's scan."
-            return Ok((None, None));
-        }
+    // Tier 1: `Span::local_file()` on nightly's
+    // `proc_macro_span`. The primary path — works in cargo
+    // builds and rust-analyzer's file-backed evaluations.
+    //
+    // Tier 2: walk the manifest dir looking for the template
+    // filename. rust-analyzer runs speculative proc-macro
+    // expansions (hover, completion, inlay hints) where
+    // `local_file()` returns `None`; the filesystem walk lets
+    // validation still run against the authored file.
+    //
+    // Tier 3: give up silently (not an error). If neither
+    // lookup found a file, we return Ok((None, None)) and the
+    // caller emits the normal component registration with no
+    // validation. The real cargo build retries with a
+    // file-backed span so any real template bug still gets
+    // caught at build time.
+    let resolved_path = resolve_template_path(template_path);
+    let resolved_path = match resolved_path {
+        Some(p) => p,
+        None => return Ok((None, None)),
     };
-    let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let resolved_path = caller_dir.join(template_path.value());
     let file_path_str = resolved_path.to_string_lossy().to_string();
 
     // Display path: relative to CARGO_MANIFEST_DIR if we can
@@ -258,6 +255,123 @@ fn manifest_relative(path: &std::path::Path) -> String {
         }
     }
     path.to_string_lossy().to_string()
+}
+
+/// Two-tier template-path resolution.
+///
+/// * **Tier 1** — `Span::local_file()`. When the calling
+///   `.rs` file is known to the compiler (real cargo build,
+///   rust-analyzer's file-backed evaluations), join that
+///   `.rs` parent directory with the authored `template = "…"`
+///   path. This is the canonical resolution — matches
+///   `include_str!`'s own semantics.
+///
+/// * **Tier 2** — manifest-dir filesystem walk. When the span
+///   is synthetic (rust-analyzer speculative expansion,
+///   deeply-nested macros) `local_file()` returns None. We
+///   fall back by walking `CARGO_MANIFEST_DIR` looking for
+///   the template filename. An unambiguous match is used as
+///   the resolved path; zero or >1 matches → give up.
+///
+/// Returns `None` when neither tier finds an existing file
+/// — the caller treats that as "silent skip," not an error.
+fn resolve_template_path(template_path: &LitStr) -> Option<std::path::PathBuf> {
+    // Tier 1 — span-based (cargo + rust-analyzer file-backed).
+    if let Some(caller_rs) = template_path.span().unwrap().local_file() {
+        let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let candidate = caller_dir.join(template_path.value());
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        // Fall through to tier 2 if the span-derived path
+        // doesn't exist — handles edge cases like symlinked
+        // workspaces or IDE caching artefacts.
+    }
+
+    // Tier 2 — manifest-dir walk. Invoked when the span
+    // didn't yield a usable path (rust-analyzer speculative
+    // expansion is the common case).
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let template_value = template_path.value();
+
+    // Fast path: if the template path is itself
+    // manifest-relative (starts with a known prefix or is
+    // directly findable under the manifest), join and check.
+    let direct = std::path::Path::new(&manifest_dir).join(&template_value);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    // Slower path: recursive search for the basename. Only
+    // bite this cost when the direct join missed. Limits the
+    // walk to conservative depth and skips obviously-unrelated
+    // directories (target, node_modules, .git) so we don't
+    // scan the whole user's disk.
+    let basename = std::path::Path::new(&template_value).file_name()?;
+    let mut matches: Vec<std::path::PathBuf> = Vec::new();
+    find_template_in(
+        std::path::Path::new(&manifest_dir),
+        basename,
+        0,
+        &mut matches,
+    );
+
+    if matches.len() == 1 {
+        Some(matches.into_iter().next().unwrap())
+    } else {
+        // Zero matches → file doesn't exist; nothing to
+        // validate. More than one match → ambiguous; refuse
+        // to guess. Either way, silent skip.
+        None
+    }
+}
+
+/// Recursive filename search, depth-limited and
+/// skip-listed so it terminates quickly on large workspaces.
+fn find_template_in(
+    dir: &std::path::Path,
+    basename: &std::ffi::OsStr,
+    depth: usize,
+    out: &mut Vec<std::path::PathBuf>,
+) {
+    // Depth cap: pocopine templates live within a few layers
+    // of `src/`. Eight is generous.
+    if depth > 8 {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        // Skip build-output and dependency directories.
+        if matches!(
+            name_str.as_ref(),
+            "target" | "node_modules" | ".git" | "pkg" | "dist" | ".idea" | ".vscode"
+        ) {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => {
+                find_template_in(&path, basename, depth + 1, out);
+                if out.len() > 1 {
+                    return; // short-circuit on ambiguity
+                }
+            }
+            Ok(ft) if ft.is_file() => {
+                if entry.file_name() == basename {
+                    out.push(path);
+                    if out.len() > 1 {
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Tiny FNV-1a over the rendered message — just enough
