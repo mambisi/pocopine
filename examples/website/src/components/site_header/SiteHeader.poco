@@ -1,4 +1,4 @@
-<root class="site-header">
+<root :class="show_header_github ? 'site-header border-b' : 'site-header'">
   <div class="site-header-bar">
     <div class="site-header-center">
       <button class="site-header-search" @click="open_palette" aria-label="Search (Ctrl+K)">
