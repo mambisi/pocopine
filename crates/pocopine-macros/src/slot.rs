@@ -69,11 +69,23 @@ impl SlotName {
     /// PascalCase suffix used for the emitted marker trait
     /// name. `SlotName::Default` → `"Default"`;
     /// `SlotName::Named("footer")` → `"Footer"`.
-    fn trait_suffix(&self) -> String {
+    pub(crate) fn trait_suffix(&self) -> String {
         match self {
             SlotName::Default => "Default".to_string(),
             SlotName::Named(s) => pascal_case(s),
         }
+    }
+
+    /// Inherent-method ident used for the consumer-side
+    /// assertion call. Shape is
+    /// `__pocopine_assert_<snake_name>_slot`. Consumers call
+    /// it via `<Struct>::<ident>::<ChildType>()`.
+    pub(crate) fn assert_method_ident(&self) -> Ident {
+        let name = match self {
+            SlotName::Default => "default".to_string(),
+            SlotName::Named(s) => snake_case(s),
+        };
+        format_ident!("__pocopine_assert_{}_slot", name)
     }
 
     /// Human-readable slot name for diagnostic messages.
@@ -232,8 +244,14 @@ impl Parse for SlotArg {
     }
 }
 
-/// Emit marker traits + blanket impls for all of this
-/// component's slot declarations.
+/// Emit marker traits + blanket impls + inherent assertion
+/// method for each of this component's slot declarations.
+///
+/// The inherent method (`__pocopine_assert_<slot>_slot::<T>()`)
+/// is the path consumers use — it routes the trait bound
+/// through the struct so importing `#struct_ident` is enough;
+/// the trait itself doesn't need to be in scope at the call
+/// site. Per RFC 049 §5.2.
 ///
 /// Slots with no `accepts`/`only` list produce no trait (the slot
 /// is metadata for future typed-yield use; RFC 049's consumer
@@ -255,6 +273,7 @@ pub(crate) fn emit_slot_traits(
             struct_ident,
             slot.name.trait_suffix(),
         );
+        let assert_method_ident = slot.name.assert_method_ident();
         let slot_display = slot.name.display();
         let mode_suffix = match slot.mode {
             SlotMode::Accepts => "accepts",
@@ -282,6 +301,17 @@ pub(crate) fn emit_slot_traits(
             #(
                 impl #trait_ident for #accepts {}
             )*
+
+            // RFC 049 §5.2 — inherent method that carries the
+            // trait bound. Consumers call
+            // `<#struct_ident>::#assert_method_ident::<ChildType>()`
+            // to enforce the slot contract; they don't have to
+            // import `#trait_ident` to do so.
+            impl #struct_ident {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub fn #assert_method_ident<__T: #trait_ident>() {}
+            }
         });
     }
     out
@@ -300,6 +330,24 @@ fn pascal_case(s: &str) -> String {
             capitalize_next = false;
         } else {
             out.push(c);
+        }
+    }
+    out
+}
+
+/// `footer` → `footer`, `my-slot` → `my_slot`, `MySlot` →
+/// `m_y_slot`. Used for the inherent-method ident so named
+/// slots emit valid Rust identifiers.
+fn snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for (i, c) in s.chars().enumerate() {
+        if c == '-' || c == ' ' {
+            out.push('_');
+        } else if c.is_ascii_uppercase() && i > 0 {
+            out.push('_');
+            out.extend(c.to_lowercase());
+        } else {
+            out.extend(c.to_lowercase());
         }
     }
     out

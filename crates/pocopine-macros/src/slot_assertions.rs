@@ -40,9 +40,10 @@
 //!   trait half.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::Path;
 
+use crate::slot::SlotName;
 use crate::template_parser::{Element, Node, TemplateAst};
 use crate::uses::UsesTable;
 
@@ -123,11 +124,12 @@ fn emit_assertions_for_parent(
         // 011 syntax.
         if child_el.tag == "template" {
             if let Some(slot_name) = pp_slot_name(child_el) {
+                let site = SlotName::Named(slot_name);
                 for slotted in &child_el.children {
                     if let Node::Element(slotted_el) = slotted {
                         emit_one_assertion(
                             parent_path,
-                            &SlotSite::Named(slot_name.clone()),
+                            &site,
                             slotted_el,
                             uses,
                             out,
@@ -141,7 +143,7 @@ fn emit_assertions_for_parent(
         // Default slot — any non-template-wrapped direct child.
         emit_one_assertion(
             parent_path,
-            &SlotSite::Default,
+            &SlotName::Default,
             child_el,
             uses,
             out,
@@ -149,26 +151,9 @@ fn emit_assertions_for_parent(
     }
 }
 
-enum SlotSite {
-    Default,
-    Named(String),
-}
-
-impl SlotSite {
-    /// PascalCase suffix used in the parent's marker-trait
-    /// name. Matches the naming scheme `slot::emit_slot_traits`
-    /// uses (`<StructIdent><SlotName>Child`).
-    fn trait_suffix(&self) -> String {
-        match self {
-            SlotSite::Default => "Default".to_string(),
-            SlotSite::Named(s) => pascal_case(s),
-        }
-    }
-}
-
 fn emit_one_assertion(
     parent_path: &Path,
-    site: &SlotSite,
+    slot_name: &SlotName,
     child_el: &Element,
     uses: &UsesTable,
     out: &mut TokenStream,
@@ -181,36 +166,19 @@ fn emit_one_assertion(
         return;
     };
 
-    let trait_path = build_trait_path(parent_path, site);
+    // Emit `<ParentType>::__pocopine_assert_<slot>_slot::<ChildType>()`.
+    // Routing through the inherent method (emitted by
+    // `slot::emit_slot_traits`) means consumers only need the
+    // parent struct in scope — the marker trait doesn't have
+    // to be imported separately.
+    let assert_method = slot_name.assert_method_ident();
     let assertion = quote! {
         #[allow(unused_variables, dead_code, non_snake_case)]
         const _: fn() = || {
-            fn __pocopine_assert_child<__T: #trait_path>() {}
-            __pocopine_assert_child::<#child_path>();
+            <#parent_path>::#assert_method::<#child_path>();
         };
     };
     out.extend(assertion);
-}
-
-/// Build the marker-trait path for a parent/slot pair. Keeps
-/// the parent's module path intact; rewrites just the last
-/// ident (`Parent`) into `Parent<SlotSuffix>Child`.
-fn build_trait_path(parent_path: &Path, site: &SlotSite) -> Path {
-    let mut trait_path = parent_path.clone();
-    let last = trait_path
-        .segments
-        .last_mut()
-        .expect("uses entry must be a non-empty path");
-    let new_ident = format_ident!(
-        "{}{}Child",
-        last.ident,
-        site.trait_suffix(),
-    );
-    last.ident = new_ident;
-    // Drop any generic arguments the caller attached — marker
-    // traits we emit are generics-free.
-    last.arguments = syn::PathArguments::None;
-    trait_path
 }
 
 /// Extract `pp-slot="NAME"` value from an element's
@@ -226,24 +194,6 @@ fn pp_slot_name(el: &Element) -> Option<String> {
         }
     }
     None
-}
-
-fn pascal_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut cap_next = true;
-    for c in s.chars() {
-        if c == '-' || c == '_' || c == ' ' {
-            cap_next = true;
-            continue;
-        }
-        if cap_next {
-            out.extend(c.to_uppercase());
-            cap_next = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -268,12 +218,12 @@ mod tests {
         let tokens = emit_slot_assertions(&ast, &uses);
         let s = tokens.to_string();
         assert!(
-            s.contains("PineFooDefaultChild"),
-            "expected parent's DefaultChild trait bound, got:\n{s}"
+            s.contains("__pocopine_assert_default_slot"),
+            "expected inherent-method call on parent, got:\n{s}"
         );
         assert!(
-            s.contains("PineItem"),
-            "expected child type in assertion, got:\n{s}"
+            s.contains("PineFoo") && s.contains("PineItem"),
+            "expected both parent and child types in assertion, got:\n{s}"
         );
     }
 
@@ -327,12 +277,12 @@ mod tests {
         let tokens = emit_slot_assertions(&ast, &uses);
         let s = tokens.to_string();
         assert!(
-            s.contains("PineFooHeaderChild"),
-            "expected named-slot trait, got:\n{s}"
+            s.contains("__pocopine_assert_header_slot"),
+            "expected named-slot method, got:\n{s}"
         );
         assert!(
-            s.contains("PineFooDefaultChild"),
-            "expected default-slot trait for unwrapped child, got:\n{s}"
+            s.contains("__pocopine_assert_default_slot"),
+            "expected default-slot method for unwrapped child, got:\n{s}"
         );
         assert!(s.contains("PineTitle"));
         assert!(s.contains("PineItem"));
@@ -353,14 +303,11 @@ mod tests {
         ]);
         let tokens = emit_slot_assertions(&ast, &uses);
         let s = tokens.to_string();
-        assert!(
-            s.contains("PineOuterDefaultChild"),
-            "outer parent missing"
-        );
-        assert!(
-            s.contains("PineInnerDefaultChild"),
-            "inner parent missing"
-        );
+        // Two assertion blocks — both via the default-slot
+        // method, one on the outer parent, one on the inner.
+        let method_count = s.matches("__pocopine_assert_default_slot").count();
+        assert_eq!(method_count, 2, "expected 2 method calls, got:\n{s}");
+        assert!(s.contains("PineOuter"));
         assert!(s.contains("PineInner"));
         assert!(s.contains("PineItem"));
     }
@@ -396,8 +343,9 @@ mod tests {
         let s = tokens.to_string();
         assert!(
             s.contains("crate") && s.contains("pine"),
-            "trait path should preserve crate::pine prefix, got:\n{s}"
+            "type path should preserve crate::pine prefix, got:\n{s}"
         );
-        assert!(s.contains("MyFooDefaultChild"));
+        assert!(s.contains("MyFoo"));
+        assert!(s.contains("__pocopine_assert_default_slot"));
     }
 }

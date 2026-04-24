@@ -157,6 +157,11 @@ impl PineContextMenuPortal {
     role = "list",
     transition = "slide-down"
 )]
+// RFC 049 reference migration: only `<pine-context-menu-item>` and
+// `<pine-context-menu-separator>` are permitted direct children.
+// Any other pocopine component listed in a consumer's `uses` is
+// rejected via the emitted marker trait `PineContextMenuContentDefaultChild`.
+#[slot(default, only = [PineContextMenuItem, PineContextMenuSeparator])]
 pub struct PineContextMenuContent {
     /// Mirrored from Root on open so the template's inline style
     /// positions this panel at the captured pointer. Read once at
