@@ -16,3 +16,5 @@ target/
 # Playwright screenshot output — regenerated on every e2e run.
 examples/*/e2e/screenshots/
 examples/*/e2e/*.png
+.idea/
+.codex
