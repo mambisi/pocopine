@@ -1,0 +1,23 @@
+<div class="pine-date-range-field"
+     pp-ref="root"
+     role="group"
+     :data-disabled="disabled"
+     :data-readonly="readonly">
+  <pine-date-field class="pine-date-range-field-start"
+                   pp-model:value="start"
+                   :min-value="min_value"
+                   :max-value="effective_start_max()"
+                   :name="start_name"
+                   :disabled="disabled"
+                   :readonly="readonly"
+                   :required="required"></pine-date-field>
+  <span class="pine-date-range-field-separator" aria-hidden="true" pp-text="separator"></span>
+  <pine-date-field class="pine-date-range-field-end"
+                   pp-model:value="end"
+                   :min-value="effective_end_min()"
+                   :max-value="max_value"
+                   :name="end_name"
+                   :disabled="disabled"
+                   :readonly="readonly"
+                   :required="required"></pine-date-field>
+</div>

@@ -35,7 +35,9 @@ pub mod combobox;
 pub mod command;
 pub mod compound;
 pub mod context_menu;
+pub mod date_field;
 pub mod date_picker;
+pub mod date_range_field;
 pub mod date_range_picker;
 pub mod datetime;
 pub mod dialog;
@@ -62,6 +64,8 @@ pub mod switch;
 pub mod tabs;
 pub mod tags_input;
 pub mod text;
+pub mod time_field;
+pub mod time_range_field;
 pub mod toggle;
 pub mod toggle_group;
 pub mod toolbar;
@@ -98,7 +102,9 @@ pub use context_menu::{
     PineContextMenuContent, PineContextMenuItem, PineContextMenuPortal, PineContextMenuRoot,
     PineContextMenuSeparator, PineContextMenuTrigger,
 };
+pub use date_field::PineDateField;
 pub use date_picker::PineDatePicker;
+pub use date_range_field::PineDateRangeField;
 pub use date_range_picker::PineDateRangePicker;
 pub use dialog::{
     PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay, PineDialogPortal,
@@ -154,6 +160,8 @@ pub use tags_input::{
     PineTagsInputItemText, PineTagsInputRoot,
 };
 pub use text::PineText;
+pub use time_field::PineTimeField;
+pub use time_range_field::PineTimeRangeField;
 pub use toggle::PineToggle;
 pub use toggle_group::{PineToggleGroupItem, PineToggleGroupRoot};
 pub use toolbar::{PineToolbarButton, PineToolbarLink, PineToolbarRoot, PineToolbarSeparator};
@@ -206,6 +214,10 @@ pub fn register_all() {
     PineRangeCalendarCell::register();
     PineRangeCalendarCellTrigger::register();
     PineDateRangePicker::register();
+    PineDateField::register();
+    PineTimeField::register();
+    PineDateRangeField::register();
+    PineTimeRangeField::register();
     PineCollapsibleRoot::register();
     PineCollapsibleTrigger::register();
     PineCollapsibleContent::register();

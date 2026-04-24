@@ -1,0 +1,25 @@
+<div class="pine-time-range-field"
+     pp-ref="root"
+     role="group"
+     :data-disabled="disabled"
+     :data-readonly="readonly">
+  <pine-time-field class="pine-time-range-field-start"
+                   pp-model:value="start"
+                   :min-value="min_value"
+                   :max-value="effective_start_max()"
+                   :step="step"
+                   :name="start_name"
+                   :disabled="disabled"
+                   :readonly="readonly"
+                   :required="required"></pine-time-field>
+  <span class="pine-time-range-field-separator" aria-hidden="true" pp-text="separator"></span>
+  <pine-time-field class="pine-time-range-field-end"
+                   pp-model:value="end"
+                   :min-value="effective_end_min()"
+                   :max-value="max_value"
+                   :step="step"
+                   :name="end_name"
+                   :disabled="disabled"
+                   :readonly="readonly"
+                   :required="required"></pine-time-field>
+</div>

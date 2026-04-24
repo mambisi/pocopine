@@ -1,0 +1,78 @@
+/* ─── DatetimeFieldsDemo ────────────────────────────────────── */
+
+.datetime-fields-grid {
+  display: grid;
+  gap: 0.875rem;
+  max-width: 34rem;
+}
+.datetime-field-row {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+.datetime-field-label {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.datetime-field-readout {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--fg);
+  text-align: right;
+}
+
+/* The primitives ship zero CSS — the demo styles the nested
+   classes (`.pine-date-field`, `.pine-time-field`) directly so the
+   four rows line up. */
+.pine-date-field,
+.pine-time-field {
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.pine-date-field[data-focused],
+.pine-time-field[data-focused] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 25%, transparent);
+  outline: none;
+}
+.pine-date-field[data-touched]:invalid,
+.pine-time-field[data-touched]:invalid {
+  border-color: #d64545;
+}
+.pine-date-field[data-disabled],
+.pine-time-field[data-disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pine-date-range-field,
+.pine-time-range-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  width: 100%;
+}
+.pine-date-range-field-start,
+.pine-date-range-field-end,
+.pine-time-range-field-start,
+.pine-time-range-field-end {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.pine-date-range-field-separator,
+.pine-time-range-field-separator {
+  color: var(--fg-muted);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}

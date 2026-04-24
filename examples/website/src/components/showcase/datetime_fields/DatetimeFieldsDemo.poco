@@ -1,0 +1,49 @@
+<root>
+  <h2>Date / time fields</h2>
+  <section>
+    <p style="color:var(--fg-muted);font-size:0.875rem;margin:0 0 0.75rem">
+      Native <code>&lt;input type="date"&gt;</code> /
+      <code>type="time"</code> wrapped as Pine primitives with
+      <code>Option&lt;DateValue&gt;</code> / <code>String</code>
+      two-way bindings. Range variants pair two fields and keep
+      their min/max in sync so the range can't invert.
+    </p>
+
+    <div class="datetime-fields-grid">
+      <label class="datetime-field-row">
+        <span class="datetime-field-label">Date</span>
+        <pine-date-field pp-model:value="date_value"></pine-date-field>
+        <strong class="datetime-field-readout" pp-text="date_value || '(none)'"></strong>
+      </label>
+
+      <label class="datetime-field-row">
+        <span class="datetime-field-label">Time</span>
+        <pine-time-field pp-model:value="time_value" step="60"></pine-time-field>
+        <strong class="datetime-field-readout" pp-text="time_value || '(none)'"></strong>
+      </label>
+
+      <div class="datetime-field-row">
+        <span class="datetime-field-label">Date range</span>
+        <pine-date-range-field pp-model:start="range_start"
+                               pp-model:end="range_end"></pine-date-range-field>
+        <strong class="datetime-field-readout">
+          <span pp-text="range_start || '(none)'"></span>
+          <span>&nbsp;–&nbsp;</span>
+          <span pp-text="range_end || '(none)'"></span>
+        </strong>
+      </div>
+
+      <div class="datetime-field-row">
+        <span class="datetime-field-label">Time range</span>
+        <pine-time-range-field pp-model:start="time_start"
+                               pp-model:end="time_end"
+                               step="60"></pine-time-range-field>
+        <strong class="datetime-field-readout">
+          <span pp-text="time_start || '(none)'"></span>
+          <span>&nbsp;–&nbsp;</span>
+          <span pp-text="time_end || '(none)'"></span>
+        </strong>
+      </div>
+    </div>
+  </section>
+</root>
