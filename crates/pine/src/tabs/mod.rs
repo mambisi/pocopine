@@ -36,6 +36,11 @@ inject_key!(ROOT: Handle<PineTabsRoot>);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTabsRoot.poco", role = "panel")]
+// RFC 049 — Tabs compound is List + Content panels. Multiple
+// Content panels (one per tab) are expected, alongside the
+// single List. No arbitrary content at this level — it'd
+// either shadow the tab panels or confuse keyboard navigation.
+#[slot(default, only = [PineTabsList, PineTabsContent])]
 pub struct PineTabsRoot {
     #[model]
     pub value: String,
@@ -72,6 +77,10 @@ impl PineTabsRoot {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTabsList.poco", role = "panel")]
+// RFC 049 — List is the roving-tabindex container; only
+// Triggers are valid direct children. Non-Trigger siblings
+// break arrow-key walking.
+#[slot(default, only = [PineTabsTrigger])]
 pub struct PineTabsList {
     #[observe(ROOT)]
     pub orientation: String,

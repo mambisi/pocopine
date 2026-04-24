@@ -48,6 +48,9 @@ inject_key!(DESCRIPTION_ID: String);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineAlertDialogRoot.poco", role = "scope")]
+// RFC 049 — AlertDialog mirrors Dialog's structure. Trigger
+// opens the alert; Portal teleports the overlay + content.
+#[slot(default, only = [PineAlertDialogTrigger, PineAlertDialogPortal])]
 pub struct PineAlertDialogRoot {
     #[model]
     pub open: bool,
@@ -129,6 +132,9 @@ impl PineAlertDialogTrigger {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineAlertDialogPortal.poco", role = "scope")]
+// RFC 049 — teleport wrapper holds the dimmed overlay + the
+// alert content box.
+#[slot(default, only = [PineAlertDialogOverlay, PineAlertDialogContent])]
 pub struct PineAlertDialogPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -167,6 +173,16 @@ impl PineAlertDialogOverlay {
     role = "panel",
     transition = "fade-scale"
 )]
+// RFC 049 — AlertDialog's content surface holds its semantic
+// parts plus the required Action + Cancel buttons (every
+// alert dialog needs a way to confirm or dismiss). `accepts`
+// not `only` so authors can drop layout elements alongside.
+#[slot(default, accepts = [
+    PineAlertDialogTitle,
+    PineAlertDialogDescription,
+    PineAlertDialogAction,
+    PineAlertDialogCancel,
+])]
 pub struct PineAlertDialogContent {
     pub title_id: String,
     pub description_id: String,

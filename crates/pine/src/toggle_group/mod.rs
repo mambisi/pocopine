@@ -37,6 +37,10 @@ inject_key!(ROOT: ScopeId);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineToggleGroupRoot.poco", role = "panel")]
+// RFC 049 — same shape as RadioGroup: a single-kind container
+// of Items with roving tabindex. Foreign elements would break
+// keyboard navigation between the toggles.
+#[slot(default, only = [PineToggleGroupItem])]
 pub struct PineToggleGroupRoot {
     /// `"single"` (default) or `"multiple"`.
     #[prop]

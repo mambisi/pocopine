@@ -131,6 +131,11 @@ struct TriggerRuntime {
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTooltipRoot.poco", role = "scope")]
+// RFC 049 — Tooltip's Root has exactly Trigger + Portal.
+// Provider sits OUTSIDE this Root (it's the top-level wrapper
+// that shares delay/skip-duration state across tooltips) so
+// isn't listed here.
+#[slot(default, only = [PineTooltipTrigger, PineTooltipPortal])]
 pub struct PineTooltipRoot {
     #[prop]
     pub open: bool,
@@ -369,6 +374,8 @@ fn teardown(scope: ScopeId) {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineTooltipPortal.poco", role = "scope")]
+// RFC 049 — Portal teleports to body; wraps just Content.
+#[slot(default, only = [PineTooltipContent])]
 pub struct PineTooltipPortal {
     #[observe(ROOT)]
     pub open: bool,

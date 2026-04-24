@@ -31,6 +31,11 @@ inject_key!(ROOT: Handle<PineProgressRoot>);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineProgressRoot.poco", role = "panel")]
+// RFC 049 — Progress holds exactly one Indicator. The
+// indicator's width / transform draws the filled portion;
+// nothing else belongs at Root level (a label belongs outside
+// the progress's a11y surface).
+#[slot(default, only = [PineProgressIndicator])]
 pub struct PineProgressRoot {
     /// Current progress. Negative (e.g. `-1`) marks an
     /// indeterminate state — spinner-style loading with no known

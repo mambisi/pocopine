@@ -43,6 +43,11 @@ inject_key!(DESCRIPTION_ID: String);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDialogRoot.poco", role = "scope")]
+// RFC 049 — Dialog's Root holds exactly Trigger + Portal.
+// Content lives inside the Portal (it's teleported at mount
+// so focus-trap / scroll-lock install on the real overlay,
+// not a sibling of Trigger).
+#[slot(default, only = [PineDialogTrigger, PineDialogPortal])]
 pub struct PineDialogRoot {
     #[model]
     pub open: bool,
@@ -119,6 +124,9 @@ impl PineDialogTrigger {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDialogPortal.poco", role = "scope")]
+// RFC 049 — Portal teleports to <body>; it holds the Overlay
+// (dim layer) + the Content (the dialog box).
+#[slot(default, only = [PineDialogOverlay, PineDialogContent])]
 pub struct PineDialogPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -157,6 +165,11 @@ impl PineDialogOverlay {
     role = "panel",
     transition = "fade-scale"
 )]
+// RFC 049 — Dialog's content surface holds its own semantic
+// parts (Title, Description, Close). Anything else is author
+// content — we use `accepts` instead of `only` so authors can
+// drop buttons, forms, images, custom markup alongside.
+#[slot(default, accepts = [PineDialogTitle, PineDialogDescription, PineDialogClose])]
 pub struct PineDialogContent {
     pub title_id: String,
     pub description_id: String,

@@ -90,6 +90,9 @@ struct RootRuntime {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — HoverCard's Root holds Trigger + Portal. Same
+// topology as Popover / Tooltip.
+#[slot(default, only = [PineHoverCardTrigger, PineHoverCardPortal])]
 pub struct PineHoverCardRoot {
     #[prop]
     pub open: bool,
@@ -337,6 +340,8 @@ fn teardown_trigger(root_id: ScopeId) {
     role = "scope",
     display = "contents"
 )]
+// RFC 049 — Portal wraps Content.
+#[slot(default, only = [PineHoverCardContent])]
 pub struct PineHoverCardPortal {
     #[observe(ROOT)]
     pub open: bool,

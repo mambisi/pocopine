@@ -40,6 +40,10 @@ inject_key!(ROOT: Handle<PinePopoverRoot>);
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PinePopoverRoot.poco", role = "scope")]
+// RFC 049 — Popover's Root holds exactly Trigger + Portal.
+// Popover has no Overlay (non-modal by default) so Portal's
+// sole child is Content.
+#[slot(default, only = [PinePopoverTrigger, PinePopoverPortal])]
 pub struct PinePopoverRoot {
     #[model]
     pub open: bool,
@@ -118,6 +122,9 @@ impl PinePopoverTrigger {
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PinePopoverPortal.poco", role = "scope")]
+// RFC 049 — Portal wraps the positioned Content panel; no
+// overlay layer since Popover is non-modal by default.
+#[slot(default, only = [PinePopoverContent])]
 pub struct PinePopoverPortal {
     #[observe(ROOT)]
     pub open: bool,
@@ -134,6 +141,10 @@ impl PinePopoverPortal {}
     role = "panel",
     transition = "slide-down"
 )]
+// RFC 049 — Popover content is author-driven (form, text,
+// nested components); the only semantic pocopine part is
+// Close. `accepts` so arbitrary wrapping HTML still works.
+#[slot(default, accepts = [PinePopoverClose])]
 pub struct PinePopoverContent {
     /// Computed in `on_setup` from the injected root scope id —
     /// per-instance selector for anchor. Matches the

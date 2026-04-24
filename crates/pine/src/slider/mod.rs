@@ -61,6 +61,11 @@ thread_local! {
 
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineSliderRoot.poco", role = "scope", display = "contents")]
+// RFC 049 — Slider's Root holds the Track (visual bar) + one
+// or more Thumbs (drag handles). The Range lives inside the
+// Track; Thumbs live at Root level so the author positions
+// them directly.
+#[slot(default, only = [PineSliderTrack, PineSliderThumb])]
 pub struct PineSliderRoot {
     /// Current value. Two-way bindable via
     /// `pp-model:value="my_volume"` on the tag.
@@ -302,6 +307,10 @@ fn value_from_pointer(
     role = "panel",
     display = "contents"
 )]
+// RFC 049 — Track holds the Range (filled portion). Nothing
+// else: the Range's positioning is the only thing that draws
+// inside the Track.
+#[slot(default, only = [PineSliderRange])]
 pub struct PineSliderTrack {
     /// Mirrored for the `data-orientation` / `data-disabled` attrs.
     #[observe(ROOT)]

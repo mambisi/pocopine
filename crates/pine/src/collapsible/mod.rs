@@ -33,6 +33,9 @@ inject_key!(ROOT: Handle<PineCollapsibleRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineCollapsibleRoot.poco", role = "scope")]
+// RFC 049 — Collapsible is exactly Trigger + Content. Same
+// shape as a single Accordion item at the top level.
+#[slot(default, only = [PineCollapsibleTrigger, PineCollapsibleContent])]
 pub struct PineCollapsibleRoot {
     /// Open/closed. Two-way bindable via
     /// `pp-model:open="my_open"` on the tag; Root emits
