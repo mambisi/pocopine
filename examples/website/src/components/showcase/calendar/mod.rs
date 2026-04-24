@@ -1,9 +1,29 @@
 use pine::datetime::DateValue;
+use pine::{
+    PineCalendarGrid, PineCalendarGridBody, PineCalendarGridHead, PineCalendarHeader,
+    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "CalendarDemo.poco", style = "calendar.css", role = "panel")]
+#[component(
+    template = "CalendarDemo.poco",
+    style = "calendar.css",
+    role = "panel",
+    // RFC 049 — Calendar Root only accepts Header + Grid; Header
+    // takes Prev/Heading/Next; Grid nests Head + Body.
+    uses = [
+        PineCalendarRoot,
+        PineCalendarHeader,
+        PineCalendarPrev,
+        PineCalendarHeading,
+        PineCalendarNext,
+        PineCalendarGrid,
+        PineCalendarGridHead,
+        PineCalendarGridBody,
+    ]
+)]
 pub struct CalendarDemo {
     /// Selected date. Two-way bound via `pp-model:value` on the
     /// calendar root; authored template strings still deserialize

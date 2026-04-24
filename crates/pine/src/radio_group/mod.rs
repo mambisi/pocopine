@@ -95,6 +95,11 @@ impl PineRadioGroupRoot {
 /// whether the Root's `value` matches this Item's `value`.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineRadioGroupItem.poco", role = "interactive")]
+// RFC 049 — RadioGroupItem commonly holds an Indicator plus
+// label text. `accepts` (blanket) so the Item is permissive
+// for arbitrary author content while still declaring the
+// Indicator as its recognised semantic part.
+#[slot(default, accepts = [PineRadioGroupIndicator])]
 pub struct PineRadioGroupItem {
     #[prop]
     pub value: String,

@@ -1,3 +1,7 @@
+use pine::{
+    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineHoverCardContent,
+    PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +9,18 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "HoverCardDemo.poco",
     style = "hover_card.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — HoverCard Root = Trigger + Portal > Content.
+    // Avatar primitives appear inside Content as author markup.
+    uses = [
+        PineHoverCardRoot,
+        PineHoverCardTrigger,
+        PineHoverCardPortal,
+        PineHoverCardContent,
+        PineAvatarRoot,
+        PineAvatarImage,
+        PineAvatarFallback,
+    ]
 )]
 pub struct HoverCardDemo {}
 

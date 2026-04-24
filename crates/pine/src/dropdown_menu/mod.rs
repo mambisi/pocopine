@@ -561,6 +561,11 @@ impl PineDropdownMenuGroup {
 /// reka-ui semantics).
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuCheckboxItem.poco", role = "item")]
+// RFC 049 — CheckboxItem commonly holds an ItemIndicator
+// (the ✓ glyph) alongside the label. `accepts` (blanket) so
+// authors can drop icons, layout wrappers, Indicator, or
+// plain text.
+#[slot(default, accepts = [PineDropdownMenuItemIndicator])]
 pub struct PineDropdownMenuCheckboxItem {
     #[model]
     pub state: String,
@@ -718,6 +723,9 @@ impl PineDropdownMenuRadioGroup {
 /// work identically to CheckboxItem.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuRadioItem.poco", role = "item")]
+// RFC 049 — same pattern as CheckboxItem: author content
+// with an optional Indicator.
+#[slot(default, accepts = [PineDropdownMenuItemIndicator])]
 pub struct PineDropdownMenuRadioItem {
     /// Author-provided — the value this item represents.
     #[prop]

@@ -1,8 +1,14 @@
+use pine::PineButton;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "ButtonDemo.poco", role = "panel")]
+#[component(
+    template = "ButtonDemo.poco",
+    role = "panel",
+    // RFC 049 — single primitive.
+    uses = [PineButton]
+)]
 pub struct ButtonDemo {
     pub clicks: u32,
 }

@@ -38,6 +38,13 @@ inject_key!(pub FORM: Handle<PineFormRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFormRoot.poco", role = "scope")]
+// RFC 049 — Form is a loose wrapper. Authors drop Fieldset /
+// Field groupings and native buttons freely; `accepts` keeps it
+// permissive while naming the canonical groupings.
+#[slot(default, accepts = [
+    crate::fieldset::PineFieldsetRoot,
+    crate::field::PineFieldRoot,
+])]
 pub struct PineFormRoot {
     /// External validation errors keyed by field `name`. Fields
     /// whose `name` appears as a key flip `invalid = true`; the

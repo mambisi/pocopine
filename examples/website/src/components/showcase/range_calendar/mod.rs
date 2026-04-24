@@ -1,4 +1,9 @@
 use pine::datetime::DateValue;
+use pine::{
+    PineRangeCalendarGrid, PineRangeCalendarGridBody, PineRangeCalendarGridHead,
+    PineRangeCalendarHeader, PineRangeCalendarHeading, PineRangeCalendarNext,
+    PineRangeCalendarPrev, PineRangeCalendarRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +11,19 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "RangeCalendarDemo.poco",
     style = "range_calendar.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — Mirrors Calendar: Root → Header + Grid;
+    // Header takes Prev/Heading/Next; Grid nests Head + Body.
+    uses = [
+        PineRangeCalendarRoot,
+        PineRangeCalendarHeader,
+        PineRangeCalendarPrev,
+        PineRangeCalendarHeading,
+        PineRangeCalendarNext,
+        PineRangeCalendarGrid,
+        PineRangeCalendarGridHead,
+        PineRangeCalendarGridBody,
+    ]
 )]
 pub struct RangeCalendarDemo {
     pub start: Option<DateValue>,

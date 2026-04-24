@@ -1,4 +1,5 @@
 use pine::datetime::DateValue;
+use pine::PineDateRangePicker;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +7,9 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "DateRangePickerDemo.poco",
     style = "date_range_picker.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — Uses the pre-composed `<pine-date-range-picker>`.
+    uses = [PineDateRangePicker]
 )]
 pub struct DateRangePickerDemo {
     pub start: Option<DateValue>,

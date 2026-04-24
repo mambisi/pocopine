@@ -70,6 +70,9 @@ inject_key!(PROVIDER: Handle<PineTooltipProvider>);
 /// ```
 #[derive(Serialize, Deserialize)]
 #[component(template = "PineTooltipProvider.poco", role = "scope")]
+// RFC 049 — Provider groups tooltip Roots under one policy.
+// Only direct children that matter to Provider are Roots.
+#[slot(default, only = [PineTooltipRoot])]
 pub struct PineTooltipProvider {
     /// Default `delay_duration` inherited by descendants. Authors
     /// can still set `delay_duration` on an individual Root to

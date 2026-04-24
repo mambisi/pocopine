@@ -1,3 +1,7 @@
+use pine::{
+    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineTagsInputClear, PineTagsInputInput,
+    PineTagsInputItem, PineTagsInputItemDelete, PineTagsInputItemText, PineTagsInputRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +9,20 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "TagsMentionsDemo.poco",
     style = "../tags_input/tags_input.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — TagsInput with per-chip Avatars: each Item hosts
+    // an Avatar compound plus the standard Text + Delete parts.
+    uses = [
+        PineTagsInputRoot,
+        PineTagsInputItem,
+        PineTagsInputItemText,
+        PineTagsInputItemDelete,
+        PineTagsInputInput,
+        PineTagsInputClear,
+        PineAvatarRoot,
+        PineAvatarImage,
+        PineAvatarFallback,
+    ]
 )]
 pub struct TagsMentionsDemo {
     pub mentions: Vec<String>,

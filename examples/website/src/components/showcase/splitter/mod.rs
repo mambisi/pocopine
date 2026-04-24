@@ -1,8 +1,20 @@
+use pine::{PineSplitterGroup, PineSplitterPanel, PineSplitterResizeHandle};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "SplitterDemo.poco", style = "splitter.css", role = "panel")]
+#[component(
+    template = "SplitterDemo.poco",
+    style = "splitter.css",
+    role = "panel",
+    // RFC 049 — Splitter Group only accepts Panels and
+    // ResizeHandles as direct children.
+    uses = [
+        PineSplitterGroup,
+        PineSplitterPanel,
+        PineSplitterResizeHandle,
+    ]
+)]
 pub struct SplitterDemo {
     pub sizes: Vec<f64>,
 }

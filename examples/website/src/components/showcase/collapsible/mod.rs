@@ -1,3 +1,4 @@
+use pine::{PineCollapsibleContent, PineCollapsibleRoot, PineCollapsibleTrigger};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +6,9 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "CollapsibleDemo.poco",
     style = "collapsible.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — Collapsible is exactly Trigger + Content.
+    uses = [PineCollapsibleRoot, PineCollapsibleTrigger, PineCollapsibleContent]
 )]
 pub struct CollapsibleDemo {
     pub open: bool,

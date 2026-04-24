@@ -1,3 +1,7 @@
+use pine::{
+    PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
+    PineTagsInputItemText, PineTagsInputRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +9,16 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "TagsSkillsDemo.poco",
     style = "../tags_input/tags_input.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — styling variant of TagsInput.
+    uses = [
+        PineTagsInputRoot,
+        PineTagsInputItem,
+        PineTagsInputItemText,
+        PineTagsInputItemDelete,
+        PineTagsInputInput,
+        PineTagsInputClear,
+    ]
 )]
 pub struct TagsSkillsDemo {
     pub skills: Vec<String>,

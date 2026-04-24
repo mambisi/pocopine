@@ -1,3 +1,4 @@
+use pine::PineOtpField;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +7,13 @@ use serde::{Deserialize, Serialize};
 /// completion state) so the delete / retype flow gets real mileage
 /// beyond the standalone OTP demo.
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PinCardDemo.poco", style = "pin_card.css", role = "panel")]
+#[component(
+    template = "PinCardDemo.poco",
+    style = "pin_card.css",
+    role = "panel",
+    // RFC 049 — single primitive used twice.
+    uses = [PineOtpField]
+)]
 pub struct PinCardDemo {
     pub card_number: String,
     pub pin: String,

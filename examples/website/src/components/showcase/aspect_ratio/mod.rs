@@ -1,3 +1,4 @@
+use pine::PineAspectRatio;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +6,9 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "AspectRatioDemo.poco",
     style = "aspect_ratio.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — single-element primitive.
+    uses = [PineAspectRatio]
 )]
 pub struct AspectRatioDemo {}
 

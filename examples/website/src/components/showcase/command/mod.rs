@@ -1,8 +1,29 @@
+use pine::{
+    PineCommandContent, PineCommandEmpty, PineCommandInput, PineCommandItem, PineCommandList,
+    PineCommandOverlay, PineCommandPortal, PineCommandRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "CommandDemo.poco", style = "command.css", role = "panel")]
+#[component(
+    template = "CommandDemo.poco",
+    style = "command.css",
+    role = "panel",
+    // RFC 049 — Command is a palette compound: Root holds the
+    // Portal, Portal wraps Overlay + Content, Content groups an
+    // Input with a List of Items and an Empty fallback.
+    uses = [
+        PineCommandRoot,
+        PineCommandPortal,
+        PineCommandOverlay,
+        PineCommandContent,
+        PineCommandInput,
+        PineCommandList,
+        PineCommandItem,
+        PineCommandEmpty,
+    ]
+)]
 pub struct CommandDemo {
     pub last_command: String,
 }

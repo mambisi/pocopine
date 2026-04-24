@@ -1,4 +1,5 @@
 use pine::datetime::DateValue;
+use pine::{PineDateField, PineDateRangeField, PineTimeField, PineTimeRangeField};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +7,15 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "DatetimeFieldsDemo.poco",
     style = "datetime_fields.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — Each of these is a single-element primitive with
+    // no typed-slot surface, so the list is flat.
+    uses = [
+        PineDateField,
+        PineTimeField,
+        PineDateRangeField,
+        PineTimeRangeField,
+    ]
 )]
 pub struct DatetimeFieldsDemo {
     // date field

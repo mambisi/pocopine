@@ -4,12 +4,34 @@
 //! each Field wires label / input / description / error, and
 //! Input drops into the Control slot for the state tracking.
 
+use pine::{
+    PineFieldControl, PineFieldDescription, PineFieldError, PineFieldLabel, PineFieldRoot,
+    PineFieldsetLegend, PineFieldsetRoot, PineFormRoot, PineInput,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "SignupDemo.poco", style = "signup.css", role = "panel")]
+#[component(
+    template = "SignupDemo.poco",
+    style = "signup.css",
+    role = "panel",
+    // RFC 049 — Shows the four form primitives cooperating: Form
+    // wraps Fieldset, Fieldset wraps Legend + Fields, each Field
+    // wires Label / Control / Description / Error.
+    uses = [
+        PineFormRoot,
+        PineFieldsetRoot,
+        PineFieldsetLegend,
+        PineFieldRoot,
+        PineFieldLabel,
+        PineFieldControl,
+        PineFieldDescription,
+        PineFieldError,
+        PineInput,
+    ]
+)]
 pub struct SignupDemo {
     pub email: String,
     pub password: String,

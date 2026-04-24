@@ -290,6 +290,39 @@ pub(crate) fn emit_slot_traits(
             },
         );
         let accepts = &slot.accepts;
+
+        // Mode split per RFC 049 §4.1 / §4.3:
+        //
+        // `only` — strict rejection. Trait has specific impls
+        // only; non-listed types fail the trait bound and the
+        // consumer-side assertion triggers the on_unimplemented
+        // diagnostic.
+        //
+        // `accepts` — declarative, non-rejecting. Trait still
+        // exists (for future typed-yield use per §4.4) but
+        // carries a blanket impl so any T satisfies the bound.
+        // HTML wrappers pass silently (RFC 049 §4.3 rule 2);
+        // other pocopine components that happen to appear as
+        // direct children — e.g. `<pine-calendar-root>` inside
+        // `<pine-popover-content>` — also pass, treated as
+        // author content. Nothing gets rejected; the listed
+        // types are documentation of pocopine's semantic parts.
+        let impls = match slot.mode {
+            SlotMode::Only => quote! {
+                #(
+                    impl #trait_ident for #accepts {}
+                )*
+            },
+            SlotMode::Accepts => quote! {
+                // Blanket impl — `accepts` is declarative-only.
+                // Listed types in #accepts are pocopine's own
+                // semantic parts; they're still "implementors"
+                // via the blanket and don't need individual
+                // impls (which would conflict with the blanket).
+                impl<__T> #trait_ident for __T {}
+            },
+        };
+
         out.extend(quote! {
             #[diagnostic::on_unimplemented(
                 message = #on_unimplemented_message,
@@ -298,9 +331,7 @@ pub(crate) fn emit_slot_traits(
             #[allow(non_camel_case_types)]
             pub trait #trait_ident {}
 
-            #(
-                impl #trait_ident for #accepts {}
-            )*
+            #impls
 
             // RFC 049 §5.2 — inherent method that carries the
             // trait bound. Consumers call
@@ -479,10 +510,12 @@ mod tests {
     }
 
     #[test]
-    fn emit_default_slot_produces_named_trait() {
+    fn emit_only_slot_produces_named_trait_with_specific_impls() {
+        // `only` mode — strict rejection. Trait + specific
+        // impls per accepted type.
         let slots = vec![SlotDecl {
             name: SlotName::Default,
-            mode: SlotMode::Accepts,
+            mode: SlotMode::Only,
             accepts: vec![
                 syn::parse_str::<Path>("PineItem").unwrap(),
                 syn::parse_str::<Path>("PineSeparator").unwrap(),
@@ -498,6 +531,39 @@ mod tests {
         assert!(s.contains("pub trait PineContextMenuContentDefaultChild"));
         assert!(s.contains("impl PineContextMenuContentDefaultChild for PineItem"));
         assert!(s.contains("impl PineContextMenuContentDefaultChild for PineSeparator"));
+        // `only` mode should NOT emit a blanket impl.
+        assert!(!s.contains("impl < __T >"));
+    }
+
+    #[test]
+    fn emit_accepts_slot_emits_blanket_impl() {
+        // `accepts` mode — declarative, non-rejecting. Trait
+        // exists + has a blanket impl so any type satisfies
+        // the bound. Specific impls are omitted (would conflict
+        // with the blanket per Rust's coherence rules).
+        let slots = vec![SlotDecl {
+            name: SlotName::Default,
+            mode: SlotMode::Accepts,
+            accepts: vec![
+                syn::parse_str::<Path>("PineDialogTitle").unwrap(),
+                syn::parse_str::<Path>("PineDialogDescription").unwrap(),
+            ],
+            span: proc_macro2::Span::call_site(),
+        }];
+        let out = emit_slot_traits(
+            &syn::Ident::new("PineDialogContent", proc_macro2::Span::call_site()),
+            "pine-dialog-content",
+            &slots,
+        );
+        let s = out.to_string();
+        assert!(s.contains("pub trait PineDialogContentDefaultChild"));
+        // Blanket impl shape: `impl<__T> Trait for __T {}`.
+        assert!(
+            s.contains("impl < __T >") && s.contains("for __T"),
+            "expected blanket impl, got:\n{s}"
+        );
+        // No per-type impls in accepts mode.
+        assert!(!s.contains("for PineDialogTitle"));
     }
 
     #[test]

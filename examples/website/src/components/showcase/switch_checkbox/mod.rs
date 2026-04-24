@@ -1,3 +1,4 @@
+use pine::{PineCheckbox, PineSwitch};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +6,9 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "SwitchCheckboxDemo.poco",
     style = "switch_checkbox.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — leaf primitives; no typed-slot parent here.
+    uses = [PineSwitch, PineCheckbox]
 )]
 pub struct SwitchCheckboxDemo {
     pub dark_mode: bool,

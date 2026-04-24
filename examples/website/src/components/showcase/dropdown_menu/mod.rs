@@ -1,3 +1,11 @@
+use pine::{
+    PineDropdownMenuArrow, PineDropdownMenuCheckboxItem, PineDropdownMenuContent,
+    PineDropdownMenuGroup, PineDropdownMenuItem, PineDropdownMenuItemIndicator,
+    PineDropdownMenuLabel, PineDropdownMenuPortal, PineDropdownMenuRadioGroup,
+    PineDropdownMenuRadioItem, PineDropdownMenuRoot, PineDropdownMenuSeparator,
+    PineDropdownMenuSub, PineDropdownMenuSubContent, PineDropdownMenuSubTrigger,
+    PineDropdownMenuTrigger,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +13,30 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "DropdownMenuDemo.poco",
     style = "dropdown_menu.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — the rich menu compound. Six typed parents
+    // (Root, Portal, Content, SubContent, Group, RadioGroup,
+    // Sub) with cascading strictness: Content accepts eight
+    // kinds; Group and RadioGroup narrow to their own
+    // item subsets; Sub is exactly [SubTrigger, SubContent].
+    uses = [
+        PineDropdownMenuRoot,
+        PineDropdownMenuTrigger,
+        PineDropdownMenuPortal,
+        PineDropdownMenuContent,
+        PineDropdownMenuItem,
+        PineDropdownMenuSeparator,
+        PineDropdownMenuLabel,
+        PineDropdownMenuGroup,
+        PineDropdownMenuCheckboxItem,
+        PineDropdownMenuItemIndicator,
+        PineDropdownMenuRadioGroup,
+        PineDropdownMenuRadioItem,
+        PineDropdownMenuSub,
+        PineDropdownMenuSubTrigger,
+        PineDropdownMenuSubContent,
+        PineDropdownMenuArrow,
+    ]
 )]
 pub struct DropdownMenuDemo {
     pub clicks: u32,

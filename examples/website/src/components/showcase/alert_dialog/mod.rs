@@ -1,3 +1,8 @@
+use pine::{
+    PineAlertDialogAction, PineAlertDialogCancel, PineAlertDialogContent,
+    PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal,
+    PineAlertDialogRoot, PineAlertDialogTitle, PineAlertDialogTrigger,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +10,19 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "AlertDialogDemo.poco",
     style = "alert_dialog.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — same shape as Dialog plus Action/Cancel buttons.
+    uses = [
+        PineAlertDialogRoot,
+        PineAlertDialogTrigger,
+        PineAlertDialogPortal,
+        PineAlertDialogOverlay,
+        PineAlertDialogContent,
+        PineAlertDialogTitle,
+        PineAlertDialogDescription,
+        PineAlertDialogAction,
+        PineAlertDialogCancel,
+    ]
 )]
 pub struct AlertDialogDemo {
     pub open: bool,

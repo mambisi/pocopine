@@ -61,6 +61,24 @@ pub(crate) fn emit_slot_assertions(
     }
 
     let mut out = TokenStream::new();
+
+    // Reference every `uses` entry so imports land as used even
+    // when a leaf primitive (e.g. `PineInput`) appears in the
+    // list but isn't involved in any emitted assertion. Wrapping
+    // the references in `const _: fn() = || { ... };` keeps this
+    // compile-time only with zero runtime footprint.
+    let uses_refs = uses.entries.iter().map(|(_, path)| {
+        quote! {
+            let _: ::core::marker::PhantomData<#path> = ::core::marker::PhantomData;
+        }
+    });
+    out.extend(quote! {
+        #[allow(unused_variables, dead_code, non_snake_case)]
+        const _: fn() = || {
+            #(#uses_refs)*
+        };
+    });
+
     for node in &ast.roots {
         if let Node::Element(el) = node {
             walk(el, uses, &mut out);

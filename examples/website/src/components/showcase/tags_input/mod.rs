@@ -1,3 +1,7 @@
+use pine::{
+    PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
+    PineTagsInputItemText, PineTagsInputRoot,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +9,17 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "TagsInputDemo.poco",
     style = "tags_input.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — TagsInput Root is loose (author markup is
+    // expected) but its Item owns Text + Delete siblings.
+    uses = [
+        PineTagsInputRoot,
+        PineTagsInputItem,
+        PineTagsInputItemText,
+        PineTagsInputItemDelete,
+        PineTagsInputInput,
+        PineTagsInputClear,
+    ]
 )]
 pub struct TagsInputDemo {
     pub tags: Vec<String>,

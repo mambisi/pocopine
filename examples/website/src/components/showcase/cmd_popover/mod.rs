@@ -1,3 +1,7 @@
+use pine::{
+    PineCommandEmpty, PineCommandInput, PineCommandItem, PineCommandList, PineCommandRoot,
+    PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -5,7 +9,20 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "CmdPopoverDemo.poco",
     style = "cmd_popover.css",
-    role = "panel"
+    role = "panel",
+    // RFC 049 — Composes a Command palette inside a Popover
+    // (no built-in modal shell); both compounds' parts listed.
+    uses = [
+        PinePopoverRoot,
+        PinePopoverTrigger,
+        PinePopoverPortal,
+        PinePopoverContent,
+        PineCommandRoot,
+        PineCommandInput,
+        PineCommandList,
+        PineCommandItem,
+        PineCommandEmpty,
+    ]
 )]
 pub struct CmdPopoverDemo {
     pub open: bool,
