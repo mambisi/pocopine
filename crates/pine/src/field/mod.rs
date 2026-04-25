@@ -45,9 +45,8 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, Event, EventTarget, HtmlInputElement};
+use web_sys::{Element, HtmlInputElement};
 
 create_context!(ROOT: Handle<PineFieldRoot>);
 
@@ -237,51 +236,42 @@ impl PineFieldControl {
         });
 
         // ── focus / blur / input / invalid listeners ─────────
-        let target: EventTarget = inner.clone().into();
-
+        // Each `on!` registers a typed listener bound to the
+        // current scope — when the Field's Control unmounts the
+        // listener is removed automatically (no `forget` leak).
         let root_for_focus = root.clone();
-        let focus_cb = Closure::wrap(Box::new(move |_ev: Event| {
-            root_for_focus.update(|r: &mut PineFieldRoot| r.focused = true);
-        }) as Box<dyn FnMut(Event)>);
-        let _ = target.add_event_listener_with_callback("focus", focus_cb.as_ref().unchecked_ref());
-        focus_cb.forget();
+        on!(inner, focus, |_e| {
+            root_for_focus.update(|r| r.focused = true);
+        });
 
         let root_for_blur = root.clone();
-        let blur_cb = Closure::wrap(Box::new(move |_ev: Event| {
-            root_for_blur.update(|r: &mut PineFieldRoot| {
+        on!(inner, blur, |_e| {
+            root_for_blur.update(|r| {
                 r.focused = false;
                 r.touched = true;
             });
-        }) as Box<dyn FnMut(Event)>);
-        let _ = target.add_event_listener_with_callback("blur", blur_cb.as_ref().unchecked_ref());
-        blur_cb.forget();
+        });
 
         let root_for_input = root.clone();
         let inner_for_input = inner.clone();
-        let input_cb = Closure::wrap(Box::new(move |_ev: Event| {
+        on!(inner, input, |_e| {
             let val = inner_for_input
                 .clone()
                 .dyn_into::<HtmlInputElement>()
                 .map(|i| i.value())
                 .unwrap_or_default();
             let filled = !val.is_empty();
-            root_for_input.update(|r: &mut PineFieldRoot| {
+            root_for_input.update(|r| {
                 r.dirty = true;
                 r.filled = filled;
             });
-        }) as Box<dyn FnMut(Event)>);
-        let _ = target.add_event_listener_with_callback("input", input_cb.as_ref().unchecked_ref());
-        input_cb.forget();
+        });
 
         // Native constraint-validation failure (`required`,
         // `pattern`, `min` / `max`, etc.) → Root.invalid.
-        let root_for_native = root;
-        let native_cb = Closure::wrap(Box::new(move |_ev: Event| {
-            root_for_native.update(|r: &mut PineFieldRoot| r.invalid = true);
-        }) as Box<dyn FnMut(Event)>);
-        let _ =
-            target.add_event_listener_with_callback("invalid", native_cb.as_ref().unchecked_ref());
-        native_cb.forget();
+        on!(inner, invalid, |_e| {
+            root.update(|r| r.invalid = true);
+        });
     }
 }
 
