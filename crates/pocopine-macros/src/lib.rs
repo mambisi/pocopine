@@ -35,8 +35,8 @@ use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Expr, ExprLit, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit, LitStr, Meta, MetaNameValue,
-    Pat, PatType, Path, Token, Type,
+    Data, DeriveInput, Expr, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit,
+    LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
 };
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
@@ -2416,6 +2416,122 @@ pub fn server(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let out = quote! {
         #client
         #server
+    };
+    out.into()
+}
+
+/// `#[derive(Emit)]` — RFC 056 §6.8 typed event emission.
+///
+/// Implements [`pocopine::Emit`] for an enum where each variant maps
+/// to one DOM `CustomEvent`:
+///
+/// * variant ident → kebab-case event name
+///   (`Confirm` → `"confirm"`, `OpenChange` → `"open-change"`)
+/// * unit variants → empty `detail`
+/// * struct variants → fields serialized as a flat object payload
+/// * tuple variants → fields serialized as a positional array
+///
+/// ```ignore
+/// #[derive(Emit)]
+/// pub enum DialogEvent {
+///     Close,
+///     Confirm { value: String },
+/// }
+///
+/// emit_event(DialogEvent::Close);
+/// emit_event(DialogEvent::Confirm { value: "ok".into() });
+/// ```
+#[proc_macro_derive(Emit)]
+pub fn derive_emit(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let enum_ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let Data::Enum(data) = &input.data else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Emit)] can only be applied to enums",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let mut name_arms = Vec::new();
+    let mut detail_arms = Vec::new();
+    for variant in &data.variants {
+        let var_ident = &variant.ident;
+        let kebab = kebab_case(&var_ident.to_string());
+        match &variant.fields {
+            Fields::Unit => {
+                name_arms.push(quote! { Self::#var_ident => #kebab, });
+                detail_arms.push(quote! {
+                    Self::#var_ident => {
+                        ::pocopine::__private::serde_wasm_bindgen::to_value(
+                            &::core::option::Option::<()>::None,
+                        )
+                    }
+                });
+            }
+            Fields::Named(named) => {
+                let field_idents: Vec<_> = named
+                    .named
+                    .iter()
+                    .map(|f| f.ident.clone().unwrap())
+                    .collect();
+                let field_tys: Vec<_> = named.named.iter().map(|f| f.ty.clone()).collect();
+                name_arms.push(quote! {
+                    Self::#var_ident { .. } => #kebab,
+                });
+                detail_arms.push(quote! {
+                    Self::#var_ident { #(#field_idents),* } => {
+                        #[derive(::pocopine::__private::serde::Serialize)]
+                        #[serde(crate = "::pocopine::__private::serde")]
+                        struct __PocoEmitPayload<'__a> {
+                            #(#field_idents: &'__a #field_tys,)*
+                        }
+                        let __payload = __PocoEmitPayload {
+                            #(#field_idents,)*
+                        };
+                        ::pocopine::__private::serde_wasm_bindgen::to_value(&__payload)
+                    }
+                });
+            }
+            Fields::Unnamed(unnamed) => {
+                let bindings: Vec<_> = (0..unnamed.unnamed.len())
+                    .map(|i| format_ident!("__f{}", i))
+                    .collect();
+                name_arms.push(quote! {
+                    Self::#var_ident(..) => #kebab,
+                });
+                detail_arms.push(quote! {
+                    Self::#var_ident(#(#bindings),*) => {
+                        ::pocopine::__private::serde_wasm_bindgen::to_value(
+                            &(#(#bindings,)*),
+                        )
+                    }
+                });
+            }
+        }
+    }
+
+    let out = quote! {
+        impl #impl_generics ::pocopine::Emit for #enum_ident #ty_generics #where_clause {
+            fn event_name(&self) -> &'static str {
+                match self {
+                    #(#name_arms)*
+                }
+            }
+            fn to_detail(
+                &self,
+            ) -> ::core::result::Result<
+                ::pocopine::__private::wasm_bindgen::JsValue,
+                ::pocopine::__private::serde_wasm_bindgen::Error,
+            > {
+                match self {
+                    #(#detail_arms)*
+                }
+            }
+        }
     };
     out.into()
 }
