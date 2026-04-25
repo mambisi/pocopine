@@ -67,15 +67,18 @@ thread_local! {
 }
 
 #[derive(Default)]
-#[allow(dead_code)]
 struct RootRuntime {
     pending_open: Option<i32>,
     pending_close: Option<i32>,
     /// Listener handles retained for teardown — Trigger + Content
     /// each stash theirs here so the listeners detach on
     /// `on_unmount` (dropping the Vec runs each handle's destructor).
+    /// `dead_code` doesn't model destructor side-effects, hence the
+    /// per-field allow.
+    #[allow(dead_code)]
     trigger_listeners: Vec<ListenerHandle>,
     trigger_el: Option<web_sys::Element>,
+    #[allow(dead_code)]
     content_listeners: Vec<ListenerHandle>,
     content_el: Option<web_sys::Element>,
 }

@@ -44,9 +44,13 @@ create_context!(ROOT: Handle<PineSliderRoot>);
 // Per-Root runtime: drag state + the four pointer listeners
 // (root pointerdown, doc pointermove/up/cancel). Dropping the
 // `Vec<ListenerHandle>` detaches every one at once.
-#[allow(dead_code)]
 struct RootRuntime {
-    root_el: Option<web_sys::Element>,
+    /// Held only for its `Drop` — when the runtime entry is
+    /// removed (in `teardown_pointer`), each listener detaches.
+    /// `dead_code` doesn't model destructor side-effects, so the
+    /// allow is needed even though the field is the whole point
+    /// of the struct.
+    #[allow(dead_code)]
     listeners: Vec<ListenerHandle>,
     dragging_pointer_id: Option<i32>,
 }
@@ -226,7 +230,6 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
         r.borrow_mut().insert(
             scope,
             RootRuntime {
-                root_el: Some(root_el),
                 listeners,
                 dragging_pointer_id: None,
             },

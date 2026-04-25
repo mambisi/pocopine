@@ -119,12 +119,13 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-#[allow(dead_code)]
 struct TriggerRuntime {
-    trigger_el: Option<web_sys::Element>,
-    // The four hover/focus listeners on the trigger element. The
-    // `Vec<ListenerHandle>` owns the closures — dropping the runtime
-    // (in `teardown_trigger_runtime`) auto-detaches them.
+    /// The four hover/focus listeners on the trigger element. Held
+    /// only for its `Drop` — when the runtime entry is removed
+    /// (in `teardown`), each listener detaches. `dead_code` doesn't
+    /// model destructor side-effects, so the field gets a narrow
+    /// allow.
+    #[allow(dead_code)]
     listeners: Vec<pocopine::events::ListenerHandle>,
     pending_timer: Option<i32>,
 }
@@ -308,7 +309,6 @@ fn install_trigger_listeners(
         r.borrow_mut().insert(
             scope,
             TriggerRuntime {
-                trigger_el: Some(trigger_el),
                 listeners: vec![enter, leave, focus, blur],
                 pending_timer: None,
             },

@@ -53,15 +53,15 @@ create_context!(SCROLLBAR_ORIENTATION: String);
 // Per-Root runtime: captures the fade-hide timer + Thumb drag state
 // so `on_unmount` can tear everything down without leaving
 // document-level listeners or pending timeouts behind.
-#[allow(dead_code)]
 struct RootRuntime {
     viewport_el: Option<web_sys::Element>,
     /// `setTimeout` handle used by `type="scroll"` / `type="hover"`
     /// to flip `scrolling` back to false after `scroll_hide_delay`.
     hide_timer: Option<i32>,
-    // Document-level pointer listeners installed for the currently-
-    // active Thumb drag (one at most). Dropping the Vec detaches
-    // every listener.
+    /// Document-level pointer listeners installed for the currently-
+    /// active Thumb drag (one at most). Held only for its `Drop` —
+    /// the dead_code lint can't see destructor side-effects.
+    #[allow(dead_code)]
     drag_listeners: Vec<ListenerHandle>,
     dragging_pointer_id: Option<i32>,
 }
