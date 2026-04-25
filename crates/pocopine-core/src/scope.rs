@@ -280,6 +280,7 @@ impl Scope {
         crate::slots::clear(id);
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);
+        crate::events::clear_scope(id);
         crate::reactive::clear_scope(id);
         crate::component_computed::clear_scope(id);
         crate::model_runtime::clear_scope(id);

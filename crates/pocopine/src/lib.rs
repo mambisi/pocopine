@@ -6,21 +6,22 @@
 
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
-pub use pocopine_core::{animate, focus, id, profiler, refs, scroll_lock, text, tick};
+pub use pocopine_core::{animate, events, focus, id, profiler, refs, scroll_lock, text, tick};
 pub use pocopine_core::{
     assert_registry_clean, batch, computed, current_effect, current_scope_id, dispatch_event,
     effect, effect_with, emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from,
     emit_from, emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, fetch,
     flush_sync, inject, invalidate_field, invalidate_field_cache, mount_profile_enabled,
-    on_cleanup, patch_list_at_inline, provide, registered_component_names, registry_errors,
-    release, replace_field_inline, report_mount_profile, reset_mount_profile, run, run_now,
-    rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store, this,
+    on_cleanup, on_scope_unmount, patch_list_at_inline, provide, registered_component_names,
+    registry_errors, release, replace_field_inline, report_mount_profile, reset_mount_profile, run,
+    run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store, this,
     trigger_scope, verify_registry, watch, watch_field, watch_scope_field, watch_scope_field_now,
     App, Body, Component, ComponentState, Computed, ContextKey, ContextMarker, Doc, EffectId,
     EffectOptions, El, Elapsed, Emit, Handle, HostEl, Inject, IsTeleported, LifecycleContext,
-    MountEpoch, NearestParent, Parent, ParentId, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Refs, RegisteredComponent,
+    RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle,
+    TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
