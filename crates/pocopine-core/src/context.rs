@@ -27,23 +27,28 @@ use crate::scope::current_scope_id;
 /// semantics (two `Symbol("foo")` calls return distinct symbols).
 static NEXT_KEY_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Opaque, typed, unique injection key. Created once per logical
-/// slot (module-scope static via [`inject_key!`] or runtime via
-/// `InjectKey::new`). The `T` type parameter pins the value type
-/// so `inject` returns `Option<T>` with no turbofish at the
-/// callsite.
+/// Opaque, typed, unique context key. Created once per logical
+/// slot (module-scope static via [`create_context!`] / the
+/// deprecated [`inject_key!`], or runtime via `ContextKey::new`).
+/// The `T` type parameter pins the value type so [`inject`] returns
+/// `Option<T>` with no turbofish at the callsite.
 ///
 /// `PhantomData<fn() -> T>` (contravariant in `T`) keeps the type
 /// parameter in the signature without requiring `T: 'static` in
 /// unrelated positions; `T: 'static` is enforced on use via
 /// [`provide`] / [`inject`].
-pub struct InjectKey<T: 'static> {
+pub struct ContextKey<T: 'static> {
     id: u64,
     name: &'static str,
     _t: PhantomData<fn() -> T>,
 }
 
-impl<T: 'static> InjectKey<T> {
+/// Deprecated alias kept for migration. New code should use
+/// [`ContextKey`] (declared via [`create_context!`]).
+#[deprecated(note = "use create_context! / ContextKey instead (RFC 056 §6.3)")]
+pub type InjectKey<T> = ContextKey<T>;
+
+impl<T: 'static> ContextKey<T> {
     /// Mint a fresh unique key. Two calls — even with the same
     /// `name` — yield keys that never collide. `name` is a debug
     /// label only.
@@ -65,21 +70,43 @@ impl<T: 'static> InjectKey<T> {
     pub fn id(&self) -> u64 {
         self.id
     }
+
+    /// Method-style provide. Equivalent to [`provide(&self, value)`](provide)
+    /// but reads naturally on a typed key declared with
+    /// [`create_context!`] (RFC 056 §6.4):
+    ///
+    /// ```ignore
+    /// ROOT.provide(this::<Self>());
+    /// ```
+    pub fn provide(&self, value: T)
+    where
+        T: Any + 'static,
+    {
+        provide(self, value);
+    }
+
+    /// Method-style inject. Equivalent to [`inject(&self)`](inject).
+    pub fn inject(&self) -> Option<T>
+    where
+        T: Clone + Any + 'static,
+    {
+        inject(self)
+    }
 }
 
 // `Copy` is the canonical form for an opaque token; `Clone` follows
 // automatically via `{ *self }` (per clippy's non-canonical-clone
 // lint — don't spell out field-by-field when `Copy` is available).
-impl<T: 'static> Copy for InjectKey<T> {}
-impl<T: 'static> Clone for InjectKey<T> {
+impl<T: 'static> Copy for ContextKey<T> {}
+impl<T: 'static> Clone for ContextKey<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: 'static> std::fmt::Debug for InjectKey<T> {
+impl<T: 'static> std::fmt::Debug for ContextKey<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InjectKey")
+        f.debug_struct("ContextKey")
             .field("name", &self.name)
             .field("id", &self.id)
             .finish()
@@ -121,7 +148,7 @@ pub fn parent_of(scope: ScopeId) -> Option<ScopeId> {
 /// Panics outside a handler / lifecycle context — a provide call
 /// that couldn't identify its scope is always a programming error
 /// and we'd rather surface it loudly than silently drop.
-pub fn provide<T: Any + 'static>(key: &InjectKey<T>, value: T) {
+pub fn provide<T: Any + 'static>(key: &ContextKey<T>, value: T) {
     let scope =
         current_scope_id().expect("pocopine::provide called outside a handler / lifecycle context");
     PROVIDES.with(|p| {
@@ -143,7 +170,7 @@ pub fn provide<T: Any + 'static>(key: &InjectKey<T>, value: T) {
 /// `Any::downcast_ref` inconsistencies across crate boundaries).
 ///
 /// Panics outside a handler / lifecycle context.
-pub fn inject<T: Clone + Any + 'static>(key: &InjectKey<T>) -> Option<T> {
+pub fn inject<T: Clone + Any + 'static>(key: &ContextKey<T>) -> Option<T> {
     let mut scope =
         current_scope_id().expect("pocopine::inject called outside a handler / lifecycle context");
     loop {
@@ -208,25 +235,69 @@ pub fn clear_scope(scope: ScopeId) {
     });
 }
 
-/// Define a module-scope `InjectKey<T>` bound lazily on first use.
-/// The key's debug name is derived from `module_path!()` plus the
-/// identifier so collisions across crates stay impossible even if
-/// two crates pick the same local identifier.
+/// Marker trait paired with each [`ContextKey<T>`] declared via
+/// [`create_context!`]. Lets `Inject<KEY, T>` (RFC 056 §6.5) name a
+/// key at type level on stable Rust without const generics.
+///
+/// The marker type lives in the *type* namespace and shares its
+/// identifier with the value-namespace static, e.g. `ROOT` resolves
+/// to the marker type in `Inject<ROOT, …>` and to the `LazyLock`
+/// static everywhere else (`ROOT.provide(...)`, `ROOT.inject()`).
+pub trait ContextMarker: 'static {
+    type Value: Clone + Any + 'static;
+    fn key() -> &'static ContextKey<Self::Value>;
+}
+
+/// Define a module-scope [`ContextKey<T>`] plus the matching
+/// [`ContextMarker`] type. The key's debug name is derived from
+/// `module_path!()` plus the identifier so collisions across crates
+/// stay impossible even if two crates pick the same local identifier
+/// (RFC 056 §6.3 — the successor to `inject_key!`).
+///
+/// Expands to two items:
+/// * `static <name>: LazyLock<ContextKey<T>>` (value namespace) so
+///   `<name>.provide(...)` / `<name>.inject()` work.
+/// * `struct <name> {}` (type namespace) so `Inject<<name>, T>` can
+///   name the key at the type level via [`ContextMarker`].
 ///
 /// ```ignore
-/// pocopine_core::inject_key!(pub(crate) ROOT: Handle<PineDialogRoot>);
+/// pocopine::create_context!(pub(crate) ROOT: Handle<PineDialogRoot>);
 /// // later:
-/// provide(&ROOT, this::<PineDialogRoot>());
-/// let root = inject(&ROOT);
+/// ROOT.provide(this::<PineDialogRoot>());
+/// let root = ROOT.inject();
+///
+/// fn on_click(&self, root: Inject<ROOT, Handle<PineDialogRoot>>) {
+///     root.update(|dialog| dialog.close());
+/// }
 /// ```
 #[macro_export]
-macro_rules! inject_key {
+macro_rules! create_context {
     ($vis:vis $name:ident : $ty:ty) => {
-        $vis static $name: ::std::sync::LazyLock<$crate::context::InjectKey<$ty>> =
+        $vis static $name: ::std::sync::LazyLock<$crate::context::ContextKey<$ty>> =
             ::std::sync::LazyLock::new(|| {
-                $crate::context::InjectKey::new(
+                $crate::context::ContextKey::new(
                     concat!(module_path!(), "::", stringify!($name))
                 )
             });
+
+        #[allow(non_camel_case_types)]
+        $vis struct $name {}
+
+        impl $crate::context::ContextMarker for $name {
+            type Value = $ty;
+            fn key() -> &'static $crate::context::ContextKey<$ty> {
+                &*$name
+            }
+        }
+    };
+}
+
+/// Deprecated alias for [`create_context!`]. Kept so existing call
+/// sites keep building during the RFC 056 migration window. New code
+/// should reach for [`create_context!`].
+#[macro_export]
+macro_rules! inject_key {
+    ($vis:vis $name:ident : $ty:ty) => {
+        $crate::create_context!($vis $name : $ty);
     };
 }

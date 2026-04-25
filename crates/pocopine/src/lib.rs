@@ -5,7 +5,7 @@
 //! depend on `pocopine` and pull everything from `pocopine::prelude::*`.
 
 #[doc(inline)]
-pub use pocopine_core::inject_key;
+pub use pocopine_core::{create_context, inject_key};
 pub use pocopine_core::{animate, focus, id, profiler, refs, scroll_lock, text, tick};
 pub use pocopine_core::{
     assert_registry_clean, batch, computed, current_effect, current_scope_id, dispatch_event,
@@ -16,22 +16,28 @@ pub use pocopine_core::{
     report_mount_profile, reset_mount_profile, run, run_now, rw_signal, set_auto_flush, signal,
     spawn, spawn_latest, spawn_scoped, store, this, trigger_scope, verify_registry, watch,
     watch_field, watch_scope_field, watch_scope_field_now, App, Body, Component, ComponentState,
-    Computed, Doc, EffectId, EffectOptions, El, Elapsed, Handle, HostEl, InjectKey, IsTeleported,
-    LifecycleContext, MountEpoch, ParentId, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    Computed, ContextKey, ContextMarker, Doc, EffectId, EffectOptions, El, Elapsed, Handle,
+    HostEl, IsTeleported, LifecycleContext, MountEpoch, ParentId, Refs, RegisteredComponent,
+    RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle,
+    TeleportHost, TypedEl, Win,
 };
+#[allow(deprecated)]
+pub use pocopine_core::InjectKey;
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{component, handlers, server, store};
 
 pub mod prelude {
+    #[allow(deprecated)]
+    pub use crate::InjectKey;
     pub use crate::{
-        batch, component, computed, cx, dispatch, dispatch_event, effect, emit, emit_cancelable,
-        emit_cancelable_from, emit_from, emit_from_host, emit_model, emit_model_field, handlers,
-        inject_key, on_cleanup, run, rw_signal, signal, spawn, spawn_latest, spawn_scoped, store,
-        this, watch, App, Component, ComponentState, Computed, Handle, InjectKey, RwSignal, Scope,
-        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
+        emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
+        emit_model_field, handlers, inject_key, on_cleanup, run, rw_signal, signal, spawn,
+        spawn_latest, spawn_scoped, store, this, watch, App, Component, ComponentState, Computed,
+        ContextKey, Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal,
+        Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

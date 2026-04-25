@@ -50,7 +50,9 @@ pub mod watch;
 
 pub use app::{App, Component};
 pub use computed::{computed, Computed};
-pub use context::{inject, provide, InjectKey};
+#[allow(deprecated)]
+pub use context::InjectKey;
+pub use context::{inject, provide, ContextKey, ContextMarker};
 pub use directives::for_plan::{
     register_row_plans, BindingKind, StaticBinding, StaticListener, StaticRowPlan,
 };
