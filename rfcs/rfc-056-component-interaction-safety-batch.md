@@ -1,6 +1,6 @@
 # RFC 056 - Component interaction safety batch
 
-Status: Implemented (phases 1–4 + extractor surface; phase 5 repo migration of Pine primitives outstanding)
+Status: Implemented (all phases landed + follow-on infrastructure: scope-bound listener / timer / reactive helpers, unified lifecycle, Handle method-style watches)
 
 Author: Codex
 
@@ -507,6 +507,108 @@ pub fn on_ready(&self, parent: NearestParent<PineDialogRoot>) {
 4. Add deprecation warnings for old APIs after the repo no longer uses
    them in normal examples.
 
+## 7.5 Follow-on infrastructure (landed alongside Phase 5)
+
+Implementing Phase 5 surfaced gaps the original RFC didn't anticipate.
+The migration would have stayed verbose without this supporting
+surface, so it landed in the same rollout window:
+
+### 7.5.1 `pocopine::events`
+
+Typed DOM event listeners with scope-bound auto-cleanup. The
+pre-existing `Closure::wrap` + `add_event_listener_with_callback` +
+`closure.forget()` triplet showed up dozens of times across pine and
+leaked a listener on every consumer's unmount.
+
+- `events::on(target, ev::name, handler) -> ListenerHandle` —
+  RAII-cancelled on drop.
+- `events::on_scoped(target, ev::name, handler)` — registers the
+  cleanup against the current scope's unmount; no handle to manage.
+- `events::ev::*` — compile-time catalog of ~70 standard DOM event
+  names paired with their web-sys payload types via
+  `DomEventName`. Removes both the stringly event name and the
+  turbofish on the closure parameter.
+- `events::on_named(_scoped)` — escape hatch for custom-element /
+  vendor / dynamic event names.
+- `events::on_emit(_scoped)` — receives `#[derive(Emit)]` enums by
+  registering one DOM listener per variant name and reconstructing
+  the enum from `CustomEvent.detail` via `Emit::from_event`.
+- `events::on_scope_unmount(f)` — generic per-scope teardown hook,
+  used by `timers` and the scope-bound reactive helpers.
+
+### 7.5.2 `pocopine::timers`
+
+Scope-bound `setTimeout` / `setInterval` helpers with the same
+RAII-handle / `_scoped` shape:
+
+- `timers::after(_scoped)` / `timers::every(_scoped)` — single-fire
+  and repeating, with `TimeoutHandle` / `IntervalHandle` returns.
+- `timers::Debounced` — reusable cancel-and-replace slot. The
+  workhorse for hover / scroll-fade / autosave debouncing.
+- `timers::sleep(ms).await` / `next_frame().await` /
+  `next_tick().await` — awaitable helpers for use inside
+  `pocopine::spawn_scoped` async flows.
+
+### 7.5.3 Scope-bound reactive helpers
+
+`reactive::effect_scoped`, `watch::watch_scoped`,
+`watch_field_scoped`, `watch_scope_field_scoped`. Same shape as the
+existing `effect` / `watch` / `watch_field` etc., but the EffectId
+is `release`d at the consumer's scope unmount instead of leaking
+for the page lifetime — every original `watch_scope_field` call
+site in pine was a leak.
+
+### 7.5.4 `Handle::watch_field` / `Handle::observe`
+
+Method-style watches on the universal `Handle<T>`:
+
+- `handle.watch_field::<V>("name", cb)` — sugar for
+  `watch_scope_field_scoped::<V, _>(handle.scope_id(), "name", cb)`.
+  Stringly-named for tight per-field tracking.
+- `handle.observe(|s| selector(s), cb)` — fully-typed alternative.
+  Selector reads through `&T` (no string), re-runs on any field
+  change, PartialEq-gates the callback. The right default for
+  one-field selectors and derived expressions.
+
+### 7.5.5 `pocopine::dom`
+
+`dom::window()` / `dom::document()` / `dom::body()` /
+`dom::document_element()` shortcuts for the
+`web_sys::window().and_then(|w| w.document())` chain that appeared
+~30 times across pine.
+
+### 7.5.6 Sugar macros
+
+`on!(target, name, |e| body)` and `on_emit!(target, EnumTy, |e|
+match e { … })` — declarative sugar over `events::on_scoped` /
+`events::on_emit_scoped` with implicit `move` and bare event-name
+identifier resolved against `events::ev`.
+
+### 7.5.7 Lifecycle unification
+
+All four lifecycle hooks (`on_setup`, `on_mount`, `on_ready`,
+`on_unmount`) now take a `LifecycleContext<'_>` and the
+`#[handlers]` macro projects extractors uniformly into the user
+signature. `LifecycleContext` carries a `LifecyclePhase` tag;
+element-dependent extractors (`El`, `Refs`, `HostEl`, …) panic at
+runtime with a precise message when used in `Setup` / `Unmount`
+where the rendered template doesn't exist or may be detaching.
+Phase-agnostic extractors (`Handle`, `Inject`, `Parent`,
+`NearestParent`, `ScopeId`, `Doc`, `Win`, `Body`, …) work in every
+phase. Author code that wrote zero-arg `fn on_setup(&mut self)` /
+`fn on_unmount(&mut self)` is unaffected.
+
+### 7.5.8 Pine handler visibility tightening
+
+Lifecycle methods inside `#[handlers]` impls dropped from `pub fn`
+to `fn`. They're dispatched by macro-generated forwarders in the
+same impl block, never called directly from outside the module.
+Codifies the architectural rule that cross-component coordination
+flows through events (child → parent) and props/context (parent →
+child), not direct method calls. Removes incidental visibility
+cascades when an `Inject<KEY, T>` extractor appears in a handler
+signature — the marker stays default-visibility.
+
 ## 8. Tests
 
 The batch is not complete until these categories have coverage:
@@ -522,23 +624,47 @@ The batch is not complete until these categories have coverage:
 - typed emit tests,
 - compile-fail tests for invalid extractor shapes where feasible.
 
-## 9. Open Questions
+## 9. Resolved Open Questions
 
-1. Should `create_context!` generate a `ContextKey<T>` directly or a
-   macro-specific wrapper type that carries the identifier as a type-level
-   marker for `Inject<KEY, T>`?
-2. Should `Inject<KEY, T>` use const generics, generated marker types, or
-   macro-generated helper aliases to represent `KEY` on stable Rust?
-3. Should typed `Emit` support bubbles/cancelable configuration on the
-   enum, variant, or explicit call site?
-4. Should registry aliases be documented for app authors, or treated as a
-   framework/internal migration tool?
-5. How long should `inject_key!` remain as a compatibility alias after
-   `create_context!` lands?
+1. **Should `create_context!` generate a `ContextKey<T>` directly or a
+   macro-specific wrapper type?** — *Both.* The macro emits both the
+   `LazyLock<ContextKey<T>>` static (value namespace) AND a same-name
+   marker struct (type namespace) implementing `ContextMarker`. Method
+   calls like `ROOT.provide(x)` resolve the static; type-level uses
+   like `Inject<ROOT, T>` resolve the marker. They share an
+   identifier across the two namespaces.
+
+2. **Should `Inject<KEY, T>` use const generics, generated marker
+   types, or macro-generated helper aliases?** — *Generated marker
+   types* via the `ContextMarker` trait. `Inject<KEY, T>` requires
+   `KEY: ContextMarker<Value = T>`; the bound carries the wire
+   identity via `KEY::key()`.
+
+3. **Should typed `Emit` support bubbles/cancelable on the enum,
+   variant, or call site?** — *Call site for now*: `emit_event` is
+   bubbling; `emit_cancelable` / `emit_cancelable_from` stay as
+   separate stringly fns for the cancelable case until a concrete
+   primitive needs the typed shape. Per-variant attributes
+   (`#[emit(cancelable)]`) deferred.
+
+4. **Should registry aliases be documented for app authors?** —
+   *Framework/internal tool.* `register_component_as` /
+   `register_component_prefixed` are public for plugin/wrapper
+   crates that need to alias an existing component into a new tag
+   namespace, but app authors should reach for plain
+   `register_component`.
+
+5. **How long should `inject_key!` remain as a compatibility alias?** —
+   *Two minor releases minimum, then evaluate.* Pine has fully
+   migrated to `create_context!`; first-party app code should follow
+   in the next release window. The alias stays as a
+   non-`#[deprecated]` alias initially (Rust limits `#[deprecated]`
+   on `macro_rules!`), with the docstring noting the preferred
+   form.
 
 ## 10. Recommendation
 
-Implement this RFC in dependency order:
+Implemented in dependency order:
 
 1. registry safety,
 2. context key cleanup,
@@ -546,7 +672,11 @@ Implement this RFC in dependency order:
 4. typed emit,
 5. repo migration and deprecations.
 
-That order avoids migrating primitives onto new interaction APIs before
-the runtime can fail fast on invalid component registration, and it keeps
-the context API settled before parent extractors and typed events start
-appearing in public examples.
+That order avoided migrating primitives onto new interaction APIs
+before the runtime could fail fast on invalid component registration,
+and it kept the context API settled before parent extractors and
+typed events appeared in public examples. The follow-on infrastructure
+in §7.5 (events / timers / scope-bound reactive helpers / Handle
+methods / lifecycle unification) was added during phase 5 once
+migrating real consumers surfaced the patterns that warranted
+abstraction.

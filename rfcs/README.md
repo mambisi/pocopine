@@ -64,4 +64,4 @@ Conventions:
 | 053 | [Typed component interaction surface](./rfc-053-typed-component-interaction.md) | Deferred to 056 |
 | 054 | [Compiled `pp-for` row plans](./rfc-054-compiled-pp-for-row-plans.md) | Draft |
 | 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Deferred to 056 |
-| 056 | [Component interaction safety batch](./rfc-056-component-interaction-safety-batch.md) | Implemented (phases 1–4; phase 5 repo migration outstanding) |
+| 056 | [Component interaction safety batch](./rfc-056-component-interaction-safety-batch.md) | Implemented (all phases + follow-on infrastructure) |
