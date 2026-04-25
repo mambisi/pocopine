@@ -103,13 +103,13 @@ impl Default for PineTimeField {
 impl PineTimeField {
     pub fn on_setup(&mut self) {
         self.has_seconds = seconds_visible(self.step);
-        let segs = TimeSegments::from_str(&self.value);
+        let segs = TimeSegments::parse(&self.value);
         self.sync_display(&segs);
     }
 
     #[watch(value)]
     fn on_value_change(&mut self, new: String, _prev: Option<String>) {
-        let segs = TimeSegments::from_str(&new);
+        let segs = TimeSegments::parse(&new);
         self.sync_display(&segs);
     }
 
@@ -117,7 +117,7 @@ impl PineTimeField {
     fn on_step_change(&mut self, new: f64, _prev: Option<f64>) {
         self.has_seconds = seconds_visible(new);
         // Re-derive filled/invalid for the new granularity.
-        let segs = TimeSegments::from_str(&self.value);
+        let segs = TimeSegments::parse(&self.value);
         self.sync_display(&segs);
     }
 
@@ -153,7 +153,7 @@ impl PineTimeField {
         }
 
         let key = ev.key();
-        let mut segs = TimeSegments::from_str(&self.value);
+        let mut segs = TimeSegments::parse(&self.value);
         // Preserve partial digits not yet committed to `value`.
         self.refill_from_display(&mut segs);
 

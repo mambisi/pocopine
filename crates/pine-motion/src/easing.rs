@@ -16,7 +16,7 @@ use crate::spring::Spring;
 /// An animation's timing curve. Either a named browser-native easing
 /// (a single string lands on `Element.animate`'s `easing` option), or
 /// a spring/function that gets sampled into `linear(...)`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Easing {
     /// `linear`
     Linear,
@@ -25,6 +25,7 @@ pub enum Easing {
     /// `ease-in`
     EaseIn,
     /// `ease-out` — the default for most UI motion.
+    #[default]
     EaseOut,
     /// `ease-in-out`
     EaseInOut,
@@ -69,12 +70,6 @@ impl Easing {
             Easing::Spring(s) => Some(s.settle_duration_ms()),
             _ => None,
         }
-    }
-}
-
-impl Default for Easing {
-    fn default() -> Self {
-        Easing::EaseOut
     }
 }
 

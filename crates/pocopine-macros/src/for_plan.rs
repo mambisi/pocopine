@@ -106,6 +106,7 @@ impl AnalysisCtx {
 /// not part of the surrounding component's template). Failure →
 /// continue descending so nested `pp-for`s still get their
 /// chance.
+#[allow(clippy::only_used_in_recursion)]
 fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx) {
     if el.synthetic {
         // Synthetic elements (html5ever's auto-inserted `<tbody>`)
@@ -149,10 +150,7 @@ fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx) {
 /// Try to compile one `<template pp-for>` element into a row
 /// plan. Returns `None` on any eligibility miss; the caller
 /// just leaves the template alone in that case.
-fn try_compile_row(
-    template_el: &Element,
-    plan_id: u32,
-) -> Option<(TokenStream, TemplateStamp)> {
+fn try_compile_row(template_el: &Element, plan_id: u32) -> Option<(TokenStream, TemplateStamp)> {
     // 1. Parse `pp-for="<v> in <items>"`. We don't need the
     //    items expression at the row-plan level — `pp-for`
     //    itself runs at runtime and handles the items lookup —
@@ -171,9 +169,7 @@ fn try_compile_row(
     //    Without `pp-key` the runtime falls into `run_naive`,
     //    which doesn't consult the plan anyway, so silently
     //    skipping here is fine.
-    if find_attr(template_el, "pp-key").is_none() {
-        return None;
-    }
+    find_attr(template_el, "pp-key")?;
 
     // 3. Reject other directives on the `<template>` itself
     //    that aren't part of the keyed `pp-for` envelope.
@@ -347,12 +343,7 @@ fn walk_row(el: &Element, ctx: &mut RowWalkCtx, path: &mut Vec<u16>) -> bool {
 /// node is in-envelope. Static attributes pass silently; known
 /// dynamic attributes record a binding/listener; anything else
 /// fails the row.
-fn classify_attribute(
-    name: &str,
-    value: &str,
-    path: &Vec<u16>,
-    ctx: &mut RowWalkCtx,
-) -> bool {
+fn classify_attribute(name: &str, value: &str, path: &[u16], ctx: &mut RowWalkCtx) -> bool {
     // Listener shorthand: `@<event>="<expr>"`. RFC-020.
     if let Some(event) = name.strip_prefix('@') {
         // No modifiers: reject if `event` contains a `.`.
@@ -364,7 +355,7 @@ fn classify_attribute(
             return false;
         }
         ctx.listeners.push(ListenerLite {
-            node_path: path.clone(),
+            node_path: path.to_vec(),
             event: event.to_string(),
             expr_src: value.to_string(),
         });
@@ -380,7 +371,7 @@ fn classify_attribute(
             return false;
         }
         ctx.bindings.push(BindingLite {
-            node_path: path.clone(),
+            node_path: path.to_vec(),
             kind: BindingKindLite::Class,
             expr_src: value.to_string(),
         });
@@ -394,7 +385,7 @@ fn classify_attribute(
                 return false;
             }
             ctx.bindings.push(BindingLite {
-                node_path: path.clone(),
+                node_path: path.to_vec(),
                 kind: BindingKindLite::Text,
                 expr_src: value.to_string(),
             });
@@ -415,7 +406,7 @@ fn classify_attribute(
                 return false;
             }
             ctx.bindings.push(BindingLite {
-                node_path: path.clone(),
+                node_path: path.to_vec(),
                 kind: BindingKindLite::Class,
                 expr_src: value.to_string(),
             });
@@ -434,7 +425,7 @@ fn classify_attribute(
                 return false;
             }
             ctx.listeners.push(ListenerLite {
-                node_path: path.clone(),
+                node_path: path.to_vec(),
                 event: rest.to_string(),
                 expr_src: value.to_string(),
             });
@@ -468,13 +459,9 @@ fn single_element_child(template_el: &Element) -> Option<&Element> {
 }
 
 fn find_attr<'a>(el: &'a Element, name: &str) -> Option<&'a String> {
-    el.attrs.iter().find_map(|(n, v)| {
-        if n == name {
-            Some(v)
-        } else {
-            None
-        }
-    })
+    el.attrs
+        .iter()
+        .find_map(|(n, v)| if n == name { Some(v) } else { None })
 }
 
 /// Parse `pp-for="<v> in <items>"` and return the loop
@@ -487,7 +474,10 @@ fn parse_for_item(value: &str) -> Option<String> {
     if var.is_empty() {
         return None;
     }
-    if !var.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+    if !var
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    {
         return None;
     }
     Some(var.to_string())

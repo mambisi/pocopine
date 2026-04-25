@@ -18,7 +18,7 @@ use std::{cell::RefCell, collections::HashMap};
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 
-pub use pocopine_expr::{BinOp, Expr, Literal, ParseError, Span, Spanned, parse};
+pub use pocopine_expr::{parse, BinOp, Expr, Literal, ParseError, Span, Spanned};
 
 thread_local! {
     static PARSE_CACHE: RefCell<HashMap<String, Result<Spanned<Expr>, ParseError>>> =

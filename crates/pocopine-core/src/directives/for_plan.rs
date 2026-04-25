@@ -109,7 +109,7 @@ pub(crate) struct CompiledBinding {
     /// `effect()` per row for this binding — the effect reads
     /// each named field through `parent_proxy` to subscribe via
     /// the parent proxy's `get` trap, then evaluates the binding
-    /// + patches DOM. Without this, RFC 054 M2's effect-less
+    /// and patches DOM. Without this, RFC 054 M2's effect-less
     /// per-row eval path silently drops parent-state reactivity:
     /// changes to `selected_id` (e.g. selection styling on
     /// `:class="selected_id == row.id ? 'danger' : ''"`) wouldn't
@@ -278,11 +278,7 @@ fn walk_collect(item_name: &str, expr: &Spanned<Expr>, out: &mut Vec<String>) {
             let Some(first) = segments.first() else {
                 return;
             };
-            if first == item_name
-                || first == "$index"
-                || first == "$first"
-                || first == "$last"
-            {
+            if first == item_name || first == "$index" || first == "$first" || first == "$last" {
                 return;
             }
             if !out.iter().any(|existing| existing == first) {
@@ -450,7 +446,7 @@ pub(crate) fn ensure_delegated_listeners(
 fn unique_listener_events(plan: &CompiledRowPlan) -> Vec<&'static str> {
     let mut events: Vec<&'static str> = Vec::new();
     for listener in &plan.listeners {
-        if !events.iter().any(|event| *event == listener.event) {
+        if !events.contains(&listener.event) {
             events.push(listener.event);
         }
     }
@@ -739,10 +735,9 @@ pub(crate) fn mount_row_compiled(
     let loop_state = Scope::find(scope_id).and_then(|scope| scope.typed::<LoopScope>());
     let binding_start = crate::profiler::mount::start();
     let binding_cache = {
-        let mut binding_cache: Vec<Option<Rc<str>>> =
-            vec![None; plan.bindings.len()];
+        let mut binding_cache: Vec<Option<Rc<str>>> = vec![None; plan.bindings.len()];
         let loop_borrow = loop_state.as_ref().map(|state| state.borrow());
-        let loop_ref = loop_borrow.as_ref().map(|state| &**state);
+        let loop_ref = loop_borrow.as_deref();
         let placeholder_proxy = JsValue::UNDEFINED;
         let proxy_for_eval = proxy.unwrap_or(&placeholder_proxy);
         for (i, b) in plan.bindings.iter().enumerate() {
@@ -949,11 +944,8 @@ fn refresh_parent_bindings(scope_id: ScopeId) {
         let proxy_value = instance.proxy.borrow().clone();
         let placeholder = JsValue::UNDEFINED;
         let proxy_ref = proxy_value.as_ref().unwrap_or(&placeholder);
-        let loop_borrow = instance
-            .loop_state
-            .as_ref()
-            .map(|state| state.borrow());
-        let loop_ref = loop_borrow.as_ref().map(|s| &**s);
+        let loop_borrow = instance.loop_state.as_ref().map(|state| state.borrow());
+        let loop_ref = loop_borrow.as_deref();
         for (i, binding) in plan.bindings.iter().enumerate() {
             if binding.parent_field_paths.is_empty() {
                 continue;
@@ -965,7 +957,6 @@ fn refresh_parent_bindings(scope_id: ScopeId) {
         }
     });
 }
-
 
 /// Re-run the row plan's bindings against the (mutated) loop
 /// scope. Evaluates each binding's AST, compares against the
@@ -991,7 +982,7 @@ pub(crate) fn reuse_row_compiled(scope_id: ScopeId) -> bool {
         let placeholder = JsValue::UNDEFINED;
         let proxy_ref = proxy_value.as_ref().unwrap_or(&placeholder);
         let loop_borrow = instance.loop_state.as_ref().map(|state| state.borrow());
-        let loop_ref = loop_borrow.as_ref().map(|state| &**state);
+        let loop_ref = loop_borrow.as_deref();
         for (i, b) in plan.bindings.iter().enumerate() {
             let v = evaluate_binding(b, proxy_ref, loop_ref);
             let prev = instance.binding_cache[i].as_deref();
@@ -1020,9 +1011,7 @@ pub fn unmount_row_compiled(scope_id: ScopeId) {
     };
     let dropped_effect = LIST_WATCHERS.with(|m| {
         let mut map = m.borrow_mut();
-        let Some(watcher) = map.get_mut(&list_key) else {
-            return None;
-        };
+        let watcher = map.get_mut(&list_key)?;
         watcher.members.retain(|id| *id != scope_id);
         if watcher.members.is_empty() {
             // Last row in this list — tear the watcher down so

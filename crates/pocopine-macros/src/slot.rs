@@ -100,9 +100,7 @@ impl SlotName {
 /// Strip all `#[slot(...)]` attributes from `attrs`, parsing each
 /// into a [`SlotDecl`]. Mutates `attrs` in place — the remaining
 /// attributes are re-emitted on the struct as normal.
-pub(crate) fn parse_and_strip_slots(
-    attrs: &mut Vec<Attribute>,
-) -> syn::Result<Vec<SlotDecl>> {
+pub(crate) fn parse_and_strip_slots(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<SlotDecl>> {
     let mut decls = Vec::new();
     let mut i = 0;
     while i < attrs.len() {
@@ -129,9 +127,7 @@ fn parse_slot_attr(attr: &Attribute) -> syn::Result<SlotDecl> {
 
     // Parse the parenthesised body. `Meta`-list parsing is
     // comma-separated; first entry is the selector.
-    let nested = attr.parse_args_with(
-        Punctuated::<SlotArg, Token![,]>::parse_terminated,
-    )?;
+    let nested = attr.parse_args_with(Punctuated::<SlotArg, Token![,]>::parse_terminated)?;
 
     for arg in nested {
         match arg {
@@ -268,11 +264,7 @@ pub(crate) fn emit_slot_traits(
             // compile-time child constraint means no trait.
             continue;
         }
-        let trait_ident = format_ident!(
-            "{}{}Child",
-            struct_ident,
-            slot.name.trait_suffix(),
-        );
+        let trait_ident = format_ident!("{}{}Child", struct_ident, slot.name.trait_suffix(),);
         let assert_method_ident = slot.name.assert_method_ident();
         let slot_display = slot.name.display();
         let mode_suffix = match slot.mode {
@@ -400,6 +392,7 @@ impl AttrSpanHelpers for Attribute {
 // Re-export for tests; kept as a free function so the test
 // module can call it without grabbing Path imports.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn parse_slot_for_test(attr: &Attribute) -> syn::Result<SlotDecl> {
     parse_slot_attr(attr)
 }

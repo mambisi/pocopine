@@ -41,8 +41,8 @@ use syn::{
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
 // renderer. Both host-only (proc-macro crate), invisible to wasm.
-mod template_parser;
 mod diagnostics;
+mod template_parser;
 // RFC 049 — `#[slot]` helper-attribute parsing + marker-trait
 // emission. Inert helper consumed by `#[component]`.
 mod slot;
@@ -81,7 +81,13 @@ mod for_plan;
 fn validate_template_or_emit_errors(
     template_path: &LitStr,
     component_name: &str,
-) -> Result<(Option<proc_macro2::TokenStream>, Option<template_parser::TemplateAst>), TokenStream> {
+) -> Result<
+    (
+        Option<proc_macro2::TokenStream>,
+        Option<template_parser::TemplateAst>,
+    ),
+    TokenStream,
+> {
     let lenient = is_lenient_mode();
 
     // Resolve the `.poco` file via a two-tier strategy.
@@ -120,9 +126,7 @@ fn validate_template_or_emit_errors(
         Err(e) => {
             let msg = diagnostics::render_fileless_error(
                 &display_path,
-                &format!(
-                    "pocopine: cannot read template for component `{component_name}`"
-                ),
+                &format!("pocopine: cannot read template for component `{component_name}`"),
                 &format!("{} ({})", e, file_path_str),
             );
             return surface_diagnostic(template_path, &msg, lenient, None);
@@ -134,9 +138,7 @@ fn validate_template_or_emit_errors(
         Err(parse_errors) => {
             let mut rendered_blocks: Vec<String> = Vec::new();
             for err in parse_errors {
-                if err.byte_range.end > err.byte_range.start
-                    && err.byte_range.end <= source.len()
-                {
+                if err.byte_range.end > err.byte_range.start && err.byte_range.end <= source.len() {
                     rendered_blocks.push(diagnostics::render_template_error(
                         &source,
                         &display_path,
@@ -150,9 +152,7 @@ fn validate_template_or_emit_errors(
                 } else {
                     rendered_blocks.push(diagnostics::render_fileless_error(
                         &display_path,
-                        &format!(
-                            "pocopine: invalid template for component `{component_name}`"
-                        ),
+                        &format!("pocopine: invalid template for component `{component_name}`"),
                         &err.message,
                     ));
                 }
@@ -171,9 +171,7 @@ fn validate_template_or_emit_errors(
         0 => {
             let msg = diagnostics::render_fileless_error(
                 &display_path,
-                &format!(
-                    "pocopine: template for component `{component_name}` has no root element"
-                ),
+                &format!("pocopine: template for component `{component_name}` has no root element"),
                 "pocopine templates require exactly one root",
             );
             drop(roots);
@@ -211,15 +209,19 @@ fn surface_diagnostic(
     rendered: &str,
     lenient: bool,
     ast: Option<template_parser::TemplateAst>,
-) -> Result<(Option<proc_macro2::TokenStream>, Option<template_parser::TemplateAst>), TokenStream> {
+) -> Result<
+    (
+        Option<proc_macro2::TokenStream>,
+        Option<template_parser::TemplateAst>,
+    ),
+    TokenStream,
+> {
     if lenient {
         Ok((Some(build_warning_tokens(rendered)), ast))
     } else {
-        Err(
-            syn::Error::new(anchor.span(), rendered)
-                .to_compile_error()
-                .into(),
-        )
+        Err(syn::Error::new(anchor.span(), rendered)
+            .to_compile_error()
+            .into())
     }
 }
 
@@ -283,7 +285,9 @@ fn manifest_relative(path: &std::path::Path) -> String {
 fn resolve_template_path(template_path: &LitStr) -> Option<std::path::PathBuf> {
     // Tier 1 — span-based (cargo + rust-analyzer file-backed).
     if let Some(caller_rs) = template_path.span().unwrap().local_file() {
-        let caller_dir = caller_rs.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let caller_dir = caller_rs
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         let candidate = caller_dir.join(template_path.value());
         if candidate.is_file() {
             return Some(candidate);
@@ -712,11 +716,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(s) => s,
         Err(e) => return e.to_compile_error().into(),
     };
-    let slot_traits_tokens = slot::emit_slot_traits(
-        &struct_ident,
-        &name_str,
-        &slot_decls,
-    );
+    let slot_traits_tokens = slot::emit_slot_traits(&struct_ident, &name_str, &slot_decls);
 
     // RFC-031 — `#[prop]` is the explicit "parent contract"
     // marker; everything else defaults to state (internal,
@@ -1199,25 +1199,18 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Also keeps the parsed AST in scope for RFC 049's
     // consumer-side slot-contract scan, run below when the
     // consumer declared a `uses = [...]` list.
-    let (template_warnings, template_ast) = match validate_template_or_emit_errors(
-        &template_path,
-        &name_str,
-    ) {
-        Ok((warning, ast)) => (
-            warning.unwrap_or_else(proc_macro2::TokenStream::new),
-            ast,
-        ),
-        Err(token_stream) => return token_stream,
-    };
+    let (template_warnings, template_ast) =
+        match validate_template_or_emit_errors(&template_path, &name_str) {
+            Ok((warning, ast)) => (warning.unwrap_or_else(proc_macro2::TokenStream::new), ast),
+            Err(token_stream) => return token_stream,
+        };
 
     // RFC 049 consumer-side scan — emit trait-bound assertions
     // for each (parent, child) pair where both tags resolve
     // through the consumer's `uses` list. Empty when `uses` is
     // absent or the template has no recognised typed parents.
     let slot_assertions_tokens = match (&args.uses, &template_ast) {
-        (Some(uses_table), Some(ast)) => {
-            slot_assertions::emit_slot_assertions(ast, uses_table)
-        }
+        (Some(uses_table), Some(ast)) => slot_assertions::emit_slot_assertions(ast, uses_table),
         _ => proc_macro2::TokenStream::new(),
     };
 
@@ -1595,7 +1588,12 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             methods_to_skip_in_arms.insert(method.sig.ident.to_string());
             computed_methods.push(ComputedMethod {
                 method_ident: method.sig.ident.clone(),
-                field_name: method.sig.ident.to_string().trim_start_matches("r#").to_string(),
+                field_name: method
+                    .sig
+                    .ident
+                    .to_string()
+                    .trim_start_matches("r#")
+                    .to_string(),
                 ret_ty,
                 params: Vec::new(),
             });
@@ -1627,7 +1625,11 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             };
-            let dep_name = pat_ident.ident.to_string().trim_start_matches("r#").to_string();
+            let dep_name = pat_ident
+                .ident
+                .to_string()
+                .trim_start_matches("r#")
+                .to_string();
             entry.params.push(ComputedParam {
                 ident: pat_ident.ident.clone(),
                 ty: (**ty).clone(),
@@ -1875,12 +1877,9 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .enumerate()
             .find_map(|(idx, entry)| (indegree[idx] > 0).then_some(entry.method_ident.clone()))
             .unwrap_or_else(|| format_ident!("computed"));
-        return syn::Error::new_spanned(
-            offender,
-            "#[computed] dependency graph contains a cycle",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new_spanned(offender, "#[computed] dependency graph contains a cycle")
+            .to_compile_error()
+            .into();
     }
 
     let computed_install_stmts = topo.iter().map(|idx| {

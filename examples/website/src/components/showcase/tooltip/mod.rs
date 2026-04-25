@@ -1,6 +1,5 @@
 use pine::{
-    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot,
-    PineTooltipTrigger,
+    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot, PineTooltipTrigger,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};

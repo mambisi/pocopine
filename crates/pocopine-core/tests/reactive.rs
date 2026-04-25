@@ -313,9 +313,8 @@ fn spawn_scoped_cancels_when_scope_is_removed() {
 
     let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
     let scope = Scope::new(state);
-    let handle = pocopine_core::scope::with_current_scope_id(scope.id, || {
-        spawn_scoped(async move {})
-    });
+    let handle =
+        pocopine_core::scope::with_current_scope_id(scope.id, || spawn_scoped(async move {}));
 
     assert!(!handle.is_cancelled());
     Scope::remove(scope.id);
@@ -334,7 +333,10 @@ fn spawn_latest_cancels_previous_task_in_same_slot() {
         (first, second)
     });
 
-    assert!(first.is_cancelled(), "older latest-wins task should be cancelled");
+    assert!(
+        first.is_cancelled(),
+        "older latest-wins task should be cancelled"
+    );
     assert!(
         !second.is_cancelled(),
         "newest latest-wins task should stay active until scope teardown"

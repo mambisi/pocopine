@@ -88,9 +88,8 @@ fn remove_or_leave(root: &Element) {
 /// in `run_keyed` falls back to the per-row leave loop when
 /// this returns true, so transition keyframes still play.
 fn has_leavers_with_transition(pool: &HashMap<Rc<str>, PrevItem>) -> bool {
-    pool.values().any(|entry| {
-        crate::directives::transition::has_transition_in_subtree(&entry.element)
-    })
+    pool.values()
+        .any(|entry| crate::directives::transition::has_transition_in_subtree(&entry.element))
 }
 
 /// Predicate for the bulk-clear path. `replace_children_with_node_1`
@@ -373,6 +372,7 @@ fn item_signature(v: &JsValue) -> String {
 /// Keyed iteration. Reuses clones whose keys still appear, fires
 /// `trigger_scope` so their bindings re-evaluate against the updated
 /// `LoopScope`, and reorders the DOM to match the new order.
+#[allow(clippy::too_many_arguments)]
 fn run_keyed(
     item_name: String,
     items_expr: String,
@@ -702,7 +702,7 @@ fn run_keyed(
                     crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
                     Scope::remove_compiled_rows(&scope_ids);
                     pool.clear();
-                    let _ = parent_el.replace_children_with_node_1(template_el.as_ref());
+                    parent_el.replace_children_with_node_1(template_el.as_ref());
                     prior.borrow_mut().clear();
                     crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
                     crate::profiler::reconcile::record_total(reconcile_total_start);
@@ -1086,7 +1086,6 @@ fn stringify_key(v: &JsValue) -> String {
         .and_then(|s| s.as_string())
         .unwrap_or_default()
 }
-
 
 /// Clone `<template>.content` deeply and return the first element
 /// child of the resulting fragment. Returns `None` when the body is

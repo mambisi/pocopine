@@ -494,10 +494,7 @@ pub fn has_transition_in_subtree(root: &Element) -> bool {
     if has_any_transition_attr(root) {
         return true;
     }
-    root.query_selector(ATTR_SELECTOR)
-        .ok()
-        .flatten()
-        .is_some()
+    root.query_selector(ATTR_SELECTOR).ok().flatten().is_some()
 }
 
 fn collect_animated(root: &Element) -> Vec<Element> {
