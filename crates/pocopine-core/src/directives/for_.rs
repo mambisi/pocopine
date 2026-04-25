@@ -87,8 +87,11 @@ fn remove_or_leave(root: &Element) {
 /// has a transition in its subtree. The bulk-clear fast path
 /// in `run_keyed` falls back to the per-row leave loop when
 /// this returns true, so transition keyframes still play.
-fn has_leavers_with_transition(pool: &HashMap<Rc<str>, PrevItem>) -> bool {
-    pool.values()
+fn has_leavers_with_transition_entries<'a>(
+    entries: impl IntoIterator<Item = &'a PrevItem>,
+) -> bool {
+    entries
+        .into_iter()
         .any(|entry| crate::directives::transition::has_transition_in_subtree(&entry.element))
 }
 
@@ -97,39 +100,49 @@ fn has_leavers_with_transition(pool: &HashMap<Rc<str>, PrevItem>) -> bool {
 /// before reinstating `template_el`. We only take the fast path
 /// when:
 ///
-/// * Every element child is either `template_el` or one of the
-///   pool clones — no user-authored sibling structure is present.
+/// * The parent has exactly `pool.len() + 1` element children, and
+///   every pool clone plus `template_el` is a direct child of that
+///   parent — no user-authored element sibling can fit in that count.
 /// * Every non-element child is a whitespace-only `Text` node
 ///   (typical formatting indentation between rows).
 ///
 /// Comments, non-whitespace text, and unrecognised element
 /// siblings all fall through to the per-row remove loop.
-fn bulk_clear_safe(
+fn bulk_clear_safe<'a>(
     parent_el: &Element,
-    pool: &HashMap<Rc<str>, PrevItem>,
+    entries: impl IntoIterator<Item = &'a PrevItem>,
     template_el: &Element,
     pool_count: usize,
 ) -> bool {
-    let template_node: &Node = template_el.as_ref();
+    let parent_node: &Node = parent_el.as_ref();
+    if parent_el.child_element_count() as usize != pool_count + 1 {
+        return false;
+    }
+    let template_parent_ok = template_el
+        .parent_node()
+        .as_ref()
+        .is_some_and(|parent| parent.is_same_node(Some(parent_node)));
+    if !template_parent_ok {
+        return false;
+    }
+    for entry in entries {
+        let row_parent_ok = entry
+            .element
+            .parent_node()
+            .as_ref()
+            .is_some_and(|parent| parent.is_same_node(Some(parent_node)));
+        if !row_parent_ok {
+            return false;
+        }
+    }
+
     let nodes = parent_el.child_nodes();
-    let mut element_seen: usize = 0;
     for i in 0..nodes.length() {
         let Some(node) = nodes.item(i) else {
             return false;
         };
         match node.node_type() {
-            Node::ELEMENT_NODE => {
-                element_seen += 1;
-                if node.is_same_node(Some(template_node)) {
-                    continue;
-                }
-                let in_pool = pool
-                    .values()
-                    .any(|entry| node.is_same_node(Some(entry.element.as_ref())));
-                if !in_pool {
-                    return false;
-                }
-            }
+            Node::ELEMENT_NODE => {}
             Node::TEXT_NODE => {
                 let text = node.text_content().unwrap_or_default();
                 if !text.chars().all(|c| c.is_whitespace()) {
@@ -140,7 +153,24 @@ fn bulk_clear_safe(
             _ => return false,
         }
     }
-    element_seen == pool_count + 1
+    true
+}
+
+fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &Element) -> bool {
+    let pool_count = entries.len();
+    if pool_count == 0
+        || has_leavers_with_transition_entries(entries.iter())
+        || !bulk_clear_safe(parent_el, entries.iter(), template_el, pool_count)
+    {
+        return false;
+    }
+
+    let scope_ids: Vec<ScopeId> = entries.iter().map(|entry| entry.scope_id).collect();
+    crate::walker::mark_bulk_release(parent_el);
+    crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
+    Scope::remove_compiled_rows(&scope_ids);
+    parent_el.replace_children_with_node_1(template_el.as_ref());
+    true
 }
 
 fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
@@ -452,6 +482,22 @@ fn run_keyed(
             let mut b = prior.borrow_mut();
             std::mem::take(&mut *b)
         };
+        // Clearing a compiled list does not need keyed lookup at all:
+        // every prior row is leaving. Try the same safe bulk teardown
+        // before hashing 10K keys into `pool`; fall back to the normal
+        // reconcile path if transitions or sibling structure require it.
+        if total == 0 && row_plan.is_some() {
+            if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
+                crate::profiler::reconcile::record_pool_build(pool_build_start);
+                let leaver_drain_start = crate::profiler::reconcile::start();
+                if bulk_clear_compiled(parent_el, &old_prior, &template_el) {
+                    prior.borrow_mut().clear();
+                    crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
+                    crate::profiler::reconcile::record_total(reconcile_total_start);
+                    return;
+                }
+            }
+        }
         for entry in old_prior {
             pool.insert(entry.key.clone(), entry);
         }
@@ -653,7 +699,7 @@ fn run_keyed(
         if total == 0
             && !pool.is_empty()
             && row_plan.is_some()
-            && !has_leavers_with_transition(&pool)
+            && !has_leavers_with_transition_entries(pool.values())
         {
             if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
                 let pool_count = pool.len();
@@ -666,7 +712,7 @@ fn run_keyed(
                 // `<template pp-for>` inside the same `<tbody>`)
                 // bail out — `replace_children_with_node_1`
                 // below would otherwise nuke them.
-                if bulk_clear_safe(parent_el, &pool, &template_el, pool_count) {
+                if bulk_clear_safe(parent_el, pool.values(), &template_el, pool_count) {
                     let scope_ids: Vec<ScopeId> =
                         pool.values().map(|entry| entry.scope_id).collect();
                     // Cleanup BEFORE the DOM mutation:
