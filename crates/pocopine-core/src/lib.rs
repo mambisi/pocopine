@@ -89,8 +89,9 @@ pub use registry::{
 };
 pub use router::{navigate, register_route};
 pub use scope::{
-    current_scope_id, invalidate_field, invalidate_field_cache, patch_list_at_inline,
-    replace_field_inline, ComponentState, Scope,
+    append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache,
+    patch_list_at_inline, patch_list_indices_inline, replace_field_inline,
+    swap_list_indices_inline, ComponentState, Scope,
 };
 pub use server::{Result as ServerResult, ServerError};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};

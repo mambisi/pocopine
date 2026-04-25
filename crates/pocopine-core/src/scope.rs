@@ -630,6 +630,82 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     crate::reactive::trigger(sid, field);
 }
 
+/// Patch several elements of a cached JS Array and trigger once.
+/// This is the bulk sibling of [`patch_list_at_inline`] for handlers
+/// such as "update every 10th row": it preserves object identity for
+/// untouched rows without paying one reactive dispatch per changed row.
+pub fn patch_list_indices_inline<T: serde::Serialize>(field: &str, patches: &[(usize, &T)]) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            for (idx, row) in patches {
+                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
+                    let _ = Reflect::set(&arr, &(*idx as u32).into(), &new_js);
+                }
+            }
+        }
+        keep_field_fresh(sid, field);
+    }
+    crate::reactive::trigger(sid, field);
+}
+
+fn keep_field_fresh(scope_id: ScopeId, field: &str) {
+    FRESH_FIELDS.with(|f| {
+        f.borrow_mut()
+            .entry(scope_id)
+            .or_default()
+            .insert(field.to_string());
+    });
+}
+
+/// Swap two indices inside a cached JS Array for a Vec-like field.
+/// Call from inside a handler after swapping the Rust Vec. This keeps
+/// existing row object identities intact, so keyed `pp-for` can avoid
+/// re-stringifying unchanged rows on the follow-up reconcile.
+pub fn swap_list_indices_inline(field: &str, a: usize, b: usize) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            let a_key = JsValue::from_f64(a as f64);
+            let b_key = JsValue::from_f64(b as f64);
+            let a_val = Reflect::get(&arr, &a_key).unwrap_or(JsValue::UNDEFINED);
+            let b_val = Reflect::get(&arr, &b_key).unwrap_or(JsValue::UNDEFINED);
+            let _ = Reflect::set(&arr, &a_key, &b_val);
+            let _ = Reflect::set(&arr, &b_key, &a_val);
+        }
+        keep_field_fresh(sid, field);
+    }
+    crate::reactive::trigger(sid, field);
+}
+
+/// Append serialized rows into a cached JS Array for a Vec-like field.
+/// Call from inside a handler after extending the Rust Vec. Existing
+/// JS row objects remain in place; only the appended range is
+/// serialized.
+pub fn append_list_inline<T: serde::Serialize>(field: &str, start_idx: usize, rows: &[T]) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            for (offset, row) in rows.iter().enumerate() {
+                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
+                    let _ = Reflect::set(&arr, &((start_idx + offset) as u32).into(), &new_js);
+                }
+            }
+        }
+        keep_field_fresh(sid, field);
+    }
+    crate::reactive::trigger(sid, field);
+}
+
 /// Replace the entire cached `JsValue` for `field` against the
 /// current scope. Fires per-field reactivity. Use this when a
 /// structural change (push / swap / clear / length change) means

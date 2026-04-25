@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use js_sys::{Array, Reflect};
+use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
@@ -372,6 +372,7 @@ struct PrevItem {
     scope_id: ScopeId,
     loop_state: Rc<RefCell<LoopScope>>,
     key: Rc<str>,
+    item_value: JsValue,
     item_sig: String,
     leaving: bool,
 }
@@ -436,6 +437,10 @@ fn run_keyed(
         .as_ref()
         .map(|p| p.is_proxy_elision_eligible())
         .unwrap_or(false);
+    let compiled_bindings_depend_on_position = row_plan
+        .as_ref()
+        .map(|p| p.depends_on_loop_position())
+        .unwrap_or(true);
     let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
     // Pool + seen-keys set carry allocated capacity across effect
@@ -549,7 +554,11 @@ fn run_keyed(
             let item_sig: String = if pool_initially_empty {
                 String::new()
             } else {
-                item_signature(&item)
+                // Reused rows compute their signature only after
+                // `pool.remove` below. If the cached JS row object is
+                // identical, the row data cannot have changed from the
+                // DOM's point of view and JSON.stringify is pure waste.
+                String::new()
             };
             let key: Rc<str> = if seen.insert(raw_key.clone()) {
                 raw_key
@@ -578,18 +587,34 @@ fn run_keyed(
                     crate::directives::transition::enter_subtree(&entry.element, || {});
                     entry.leaving = false;
                 }
-                let needs_update = {
-                    let st = entry.loop_state.borrow();
-                    st.index != i || st.total != total || entry.item_sig != item_sig
+                let same_item = Object::is(&entry.item_value, &item);
+                let mut next_item_sig = entry.item_sig.clone();
+                let item_changed = if same_item {
+                    false
+                } else {
+                    next_item_sig = item_signature(&item);
+                    next_item_sig != entry.item_sig
                 };
-                if needs_update {
+                let position_changed = {
+                    let st = entry.loop_state.borrow();
+                    st.index != i || st.total != total
+                };
+                let needs_loop_update = position_changed || !same_item;
+                let needs_binding_update = item_changed
+                    || (position_changed
+                        && (row_plan.is_none() || compiled_bindings_depend_on_position));
+                if needs_loop_update {
+                    let item_for_entry = item.clone();
                     {
                         let mut st = entry.loop_state.borrow_mut();
                         st.item = item;
                         st.index = i;
                         st.total = total;
                     }
-                    entry.item_sig = item_sig;
+                    entry.item_value = item_for_entry;
+                    entry.item_sig = next_item_sig;
+                }
+                if needs_binding_update {
                     // RFC 054 §5.5 — compiled rows skip the
                     // reactive sweep; their bindings evaluate
                     // directly against the mutated loop state and
@@ -603,9 +628,14 @@ fn run_keyed(
                 fresh.push(entry);
             } else {
                 // New. Fresh loop scope + clone.
+                let item_sig = if pool_initially_empty {
+                    item_sig
+                } else {
+                    item_signature(&item)
+                };
                 let loop_rc = Rc::new(RefCell::new(LoopScope {
                     item_name: Rc::clone(&item_name),
-                    item,
+                    item: item.clone(),
                     index: i,
                     total,
                     parent: parent_proxy.clone(),
@@ -634,6 +664,7 @@ fn run_keyed(
                     scope_id: scope.id,
                     loop_state: loop_rc,
                     key,
+                    item_value: item,
                     item_sig,
                     leaving: false,
                 });

@@ -411,6 +411,40 @@ fn evaluate_fast_expr(expr: &FastExpr, loop_state: &LoopScope) -> JsValue {
     }
 }
 
+fn fast_expr_depends_on_loop_position(expr: &FastExpr) -> bool {
+    match expr {
+        FastExpr::Path(path) => fast_path_depends_on_loop_position(path),
+        FastExpr::TernaryEq { lhs, rhs, .. } => {
+            fast_path_depends_on_loop_position(lhs) || fast_path_depends_on_loop_position(rhs)
+        }
+    }
+}
+
+fn fast_path_depends_on_loop_position(path: &FastPath) -> bool {
+    matches!(
+        path.root,
+        FastPathRoot::LoopIndex | FastPathRoot::LoopFirst | FastPathRoot::LoopLast
+    )
+}
+
+impl CompiledRowPlan {
+    /// True when any compiled binding reads `$index`, `$first`, or
+    /// `$last`. Reconcile can still update the row's LoopScope for
+    /// listener correctness, but when this is false an index/total-only
+    /// change does not require reapplying DOM bindings.
+    pub(crate) fn depends_on_loop_position(&self) -> bool {
+        self.bindings.iter().any(|binding| {
+            binding
+                .fast
+                .as_ref()
+                .map(fast_expr_depends_on_loop_position)
+                // Non-fast bindings may read positional fields through
+                // the generic evaluator, so stay conservative.
+                .unwrap_or(true)
+        })
+    }
+}
+
 fn evaluate_fast_path(path: &FastPath, loop_state: &LoopScope) -> JsValue {
     let mut cur = match path.root {
         FastPathRoot::LoopItem => loop_state.item.clone(),

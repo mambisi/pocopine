@@ -87,8 +87,10 @@ impl JsBenchApp {
 
     pub fn add(&mut self) {
         self.measure("add(1000)", |s| {
+            let start = s.rows.len();
             let more = s.make_rows(1_000);
             s.rows.extend(more);
+            pocopine::append_list_inline("rows", start, &s.rows[start..]);
         });
     }
 
@@ -97,6 +99,11 @@ impl JsBenchApp {
             for idx in (0..s.rows.len()).step_by(10) {
                 s.rows[idx].label.push_str(" !!!");
             }
+            let patches: Vec<(usize, &Row)> = (0..s.rows.len())
+                .step_by(10)
+                .map(|idx| (idx, &s.rows[idx]))
+                .collect();
+            pocopine::patch_list_indices_inline("rows", &patches);
             if let Some(selected_id) = s.selected_id {
                 s.selected_label = s
                     .rows
@@ -120,6 +127,7 @@ impl JsBenchApp {
         self.measure("swapRows", |s| {
             if s.rows.len() > 998 {
                 s.rows.swap(1, 998);
+                pocopine::swap_list_indices_inline("rows", 1, 998);
             }
         });
     }
