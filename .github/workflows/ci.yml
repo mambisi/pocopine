@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 # Toolchain channel + components + targets are pinned in
-# `rust-toolchain.toml` at the repo root. dtolnay/rust-toolchain@master
-# reads that file when no channel is specified, so all three jobs
-# share one source of truth.
+# `rust-toolchain.toml` at the repo root. The CI jobs install the
+# same nightly explicitly so dtolnay/rust-toolchain@master doesn't
+# need to read the toml file (its support for that is partial).
 
 jobs:
   fmt:
@@ -61,3 +61,30 @@ jobs:
         with:
           key: clippy-host
       - run: cargo clippy -p pocopine-cli --all-targets -- -D warnings
+
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.os }}
+      # Framework + example crates target wasm; build them for the
+      # canonical wasm32 target on every OS so platform-specific
+      # surprises (path separators, line endings, host toolchain
+      # quirks) surface here, not at release time.
+      - name: build (wasm32 workspace)
+        run: cargo build --workspace --exclude pocopine-cli --target wasm32-unknown-unknown
+      # pocopine-cli is the only host-binary crate. Build it for the
+      # current OS so each platform's CLI binary is exercised.
+      - name: build (host — pocopine-cli)
+        run: cargo build -p pocopine-cli
