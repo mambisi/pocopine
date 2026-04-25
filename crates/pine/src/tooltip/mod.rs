@@ -24,17 +24,14 @@
 //! </pine-tooltip-root>
 //! ```
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::compound;
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, watch_scope_field, ScopeId};
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
 
 const SLUG: &str = "tooltip";
 
@@ -232,39 +229,27 @@ impl PineTooltipTrigger {
 }
 
 fn install_trigger_listeners(trigger_el: web_sys::Element, root: Handle<PineTooltipRoot>) {
-    use pocopine::events::{self, ev, on_scope_unmount};
+    use pocopine::events::{self, ev};
+    use pocopine::timers;
 
-    // Pending show-delay timer id, shared by every listener that
-    // schedules or cancels it. No thread-local side table needed.
-    let pending_timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
+    // Pending show-delay timer slot — auto-cancels at unmount.
+    let pending = timers::Debounced::new_scoped();
 
     let enter_root = root.clone();
-    let enter_timer = pending_timer.clone();
+    let enter_pending = pending.clone();
     events::on_scoped(&trigger_el, ev::mouseenter, move |_e| {
         let delay = enter_root.with(|r| r.delay_duration);
         let root_for_timer = enter_root.clone();
-        let timer_slot = enter_timer.clone();
-        let timer_cb = Closure::once(Box::new(move || {
-            timer_slot.set(None);
+        enter_pending.schedule(delay, move || {
             root_for_timer.update(|s| s.open = true);
-        }) as Box<dyn FnOnce()>);
-        let js = timer_cb.into_js_value();
-        if let Some(w) = web_sys::window() {
-            if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                js.unchecked_ref(),
-                delay as i32,
-            ) {
-                if let Some(prev) = enter_timer.replace(Some(id)) {
-                    w.clear_timeout_with_handle(prev);
-                }
-            }
-        }
+        });
     });
 
     let leave_root = root.clone();
-    let leave_timer = pending_timer.clone();
+    let leave_pending = pending.clone();
     events::on_scoped(&trigger_el, ev::mouseleave, move |_e| {
-        cancel_pending_and_close(&leave_timer, &leave_root);
+        leave_pending.cancel();
+        leave_root.update(|s| s.open = false);
     });
 
     // `focusin` + `focusout` bubble, so they fire for focus on a
@@ -275,29 +260,10 @@ fn install_trigger_listeners(trigger_el: web_sys::Element, root: Handle<PineTool
         focus_root.update(|s| s.open = true);
     });
 
-    let blur_timer = pending_timer.clone();
     events::on_scoped(&trigger_el, ev::focusout, move |_e| {
-        cancel_pending_and_close(&blur_timer, &root);
+        pending.cancel();
+        root.update(|s| s.open = false);
     });
-
-    // Drop any still-pending show timer at unmount — listeners
-    // already auto-detach via on_scoped.
-    on_scope_unmount(move || {
-        if let Some(id) = pending_timer.take() {
-            if let Some(w) = web_sys::window() {
-                w.clear_timeout_with_handle(id);
-            }
-        }
-    });
-}
-
-fn cancel_pending_and_close(pending: &Cell<Option<i32>>, root: &Handle<PineTooltipRoot>) {
-    if let Some(id) = pending.take() {
-        if let Some(w) = web_sys::window() {
-            w.clear_timeout_with_handle(id);
-        }
-    }
-    root.update(|s| s.open = false);
 }
 
 // ── Portal ────────────────────────────────────────────────────────

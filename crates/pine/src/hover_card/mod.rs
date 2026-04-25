@@ -40,33 +40,31 @@
 //! </pine-hover-card-root>
 //! ```
 
-use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::compound;
 use pocopine::events::{self, ev};
 use pocopine::prelude::*;
+use pocopine::timers::Debounced;
 use pocopine::{create_context, refs};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 const SLUG: &str = "hover-card";
 
 create_context!(ROOT: Handle<PineHoverCardRoot>);
 
-// Shared open/close timer cells — Root provides one of these on
+// Shared open/close debounce slots — Root provides one of these on
 // setup; Trigger and Content both `inject()` it so their listeners
 // can read and cancel the same pair of pending timers.
 //
 // Storing on Root (rather than per-Trigger) lets Content's
 // mouseenter cancel the close timer Trigger's mouseleave started —
-// the two parts share the timer because they share the "is
+// the two parts share the timers because they share the "is
 // hovering the combined surface?" state.
-#[derive(Default)]
 struct HoverState {
-    pending_open: Cell<Option<i32>>,
-    pending_close: Cell<Option<i32>>,
+    open: Rc<Debounced>,
+    close: Rc<Debounced>,
 }
 
 create_context!(STATE: Rc<HoverState>);
@@ -109,19 +107,14 @@ impl Default for PineHoverCardRoot {
 impl PineHoverCardRoot {
     pub fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
-        // Mint the shared timer cells — Trigger and Content inject
-        // them to coordinate the open/close debounce across the
-        // combined hover surface.
-        STATE.provide(Rc::new(HoverState::default()));
-    }
-
-    pub fn on_unmount(&mut self) {
-        // Listeners auto-detach with their own scopes; only the
-        // outstanding setTimeout handles need clearing.
-        if let Some(state) = STATE.inject() {
-            cancel_open(&state);
-            cancel_close(&state);
-        }
+        // Mint the shared debounce slots — Trigger and Content
+        // inject them to coordinate the open/close timing across
+        // the combined hover surface. `new_scoped` ties any
+        // pending fire to Root's unmount.
+        STATE.provide(Rc::new(HoverState {
+            open: Debounced::new_scoped(),
+            close: Debounced::new_scoped(),
+        }));
     }
 }
 
@@ -168,7 +161,7 @@ fn install_trigger_listeners(
     let focus_state = state.clone();
     let focus_root = root;
     events::on_scoped(&trigger_el, ev::focusin, move |_e| {
-        cancel_close(&focus_state);
+        focus_state.close.cancel();
         focus_root.update(|s| s.open = true);
     });
     events::on_scoped(&trigger_el, ev::focusout, move |_e| close());
@@ -178,76 +171,38 @@ fn install_trigger_listeners(
 /// Cancels any pending close timer first — the pointer re-entered
 /// a tracked surface, so we don't want the card to close under us.
 /// Wrapped in `Rc` so the same scheduler can be cloned into multiple
-/// listener closures without rebuilding the timer-bookkeeping state.
+/// listener closures.
 fn make_open_scheduler(root: Handle<PineHoverCardRoot>, state: Rc<HoverState>) -> Rc<dyn Fn()> {
     Rc::new(move || {
-        cancel_close(&state);
+        state.close.cancel();
         // Don't restart the open timer if one is already pending —
         // a second mouseenter on the same surface during the delay
         // window should keep the original countdown.
-        if state.pending_open.get().is_some() {
+        if state.open.is_pending() {
             return;
         }
         let delay = root.with(|r| r.open_delay);
         let root_for_timer = root.clone();
-        let state_for_timer = state.clone();
-        let timer_cb = Closure::once(Box::new(move || {
-            state_for_timer.pending_open.set(None);
+        state.open.schedule(delay, move || {
             root_for_timer.update(|s| s.open = true);
-        }) as Box<dyn FnOnce()>);
-        if let Some(w) = web_sys::window() {
-            if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                timer_cb.into_js_value().unchecked_ref(),
-                delay as i32,
-            ) {
-                state.pending_open.set(Some(id));
-            }
-        }
+        });
     })
 }
 
 /// Build a closure that schedules `open = false` after `close_delay`.
 /// Cancels any pending open first — the pointer left the tracked
 /// surface before the card even appeared, so don't surprise the
-/// user with a delayed open.
+/// user with a delayed open. Last-leave-wins on the close timer
+/// itself — `Debounced::schedule` cancels the prior pending fire.
 fn make_close_scheduler(root: Handle<PineHoverCardRoot>, state: Rc<HoverState>) -> Rc<dyn Fn()> {
     Rc::new(move || {
-        cancel_open(&state);
+        state.open.cancel();
         let delay = root.with(|r| r.close_delay);
         let root_for_timer = root.clone();
-        let state_for_timer = state.clone();
-        let timer_cb = Closure::once(Box::new(move || {
-            state_for_timer.pending_close.set(None);
+        state.close.schedule(delay, move || {
             root_for_timer.update(|s| s.open = false);
-        }) as Box<dyn FnOnce()>);
-        if let Some(w) = web_sys::window() {
-            if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                timer_cb.into_js_value().unchecked_ref(),
-                delay as i32,
-            ) {
-                // Replace any prior pending close — last leave wins.
-                if let Some(prev) = state.pending_close.replace(Some(id)) {
-                    w.clear_timeout_with_handle(prev);
-                }
-            }
-        }
+        });
     })
-}
-
-fn cancel_open(state: &HoverState) {
-    if let Some(id) = state.pending_open.take() {
-        if let Some(w) = web_sys::window() {
-            w.clear_timeout_with_handle(id);
-        }
-    }
-}
-
-fn cancel_close(state: &HoverState) {
-    if let Some(id) = state.pending_close.take() {
-        if let Some(w) = web_sys::window() {
-            w.clear_timeout_with_handle(id);
-        }
-    }
 }
 
 // ── Portal ────────────────────────────────────────────────────────

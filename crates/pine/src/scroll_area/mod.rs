@@ -39,10 +39,10 @@
 
 use pocopine::events::{self, ev};
 use pocopine::prelude::*;
+use pocopine::timers::Debounced;
 use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
@@ -50,14 +50,10 @@ use web_sys::PointerEvent;
 create_context!(ROOT: Handle<PineScrollAreaRoot>);
 create_context!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
 create_context!(SCROLLBAR_ORIENTATION: String);
-
-// Per-Root fade-out `setTimeout` handle. Cancelled + replaced on
-// every scroll event so rapid scrolls don't stack timers; cleared
-// on Root unmount. Drag state lives in closure-captured `Rc<Cell<>>`s
-// instead of a runtime side-table.
-thread_local! {
-    static HIDE_TIMERS: RefCell<HashMap<ScopeId, i32>> = RefCell::new(HashMap::new());
-}
+// Shared fade-out debounce slot — Root mints one on setup;
+// Viewport injects it to (re)schedule the fade after every scroll
+// or pointer event. Auto-cancels at Root unmount.
+create_context!(FADE_TIMER: Rc<Debounced>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -139,12 +135,10 @@ impl Default for PineScrollAreaRoot {
 impl PineScrollAreaRoot {
     pub fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
-    }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            clear_hide_timer(scope);
-        }
+        // Mint the fade-out debounce slot once at setup; descendants
+        // inject and reuse it across every scroll event. `new_scoped`
+        // ties any pending fire to Root's unmount.
+        FADE_TIMER.provide(Debounced::new_scoped());
     }
 
     /// Called by Root's own `@pointerenter` / `@pointerleave`
@@ -262,7 +256,9 @@ impl PineScrollAreaViewport {
         let top = js_scroll_top(&viewport_el);
         let left = js_scroll_left(&viewport_el);
         root.update(|r: &mut PineScrollAreaRoot| r.on_scroll(top, left));
-        schedule_fade(root);
+        if let Some(timer) = FADE_TIMER.inject() {
+            schedule_fade(&timer, root);
+        }
     }
 
     /// `pp-resize` handler — fires whenever the Viewport's size
@@ -316,47 +312,16 @@ fn push_geometry(viewport_el: &web_sys::Element, root: &Handle<PineScrollAreaRoo
     });
 }
 
-fn schedule_fade(root: Handle<PineScrollAreaRoot>) {
-    let scope = root.scope_id();
+fn schedule_fade(timer: &Rc<Debounced>, root: Handle<PineScrollAreaRoot>) {
     let (kind, delay) = root.with(|r| (r.r#type.clone(), r.scroll_hide_delay));
     // `auto` / `always` never fade on inactivity — `scrolling` can
     // stay true, it doesn't affect their visibility computation.
     if kind == "auto" || kind == "always" {
         return;
     }
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    // Cancel any in-flight timer first so rapid scrolls don't stack.
-    HIDE_TIMERS.with(|t| {
-        if let Some(prev) = t.borrow_mut().remove(&scope) {
-            window.clear_timeout_with_handle(prev);
-        }
+    timer.schedule(delay, move || {
+        root.update(|r: &mut PineScrollAreaRoot| r.end_scroll());
     });
-    let root_for_cb = root;
-    let cb = Closure::once_into_js(move || {
-        HIDE_TIMERS.with(|t| {
-            t.borrow_mut().remove(&scope);
-        });
-        root_for_cb.update(|r: &mut PineScrollAreaRoot| r.end_scroll());
-    });
-    let handle = window
-        .set_timeout_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            delay as i32,
-        )
-        .unwrap_or(0);
-    HIDE_TIMERS.with(|t| {
-        t.borrow_mut().insert(scope, handle);
-    });
-}
-
-fn clear_hide_timer(scope: ScopeId) {
-    if let Some(prev) = HIDE_TIMERS.with(|t| t.borrow_mut().remove(&scope)) {
-        if let Some(w) = web_sys::window() {
-            w.clear_timeout_with_handle(prev);
-        }
-    }
 }
 
 // ── Scrollbar ─────────────────────────────────────────────────────
