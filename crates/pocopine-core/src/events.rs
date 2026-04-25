@@ -214,7 +214,12 @@ where
 /// typo in either place is a compile error.
 pub mod ev {
     use super::DomEventName;
-    use web_sys::{Event, FocusEvent, InputEvent, KeyboardEvent, MouseEvent, UiEvent};
+    use web_sys::{
+        AnimationEvent, ClipboardEvent, CompositionEvent, DragEvent, ErrorEvent, Event,
+        FocusEvent, HashChangeEvent, InputEvent, KeyboardEvent, MessageEvent, MouseEvent,
+        PageTransitionEvent, PointerEvent, PopStateEvent, ProgressEvent, StorageEvent,
+        SubmitEvent, TouchEvent, TransitionEvent, UiEvent, WheelEvent,
+    };
 
     macro_rules! event_marker {
         ($($name:ident => ($lit:literal, $ty:ty)),* $(,)?) => {$(
@@ -230,41 +235,108 @@ pub mod ev {
 
     event_marker! {
         // Mouse
-        click          => ("click", MouseEvent),
-        dblclick       => ("dblclick", MouseEvent),
-        contextmenu    => ("contextmenu", MouseEvent),
-        mousedown      => ("mousedown", MouseEvent),
-        mouseup        => ("mouseup", MouseEvent),
-        mousemove      => ("mousemove", MouseEvent),
-        mouseenter     => ("mouseenter", MouseEvent),
-        mouseleave     => ("mouseleave", MouseEvent),
-        mouseover      => ("mouseover", MouseEvent),
-        mouseout       => ("mouseout", MouseEvent),
+        click             => ("click", MouseEvent),
+        dblclick          => ("dblclick", MouseEvent),
+        contextmenu       => ("contextmenu", MouseEvent),
+        auxclick          => ("auxclick", MouseEvent),
+        mousedown         => ("mousedown", MouseEvent),
+        mouseup           => ("mouseup", MouseEvent),
+        mousemove         => ("mousemove", MouseEvent),
+        mouseenter        => ("mouseenter", MouseEvent),
+        mouseleave        => ("mouseleave", MouseEvent),
+        mouseover         => ("mouseover", MouseEvent),
+        mouseout          => ("mouseout", MouseEvent),
+        wheel             => ("wheel", WheelEvent),
+        // Pointer (modern unified mouse + touch + pen)
+        pointerdown       => ("pointerdown", PointerEvent),
+        pointerup         => ("pointerup", PointerEvent),
+        pointermove       => ("pointermove", PointerEvent),
+        pointerenter      => ("pointerenter", PointerEvent),
+        pointerleave      => ("pointerleave", PointerEvent),
+        pointerover       => ("pointerover", PointerEvent),
+        pointerout        => ("pointerout", PointerEvent),
+        pointercancel     => ("pointercancel", PointerEvent),
+        gotpointercapture => ("gotpointercapture", PointerEvent),
+        lostpointercapture => ("lostpointercapture", PointerEvent),
+        // Touch
+        touchstart        => ("touchstart", TouchEvent),
+        touchend          => ("touchend", TouchEvent),
+        touchmove         => ("touchmove", TouchEvent),
+        touchcancel       => ("touchcancel", TouchEvent),
+        // Drag and drop
+        drag              => ("drag", DragEvent),
+        dragstart         => ("dragstart", DragEvent),
+        dragend           => ("dragend", DragEvent),
+        dragenter         => ("dragenter", DragEvent),
+        dragleave         => ("dragleave", DragEvent),
+        dragover          => ("dragover", DragEvent),
+        drop              => ("drop", DragEvent),
         // Keyboard
-        keydown        => ("keydown", KeyboardEvent),
-        keyup          => ("keyup", KeyboardEvent),
-        keypress       => ("keypress", KeyboardEvent),
+        keydown           => ("keydown", KeyboardEvent),
+        keyup             => ("keyup", KeyboardEvent),
+        keypress          => ("keypress", KeyboardEvent),
+        // IME composition
+        compositionstart  => ("compositionstart", CompositionEvent),
+        compositionupdate => ("compositionupdate", CompositionEvent),
+        compositionend    => ("compositionend", CompositionEvent),
         // Focus
-        focus          => ("focus", FocusEvent),
-        blur           => ("blur", FocusEvent),
-        focusin        => ("focusin", FocusEvent),
-        focusout       => ("focusout", FocusEvent),
+        focus             => ("focus", FocusEvent),
+        blur              => ("blur", FocusEvent),
+        focusin           => ("focusin", FocusEvent),
+        focusout          => ("focusout", FocusEvent),
         // Form / input
-        input          => ("input", InputEvent),
-        change         => ("change", Event),
-        submit         => ("submit", Event),
-        reset          => ("reset", Event),
-        invalid        => ("invalid", Event),
+        input             => ("input", InputEvent),
+        change            => ("change", Event),
+        submit            => ("submit", SubmitEvent),
+        reset             => ("reset", Event),
+        invalid           => ("invalid", Event),
+        search            => ("search", Event),
+        // Selection / clipboard
+        select            => ("select", Event),
+        copy              => ("copy", ClipboardEvent),
+        cut               => ("cut", ClipboardEvent),
+        paste             => ("paste", ClipboardEvent),
+        // Animation / transition
+        animationstart    => ("animationstart", AnimationEvent),
+        animationend      => ("animationend", AnimationEvent),
+        animationiteration => ("animationiteration", AnimationEvent),
+        animationcancel   => ("animationcancel", AnimationEvent),
+        transitionstart   => ("transitionstart", TransitionEvent),
+        transitionrun     => ("transitionrun", TransitionEvent),
+        transitionend     => ("transitionend", TransitionEvent),
+        transitioncancel  => ("transitioncancel", TransitionEvent),
         // Document / window lifecycle
-        load           => ("load", Event),
-        unload         => ("unload", Event),
-        beforeunload   => ("beforeunload", Event),
-        scroll         => ("scroll", Event),
-        resize         => ("resize", UiEvent),
-        // Selection / clipboard / drag
-        select         => ("select", Event),
-        copy           => ("copy", Event),
-        cut            => ("cut", Event),
-        paste          => ("paste", Event),
+        load              => ("load", Event),
+        unload            => ("unload", Event),
+        beforeunload      => ("beforeunload", Event),
+        scroll            => ("scroll", Event),
+        scrollend         => ("scrollend", Event),
+        resize            => ("resize", UiEvent),
+        visibilitychange  => ("visibilitychange", Event),
+        fullscreenchange  => ("fullscreenchange", Event),
+        fullscreenerror   => ("fullscreenerror", Event),
+        // Errors / progress
+        error             => ("error", ErrorEvent),
+        progress          => ("progress", ProgressEvent),
+        loadstart         => ("loadstart", ProgressEvent),
+        loadend           => ("loadend", ProgressEvent),
+        // Routing / storage / connectivity
+        hashchange        => ("hashchange", HashChangeEvent),
+        popstate          => ("popstate", PopStateEvent),
+        pageshow          => ("pageshow", PageTransitionEvent),
+        pagehide          => ("pagehide", PageTransitionEvent),
+        storage           => ("storage", StorageEvent),
+        online            => ("online", Event),
+        offline           => ("offline", Event),
+        // postMessage. MediaQueryList fires its own "change" event
+        // with a different payload — reach for `on_named` if you
+        // want it typed as MediaQueryListEvent.
+        message           => ("message", MessageEvent),
+        // HTML5 details / dialog
+        toggle            => ("toggle", Event),
+        cancel            => ("cancel", Event),
+        close             => ("close", Event),
+        // Slot / slot change
+        slotchange        => ("slotchange", Event),
     }
 }
