@@ -89,6 +89,92 @@ jobs:
       - name: build (host — pocopine-cli)
         run: cargo build -p pocopine-cli
 
+  test-host:
+    name: cargo test (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-host
+      # `pine-icons` ships fs-based manifest tests; `pocopine-cli`
+      # is host-only. Other crates' #[test]s either have no
+      # host-runnable shape (gated on `cfg(target_arch = "wasm32")`)
+      # or live in `src/` and run cleanly on host. `--tests` skips
+      # doc-tests (a few example snippets reference deps the
+      # workspace doesn't carry — they're not the contract here).
+      - run: cargo test --workspace --exclude pine --tests
+
+  test-wasm-node:
+    name: wasm-pack test --node (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # Tests that run under JSDOM/Node — no DOM walker, no real
+    # event dispatch. Faster than the browser jobs and catch the
+    # bulk of the runtime regressions (reactive core, registry
+    # safety, Emit derive, ContextKey).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pocopine-core
+            crate: crates/pocopine-core
+            args: ""
+          - name: pocopine-emit-derive
+            crate: crates/pocopine
+            args: --test rfc_056_emit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-node-${{ matrix.name }}
+      - run: wasm-pack test --node ${{ matrix.crate }} ${{ matrix.args }}
+
+  test-wasm-browser:
+    name: wasm-pack test --chrome (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # Tests that need a real browser — DOM walker, MutationObserver,
+    # focus traps, pp-for keyed reorder, transitions. ubuntu-latest
+    # ships Chrome pre-installed; setup-chrome action pins a
+    # known-good version + installs the matching ChromeDriver so
+    # wasm-bindgen-test can spawn it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pocopine-walker
+            crate: crates/pocopine
+            args: --test walker
+          - name: pine
+            crate: crates/pine
+            args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: browser-actions/setup-chrome@v1
+        id: setup-chrome
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-chrome-${{ matrix.name }}
+      - name: wasm-pack test --chrome --headless
+        env:
+          CHROMEDRIVER: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+        run: wasm-pack test --chrome --headless ${{ matrix.crate }} ${{ matrix.args }}
+
   examples:
     name: examples (wasm-pack)
     runs-on: ubuntu-latest
