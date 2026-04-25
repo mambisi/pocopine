@@ -141,7 +141,11 @@ jobs:
       - name: install wasm-bindgen-cli (locked)
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen-cli
+          # Pinned to the workspace lockfile's wasm-bindgen
+          # version — the test runner ABI must match exactly or
+          # ChromeDriver returns `http status: 404` from the
+          # session-init handshake.
+          tool: wasm-bindgen-cli@0.2.118
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-node-${{ matrix.name }}
@@ -177,7 +181,11 @@ jobs:
       - name: install wasm-bindgen-cli (locked)
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen-cli
+          # Pinned to the workspace lockfile's wasm-bindgen
+          # version — the test runner ABI must match exactly or
+          # ChromeDriver returns `http status: 404` from the
+          # session-init handshake.
+          tool: wasm-bindgen-cli@0.2.118
       - uses: browser-actions/setup-chrome@v1
         id: setup-chrome
         with:
