@@ -57,15 +57,9 @@ pub(crate) fn render_template_error(
 /// back to a file-level message without a source snippet.
 /// Used when a `ParseError` surfaces without a range (e.g.
 /// inherited from html5ever without position info).
-pub(crate) fn render_fileless_error(
-    file_path: &str,
-    title: &str,
-    note: &str,
-) -> String {
+pub(crate) fn render_fileless_error(file_path: &str, title: &str, note: &str) -> String {
     let footer = format!("in {file_path}: {note}");
-    let message = Level::Error
-        .title(title)
-        .footer(Level::Note.title(&footer));
+    let message = Level::Error.title(title).footer(Level::Note.title(&footer));
     format!("{}", Renderer::styled().render(message))
 }
 
@@ -100,11 +94,7 @@ mod tests {
 
     #[test]
     fn fileless_render_includes_file_and_note() {
-        let rendered = render_fileless_error(
-            "test.poco",
-            "malformed template",
-            "unclosed tag",
-        );
+        let rendered = render_fileless_error("test.poco", "malformed template", "unclosed tag");
         assert!(rendered.contains("test.poco"));
         assert!(rendered.contains("unclosed tag"));
     }

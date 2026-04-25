@@ -84,7 +84,7 @@ pub fn lookup(variant: &str, name: &str) -> Option<&'static str> {
 /// collide with: the algorithm seeds with a nonzero offset and
 /// multiplies by a nonzero prime, so every non-empty input
 /// produces a nonzero hash.
-pub const EMPTY_ICON: (&'static str, u64) = ("", 0u64);
+pub const EMPTY_ICON: (&str, u64) = ("", 0u64);
 
 /// Same as [`lookup`] but also returns the precomputed FNV-1a
 /// hash of the SVG bytes. Useful for O(1) change detection when

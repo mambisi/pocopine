@@ -52,10 +52,7 @@ use crate::uses::UsesTable;
 ///
 /// Returns an empty `TokenStream` when `uses` is empty or the
 /// template contains no recognised typed-parent tags.
-pub(crate) fn emit_slot_assertions(
-    ast: &TemplateAst,
-    uses: &UsesTable,
-) -> TokenStream {
+pub(crate) fn emit_slot_assertions(ast: &TemplateAst, uses: &UsesTable) -> TokenStream {
     if uses.entries.is_empty() {
         return TokenStream::new();
     }
@@ -145,13 +142,7 @@ fn emit_assertions_for_parent(
                 let site = SlotName::Named(slot_name);
                 for slotted in &child_el.children {
                     if let Node::Element(slotted_el) = slotted {
-                        emit_one_assertion(
-                            parent_path,
-                            &site,
-                            slotted_el,
-                            uses,
-                            out,
-                        );
+                        emit_one_assertion(parent_path, &site, slotted_el, uses, out);
                     }
                 }
                 continue;
@@ -159,13 +150,7 @@ fn emit_assertions_for_parent(
         }
 
         // Default slot — any non-template-wrapped direct child.
-        emit_one_assertion(
-            parent_path,
-            &SlotName::Default,
-            child_el,
-            uses,
-            out,
-        );
+        emit_one_assertion(parent_path, &SlotName::Default, child_el, uses, out);
     }
 }
 
@@ -287,11 +272,7 @@ mod tests {
             <pine-item></pine-item>
         </pine-foo>"#;
         let (ast, _errors) = parse(src, "test.poco");
-        let uses = table(vec![
-            bare("PineFoo"),
-            bare("PineItem"),
-            bare("PineTitle"),
-        ]);
+        let uses = table(vec![bare("PineFoo"), bare("PineItem"), bare("PineTitle")]);
         let tokens = emit_slot_assertions(&ast, &uses);
         let s = tokens.to_string();
         assert!(
@@ -314,11 +295,7 @@ mod tests {
             </pine-inner>
         </pine-outer>"#;
         let (ast, _errors) = parse(src, "test.poco");
-        let uses = table(vec![
-            bare("PineOuter"),
-            bare("PineInner"),
-            bare("PineItem"),
-        ]);
+        let uses = table(vec![bare("PineOuter"), bare("PineInner"), bare("PineItem")]);
         let tokens = emit_slot_assertions(&ast, &uses);
         let s = tokens.to_string();
         // Two assertion blocks — both via the default-slot

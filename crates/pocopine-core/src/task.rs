@@ -88,7 +88,10 @@ pub fn spawn_latest(
     TASKS.with(|tasks| {
         let mut tasks = tasks.borrow_mut();
         let scope_tasks = tasks.entry(scope_id).or_default();
-        if let Some(prev) = scope_tasks.latest.insert(task_name.clone(), handle.inner.clone()) {
+        if let Some(prev) = scope_tasks
+            .latest
+            .insert(task_name.clone(), handle.inner.clone())
+        {
             prev.cancelled.set(true);
         }
         scope_tasks.tasks.push(handle.inner.clone());

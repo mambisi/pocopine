@@ -359,11 +359,7 @@ impl Scope {
     /// apply targeted patches against the live JS object that
     /// effects are reading.
     pub fn cached_field(&self, field: &str) -> Option<JsValue> {
-        FIELD_CACHE.with(|c| {
-            c.borrow()
-                .get(&self.id)
-                .and_then(|m| m.get(field).cloned())
-        })
+        FIELD_CACHE.with(|c| c.borrow().get(&self.id).and_then(|m| m.get(field).cloned()))
     }
 
     /// Replace the cached `JsValue` for `field`. Mostly used by
@@ -580,11 +576,7 @@ pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &
     let Some(sid) = current_scope_id() else {
         return;
     };
-    let cached = FIELD_CACHE.with(|c| {
-        c.borrow()
-            .get(&sid)
-            .and_then(|m| m.get(field).cloned())
-    });
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
     if let Some(arr) = cached {
         if arr.is_object() {
             if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {

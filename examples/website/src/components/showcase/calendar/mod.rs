@@ -70,8 +70,8 @@ impl CalendarDemo {
         {
             let js = js_sys::Date::new_0();
             let y = js.get_full_year() as i32;
-            let m = (js.get_month() + 1) as u32;
-            let d = js.get_date() as u32;
+            let m = js.get_month() + 1;
+            let d = js.get_date();
             self.placeholder = DateValue::new(y, m as u8, d as u8);
         }
     }

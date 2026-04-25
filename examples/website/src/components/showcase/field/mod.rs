@@ -1,6 +1,4 @@
-use pine::{
-    PineFieldControl, PineFieldDescription, PineFieldError, PineFieldLabel, PineFieldRoot,
-};
+use pine::{PineFieldControl, PineFieldDescription, PineFieldError, PineFieldLabel, PineFieldRoot};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 

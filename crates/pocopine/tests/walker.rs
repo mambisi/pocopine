@@ -2643,20 +2643,14 @@ async fn computed_fields_render_and_update_reactively() {
     assert_eq!(summary.text_content().as_deref(), Some("Ada Lovelace"));
 
     let rename = host.query_selector("#rename").unwrap().unwrap();
-    rename
-        .dyn_ref::<HtmlElement>()
-        .unwrap()
-        .click();
+    rename.dyn_ref::<HtmlElement>().unwrap().click();
     tick().await;
 
     assert_eq!(full.text_content().as_deref(), Some("Grace Hopper"));
     assert_eq!(summary.text_content().as_deref(), Some("Grace Hopper"));
 
     let toggle = host.query_selector("#toggle").unwrap().unwrap();
-    toggle
-        .dyn_ref::<HtmlElement>()
-        .unwrap()
-        .click();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
     tick().await;
 
     assert_eq!(
@@ -2736,11 +2730,26 @@ async fn empty_pool_compiled_mount_renders_all_rows() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 1, label: "alpha".into() },
-            Row { id: 2, label: "bravo".into() },
-            Row { id: 3, label: "charlie".into() },
-            Row { id: 4, label: "delta".into() },
-            Row { id: 5, label: "echo".into() },
+            Row {
+                id: 1,
+                label: "alpha".into(),
+            },
+            Row {
+                id: 2,
+                label: "bravo".into(),
+            },
+            Row {
+                id: 3,
+                label: "charlie".into(),
+            },
+            Row {
+                id: 4,
+                label: "delta".into(),
+            },
+            Row {
+                id: 5,
+                label: "echo".into(),
+            },
         ],
     );
     tick().await;
@@ -2771,9 +2780,18 @@ async fn remount_after_bulk_clear() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 1, label: "one".into() },
-            Row { id: 2, label: "two".into() },
-            Row { id: 3, label: "three".into() },
+            Row {
+                id: 1,
+                label: "one".into(),
+            },
+            Row {
+                id: 2,
+                label: "two".into(),
+            },
+            Row {
+                id: 3,
+                label: "three".into(),
+            },
         ],
     );
     tick().await;
@@ -2788,8 +2806,14 @@ async fn remount_after_bulk_clear() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 10, label: "x".into() },
-            Row { id: 11, label: "y".into() },
+            Row {
+                id: 10,
+                label: "x".into(),
+            },
+            Row {
+                id: 11,
+                label: "y".into(),
+            },
         ],
     );
     tick().await;
@@ -2817,9 +2841,18 @@ async fn delegated_listener_after_proxy_elision() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 1, label: "a".into() },
-            Row { id: 2, label: "b".into() },
-            Row { id: 3, label: "c".into() },
+            Row {
+                id: 1,
+                label: "a".into(),
+            },
+            Row {
+                id: 2,
+                label: "b".into(),
+            },
+            Row {
+                id: 3,
+                label: "c".into(),
+            },
         ],
     );
     tick().await;
@@ -2835,9 +2868,15 @@ async fn delegated_listener_after_proxy_elision() {
     tick().await;
 
     // Selected_id became 2 → row 2's :class must now be 'sel'.
-    let row1_class = bulk_li_at(&host, 0).get_attribute("class").unwrap_or_default();
-    let row2_class = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
-    let row3_class = bulk_li_at(&host, 2).get_attribute("class").unwrap_or_default();
+    let row1_class = bulk_li_at(&host, 0)
+        .get_attribute("class")
+        .unwrap_or_default();
+    let row2_class = bulk_li_at(&host, 1)
+        .get_attribute("class")
+        .unwrap_or_default();
+    let row3_class = bulk_li_at(&host, 2)
+        .get_attribute("class")
+        .unwrap_or_default();
     assert_eq!(row1_class, "", "row 1 not selected");
     assert_eq!(row2_class, "sel", "row 2 should carry .sel");
     assert_eq!(row3_class, "", "row 3 not selected");
@@ -2852,8 +2891,12 @@ async fn delegated_listener_after_proxy_elision() {
     btn3.click();
     tick().await;
 
-    let row2_class = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
-    let row3_class = bulk_li_at(&host, 2).get_attribute("class").unwrap_or_default();
+    let row2_class = bulk_li_at(&host, 1)
+        .get_attribute("class")
+        .unwrap_or_default();
+    let row3_class = bulk_li_at(&host, 2)
+        .get_attribute("class")
+        .unwrap_or_default();
     assert_eq!(row2_class, "", "row 2 should clear after row 3 picked");
     assert_eq!(row3_class, "sel", "row 3 should carry .sel");
 }
@@ -2874,8 +2917,14 @@ async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 1, label: "a".into() },
-            Row { id: 2, label: "b".into() },
+            Row {
+                id: 1,
+                label: "a".into(),
+            },
+            Row {
+                id: 2,
+                label: "b".into(),
+            },
         ],
     );
     tick().await;
@@ -2889,8 +2938,14 @@ async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 10, label: "x".into() },
-            Row { id: 11, label: "y".into() },
+            Row {
+                id: 10,
+                label: "x".into(),
+            },
+            Row {
+                id: 11,
+                label: "y".into(),
+            },
         ],
     );
     tick().await;
@@ -2903,7 +2958,10 @@ async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
     // by the observer already.
     seed_bulk_rows(
         &host,
-        &[Row { id: 10, label: "x".into() }],
+        &[Row {
+            id: 10,
+            label: "x".into(),
+        }],
     );
     tick().await;
     assert_eq!(bulk_li_count(&host), 1);
@@ -2915,9 +2973,18 @@ async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 10, label: "x".into() },
-            Row { id: 11, label: "y2".into() },
-            Row { id: 12, label: "z".into() },
+            Row {
+                id: 10,
+                label: "x".into(),
+            },
+            Row {
+                id: 11,
+                label: "y2".into(),
+            },
+            Row {
+                id: 12,
+                label: "z".into(),
+            },
         ],
     );
     tick().await;
@@ -2968,8 +3035,14 @@ async fn lever5_watcher_reinstalls_after_bulk_clear() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 1, label: "a".into() },
-            Row { id: 2, label: "b".into() },
+            Row {
+                id: 1,
+                label: "a".into(),
+            },
+            Row {
+                id: 2,
+                label: "b".into(),
+            },
         ],
     );
     tick().await;
@@ -2984,8 +3057,14 @@ async fn lever5_watcher_reinstalls_after_bulk_clear() {
     seed_bulk_rows(
         &host,
         &[
-            Row { id: 7, label: "g".into() },
-            Row { id: 8, label: "h".into() },
+            Row {
+                id: 7,
+                label: "g".into(),
+            },
+            Row {
+                id: 8,
+                label: "h".into(),
+            },
         ],
     );
     tick().await;
@@ -2999,7 +3078,9 @@ async fn lever5_watcher_reinstalls_after_bulk_clear() {
     btn.click();
     tick().await;
 
-    let cls = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
+    let cls = bulk_li_at(&host, 1)
+        .get_attribute("class")
+        .unwrap_or_default();
     assert_eq!(
         cls, "sel",
         "list-level watcher must re-install on the cold-pool re-mount"

@@ -73,15 +73,10 @@ pub type WeekStartsOn = u8;
 /// Format spec for the weekday labels in a calendar header.
 /// Mirrors reka's `WeekDayFormat` union; renderers are free to
 /// ignore it for v1 and ship English short names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WeekDayFormat {
     Narrow,
+    #[default]
     Short,
     Long,
-}
-
-impl Default for WeekDayFormat {
-    fn default() -> Self {
-        WeekDayFormat::Short
-    }
 }

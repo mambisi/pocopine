@@ -3,19 +3,41 @@ use wasm_bindgen::prelude::*;
 use web_sys::window;
 
 const ADJECTIVES: &[&str] = &[
-    "pretty", "large", "big", "small", "tall", "short", "long", "handsome", "plain",
-    "quaint", "clean", "elegant", "easy", "angry", "crazy", "helpful", "mushy", "odd",
-    "unsightly", "adorable", "important", "inexpensive", "cheap", "expensive", "fancy",
+    "pretty",
+    "large",
+    "big",
+    "small",
+    "tall",
+    "short",
+    "long",
+    "handsome",
+    "plain",
+    "quaint",
+    "clean",
+    "elegant",
+    "easy",
+    "angry",
+    "crazy",
+    "helpful",
+    "mushy",
+    "odd",
+    "unsightly",
+    "adorable",
+    "important",
+    "inexpensive",
+    "cheap",
+    "expensive",
+    "fancy",
 ];
 
 const COLOURS: &[&str] = &[
-    "red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white",
-    "black", "orange",
+    "red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black",
+    "orange",
 ];
 
 const NOUNS: &[&str] = &[
-    "table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich",
-    "burger", "pizza", "mouse", "keyboard",
+    "table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger",
+    "pizza", "mouse", "keyboard",
 ];
 
 #[derive(Clone, PartialEq)]

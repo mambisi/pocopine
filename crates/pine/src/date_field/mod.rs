@@ -300,7 +300,7 @@ impl PineDateField {
         let next = s.to_date();
         if next != self.value {
             self.value = next;
-            emit_model_field("value", &self.value);
+            emit_model_field("value", self.value);
         }
     }
 

@@ -1,6 +1,6 @@
 use pine::{
-    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineHoverCardContent,
-    PineHoverCardPortal, PineHoverCardRoot, PineHoverCardTrigger,
+    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineHoverCardContent, PineHoverCardPortal,
+    PineHoverCardRoot, PineHoverCardTrigger,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};

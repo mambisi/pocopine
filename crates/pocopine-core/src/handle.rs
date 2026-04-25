@@ -33,9 +33,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::reactive::{trigger_scope, ScopeId};
-use crate::scope::{
-    current_scope_id, invalidate_field_cache, with_current_scope_id, Scope,
-};
+use crate::scope::{current_scope_id, invalidate_field_cache, with_current_scope_id, Scope};
 
 /// Typed handle onto a component or store scope.
 ///

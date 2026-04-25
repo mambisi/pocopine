@@ -79,7 +79,7 @@ pub struct TimeSegments {
 impl TimeSegments {
     /// Parse a native-input `HH:MM` or `HH:MM:SS` value. Empty
     /// or malformed input yields empty segments.
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         let mut s = Self::default();
         let mut parts = value.split(':');
         if let Some(h) = parts.next().and_then(|p| p.trim().parse::<u8>().ok()) {
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn parse_hh_mm() {
-        let s = TimeSegments::from_str("09:30");
+        let s = TimeSegments::parse("09:30");
         assert_eq!(s.hour, Some(9));
         assert_eq!(s.minute, Some(30));
         assert_eq!(s.second, None);
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn parse_hh_mm_ss() {
-        let s = TimeSegments::from_str("09:30:45");
+        let s = TimeSegments::parse("09:30:45");
         assert_eq!(s.hour, Some(9));
         assert_eq!(s.minute, Some(30));
         assert_eq!(s.second, Some(45));
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn parse_garbage_is_empty() {
-        let s = TimeSegments::from_str("not a time");
+        let s = TimeSegments::parse("not a time");
         assert_eq!(s, TimeSegments::default());
     }
 

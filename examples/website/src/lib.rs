@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 use components::showcase::{
     AccordionDemo, AlertDialogDemo, AnimationDemo, AspectRatioDemo, AvatarDemo, Basics, ButtonDemo,
     CalendarDemo, CmdPopoverDemo, CollapsibleDemo, ComboboxDemo, CommandDemo, ContextMenuDemo,
-    DatePickerDemo, DateRangePickerDemo, DatetimeFieldsDemo, DialogDemo, DropdownMenuDemo, FieldDemo, FieldsetDemo,
-    FormDemo, HoverCardDemo, InputDemo, OtpDemo, PinCardDemo, PopoverDemo, RadioGroupDemo,
-    RangeCalendarDemo, ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo, SplitterDemo,
-    StressDemo, SwitchCheckboxDemo, TabsDemo, TagsInputDemo, TagsMentionsDemo, TagsSkillsDemo,
-    TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
+    DatePickerDemo, DateRangePickerDemo, DatetimeFieldsDemo, DialogDemo, DropdownMenuDemo,
+    FieldDemo, FieldsetDemo, FormDemo, HoverCardDemo, InputDemo, OtpDemo, PinCardDemo, PopoverDemo,
+    RadioGroupDemo, RangeCalendarDemo, ScrollAreaDemo, SelectDemo, SignupDemo, SliderDemo,
+    SplitterDemo, StressDemo, SwitchCheckboxDemo, TabsDemo, TagsInputDemo, TagsMentionsDemo,
+    TagsSkillsDemo, TextDemo, ToggleDemo, ToolbarDemo, TooltipDemo, TreeDemo,
 };
 use components::{Hero, Showcase, ShowcaseCard, SiteHeader, Tutorial};
 

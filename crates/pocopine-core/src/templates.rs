@@ -204,7 +204,6 @@ fn find_tag_end(bytes: &[u8], tag_start: usize) -> Option<usize> {
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{compile_template, inject_pp_data};
@@ -309,5 +308,4 @@ mod tests {
         assert!(out.contains(r#"pp-data="pine-avatar-image""#));
         assert!(out.ends_with("/>"));
     }
-
 }

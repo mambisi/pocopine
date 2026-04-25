@@ -154,9 +154,9 @@ pub fn are_all_days_between_valid(
         return true;
     }
     let bad = |d: &DateValue| -> bool {
-        let disabled = is_disabled.map_or(false, |f| f(d));
-        let unavailable = is_unavailable.map_or(false, |f| f(d));
-        let saved = is_highlightable.map_or(false, |f| f(d));
+        let disabled = is_disabled.is_some_and(|f| f(d));
+        let unavailable = is_unavailable.is_some_and(|f| f(d));
+        let saved = is_highlightable.is_some_and(|f| f(d));
         (disabled || unavailable) && !saved
     };
 
@@ -185,7 +185,7 @@ pub fn are_all_months_between_valid(
     let mut cur = start.set_day(1);
     let end_month = end.set_day(1);
     while compare_year_month(&cur, &end_month) <= 0 {
-        if is_disabled.map_or(false, |f| f(&cur)) || is_unavailable.map_or(false, |f| f(&cur)) {
+        if is_disabled.is_some_and(|f| f(&cur)) || is_unavailable.is_some_and(|f| f(&cur)) {
             return false;
         }
         cur = cur.add_months(1);
@@ -205,7 +205,7 @@ pub fn are_all_years_between_valid(
     let mut cur = start.set_day(1).set_month(1);
     let end_year = end.year();
     while cur.year() <= end_year {
-        if is_disabled.map_or(false, |f| f(&cur)) || is_unavailable.map_or(false, |f| f(&cur)) {
+        if is_disabled.is_some_and(|f| f(&cur)) || is_unavailable.is_some_and(|f| f(&cur)) {
             return false;
         }
         cur = cur.add_years(1);

@@ -1560,16 +1560,17 @@ fn install_observer(root: &Element) {
             // state torn down synchronously. Skip the per-node
             // `release_subtree` walk + recursive `Reflect::get`
             // sweeps. Saves ~30-50ms on a 10K-row clear.
-            let bulk_skip = rec.target().and_then(|t| t.dyn_into::<Element>().ok()).and_then(
-                |parent_el| {
+            let bulk_skip = rec
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|parent_el| {
                     if get_private(&parent_el, BULK_RELEASE_KEY).is_some() {
                         bulk_release_parents.push(parent_el);
                         Some(())
                     } else {
                         None
                     }
-                },
-            );
+                });
 
             // "Removed" records report nodes detached from *this*
             // parent. When we reparent an element (a keyed `pp-for`

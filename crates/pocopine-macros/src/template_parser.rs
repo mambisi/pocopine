@@ -438,16 +438,13 @@ impl<'a> Mapper<'a> {
     /// opening `<tagname` that corresponds to a real element.
     fn skip_insignificant_and_text(&mut self) {
         loop {
-            while self.cursor < self.source.len()
-                && self.source[self.cursor].is_ascii_whitespace()
+            while self.cursor < self.source.len() && self.source[self.cursor].is_ascii_whitespace()
             {
                 self.cursor += 1;
             }
             if !self.peek_seq(b"<") {
                 // Stray text content — advance until next `<`.
-                while self.cursor < self.source.len()
-                    && self.source[self.cursor] != b'<'
-                {
+                while self.cursor < self.source.len() && self.source[self.cursor] != b'<' {
                     self.cursor += 1;
                 }
                 if self.cursor >= self.source.len() {
@@ -506,8 +503,7 @@ fn find_seq(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || start + needle.len() > bytes.len() {
         return None;
     }
-    (start..=bytes.len() - needle.len())
-        .find(|&i| &bytes[i..i + needle.len()] == needle)
+    (start..=bytes.len() - needle.len()).find(|&i| &bytes[i..i + needle.len()] == needle)
 }
 
 /// Find the `>` that closes the opening tag starting at
@@ -547,9 +543,7 @@ fn find_close_tag(bytes: &[u8], start: usize, tag: &str) -> Option<Range<usize>>
             let name_start = i + 2;
             if name_start + tag_bytes.len() <= bytes.len() {
                 let candidate = &bytes[name_start..name_start + tag_bytes.len()];
-                let matches = candidate.iter().zip(tag_bytes).all(|(a, b)| {
-                    a.to_ascii_lowercase() == b.to_ascii_lowercase()
-                });
+                let matches = candidate.eq_ignore_ascii_case(tag_bytes);
                 if matches {
                     // Next byte should be whitespace or `>`.
                     let next = bytes.get(name_start + tag_bytes.len()).copied();
@@ -570,8 +564,8 @@ fn find_close_tag(bytes: &[u8], start: usize, tag: &str) -> Option<Range<usize>>
 /// never carry a `</tag>` close. Kept in sync with the list in
 /// `pocopine-core/src/templates.rs`.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
-    "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
 ];
 
 fn is_void_element(tag: &str) -> bool {
@@ -585,7 +579,9 @@ fn is_void_element(tag: &str) -> bool {
 const FOREIGN_CONTENT_ROOTS: &[&str] = &["svg", "math"];
 
 fn is_foreign_content_root(tag: &str) -> bool {
-    FOREIGN_CONTENT_ROOTS.iter().any(|v| v.eq_ignore_ascii_case(tag))
+    FOREIGN_CONTENT_ROOTS
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case(tag))
 }
 
 /// RFC 050 explicit rule: `<tagname/>` self-close is only valid
@@ -776,10 +772,7 @@ fn source_tag_matches(bytes: &[u8], open_lt: usize, tag: &str) -> bool {
         return false;
     }
     let tag_bytes = tag.as_bytes();
-    bytes[name_start..name_end]
-        .iter()
-        .zip(tag_bytes)
-        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    bytes[name_start..name_end].eq_ignore_ascii_case(tag_bytes)
 }
 
 /// RcDom's fragment parsing nests the user's content inside an
@@ -816,11 +809,8 @@ fn collect_fragment_roots(
     out
 }
 
-fn convert_node(
-    handle: &Handle,
-    source: &str,
-    errors: &mut Vec<ParseError>,
-) -> Option<Node> {
+#[allow(clippy::only_used_in_recursion)]
+fn convert_node(handle: &Handle, source: &str, errors: &mut Vec<ParseError>) -> Option<Node> {
     match &handle.data {
         NodeData::Element {
             name,
@@ -838,10 +828,12 @@ fn convert_node(
             let attrs: Vec<(String, String)> = attrs_ref
                 .borrow()
                 .iter()
-                .map(|a| (
-                    a.name.local.to_string().to_ascii_lowercase(),
-                    a.value.to_string(),
-                ))
+                .map(|a| {
+                    (
+                        a.name.local.to_string().to_ascii_lowercase(),
+                        a.value.to_string(),
+                    )
+                })
                 .collect();
 
             let mut children: Vec<Node> = Vec::new();
@@ -882,9 +874,7 @@ fn convert_node(
             let text = contents.borrow().to_string();
             Some(Node::Text(text, 0..0))
         }
-        NodeData::Comment { contents } => {
-            Some(Node::Comment(contents.to_string(), 0..0))
-        }
+        NodeData::Comment { contents } => Some(Node::Comment(contents.to_string(), 0..0)),
         // Doctype / ProcessingInstruction / Document are either
         // filtered by parse options (doctype) or don't occur
         // inside a fragment tree.
@@ -908,19 +898,12 @@ fn source_contains_tag_opener(source: &str, tag: &str) -> bool {
     let mut i = 0;
     while i + n <= src.len() {
         let candidate = &src[i..i + n];
-        if candidate
-            .iter()
-            .zip(needle)
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
-        {
+        if candidate.eq_ignore_ascii_case(needle) {
             // Confirm next byte is a tag delimiter.
             match src.get(i + n) {
                 None => return true,
                 Some(&b) => {
-                    if b.is_ascii_whitespace()
-                        || b == b'>'
-                        || b == b'/'
-                    {
+                    if b.is_ascii_whitespace() || b == b'>' || b == b'/' {
                         return true;
                     }
                 }
@@ -941,7 +924,7 @@ mod tests {
         ast
     }
 
-    fn elem<'a>(node: &'a Node) -> &'a Element {
+    fn elem(node: &Node) -> &Element {
         node.as_element().expect("expected element node")
     }
 
@@ -985,7 +968,10 @@ mod tests {
         // diagnostic will land with byte ranges; this test only
         // pins down that we *do* surface an error today.
         let (ast, errors) = parse(r#"<div a="1" a="2">x</div>"#, "test.poco");
-        assert!(!errors.is_empty(), "expected parser error for duplicate attr");
+        assert!(
+            !errors.is_empty(),
+            "expected parser error for duplicate attr"
+        );
         let root = elem(&ast.roots[0]);
         // html5ever retains the first occurrence; we don't
         // invent additional deduping on top.
@@ -1144,7 +1130,10 @@ mod tests {
         let src = "<div><span>inner</span></div>";
         let ast = parse_ok(src);
         let root = ast.element_roots().next().unwrap();
-        assert_eq!(slice(src, &root.byte_range), "<div><span>inner</span></div>");
+        assert_eq!(
+            slice(src, &root.byte_range),
+            "<div><span>inner</span></div>"
+        );
         let span = root.children[0].as_element().unwrap();
         assert_eq!(slice(src, &span.opening_tag_range), "<span>");
         assert_eq!(slice(src, &span.byte_range), "<span>inner</span>");
@@ -1155,7 +1144,10 @@ mod tests {
         let src = r#"<input type="text"/>"#;
         let ast = parse_ok(src);
         let root = ast.element_roots().next().unwrap();
-        assert_eq!(slice(src, &root.opening_tag_range), r#"<input type="text"/>"#);
+        assert_eq!(
+            slice(src, &root.opening_tag_range),
+            r#"<input type="text"/>"#
+        );
         // Self-closing: byte_range == opening_tag_range.
         assert_eq!(root.byte_range, root.opening_tag_range);
     }
@@ -1197,7 +1189,10 @@ mod tests {
         let src = "<div\n  class=\"x\"\n  id=\"y\"\n>\n  inside\n</div>";
         let ast = parse_ok(src);
         let root = ast.element_roots().next().unwrap();
-        assert_eq!(slice(src, &root.opening_tag_range), "<div\n  class=\"x\"\n  id=\"y\"\n>");
+        assert_eq!(
+            slice(src, &root.opening_tag_range),
+            "<div\n  class=\"x\"\n  id=\"y\"\n>"
+        );
         assert_eq!(slice(src, &root.byte_range), src);
     }
 
@@ -1383,9 +1378,7 @@ mod tests {
         let src = "<div><pine-foo/></div>";
         let (_ast, errors) = parse(src, "test.poco");
         assert!(
-            errors
-                .iter()
-                .any(|e| e.message.contains("`<pine-foo/>`")),
+            errors.iter().any(|e| e.message.contains("`<pine-foo/>`")),
             "expected self-close error on custom element, got: {errors:?}"
         );
     }
@@ -1438,7 +1431,10 @@ mod tests {
     fn parse_strict_rejects_forbidden_self_close() {
         let src = "<root><slot/></root>";
         let err = parse_strict(src, "test.poco").err();
-        assert!(err.is_some(), "parse_strict must reject forbidden self-close");
+        assert!(
+            err.is_some(),
+            "parse_strict must reject forbidden self-close"
+        );
     }
 
     // ── Table-rooted templates (Pine calendar regression) ───
