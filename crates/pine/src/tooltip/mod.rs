@@ -34,7 +34,6 @@ use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{Event, EventTarget};
 
 const SLUG: &str = "tooltip";
 
@@ -123,10 +122,10 @@ thread_local! {
 #[allow(dead_code)]
 struct TriggerRuntime {
     trigger_el: Option<web_sys::Element>,
-    enter: Option<Closure<dyn FnMut(Event)>>,
-    leave: Option<Closure<dyn FnMut(Event)>>,
-    focus: Option<Closure<dyn FnMut(Event)>>,
-    blur: Option<Closure<dyn FnMut(Event)>>,
+    // The four hover/focus listeners on the trigger element. The
+    // `Vec<ListenerHandle>` owns the closures — dropping the runtime
+    // (in `teardown_trigger_runtime`) auto-detaches them.
+    listeners: Vec<pocopine::events::ListenerHandle>,
     pending_timer: Option<i32>,
 }
 
@@ -261,70 +260,56 @@ fn install_trigger_listeners(
     trigger_el: web_sys::Element,
     root: Handle<PineTooltipRoot>,
 ) {
-    let enter = {
-        let root = root.clone();
-        Closure::wrap(Box::new(move |_ev: Event| {
-            let delay = root.with(|r| r.delay_duration);
-            let root_for_timer = root.clone();
-            let timer_cb = Closure::once(Box::new(move || {
-                root_for_timer.update(|s| s.open = true);
-            }) as Box<dyn FnOnce()>);
-            let js = timer_cb.into_js_value();
-            if let Some(w) = web_sys::window() {
-                if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                    js.unchecked_ref(),
-                    delay as i32,
-                ) {
-                    RUNTIME.with(|r| {
-                        if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-                            if let Some(prev) = rt.pending_timer.take() {
-                                w.clear_timeout_with_handle(prev);
-                            }
-                            rt.pending_timer = Some(id);
+    use pocopine::events::{self, ev};
+
+    let enter_root = root.clone();
+    let enter = events::on(&trigger_el, ev::mouseenter, move |_e| {
+        let delay = enter_root.with(|r| r.delay_duration);
+        let root_for_timer = enter_root.clone();
+        let timer_cb = Closure::once(Box::new(move || {
+            root_for_timer.update(|s| s.open = true);
+        }) as Box<dyn FnOnce()>);
+        let js = timer_cb.into_js_value();
+        if let Some(w) = web_sys::window() {
+            if let Ok(id) = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                js.unchecked_ref(),
+                delay as i32,
+            ) {
+                RUNTIME.with(|r| {
+                    if let Some(rt) = r.borrow_mut().get_mut(&scope) {
+                        if let Some(prev) = rt.pending_timer.take() {
+                            w.clear_timeout_with_handle(prev);
                         }
-                    });
-                }
+                        rt.pending_timer = Some(id);
+                    }
+                });
             }
-        }) as Box<dyn FnMut(Event)>)
-    };
+        }
+    });
 
-    let leave = {
-        let root = root.clone();
-        Closure::wrap(Box::new(move |_ev: Event| {
-            cancel_pending_and_close(scope, &root);
-        }) as Box<dyn FnMut(Event)>)
-    };
-    let focus = {
-        let root = root.clone();
-        Closure::wrap(Box::new(move |_ev: Event| {
-            root.update(|s| s.open = true);
-        }) as Box<dyn FnMut(Event)>)
-    };
-    let blur = {
-        let root = root.clone();
-        Closure::wrap(Box::new(move |_ev: Event| {
-            cancel_pending_and_close(scope, &root);
-        }) as Box<dyn FnMut(Event)>)
-    };
+    let leave_root = root.clone();
+    let leave = events::on(&trigger_el, ev::mouseleave, move |_e| {
+        cancel_pending_and_close(scope, &leave_root);
+    });
 
-    let target: &EventTarget = trigger_el.as_ref();
-    let _ = target.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
     // `focusin` + `focusout` bubble, so they fire for focus on a
     // descendant (e.g. the user's <button> slotted into Trigger's
     // `<span>` wrapper). Plain `focus` / `blur` don't bubble.
-    let _ = target.add_event_listener_with_callback("focusin", focus.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("focusout", blur.as_ref().unchecked_ref());
+    let focus_root = root.clone();
+    let focus = events::on(&trigger_el, ev::focusin, move |_e| {
+        focus_root.update(|s| s.open = true);
+    });
+
+    let blur = events::on(&trigger_el, ev::focusout, move |_e| {
+        cancel_pending_and_close(scope, &root);
+    });
 
     RUNTIME.with(|r| {
         r.borrow_mut().insert(
             scope,
             TriggerRuntime {
                 trigger_el: Some(trigger_el),
-                enter: Some(enter),
-                leave: Some(leave),
-                focus: Some(focus),
-                blur: Some(blur),
+                listeners: vec![enter, leave, focus, blur],
                 pending_timer: None,
             },
         );
@@ -345,27 +330,13 @@ fn cancel_pending_and_close(scope: ScopeId, root: &Handle<PineTooltipRoot>) {
 }
 
 fn teardown(scope: ScopeId) {
+    // Removing the runtime drops the `Vec<ListenerHandle>` whose
+    // destructor detaches every trigger listener at once. We still
+    // need to clear the pending open-timer manually since it lives
+    // outside the listener system.
     let Some(rt) = RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
         return;
     };
-    let Some(trigger_el) = rt.trigger_el.as_ref() else {
-        return;
-    };
-    let target: &EventTarget = trigger_el.as_ref();
-    if let Some(c) = rt.enter.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.leave.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.focus.as_ref() {
-        let _ = target.remove_event_listener_with_callback("focusin", c.as_ref().unchecked_ref());
-    }
-    if let Some(c) = rt.blur.as_ref() {
-        let _ = target.remove_event_listener_with_callback("focusout", c.as_ref().unchecked_ref());
-    }
     if let Some(w) = web_sys::window() {
         if let Some(id) = rt.pending_timer {
             w.clear_timeout_with_handle(id);
