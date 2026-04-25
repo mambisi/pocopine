@@ -40,13 +40,13 @@
 //! </pine-hover-card-root>
 //! ```
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use crate::compound;
-use pocopine::events::{self, ev, ListenerHandle};
+use pocopine::events::{self, ev};
 use pocopine::prelude::*;
-use pocopine::{create_context, refs, ScopeId};
+use pocopine::{create_context, refs};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -55,33 +55,21 @@ const SLUG: &str = "hover-card";
 
 create_context!(ROOT: Handle<PineHoverCardRoot>);
 
-// Per-Root runtime: the pending open/close timer, keyed on Root's
-// scope id so both Trigger and Content can reach into the same
-// slot. Storing on Root (not per-Trigger) lets Content's
-// mouse-enter cancel the close timer that Trigger's mouse-leave
-// started — the two parts share the timer because they share
-// the "is hovering the combined surface?" state.
-thread_local! {
-    static RUNTIME: RefCell<HashMap<ScopeId, RootRuntime>> =
-        RefCell::new(HashMap::new());
+// Shared open/close timer cells — Root provides one of these on
+// setup; Trigger and Content both `inject()` it so their listeners
+// can read and cancel the same pair of pending timers.
+//
+// Storing on Root (rather than per-Trigger) lets Content's
+// mouseenter cancel the close timer Trigger's mouseleave started —
+// the two parts share the timer because they share the "is
+// hovering the combined surface?" state.
+#[derive(Default)]
+struct HoverState {
+    pending_open: Cell<Option<i32>>,
+    pending_close: Cell<Option<i32>>,
 }
 
-#[derive(Default)]
-struct RootRuntime {
-    pending_open: Option<i32>,
-    pending_close: Option<i32>,
-    /// Listener handles retained for teardown — Trigger + Content
-    /// each stash theirs here so the listeners detach on
-    /// `on_unmount` (dropping the Vec runs each handle's destructor).
-    /// `dead_code` doesn't model destructor side-effects, hence the
-    /// per-field allow.
-    #[allow(dead_code)]
-    trigger_listeners: Vec<ListenerHandle>,
-    trigger_el: Option<web_sys::Element>,
-    #[allow(dead_code)]
-    content_listeners: Vec<ListenerHandle>,
-    content_el: Option<web_sys::Element>,
-}
+create_context!(STATE: Rc<HoverState>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -121,6 +109,19 @@ impl Default for PineHoverCardRoot {
 impl PineHoverCardRoot {
     pub fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
+        // Mint the shared timer cells — Trigger and Content inject
+        // them to coordinate the open/close debounce across the
+        // combined hover surface.
+        STATE.provide(Rc::new(HoverState::default()));
+    }
+
+    pub fn on_unmount(&mut self) {
+        // Listeners auto-detach with their own scopes; only the
+        // outstanding setTimeout handles need clearing.
+        if let Some(state) = STATE.inject() {
+            cancel_open(&state);
+            cancel_close(&state);
+        }
     }
 }
 
@@ -138,50 +139,39 @@ pub struct PineHoverCardTrigger {}
 impl PineHoverCardTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
+        let Some(state) = STATE.inject() else { return };
         let root_id = root.scope_id();
         // Stamp the trigger element with the Root's scope id so
         // Content's anchor selector resolves to it.
         if let Some(el) = refs::get_on(root_id, "trigger").or_else(|| refs.get("trigger")) {
             compound::stamp_trigger(&el, root_id, SLUG);
-            install_trigger_listeners(root_id, el, root);
-        }
-    }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(root) = ROOT.inject() {
-            teardown_trigger(root.scope_id());
+            install_trigger_listeners(el, root, state);
         }
     }
 }
 
 fn install_trigger_listeners(
-    root_id: ScopeId,
     trigger_el: web_sys::Element,
     root: Handle<PineHoverCardRoot>,
+    state: Rc<HoverState>,
 ) {
-    let open_scheduler = make_open_scheduler(root_id, root.clone());
-    let close_scheduler = make_close_scheduler(root_id, root.clone());
-    let mouseenter_open = open_scheduler.clone();
-    let enter = events::on(&trigger_el, ev::mouseenter, move |_e| mouseenter_open());
-    let mouseleave_close = close_scheduler.clone();
-    let leave = events::on(&trigger_el, ev::mouseleave, move |_e| mouseleave_close());
+    let open = make_open_scheduler(root.clone(), state.clone());
+    let close = make_close_scheduler(root.clone(), state.clone());
+
+    let open_for_enter = open.clone();
+    events::on_scoped(&trigger_el, ev::mouseenter, move |_e| open_for_enter());
+    let close_for_leave = close.clone();
+    events::on_scoped(&trigger_el, ev::mouseleave, move |_e| close_for_leave());
+
     // Focus opens immediately (no delay) to match keyboard-user
     // expectations — matches Radix's HoverCard behaviour.
-    let focus_root = root.clone();
-    let focus = events::on(&trigger_el, ev::focusin, move |_e| {
-        cancel_close(root_id);
+    let focus_state = state.clone();
+    let focus_root = root;
+    events::on_scoped(&trigger_el, ev::focusin, move |_e| {
+        cancel_close(&focus_state);
         focus_root.update(|s| s.open = true);
     });
-    let blur = events::on(&trigger_el, ev::focusout, move |_e| close_scheduler());
-
-    RUNTIME.with(|r| {
-        let mut map = r.borrow_mut();
-        let entry = map.entry(root_id).or_default();
-        entry.trigger_el = Some(trigger_el);
-        entry.trigger_listeners = vec![enter, leave, focus, blur];
-    });
-    // Suppress an unused-warning when only some events use `root`.
-    let _ = root;
+    events::on_scoped(&trigger_el, ev::focusout, move |_e| close());
 }
 
 /// Build a callable that schedules `open = true` after `open_delay`.
@@ -189,29 +179,20 @@ fn install_trigger_listeners(
 /// a tracked surface, so we don't want the card to close under us.
 /// Wrapped in `Rc` so the same scheduler can be cloned into multiple
 /// listener closures without rebuilding the timer-bookkeeping state.
-fn make_open_scheduler(root_id: ScopeId, root: Handle<PineHoverCardRoot>) -> std::rc::Rc<dyn Fn()> {
-    std::rc::Rc::new(move || {
-        cancel_close(root_id);
+fn make_open_scheduler(root: Handle<PineHoverCardRoot>, state: Rc<HoverState>) -> Rc<dyn Fn()> {
+    Rc::new(move || {
+        cancel_close(&state);
         // Don't restart the open timer if one is already pending —
         // a second mouseenter on the same surface during the delay
         // window should keep the original countdown.
-        let has_pending_open = RUNTIME.with(|r| {
-            r.borrow()
-                .get(&root_id)
-                .and_then(|e| e.pending_open)
-                .is_some()
-        });
-        if has_pending_open {
+        if state.pending_open.get().is_some() {
             return;
         }
         let delay = root.with(|r| r.open_delay);
         let root_for_timer = root.clone();
+        let state_for_timer = state.clone();
         let timer_cb = Closure::once(Box::new(move || {
-            RUNTIME.with(|r| {
-                if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                    e.pending_open = None;
-                }
-            });
+            state_for_timer.pending_open.set(None);
             root_for_timer.update(|s| s.open = true);
         }) as Box<dyn FnOnce()>);
         if let Some(w) = web_sys::window() {
@@ -219,11 +200,7 @@ fn make_open_scheduler(root_id: ScopeId, root: Handle<PineHoverCardRoot>) -> std
                 timer_cb.into_js_value().unchecked_ref(),
                 delay as i32,
             ) {
-                RUNTIME.with(|r| {
-                    if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                        e.pending_open = Some(id);
-                    }
-                });
+                state.pending_open.set(Some(id));
             }
         }
     })
@@ -233,20 +210,14 @@ fn make_open_scheduler(root_id: ScopeId, root: Handle<PineHoverCardRoot>) -> std
 /// Cancels any pending open first — the pointer left the tracked
 /// surface before the card even appeared, so don't surprise the
 /// user with a delayed open.
-fn make_close_scheduler(
-    root_id: ScopeId,
-    root: Handle<PineHoverCardRoot>,
-) -> std::rc::Rc<dyn Fn()> {
-    std::rc::Rc::new(move || {
-        cancel_open(root_id);
+fn make_close_scheduler(root: Handle<PineHoverCardRoot>, state: Rc<HoverState>) -> Rc<dyn Fn()> {
+    Rc::new(move || {
+        cancel_open(&state);
         let delay = root.with(|r| r.close_delay);
         let root_for_timer = root.clone();
+        let state_for_timer = state.clone();
         let timer_cb = Closure::once(Box::new(move || {
-            RUNTIME.with(|r| {
-                if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                    e.pending_close = None;
-                }
-            });
+            state_for_timer.pending_close.set(None);
             root_for_timer.update(|s| s.open = false);
         }) as Box<dyn FnOnce()>);
         if let Some(w) = web_sys::window() {
@@ -254,58 +225,29 @@ fn make_close_scheduler(
                 timer_cb.into_js_value().unchecked_ref(),
                 delay as i32,
             ) {
-                RUNTIME.with(|r| {
-                    if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                        // Replace any prior pending close — last
-                        // leave wins.
-                        if let (Some(w), Some(prev)) = (web_sys::window(), e.pending_close.take()) {
-                            w.clear_timeout_with_handle(prev);
-                        }
-                        e.pending_close = Some(id);
-                    }
-                });
+                // Replace any prior pending close — last leave wins.
+                if let Some(prev) = state.pending_close.replace(Some(id)) {
+                    w.clear_timeout_with_handle(prev);
+                }
             }
         }
     })
 }
 
-fn cancel_open(root_id: ScopeId) {
-    if let Some(w) = web_sys::window() {
-        RUNTIME.with(|r| {
-            if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                if let Some(id) = e.pending_open.take() {
-                    w.clear_timeout_with_handle(id);
-                }
-            }
-        });
-    }
-}
-
-fn cancel_close(root_id: ScopeId) {
-    if let Some(w) = web_sys::window() {
-        RUNTIME.with(|r| {
-            if let Some(e) = r.borrow_mut().get_mut(&root_id) {
-                if let Some(id) = e.pending_close.take() {
-                    w.clear_timeout_with_handle(id);
-                }
-            }
-        });
-    }
-}
-
-fn teardown_trigger(root_id: ScopeId) {
-    // Clear the trigger listener handles — dropping the Vec
-    // detaches all four listeners. The runtime entry itself stays
-    // (Content may still be live).
-    RUNTIME.with(|r| {
-        let mut map = r.borrow_mut();
-        if let Some(e) = map.get_mut(&root_id) {
-            e.trigger_el = None;
-            e.trigger_listeners.clear();
+fn cancel_open(state: &HoverState) {
+    if let Some(id) = state.pending_open.take() {
+        if let Some(w) = web_sys::window() {
+            w.clear_timeout_with_handle(id);
         }
-    });
-    cancel_open(root_id);
-    cancel_close(root_id);
+    }
+}
+
+fn cancel_close(state: &HoverState) {
+    if let Some(id) = state.pending_close.take() {
+        if let Some(w) = web_sys::window() {
+            w.clear_timeout_with_handle(id);
+        }
+    }
 }
 
 // ── Portal ────────────────────────────────────────────────────────
@@ -389,34 +331,12 @@ impl PineHoverCardContent {
         // enters it, schedule close when pointer leaves. This is
         // the thing that lets users move mouse from Trigger across
         // the gap into Content without the card vanishing.
-        let open = make_open_scheduler(root_id, root.clone());
-        let close = make_close_scheduler(root_id, root);
+        let Some(state) = STATE.inject() else { return };
+        let open = make_open_scheduler(root.clone(), state.clone());
+        let close = make_close_scheduler(root, state);
 
-        let enter = events::on(&content, ev::mouseenter, move |_e| open());
-        let leave = events::on(&content, ev::mouseleave, move |_e| close());
-
-        RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            let entry = map.entry(root_id).or_default();
-            entry.content_el = Some(content);
-            entry.content_listeners = vec![enter, leave];
-        });
+        events::on_scoped(&content, ev::mouseenter, move |_e| open());
+        events::on_scoped(&content, ev::mouseleave, move |_e| close());
+        let _ = root_id; // anchor selector already wired above
     }
-
-    pub fn on_unmount(&mut self) {
-        let Some(root) = ROOT.inject() else { return };
-        teardown_content(root.scope_id());
-    }
-}
-
-fn teardown_content(root_id: ScopeId) {
-    // Clear the content listener handles — dropping the Vec
-    // detaches the two hover listeners.
-    RUNTIME.with(|r| {
-        let mut map = r.borrow_mut();
-        if let Some(e) = map.get_mut(&root_id) {
-            e.content_el = None;
-            e.content_listeners.clear();
-        }
-    });
 }
