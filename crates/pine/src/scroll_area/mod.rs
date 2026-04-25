@@ -37,14 +37,14 @@
 //! </pine-scroll-area-root>
 //! ```
 
+use pocopine::events::{self, ev, ListenerHandle};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{EventTarget, PointerEvent};
+use web_sys::PointerEvent;
 
 create_context!(ROOT: Handle<PineScrollAreaRoot>);
 create_context!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
@@ -53,15 +53,16 @@ create_context!(SCROLLBAR_ORIENTATION: String);
 // Per-Root runtime: captures the fade-hide timer + Thumb drag state
 // so `on_unmount` can tear everything down without leaving
 // document-level listeners or pending timeouts behind.
+#[allow(dead_code)]
 struct RootRuntime {
     viewport_el: Option<web_sys::Element>,
     /// `setTimeout` handle used by `type="scroll"` / `type="hover"`
     /// to flip `scrolling` back to false after `scroll_hide_delay`.
     hide_timer: Option<i32>,
     // Document-level pointer listeners installed for the currently-
-    // active Thumb drag (one at most). `on_unmount` detaches these.
-    pointer_move: Option<Closure<dyn FnMut(PointerEvent)>>,
-    pointer_up: Option<Closure<dyn FnMut(PointerEvent)>>,
+    // active Thumb drag (one at most). Dropping the Vec detaches
+    // every listener.
+    drag_listeners: Vec<ListenerHandle>,
     dragging_pointer_id: Option<i32>,
 }
 
@@ -254,8 +255,7 @@ impl PineScrollAreaViewport {
             let entry = map.entry(root.scope_id()).or_insert_with(|| RootRuntime {
                 viewport_el: None,
                 hide_timer: None,
-                pointer_move: None,
-                pointer_up: None,
+                drag_listeners: Vec::new(),
                 dragging_pointer_id: None,
             });
             entry.viewport_el = Some(viewport_el.clone());
@@ -626,12 +626,16 @@ fn start_drag(
         }
     });
 
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+
     let orient_for_move = orientation.clone();
     let rail_rect_for_move = rail_rect;
     let rail_el_for_move = rail_el.clone();
     let viewport_for_move = viewport_el.clone();
     let root_for_move = root.clone();
-    let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
+    let move_handle = events::on(&doc, ev::pointermove, move |ev| {
         let active = ROOT_RUNTIME.with(|r| {
             r.borrow()
                 .get(&root_scope)
@@ -679,9 +683,9 @@ fn start_drag(
         // turn fans out to the Thumb's watches. No need to
         // handle.update here.
         let _ = &rail_rect_for_move;
-    }) as Box<dyn FnMut(PointerEvent)>);
+    });
 
-    let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
+    let release = move |ev: PointerEvent| {
         ROOT_RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
             if let Some(rt) = map.get_mut(&root_scope) {
@@ -690,19 +694,13 @@ fn start_drag(
                 }
             }
         });
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let t: &EventTarget = doc.as_ref();
-        let _ = t.add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-        let _ = t.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
-        let _ = t.add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
-    }
+    };
+    let up_handle = events::on(&doc, ev::pointerup, release);
+    let cancel_handle = events::on(&doc, ev::pointercancel, release);
 
     ROOT_RUNTIME.with(|r| {
         if let Some(rt) = r.borrow_mut().get_mut(&root_scope) {
-            rt.pointer_move = Some(move_);
-            rt.pointer_up = Some(up);
+            rt.drag_listeners = vec![move_handle, up_handle, cancel_handle];
         }
     });
 }
@@ -765,25 +763,16 @@ impl PineScrollAreaCorner {
 // ── Teardown ──────────────────────────────────────────────────────
 
 fn teardown_runtime(scope: ScopeId) {
-    let rt = match ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) {
-        Some(rt) => rt,
-        None => return,
+    // Removing the runtime drops `drag_listeners`, whose
+    // destructor detaches the document-level pointer listeners.
+    // The hide-timer lives outside the listener system, so it
+    // still has to be cleared explicitly.
+    let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
+        return;
     };
     if let Some(handle) = rt.hide_timer {
         if let Some(win) = web_sys::window() {
             win.clear_timeout_with_handle(handle);
-        }
-    }
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let t: &EventTarget = doc.as_ref();
-        if let Some(c) = rt.pointer_move.as_ref() {
-            let _ =
-                t.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
-        }
-        if let Some(c) = rt.pointer_up.as_ref() {
-            let _ = t.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-            let _ =
-                t.remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
         }
     }
 }
