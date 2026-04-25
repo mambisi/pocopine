@@ -112,6 +112,51 @@ impl<T: 'static> Handle<T> {
     pub fn scope_id(&self) -> ScopeId {
         self.scope_id
     }
+
+    /// Watch a string-named field on this handle's scope. The
+    /// effect releases automatically when the consumer's scope
+    /// (the one calling `watch_field`) unmounts — same lifetime
+    /// story as `events::on_scoped` / `timers::after_scoped`.
+    ///
+    /// Sugar over [`crate::watch::watch_scope_field_scoped`] so
+    /// compound primitives can write
+    /// `root.watch_field::<bool>("open", cb)` instead of plumbing
+    /// the scope id and turbofish manually.
+    pub fn watch_field<V, C>(&self, field: &'static str, cb: C)
+    where
+        V: Clone + PartialEq + Default + serde::de::DeserializeOwned + 'static,
+        C: Fn(&V, Option<&V>) + 'static,
+    {
+        crate::watch::watch_scope_field_scoped::<V, _>(self.scope_id, field, cb);
+    }
+
+    /// Subscribe to a derived value of this handle's typed state.
+    /// `selector` runs whenever the scope is triggered (any field
+    /// change); `cb` fires when the selected `V` actually moves —
+    /// the same shape as `Parent<T>::observe` / `NearestParent<T>::observe`.
+    ///
+    /// Use when `#[watch(field)]` and `watch_field` can't express
+    /// the dependency: derived expressions, multi-field reads,
+    /// computed projections.
+    pub fn observe<V, S, C>(&self, selector: S, cb: C)
+    where
+        V: Clone + PartialEq + 'static,
+        S: Fn(&T) -> V + 'static,
+        C: Fn(&V, Option<&V>) + 'static,
+    {
+        let scope = self.scope_id;
+        let me = self.clone();
+        crate::watch::watch_scoped(
+            move || {
+                // Sentinel key — `trigger_scope` fires every key
+                // tracked on the scope, so any field change re-runs
+                // the selector.
+                crate::reactive::track(scope, "__pp_handle_observe");
+                me.with(|s| selector(s))
+            },
+            cb,
+        );
+    }
 }
 
 /// Typed handle onto the component whose handler is currently executing.
