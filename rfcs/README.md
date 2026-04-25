@@ -61,3 +61,6 @@ Conventions:
 | 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Draft |
 | 051 | [Component registry safety — aliases, prefixes, boot verification](./rfc-051-component-registry-safety.md) | Draft |
 | 052 | [Typed structural parent extractors](./rfc-052-parent-extractors.md) | Draft |
+| 053 | [Typed component interaction surface](./rfc-053-typed-component-interaction.md) | Draft |
+| 054 | [Compiled `pp-for` row plans](./rfc-054-compiled-pp-for-row-plans.md) | Draft |
+| 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Draft |

@@ -1,6 +1,9 @@
 //! `pp-text="<expr>"` — set `textContent` from a template expression
 //! (RFC-012).
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use wasm_bindgen::JsValue;
 use web_sys::console;
 
@@ -13,7 +16,8 @@ use crate::walker::track_effect_on;
 pub fn run(call: &DirectiveCall) {
     let el = call.el.clone();
     let proxy = call.proxy.clone();
-    let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
+    let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
         Ok(a) => a,
         Err(e) => {
             console::error_1(&JsValue::from_str(&format!(
@@ -25,9 +29,18 @@ pub fn run(call: &DirectiveCall) {
     };
     let id = effect(move || {
         let el_for_magic = el.clone();
+        let prev = prev.clone();
         with_current_el(&el_for_magic, || {
             let v = expr::evaluate(&ast, &proxy);
-            el.set_text_content(Some(&js_to_string(&v)));
+            let next = js_to_string(&v);
+            {
+                let p = prev.borrow();
+                if p.as_deref() == Some(next.as_str()) {
+                    return;
+                }
+            }
+            el.set_text_content(Some(&next));
+            *prev.borrow_mut() = Some(next);
         });
     });
     track_effect_on(call.el, id);

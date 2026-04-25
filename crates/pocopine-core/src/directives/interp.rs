@@ -94,7 +94,7 @@ fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Seg
                 let _ = parent_node.insert_before(node.as_ref(), Some(original.as_ref()));
             }
             Segment::Dynamic(src) => {
-                let ast: Spanned<expr::Expr> = match expr::parse(&src) {
+                let ast: Spanned<expr::Expr> = match expr::parse_cached(&src) {
                     Ok(a) => a,
                     Err(e) => {
                         console::error_1(&JsValue::from_str(&format!(

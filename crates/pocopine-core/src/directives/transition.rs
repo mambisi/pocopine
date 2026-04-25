@@ -490,6 +490,16 @@ fn has_any_transition_attr(el: &Element) -> bool {
         || el.has_attribute("pp-transition:leave-end")
 }
 
+pub fn has_transition_in_subtree(root: &Element) -> bool {
+    if has_any_transition_attr(root) {
+        return true;
+    }
+    root.query_selector(ATTR_SELECTOR)
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 fn collect_animated(root: &Element) -> Vec<Element> {
     use wasm_bindgen::JsCast;
     let mut out = Vec::new();

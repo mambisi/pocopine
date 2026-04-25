@@ -1,0 +1,59 @@
+<div class="container">
+  <div class="jumbotron">
+    <div class="row">
+      <div class="col-md-6">
+        <h1>pocopine keyed</h1>
+      </div>
+      <div class="col-md-6">
+        <div class="row">
+          <div class="col-sm-6 smallpad">
+            <button id="run" type="button" @click="run">Create 1,000 rows</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="runlots" type="button" @click="run_lots">Create 10,000 rows</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="add" type="button" @click="add">Append 1,000 rows</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="update" type="button" @click="update_every_tenth">Update every 10th row</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="clear" type="button" @click="clear">Clear</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="swaprows" type="button" @click="swap_rows">Swap Rows</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <span>Last action: <strong pp-text="last_action"></strong></span>
+      <span>Last duration: <strong pp-text="last_duration_ms"></strong> ms</span>
+      <span>Rows: <strong pp-text="rows.length"></strong></span>
+      <span>Selected: <strong pp-text="selected_label"></strong></span>
+    </div>
+  </div>
+
+  <table class="table table-hover table-striped test-data">
+    <tbody>
+      <template pp-for="row in rows" pp-key="row.id">
+        <tr :class="selected_id == row.id ? 'danger' : ''">
+          <td class="col-md-1" pp-text="row.id"></td>
+          <td class="col-md-4">
+            <a @click="select_row(row.id)" pp-text="row.label"></a>
+          </td>
+          <td class="col-md-1">
+            <a @click="remove_row(row.id)">
+              <span class="glyphicon glyphicon-remove remove" aria-hidden="true"></span>
+            </a>
+          </td>
+          <td class="col-md-6"></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <span class="preloadicon" aria-hidden="true">×</span>
+</div>

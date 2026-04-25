@@ -50,7 +50,7 @@ pub fn run(call: &DirectiveCall) {
     // compatibility shape `on_click($event)` so existing
     // single-identifier handlers keep receiving the event as
     // their first arg.
-    let ast: Rc<Spanned<Expr>> = match expr::parse(&call.value) {
+    let ast: Rc<Spanned<Expr>> = match expr::parse_cached(&call.value) {
         Ok(a) => Rc::new(backfill_legacy_call(a)),
         Err(e) => {
             console::error_1(&JsValue::from_str(&format!(

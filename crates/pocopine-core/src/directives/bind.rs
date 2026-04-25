@@ -34,7 +34,7 @@ pub fn run(call: &DirectiveCall) {
     let Some(attr) = call.arg.clone() else { return };
     let el = call.el.clone();
     let parent_proxy = call.proxy.clone();
-    let ast: Spanned<expr::Expr> = match expr::parse(&call.value) {
+    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
         Ok(a) => a,
         Err(e) => {
             console::error_1(&JsValue::from_str(&format!(

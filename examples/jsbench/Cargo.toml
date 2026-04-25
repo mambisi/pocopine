@@ -1,0 +1,15 @@
+[package]
+name = "jsbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine" }
+wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+web-sys = { version = "0.3", features = ["Performance", "Window"] }

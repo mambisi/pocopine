@@ -25,7 +25,7 @@ use std::rc::Rc;
 use js_sys::{Array, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element, HtmlTemplateElement, Node};
+use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
 
 use super::DirectiveCall;
 use crate::loop_scope::LoopScope;
@@ -66,6 +66,21 @@ fn fire_staggered_enter(clones: &[Element], stagger_ms: u32) {
         return;
     }
     crate::directives::transition::enter_subtrees_sequenced(clones, stagger_ms);
+}
+
+fn remove_or_leave(root: &Element) {
+    if !crate::directives::transition::has_transition_in_subtree(root) {
+        if let Some(parent) = root.parent_node() {
+            let _ = parent.remove_child(root);
+        }
+        return;
+    }
+    let root_cap = root.clone();
+    crate::directives::transition::leave_subtree(root, move || {
+        if let Some(parent) = root_cap.parent_node() {
+            let _ = parent.remove_child(&root_cap);
+        }
+    });
 }
 
 fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
@@ -200,12 +215,7 @@ fn run_naive(
         {
             let mut prior = prior.borrow_mut();
             for el in prior.drain(..) {
-                let el_cap = el.clone();
-                crate::directives::transition::leave_subtree(&el, move || {
-                    if let Some(parent) = el_cap.parent_node() {
-                        let _ = parent.remove_child(&el_cap);
-                    }
-                });
+                remove_or_leave(&el);
             }
         }
         if total == 0 {
@@ -272,7 +282,31 @@ struct PrevItem {
     scope_id: ScopeId,
     loop_state: Rc<RefCell<LoopScope>>,
     key: Rc<str>,
+    item_sig: String,
     leaving: bool,
+}
+
+fn item_signature(v: &JsValue) -> String {
+    if v.is_undefined() {
+        return "u:".into();
+    }
+    if v.is_null() {
+        return "n:".into();
+    }
+    if let Some(s) = v.as_string() {
+        return format!("s:{s}");
+    }
+    if let Some(n) = v.as_f64() {
+        return format!("f:{n}");
+    }
+    if let Some(b) = v.as_bool() {
+        return if b { "b:1".into() } else { "b:0".into() };
+    }
+    js_sys::JSON::stringify(v)
+        .ok()
+        .and_then(|s| s.as_string())
+        .map(|s| format!("j:{s}"))
+        .unwrap_or_default()
 }
 
 /// Keyed iteration. Reuses clones whose keys still appear, fires
@@ -343,6 +377,7 @@ fn run_keyed(
 
         for i in 0..total {
             let item = arr.get(i as u32);
+            let item_sig = item_signature(&item);
             let key_val = key_resolver.resolve(&item, i, &parent_proxy);
             let raw_key: Rc<str> = stringify_key(&key_val).into();
 
@@ -371,15 +406,20 @@ fn run_keyed(
                     crate::directives::transition::enter_subtree(&entry.element, || {});
                     entry.leaving = false;
                 }
-                // Update the loop state in place; fire trigger_scope
-                // so effects bound to this loop re-run.
-                {
-                    let mut st = entry.loop_state.borrow_mut();
-                    st.item = item;
-                    st.index = i;
-                    st.total = total;
+                let needs_update = {
+                    let st = entry.loop_state.borrow();
+                    st.index != i || st.total != total || entry.item_sig != item_sig
+                };
+                if needs_update {
+                    {
+                        let mut st = entry.loop_state.borrow_mut();
+                        st.item = item;
+                        st.index = i;
+                        st.total = total;
+                    }
+                    entry.item_sig = item_sig;
+                    trigger_scope(entry.scope_id);
                 }
-                trigger_scope(entry.scope_id);
                 fresh.push(entry);
             } else {
                 // New. Fresh loop scope + clone.
@@ -408,6 +448,7 @@ fn run_keyed(
                     scope_id: scope.id,
                     loop_state: loop_rc,
                     key,
+                    item_sig,
                     leaving: false,
                 });
             }
@@ -455,12 +496,19 @@ fn run_keyed(
                 let el_for_cb = el.clone();
                 let key_for_retract = Rc::clone(&entry.key);
                 let prior_for_retract = prior.clone();
-                crate::directives::transition::leave_subtree(&el, move || {
-                    if let Some(parent) = el_for_cb.parent_node() {
-                        let _ = parent.remove_child(&el_for_cb);
+                if !crate::directives::transition::has_transition_in_subtree(&el) {
+                    if let Some(parent) = el.parent_node() {
+                        let _ = parent.remove_child(&el);
                     }
                     retract_from_prior(&prior_for_retract, &key_for_retract);
-                });
+                } else {
+                    crate::directives::transition::leave_subtree(&el, move || {
+                        if let Some(parent) = el_for_cb.parent_node() {
+                            let _ = parent.remove_child(&el_for_cb);
+                        }
+                        retract_from_prior(&prior_for_retract, &key_for_retract);
+                    });
+                }
             }
             leavers.push(entry);
         }
@@ -541,6 +589,42 @@ fn run_keyed(
 
         let mut newly_walked: Vec<Element> = Vec::new();
         if !already_ordered {
+            let suffix_insert_start = fresh
+                .iter()
+                .position(|entry| entry.element.parent_node().is_none())
+                .unwrap_or(fresh.len());
+            let can_batch_suffix = !has_leavers
+                && suffix_insert_start < fresh.len()
+                && fresh[suffix_insert_start..]
+                    .iter()
+                    .all(|entry| entry.element.parent_node().is_none())
+                && fresh[..suffix_insert_start].iter().enumerate().all(|(i, entry)| {
+                    let correct_parent = entry
+                        .element
+                        .parent_node()
+                        .map(|p| p.is_same_node(Some(parent_node_ref)))
+                        .unwrap_or(false);
+                    let expected_next: &Node = if i + 1 < fresh.len() {
+                        fresh[i + 1].element.as_ref()
+                    } else {
+                        template_el.as_ref()
+                    };
+                    let correct_next = next_non_leaving(entry.element.next_sibling())
+                        .map(|n| n.is_same_node(Some(expected_next)))
+                        .unwrap_or(false);
+                    correct_parent && correct_next
+                });
+            if can_batch_suffix {
+                let doc = template_el
+                    .owner_document()
+                    .expect("template element should belong to a document");
+                let fragment: DocumentFragment = doc.create_document_fragment();
+                for entry in &fresh[suffix_insert_start..] {
+                    let _ = fragment.append_child(entry.element.as_ref());
+                    newly_walked.push(entry.element.clone());
+                }
+                let _ = parent_node.insert_before(fragment.as_ref(), Some(template_el.as_ref()));
+            } else {
             // Iterate back-to-front and use the next fresh entry
             // (or template_el for the last) as the insert anchor.
             // That keeps leaving siblings in their original DOM
@@ -592,6 +676,7 @@ fn run_keyed(
             }
             new_indices.sort_unstable();
             newly_walked.extend(new_indices.into_iter().map(|i| fresh[i].element.clone()));
+            }
         }
         // Walk freshly-inserted clones AFTER they're in the tree so
         // directive setup can look up the enclosing scope via parent

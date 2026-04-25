@@ -819,6 +819,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsbench"
+version = "0.1.0"
+dependencies = [
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

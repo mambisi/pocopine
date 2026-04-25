@@ -28,9 +28,15 @@
 //! ```
 
 use std::ops::Range;
+use std::{cell::RefCell, collections::HashMap};
 
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
+
+thread_local! {
+    static PARSE_CACHE: RefCell<HashMap<String, Result<Spanned<Expr>, ParseError>>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Byte-range span into the original source string.
 pub type Span = Range<usize>;
@@ -675,6 +681,17 @@ pub fn parse(src: &str) -> Result<Spanned<Expr>, ParseError> {
     }
     let mut p = Parser::new(src)?;
     p.parse_expr()
+}
+
+pub fn parse_cached(src: &str) -> Result<Spanned<Expr>, ParseError> {
+    PARSE_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(src).cloned() {
+            return hit;
+        }
+        let parsed = parse(src);
+        cache.borrow_mut().insert(src.to_string(), parsed.clone());
+        parsed
+    })
 }
 
 // ─── evaluator ────────────────────────────────────────────────────
