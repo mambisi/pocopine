@@ -24,8 +24,9 @@
 //! </pine-tooltip-root>
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::compound;
 use pocopine::prelude::*;
@@ -108,26 +109,6 @@ impl PineTooltipProvider {
 thread_local! {
     static CURRENT_OPEN: RefCell<HashMap<ScopeId, Option<ScopeId>>> =
         RefCell::new(HashMap::new());
-}
-
-thread_local! {
-    /// Per-Trigger-scope runtime: holds the listener closures +
-    /// pending show timer. Keyed on the Trigger's scope id so
-    /// teardown (watch callback when Trigger unmounts, or
-    /// Root.open goes false-and-stays-false) finds its entry.
-    static RUNTIME: RefCell<HashMap<ScopeId, TriggerRuntime>> =
-        RefCell::new(HashMap::new());
-}
-
-struct TriggerRuntime {
-    /// The four hover/focus listeners on the trigger element. Held
-    /// only for its `Drop` — when the runtime entry is removed
-    /// (in `teardown`), each listener detaches. `dead_code` doesn't
-    /// model destructor side-effects, so the field gets a narrow
-    /// allow.
-    #[allow(dead_code)]
-    listeners: Vec<pocopine::events::ListenerHandle>,
-    pending_timer: Option<i32>,
 }
 
 // ── Root ──────────────────────────────────────────────────────────
@@ -238,36 +219,33 @@ pub struct PineTooltipTrigger {}
 
 #[handlers]
 impl PineTooltipTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+    pub fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
         // Stamp the trigger's slot root so Content's auto-anchor
         // resolves to it. `pp-ref="trigger"` points at the
         // wrapper the template renders around the author's slot.
         if let Some(el) = refs.get("trigger") {
             compound::stamp_trigger(&el, root.scope_id(), SLUG);
-            install_trigger_listeners(scope, el, root);
-        }
-    }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            teardown(scope);
+            install_trigger_listeners(el, root);
         }
     }
 }
 
-fn install_trigger_listeners(
-    scope: ScopeId,
-    trigger_el: web_sys::Element,
-    root: Handle<PineTooltipRoot>,
-) {
-    use pocopine::events::{self, ev};
+fn install_trigger_listeners(trigger_el: web_sys::Element, root: Handle<PineTooltipRoot>) {
+    use pocopine::events::{self, ev, on_scope_unmount};
+
+    // Pending show-delay timer id, shared by every listener that
+    // schedules or cancels it. No thread-local side table needed.
+    let pending_timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
     let enter_root = root.clone();
-    let enter = events::on(&trigger_el, ev::mouseenter, move |_e| {
+    let enter_timer = pending_timer.clone();
+    events::on_scoped(&trigger_el, ev::mouseenter, move |_e| {
         let delay = enter_root.with(|r| r.delay_duration);
         let root_for_timer = enter_root.clone();
+        let timer_slot = enter_timer.clone();
         let timer_cb = Closure::once(Box::new(move || {
+            timer_slot.set(None);
             root_for_timer.update(|s| s.open = true);
         }) as Box<dyn FnOnce()>);
         let js = timer_cb.into_js_value();
@@ -276,72 +254,50 @@ fn install_trigger_listeners(
                 js.unchecked_ref(),
                 delay as i32,
             ) {
-                RUNTIME.with(|r| {
-                    if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-                        if let Some(prev) = rt.pending_timer.take() {
-                            w.clear_timeout_with_handle(prev);
-                        }
-                        rt.pending_timer = Some(id);
-                    }
-                });
+                if let Some(prev) = enter_timer.replace(Some(id)) {
+                    w.clear_timeout_with_handle(prev);
+                }
             }
         }
     });
 
     let leave_root = root.clone();
-    let leave = events::on(&trigger_el, ev::mouseleave, move |_e| {
-        cancel_pending_and_close(scope, &leave_root);
+    let leave_timer = pending_timer.clone();
+    events::on_scoped(&trigger_el, ev::mouseleave, move |_e| {
+        cancel_pending_and_close(&leave_timer, &leave_root);
     });
 
     // `focusin` + `focusout` bubble, so they fire for focus on a
     // descendant (e.g. the user's <button> slotted into Trigger's
     // `<span>` wrapper). Plain `focus` / `blur` don't bubble.
     let focus_root = root.clone();
-    let focus = events::on(&trigger_el, ev::focusin, move |_e| {
+    events::on_scoped(&trigger_el, ev::focusin, move |_e| {
         focus_root.update(|s| s.open = true);
     });
 
-    let blur = events::on(&trigger_el, ev::focusout, move |_e| {
-        cancel_pending_and_close(scope, &root);
+    let blur_timer = pending_timer.clone();
+    events::on_scoped(&trigger_el, ev::focusout, move |_e| {
+        cancel_pending_and_close(&blur_timer, &root);
     });
 
-    RUNTIME.with(|r| {
-        r.borrow_mut().insert(
-            scope,
-            TriggerRuntime {
-                listeners: vec![enter, leave, focus, blur],
-                pending_timer: None,
-            },
-        );
-    });
-}
-
-fn cancel_pending_and_close(scope: ScopeId, root: &Handle<PineTooltipRoot>) {
-    if let Some(w) = web_sys::window() {
-        RUNTIME.with(|r| {
-            if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-                if let Some(id) = rt.pending_timer.take() {
-                    w.clear_timeout_with_handle(id);
-                }
+    // Drop any still-pending show timer at unmount — listeners
+    // already auto-detach via on_scoped.
+    on_scope_unmount(move || {
+        if let Some(id) = pending_timer.take() {
+            if let Some(w) = web_sys::window() {
+                w.clear_timeout_with_handle(id);
             }
-        });
-    }
-    root.update(|s| s.open = false);
+        }
+    });
 }
 
-fn teardown(scope: ScopeId) {
-    // Removing the runtime drops the `Vec<ListenerHandle>` whose
-    // destructor detaches every trigger listener at once. We still
-    // need to clear the pending open-timer manually since it lives
-    // outside the listener system.
-    let Some(rt) = RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    if let Some(w) = web_sys::window() {
-        if let Some(id) = rt.pending_timer {
+fn cancel_pending_and_close(pending: &Cell<Option<i32>>, root: &Handle<PineTooltipRoot>) {
+    if let Some(id) = pending.take() {
+        if let Some(w) = web_sys::window() {
             w.clear_timeout_with_handle(id);
         }
     }
+    root.update(|s| s.open = false);
 }
 
 // ── Portal ────────────────────────────────────────────────────────
