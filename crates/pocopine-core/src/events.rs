@@ -38,11 +38,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::EventTarget;
+use web_sys::{CustomEvent, EventTarget};
 
+use crate::emit::Emit;
 use crate::reactive::ScopeId;
 use crate::scope::current_scope_id;
 
@@ -60,26 +62,32 @@ pub trait DomEventName: 'static {
     const NAME: &'static str;
 }
 
-/// Opaque handle to an installed listener. Drop the value or call
-/// [`ListenerHandle::cancel`] to remove the listener; otherwise it
-/// stays alive for as long as the handle does.
+/// Opaque handle to one or more installed listeners. Drop the value
+/// or call [`ListenerHandle::cancel`] to remove all of them; otherwise
+/// they stay alive for as long as the handle does.
+///
+/// Most call sites end up with a single underlying listener, but
+/// [`on_emit`] stores one entry per [`Emit`] variant name, so the
+/// handle is built around a `Vec` rather than a single closure.
+type Listener = (&'static str, Closure<dyn FnMut(JsValue)>);
+
 pub struct ListenerHandle {
     target: EventTarget,
-    event: &'static str,
-    closure: Option<Closure<dyn FnMut(JsValue)>>,
+    listeners: Vec<Listener>,
 }
 
 impl ListenerHandle {
-    /// Remove the listener now. Equivalent to dropping the handle.
+    /// Remove every listener this handle owns. Equivalent to dropping
+    /// the handle.
     pub fn cancel(mut self) {
         self.cancel_in_place();
     }
 
     fn cancel_in_place(&mut self) {
-        if let Some(closure) = self.closure.take() {
+        for (name, closure) in self.listeners.drain(..) {
             let _ = self
                 .target
-                .remove_event_listener_with_callback(self.event, closure.as_ref().unchecked_ref());
+                .remove_event_listener_with_callback(name, closure.as_ref().unchecked_ref());
         }
     }
 }
@@ -184,8 +192,7 @@ where
     let _ = target.add_event_listener_with_callback(event, closure.as_ref().unchecked_ref());
     ListenerHandle {
         target: target.clone(),
-        event,
-        closure: Some(closure),
+        listeners: vec![(event, closure)],
     }
 }
 
@@ -197,6 +204,75 @@ where
     F: FnMut(E) + 'static,
 {
     let handle = on_named::<E, T, F>(target, event, handler);
+    on_scope_unmount(move || drop(handle));
+}
+
+/// Listen for every variant of a typed [`Emit`] enum on `target`.
+/// One DOM listener is registered per variant name; every fire is
+/// reconstructed back into the original enum via [`Emit::from_event`]
+/// before the handler runs.
+///
+/// The receiving counterpart to `emit_event(MyEvent::…)`. Pairs the
+/// emit-side typed surface with a receive-side typed surface so a
+/// component author can write:
+///
+/// ```ignore
+/// #[derive(Emit)]
+/// enum DialogEvent {
+///     Close,
+///     Confirm { value: String },
+/// }
+///
+/// events::on_emit_scoped::<DialogEvent, _, _>(&host, move |e| match e {
+///     DialogEvent::Close            => { /* … */ }
+///     DialogEvent::Confirm { value } => { /* … */ }
+/// });
+/// ```
+///
+/// All variant listeners share a single `Rc<RefCell<F>>` so the
+/// closure runs against consistent state across variants.
+pub fn on_emit<E, T, F>(target: &T, handler: F) -> ListenerHandle
+where
+    E: Emit + 'static,
+    T: AsRef<EventTarget>,
+    F: FnMut(E) + 'static,
+{
+    let target = target.as_ref();
+    let handler = Rc::new(RefCell::new(handler));
+    let mut listeners = Vec::with_capacity(E::event_names().len());
+    for &name in E::event_names() {
+        let handler = handler.clone();
+        let closure: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |raw: JsValue| {
+            // Custom events fire as CustomEvent; if the browser
+            // delivered something else (the bare base `Event`), the
+            // detail field is undefined and from_event will fail
+            // gracefully.
+            let detail = raw
+                .dyn_ref::<CustomEvent>()
+                .map(|ce| ce.detail())
+                .unwrap_or(JsValue::UNDEFINED);
+            if let Some(typed) = E::from_event(name, detail) {
+                (handler.borrow_mut())(typed);
+            }
+        }));
+        let _ = target.add_event_listener_with_callback(name, closure.as_ref().unchecked_ref());
+        listeners.push((name, closure));
+    }
+    ListenerHandle {
+        target: target.clone(),
+        listeners,
+    }
+}
+
+/// Scope-bound counterpart to [`on_emit`] — the listeners are
+/// removed automatically when the current scope unmounts.
+pub fn on_emit_scoped<E, T, F>(target: &T, handler: F)
+where
+    E: Emit + 'static,
+    T: AsRef<EventTarget>,
+    F: FnMut(E) + 'static,
+{
+    let handle = on_emit::<E, T, F>(target, handler);
     on_scope_unmount(move || drop(handle));
 }
 
@@ -215,10 +291,10 @@ where
 pub mod ev {
     use super::DomEventName;
     use web_sys::{
-        AnimationEvent, ClipboardEvent, CompositionEvent, DragEvent, ErrorEvent, Event,
-        FocusEvent, HashChangeEvent, InputEvent, KeyboardEvent, MessageEvent, MouseEvent,
-        PageTransitionEvent, PointerEvent, PopStateEvent, ProgressEvent, StorageEvent,
-        SubmitEvent, TouchEvent, TransitionEvent, UiEvent, WheelEvent,
+        AnimationEvent, ClipboardEvent, CompositionEvent, DragEvent, ErrorEvent, Event, FocusEvent,
+        HashChangeEvent, InputEvent, KeyboardEvent, MessageEvent, MouseEvent, PageTransitionEvent,
+        PointerEvent, PopStateEvent, ProgressEvent, StorageEvent, SubmitEvent, TouchEvent,
+        TransitionEvent, UiEvent, WheelEvent,
     };
 
     macro_rules! event_marker {
@@ -315,7 +391,7 @@ pub mod ev {
         visibilitychange  => ("visibilitychange", Event),
         fullscreenchange  => ("fullscreenchange", Event),
         fullscreenerror   => ("fullscreenerror", Event),
-        // Errors / progress
+        // Media (load, error, progress – the typed ones)
         error             => ("error", ErrorEvent),
         progress          => ("progress", ProgressEvent),
         loadstart         => ("loadstart", ProgressEvent),

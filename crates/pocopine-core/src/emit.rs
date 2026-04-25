@@ -36,7 +36,13 @@ use crate::tick;
 ///   `CustomEvent.detail` (`{}` for unit variants, the struct fields
 ///   for struct variants, the tuple for tuple variants).
 ///
-/// `Emit` is what [`emit_event`] / [`emit_event_from`] dispatch on.
+/// `Emit` is what [`emit_event`] / [`emit_event_from`] dispatch on,
+/// and what [`crate::events::on_emit`] reverses on the receiving end:
+/// the derive also generates [`Emit::event_names`] and
+/// [`Emit::from_event`] so a typed listener can subscribe to every
+/// variant name at once and reconstruct the enum from the
+/// `CustomEvent`'s detail.
+///
 /// Authors should not implement this by hand — derive it instead so
 /// the variant→name mapping stays consistent across the codebase.
 pub trait Emit {
@@ -47,6 +53,22 @@ pub trait Emit {
     /// serialize as their named fields; tuple variants serialize as
     /// an array of positional values.
     fn to_detail(&self) -> Result<JsValue, serde_wasm_bindgen::Error>;
+
+    /// Every event name this enum can fire — one per variant. Used
+    /// by [`crate::events::on_emit`] to register one DOM listener
+    /// per variant.
+    fn event_names() -> &'static [&'static str]
+    where
+        Self: Sized;
+
+    /// Reverse the `(name, detail)` round-trip — given a `name` from
+    /// [`Self::event_names`] and the `CustomEvent.detail` value the
+    /// browser delivered, reconstruct the matching enum variant.
+    /// Returns `None` when `name` is unknown or when `detail` fails
+    /// to deserialize into the variant's payload.
+    fn from_event(name: &str, detail: JsValue) -> Option<Self>
+    where
+        Self: Sized;
 }
 
 /// Serialize `detail` and fire a bubbling `CustomEvent(name)`

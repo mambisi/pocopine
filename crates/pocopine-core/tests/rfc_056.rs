@@ -185,6 +185,16 @@ impl Emit for HandImplEvent {
     fn to_detail(&self) -> Result<wasm_bindgen::JsValue, serde_wasm_bindgen::Error> {
         serde_wasm_bindgen::to_value(&Option::<()>::None)
     }
+    fn event_names() -> &'static [&'static str] {
+        &["open", "open-change"]
+    }
+    fn from_event(name: &str, _detail: wasm_bindgen::JsValue) -> Option<Self> {
+        match name {
+            "open" => Some(Self::Open),
+            "open-change" => Some(Self::OpenChange),
+            _ => None,
+        }
+    }
 }
 
 #[wasm_bindgen_test]

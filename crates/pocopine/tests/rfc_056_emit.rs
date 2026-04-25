@@ -60,3 +60,50 @@ fn tuple_variant_serialises_positional_payload() {
     assert_eq!(arr.get(0).as_f64().unwrap() as u32, 7);
     assert_eq!(arr.get(1).as_f64().unwrap() as u32, 11);
 }
+
+#[wasm_bindgen_test]
+fn event_names_lists_every_variant_kebab() {
+    assert_eq!(
+        <DialogEvent as EmitTrait>::event_names(),
+        &["close", "open-change", "confirm", "pair"],
+    );
+}
+
+#[wasm_bindgen_test]
+fn from_event_round_trips_unit_variant() {
+    let recovered = <DialogEvent as EmitTrait>::from_event("close", JsValue::UNDEFINED);
+    assert!(matches!(recovered, Some(DialogEvent::Close)));
+    let recovered2 = <DialogEvent as EmitTrait>::from_event("open-change", JsValue::UNDEFINED);
+    assert!(matches!(recovered2, Some(DialogEvent::OpenChange)));
+}
+
+#[wasm_bindgen_test]
+fn from_event_round_trips_struct_variant() {
+    let original = DialogEvent::Confirm {
+        value: "ok".into(),
+        count: 3,
+    };
+    let detail = original.to_detail().expect("serialise");
+    let recovered = <DialogEvent as EmitTrait>::from_event("confirm", detail).expect("recover");
+    match recovered {
+        DialogEvent::Confirm { value, count } => {
+            assert_eq!(value, "ok");
+            assert_eq!(count, 3);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[wasm_bindgen_test]
+fn from_event_round_trips_tuple_variant() {
+    let original = DialogEvent::Pair(7, 11);
+    let detail = original.to_detail().expect("serialise");
+    let recovered = <DialogEvent as EmitTrait>::from_event("pair", detail).expect("recover");
+    assert!(matches!(recovered, DialogEvent::Pair(7, 11)));
+}
+
+#[wasm_bindgen_test]
+fn from_event_unknown_name_yields_none() {
+    let recovered = <DialogEvent as EmitTrait>::from_event("does-not-exist", JsValue::UNDEFINED);
+    assert!(recovered.is_none());
+}

@@ -2458,9 +2458,12 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
 
     let mut name_arms = Vec::new();
     let mut detail_arms = Vec::new();
+    let mut from_event_arms = Vec::new();
+    let mut name_literals = Vec::new();
     for variant in &data.variants {
         let var_ident = &variant.ident;
         let kebab = kebab_case(&var_ident.to_string());
+        name_literals.push(kebab.clone());
         match &variant.fields {
             Fields::Unit => {
                 name_arms.push(quote! { Self::#var_ident => #kebab, });
@@ -2470,6 +2473,9 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                             &::core::option::Option::<()>::None,
                         )
                     }
+                });
+                from_event_arms.push(quote! {
+                    #kebab => ::core::option::Option::Some(Self::#var_ident),
                 });
             }
             Fields::Named(named) => {
@@ -2495,11 +2501,28 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                         ::pocopine::__private::serde_wasm_bindgen::to_value(&__payload)
                     }
                 });
+                from_event_arms.push(quote! {
+                    #kebab => {
+                        #[derive(::pocopine::__private::serde::Deserialize)]
+                        #[serde(crate = "::pocopine::__private::serde")]
+                        struct __PocoEmitPayload {
+                            #(#field_idents: #field_tys,)*
+                        }
+                        let __payload: __PocoEmitPayload =
+                            ::pocopine::__private::serde_wasm_bindgen::from_value(detail).ok()?;
+                        ::core::option::Option::Some(Self::#var_ident {
+                            #(#field_idents: __payload.#field_idents,)*
+                        })
+                    }
+                });
             }
             Fields::Unnamed(unnamed) => {
                 let bindings: Vec<_> = (0..unnamed.unnamed.len())
                     .map(|i| format_ident!("__f{}", i))
                     .collect();
+                let field_tys: Vec<_> = unnamed.unnamed.iter().map(|f| f.ty.clone()).collect();
+                let positional: Vec<_> =
+                    (0..unnamed.unnamed.len()).map(syn::Index::from).collect();
                 name_arms.push(quote! {
                     Self::#var_ident(..) => #kebab,
                 });
@@ -2508,6 +2531,15 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                         ::pocopine::__private::serde_wasm_bindgen::to_value(
                             &(#(#bindings,)*),
                         )
+                    }
+                });
+                from_event_arms.push(quote! {
+                    #kebab => {
+                        let __tuple: ( #(#field_tys,)* ) =
+                            ::pocopine::__private::serde_wasm_bindgen::from_value(detail).ok()?;
+                        ::core::option::Option::Some(Self::#var_ident(
+                            #(__tuple.#positional,)*
+                        ))
                     }
                 });
             }
@@ -2529,6 +2561,19 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
             > {
                 match self {
                     #(#detail_arms)*
+                }
+            }
+            fn event_names() -> &'static [&'static str] {
+                &[ #(#name_literals,)* ]
+            }
+            fn from_event(
+                name: &str,
+                detail: ::pocopine::__private::wasm_bindgen::JsValue,
+            ) -> ::core::option::Option<Self> {
+                let _ = detail;
+                match name {
+                    #(#from_event_arms)*
+                    _ => ::core::option::Option::None,
                 }
             }
         }
