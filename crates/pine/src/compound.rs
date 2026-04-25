@@ -17,7 +17,6 @@
 //! keep working without a data-attribute-rename migration.
 
 use pocopine::ScopeId;
-use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement};
 
 use pocopine_core::directives::anchor;
@@ -89,33 +88,29 @@ pub fn install_outside_dismiss(
     inside_els: Vec<Element>,
     on_dismiss: impl Fn() + 'static,
 ) {
+    use pocopine::events::{self, ev, ListenerHandle};
     use std::cell::RefCell;
     use std::rc::Rc;
-    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
 
     pocopine::tick::after_flush(move || {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
-        let content_for_listener = content.clone();
-        let inside_for_listener = inside_els.clone();
-        type DismissClosure = Closure<dyn FnMut(web_sys::Event)>;
-        let listener_holder: Rc<RefCell<Option<DismissClosure>>> = Rc::new(RefCell::new(None));
-        let listener_holder_for_cb = listener_holder.clone();
-        let listener = Closure::wrap(Box::new(move |ev: web_sys::Event| {
-            // Self-GC once the surface detaches.
-            let content_node: &web_sys::Node = content_for_listener.as_ref();
+        // Self-removing listener: the handle is stashed in an `Rc`
+        // the callback closes over, so when `content` detaches the
+        // callback drops the handle (which detaches the listener)
+        // and then bails. The Rc itself is intentionally leaked —
+        // ownership of the listener's lifetime moves to the
+        // callback's content-detached path.
+        let handle_slot: Rc<RefCell<Option<ListenerHandle>>> = Rc::new(RefCell::new(None));
+        let handle_slot_for_cb = handle_slot.clone();
+        let content_for_cb = content.clone();
+        let inside_for_cb = inside_els.clone();
+        let listener = events::on(&doc, ev::mousedown, move |ev| {
+            let content_node: &web_sys::Node = content_for_cb.as_ref();
             if !content_node.is_connected() {
-                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                    if let Some(c) = listener_holder_for_cb.borrow().as_ref() {
-                        let t: &web_sys::EventTarget = doc.as_ref();
-                        let _ = t.remove_event_listener_with_callback(
-                            "mousedown",
-                            c.as_ref().unchecked_ref(),
-                        );
-                    }
-                }
-                *listener_holder_for_cb.borrow_mut() = None;
+                handle_slot_for_cb.borrow_mut().take();
                 return;
             }
             let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok()) else {
@@ -124,20 +119,15 @@ pub fn install_outside_dismiss(
             if content_node.contains(Some(&target)) {
                 return;
             }
-            for inside in &inside_for_listener {
+            for inside in &inside_for_cb {
                 let n: &web_sys::Node = inside.as_ref();
                 if n.contains(Some(&target)) || n.is_same_node(Some(&target)) {
                     return;
                 }
             }
             on_dismiss();
-        }) as Box<dyn FnMut(web_sys::Event)>);
-        let t: &web_sys::EventTarget = doc.as_ref();
-        let _ = t.add_event_listener_with_callback("mousedown", listener.as_ref().unchecked_ref());
-        *listener_holder.borrow_mut() = Some(listener);
-        // Leak the Rc — the listener self-references via
-        // `listener_holder` so it can remove itself from the
-        // document listener list when content detaches.
-        std::mem::forget(listener_holder);
+        });
+        *handle_slot.borrow_mut() = Some(listener);
+        std::mem::forget(handle_slot);
     });
 }
