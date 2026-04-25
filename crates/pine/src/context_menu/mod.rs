@@ -45,12 +45,11 @@
 //! </pine-context-menu-root>
 //! ```
 
+use pocopine::events;
 use pocopine::prelude::*;
 use pocopine::{create_context, focus, watch_scope_field};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
-use web_sys::{EventTarget, MouseEvent};
+use web_sys::MouseEvent;
 
 create_context!(ROOT: Handle<PineContextMenuRoot>);
 
@@ -109,18 +108,12 @@ impl PineContextMenuTrigger {
             return;
         };
 
-        let root_for_closure = root.clone();
-        let closure = Closure::wrap(Box::new(move |ev: MouseEvent| {
+        events::on_scoped(&el, "contextmenu", move |ev: MouseEvent| {
             let x = ev.client_x() as f64;
             let y = ev.client_y() as f64;
             ev.prevent_default();
-            root_for_closure.update(|r| r.open_at(x, y));
-        }) as Box<dyn FnMut(MouseEvent)>);
-
-        let target: &EventTarget = el.as_ref();
-        let _ = target
-            .add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
-        closure.forget();
+            root.update(|r| r.open_at(x, y));
+        });
     }
 }
 
