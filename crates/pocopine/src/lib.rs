@@ -36,10 +36,10 @@ pub mod prelude {
         batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
         emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, handlers,
-        inject_key, on_cleanup, run, rw_signal, signal, spawn, spawn_latest, spawn_scoped, store,
-        this, watch, App, Component, ComponentState, Computed, ContextKey, ContextMarker, Emit,
-        Handle, Inject, NearestParent, Parent, RwSignal, Scope, ScopeId, ServerError, ServerResult,
-        Setter, Signal, Store,
+        inject_key, on, on_cleanup, on_emit, run, rw_signal, signal, spawn, spawn_latest,
+        spawn_scoped, store, this, watch, App, Component, ComponentState, Computed, ContextKey,
+        ContextMarker, Emit, Handle, Inject, NearestParent, Parent, RwSignal, Scope, ScopeId,
+        ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
@@ -114,6 +114,72 @@ macro_rules! dispatch {
             __pocopine_handle.update(|$s| $update);
         });
     }};
+}
+
+/// Sugar for [`events::on_scoped`]. Resolves the bare event ident
+/// against the [`events::ev`] catalog and adds an implicit `move`
+/// so the closure captures by ownership (the right default inside
+/// handler / lifecycle hooks where the listener outlives the
+/// caller's frame).
+///
+/// ```ignore
+/// use pocopine::prelude::*;
+///
+/// on!(el, contextmenu, |e| {
+///     e.prevent_default();
+///     root.update(|r| r.open_at(e.client_x() as f64, e.client_y() as f64));
+/// });
+/// ```
+///
+/// Equivalent to:
+///
+/// ```ignore
+/// pocopine::events::on_scoped(
+///     &el,
+///     pocopine::events::ev::contextmenu,
+///     move |e| { … },
+/// );
+/// ```
+///
+/// For events outside the catalog (custom-element events, vendor
+/// names) reach for [`events::on_named_scoped`] directly.
+#[macro_export]
+macro_rules! on {
+    ($target:expr, $event:ident, |$arg:ident| $body:expr $(,)?) => {
+        $crate::events::on_scoped(&$target, $crate::events::ev::$event, move |$arg| $body)
+    };
+}
+
+/// Sugar for [`events::on_emit_scoped`]. Subscribes to every variant
+/// of an [`Emit`] enum on `target`; the typed enum is reconstructed
+/// from the `CustomEvent.detail` before the closure runs.
+///
+/// ```ignore
+/// #[derive(Emit)]
+/// enum DialogEvent {
+///     Close,
+///     Confirm { value: String },
+/// }
+///
+/// on_emit!(host, DialogEvent, |e| match e {
+///     DialogEvent::Close            => { /* … */ }
+///     DialogEvent::Confirm { value } => { /* … */ }
+/// });
+/// ```
+///
+/// Equivalent to:
+///
+/// ```ignore
+/// pocopine::events::on_emit_scoped::<DialogEvent, _, _>(
+///     &host,
+///     move |e| match e { … },
+/// );
+/// ```
+#[macro_export]
+macro_rules! on_emit {
+    ($target:expr, $emit_ty:ty, |$arg:ident| $body:expr $(,)?) => {
+        $crate::events::on_emit_scoped::<$emit_ty, _, _>(&$target, move |$arg| $body)
+    };
 }
 
 /// Build a space-separated class string from a mix of constants and

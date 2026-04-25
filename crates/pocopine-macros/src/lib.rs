@@ -2521,8 +2521,7 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                     .map(|i| format_ident!("__f{}", i))
                     .collect();
                 let field_tys: Vec<_> = unnamed.unnamed.iter().map(|f| f.ty.clone()).collect();
-                let positional: Vec<_> =
-                    (0..unnamed.unnamed.len()).map(syn::Index::from).collect();
+                let positional: Vec<_> = (0..unnamed.unnamed.len()).map(syn::Index::from).collect();
                 name_arms.push(quote! {
                     Self::#var_ident(..) => #kebab,
                 });
