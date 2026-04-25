@@ -30,24 +30,24 @@
 //! </pine-splitter-group>
 //! ```
 
+use pocopine::events::ListenerHandle;
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{EventTarget, PointerEvent};
+use web_sys::PointerEvent;
 
 create_context!(GROUP: Handle<PineSplitterGroup>);
 
 // Per-Group runtime: handle-level drag state + the document-level
-// pointer listeners installed for the currently-active handle, so
-// `on_unmount` can detach them cleanly.
+// pointer listeners installed for the currently-active handle.
+// `drag_listeners` owns the `ListenerHandle`s — dropping the Vec
+// removes the listeners; `on_unmount` clears the runtime entirely.
 struct GroupRuntime {
     group_el: Option<web_sys::Element>,
-    pointer_move: Option<Closure<dyn FnMut(PointerEvent)>>,
-    pointer_up: Option<Closure<dyn FnMut(PointerEvent)>>,
+    drag_listeners: Vec<ListenerHandle>,
     dragging_pointer_id: Option<i32>,
 }
 
@@ -118,8 +118,7 @@ impl PineSplitterGroup {
                         scope,
                         GroupRuntime {
                             group_el: Some(el),
-                            pointer_move: None,
-                            pointer_up: None,
+                            drag_listeners: Vec::new(),
                             dragging_pointer_id: None,
                         },
                     );
@@ -203,22 +202,9 @@ impl PineSplitterGroup {
 }
 
 fn teardown_runtime(scope: ScopeId) {
-    let rt = match GROUP_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) {
-        Some(rt) => rt,
-        None => return,
-    };
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let t: &EventTarget = doc.as_ref();
-        if let Some(c) = rt.pointer_move.as_ref() {
-            let _ =
-                t.remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
-        }
-        if let Some(c) = rt.pointer_up.as_ref() {
-            let _ = t.remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-            let _ =
-                t.remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
-        }
-    }
+    // Removing the runtime drops the `Vec<ListenerHandle>`, whose
+    // destructor detaches the document-level pointer listeners.
+    GROUP_RUNTIME.with(|r| r.borrow_mut().remove(&scope));
 }
 
 // ── Panel ─────────────────────────────────────────────────────────
@@ -489,10 +475,17 @@ fn start_drag(
         }
     });
 
+    // Document-level pointer listeners installed for the duration
+    // of this drag. The handles live in `GroupRuntime.drag_listeners`
+    // — when teardown_runtime drops the Vec, the listeners detach.
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+
     let group_for_move = group.clone();
     let direction_for_move = direction.clone();
     let group_el_for_move = group_el.clone();
-    let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
+    let move_handle = pocopine::events::on(&doc, pocopine::events::ev::pointermove, move |ev| {
         let active = GROUP_RUNTIME.with(|r| {
             r.borrow()
                 .get(&group_scope)
@@ -521,33 +514,27 @@ fn start_drag(
             let step = desired - b_cur;
             g.resize(before_idx, after_idx, step);
         });
-    }) as Box<dyn FnMut(PointerEvent)>);
+    });
 
-    let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        let was_active = GROUP_RUNTIME.with(|r| {
+    let release = move |ev: PointerEvent| {
+        GROUP_RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
             if let Some(rt) = map.get_mut(&group_scope) {
                 if rt.dragging_pointer_id == Some(ev.pointer_id()) {
                     rt.dragging_pointer_id = None;
-                    return true;
                 }
             }
-            false
         });
-        if was_active {}
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let t: &EventTarget = doc.as_ref();
-        let _ = t.add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-        let _ = t.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
-        let _ = t.add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
-    }
+    };
+    // `release` captures only `group_scope: ScopeId` (Copy), so the
+    // closure is itself Copy — no `.clone()` needed across the two
+    // installs.
+    let up_handle = pocopine::events::on(&doc, pocopine::events::ev::pointerup, release);
+    let cancel_handle = pocopine::events::on(&doc, pocopine::events::ev::pointercancel, release);
 
     GROUP_RUNTIME.with(|r| {
         if let Some(rt) = r.borrow_mut().get_mut(&group_scope) {
-            rt.pointer_move = Some(move_);
-            rt.pointer_up = Some(up);
+            rt.drag_listeners = vec![move_handle, up_handle, cancel_handle];
         }
     });
 }
