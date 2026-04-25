@@ -87,13 +87,19 @@ fn distinct_owners_collide_on_canonical() {
     assert!(verify_registry().is_err());
 }
 
+// `std::panic::catch_unwind` is a no-op on wasm32 (`panic = "abort"`
+// aborts the instance instead of unwinding), so we rely on
+// wasm-bindgen-test's `#[should_panic]` integration to verify the
+// failure mode. The substring in `expected` is matched against the
+// panic message — keep it loose enough to survive minor wording
+// edits on the diagnostics surface.
 #[wasm_bindgen_test]
+#[should_panic(expected = "pocopine registry has unresolved collisions")]
 fn assert_registry_clean_panics_on_dirty() {
     fresh_registry();
     register_component("counter", "owner::A", dummy_ctor);
     register_component("counter", "owner::B", other_ctor);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(assert_registry_clean));
-    assert!(result.is_err());
+    assert_registry_clean();
 }
 
 #[wasm_bindgen_test]
