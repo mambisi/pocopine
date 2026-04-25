@@ -46,10 +46,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, focus, watch_scope_field_scoped};
+use pocopine::{create_context, focus};
 use serde::{Deserialize, Serialize};
 
-create_context!(ROOT: Handle<PineContextMenuRoot>);
+create_context!(pub ROOT: Handle<PineContextMenuRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -125,11 +125,20 @@ pub struct PineContextMenuPortal {
 
 #[handlers]
 impl PineContextMenuPortal {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = ROOT.inject() else { return };
-        watch_scope_field_scoped::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
-            handle.update(|s| s.open = is_open);
-        });
+    pub fn on_ready(
+        &self,
+        handle: pocopine::Handle<Self>,
+        root: pocopine::Inject<ROOT, pocopine::Handle<PineContextMenuRoot>>,
+    ) {
+        // `observe` is the fully-typed shape — selector reads through
+        // `&PineContextMenuRoot` so the field name is a struct-access
+        // expression, not a string. It re-runs on any field change
+        // (cheap for one-field selectors) but PartialEq-gates the
+        // callback so `handle.update` only fires on real flips.
+        root.observe(
+            |r| r.open,
+            move |&is_open, _| handle.update(|s| s.open = is_open),
+        );
     }
 }
 
