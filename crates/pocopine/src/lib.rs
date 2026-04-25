@@ -16,12 +16,12 @@ pub use pocopine_core::{
     registry_errors, release, replace_field_inline, report_mount_profile, reset_mount_profile, run,
     run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store, this,
     trigger_scope, verify_registry, watch, watch_field, watch_scope_field, watch_scope_field_now,
-    App, Body, Component, ComponentState, Computed, ContextKey, ContextMarker, Doc, EffectId,
-    EffectOptions, El, Elapsed, Emit, Handle, HostEl, Inject, IsTeleported, LifecycleContext,
-    ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Refs, RegisteredComponent,
-    RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError,
-    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle,
-    TeleportHost, TypedEl, Win,
+    App, Body, Component, ComponentState, Computed, ContextKey, ContextMarker, Doc, DomEventName,
+    EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl, Inject, IsTeleported,
+    LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Refs,
+    RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath,
+    ServerError, ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName,
+    TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
