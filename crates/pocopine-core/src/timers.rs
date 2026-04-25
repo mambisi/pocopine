@@ -38,7 +38,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 
 use crate::events::on_scope_unmount;
 
@@ -269,4 +270,48 @@ impl Debounced {
     pub fn is_pending(&self) -> bool {
         self.id.get().is_some()
     }
+}
+
+// ── awaitable helpers ────────────────────────────────────────────
+//
+// Use these inside `pocopine::spawn_scoped(async move { … })` so the
+// in-flight `await` is dropped (and the underlying setTimeout /
+// requestAnimationFrame fire becomes a no-op) when the scope
+// unmounts. For event-driven cancellation (e.g. mouseleave aborts
+// a pending mouseenter delay), reach for [`Debounced`] instead —
+// async closures don't compose with mid-flight cancellation.
+
+/// Resolve after `delay_ms`. The future stays pending forever if
+/// the host has no `window` (e.g. SSR shim) — fine because nothing
+/// is driving it in that environment.
+pub async fn sleep(delay_ms: u32) {
+    let p = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(w) = web_sys::window() {
+            let _ =
+                w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay_ms as i32);
+        }
+    });
+    let _ = JsFuture::from(p).await;
+}
+
+/// Resolve on the next `requestAnimationFrame` with the high-res
+/// timestamp the browser passes to the RAF callback. Useful for
+/// "measure after layout" patterns inside async flows.
+pub async fn next_frame() -> f64 {
+    let p = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(w) = web_sys::window() {
+            let _ = w.request_animation_frame(&resolve);
+        }
+    });
+    JsFuture::from(p)
+        .await
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+}
+
+/// Resolve on the next microtask. Awaitable counterpart to
+/// [`crate::tick::next`] — same execution slot, different shape.
+pub async fn next_tick() {
+    let _ = JsFuture::from(js_sys::Promise::resolve(&JsValue::NULL)).await;
 }
