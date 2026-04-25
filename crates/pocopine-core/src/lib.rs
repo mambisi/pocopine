@@ -16,6 +16,7 @@ pub mod context;
 #[cfg(feature = "devtools")]
 pub mod devtools;
 pub mod directives;
+pub mod dom;
 pub mod emit;
 pub mod events;
 pub mod expr;
@@ -77,8 +78,9 @@ pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,
 };
 pub use reactive::{
-    batch, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run_now,
-    set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
+    batch, current_effect, effect, effect_scoped, effect_with, flush_sync, on_cleanup, release,
+    run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
+    SIGNAL_SCOPE,
 };
 pub use registry::{
     assert_registry_clean, register_component, register_component_as, register_component_prefixed,
@@ -99,7 +101,10 @@ pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
 pub use walker::{start, start_on_body};
-pub use watch::{watch, watch_field, watch_scope_field, watch_scope_field_now};
+pub use watch::{
+    watch, watch_field, watch_field_scoped, watch_scope_field, watch_scope_field_now,
+    watch_scope_field_scoped, watch_scoped,
+};
 
 /// Convenience re-export alias so `pocopine_core::run()` reads well.
 ///
