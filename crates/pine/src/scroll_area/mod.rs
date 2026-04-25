@@ -37,12 +37,13 @@
 //! </pine-scroll-area-root>
 //! ```
 
-use pocopine::events::{self, ev, ListenerHandle};
+use pocopine::events::{self, ev};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
@@ -50,25 +51,12 @@ create_context!(ROOT: Handle<PineScrollAreaRoot>);
 create_context!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
 create_context!(SCROLLBAR_ORIENTATION: String);
 
-// Per-Root runtime: captures the fade-hide timer + Thumb drag state
-// so `on_unmount` can tear everything down without leaving
-// document-level listeners or pending timeouts behind.
-struct RootRuntime {
-    viewport_el: Option<web_sys::Element>,
-    /// `setTimeout` handle used by `type="scroll"` / `type="hover"`
-    /// to flip `scrolling` back to false after `scroll_hide_delay`.
-    hide_timer: Option<i32>,
-    /// Document-level pointer listeners installed for the currently-
-    /// active Thumb drag (one at most). Held only for its `Drop` —
-    /// the dead_code lint can't see destructor side-effects.
-    #[allow(dead_code)]
-    drag_listeners: Vec<ListenerHandle>,
-    dragging_pointer_id: Option<i32>,
-}
-
+// Per-Root fade-out `setTimeout` handle. Cancelled + replaced on
+// every scroll event so rapid scrolls don't stack timers; cleared
+// on Root unmount. Drag state lives in closure-captured `Rc<Cell<>>`s
+// instead of a runtime side-table.
 thread_local! {
-    static ROOT_RUNTIME: RefCell<HashMap<ScopeId, RootRuntime>> =
-        RefCell::new(HashMap::new());
+    static HIDE_TIMERS: RefCell<HashMap<ScopeId, i32>> = RefCell::new(HashMap::new());
 }
 
 // ── Root ──────────────────────────────────────────────────────────
@@ -155,7 +143,7 @@ impl PineScrollAreaRoot {
 
     pub fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
-            teardown_runtime(scope);
+            clear_hide_timer(scope);
         }
     }
 
@@ -250,16 +238,11 @@ impl PineScrollAreaViewport {
         let Some(root) = ROOT.inject() else {
             return;
         };
-        ROOT_RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            let entry = map.entry(root.scope_id()).or_insert_with(|| RootRuntime {
-                viewport_el: None,
-                hide_timer: None,
-                drag_listeners: Vec::new(),
-                dragging_pointer_id: None,
-            });
-            entry.viewport_el = Some(viewport_el.clone());
-        });
+        // Stamp the inner scrollable element onto Root's scope so
+        // Thumb-drag (which lives on a sibling scope) can resolve
+        // it via cross-scope refs lookup. Avoids a thread-local
+        // side-table just to map Root → viewport_el.
+        refs::register(root.scope_id(), "viewport", &viewport_el);
         // Push initial geometry so the scrollbars can compute their
         // thumb sizing before the user touches anything.
         push_geometry(&viewport_el, &root);
@@ -345,15 +328,16 @@ fn schedule_fade(root: Handle<PineScrollAreaRoot>) {
         return;
     };
     // Cancel any in-flight timer first so rapid scrolls don't stack.
-    ROOT_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-            if let Some(prev) = rt.hide_timer.take() {
-                window.clear_timeout_with_handle(prev);
-            }
+    HIDE_TIMERS.with(|t| {
+        if let Some(prev) = t.borrow_mut().remove(&scope) {
+            window.clear_timeout_with_handle(prev);
         }
     });
     let root_for_cb = root;
     let cb = Closure::once_into_js(move || {
+        HIDE_TIMERS.with(|t| {
+            t.borrow_mut().remove(&scope);
+        });
         root_for_cb.update(|r: &mut PineScrollAreaRoot| r.end_scroll());
     });
     let handle = window
@@ -362,11 +346,17 @@ fn schedule_fade(root: Handle<PineScrollAreaRoot>) {
             delay as i32,
         )
         .unwrap_or(0);
-    ROOT_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&scope) {
-            rt.hide_timer = Some(handle);
-        }
+    HIDE_TIMERS.with(|t| {
+        t.borrow_mut().insert(scope, handle);
     });
+}
+
+fn clear_hide_timer(scope: ScopeId) {
+    if let Some(prev) = HIDE_TIMERS.with(|t| t.borrow_mut().remove(&scope)) {
+        if let Some(w) = web_sys::window() {
+            w.clear_timeout_with_handle(prev);
+        }
+    }
 }
 
 // ── Scrollbar ─────────────────────────────────────────────────────
@@ -598,15 +588,15 @@ fn start_drag(
     orientation: String,
     ev: PointerEvent,
 ) {
-    let root_scope = root.scope_id();
-    let Some(viewport_el) = ROOT_RUNTIME.with(|r| {
-        r.borrow()
-            .get(&root_scope)
-            .and_then(|rt| rt.viewport_el.clone())
-    }) else {
+    // Viewport element was stamped onto Root's scope by Viewport
+    // ::on_ready via `refs::register` so we can resolve it without
+    // a runtime side-table.
+    let Some(viewport_el) = refs::get_on(root.scope_id(), "viewport") else {
         return;
     };
-    let rail_rect = rail_el.get_bounding_client_rect();
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
 
     // Anchor: pointer position vs. thumb offset within the rail, so
     // the thumb doesn't snap to the pointer origin — the delta the
@@ -618,91 +608,77 @@ fn start_drag(
         (ev.client_y() as f64, thumb_rect.top())
     };
     let grab_offset = pointer_origin - thumb_origin;
-
     ev.prevent_default();
-    ROOT_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&root_scope) {
-            rt.dragging_pointer_id = Some(ev.pointer_id());
-        }
-    });
+    let pointer_id = ev.pointer_id();
 
-    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
+    // Document-level listeners for this drag. The handles share an
+    // `Rc<RefCell<Vec<_>>>`; the release closure clears it,
+    // dropping every handle and detaching its listener immediately.
+    let handles: Rc<RefCell<Vec<events::ListenerHandle>>> =
+        Rc::new(RefCell::new(Vec::with_capacity(3)));
 
-    let orient_for_move = orientation.clone();
-    let rail_rect_for_move = rail_rect;
-    let rail_el_for_move = rail_el.clone();
-    let viewport_for_move = viewport_el.clone();
-    let root_for_move = root.clone();
-    let move_handle = events::on(&doc, ev::pointermove, move |ev| {
-        let active = ROOT_RUNTIME.with(|r| {
-            r.borrow()
-                .get(&root_scope)
-                .and_then(|rt| rt.dragging_pointer_id)
-                == Some(ev.pointer_id())
-        });
-        if !active {
-            return;
-        }
-        ev.prevent_default();
-        let (sh, sw, ch, cw) = root_for_move.with(|r| {
-            (
-                r.scroll_height,
-                r.scroll_width,
-                r.client_height,
-                r.client_width,
-            )
-        });
-        // Recompute rail size from the current client rect. The
-        // rail can resize mid-drag (content changes, window resize)
-        // so the cached rect is only a seed for the grab offset.
-        let rail_now = rail_el_for_move.get_bounding_client_rect();
-        if orient_for_move == "horizontal" {
-            let rail_len = rail_now.width().max(1.0);
-            let pointer = (ev.client_x() as f64) - rail_now.left();
-            let new_thumb_left = (pointer - grab_offset).max(0.0);
-            let max_scroll = (sw - cw).max(0.0);
-            // Available travel for the thumb = rail length - thumb size.
-            let thumb_size = (cw / sw * rail_len).clamp(0.0, rail_len);
-            let travel = (rail_len - thumb_size).max(1.0);
-            let new_scroll = (new_thumb_left / travel) * max_scroll;
-            set_scroll_left(&viewport_for_move, new_scroll.clamp(0.0, max_scroll));
-        } else {
-            let rail_len = rail_now.height().max(1.0);
-            let pointer = (ev.client_y() as f64) - rail_now.top();
-            let new_thumb_top = (pointer - grab_offset).max(0.0);
-            let max_scroll = (sh - ch).max(0.0);
-            let thumb_size = (ch / sh * rail_len).clamp(0.0, rail_len);
-            let travel = (rail_len - thumb_size).max(1.0);
-            let new_scroll = (new_thumb_top / travel) * max_scroll;
-            set_scroll_top(&viewport_for_move, new_scroll.clamp(0.0, max_scroll));
-        }
-        // The `scroll` event from the viewport flows back through
-        // Viewport::on_scroll and updates Root.scroll_*, which in
-        // turn fans out to the Thumb's watches. No need to
-        // handle.update here.
-        let _ = &rail_rect_for_move;
-    });
-
-    let release = move |ev: PointerEvent| {
-        ROOT_RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            if let Some(rt) = map.get_mut(&root_scope) {
-                if rt.dragging_pointer_id == Some(ev.pointer_id()) {
-                    rt.dragging_pointer_id = None;
-                }
+    let move_handle = events::on(&doc, ev::pointermove, {
+        let root = root.clone();
+        let viewport_el = viewport_el.clone();
+        move |ev| {
+            if ev.pointer_id() != pointer_id {
+                return;
             }
-        });
+            ev.prevent_default();
+            let (sh, sw, ch, cw) = root.with(|r| {
+                (
+                    r.scroll_height,
+                    r.scroll_width,
+                    r.client_height,
+                    r.client_width,
+                )
+            });
+            // Recompute rail size from the current client rect. The
+            // rail can resize mid-drag (content changes, window
+            // resize) so the cached origin is only a seed for the
+            // grab offset.
+            let rail_now = rail_el.get_bounding_client_rect();
+            if orientation == "horizontal" {
+                let rail_len = rail_now.width().max(1.0);
+                let pointer = (ev.client_x() as f64) - rail_now.left();
+                let new_thumb_left = (pointer - grab_offset).max(0.0);
+                let max_scroll = (sw - cw).max(0.0);
+                let thumb_size = (cw / sw * rail_len).clamp(0.0, rail_len);
+                let travel = (rail_len - thumb_size).max(1.0);
+                let new_scroll = (new_thumb_left / travel) * max_scroll;
+                set_scroll_left(&viewport_el, new_scroll.clamp(0.0, max_scroll));
+            } else {
+                let rail_len = rail_now.height().max(1.0);
+                let pointer = (ev.client_y() as f64) - rail_now.top();
+                let new_thumb_top = (pointer - grab_offset).max(0.0);
+                let max_scroll = (sh - ch).max(0.0);
+                let thumb_size = (ch / sh * rail_len).clamp(0.0, rail_len);
+                let travel = (rail_len - thumb_size).max(1.0);
+                let new_scroll = (new_thumb_top / travel) * max_scroll;
+                set_scroll_top(&viewport_el, new_scroll.clamp(0.0, max_scroll));
+            }
+            // The `scroll` event from the viewport flows back through
+            // Viewport::on_scroll and updates Root.scroll_*, which
+            // in turn fans out to the Thumb's watches. No need to
+            // handle.update here.
+        }
+    });
+
+    let release = {
+        let handles = handles.clone();
+        move |ev: PointerEvent| {
+            if ev.pointer_id() == pointer_id {
+                handles.borrow_mut().clear();
+            }
+        }
     };
-    let up_handle = events::on(&doc, ev::pointerup, release);
+    let up_handle = events::on(&doc, ev::pointerup, release.clone());
     let cancel_handle = events::on(&doc, ev::pointercancel, release);
 
-    ROOT_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&root_scope) {
-            rt.drag_listeners = vec![move_handle, up_handle, cancel_handle];
-        }
-    });
+    handles
+        .borrow_mut()
+        .extend([move_handle, up_handle, cancel_handle]);
+    let _ = root; // captured-by-clone above; suppress unused-tail
 }
 
 fn set_scroll_top(viewport: &web_sys::Element, v: f64) {
@@ -757,22 +733,5 @@ impl PineScrollAreaCorner {
         pocopine::watch_scope_field::<bool, _>(root_scope, "h_visible", move |_, _| {
             recompute(r2.clone(), h2.clone());
         });
-    }
-}
-
-// ── Teardown ──────────────────────────────────────────────────────
-
-fn teardown_runtime(scope: ScopeId) {
-    // Removing the runtime drops `drag_listeners`, whose
-    // destructor detaches the document-level pointer listeners.
-    // The hide-timer lives outside the listener system, so it
-    // still has to be cleared explicitly.
-    let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    if let Some(handle) = rt.hide_timer {
-        if let Some(win) = web_sys::window() {
-            win.clear_timeout_with_handle(handle);
-        }
     }
 }
