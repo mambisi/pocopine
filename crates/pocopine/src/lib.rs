@@ -17,10 +17,10 @@ pub use pocopine_core::{
     spawn, spawn_latest, spawn_scoped, store, this, trigger_scope, verify_registry, watch,
     watch_field, watch_scope_field, watch_scope_field_now, App, Body, Component, ComponentState,
     Computed, ContextKey, ContextMarker, Doc, EffectId, EffectOptions, El, Elapsed, Handle,
-    HostEl, IsTeleported, LifecycleContext, MountEpoch, ParentId, Refs, RegisteredComponent,
-    RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError,
-    ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName, TaskHandle,
-    TeleportHost, TypedEl, Win,
+    HostEl, Inject, IsTeleported, LifecycleContext, MountEpoch, NearestParent, Parent, ParentId,
+    Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId,
+    ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle,
+    TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
@@ -36,8 +36,8 @@ pub mod prelude {
         emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
         emit_model_field, handlers, inject_key, on_cleanup, run, rw_signal, signal, spawn,
         spawn_latest, spawn_scoped, store, this, watch, App, Component, ComponentState, Computed,
-        ContextKey, Handle, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal,
-        Store,
+        ContextKey, ContextMarker, Handle, Inject, NearestParent, Parent, RwSignal, Scope,
+        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
