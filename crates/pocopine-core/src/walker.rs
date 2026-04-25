@@ -202,7 +202,11 @@ fn fire_mount_hook(el: &Element) {
     };
 
     if has_mount {
-        let ctx = crate::lifecycle::LifecycleContext::__new(el, id);
+        let ctx = crate::lifecycle::LifecycleContext::__new(
+            el,
+            id,
+            crate::lifecycle::LifecyclePhase::Mount,
+        );
         crate::scope::with_current_scope_id(id, || {
             scope.state.borrow_mut().mount(ctx);
         });
@@ -223,7 +227,11 @@ fn fire_mount_hook(el: &Element) {
         let el_owned = el.clone();
         crate::tick::next(move || {
             let Some(scope) = Scope::find(id) else { return };
-            let ctx = crate::lifecycle::LifecycleContext::__new(&el_owned, id);
+            let ctx = crate::lifecycle::LifecycleContext::__new(
+                &el_owned,
+                id,
+                crate::lifecycle::LifecyclePhase::Ready,
+            );
             crate::scope::with_current_scope_id(id, || {
                 scope.state.borrow().on_ready(ctx);
             });
@@ -371,11 +379,16 @@ fn mount_component(el: &Element, tag: &str) {
     // hook writes into the scope is visible on the first directive
     // bind.
     if scope.state.borrow().has_setup() {
+        let setup_ctx = crate::lifecycle::LifecycleContext::__new(
+            el,
+            scope.id,
+            crate::lifecycle::LifecyclePhase::Setup,
+        );
         crate::scope::with_current_scope_id(scope.id, || {
             crate::model_runtime::with_scope_write(
                 scope.id,
                 crate::model_runtime::WriteOrigin::SetupSeed,
-                || scope.state.borrow_mut().setup(),
+                || scope.state.borrow_mut().setup(setup_ctx),
             );
         });
     }
@@ -513,11 +526,16 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     }
     apply_static_props(el, &scope);
     if scope.state.borrow().has_setup() {
+        let setup_ctx = crate::lifecycle::LifecycleContext::__new(
+            el,
+            scope.id,
+            crate::lifecycle::LifecyclePhase::Setup,
+        );
         crate::scope::with_current_scope_id(scope.id, || {
             crate::model_runtime::with_scope_write(
                 scope.id,
                 crate::model_runtime::WriteOrigin::SetupSeed,
-                || scope.state.borrow_mut().setup(),
+                || scope.state.borrow_mut().setup(setup_ctx),
             );
         });
     }
@@ -1499,8 +1517,13 @@ fn release_subtree_inner(node: &Node) {
                 // Fire the `on_unmount` lifecycle hook while the scope
                 // and its state are still valid.
                 if let Some(scope) = Scope::find(scope_id) {
+                    let unmount_ctx = crate::lifecycle::LifecycleContext::__new(
+                        &el,
+                        scope_id,
+                        crate::lifecycle::LifecyclePhase::Unmount,
+                    );
                     crate::scope::with_current_scope_id(scope_id, || {
-                        scope.state.borrow_mut().unmount();
+                        scope.state.borrow_mut().unmount(unmount_ctx);
                     });
                 }
                 Scope::remove(scope_id);

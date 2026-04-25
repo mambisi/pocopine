@@ -73,7 +73,13 @@ pub trait ComponentState: 'static {
     /// from injected context so directives in their template see
     /// the populated values on first bind. Default no-op;
     /// `#[component]` wires the user's `on_setup` when one exists.
-    fn setup(&mut self) {}
+    /// RFC 056 follow-on: receives a `LifecycleContext` (phase
+    /// `Setup`) so authors can extract `Inject<KEY, T>`,
+    /// `Handle<Self>`, etc. Element-dependent extractors panic in
+    /// this phase (template hasn't been walked).
+    fn setup(&mut self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// Lifecycle — called once after the component's subtree is fully
     /// bound. Default no-op; `#[component]` wires the user's
@@ -97,8 +103,13 @@ pub trait ComponentState: 'static {
 
     /// Lifecycle — called once just before the component is torn down.
     /// Default no-op; `#[component]` wires the user's `on_unmount`
-    /// when one exists.
-    fn unmount(&mut self) {}
+    /// when one exists. RFC 056 follow-on: receives a
+    /// `LifecycleContext` (phase `Unmount`) for symmetry with the
+    /// other lifecycle hooks. Element-dependent extractors panic
+    /// (the element may already be detaching).
+    fn unmount(&mut self, ctx: crate::lifecycle::LifecycleContext<'_>) {
+        let _ = ctx;
+    }
 
     /// True iff the component has a user-defined `on_setup`.
     /// `mount_component` uses this to skip the setup call for

@@ -28,26 +28,74 @@ use crate::scope::Scope;
 /// adding a parent scope id, refs map, or timing info costs
 /// nothing at author callsites because extractors read the
 /// specific fields they need.
+/// Which lifecycle slot a [`LifecycleContext`] was minted for. Lets
+/// element-dependent extractors panic with a precise message when
+/// used in a phase where the rendered element doesn't yet exist
+/// (setup) or may already be detaching (unmount).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LifecyclePhase {
+    /// Pre-template-walk. `ctx.el` is the custom-element host, not
+    /// the rendered template root. Refs aren't registered yet.
+    Setup,
+    /// Post-template-walk. `ctx.el` is the rendered root. Refs are
+    /// fully populated. Full extractor surface available.
+    Mount,
+    /// One microtask after `Mount`. Same context; the user method
+    /// receives `&self` so internal proxy reads don't double-borrow.
+    Ready,
+    /// Component teardown. `ctx.el` is the element being detached;
+    /// refs may already be cleared by the time the body runs.
+    Unmount,
+}
+
 #[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct LifecycleContext<'a> {
     /// The component's rendered root element — what `SCOPE_ID_KEY`
     /// is pinned on. Template root on the normal mount path; the
-    /// hoisted user element under `pp-as`.
+    /// hoisted user element under `pp-as`. At [`LifecyclePhase::Setup`]
+    /// this is the custom-element host (template hasn't been walked).
     pub el: &'a Element,
     /// This component's scope id.
     pub scope_id: ScopeId,
+    /// Which lifecycle slot the walker fired this hook from.
+    /// Element-dependent extractors guard on this.
+    pub phase: LifecyclePhase,
 }
 
 impl<'a> LifecycleContext<'a> {
-    /// Internal constructor — walker mints these in
-    /// `fire_mount_hook`; not exposed to downstream because the
-    /// type is `#[non_exhaustive]`.
+    /// Internal constructor — walker mints these in `fire_*_hook`;
+    /// not exposed to downstream because the type is
+    /// `#[non_exhaustive]`.
     #[doc(hidden)]
-    pub fn __new(el: &'a Element, scope_id: ScopeId) -> Self {
-        Self { el, scope_id }
+    pub fn __new(el: &'a Element, scope_id: ScopeId, phase: LifecyclePhase) -> Self {
+        Self {
+            el,
+            scope_id,
+            phase,
+        }
     }
 }
+
+#[track_caller]
+fn check_phase(ctx_phase: LifecyclePhase, allowed: &[LifecyclePhase], extractor: &str) {
+    if !allowed.contains(&ctx_phase) {
+        panic!(
+            "{extractor} extractor is not valid in `on_{phase}` (allowed: {allowed:?}). \
+             At setup the rendered template hasn't been walked yet; at unmount the element \
+             may already be detaching. Reach for Handle / Inject / Parent / NearestParent \
+             / ScopeId / Doc / Win / Body — those work in every phase.",
+            phase = match ctx_phase {
+                LifecyclePhase::Setup => "setup",
+                LifecyclePhase::Mount => "mount",
+                LifecyclePhase::Ready => "ready",
+                LifecyclePhase::Unmount => "unmount",
+            },
+        );
+    }
+}
+
+const ELEMENT_PHASES: &[LifecyclePhase] = &[LifecyclePhase::Mount, LifecyclePhase::Ready];
 
 // ── Tier 1 — rendered root, scope id, carrier itself ───────────────
 
@@ -67,7 +115,9 @@ impl<'a> std::ops::Deref for El<'a> {
 }
 
 impl<'a> From<LifecycleContext<'a>> for El<'a> {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "El");
         El(ctx.el)
     }
 }
@@ -167,7 +217,9 @@ impl<'a> From<LifecycleContext<'a>> for Body {
 pub struct TagName(pub &'static str);
 
 impl<'a> From<LifecycleContext<'a>> for TagName {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "TagName");
         // Resolve at hook-call time: rendered-root's parent is
         // normally the custom-element tag. Leak the string to get
         // a `'static str` — one per tag-name string, tiny cost,
@@ -215,7 +267,9 @@ impl<'a> Refs<'a> {
 }
 
 impl<'a> From<LifecycleContext<'a>> for Refs<'a> {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "Refs");
         Refs {
             scope_id: ctx.scope_id,
             _m: PhantomData,
@@ -236,7 +290,9 @@ impl<'a> From<LifecycleContext<'a>> for Refs<'a> {
 pub struct TypedEl<T: JsCast>(pub T);
 
 impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for TypedEl<T> {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "TypedEl");
         TypedEl(
             ctx.el
                 .clone()
@@ -247,7 +303,9 @@ impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for TypedEl<T> {
 }
 
 impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for Option<TypedEl<T>> {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "Option<TypedEl>");
         ctx.el.clone().dyn_into::<T>().ok().map(TypedEl)
     }
 }
@@ -261,7 +319,9 @@ impl<'a, T: JsCast + 'static> From<LifecycleContext<'a>> for Option<TypedEl<T>> 
 pub struct HostEl(pub Element);
 
 impl<'a> From<LifecycleContext<'a>> for HostEl {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "HostEl");
         HostEl(ctx.el.parent_element().unwrap_or_else(|| ctx.el.clone()))
     }
 }
@@ -273,7 +333,9 @@ impl<'a> From<LifecycleContext<'a>> for HostEl {
 pub struct IsTeleported(pub bool);
 
 impl<'a> From<LifecycleContext<'a>> for IsTeleported {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "IsTeleported");
         IsTeleported(crate::directives::teleport::host_of(ctx.el).is_some())
     }
 }
@@ -305,7 +367,9 @@ impl<'a> From<LifecycleContext<'a>> for ScopePath {
 pub struct TeleportHost(pub Option<Element>);
 
 impl<'a> From<LifecycleContext<'a>> for TeleportHost {
+    #[track_caller]
     fn from(ctx: LifecycleContext<'a>) -> Self {
+        check_phase(ctx.phase, ELEMENT_PHASES, "TeleportHost");
         TeleportHost(crate::directives::teleport::host_of(ctx.el))
     }
 }

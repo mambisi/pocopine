@@ -1433,8 +1433,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::pocopine::__private::JsValue {
                 <Self as ::pocopine::__private::HandlerDispatch>::invoke_handler(self, key, args)
             }
-            fn setup(&mut self) {
-                <Self as ::pocopine::__private::HandlerDispatch>::setup(self);
+            fn setup(
+                &mut self,
+                ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                <Self as ::pocopine::__private::HandlerDispatch>::setup(self, ctx);
             }
             fn mount(
                 &mut self,
@@ -1448,8 +1451,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) {
                 <Self as ::pocopine::__private::HandlerDispatch>::on_ready(self, ctx);
             }
-            fn unmount(&mut self) {
-                <Self as ::pocopine::__private::HandlerDispatch>::unmount(self);
+            fn unmount(
+                &mut self,
+                ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                <Self as ::pocopine::__private::HandlerDispatch>::unmount(self, ctx);
             }
             fn has_setup(&self) -> bool {
                 <Self as ::pocopine::__private::HandlerDispatch>::has_setup(self)
@@ -1523,8 +1529,10 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC-032 — number of extractor params past &self / &mut self.
     // Drives how many `__ctx.into()` calls the generated forwarder
     // passes to the user's `on_mount` / `on_ready`.
+    let mut on_setup_extractor_count: usize = 0;
     let mut on_mount_extractor_count: usize = 0;
     let mut on_ready_extractor_count: usize = 0;
+    let mut on_unmount_extractor_count: usize = 0;
     // (method_ident, field_ident, value_type) for each `#[watch(f)]`
     // method. The macro auto-generates an `on_ready` that wires a
     // `watch_field` per entry.
@@ -1658,31 +1666,35 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         let ident = method.sig.ident.clone();
         let name = ident.to_string();
+        let extractor_count = || {
+            method
+                .sig
+                .inputs
+                .iter()
+                .filter(|a| matches!(a, FnArg::Typed(_)))
+                .count()
+        };
         match name.as_str() {
-            "on_setup" => has_on_setup = true,
+            "on_setup" => {
+                has_on_setup = true;
+                on_setup_extractor_count = extractor_count();
+                continue; // lifecycle; don't emit an invoke arm
+            }
             "on_mount" => {
                 has_on_mount = true;
-                // Count non-receiver params — each becomes a
-                // `__ctx.into()` in the generated forwarder.
-                on_mount_extractor_count = method
-                    .sig
-                    .inputs
-                    .iter()
-                    .filter(|a| matches!(a, FnArg::Typed(_)))
-                    .count();
+                on_mount_extractor_count = extractor_count();
                 continue; // lifecycle; don't emit an invoke arm
             }
             "on_ready" => {
                 has_on_ready = true;
-                on_ready_extractor_count = method
-                    .sig
-                    .inputs
-                    .iter()
-                    .filter(|a| matches!(a, FnArg::Typed(_)))
-                    .count();
+                on_ready_extractor_count = extractor_count();
                 continue; // lifecycle; don't emit an invoke arm
             }
-            "on_unmount" => has_on_unmount = true,
+            "on_unmount" => {
+                has_on_unmount = true;
+                on_unmount_extractor_count = extractor_count();
+                continue; // lifecycle; don't emit an invoke arm
+            }
             _ => {}
         }
 
@@ -1736,11 +1748,18 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // lookup — negligible compared to the setup invocation itself.
     // User's `on_setup` (when declared) runs after observes so
     // author code sees observed fields already populated.
+    let setup_extractor_args = (0..on_setup_extractor_count).map(|_| {
+        quote! { __ctx.into() }
+    });
     let user_on_setup_call = has_on_setup.then(|| {
-        quote! { Self::on_setup(self); }
+        quote! { Self::on_setup(self #(, #setup_extractor_args)*); }
     });
     let setup_impl = Some(quote! {
-        fn setup(&mut self) {
+        fn setup(
+            &mut self,
+            __ctx: ::pocopine::__private::LifecycleContext<'_>,
+        ) {
+            let _ = &__ctx;
             <Self>::__pocopine_observe_seed(self);
             let __state_ptr = ::pocopine::__private::component_computed::state_ptr(self);
             let __me = ::pocopine::this::<Self>();
@@ -2060,10 +2079,17 @@ pub fn handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
+    let unmount_extractor_args: Vec<_> = (0..on_unmount_extractor_count)
+        .map(|_| quote! { __ctx.into() })
+        .collect();
     let unmount_impl = has_on_unmount.then(|| {
         quote! {
-            fn unmount(&mut self) {
-                Self::on_unmount(self);
+            fn unmount(
+                &mut self,
+                __ctx: ::pocopine::__private::LifecycleContext<'_>,
+            ) {
+                let _ = &__ctx;
+                Self::on_unmount(self #(, #unmount_extractor_args)*);
             }
             fn has_on_unmount(&self) -> bool { true }
         }
