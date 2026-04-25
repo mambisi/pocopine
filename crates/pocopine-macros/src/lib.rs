@@ -1484,6 +1484,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             pub fn register() {
                 ::pocopine::__private::register_component(
                     #name_str,
+                    concat!(module_path!(), "::", stringify!(#struct_ident)),
                     || {
                         let instance: ::std::rc::Rc<::std::cell::RefCell<#struct_ident>> =
                             ::std::rc::Rc::new(::std::cell::RefCell::new(

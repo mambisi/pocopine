@@ -73,7 +73,11 @@ pub use reactive::{
     batch, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run_now,
     set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
 };
-pub use registry::{register_component, ComponentCtor, ComponentEntry, COMPONENT_ENTRIES};
+pub use registry::{
+    assert_registry_clean, register_component, register_component_as, register_component_prefixed,
+    registered_component_names, registry_errors, render_boot_error, verify_registry, ComponentCtor,
+    ComponentEntry, RegisteredComponent, RegistryError, RegistryErrorKind, COMPONENT_ENTRIES,
+};
 pub use router::{navigate, register_route};
 pub use scope::{
     current_scope_id, invalidate_field, invalidate_field_cache, patch_list_at_inline,
@@ -91,6 +95,14 @@ pub use walker::{start, start_on_body};
 pub use watch::{watch, watch_field, watch_scope_field, watch_scope_field_now};
 
 /// Convenience re-export alias so `pocopine_core::run()` reads well.
+///
+/// Verifies the component registry first (RFC 056 §6.2). When any
+/// collision was recorded during `register()` calls, the boot error
+/// surface is rendered and the walker is *not* started.
 pub fn run() {
+    if let Err(errors) = registry::verify_registry() {
+        registry::render_boot_error(&errors);
+        return;
+    }
     walker::start_on_body();
 }

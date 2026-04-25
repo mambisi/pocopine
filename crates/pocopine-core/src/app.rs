@@ -37,8 +37,10 @@ pub trait Component {
     /// Identical to the registered tag name.
     const NAME: &'static str;
     /// Register this component (scope constructor, template, stylesheet)
-    /// with the runtime. Idempotent — safe to call more than once, later
-    /// calls just overwrite the registry entries.
+    /// with the runtime. Idempotent for the *same* owner — re-registering
+    /// the same `(canonical, owner)` pair is a no-op (RFC 056 §6.1). A
+    /// distinct owner colliding on the same canonical tag records a
+    /// [`crate::RegistryError`] instead of silently overwriting.
     fn register();
 }
 
@@ -118,7 +120,15 @@ impl App {
 
     /// Fire pre-mount hooks, start the walker, initialise the router
     /// (if any routes were registered), then fire post-mount hooks.
+    ///
+    /// RFC 056 §6.2: before any walker work the registry is verified;
+    /// when collisions exist the boot error surface is rendered and
+    /// no further mount work runs.
     pub fn run(self) {
+        if let Err(errors) = crate::registry::verify_registry() {
+            crate::registry::render_boot_error(&errors);
+            return;
+        }
         // Inject the animate-preset atom stylesheet before any
         // component `register()` injects per-component styles, so
         // the preset atoms live earlier in the cascade and
