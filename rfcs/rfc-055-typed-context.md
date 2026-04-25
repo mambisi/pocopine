@@ -1,6 +1,6 @@
 # RFC-055 — Typed Context Ergonomics on Top of Keyed `provide` / `inject`
 
-Status: Draft
+Status: Deferred to [RFC 056](./rfc-056-component-interaction-safety-batch.md)
 
 Author: Codex
 

@@ -1,6 +1,6 @@
 # RFC 053 — Typed component interaction surface
 
-Status: Draft
+Status: Deferred to [RFC 056](./rfc-056-component-interaction-safety-batch.md)
 
 Author: Codex
 

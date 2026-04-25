@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Deferred to [RFC 056](./rfc-056-component-interaction-safety-batch.md) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-24 |
 | **Supersedes** | — |

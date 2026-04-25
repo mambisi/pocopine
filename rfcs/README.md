@@ -59,8 +59,9 @@ Conventions:
 | 047 | [`$slots` magic + slot-presence probes](./rfc-047-slots-magic.md) | Draft |
 | 049 | [Typed slot contracts — compile-time child constraints](./rfc-049-typed-slot-contracts.md) | Draft |
 | 050 | [Real HTML parser at compile time — `html5ever` in `pocopine-macros`](./rfc-050-html5ever-compile-time-parser.md) | Draft |
-| 051 | [Component registry safety — aliases, prefixes, boot verification](./rfc-051-component-registry-safety.md) | Draft |
-| 052 | [Typed structural parent extractors](./rfc-052-parent-extractors.md) | Draft |
-| 053 | [Typed component interaction surface](./rfc-053-typed-component-interaction.md) | Draft |
+| 051 | [Component registry safety — aliases, prefixes, boot verification](./rfc-051-component-registry-safety.md) | Deferred to 056 |
+| 052 | [Typed structural parent extractors](./rfc-052-parent-extractors.md) | Deferred to 056 |
+| 053 | [Typed component interaction surface](./rfc-053-typed-component-interaction.md) | Deferred to 056 |
 | 054 | [Compiled `pp-for` row plans](./rfc-054-compiled-pp-for-row-plans.md) | Draft |
-| 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Draft |
+| 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Deferred to 056 |
+| 056 | [Component interaction safety batch](./rfc-056-component-interaction-safety-batch.md) | Implemented (phases 1–4; phase 5 repo migration outstanding) |
