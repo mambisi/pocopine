@@ -50,7 +50,7 @@ use pocopine::{create_context, focus, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{Event, EventTarget, MouseEvent};
+use web_sys::{EventTarget, MouseEvent};
 
 create_context!(ROOT: Handle<PineContextMenuRoot>);
 
@@ -110,19 +110,12 @@ impl PineContextMenuTrigger {
         };
 
         let root_for_closure = root.clone();
-        let closure = Closure::wrap(Box::new(move |ev: Event| {
-            // `contextmenu` is a MouseEvent — cast to grab client
-            // coords before suppressing the browser's native menu.
-            let me: MouseEvent = ev.clone().dyn_into().unwrap_or_else(|_| {
-                // Shouldn't happen for a contextmenu event; fall
-                // back to (0,0) so we still open.
-                MouseEvent::new("contextmenu").unwrap()
-            });
-            let x = me.client_x() as f64;
-            let y = me.client_y() as f64;
+        let closure = Closure::wrap(Box::new(move |ev: MouseEvent| {
+            let x = ev.client_x() as f64;
+            let y = ev.client_y() as f64;
             ev.prevent_default();
-            root_for_closure.update(|r: &mut PineContextMenuRoot| r.open_at(x, y));
-        }) as Box<dyn FnMut(Event)>);
+            root_for_closure.update(|r| r.open_at(x, y));
+        }) as Box<dyn FnMut(MouseEvent)>);
 
         let target: &EventTarget = el.as_ref();
         let _ = target
