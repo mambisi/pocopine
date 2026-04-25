@@ -1,0 +1,9 @@
+[package]
+name = "pocopine-expr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure-Rust template expression parser shared between pocopine-core (runtime evaluator) and pocopine-macros (compile-time validation). RFC 012 grammar."
+
+[lib]

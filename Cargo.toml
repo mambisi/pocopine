@@ -8,6 +8,7 @@ members = [
     "crates/pocopine",
     "crates/pocopine-cli",
     "crates/pocopine-core",
+    "crates/pocopine-expr",
     "crates/pocopine-macros",
     "crates/pocopine-server",
     "examples/blog",
@@ -39,6 +40,7 @@ repository = "https://github.com/mambisi/pocopine"
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
+pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
