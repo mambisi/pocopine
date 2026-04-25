@@ -45,7 +45,6 @@
 //! </pine-context-menu-root>
 //! ```
 
-use pocopine::events::{self, ev};
 use pocopine::prelude::*;
 use pocopine::{create_context, focus, watch_scope_field};
 use serde::{Deserialize, Serialize};
@@ -107,7 +106,7 @@ impl PineContextMenuTrigger {
             return;
         };
 
-        events::on_scoped(&el, ev::contextmenu, move |e| {
+        on!(el, contextmenu, |e| {
             let x = e.client_x() as f64;
             let y = e.client_y() as f64;
             e.prevent_default();
