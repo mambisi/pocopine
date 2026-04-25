@@ -152,13 +152,16 @@ jobs:
       - run: wasm-pack test --node ${{ matrix.crate }} ${{ matrix.args }}
 
   test-wasm-browser:
-    name: wasm-pack test --chrome (${{ matrix.name }})
+    name: wasm-pack test --firefox (${{ matrix.name }})
     runs-on: ubuntu-latest
     # Tests that need a real browser — DOM walker, MutationObserver,
-    # focus traps, pp-for keyed reorder, transitions. ubuntu-latest
-    # ships Chrome pre-installed; setup-chrome action pins a
-    # known-good version + installs the matching ChromeDriver so
-    # wasm-bindgen-test can spawn it.
+    # focus traps, pp-for keyed reorder, transitions. We use
+    # Firefox + geckodriver instead of Chrome + chromedriver because
+    # ChromeDriver 148's session-init endpoint is incompatible with
+    # `wasm-bindgen-test 0.3.x`'s request shape — the session POST
+    # returns `http status: 404` and the test runner aborts before
+    # any test code runs. Geckodriver has been the stable path for
+    # `wasm-pack test --headless` in CI throughout 2026.
     strategy:
       fail-fast: false
       matrix:
@@ -186,23 +189,25 @@ jobs:
           # ChromeDriver returns `http status: 404` from the
           # session-init handshake.
           tool: wasm-bindgen-cli@0.2.118
-      - uses: browser-actions/setup-chrome@v1
-        id: setup-chrome
+      - uses: browser-actions/setup-firefox@v1
+        id: setup-firefox
         with:
-          chrome-version: stable
-          install-chromedriver: true
+          firefox-version: latest
+      - uses: browser-actions/setup-geckodriver@latest
+        id: setup-geckodriver
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-chrome-${{ matrix.name }}
-      # `webdriver.json` at the repo root carries the Chrome flags
-      # wasm-bindgen-test handshakes with — `--headless=new`,
-      # `--no-sandbox` (required in the GitHub-hosted runner sandbox),
-      # `--disable-dev-shm-usage` (`/dev/shm` is too small in CI
-      # containers and causes spurious `Out of memory` crashes).
-      - name: wasm-pack test --chrome --headless
+          key: test-firefox-${{ matrix.name }}
+      # The `webdriver.json` in each browser-test crate dir carries
+      # `moz:firefoxOptions.args = ["-headless"]`, which Firefox
+      # requires for the headless flag (no `--no-sandbox` /
+      # `--disable-gpu` analogues needed — Firefox doesn't
+      # double-sandbox on the runner and uses its own GPU sandbox
+      # gating).
+      - name: wasm-pack test --firefox --headless
         env:
-          CHROMEDRIVER: ${{ steps.setup-chrome.outputs.chromedriver-path }}
-        run: wasm-pack test --chrome --headless ${{ matrix.crate }} ${{ matrix.args }}
+          GECKODRIVER: ${{ steps.setup-geckodriver.outputs.geckodriver-path }}
+        run: wasm-pack test --firefox --headless ${{ matrix.crate }} ${{ matrix.args }}
 
   examples:
     name: examples (wasm-pack)
