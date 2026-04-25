@@ -13,3 +13,6 @@ pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 web-sys = { version = "0.3", features = ["Performance", "Window"] }
+
+[features]
+mount-profiler = ["pocopine/mount-profiler"]

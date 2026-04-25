@@ -1,5 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 use web_sys::window;
 
 const ADJECTIVES: &[&str] = &[
@@ -31,33 +33,13 @@ const ADJECTIVES: &[&str] = &[
 ];
 
 const COLOURS: &[&str] = &[
-    "red",
-    "yellow",
-    "blue",
-    "green",
-    "pink",
-    "brown",
-    "purple",
-    "brown",
-    "white",
-    "black",
+    "red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black",
     "orange",
 ];
 
 const NOUNS: &[&str] = &[
-    "table",
-    "chair",
-    "house",
-    "bbq",
-    "desk",
-    "car",
-    "pony",
-    "cookie",
-    "sandwich",
-    "burger",
-    "pizza",
-    "mouse",
-    "keyboard",
+    "table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger",
+    "pizza", "mouse", "keyboard",
 ];
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -192,17 +174,39 @@ impl JsBenchApp {
     }
 
     fn next_rand(&mut self, max: usize) -> usize {
-        self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        self.seed = self
+            .seed
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
         ((self.seed >> 16) as usize) % max
     }
 
     fn measure(&mut self, action: &str, f: impl FnOnce(&mut Self)) {
+        if pocopine::mount_profile_enabled() {
+            pocopine::reset_mount_profile();
+        }
         let start = now_ms();
         f(self);
         let end = now_ms();
         self.last_action = action.into();
         self.last_duration_ms = format!("{:.2}", end - start);
+        schedule_mount_profile_report(action);
     }
+}
+
+fn schedule_mount_profile_report(action: &str) {
+    if !pocopine::mount_profile_enabled() {
+        return;
+    }
+    let action = action.to_string();
+    let cb = Closure::once(move || {
+        pocopine::report_mount_profile(&action);
+    });
+    if let Some(w) = window() {
+        let _ =
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 0);
+    }
+    cb.forget();
 }
 
 fn now_ms() -> f64 {

@@ -1,0 +1,14 @@
+[package]
+name = "jsbench-yew"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { version = "0.3", features = ["Document", "Element", "HtmlElement", "Performance", "Window"] }
+yew = { version = "0.21", features = ["csr"] }

@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>yew jsbench temp</title>
+  <style>
+    body {
+      font-family: Helvetica Neue, Helvetica, Arial, sans-serif;
+      margin: 0;
+      color: #212529;
+    }
+    .container {
+      margin: 0 auto;
+      padding: 30px 15px;
+      max-width: 1170px;
+    }
+    .jumbotron {
+      padding: 30px;
+      margin-bottom: 30px;
+      background-color: #eee;
+      border-radius: 6px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      margin-left: -15px;
+      margin-right: -15px;
+    }
+    .col-md-6, .col-sm-6, .col-md-1, .col-md-4 {
+      position: relative;
+      min-height: 1px;
+      padding-left: 15px;
+      padding-right: 15px;
+      box-sizing: border-box;
+    }
+    .col-md-6 { width: 50%; }
+    .col-md-4 { width: 33.333333%; }
+    .col-md-1 { width: 8.333333%; }
+    .col-sm-6 { width: 50%; }
+    .smallpad { padding: 5px; }
+    button {
+      display: inline-block;
+      width: 100%;
+      padding: 10px 16px;
+      border: 1px solid #2e6da4;
+      border-radius: 4px;
+      font-size: 18px;
+      line-height: 1.3333333;
+      color: white;
+      background: #337ab7;
+      cursor: pointer;
+    }
+    h1 {
+      margin: 20px 0 10px;
+      font-size: 63px;
+      font-weight: 500;
+      line-height: 1.1;
+    }
+    .metrics {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin: 16px 0 0;
+      color: #4f5964;
+      font-size: 14px;
+    }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .table td {
+      padding: 8px;
+      line-height: 1.42857143;
+      border-top: 1px solid #ddd;
+      vertical-align: middle;
+    }
+    .danger {
+      background: #f2dede;
+    }
+    a {
+      color: #337ab7;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .glyphicon-remove::before {
+      content: "×";
+      font-weight: 700;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .preloadicon {
+      opacity: 0;
+      position: absolute;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module">
+    import init from "/pkg/jsbench_yew.js";
+    init();
+  </script>
+</body>
+</html>
