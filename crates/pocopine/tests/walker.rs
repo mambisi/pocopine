@@ -55,6 +55,26 @@ struct TestList {
 #[handlers]
 impl TestList {}
 
+// RFC 054 — compiled-row-plan-eligible template (FastExpr-only
+// bindings + a delegated `@click` listener). Exercises the
+// proxy-elided cold-pool mount in `for_::run_keyed`, the
+// parent-level `BULK_RELEASE_KEY` short-circuit on bulk clear,
+// and the per-list watcher's lifecycle across teardown +
+// remount.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "BulkList.html")]
+struct BulkList {
+    rows: Vec<Row>,
+    selected_id: u32,
+}
+
+#[handlers]
+impl BulkList {
+    pub fn pick(&mut self, id: u32) {
+        self.selected_id = id;
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "WithMount.html")]
 struct WithMount {
@@ -612,6 +632,7 @@ impl ComputedHost {
 fn register_all() {
     TestRow::register();
     TestList::register();
+    BulkList::register();
     WithMount::register();
     WithoutMount::register();
     HandlerArgs::register();
@@ -2674,4 +2695,313 @@ async fn emit_cancelable_returns_prevented_flag() {
     assert!(prevented, "listener's preventDefault() observed by caller");
 
     el.remove();
+}
+
+// ─── RFC 054 — bulk-clear + cold-pool compiled-row edge cases ────
+
+/// Read `bulk_list.rows` etc. via the proxy on the `<bulk-list>`
+/// host element's first element child (the component root).
+fn bulk_list_proxy(host: &Element) -> JsValue {
+    let bulk = host.query_selector("bulk-list").unwrap().unwrap();
+    let root = bulk.first_element_child().unwrap();
+    let (_id, proxy) = pocopine_core::walker::scope_of_element(&root)
+        .expect("bulk-list scope present after mount");
+    proxy
+}
+
+fn seed_bulk_rows(host: &Element, rows: &[Row]) {
+    let proxy = bulk_list_proxy(host);
+    let array = serde_wasm_bindgen::to_value(rows).unwrap();
+    js_sys::Reflect::set(&proxy, &"rows".into(), &array).unwrap();
+}
+
+fn bulk_li_count(host: &Element) -> u32 {
+    host.query_selector_all("li").unwrap().length()
+}
+
+fn bulk_li_at(host: &Element, idx: u32) -> Element {
+    let list = host.query_selector_all("li").unwrap();
+    list.get(idx)
+        .and_then(|n| n.dyn_into::<Element>().ok())
+        .expect("li at index")
+}
+
+/// Empty-pool compiled mount — first reconcile against an
+/// empty pool routes through the cold-pool short-circuit
+/// (skipping `item_signature` + `pool.remove`). Verifies every
+/// row renders with its bound text.
+#[wasm_bindgen_test]
+async fn empty_pool_compiled_mount_renders_all_rows() {
+    let host = mount("<bulk-list></bulk-list>");
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 1, label: "alpha".into() },
+            Row { id: 2, label: "bravo".into() },
+            Row { id: 3, label: "charlie".into() },
+            Row { id: 4, label: "delta".into() },
+            Row { id: 5, label: "echo".into() },
+        ],
+    );
+    tick().await;
+
+    assert_eq!(bulk_li_count(&host), 5);
+    let labels: Vec<String> = (0..5)
+        .map(|i| {
+            bulk_li_at(&host, i)
+                .query_selector(".rl")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(labels, vec!["alpha", "bravo", "charlie", "delta", "echo"]);
+}
+
+/// Remount after bulk clear — the bulk-clear path runs, then
+/// the next reconcile mounts again against an empty pool.
+/// Catches state leaking between bulk-clear teardown
+/// (`unmount_rows_bulk` + `Scope::remove_compiled_rows` +
+/// parent-level `BULK_RELEASE_KEY` marker) and the cold-pool
+/// initial mount that follows.
+#[wasm_bindgen_test]
+async fn remount_after_bulk_clear() {
+    let host = mount("<bulk-list></bulk-list>");
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 1, label: "one".into() },
+            Row { id: 2, label: "two".into() },
+            Row { id: 3, label: "three".into() },
+        ],
+    );
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 3);
+
+    // Clear → empty list. Triggers Lever 5b bulk-release marker.
+    seed_bulk_rows(&host, &[]);
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 0);
+
+    // Re-seed → second mount, pool empty again, bulk path re-fires.
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 10, label: "x".into() },
+            Row { id: 11, label: "y".into() },
+        ],
+    );
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 2);
+    assert_eq!(
+        bulk_li_at(&host, 0)
+            .query_selector(".rl")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap_or_default(),
+        "x"
+    );
+}
+
+/// Delegated listener after proxy elision — clicking a button
+/// on a row that mounted via the proxy-elision path
+/// (`bind_scope_id_only`) must lazy-mint the row's proxy on
+/// first dispatch and route the handler against the parent's
+/// state. Verifies subsequent clicks on a different row update
+/// `selected_id` correctly via the same delegated listener.
+#[wasm_bindgen_test]
+async fn delegated_listener_after_proxy_elision() {
+    let host = mount("<bulk-list></bulk-list>");
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 1, label: "a".into() },
+            Row { id: 2, label: "b".into() },
+            Row { id: 3, label: "c".into() },
+        ],
+    );
+    tick().await;
+
+    // Click row 2's button — pick(2) handler should fire.
+    let btn = bulk_li_at(&host, 1)
+        .query_selector("button.pick")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    btn.click();
+    tick().await;
+
+    // Selected_id became 2 → row 2's :class must now be 'sel'.
+    let row1_class = bulk_li_at(&host, 0).get_attribute("class").unwrap_or_default();
+    let row2_class = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
+    let row3_class = bulk_li_at(&host, 2).get_attribute("class").unwrap_or_default();
+    assert_eq!(row1_class, "", "row 1 not selected");
+    assert_eq!(row2_class, "sel", "row 2 should carry .sel");
+    assert_eq!(row3_class, "", "row 3 not selected");
+
+    // Click row 3 — selection should move; row 2's class clears.
+    let btn3 = bulk_li_at(&host, 2)
+        .query_selector("button.pick")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    btn3.click();
+    tick().await;
+
+    let row2_class = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
+    let row3_class = bulk_li_at(&host, 2).get_attribute("class").unwrap_or_default();
+    assert_eq!(row2_class, "", "row 2 should clear after row 3 picked");
+    assert_eq!(row3_class, "sel", "row 3 should carry .sel");
+}
+
+/// Lever 5b — after a bulk-clear, the parent's `BULK_RELEASE_KEY`
+/// marker must be cleared by the observer. A subsequent
+/// non-bulk reconcile that legitimately removes a single row
+/// should release that row's scope normally (NOT skip teardown).
+///
+/// Indirect signal: after clear → re-mount → remove one row →
+/// re-add the same row, the row's button click must still fire
+/// the handler. If the previous teardown was incorrectly skipped
+/// the new clone would inherit a stale scope id and the click
+/// would route to nowhere.
+#[wasm_bindgen_test]
+async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
+    let host = mount("<bulk-list></bulk-list>");
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 1, label: "a".into() },
+            Row { id: 2, label: "b".into() },
+        ],
+    );
+    tick().await;
+
+    // Bulk-clear (engages Lever 5b parent marker).
+    seed_bulk_rows(&host, &[]);
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 0);
+
+    // Re-seed with two rows. Pool empty → cold-pool mount.
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 10, label: "x".into() },
+            Row { id: 11, label: "y".into() },
+        ],
+    );
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 2);
+
+    // Drop just the second row — non-bulk reconcile path runs
+    // (pool not empty for this reconcile). Row 11's clone must
+    // be torn down via the standard release flow; the parent
+    // marker from the earlier bulk-clear must have been cleared
+    // by the observer already.
+    seed_bulk_rows(
+        &host,
+        &[Row { id: 10, label: "x".into() }],
+    );
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 1);
+
+    // Re-add row 11 (and a fresh row 12). They take the standard
+    // mount path now (pool has row 10 in it). Click row 11's
+    // button — handler must fire. If the prior teardown was
+    // skipped, the lingering scope state could swallow the click.
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 10, label: "x".into() },
+            Row { id: 11, label: "y2".into() },
+            Row { id: 12, label: "z".into() },
+        ],
+    );
+    tick().await;
+    assert_eq!(bulk_li_count(&host), 3);
+
+    let btn11 = bulk_li_at(&host, 1)
+        .query_selector("button.pick")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    btn11.click();
+    tick().await;
+    tick().await;
+
+    // The parent's BULK_RELEASE_KEY must have been cleared by the
+    // observer that processed step-2's clear, so step-4's
+    // legitimate single-row removal triggered the standard
+    // release_subtree teardown. Verify the marker is gone.
+    let ul = host.query_selector("ul").unwrap().unwrap();
+    let marker = js_sys::Reflect::get(ul.as_ref(), &"__pp_bulk_release".into())
+        .ok()
+        .filter(|v| !v.is_undefined());
+    assert!(
+        marker.is_none(),
+        "BULK_RELEASE_KEY must not persist past the observer batch that processed it"
+    );
+
+    // Click on the re-added row 11 routed through the standard
+    // delegated-listener path. selected_id should be 11.
+    let proxy = bulk_list_proxy(&host);
+    let selected = js_sys::Reflect::get(&proxy, &"selected_id".into()).unwrap();
+    assert_eq!(
+        selected.as_f64().unwrap_or(-1.0) as u32,
+        11,
+        "click handler on the re-added row must fire and update parent state"
+    );
+}
+
+/// Lever 5 — unmount via the bulk path drops the row's
+/// `RowInstance` AND the per-list watcher when the last row
+/// goes away. Subsequent re-mount must re-install a fresh
+/// watcher; without it, parent-state reactivity would silently
+/// break (selection wouldn't update :class on later rows).
+#[wasm_bindgen_test]
+async fn lever5_watcher_reinstalls_after_bulk_clear() {
+    let host = mount("<bulk-list></bulk-list>");
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 1, label: "a".into() },
+            Row { id: 2, label: "b".into() },
+        ],
+    );
+    tick().await;
+
+    // Bulk-clear drops the watcher (its members went empty).
+    seed_bulk_rows(&host, &[]);
+    tick().await;
+
+    // Re-mount + click — selection must propagate to :class on
+    // the right row. If the watcher didn't re-install on the
+    // cold-pool mount, the :class binding would never re-fire.
+    seed_bulk_rows(
+        &host,
+        &[
+            Row { id: 7, label: "g".into() },
+            Row { id: 8, label: "h".into() },
+        ],
+    );
+    tick().await;
+
+    let btn = bulk_li_at(&host, 1)
+        .query_selector("button.pick")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    btn.click();
+    tick().await;
+
+    let cls = bulk_li_at(&host, 1).get_attribute("class").unwrap_or_default();
+    assert_eq!(
+        cls, "sel",
+        "list-level watcher must re-install on the cold-pool re-mount"
+    );
 }

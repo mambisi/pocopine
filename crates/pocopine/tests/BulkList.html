@@ -1,0 +1,11 @@
+<div class="bulk-list">
+  <ul>
+    <template pp-for="row in rows" pp-key="row.id">
+      <li :class="selected_id == row.id ? 'sel' : ''">
+        <span class="rid" pp-text="row.id"></span>
+        <span class="rl" pp-text="row.label"></span>
+        <button class="pick" @click="pick(row.id)">pick</button>
+      </li>
+    </template>
+  </ul>
+</div>
