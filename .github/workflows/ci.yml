@@ -88,3 +88,44 @@ jobs:
       # current OS so each platform's CLI binary is exercised.
       - name: build (host — pocopine-cli)
         run: cargo build -p pocopine-cli
+
+  examples:
+    name: examples (wasm-pack)
+    runs-on: ubuntu-latest
+    # The workspace build above already type-checks each example
+    # via plain `cargo build --target wasm32`. This job exercises
+    # the full ship pipeline — wasm-bindgen-cli post-processing,
+    # JS shim generation, snippet emission — that `cargo build`
+    # alone doesn't run. Catches integration regressions
+    # (incompatible wasm-bindgen versions, missing target features
+    # in `[lib]`, etc.) before they hit anyone deploying.
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - examples/blog
+          - examples/counter
+          - examples/hn
+          - examples/site
+          - examples/spa
+          - examples/tailwind
+          - examples/todo
+          - examples/website
+          - jsbench/pocopine
+          - jsbench/leptos
+          - jsbench/yew
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Per-example cache so a regression in one doesn't
+          # blow away the others' compiled deps.
+          key: examples-${{ matrix.example }}
+          workspaces: ${{ matrix.example }}
+      - name: wasm-pack build (${{ matrix.example }})
+        run: wasm-pack build --release --target web ${{ matrix.example }}
