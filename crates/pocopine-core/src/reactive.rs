@@ -426,6 +426,21 @@ pub fn clear_scope(scope_id: ScopeId) {
     });
 }
 
+/// Bulk variant for the RFC 054 compiled-row bulk-clear path.
+/// Drains DEPS for every targeted scope in a single
+/// `thread_local::with` borrow.
+pub fn clear_scopes(scope_ids: &[ScopeId]) {
+    if scope_ids.is_empty() {
+        return;
+    }
+    DEPS.with(|d| {
+        let mut map = d.borrow_mut();
+        for id in scope_ids {
+            map.remove(id);
+        }
+    });
+}
+
 /// Trigger every key currently tracked for this scope. Used after a
 /// handler invocation mutates Rust state directly without going
 /// through the proxy's `set` trap. O(k) in the scope's tracked keys

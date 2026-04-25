@@ -83,6 +83,67 @@ fn remove_or_leave(root: &Element) {
     });
 }
 
+/// Cheap predicate over the leave pool — true if any entry
+/// has a transition in its subtree. The bulk-clear fast path
+/// in `run_keyed` falls back to the per-row leave loop when
+/// this returns true, so transition keyframes still play.
+fn has_leavers_with_transition(pool: &HashMap<Rc<str>, PrevItem>) -> bool {
+    pool.values().any(|entry| {
+        crate::directives::transition::has_transition_in_subtree(&entry.element)
+    })
+}
+
+/// Predicate for the bulk-clear path. `replace_children_with_node_1`
+/// removes every child of `parent_el` (text + comment included)
+/// before reinstating `template_el`. We only take the fast path
+/// when:
+///
+/// * Every element child is either `template_el` or one of the
+///   pool clones — no user-authored sibling structure is present.
+/// * Every non-element child is a whitespace-only `Text` node
+///   (typical formatting indentation between rows).
+///
+/// Comments, non-whitespace text, and unrecognised element
+/// siblings all fall through to the per-row remove loop.
+fn bulk_clear_safe(
+    parent_el: &Element,
+    pool: &HashMap<Rc<str>, PrevItem>,
+    template_el: &Element,
+    pool_count: usize,
+) -> bool {
+    let template_node: &Node = template_el.as_ref();
+    let nodes = parent_el.child_nodes();
+    let mut element_seen: usize = 0;
+    for i in 0..nodes.length() {
+        let Some(node) = nodes.item(i) else {
+            return false;
+        };
+        match node.node_type() {
+            Node::ELEMENT_NODE => {
+                element_seen += 1;
+                if node.is_same_node(Some(template_node)) {
+                    continue;
+                }
+                let in_pool = pool
+                    .values()
+                    .any(|entry| node.is_same_node(Some(entry.element.as_ref())));
+                if !in_pool {
+                    return false;
+                }
+            }
+            Node::TEXT_NODE => {
+                let text = node.text_content().unwrap_or_default();
+                if !text.chars().all(|c| c.is_whitespace()) {
+                    return false;
+                }
+            }
+            // Comment, CDATA, processing instruction, etc.
+            _ => return false,
+        }
+    }
+    element_seen == pool_count + 1
+}
+
 fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
     if entry.element.parent_node().is_none()
         || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
@@ -323,6 +384,28 @@ fn run_keyed(
     stagger_ms: u32,
 ) -> crate::reactive::EffectId {
     let key_resolver = KeyResolver::parse(&item_name, &key_expr);
+    // RFC 054 — opportunistic compiled-row-plan fast path. Looked
+    // up once per `pp-for` directive bind (NOT per row). Templates
+    // the macro flagged as eligible (flat keyed table rows, no
+    // nested directives, supported binding/listener envelope) are
+    // stamped with `data-pp-row-plan="<id>"`. None ⇒ generic
+    // walker; Some ⇒ skip the per-row attribute scan and patch
+    // dynamic nodes from the plan directly.
+    let row_plan: Option<Rc<crate::directives::for_plan::CompiledRowPlan>> =
+        crate::directives::for_plan::lookup_for_template(&template_el);
+    // RFC 054 — proxy elision. Plans whose every binding routes
+    // through the typed `FastExpr` evaluator never read the row's
+    // `js_sys::Proxy` on the per-row hot path. Skipping
+    // `Scope::into_proxy` (Object::new ×2 + 2 trap closures +
+    // Proxy::new + 2 wasm-js bridge `Reflect::set` calls) per row
+    // is ~24K bridge ops on `runLots(10000)`. The proxy is
+    // lazy-minted by `enclosing_scope` / `instance_proxy` if a
+    // delegated listener actually fires, so the rare interactive
+    // case still works.
+    let elide_proxy = row_plan
+        .as_ref()
+        .map(|p| p.is_proxy_elision_eligible())
+        .unwrap_or(false);
     let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<PrevItem>>> = Rc::new(RefCell::new(Vec::new()));
     // Pool + seen-keys set carry allocated capacity across effect
@@ -334,6 +417,7 @@ fn run_keyed(
     let seen_cell: Rc<RefCell<HashSet<Rc<str>>>> = Rc::new(RefCell::new(HashSet::new()));
 
     effect(move || {
+        let reconcile_total_start = crate::profiler::reconcile::start();
         let items_js = resolve_path(&parent_proxy, &items_expr);
         let arr: Array = items_js
             .dyn_into::<Array>()
@@ -343,12 +427,21 @@ fn run_keyed(
         let Some(parent_node) = template_el.parent_node() else {
             // Template not attached — clear any tracking.
             prior.borrow_mut().clear();
+            crate::profiler::reconcile::record_total(reconcile_total_start);
             return;
         };
         let parent_node_ref: &Node = parent_node.as_ref();
+        if let Some(plan) = row_plan.as_ref() {
+            crate::directives::for_plan::ensure_delegated_listeners(
+                plan,
+                &template_el,
+                parent_node_ref,
+            );
+        }
 
         // Drain prior into a key → entry map so we can look up reuse
         // candidates in O(1).
+        let pool_build_start = crate::profiler::reconcile::start();
         let mut pool = pool_cell.borrow_mut();
         pool.clear();
         let pool_cap = pool.capacity();
@@ -372,18 +465,46 @@ fn run_keyed(
         if seen_cap < total {
             seen.reserve(total - seen_cap);
         }
+        crate::profiler::reconcile::record_pool_build(pool_build_start);
 
         let mut fresh: Vec<PrevItem> = Vec::with_capacity(total);
+        // RFC 054 — when there's no prior pool, every iteration
+        // hits the "New" branch unconditionally. The
+        // `item_signature` JSON.stringify, the `seen.insert`
+        // dedup check, and the `pool.remove` lookup are all pure
+        // overhead in that case (`item_sig` only matters across
+        // reconciles via `entry.item_sig`, which doesn't exist
+        // for fresh rows; `seen` only matters when reuse is
+        // possible). For `runLots(10000)`'s initial mount this
+        // saves ~30-50ms.
+        let pool_initially_empty = pool.is_empty();
 
+        // RFC 054 Lever 6 was a bulk-mount via parsed
+        // `<template>.innerHTML` — net negative across engines
+        // (Chromium pays a ~12× attach penalty for HTML-parser
+        // elements, see `jsbench/RESULTS.md`). The
+        // suffix-batch path below (`clone_template_body` × N
+        // into a `DocumentFragment`, single `insert_before`)
+        // handles the empty-pool initial mount instead.
+
+        let row_iter_start = crate::profiler::reconcile::start();
         for i in 0..total {
             let item = arr.get(i as u32);
-            let item_sig = item_signature(&item);
             let key_val = key_resolver.resolve(&item, i, &parent_proxy);
             let raw_key: Rc<str> = stringify_key(&key_val).into();
-
-            // Make sure duplicate keys in one pass don't collapse
-            // onto the first clone — the second (and later) hit gets
-            // disambiguated and warned.
+            // Cold-pool optimisation: skip the `item_signature`
+            // (only meaningful across reconciles) and the
+            // `pool.remove` (always None when pool is empty).
+            // Dedup still has to run — duplicate keys must be
+            // disambiguated on first mount too, otherwise the
+            // *next* reconcile drains `prior` into `pool` via
+            // `HashMap::insert` and silently overwrites the
+            // earlier entries, losing row + scope tracking.
+            let item_sig: String = if pool_initially_empty {
+                String::new()
+            } else {
+                item_signature(&item)
+            };
             let key: Rc<str> = if seen.insert(raw_key.clone()) {
                 raw_key
             } else {
@@ -396,7 +517,12 @@ fn run_keyed(
                 dup
             };
 
-            if let Some(mut entry) = pool.remove(&key) {
+            let pool_lookup = if pool_initially_empty {
+                None
+            } else {
+                pool.remove(&key)
+            };
+            if let Some(mut entry) = pool_lookup {
                 // Reuse. If the entry was mid-leave (prior reconcile
                 // started its unmount but the transition hadn't
                 // finished), cancel the leave by running enter — the
@@ -418,7 +544,15 @@ fn run_keyed(
                         st.total = total;
                     }
                     entry.item_sig = item_sig;
-                    trigger_scope(entry.scope_id);
+                    // RFC 054 §5.5 — compiled rows skip the
+                    // reactive sweep; their bindings evaluate
+                    // directly against the mutated loop state and
+                    // patch DOM only on cache miss. Generic rows
+                    // still go through `trigger_scope` so any
+                    // effect-wrapped binding fires once.
+                    if !crate::directives::for_plan::reuse_row_compiled(entry.scope_id) {
+                        trigger_scope(entry.scope_id);
+                    }
                 }
                 fresh.push(entry);
             } else {
@@ -433,8 +567,8 @@ fn run_keyed(
                 }));
                 let scope = Scope::new(loop_rc.clone());
                 crate::context::set_parent(scope.id, parent_scope_id);
-                let proxy = scope.into_proxy();
 
+                let clone_start = crate::profiler::mount::start();
                 let Some(clone_root) = clone_template_body(&template) else {
                     console::error_1(&JsValue::from_str(
                         "pp-for: <template> body must contain exactly one element",
@@ -442,7 +576,13 @@ fn run_keyed(
                     Scope::remove(scope.id);
                     break;
                 };
-                bind_scope_to(&clone_root, scope.id, &proxy);
+                crate::profiler::mount::record_clone_template_body(clone_start);
+                if elide_proxy {
+                    walker::bind_scope_id_only(&clone_root, scope.id);
+                } else {
+                    let proxy = scope.into_proxy();
+                    bind_scope_to(&clone_root, scope.id, &proxy);
+                }
                 fresh.push(PrevItem {
                     element: clone_root,
                     scope_id: scope.id,
@@ -453,6 +593,7 @@ fn run_keyed(
                 });
             }
         }
+        crate::profiler::reconcile::record_row_iter(row_iter_start);
 
         // Anything left in the pool is no longer in the iteration
         // source. RFC-038: route through `transition::leave_subtree`
@@ -488,30 +629,126 @@ fn run_keyed(
         let has_leavers = !pool.is_empty();
         let n_new: usize = fresh.len();
         let mut leavers: Vec<PrevItem> = Vec::new();
+        let leaver_drain_start = crate::profiler::reconcile::start();
+
+        // RFC 054 — bulk-clear fast path. When the new list is
+        // empty, every entry in the pool is a sync-leaver (no
+        // transitions), and the only Element children of
+        // `parent_node` are our clones plus `template_el`, do
+        // ONE `replaceChildren(template_el)` instead of
+        // `parent.remove_child(&el)` × N. For 10K-row clear the
+        // diagnostic profile pinned 387ms in this loop alone —
+        // the bridge cost of N individual `remove_child` calls
+        // dwarfed everything else.
+        //
+        // Gated on `row_plan.is_some()`: the bulk teardown
+        // (`unmount_rows_bulk` + `Scope::remove_compiled_rows`
+        // + `mark_bulk_release`) skips refs/slots/ids/context/
+        // tasks/component_computed/model_runtime cleanup AND
+        // suppresses the `MutationObserver`-driven
+        // `release_subtree` sweep. Compiled rows are guaranteed
+        // not to register any of those side-tables; generic rows
+        // can. Routing generic rows here would leak every one of
+        // those tables for the entire torn-down list.
+        if total == 0
+            && !pool.is_empty()
+            && row_plan.is_some()
+            && !has_leavers_with_transition(&pool)
+        {
+            if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
+                let pool_count = pool.len();
+                // Strict guard: `parent_node` owns *exactly* the
+                // pool's clones plus `template_el`, and any
+                // non-element children are whitespace-only
+                // (typical template indentation). Comments,
+                // user text, or unexpected element siblings
+                // (e.g. a `<tr class="header">` next to a
+                // `<template pp-for>` inside the same `<tbody>`)
+                // bail out — `replace_children_with_node_1`
+                // below would otherwise nuke them.
+                if bulk_clear_safe(parent_el, &pool, &template_el, pool_count) {
+                    let scope_ids: Vec<ScopeId> =
+                        pool.values().map(|entry| entry.scope_id).collect();
+                    // Cleanup BEFORE the DOM mutation:
+                    //  1. Stamp every clone with the
+                    //     `release_skip` marker — when the
+                    //     `MutationObserver`-driven
+                    //     `release_subtree` fires async on each
+                    //     removed row, the marker short-circuits
+                    //     the per-element side-table sweep.
+                    //     11K rows × ~5 sub-elements × ~10
+                    //     `Reflect::get` calls otherwise dominate
+                    //     `clear`'s tail.
+                    //  2. Remove each scope from the registry +
+                    //     drop its `RowInstance`. Idempotent if
+                    //     `release_subtree` ever did fire its
+                    //     normal path (it won't, given (1)).
+                    // RFC 054 Lever 5b — single parent-level
+                    // marker instead of N per-row stamps. The
+                    // `MutationObserver` callback honors
+                    // `BULK_RELEASE_KEY` on `rec.target()` and
+                    // skips the entire batch's `release_subtree`
+                    // sweep, then clears the marker. One
+                    // `Reflect::set` per clear instead of 10K.
+                    crate::walker::mark_bulk_release(parent_el);
+                    // RFC 054 Lever 5 — bulk teardown. The per-row
+                    // unmount path was O(N²) due to
+                    // `LIST_WATCHERS.members.retain(|id| id != sid)`
+                    // running once per row over an N-element Vec
+                    // (~358ms slowest run for 10K rows). The bulk
+                    // variant drops the entire watcher in one
+                    // borrow and drains side-tables in one
+                    // `thread_local::with` per table.
+                    crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
+                    Scope::remove_compiled_rows(&scope_ids);
+                    pool.clear();
+                    let _ = parent_el.replace_children_with_node_1(template_el.as_ref());
+                    prior.borrow_mut().clear();
+                    crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
+                    crate::profiler::reconcile::record_total(reconcile_total_start);
+                    return;
+                }
+            }
+        }
+
         for (_, mut entry) in pool.drain() {
             if !entry.leaving {
                 entry.leaving = true;
                 lift_leaver_out_of_layout(&entry);
                 let el = entry.element.clone();
                 let el_for_cb = el.clone();
+                let scope_id_for_unmount = entry.scope_id;
                 let key_for_retract = Rc::clone(&entry.key);
                 let prior_for_retract = prior.clone();
                 if !crate::directives::transition::has_transition_in_subtree(&el) {
                     if let Some(parent) = el.parent_node() {
                         let _ = parent.remove_child(&el);
                     }
+                    crate::directives::for_plan::unmount_row_compiled(scope_id_for_unmount);
                     retract_from_prior(&prior_for_retract, &key_for_retract);
-                } else {
-                    crate::directives::transition::leave_subtree(&el, move || {
-                        if let Some(parent) = el_for_cb.parent_node() {
-                            let _ = parent.remove_child(&el_for_cb);
-                        }
-                        retract_from_prior(&prior_for_retract, &key_for_retract);
-                    });
+                    // No transition → the entry is fully retired
+                    // synchronously. Skipping the `leavers.push`
+                    // below keeps the dead entry out of
+                    // `fresh.extend(leavers)`, which would
+                    // otherwise re-stash it into `prior` and let
+                    // the *next* reconcile reuse the clone after
+                    // its scope was already removed by the async
+                    // observer — `mount_row_compiled` would then
+                    // run with `loop_state = None` and every
+                    // binding would evaluate to UNDEFINED.
+                    continue;
                 }
+                crate::directives::transition::leave_subtree(&el, move || {
+                    if let Some(parent) = el_for_cb.parent_node() {
+                        let _ = parent.remove_child(&el_for_cb);
+                    }
+                    crate::directives::for_plan::unmount_row_compiled(scope_id_for_unmount);
+                    retract_from_prior(&prior_for_retract, &key_for_retract);
+                });
             }
             leavers.push(entry);
         }
+        crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
 
         // Short-circuit: if the DOM already matches the new order
         // (every `fresh[i]` is parented at `parent_node` AND its
@@ -588,6 +825,7 @@ fn run_keyed(
         }
 
         let mut newly_walked: Vec<Element> = Vec::new();
+        let reorder_start = crate::profiler::reconcile::start();
         if !already_ordered {
             let suffix_insert_start = fresh
                 .iter()
@@ -598,90 +836,130 @@ fn run_keyed(
                 && fresh[suffix_insert_start..]
                     .iter()
                     .all(|entry| entry.element.parent_node().is_none())
-                && fresh[..suffix_insert_start].iter().enumerate().all(|(i, entry)| {
-                    let correct_parent = entry
-                        .element
-                        .parent_node()
-                        .map(|p| p.is_same_node(Some(parent_node_ref)))
-                        .unwrap_or(false);
-                    let expected_next: &Node = if i + 1 < fresh.len() {
-                        fresh[i + 1].element.as_ref()
-                    } else {
-                        template_el.as_ref()
-                    };
-                    let correct_next = next_non_leaving(entry.element.next_sibling())
-                        .map(|n| n.is_same_node(Some(expected_next)))
-                        .unwrap_or(false);
-                    correct_parent && correct_next
-                });
+                && fresh[..suffix_insert_start]
+                    .iter()
+                    .enumerate()
+                    .all(|(i, entry)| {
+                        let correct_parent = entry
+                            .element
+                            .parent_node()
+                            .map(|p| p.is_same_node(Some(parent_node_ref)))
+                            .unwrap_or(false);
+                        let expected_next: &Node = if i + 1 < fresh.len() {
+                            fresh[i + 1].element.as_ref()
+                        } else {
+                            template_el.as_ref()
+                        };
+                        let correct_next = next_non_leaving(entry.element.next_sibling())
+                            .map(|n| n.is_same_node(Some(expected_next)))
+                            .unwrap_or(false);
+                        correct_parent && correct_next
+                    });
             if can_batch_suffix {
                 let doc = template_el
                     .owner_document()
                     .expect("template element should belong to a document");
                 let fragment: DocumentFragment = doc.create_document_fragment();
+                let dom_insert_start = crate::profiler::mount::start();
                 for entry in &fresh[suffix_insert_start..] {
                     let _ = fragment.append_child(entry.element.as_ref());
                     newly_walked.push(entry.element.clone());
                 }
                 let _ = parent_node.insert_before(fragment.as_ref(), Some(template_el.as_ref()));
+                crate::profiler::mount::record_dom_insertion(dom_insert_start);
             } else {
-            // Iterate back-to-front and use the next fresh entry
-            // (or template_el for the last) as the insert anchor.
-            // That keeps leaving siblings in their original DOM
-            // slots instead of pushing every fresh item past them
-            // — deleting a middle item no longer reorders the
-            // flex flow around the leaver, so FLIP only plays on
-            // items whose slot actually moves.
-            //
-            // Per-iter skip: back-to-front means by the time we
-            // consider fresh[i], fresh[i+1] is already in its
-            // final position. So we only need to move fresh[i]
-            // if its next sibling isn't already fresh[i+1]
-            // (skipping any leavers in between). A rotate of N
-            // items where only one moved used to do N no-op
-            // insert_before round-trips through `remove + insert`
-            // — each one still blurs / restarts transitions /
-            // invalidates layout. Now it does exactly the moves
-            // the mutation demands.
-            // Back-to-front insert order keeps the local skip
-            // check correct during a reorder. But the stagger
-            // enter downstream wants clones in FORWARD order so a
-            // 500-item mount paints top → bottom, not bottom → top.
-            // Record new clones into a separate Vec indexed by
-            // fresh position so we can restore the forward order
-            // after this loop.
-            let mut new_indices: Vec<usize> = Vec::new();
-            for i in (0..fresh.len()).rev() {
-                let entry = &fresh[i];
-                let was_in_place = entry
-                    .element
-                    .parent_node()
-                    .map(|p| p.is_same_node(Some(parent_node_ref)))
-                    .unwrap_or(false);
-                let anchor: &Node = if i + 1 < fresh.len() {
-                    fresh[i + 1].element.as_ref()
-                } else {
-                    template_el.as_ref()
-                };
-                let already_here = was_in_place
-                    && next_non_leaving(entry.element.next_sibling())
-                        .map(|n| n.is_same_node(Some(anchor)))
+                // Iterate back-to-front and use the next fresh entry
+                // (or template_el for the last) as the insert anchor.
+                // That keeps leaving siblings in their original DOM
+                // slots instead of pushing every fresh item past them
+                // — deleting a middle item no longer reorders the
+                // flex flow around the leaver, so FLIP only plays on
+                // items whose slot actually moves.
+                //
+                // Per-iter skip: back-to-front means by the time we
+                // consider fresh[i], fresh[i+1] is already in its
+                // final position. So we only need to move fresh[i]
+                // if its next sibling isn't already fresh[i+1]
+                // (skipping any leavers in between). A rotate of N
+                // items where only one moved used to do N no-op
+                // insert_before round-trips through `remove + insert`
+                // — each one still blurs / restarts transitions /
+                // invalidates layout. Now it does exactly the moves
+                // the mutation demands.
+                // Back-to-front insert order keeps the local skip
+                // check correct during a reorder. But the stagger
+                // enter downstream wants clones in FORWARD order so a
+                // 500-item mount paints top → bottom, not bottom → top.
+                // Record new clones into a separate Vec indexed by
+                // fresh position so we can restore the forward order
+                // after this loop.
+                let mut new_indices: Vec<usize> = Vec::new();
+                let dom_insert_start = crate::profiler::mount::start();
+                for i in (0..fresh.len()).rev() {
+                    let entry = &fresh[i];
+                    let was_in_place = entry
+                        .element
+                        .parent_node()
+                        .map(|p| p.is_same_node(Some(parent_node_ref)))
                         .unwrap_or(false);
-                if !already_here {
-                    let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
+                    let anchor: &Node = if i + 1 < fresh.len() {
+                        fresh[i + 1].element.as_ref()
+                    } else {
+                        template_el.as_ref()
+                    };
+                    let already_here = was_in_place
+                        && next_non_leaving(entry.element.next_sibling())
+                            .map(|n| n.is_same_node(Some(anchor)))
+                            .unwrap_or(false);
+                    if !already_here {
+                        let _ = parent_node.insert_before(entry.element.as_ref(), Some(anchor));
+                    }
+                    if !was_in_place {
+                        new_indices.push(i);
+                    }
                 }
-                if !was_in_place {
-                    new_indices.push(i);
-                }
-            }
-            new_indices.sort_unstable();
-            newly_walked.extend(new_indices.into_iter().map(|i| fresh[i].element.clone()));
+                crate::profiler::mount::record_dom_insertion(dom_insert_start);
+                new_indices.sort_unstable();
+                newly_walked.extend(new_indices.into_iter().map(|i| fresh[i].element.clone()));
             }
         }
         // Walk freshly-inserted clones AFTER they're in the tree so
         // directive setup can look up the enclosing scope via parent
         // chain if it needs to.
+        //
+        // RFC 054 — the compiled fast path swaps the generic walker
+        // for a plan-driven mount: clone is already in the DOM with
+        // its scope bound, so we resolve the dynamic node paths
+        // and install bindings/listeners directly. Eligibility is
+        // checked at macro time and the template is stamped with
+        // `data-pp-row-plan="<id>"`; `lookup_for_template` returns
+        // `None` for any template that didn't qualify, and we fall
+        // back to the generic walker.
         for el in &newly_walked {
+            // For compiled rows we already know the scope id (stamped
+            // at clone time) and whether to pass a proxy: elision
+            // means none was minted, so we pass `None` and
+            // `mount_row_compiled` lazy-mints on first listener fire.
+            // Going through `enclosing_scope` here would defeat the
+            // elision by triggering the lazy-mint path immediately.
+            if let Some(plan) = &row_plan {
+                if let Some(sid) = walker::scope_id_of_element(el) {
+                    let proxy_for_mount = if elide_proxy {
+                        None
+                    } else {
+                        crate::walker::scope_of_element(el).map(|(_, p)| p)
+                    };
+                    crate::directives::for_plan::mount_row_compiled(
+                        plan,
+                        el,
+                        sid,
+                        proxy_for_mount.as_ref(),
+                    );
+                    walker::mark_walked(el);
+                    continue;
+                }
+            }
+            crate::profiler::mount::record_generic_row_mounted();
             walker::walk(el);
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
@@ -717,6 +995,8 @@ fn run_keyed(
             crate::animate::flip_batch(pending, crate::animate::FlipOptions::default());
         }
 
+        crate::profiler::reconcile::record_reorder(reorder_start);
+
         // `prior` holds everything the next reconcile can reuse:
         // the `fresh` list (current iteration order) plus any clones
         // that are mid-leave. The leaver's remove callback will
@@ -726,6 +1006,7 @@ fn run_keyed(
         let _ = n_new; // kept for clarity when reading the function
         fresh.extend(leavers);
         *prior.borrow_mut() = fresh;
+        crate::profiler::reconcile::record_total(reconcile_total_start);
     })
 }
 
@@ -805,6 +1086,7 @@ fn stringify_key(v: &JsValue) -> String {
         .and_then(|s| s.as_string())
         .unwrap_or_default()
 }
+
 
 /// Clone `<template>.content` deeply and return the first element
 /// child of the resulting fragment. Returns `None` when the body is

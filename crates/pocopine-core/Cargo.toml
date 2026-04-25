@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 # that's pure binary-size cost when unused.
 default = ["devtools"]
 devtools = []
+mount-profiler = []
 
 [dependencies]
 pocopine-expr = { workspace = true }

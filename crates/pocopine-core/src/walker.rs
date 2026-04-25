@@ -38,6 +38,21 @@ const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
 const INIT_PENDING_KEY: &str = "__pp_init_pending";
 const WALKED_KEY: &str = "__pp_walked";
+/// Stamped on row clones whose scope + row-instance state has
+/// been torn down synchronously by the RFC 054 bulk-clear path.
+/// `release_subtree` checks this first and returns immediately,
+/// skipping the per-element side-table sweep that would otherwise
+/// pay ~10 `Reflect::get` calls per element across the row's
+/// subtree on async `MutationObserver` cleanup. For a 10K-row
+/// `clear` this collapses ~390ms of async cleanup into a no-op.
+const RELEASE_SKIP_KEY: &str = "__pp_release_skip";
+/// Stamped on the *parent* element by the RFC 054 bulk-clear path.
+/// The `MutationObserver` callback checks this on `rec.target()`
+/// for each batch and skips the entire batch's removed-node
+/// teardown sweep when set, then clears the marker after the
+/// batch processes. One `Reflect::set` per bulk clear instead of
+/// N per row.
+const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 /// Explicit inject-chain parent for RFC-027. Stamped on
 /// slot-materialised elements so their scopes chain to the slot-
 /// *owning* component (the one whose template contains the
@@ -71,6 +86,27 @@ pub fn start(root: &Element) {
 pub fn bind_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) {
     set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
     set_private(el, SCOPE_PROXY_KEY, proxy);
+}
+
+/// Stamp only the scope id without minting a `js_sys::Proxy`. Used by
+/// the RFC 054 compiled-row fast path when the row plan is eligible
+/// for proxy elision (every binding is a `FastExpr` so the proxy is
+/// never read by the per-row hot path). [`enclosing_scope`] /
+/// [`scope_of_element`] lazy-mint the proxy on the rare reads — most
+/// commonly a delegated listener firing on user click — so the
+/// 10K-row mount path skips ~24K wasm-js bridge ops (`Object::new` ×2
+/// + 2 trap closures + `Proxy::new` per row).
+pub fn bind_scope_id_only(el: &Element, scope_id: ScopeId) {
+    set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
+}
+
+/// Read just the scope id without forcing proxy lazy-mint. Used by
+/// the compiled-row mount loop in `for_.rs::run_keyed`, which has
+/// the proxy-or-None decision already made and shouldn't pay for a
+/// proxy fetch it'll throw away.
+pub fn scope_id_of_element(el: &Element) -> Option<ScopeId> {
+    let id_num = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64())?;
+    Some(ScopeId(id_num as u64))
 }
 
 /// Pin a **borrowed** scope. Same lookup semantics as `bind_scope_to`,
@@ -1137,8 +1173,20 @@ pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(e) = cur {
         if let Some(id_num) = get_private(&e, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
+            let scope_id = ScopeId(id_num as u64);
             if let Some(proxy) = get_private(&e, SCOPE_PROXY_KEY) {
-                return Some((ScopeId(id_num as u64), proxy));
+                return Some((scope_id, proxy));
+            }
+            // RFC 054 — compiled rows stamp only `SCOPE_ID_KEY` when
+            // their plan is FastExpr-only. Any caller that *does*
+            // need a proxy (a non-eligible directive walk, a
+            // listener AST eval, an inject lookup landing on a row
+            // root) lazy-mints here and caches on the element so
+            // repeat reads stay constant-time.
+            if let Some(scope) = Scope::find(scope_id) {
+                let proxy = scope.into_proxy();
+                set_private(&e, SCOPE_PROXY_KEY, &proxy);
+                return Some((scope_id, proxy));
             }
         }
         cur = e.parent_element();
@@ -1177,8 +1225,15 @@ fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {
 /// writing to an HTML attribute or to a child-component prop.
 pub fn scope_of_element(el: &Element) -> Option<(ScopeId, JsValue)> {
     let id_num = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64())?;
-    let proxy = get_private(el, SCOPE_PROXY_KEY)?;
-    Some((ScopeId(id_num as u64), proxy))
+    let scope_id = ScopeId(id_num as u64);
+    if let Some(proxy) = get_private(el, SCOPE_PROXY_KEY) {
+        return Some((scope_id, proxy));
+    }
+    // RFC 054 proxy elision — see `enclosing_scope` for the rationale.
+    let scope = Scope::find(scope_id)?;
+    let proxy = scope.into_proxy();
+    set_private(el, SCOPE_PROXY_KEY, &proxy);
+    Some((scope_id, proxy))
 }
 
 /// Find the DOM element that has `scope_id` pinned onto it. Walks
@@ -1205,6 +1260,38 @@ fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
         }
     }
     None
+}
+
+/// Stamp `WALKED_KEY` on an element without actually running the
+/// walker. Used by the RFC 054 compiled `pp-for` fast path: the
+/// row root is bound by the plan-driven mount instead of
+/// `walk()`, but we still need the `MutationObserver` to skip
+/// re-walking the subtree when keyed reorder reparents it.
+pub fn mark_walked(el: &Element) {
+    set_private(el, WALKED_KEY, &JsValue::TRUE);
+}
+
+/// Stamp `RELEASE_SKIP_KEY` on an element so `release_subtree`
+/// short-circuits when the `MutationObserver` later fires for
+/// this node. Used by the RFC 054 bulk-clear path which has
+/// already torn the row's scope and `RowInstance` state down
+/// synchronously — running the standard release chain would
+/// just repeat work + pay the Reflect::get tax for nothing.
+pub fn mark_release_skip(el: &Element) {
+    set_private(el, RELEASE_SKIP_KEY, &JsValue::TRUE);
+}
+
+/// Stamp the parent of a bulk-clear so the `MutationObserver`
+/// short-circuits the entire batch of removed-node teardowns
+/// (one stamp instead of N per-row `mark_release_skip` calls).
+/// The observer clears the marker after processing the batch so
+/// future legitimate removals from this parent run normally.
+pub fn mark_bulk_release(el: &Element) {
+    set_private(el, BULK_RELEASE_KEY, &JsValue::TRUE);
+}
+
+fn clear_private(el: &Element, key: &str) {
+    let _ = Reflect::delete_property(el.as_ref(), &key.into());
 }
 
 /// Attach an effect id to an element so it can be released on unmount.
@@ -1364,12 +1451,32 @@ pub fn listener_count() -> usize {
 }
 
 pub(crate) fn release_subtree(node: &Node) {
+    // Outermost-only probe so the recursive descent doesn't
+    // double-count. The inner recursion calls
+    // `release_subtree_inner` directly; nothing else does.
+    let unmount_start = crate::profiler::unmount::start();
+    release_subtree_inner(node);
+    crate::profiler::unmount::record_total(unmount_start);
+}
+
+fn release_subtree_inner(node: &Node) {
     // Recurse through children first so leaves are cleaned before roots.
     if let Ok(el) = node.clone().dyn_into::<Element>() {
+        // RFC 054 bulk-clear short-circuit. When the row was
+        // torn down synchronously by `for_::run_keyed`'s bulk
+        // path, the row root carries `RELEASE_SKIP_KEY`. The
+        // entire subtree's state has already been freed; the
+        // standard side-table sweep below would pay 5+
+        // `Reflect::get` calls per descendant element for
+        // nothing. Returning early collapses 11K-row `clear`
+        // teardown from ~390ms to <10ms.
+        if get_private(&el, RELEASE_SKIP_KEY).is_some() {
+            return;
+        }
         let children = el.children();
         for i in 0..children.length() {
             if let Some(c) = children.item(i) {
-                release_subtree(&c);
+                release_subtree_inner(&c);
             }
         }
         if let Some(v) = get_private(&el, EFFECTS_KEY) {
@@ -1424,6 +1531,13 @@ fn install_observer(root: &Element) {
             .and_then(|w| w.document())
             .and_then(|d| d.get_element_by_id("__pp_devtools_root"));
 
+        // RFC 054 — collect parents stamped with `BULK_RELEASE_KEY`
+        // so we can clear the marker after the batch finishes
+        // processing. Accumulate during iteration; clear at the
+        // end so a parent appearing in multiple records still
+        // honors the skip.
+        let mut bulk_release_parents: Vec<Element> = Vec::new();
+
         for i in 0..arr.length() {
             let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else {
                 continue;
@@ -1439,6 +1553,24 @@ fn install_observer(root: &Element) {
                 }
             }
 
+            // RFC 054 Lever 5b — bulk-clear short-circuit. When the
+            // synchronous bulk path stamped `BULK_RELEASE_KEY` on
+            // the parent before `replaceChildren()`, every removed
+            // node in this record has already had its scope/effect
+            // state torn down synchronously. Skip the per-node
+            // `release_subtree` walk + recursive `Reflect::get`
+            // sweeps. Saves ~30-50ms on a 10K-row clear.
+            let bulk_skip = rec.target().and_then(|t| t.dyn_into::<Element>().ok()).and_then(
+                |parent_el| {
+                    if get_private(&parent_el, BULK_RELEASE_KEY).is_some() {
+                        bulk_release_parents.push(parent_el);
+                        Some(())
+                    } else {
+                        None
+                    }
+                },
+            );
+
             // "Removed" records report nodes detached from *this*
             // parent. When we reparent an element (a keyed `pp-for`
             // reorder, `pp-teleport`, anything similar), it still ends
@@ -1446,13 +1578,15 @@ fn install_observer(root: &Element) {
             // detach-then-attach as separate records. Those must not
             // tear down the element's scope; only nodes that are
             // genuinely gone should release.
-            let removed: NodeList = rec.removed_nodes();
-            for j in 0..removed.length() {
-                if let Some(n) = removed.get(j) {
-                    if n.is_connected() {
-                        continue;
+            if bulk_skip.is_none() {
+                let removed: NodeList = rec.removed_nodes();
+                for j in 0..removed.length() {
+                    if let Some(n) = removed.get(j) {
+                        if n.is_connected() {
+                            continue;
+                        }
+                        release_subtree(&n);
                     }
-                    release_subtree(&n);
                 }
             }
 
@@ -1471,6 +1605,12 @@ fn install_observer(root: &Element) {
                     }
                 }
             }
+        }
+        // Clear the bulk-release markers we honored. Done after
+        // the full record loop so multiple records pointing at
+        // the same parent all hit the skip path.
+        for parent_el in &bulk_release_parents {
+            clear_private(parent_el, BULK_RELEASE_KEY);
         }
     }) as Box<dyn FnMut(JsValue, JsValue)>);
 

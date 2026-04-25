@@ -195,6 +195,35 @@ thread_local! {
     static PROXY_CLOSURES: RefCell<HashMap<ScopeId, AnyClosures>> =
         RefCell::new(HashMap::new());
 
+    /// RFC 054 phase A — per-scope cache of serialised JS values
+    /// for `ComponentState::get` results. The proxy's `get` trap
+    /// reads this first; cache miss falls through to
+    /// `state.get(key)` (which serialises the field via
+    /// `serde_wasm_bindgen`) and stores the result so subsequent
+    /// reads of the same field reuse the same `JsValue`. Targeted
+    /// list ops (`patch_list_at`, etc.) update the cache + the
+    /// underlying Rust state in lockstep so the cached `Array` /
+    /// `Object` identities stay stable across mutations — pp-for
+    /// row identity becomes a pointer comparison instead of a
+    /// fresh JSON.stringify per row.
+    ///
+    /// Invalidation: `set` trap drops the slot for that key;
+    /// `Handle::update` / `Scope::invoke` clear the whole scope's
+    /// cache after the closure / handler runs (we don't know
+    /// which fields it touched). Fields the handler explicitly
+    /// kept fresh via `patch_list_at_inline` are recorded in
+    /// `FRESH_FIELDS` and survive invalidation.
+    static FIELD_CACHE: RefCell<HashMap<ScopeId, HashMap<String, JsValue>>> =
+        RefCell::new(HashMap::new());
+
+    /// Per-scope set of field names that were explicitly kept in
+    /// sync with Rust state by a `patch_*_inline` call. Consumed
+    /// (and cleared) by the next `invalidate_field_cache` so
+    /// only those fields survive the post-handler / post-update
+    /// blanket invalidate.
+    static FRESH_FIELDS: RefCell<HashMap<ScopeId, std::collections::HashSet<String>>> =
+        RefCell::new(HashMap::new());
+
     /// The element the current directive is running against. Set by the
     /// walker immediately around each directive call so `$el` works without
     /// threading the element through every call site.
@@ -262,12 +291,92 @@ impl Scope {
         PROXY_CLOSURES.with(|m| {
             m.borrow_mut().remove(&id);
         });
+        FIELD_CACHE.with(|c| {
+            c.borrow_mut().remove(&id);
+        });
+        FRESH_FIELDS.with(|f| {
+            f.borrow_mut().remove(&id);
+        });
+    }
+
+    /// Bulk teardown for the RFC 054 compiled-row bulk-clear path.
+    /// Drains every per-scope side-table once over the full slice
+    /// instead of paying `12 × thread_local::with` per scope.
+    /// Compiled row scopes are guaranteed not to register
+    /// refs/slots/tasks/inject/computed/model state — those
+    /// table-clears collapse to a no-op for known-empty maps.
+    ///
+    /// **Caller obligations:** every id in `ids` MUST be a
+    /// compiled-row loop scope. General-purpose scope teardown
+    /// still goes through [`Scope::remove`].
+    pub fn remove_compiled_rows(ids: &[ScopeId]) {
+        if ids.is_empty() {
+            return;
+        }
+        SCOPES.with(|s| {
+            let mut map = s.borrow_mut();
+            for id in ids {
+                map.remove(id);
+            }
+        });
+        crate::reactive::clear_scopes(ids);
+        // Compiled rows that never minted a proxy have no entry in
+        // PROXY_CLOSURES / FIELD_CACHE / FRESH_FIELDS — the
+        // per-id `remove` is a hash + compare with no value drop.
+        // Still cheaper than 10K thread_local::with calls.
+        PROXY_CLOSURES.with(|m| {
+            let mut map = m.borrow_mut();
+            for id in ids {
+                map.remove(id);
+            }
+        });
+        FIELD_CACHE.with(|c| {
+            let mut map = c.borrow_mut();
+            for id in ids {
+                map.remove(id);
+            }
+        });
+        FRESH_FIELDS.with(|f| {
+            let mut map = f.borrow_mut();
+            for id in ids {
+                map.remove(id);
+            }
+        });
+        for id in ids {
+            crate::lifecycle::__clear_mount_epoch(*id);
+        }
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct
     /// this scope was created with. `None` on type mismatch.
     pub fn typed<T: 'static>(&self) -> Option<Rc<RefCell<T>>> {
         self.typed.downcast_ref::<Rc<RefCell<T>>>().cloned()
+    }
+
+    /// Read the cached `JsValue` for `field`, or `None` if no
+    /// reader has populated the cache yet (or it was just
+    /// invalidated). Used by [`patch_list_at`] and friends to
+    /// apply targeted patches against the live JS object that
+    /// effects are reading.
+    pub fn cached_field(&self, field: &str) -> Option<JsValue> {
+        FIELD_CACHE.with(|c| {
+            c.borrow()
+                .get(&self.id)
+                .and_then(|m| m.get(field).cloned())
+        })
+    }
+
+    /// Replace the cached `JsValue` for `field`. Mostly used by
+    /// targeted op APIs after they patch the cached value via
+    /// `Reflect::set` and want subsequent readers to see the
+    /// patched object identity.
+    pub fn set_cached_field(&self, field: &str, value: JsValue) {
+        FIELD_CACHE.with(|c| {
+            c.borrow_mut()
+                .entry(self.id)
+                .or_default()
+                .insert(field.to_string(), value);
+        });
     }
 
     /// Build a `js_sys::Proxy` whose `get` trap records dependencies and
@@ -290,7 +399,30 @@ impl Scope {
                     return magics::resolve(&key_str, scope_id);
                 }
                 track(scope_id, &key_str);
-                state_for_get.borrow().get(&key_str)
+                // RFC 054 phase A — field cache short-circuit. The
+                // first `get` for a field invokes the macro-emitted
+                // `ComponentState::get` (which serialises via
+                // `serde_wasm_bindgen`); subsequent reads of the
+                // same field by other effects in the same trigger
+                // cycle reuse the cached JsValue. Targeted
+                // `patch_*` ops keep the cache valid across
+                // mutations so Vec fields don't pay the full
+                // re-serialise tax on every reactive cycle.
+                if let Some(cached) = FIELD_CACHE.with(|c| {
+                    c.borrow()
+                        .get(&scope_id)
+                        .and_then(|m| m.get(&key_str).cloned())
+                }) {
+                    return cached;
+                }
+                let v = state_for_get.borrow().get(&key_str);
+                FIELD_CACHE.with(|c| {
+                    c.borrow_mut()
+                        .entry(scope_id)
+                        .or_default()
+                        .insert(key_str.clone(), v.clone());
+                });
+                v
             },
         )
             as Box<dyn Fn(JsValue, JsValue, JsValue) -> JsValue>);
@@ -303,6 +435,15 @@ impl Scope {
                 let origin = crate::model_runtime::current_write_origin();
                 crate::model_runtime::with_scope_write(scope_id, origin, || {
                     state_for_set.borrow_mut().set(&key_str, value);
+                });
+                // RFC 054 phase A — invalidate the field's cached
+                // JsValue. Next reader will re-serialise from Rust
+                // state, picking up the write the `set_closure` just
+                // applied.
+                FIELD_CACHE.with(|c| {
+                    if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
+                        m.remove(&key_str);
+                    }
                 });
                 trigger(scope_id, &key_str);
                 true
@@ -351,6 +492,12 @@ impl Scope {
             || self.state.borrow_mut().invoke(key, args),
         );
         CURRENT_SCOPE_ID.with(|c| c.set(prev));
+        // RFC 054 phase A — handler may have mutated arbitrary
+        // fields directly through `&mut self`; without targeted
+        // hints we have to drop the whole cache so the next
+        // proxy reads pick up the fresh state. Targeted ops
+        // (`patch_list_at`) keep the cache valid.
+        invalidate_field_cache(self.id);
         trigger_scope(self.id);
         // Devtools hook — fired after trigger_scope so any effect
         // runs scheduled by this handler are visible on the timeline
@@ -364,6 +511,125 @@ impl Scope {
         }
         out
     }
+}
+
+/// Drop every cached field `JsValue` for `scope_id`. Called from
+/// `Handle::update` (which doesn't know which fields the closure
+/// touched), and from `Scope::invoke`. Targeted op APIs
+/// (`patch_list_at` and friends) deliberately do NOT call this —
+/// they keep the cache valid by patching it in lockstep with
+/// the Rust mutation, which is the whole point of the API.
+pub fn invalidate_field_cache(scope_id: ScopeId) {
+    let fresh = FRESH_FIELDS.with(|f| {
+        let mut map = f.borrow_mut();
+        map.remove(&scope_id).unwrap_or_default()
+    });
+    FIELD_CACHE.with(|c| {
+        if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
+            if fresh.is_empty() {
+                m.clear();
+            } else {
+                m.retain(|k, _| fresh.contains(k));
+            }
+        }
+    });
+}
+
+/// Drop one field's cache slot. Call this from inside a
+/// `&mut self` handler after a Rust-side mutation when you DON'T
+/// want a full state re-serialise on the next read but also can't
+/// patch the JS cache surgically (e.g. structural reshape, length
+/// change). Reactivity does NOT fire here — call `trigger` (or
+/// the caller's `Handle::update` boundary) for that.
+pub fn invalidate_field(scope_id: ScopeId, field: &str) {
+    FIELD_CACHE.with(|c| {
+        if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
+            m.remove(field);
+        }
+    });
+}
+
+/// Patch one element of a `Vec<T>`-style field's cached
+/// `JsValue` against the *current* scope (resolved via
+/// `current_scope_id`). Designed to be called from inside a
+/// `&mut self` handler after a Rust-side mutation:
+///
+/// ```ignore
+/// pub fn touch_row(&mut self, idx: usize) {
+///     self.rows[idx].label.push_str(" !!!");
+///     pocopine::scope::patch_list_at_inline(
+///         "rows", idx, &self.rows[idx],
+///     );
+/// }
+/// ```
+///
+/// Reactivity fires for `field` on the current scope id. Unlike
+/// `Handle::update`'s blanket `trigger_scope`, only effects
+/// subscribed to `field` re-evaluate. The cached `JsValue` is
+/// patched in place via `Reflect::set` so the live JS Array
+/// readers (e.g. a `pp-for` reconcile) see the same Array
+/// identity with one updated cell — Object identities for
+/// every other row stay stable.
+///
+/// No-op (still fires reactivity) when:
+///
+/// - no scope is currently set (called outside a handler),
+/// - the field has never been read by a JS effect (cache empty),
+/// - the cached value isn't object-shaped (e.g. raw scalar field).
+pub fn patch_list_at_inline<T: serde::Serialize>(field: &str, idx: usize, row: &T) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| {
+        c.borrow()
+            .get(&sid)
+            .and_then(|m| m.get(field).cloned())
+    });
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
+                let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
+            }
+        }
+        // Keep the slot alive across the post-handler invalidate.
+        FRESH_FIELDS.with(|f| {
+            f.borrow_mut()
+                .entry(sid)
+                .or_default()
+                .insert(field.to_string());
+        });
+    }
+    crate::reactive::trigger(sid, field);
+}
+
+/// Replace the entire cached `JsValue` for `field` against the
+/// current scope. Fires per-field reactivity. Use this when a
+/// structural change (push / swap / clear / length change) means
+/// individual cell patching won't work — re-serialise the whole
+/// field once, stash it, and trigger. Sister of
+/// [`patch_list_at_inline`] for ops without per-index granularity.
+pub fn replace_field_inline<T: serde::Serialize>(field: &str, value: &T) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    match serde_wasm_bindgen::to_value(value) {
+        Ok(new_js) => {
+            FIELD_CACHE.with(|c| {
+                c.borrow_mut()
+                    .entry(sid)
+                    .or_default()
+                    .insert(field.to_string(), new_js);
+            });
+            FRESH_FIELDS.with(|f| {
+                f.borrow_mut()
+                    .entry(sid)
+                    .or_default()
+                    .insert(field.to_string());
+            });
+        }
+        Err(_) => invalidate_field(sid, field),
+    }
+    crate::reactive::trigger(sid, field);
 }
 
 /// The scope whose handler is currently on the stack. `None` outside of a

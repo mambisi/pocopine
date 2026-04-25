@@ -10,6 +10,9 @@ description = "Proc-macros for pocopine: #[component] and #[handlers]."
 proc-macro = true
 
 [dependencies]
+# RFC 054 — compile-time validation of `pp-for` row-plan
+# expressions. Pure-Rust parser shared with the runtime.
+pocopine-expr = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true }

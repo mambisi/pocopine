@@ -33,7 +33,9 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::reactive::{trigger_scope, ScopeId};
-use crate::scope::{current_scope_id, with_current_scope_id, Scope};
+use crate::scope::{
+    current_scope_id, invalidate_field_cache, with_current_scope_id, Scope,
+};
 
 /// Typed handle onto a component or store scope.
 ///
@@ -76,10 +78,24 @@ impl<T: 'static> Handle<T> {
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let sid = self.scope_id;
         let origin = crate::model_runtime::current_write_origin();
+        let total_start = crate::profiler::state_sync::start();
+        let closure_start = crate::profiler::state_sync::start();
         let out = crate::model_runtime::with_scope_write(sid, origin, || {
             with_current_scope_id(sid, || f(&mut self.inner.borrow_mut()))
         });
+        crate::profiler::state_sync::record_closure(closure_start);
+        // RFC 054 phase A — the closure may have mutated arbitrary
+        // fields directly through `&mut T`. We don't know which
+        // fields were touched, so drop the whole field cache;
+        // next proxy reads pick up the fresh state. Targeted
+        // `patch_*` ops keep the cache valid.
+        let invalidate_start = crate::profiler::state_sync::start();
+        invalidate_field_cache(sid);
+        crate::profiler::state_sync::record_invalidate(invalidate_start);
+        let trigger_start = crate::profiler::state_sync::start();
         trigger_scope(sid);
+        crate::profiler::state_sync::record_trigger(trigger_start);
+        crate::profiler::state_sync::record_total(total_start);
         out
     }
 

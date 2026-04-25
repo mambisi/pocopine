@@ -55,6 +55,11 @@ mod uses;
 // TemplateAst parsed by `template_parser` and the UsesTable
 // built by `uses`.
 mod slot_assertions;
+// RFC 054 — compile-time row-plan emitter for keyed `pp-for`.
+// Walks the AST, validates expressions via `pocopine-expr`,
+// and emits a `&[StaticRowPlan]` literal alongside template
+// stamps the caller injects into the source.
+mod for_plan;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -1216,17 +1221,61 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => proc_macro2::TokenStream::new(),
     };
 
+    // RFC 054 — compile row plans for eligible keyed `pp-for`
+    // templates and stamp the source with `data-pp-row-plan`
+    // anchors so the runtime can match the directive call back
+    // to its plan. When no plan is emitted the runtime takes
+    // the existing generic walker path.
+    let row_plans = template_ast
+        .as_ref()
+        .map(for_plan::analyze_row_plans)
+        .unwrap_or_else(|| for_plan::EmittedRowPlans {
+            array_tokens: quote! { &[] },
+            has_plans: false,
+            stamps: Vec::new(),
+        });
+
+    // Build the literal to feed into `compile_template`. Without
+    // stamps it's the raw `include_str!` (existing path); with
+    // stamps it's the stamped source spliced at macro time. We
+    // keep the `const _: &str = include_str!(...)` dependency-pin
+    // so cargo still rebuilds when the `.poco` changes.
+    let template_literal_tokens = if row_plans.stamps.is_empty() {
+        quote! { include_str!(#template_path) }
+    } else {
+        let source = template_ast
+            .as_ref()
+            .map(|ast| ast.source.as_str())
+            .unwrap_or("");
+        let stamped = for_plan::apply_stamps(source, &row_plans.stamps);
+        let lit = proc_macro2::Literal::string(&stamped);
+        quote! { #lit }
+    };
+
+    let row_plans_array_tokens = row_plans.array_tokens;
+    let register_row_plans_stmt = if row_plans.has_plans {
+        quote! {
+            ::pocopine::__private::register_row_plans(
+                #name_str,
+                #row_plans_array_tokens,
+            );
+        }
+    } else {
+        quote! {}
+    };
+
     let register_template_stmt = quote! {
         #template_warnings
         const _: &str = include_str!(#template_path);
         ::pocopine::__private::register_template(
             #name_str,
             ::pocopine::__private::compile_template(
-                include_str!(#template_path),
+                #template_literal_tokens,
                 #name_str,
                 #role_arg,
             ),
         );
+        #register_row_plans_stmt
     };
 
     let register_style_stmt = match args.style.as_ref() {

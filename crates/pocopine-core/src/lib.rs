@@ -28,6 +28,7 @@ pub mod loop_scope;
 pub mod magics;
 pub mod model_runtime;
 pub mod path;
+pub mod profiler;
 pub mod reactive;
 pub mod refs;
 pub mod registry;
@@ -40,9 +41,9 @@ pub mod slot_scope;
 pub mod slots;
 pub mod store;
 pub mod styles;
+pub mod task;
 pub mod templates;
 pub mod text;
-pub mod task;
 pub mod tick;
 pub mod walker;
 pub mod watch;
@@ -50,6 +51,9 @@ pub mod watch;
 pub use app::{App, Component};
 pub use computed::{computed, Computed};
 pub use context::{inject, provide, InjectKey};
+pub use directives::for_plan::{
+    register_row_plans, BindingKind, StaticBinding, StaticListener, StaticRowPlan,
+};
 pub use emit::{
     emit, emit_cancelable, emit_cancelable_from, emit_from, emit_from_host, emit_model,
     emit_model_field,
@@ -62,19 +66,24 @@ pub use lifecycle::{
 };
 pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
+pub use profiler::mount::{
+    enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,
+};
 pub use reactive::{
     batch, current_effect, effect, effect_with, flush_sync, on_cleanup, release, run_now,
-    set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,
-    SIGNAL_SCOPE,
+    set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId, SIGNAL_SCOPE,
 };
 pub use registry::{register_component, ComponentCtor, ComponentEntry, COMPONENT_ENTRIES};
 pub use router::{navigate, register_route};
-pub use scope::{current_scope_id, ComponentState, Scope};
+pub use scope::{
+    current_scope_id, invalidate_field, invalidate_field_cache, patch_list_at_inline,
+    replace_field_inline, ComponentState, Scope,
+};
 pub use server::{Result as ServerResult, ServerError};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
-pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
 pub use styles::inject_style;
+pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
 pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
