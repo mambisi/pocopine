@@ -14,6 +14,9 @@ looks the way it does — the code itself tells you *what*.
 - [`animation-perf.md`](./animation-perf.md) — perf characteristics
   + baseline numbers for the motion stack. Refresh via
   `examples/website/e2e/test_motion_perf.py`.
+- [`performance-strategy.md`](./performance-strategy.md) — current
+  large-list performance strategy, including why Vue / Svelte are
+  ahead and what pocopine should optimize next.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
