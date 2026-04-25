@@ -41,6 +41,7 @@
 //! </pine-command-root>
 //! ```
 
+use pocopine::events::{self, ev, ListenerHandle};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
@@ -48,16 +49,17 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{EventTarget, HtmlElement, KeyboardEvent};
+use web_sys::{HtmlElement, KeyboardEvent};
 
 create_context!(ROOT: Handle<PineCommandRoot>);
 
 // Per-Root runtime — holds the global shortcut listener so
-// `on_unmount` can detach it cleanly.
+// `on_unmount` can detach it cleanly. Dropping the handle removes
+// the listener.
 struct RootRuntime {
-    shortcut: Option<Closure<dyn FnMut(KeyboardEvent)>>,
+    #[allow(dead_code)]
+    shortcut: Option<ListenerHandle>,
 }
 
 thread_local! {
@@ -165,35 +167,29 @@ impl PineCommandRoot {
 
 fn install_global_shortcut(scope: ScopeId, handle: Handle<PineCommandRoot>, shortcut: String) {
     let parsed = parse_shortcut(&shortcut);
-    let cb = Closure::wrap(Box::new({
-        move |ev: KeyboardEvent| {
-            if matches_shortcut(&ev, &parsed) {
-                ev.prevent_default();
-                handle.update(|r: &mut PineCommandRoot| r.toggle());
-            }
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let listener = events::on(&doc, ev::keydown, move |ev| {
+        if matches_shortcut(&ev, &parsed) {
+            ev.prevent_default();
+            handle.update(|r| r.toggle());
         }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let target: &EventTarget = doc.as_ref();
-        let _ = target.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
-    }
+    });
     ROOT_RUNTIME.with(|r| {
-        r.borrow_mut()
-            .insert(scope, RootRuntime { shortcut: Some(cb) });
+        r.borrow_mut().insert(
+            scope,
+            RootRuntime {
+                shortcut: Some(listener),
+            },
+        );
     });
 }
 
 fn teardown_global_shortcut(scope: ScopeId) {
-    let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let target: &EventTarget = doc.as_ref();
-        if let Some(cb) = rt.shortcut.as_ref() {
-            let _ =
-                target.remove_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
-        }
-    }
+    // Removing the runtime drops the ListenerHandle, which detaches
+    // the document-level keydown listener.
+    ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope));
 }
 
 #[derive(Clone)]
