@@ -154,6 +154,19 @@ pub fn effect(f: impl Fn() + 'static) -> EffectId {
     effect_with(f, EffectOptions::default())
 }
 
+/// Scope-bound counterpart to [`effect`] — installs the effect and
+/// registers a cleanup against the current scope's unmount, so the
+/// effect is released automatically when the component goes away.
+/// Returns nothing; storage is implicit.
+///
+/// Same shape as `events::on_scoped` and `timers::after_scoped` —
+/// the right default inside lifecycle hooks where the effect
+/// should outlive the install but die with the scope.
+pub fn effect_scoped(f: impl Fn() + 'static) {
+    let id = effect(f);
+    crate::events::on_scope_unmount(move || release(id));
+}
+
 /// Register an effect with explicit options. A `lazy` effect is stored but
 /// not run; a `scheduler` diverts `trigger` to user code instead of the
 /// default microtask flush.

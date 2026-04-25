@@ -127,3 +127,59 @@ where
 {
     watch(move || read_scope_field::<V>(scope_id, field), cb)
 }
+
+/// Scope-bound counterpart to [`watch`] — installs the watcher and
+/// registers a cleanup against the current scope's unmount, so the
+/// effect is released automatically when the component goes away.
+/// Returns nothing; storage is implicit.
+///
+/// Same shape as `events::on_scoped` and `timers::after_scoped` —
+/// the right default inside lifecycle hooks where the watcher
+/// should outlive the install but die with the scope.
+pub fn watch_scoped<T, S, C>(source: S, cb: C)
+where
+    T: Clone + PartialEq + 'static,
+    S: Fn() -> T + 'static,
+    C: Fn(&T, Option<&T>) + 'static,
+{
+    let id = watch(source, cb);
+    crate::events::on_scope_unmount(move || crate::reactive::release(id));
+}
+
+/// Scope-bound counterpart to [`watch_field`].
+pub fn watch_field_scoped<V, C>(field: &'static str, cb: C)
+where
+    V: Clone + PartialEq + Default + DeserializeOwned + 'static,
+    C: Fn(&V, Option<&V>) + 'static,
+{
+    let scope_id = current_scope_id()
+        .expect("watch_field_scoped called outside a handler / lifecycle context");
+    watch_scope_field_scoped(scope_id, field, cb);
+}
+
+/// Scope-bound counterpart to [`watch_scope_field`]. Installs the
+/// effect lazily on `tick::next` (same as the unsoped form) and
+/// schedules a release against the current scope's unmount once
+/// the install fires.
+pub fn watch_scope_field_scoped<V, C>(scope_id: ScopeId, field: &'static str, cb: C)
+where
+    V: Clone + PartialEq + Default + DeserializeOwned + 'static,
+    C: Fn(&V, Option<&V>) + 'static,
+{
+    use std::cell::Cell;
+    use std::rc::Rc;
+    // The install is deferred a tick (same as `watch_scope_field`),
+    // so we have to capture the eventually-minted EffectId in a
+    // shared cell that the unmount closure can read.
+    let pending: Rc<Cell<Option<EffectId>>> = Rc::new(Cell::new(None));
+    let pending_for_install = pending.clone();
+    crate::tick::next(move || {
+        let id = watch_scope_field_now(scope_id, field, cb);
+        pending_for_install.set(Some(id));
+    });
+    crate::events::on_scope_unmount(move || {
+        if let Some(id) = pending.take() {
+            crate::reactive::release(id);
+        }
+    });
+}
