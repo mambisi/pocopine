@@ -31,24 +31,23 @@
 //! v1 supports a single thumb and both orientations. Multi-thumb
 //! range sliders wait for a follow-up.
 
+use pocopine::events::{self, ev, ListenerHandle};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
-use web_sys::{EventTarget, PointerEvent};
+use web_sys::PointerEvent;
 
 create_context!(ROOT: Handle<PineSliderRoot>);
 
-// Per-Root runtime: captures installed listeners + drag state so
-// `on_unmount` can detach cleanly.
+// Per-Root runtime: drag state + the four pointer listeners
+// (root pointerdown, doc pointermove/up/cancel). Dropping the
+// `Vec<ListenerHandle>` detaches every one at once.
+#[allow(dead_code)]
 struct RootRuntime {
     root_el: Option<web_sys::Element>,
-    pointer_down: Option<Closure<dyn FnMut(PointerEvent)>>,
-    pointer_move: Option<Closure<dyn FnMut(PointerEvent)>>,
-    pointer_up: Option<Closure<dyn FnMut(PointerEvent)>>,
+    listeners: Vec<ListenerHandle>,
     dragging_pointer_id: Option<i32>,
 }
 
@@ -172,7 +171,7 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
     // position + marks the drag as active.
     let root_for_down = root_el.clone();
     let handle_for_down = root.clone();
-    let down = Closure::wrap(Box::new(move |ev: PointerEvent| {
+    let down = events::on(&root_el, ev::pointerdown, move |ev| {
         if handle_for_down.with(|r| r.disabled) {
             return;
         }
@@ -183,8 +182,8 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
         });
         ev.prevent_default();
         let v = value_from_pointer(&root_for_down, &ev, &handle_for_down);
-        handle_for_down.update(|r: &mut PineSliderRoot| r.set_value(v));
-    }) as Box<dyn FnMut(PointerEvent)>);
+        handle_for_down.update(|r| r.set_value(v));
+    });
 
     // pointermove + pointerup attach to `document`. Pointer capture
     // on the slider itself is flaky across real browsers (the
@@ -192,43 +191,35 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
     // of the capturing one). Document-level listeners always fire,
     // and we gate them on `dragging_pointer_id` so they're no-ops
     // when the user isn't dragging this slider.
-    let root_for_move = root_el.clone();
-    let handle_for_move = root.clone();
-    let move_ = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        let active = ROOT_RUNTIME.with(|r| {
-            r.borrow().get(&scope).and_then(|rt| rt.dragging_pointer_id) == Some(ev.pointer_id())
-        });
-        if !active {
-            return;
-        }
-        ev.prevent_default();
-        let v = value_from_pointer(&root_for_move, &ev, &handle_for_move);
-        handle_for_move.update(|r: &mut PineSliderRoot| r.set_value(v));
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    let up = Closure::wrap(Box::new(move |ev: PointerEvent| {
-        ROOT_RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            if let Some(rt) = map.get_mut(&scope) {
-                if rt.dragging_pointer_id == Some(ev.pointer_id()) {
-                    rt.dragging_pointer_id = None;
-                }
+    let mut listeners = vec![down];
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        let root_for_move = root_el.clone();
+        let handle_for_move = root.clone();
+        let move_ = events::on(&doc, ev::pointermove, move |ev| {
+            let active = ROOT_RUNTIME.with(|r| {
+                r.borrow().get(&scope).and_then(|rt| rt.dragging_pointer_id)
+                    == Some(ev.pointer_id())
+            });
+            if !active {
+                return;
             }
+            ev.prevent_default();
+            let v = value_from_pointer(&root_for_move, &ev, &handle_for_move);
+            handle_for_move.update(|r| r.set_value(v));
         });
-    }) as Box<dyn FnMut(PointerEvent)>);
-
-    let target: &EventTarget = root_el.as_ref();
-    let _ = target.add_event_listener_with_callback("pointerdown", down.as_ref().unchecked_ref());
-
-    let doc = web_sys::window().and_then(|w| w.document());
-    if let Some(doc) = doc.as_ref() {
-        let doc_target: &EventTarget = doc.as_ref();
-        let _ = doc_target
-            .add_event_listener_with_callback("pointermove", move_.as_ref().unchecked_ref());
-        let _ =
-            doc_target.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
-        let _ = doc_target
-            .add_event_listener_with_callback("pointercancel", up.as_ref().unchecked_ref());
+        let release = move |ev: PointerEvent| {
+            ROOT_RUNTIME.with(|r| {
+                let mut map = r.borrow_mut();
+                if let Some(rt) = map.get_mut(&scope) {
+                    if rt.dragging_pointer_id == Some(ev.pointer_id()) {
+                        rt.dragging_pointer_id = None;
+                    }
+                }
+            });
+        };
+        let up = events::on(&doc, ev::pointerup, release);
+        let cancel = events::on(&doc, ev::pointercancel, release);
+        listeners.extend([move_, up, cancel]);
     }
 
     ROOT_RUNTIME.with(|r| {
@@ -236,9 +227,7 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
             scope,
             RootRuntime {
                 root_el: Some(root_el),
-                pointer_down: Some(down),
-                pointer_move: Some(move_),
-                pointer_up: Some(up),
+                listeners,
                 dragging_pointer_id: None,
             },
         );
@@ -246,30 +235,9 @@ fn install_pointer(scope: ScopeId, root_el: web_sys::Element, root: Handle<PineS
 }
 
 fn teardown_pointer(scope: ScopeId) {
-    let Some(rt) = ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope)) else {
-        return;
-    };
-    let Some(el) = rt.root_el.as_ref() else {
-        return;
-    };
-    let target: &EventTarget = el.as_ref();
-    if let Some(c) = rt.pointer_down.as_ref() {
-        let _ =
-            target.remove_event_listener_with_callback("pointerdown", c.as_ref().unchecked_ref());
-    }
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        let doc_target: &EventTarget = doc.as_ref();
-        if let Some(c) = rt.pointer_move.as_ref() {
-            let _ = doc_target
-                .remove_event_listener_with_callback("pointermove", c.as_ref().unchecked_ref());
-        }
-        if let Some(c) = rt.pointer_up.as_ref() {
-            let _ = doc_target
-                .remove_event_listener_with_callback("pointerup", c.as_ref().unchecked_ref());
-            let _ = doc_target
-                .remove_event_listener_with_callback("pointercancel", c.as_ref().unchecked_ref());
-        }
-    }
+    // Removing the runtime drops `listeners`, whose destructor
+    // detaches every pointer listener.
+    ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope));
 }
 
 /// Compute the Slider value corresponding to a pointer position
