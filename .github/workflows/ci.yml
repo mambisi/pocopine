@@ -132,6 +132,16 @@ jobs:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
       - uses: jetli/wasm-pack-action@v0.4.0
+      # Pin wasm-bindgen-cli to the workspace lockfile version so
+      # the test runner's HTTP API matches what `wasm-bindgen-test`
+      # in the lockfile expects. The wasm-pack-bundled copy is
+      # picked from a build-host heuristic and frequently lags or
+      # leads, which surfaces as `http status: 404` against the
+      # WebDriver session.
+      - name: install wasm-bindgen-cli (locked)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-node-${{ matrix.name }}
@@ -162,6 +172,12 @@ jobs:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
       - uses: jetli/wasm-pack-action@v0.4.0
+      # Pin wasm-bindgen-cli to the workspace lockfile version —
+      # see the `test-wasm-node` job for the rationale.
+      - name: install wasm-bindgen-cli (locked)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli
       - uses: browser-actions/setup-chrome@v1
         id: setup-chrome
         with:
@@ -170,6 +186,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-chrome-${{ matrix.name }}
+      # `webdriver.json` at the repo root carries the Chrome flags
+      # wasm-bindgen-test handshakes with — `--headless=new`,
+      # `--no-sandbox` (required in the GitHub-hosted runner sandbox),
+      # `--disable-dev-shm-usage` (`/dev/shm` is too small in CI
+      # containers and causes spurious `Out of memory` crashes).
       - name: wasm-pack test --chrome --headless
         env:
           CHROMEDRIVER: ${{ steps.setup-chrome.outputs.chromedriver-path }}
