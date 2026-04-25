@@ -42,7 +42,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -52,7 +52,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, HtmlElement, KeyboardEvent};
 
-inject_key!(ROOT: Handle<PineCommandRoot>);
+create_context!(ROOT: Handle<PineCommandRoot>);
 
 // Per-Root runtime — holds the global shortcut listener so
 // `on_unmount` can detach it cleanly.
@@ -111,7 +111,7 @@ impl PineCommandRoot {
             self.shortcut = "Mod+k".into();
         }
         self.has_matches = true;
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, scope: ScopeId) {
@@ -286,7 +286,7 @@ pub struct PineCommandOverlay {}
 #[handlers]
 impl PineCommandOverlay {
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCommandRoot| r.close());
         }
     }
@@ -325,7 +325,7 @@ impl PineCommandContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCommandRoot| r.close());
         }
     }
@@ -347,7 +347,7 @@ pub struct PineCommandInput {
 #[handlers]
 impl PineCommandInput {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineCommandRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -387,7 +387,7 @@ impl PineCommandInput {
             return;
         };
         let q = input.value();
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCommandRoot| r.set_query(q));
             schedule_match_refresh(root);
         }
@@ -544,7 +544,7 @@ impl PineCommandItem {
             h_label.update(|s| s.label = label);
         });
 
-        let Some(root) = inject::<Handle<PineCommandRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -565,7 +565,7 @@ impl PineCommandItem {
         if prevented {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCommandRoot| r.close());
         }
     }
@@ -586,13 +586,13 @@ pub struct PineCommandEmpty {
 #[handlers]
 impl PineCommandEmpty {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.empty = root.with(|r| !r.has_matches);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineCommandRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         watch_scope_field::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {

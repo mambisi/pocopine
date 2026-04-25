@@ -4,7 +4,6 @@
 //! flags) rather than the plain Calendar's cells.
 
 use crate::range_calendar::root::{RangeCellView, RANGE_ROOT};
-use pocopine::inject;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -60,7 +59,7 @@ impl PineRangeCalendarGridBody {
     /// whole grid body only fires when the pointer actually exits
     /// the calendar.
     pub fn clear_hover(&mut self) {
-        if let Some(root) = inject(&RANGE_ROOT) {
+        if let Some(root) = RANGE_ROOT.inject() {
             root.update(
                 |r: &mut crate::range_calendar::root::PineRangeCalendarRoot| {
                     r.clear_hover();

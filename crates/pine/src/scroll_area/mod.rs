@@ -38,7 +38,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs};
+use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -46,9 +46,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, PointerEvent};
 
-inject_key!(ROOT: Handle<PineScrollAreaRoot>);
-inject_key!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
-inject_key!(SCROLLBAR_ORIENTATION: String);
+create_context!(ROOT: Handle<PineScrollAreaRoot>);
+create_context!(SCROLLBAR: Handle<PineScrollAreaScrollbar>);
+create_context!(SCROLLBAR_ORIENTATION: String);
 
 // Per-Root runtime: captures the fade-hide timer + Thumb drag state
 // so `on_unmount` can tear everything down without leaving
@@ -149,7 +149,7 @@ impl Default for PineScrollAreaRoot {
 #[handlers]
 impl PineScrollAreaRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn on_unmount(&mut self) {
@@ -246,7 +246,7 @@ impl PineScrollAreaViewport {
         let Some(viewport_el) = refs.get("viewport") else {
             return;
         };
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         ROOT_RUNTIME.with(|r| {
@@ -267,7 +267,7 @@ impl PineScrollAreaViewport {
 
     /// `@scroll` handler on the inner scrollable div.
     pub fn on_scroll(&mut self) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let Some(scope) = current_scope_id() else {
@@ -285,7 +285,7 @@ impl PineScrollAreaViewport {
     /// `pp-resize` handler — fires whenever the Viewport's size
     /// changes. Refresh geometry + push to Root.
     pub fn on_resize(&mut self, _w: f64, _h: f64) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let Some(scope) = current_scope_id() else {
@@ -400,9 +400,9 @@ impl Default for PineScrollAreaScrollbar {
 #[handlers]
 impl PineScrollAreaScrollbar {
     pub fn on_setup(&mut self) {
-        provide(&SCROLLBAR, this::<Self>());
-        provide(&SCROLLBAR_ORIENTATION, self.orientation.clone());
-        if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
+        SCROLLBAR.provide(this::<Self>());
+        SCROLLBAR_ORIENTATION.provide(self.orientation.clone());
+        if let Some(root) = ROOT.inject() {
             let (v_vis, h_vis, has_v, has_h) =
                 root.with(|r| (r.v_visible, r.h_visible, r.has_vertical, r.has_horizontal));
             if self.orientation == "horizontal" {
@@ -416,7 +416,7 @@ impl PineScrollAreaScrollbar {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -486,9 +486,10 @@ pub struct PineScrollAreaThumb {
 #[handlers]
 impl PineScrollAreaThumb {
     pub fn on_setup(&mut self) {
-        self.orientation =
-            inject::<String>(&SCROLLBAR_ORIENTATION).unwrap_or_else(|| "vertical".into());
-        if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
+        self.orientation = SCROLLBAR_ORIENTATION
+            .inject()
+            .unwrap_or_else(|| "vertical".into());
+        if let Some(root) = ROOT.inject() {
             let (sh, sw, ch, cw, st, sl) = root.with(|r| {
                 (
                     r.scroll_height,
@@ -510,7 +511,7 @@ impl PineScrollAreaThumb {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -558,10 +559,10 @@ impl PineScrollAreaThumb {
     /// `document` so the drag doesn't drop when the pointer leaves
     /// the thumb.
     pub fn on_pointer_down(&mut self, ev: wasm_bindgen::JsValue) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
-        let Some(scrollbar) = inject::<Handle<PineScrollAreaScrollbar>>(&SCROLLBAR) else {
+        let Some(scrollbar) = SCROLLBAR.inject() else {
             return;
         };
         let Some(scope) = current_scope_id() else {
@@ -733,13 +734,13 @@ pub struct PineScrollAreaCorner {
 #[handlers]
 impl PineScrollAreaCorner {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.show = root.with(|r| r.v_visible && r.h_visible);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineScrollAreaRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();

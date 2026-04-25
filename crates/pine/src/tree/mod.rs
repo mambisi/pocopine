@@ -38,11 +38,11 @@
 //! | ←              | collapse the highlighted item                 |
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs};
+use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineTreeRoot>);
-inject_key!(ITEM: ScopeId);
+create_context!(ROOT: Handle<PineTreeRoot>);
+create_context!(ITEM: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ impl PineTreeRoot {
         if let Some(scope) = current_scope_id() {
             self.tree_id = format!("pine-tree-{}", scope.0);
         }
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
@@ -244,10 +244,10 @@ impl PineTreeItem {
             // content binds to the CALLER's scope for directive
             // dispatch, so the Toggle can't `@click="toggle"`
             // us directly.
-            provide(&ITEM, scope);
+            ITEM.provide(scope);
         }
         self.parent_visible = true;
-        if let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let my_value = self.value.clone();
             let (sel, exp) = root.with(|r| (r.is_selected(&my_value), r.is_expanded(&my_value)));
             self.selected = sel;
@@ -256,7 +256,7 @@ impl PineTreeItem {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let Some(el) = refs.get("item") else { return };
@@ -336,7 +336,7 @@ impl PineTreeItem {
             return;
         }
         let v = self.value.clone();
-        if let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTreeRoot| r.select_value(v));
         }
     }
@@ -346,7 +346,7 @@ impl PineTreeItem {
             return;
         }
         let v = self.value.clone();
-        if let Some(root) = inject::<Handle<PineTreeRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTreeRoot| r.toggle_item(v));
         }
     }
@@ -401,7 +401,7 @@ pub struct PineTreeItemToggle {
 #[handlers]
 impl PineTreeItemToggle {
     pub fn on_setup(&mut self) {
-        if let Some(item) = inject::<ScopeId>(&ITEM) {
+        if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 let s = scope.state.borrow();
                 self.expanded = s.get("expanded").as_bool().unwrap_or(false);
@@ -411,7 +411,7 @@ impl PineTreeItemToggle {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item) = inject::<ScopeId>(&ITEM) else {
+        let Some(item) = ITEM.inject() else {
             return;
         };
         let h_exp = handle.clone();
@@ -425,7 +425,7 @@ impl PineTreeItemToggle {
     }
 
     pub fn click(&mut self) {
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+        let Some(item_scope) = ITEM.inject() else {
             return;
         };
         let Some(scope) = Scope::find(item_scope) else {

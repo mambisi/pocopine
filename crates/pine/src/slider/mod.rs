@@ -32,7 +32,7 @@
 //! range sliders wait for a follow-up.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide};
+use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, PointerEvent};
 
-inject_key!(ROOT: Handle<PineSliderRoot>);
+create_context!(ROOT: Handle<PineSliderRoot>);
 
 // Per-Root runtime: captures installed listeners + drag state so
 // `on_unmount` can detach cleanly.
@@ -109,7 +109,7 @@ impl Default for PineSliderRoot {
 impl PineSliderRoot {
     pub fn on_setup(&mut self) {
         self.recompute_percent();
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     #[watch(value)]
@@ -373,38 +373,38 @@ impl PineSliderThumb {
     // Direction for Up / Right matches WAI-ARIA "slider" advice:
     // increment value, regardless of orientation's visual axis.
     pub fn step_inc(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSliderRoot| r.step_by(1.0));
         }
     }
 
     pub fn step_dec(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSliderRoot| r.step_by(-1.0));
         }
     }
 
     pub fn page_inc(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSliderRoot| r.step_by(10.0));
         }
     }
 
     pub fn page_dec(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSliderRoot| r.step_by(-10.0));
         }
     }
 
     pub fn to_min(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let min = root.with(|r| r.min);
             root.update(|r: &mut PineSliderRoot| r.set_value(min));
         }
     }
 
     pub fn to_max(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let max = root.with(|r| r.max);
             root.update(|r: &mut PineSliderRoot| r.set_value(max));
         }

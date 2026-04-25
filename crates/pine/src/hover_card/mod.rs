@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide, refs, ScopeId};
+use pocopine::{create_context, refs, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -53,7 +53,7 @@ use web_sys::{Event, EventTarget};
 
 const SLUG: &str = "hover-card";
 
-inject_key!(ROOT: Handle<PineHoverCardRoot>);
+create_context!(ROOT: Handle<PineHoverCardRoot>);
 
 // Per-Root runtime: the pending open/close timer, keyed on Root's
 // scope id so both Trigger and Content can reach into the same
@@ -119,7 +119,7 @@ impl Default for PineHoverCardRoot {
 #[handlers]
 impl PineHoverCardRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 }
 
@@ -136,7 +136,7 @@ pub struct PineHoverCardTrigger {}
 #[handlers]
 impl PineHoverCardTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let root_id = root.scope_id();
         // Stamp the trigger element with the Root's scope id so
         // Content's anchor selector resolves to it.
@@ -147,7 +147,7 @@ impl PineHoverCardTrigger {
     }
 
     pub fn on_unmount(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             teardown_trigger(root.scope_id());
         }
     }
@@ -382,7 +382,7 @@ impl Default for PineHoverCardContent {
 #[handlers]
 impl PineHoverCardContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
@@ -391,7 +391,7 @@ impl PineHoverCardContent {
         let Some(content) = refs.get("content") else {
             return;
         };
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let root_id = root.scope_id();
 
         // Anchor to the Trigger — same programmatic install path
@@ -432,7 +432,7 @@ impl PineHoverCardContent {
     }
 
     pub fn on_unmount(&mut self) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         teardown_content(root.scope_id());
     }
 }

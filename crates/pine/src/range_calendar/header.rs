@@ -3,7 +3,6 @@
 //! instead of `ROOT`.
 
 use crate::range_calendar::root::{PineRangeCalendarRoot, RANGE_ROOT};
-use pocopine::inject;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +56,7 @@ pub struct PineRangeCalendarPrev {
 #[handlers]
 impl PineRangeCalendarPrev {
     pub fn on_click(&mut self) {
-        if let Some(root) = inject(&RANGE_ROOT) {
+        if let Some(root) = RANGE_ROOT.inject() {
             root.update(|r: &mut PineRangeCalendarRoot| r.prev_page());
         }
     }
@@ -79,7 +78,7 @@ pub struct PineRangeCalendarNext {
 #[handlers]
 impl PineRangeCalendarNext {
     pub fn on_click(&mut self) {
-        if let Some(root) = inject(&RANGE_ROOT) {
+        if let Some(root) = RANGE_ROOT.inject() {
             root.update(|r: &mut PineRangeCalendarRoot| r.next_page());
         }
     }

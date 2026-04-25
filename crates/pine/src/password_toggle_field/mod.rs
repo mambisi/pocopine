@@ -31,10 +31,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PinePasswordToggleFieldRoot>);
+create_context!(ROOT: Handle<PinePasswordToggleFieldRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ pub struct PinePasswordToggleFieldRoot {
 #[handlers]
 impl PinePasswordToggleFieldRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn toggle(&mut self) {
@@ -71,7 +71,7 @@ pub struct PinePasswordToggleFieldInput {}
 #[handlers]
 impl PinePasswordToggleFieldInput {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let Some(wrap) = refs.get("slot") else { return };
         let Some(inp) = wrap.query_selector("input").ok().flatten() else {
             return;
@@ -98,7 +98,7 @@ pub struct PinePasswordToggleFieldToggle {
 #[handlers]
 impl PinePasswordToggleFieldToggle {
     pub fn click(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PinePasswordToggleFieldRoot| r.toggle());
         }
     }

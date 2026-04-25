@@ -13,7 +13,6 @@
 //! interactive-root tag per Pine's default-tag rule.
 
 use crate::calendar::root::{PineCalendarRoot, ROOT};
-use pocopine::inject;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +71,7 @@ pub struct PineCalendarPrev {
 #[handlers]
 impl PineCalendarPrev {
     pub fn on_click(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCalendarRoot| r.prev_page());
         }
     }
@@ -96,7 +95,7 @@ pub struct PineCalendarNext {
 #[handlers]
 impl PineCalendarNext {
     pub fn on_click(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCalendarRoot| r.next_page());
         }
     }

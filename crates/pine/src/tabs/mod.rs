@@ -27,10 +27,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineTabsRoot>);
+create_context!(ROOT: Handle<PineTabsRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ impl Default for PineTabsRoot {
 #[handlers]
 impl PineTabsRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn select(&mut self, value: String) {
@@ -109,14 +109,14 @@ pub struct PineTabsTrigger {
 #[handlers]
 impl PineTabsTrigger {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
         watch_scope_field::<String, _>(root_scope, "value", move |new, _| {
@@ -129,7 +129,7 @@ impl PineTabsTrigger {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let v = self.value.clone();
             root.update(|r: &mut PineTabsRoot| r.select(v));
         }
@@ -152,14 +152,14 @@ pub struct PineTabsContent {
 #[handlers]
 impl PineTabsContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
         watch_scope_field::<String, _>(root_scope, "value", move |new, _| {

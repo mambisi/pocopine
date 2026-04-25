@@ -31,7 +31,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide};
+use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{EventTarget, PointerEvent};
 
-inject_key!(GROUP: Handle<PineSplitterGroup>);
+create_context!(GROUP: Handle<PineSplitterGroup>);
 
 // Per-Group runtime: handle-level drag state + the document-level
 // pointer listeners installed for the currently-active handle, so
@@ -107,7 +107,7 @@ impl Default for PineSplitterGroup {
 #[handlers]
 impl PineSplitterGroup {
     pub fn on_setup(&mut self) {
-        provide(&GROUP, this::<Self>());
+        GROUP.provide(this::<Self>());
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
@@ -261,7 +261,7 @@ impl PineSplitterPanel {
         if self.max_size == 0.0 {
             self.max_size = 100.0;
         }
-        let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
+        let Some(group) = GROUP.inject() else {
             return;
         };
         let Some(scope) = current_scope_id() else {
@@ -287,7 +287,7 @@ impl PineSplitterPanel {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
+        let Some(group) = GROUP.inject() else {
             return;
         };
         let group_scope = group.scope_id();
@@ -337,7 +337,7 @@ pub struct PineSplitterResizeHandle {
 #[handlers]
 impl PineSplitterResizeHandle {
     pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
-        let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
+        let Some(group) = GROUP.inject() else {
             return;
         };
         // Determine our neighbour indices by counting preceding
@@ -372,7 +372,7 @@ impl PineSplitterResizeHandle {
         if self.disabled {
             return;
         }
-        let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
+        let Some(group) = GROUP.inject() else {
             return;
         };
         let Ok(ev) = ev.dyn_into::<PointerEvent>() else {
@@ -412,7 +412,7 @@ impl PineSplitterResizeHandle {
         if self.disabled {
             return;
         }
-        let Some(group) = inject::<Handle<PineSplitterGroup>>(&GROUP) else {
+        let Some(group) = GROUP.inject() else {
             return;
         };
         let before = self.before_idx;

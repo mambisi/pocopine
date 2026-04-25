@@ -17,11 +17,11 @@
 //! </pine-avatar-root>
 //! ```
 
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineAvatarRoot>);
+create_context!(ROOT: Handle<PineAvatarRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ pub struct PineAvatarRoot {
 #[handlers]
 impl PineAvatarRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 }
 
@@ -62,7 +62,7 @@ impl PineAvatarImage {
     /// `@load` on the img — fires once the browser has the
     /// bitmap. Promotes Root to loaded so Fallback hides.
     pub fn on_load(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineAvatarRoot| r.loaded = true);
         }
     }

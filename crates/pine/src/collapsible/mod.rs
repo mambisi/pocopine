@@ -21,13 +21,13 @@
 //! </pine-collapsible-root>
 //! ```
 
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 
 // Provide/inject key for the Root handle. Descendants (Trigger,
 // Content) inject to call `toggle` / mirror `open`.
-inject_key!(ROOT: Handle<PineCollapsibleRoot>);
+create_context!(ROOT: Handle<PineCollapsibleRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -47,7 +47,7 @@ pub struct PineCollapsibleRoot {
 #[handlers]
 impl PineCollapsibleRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn open_self(&mut self) {
@@ -82,7 +82,7 @@ impl PineCollapsibleTrigger {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCollapsibleRoot| r.toggle());
         }
     }

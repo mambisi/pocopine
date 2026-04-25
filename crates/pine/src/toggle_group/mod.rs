@@ -26,12 +26,12 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field};
 use pocopine_core::reactive::ScopeId;
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: ScopeId);
+create_context!(ROOT: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ impl Default for PineToggleGroupRoot {
 impl PineToggleGroupRoot {
     pub fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
-            provide(&ROOT, scope);
+            ROOT.provide(scope);
         }
     }
 
@@ -137,7 +137,7 @@ pub struct PineToggleGroupItem {
 #[handlers]
 impl PineToggleGroupItem {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             if let Some(scope) = Scope::find(root) {
                 if let Some(rc) = scope.typed::<PineToggleGroupRoot>() {
                     self.pressed = rc.borrow().item_pressed(&self.value);
@@ -147,7 +147,7 @@ impl PineToggleGroupItem {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_s = root;
         // Single-mode watcher — Root.value.
@@ -176,7 +176,7 @@ impl PineToggleGroupItem {
         if self.disabled {
             return;
         }
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let Some(scope) = Scope::find(root) else {
             return;
         };

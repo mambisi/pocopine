@@ -27,10 +27,10 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject_key, provide};
+use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineFieldsetRoot>);
+create_context!(ROOT: Handle<PineFieldsetRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ impl PineFieldsetRoot {
         if let Some(scope) = current_scope_id() {
             self.legend_id = format!("pine-fieldset-legend-{}", scope.0);
         }
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 }
 

@@ -41,7 +41,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
@@ -49,7 +49,7 @@ use web_sys::HtmlElement;
 
 const SLUG: &str = "select";
 
-inject_key!(ROOT: Handle<PineSelectRoot>);
+create_context!(ROOT: Handle<PineSelectRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ impl PineSelectRoot {
         if self.value.is_empty() && !self.default_value.is_empty() {
             self.value = self.default_value.clone();
         }
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn open_self(&mut self) {
@@ -154,7 +154,7 @@ pub struct PineSelectTrigger {
 #[handlers]
 impl PineSelectTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         // Stamp the trigger with its root scope id so Content
@@ -166,7 +166,7 @@ impl PineSelectTrigger {
     }
 
     pub fn toggle(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSelectRoot| r.toggle());
         }
     }
@@ -188,7 +188,7 @@ pub struct PineSelectValue {
 #[handlers]
 impl PineSelectValue {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.with(|r| {
                 self.has_value = !r.value.is_empty();
                 self.display_label = r
@@ -201,7 +201,7 @@ impl PineSelectValue {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -278,7 +278,7 @@ impl Default for PineSelectContent {
 #[handlers]
 impl PineSelectContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let (scope, lb) = root.with(|r| (root.scope_id(), r.listbox_id.clone()));
             self.anchor = compound::trigger_selector(scope, SLUG);
             self.listbox_id = lb;
@@ -290,7 +290,7 @@ impl PineSelectContent {
         // Exempt our own trigger from `@click.outside` so the
         // trigger-while-open click closes cleanly instead of
         // racing outside-close (capture) + trigger-toggle (bubble).
-        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let _ = menu.set_attribute(
                 "data-pp-outside-exempt",
                 &compound::trigger_selector(root.scope_id(), SLUG),
@@ -338,7 +338,7 @@ impl PineSelectContent {
         // + DropdownMenu so author-authored placement / offset
         // flow through.
         if let Ok(floater) = menu.dyn_into::<HtmlElement>() {
-            if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+            if let Some(root) = ROOT.inject() {
                 compound::install_anchor_to_trigger(
                     &floater,
                     root.scope_id(),
@@ -353,7 +353,7 @@ impl PineSelectContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSelectRoot| r.close());
             schedule_trigger_focus(root.scope_id());
         }
@@ -401,19 +401,19 @@ pub struct PineSelectItem {
 }
 
 // Provide key for ItemIndicator's `selected` mirror.
-inject_key!(SELECTED_OWNER: pocopine::ScopeId);
+create_context!(SELECTED_OWNER: pocopine::ScopeId);
 
 #[handlers]
 impl PineSelectItem {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.selected = root.with(|r| r.value == self.value);
         }
         // Provide the Item's own scope id so a nested
         // ItemIndicator can mirror `selected` without having to
         // go back to Root.
         if let Some(scope) = current_scope_id() {
-            provide(&SELECTED_OWNER, scope);
+            SELECTED_OWNER.provide(scope);
         }
     }
 
@@ -426,12 +426,12 @@ impl PineSelectItem {
             .unwrap_or_default()
             .trim()
             .to_string();
-        if let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let value = self.value.clone();
             root.update(|r: &mut PineSelectRoot| r.register_label(value, label));
         }
 
-        let Some(root) = inject::<Handle<PineSelectRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let my_value = self.value.clone();
@@ -448,7 +448,7 @@ impl PineSelectItem {
             return;
         }
         let my_value = self.value.clone();
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineSelectRoot| r.select_value(my_value));
             schedule_trigger_focus(root.scope_id());
         }
@@ -470,7 +470,7 @@ pub struct PineSelectItemIndicator {
 #[handlers]
 impl PineSelectItemIndicator {
     pub fn on_setup(&mut self) {
-        if let Some(owner) = inject(&SELECTED_OWNER) {
+        if let Some(owner) = SELECTED_OWNER.inject() {
             if let Some(scope) = pocopine::Scope::find(owner) {
                 let v = scope.state.borrow().get("selected");
                 self.selected = v.as_bool().unwrap_or(false);
@@ -479,7 +479,7 @@ impl PineSelectItemIndicator {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(owner) = inject(&SELECTED_OWNER) else {
+        let Some(owner) = SELECTED_OWNER.inject() else {
             return;
         };
         watch_scope_field::<bool, _>(owner, "selected", move |&v, _| {

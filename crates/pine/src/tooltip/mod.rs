@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field, ScopeId};
+use pocopine::{create_context, current_scope_id, watch_scope_field, ScopeId};
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
@@ -38,11 +38,11 @@ use web_sys::{Event, EventTarget};
 
 const SLUG: &str = "tooltip";
 
-inject_key!(ROOT: Handle<PineTooltipRoot>);
+create_context!(ROOT: Handle<PineTooltipRoot>);
 // Provider → descendants. Defaults + singleton policy live on the
 // provider scope; tooltip Roots inside consult this handle in their
 // `on_setup` and register with it when they open.
-inject_key!(PROVIDER: Handle<PineTooltipProvider>);
+create_context!(PROVIDER: Handle<PineTooltipProvider>);
 
 // ── Provider ──────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ impl Default for PineTooltipProvider {
 #[handlers]
 impl PineTooltipProvider {
     pub fn on_setup(&mut self) {
-        provide(&PROVIDER, this::<Self>());
+        PROVIDER.provide(this::<Self>());
     }
 
     pub fn on_unmount(&mut self) {
@@ -160,14 +160,14 @@ impl Default for PineTooltipRoot {
 #[handlers]
 impl PineTooltipRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
         // Inherit Provider's default delay if Root is still at its
         // own default (700). An explicit `delay_duration` on the
         // Root tag always wins because static props apply before
         // `on_setup`, so `self.delay_duration` here already holds
         // whatever the author wrote.
         if self.delay_duration == 700 {
-            if let Some(prov) = inject(&PROVIDER) {
+            if let Some(prov) = PROVIDER.inject() {
                 self.delay_duration = prov.with(|p| p.delay_duration);
             }
         }
@@ -180,7 +180,7 @@ impl PineTooltipRoot {
         // false, release the slot. Runs only when a Provider
         // ancestor exists; standalone tooltips are unaffected.
         let root_id = scope;
-        let Some(prov) = inject::<Handle<PineTooltipProvider>>(&PROVIDER) else {
+        let Some(prov) = PROVIDER.inject() else {
             return;
         };
         let prov_id = prov.scope_id();
@@ -239,7 +239,7 @@ pub struct PineTooltipTrigger {}
 #[handlers]
 impl PineTooltipTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         // Stamp the trigger's slot root so Content's auto-anchor
         // resolves to it. `pp-ref="trigger"` points at the
         // wrapper the template renders around the author's slot.
@@ -420,7 +420,7 @@ impl Default for PineTooltipContent {
 #[handlers]
 impl PineTooltipContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
@@ -430,7 +430,7 @@ impl PineTooltipContent {
             return;
         };
         if let Ok(floater) = content.dyn_into::<web_sys::HtmlElement>() {
-            if let Some(root) = inject::<Handle<PineTooltipRoot>>(&ROOT) {
+            if let Some(root) = ROOT.inject() {
                 compound::install_anchor_to_trigger(
                     &floater,
                     root.scope_id(),

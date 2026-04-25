@@ -27,11 +27,11 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineAccordionRoot>);
-inject_key!(ITEM: ScopeId);
+create_context!(ROOT: Handle<PineAccordionRoot>);
+create_context!(ITEM: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ impl Default for PineAccordionRoot {
 #[handlers]
 impl PineAccordionRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     /// Invoked by PineAccordionItem when its Trigger is clicked.
@@ -136,19 +136,19 @@ impl PineAccordionItem {
     pub fn on_setup(&mut self) {
         // Seed initial `open` from the root's current state so
         // Trigger / Content see the right value on first bind.
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let value = self.value.clone();
             self.open = root.with(|r| r.item_open(&value));
         }
         // Provide this Item's scope id + value to Trigger /
         // Content so they don't need to know Root's type shape.
         if let Some(scope) = current_scope_id() {
-            provide(&ITEM, scope);
+            ITEM.provide(scope);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let my_value = self.with_value();
@@ -177,7 +177,7 @@ impl PineAccordionItem {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let v = self.value.clone();
             root.update(|r: &mut PineAccordionRoot| r.toggle_item(v));
         }
@@ -202,7 +202,7 @@ pub struct PineAccordionTrigger {
 #[handlers]
 impl PineAccordionTrigger {
     pub fn on_setup(&mut self) {
-        if let Some(item) = inject(&ITEM) {
+        if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 let s = scope.state.borrow();
                 self.open = s.get("open").as_bool().unwrap_or(false);
@@ -212,14 +212,14 @@ impl PineAccordionTrigger {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item) = inject(&ITEM) else { return };
+        let Some(item) = ITEM.inject() else { return };
         watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
     }
 
     pub fn click(&mut self) {
-        let Some(item) = inject(&ITEM) else { return };
+        let Some(item) = ITEM.inject() else { return };
         if let Some(scope) = Scope::find(item) {
             if let Some(inner) = scope.typed::<PineAccordionItem>() {
                 Handle::new(inner, item).update(|s: &mut PineAccordionItem| s.click_trigger());
@@ -242,7 +242,7 @@ pub struct PineAccordionContent {
 #[handlers]
 impl PineAccordionContent {
     pub fn on_setup(&mut self) {
-        if let Some(item) = inject(&ITEM) {
+        if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 self.open = scope.state.borrow().get("open").as_bool().unwrap_or(false);
             }
@@ -250,7 +250,7 @@ impl PineAccordionContent {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item) = inject(&ITEM) else { return };
+        let Some(item) = ITEM.inject() else { return };
         watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });

@@ -39,12 +39,12 @@
 //! - `disabled: bool` — observed by Input/Clear/Item to gate input.
 
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs};
+use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 
-inject_key!(ROOT: Handle<PineTagsInputRoot>);
+create_context!(ROOT: Handle<PineTagsInputRoot>);
 // `ITEM` carries the enclosing Item's ScopeId — not its value
 // string — because `:value="tag"` on the Item tag is a reactive
 // binding, so the Item's `self.value` is "" when its on_setup
@@ -52,7 +52,7 @@ inject_key!(ROOT: Handle<PineTagsInputRoot>);
 // effect. Carrying the scope id lets ItemText / ItemDelete read
 // the Item's value *lazily* (or watch it) from the authoritative
 // scope, sidestepping the setup-order hazard.
-inject_key!(ITEM: ScopeId);
+create_context!(ITEM: ScopeId);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ pub struct PineTagsInputRoot {
 #[handlers]
 impl PineTagsInputRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     /// Add a tag. Trimmed; empty strings drop. Duplicates drop
@@ -166,7 +166,7 @@ impl PineTagsInputItem {
         // snapshot taken before reactive `:value` bindings have
         // fired.
         if let Some(scope) = current_scope_id() {
-            provide(&ITEM, scope);
+            ITEM.provide(scope);
         }
     }
 }
@@ -192,7 +192,7 @@ impl PineTagsInputItemText {
         // Seed from whatever the Item's scope currently has —
         // may still be "" if the reactive `:value` binding
         // hasn't fired yet; the `on_ready` watch covers that.
-        if let Some(item_scope) = inject::<ScopeId>(&ITEM) {
+        if let Some(item_scope) = ITEM.inject() {
             if let Some(scope) = Scope::find(item_scope) {
                 self.text = scope
                     .state
@@ -205,7 +205,7 @@ impl PineTagsInputItemText {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+        let Some(item_scope) = ITEM.inject() else {
             return;
         };
         pocopine::watch_scope_field::<String, _>(item_scope, "value", move |v, _| {
@@ -238,7 +238,7 @@ impl PineTagsInputItemDelete {
         // Item's scope at click time — avoids any cached-at-setup
         // staleness if the chip was reordered or the value
         // binding fired late.
-        let Some(item_scope) = inject::<ScopeId>(&ITEM) else {
+        let Some(item_scope) = ITEM.inject() else {
             return;
         };
         let Some(scope) = Scope::find(item_scope) else {
@@ -253,7 +253,7 @@ impl PineTagsInputItemDelete {
         if v.is_empty() {
             return;
         }
-        if let Some(root) = inject::<Handle<PineTagsInputRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTagsInputRoot| r.remove_value(v));
         }
     }
@@ -292,7 +292,7 @@ impl PineTagsInputInput {
         if raw.trim().is_empty() {
             return;
         }
-        if let Some(root) = inject::<Handle<PineTagsInputRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTagsInputRoot| r.add_tag(raw));
         }
         input.set_value("");
@@ -313,7 +313,7 @@ impl PineTagsInputInput {
         if !input.value().is_empty() {
             return;
         }
-        if let Some(root) = inject::<Handle<PineTagsInputRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTagsInputRoot| r.remove_last());
         }
     }
@@ -342,7 +342,7 @@ impl PineTagsInputClear {
         if self.disabled {
             return;
         }
-        if let Some(root) = inject::<Handle<PineTagsInputRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineTagsInputRoot| r.clear());
         }
     }

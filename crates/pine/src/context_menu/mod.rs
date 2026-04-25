@@ -46,13 +46,13 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{focus, inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, focus, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, EventTarget, MouseEvent};
 
-inject_key!(ROOT: Handle<PineContextMenuRoot>);
+create_context!(ROOT: Handle<PineContextMenuRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ impl Default for PineContextMenuRoot {
 #[handlers]
 impl PineContextMenuRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn open_at(&mut self, x: f64, y: f64) {
@@ -104,7 +104,7 @@ pub struct PineContextMenuTrigger {}
 #[handlers]
 impl PineContextMenuTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         let Some(el) = refs.get("trigger") else {
             return;
         };
@@ -142,7 +142,7 @@ pub struct PineContextMenuPortal {
 #[handlers]
 impl PineContextMenuPortal {
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject(&ROOT) else { return };
+        let Some(root) = ROOT.inject() else { return };
         watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
@@ -174,7 +174,7 @@ pub struct PineContextMenuContent {
 #[handlers]
 impl PineContextMenuContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let (x, y) = root.with(|r| (r.pointer_x, r.pointer_y));
             self.pointer_x = x;
             self.pointer_y = y;
@@ -191,7 +191,7 @@ impl PineContextMenuContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineContextMenuRoot| r.close());
         }
     }
@@ -239,7 +239,7 @@ impl PineContextMenuItem {
         if prevented {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineContextMenuRoot| r.close());
         }
     }

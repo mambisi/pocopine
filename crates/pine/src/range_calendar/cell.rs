@@ -9,7 +9,7 @@
 use crate::datetime::DateValue;
 use crate::range_calendar::root::{PineRangeCalendarRoot, RANGE_ROOT};
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, refs};
+use pocopine::{current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
@@ -49,7 +49,7 @@ pub struct PineRangeCalendarCellTrigger {
 impl PineRangeCalendarCellTrigger {
     pub fn on_click(&mut self) {
         let date = self.date.clone();
-        if let Some(root) = inject(&RANGE_ROOT) {
+        if let Some(root) = RANGE_ROOT.inject() {
             root.update(|r: &mut PineRangeCalendarRoot| r.select_date(date.clone()));
         }
     }
@@ -60,7 +60,7 @@ impl PineRangeCalendarCellTrigger {
 
     pub fn on_hover(&mut self) {
         let date = self.date.clone();
-        if let Some(root) = inject(&RANGE_ROOT) {
+        if let Some(root) = RANGE_ROOT.inject() {
             root.update(|r: &mut PineRangeCalendarRoot| r.hover_date(date.clone()));
         }
     }
@@ -114,7 +114,7 @@ impl PineRangeCalendarCellTrigger {
             // Keyboard-driven range preview: update focused to
             // match the newly-focused cell so the preview tracks.
             let iso = target.to_string();
-            if let Some(root) = inject(&RANGE_ROOT) {
+            if let Some(root) = RANGE_ROOT.inject() {
                 root.update(|r: &mut PineRangeCalendarRoot| r.hover_date(iso.clone()));
             }
         }

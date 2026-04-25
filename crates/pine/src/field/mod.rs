@@ -40,16 +40,16 @@
 //! outside; native HTML constraint validation also flips it via
 //! the `invalid` event installed on the Control's inner input.
 
-use crate::form::{PineFormRoot, FORM};
+use crate::form::FORM;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, Event, EventTarget, HtmlInputElement};
 
-inject_key!(ROOT: Handle<PineFieldRoot>);
+create_context!(ROOT: Handle<PineFieldRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -109,13 +109,13 @@ impl PineFieldRoot {
             self.description_id = format!("pine-field-description-{}", scope.0);
             self.error_id = format!("pine-field-error-{}", scope.0);
         }
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
 
         // Wire into an enclosing `<pine-form-root>`: read the
         // initial error state for our `name`, then subscribe so
         // later mutations of `form.errors` flow onto `self.invalid`
         // without the author touching `pp-model:invalid`.
-        if let Some(form) = inject::<Handle<PineFormRoot>>(&FORM) {
+        if let Some(form) = FORM.inject() {
             let name = self.name.clone();
             let initial = form.with(|f| f.errors.contains_key(&name));
             if initial {
@@ -177,7 +177,7 @@ pub struct PineFieldControl {}
 #[handlers]
 impl PineFieldControl {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineFieldRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let Some(wrap) = refs.get("slot") else { return };

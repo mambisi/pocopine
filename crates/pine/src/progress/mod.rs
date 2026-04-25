@@ -21,11 +21,11 @@
 //! </pine-progress-root>
 //! ```
 
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ROOT: Handle<PineProgressRoot>);
+create_context!(ROOT: Handle<PineProgressRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ impl Default for PineProgressRoot {
 #[handlers]
 impl PineProgressRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 }
 

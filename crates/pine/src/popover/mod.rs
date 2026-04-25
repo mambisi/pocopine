@@ -28,13 +28,13 @@
 use crate::compound;
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
 const SLUG: &str = "popover";
 
-inject_key!(ROOT: Handle<PinePopoverRoot>);
+create_context!(ROOT: Handle<PinePopoverRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ impl Default for PinePopoverRoot {
 #[handlers]
 impl PinePopoverRoot {
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn open_popover(&mut self) {
@@ -101,7 +101,7 @@ pub struct PinePopoverTrigger {
 #[handlers]
 impl PinePopoverTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         // Stamp the button so Content's pp-anchor can target it
@@ -112,7 +112,7 @@ impl PinePopoverTrigger {
     }
 
     pub fn toggle(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PinePopoverRoot| r.toggle());
         }
     }
@@ -172,7 +172,7 @@ impl Default for PinePopoverContent {
 #[handlers]
 impl PinePopoverContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
@@ -181,7 +181,8 @@ impl PinePopoverContent {
         let Some(content) = refs.get("content") else {
             return;
         };
-        let modal = inject(&ROOT)
+        let modal = ROOT
+            .inject()
             .map(|r| r.with(|root| root.modal))
             .unwrap_or(false);
         overlay::activate(scope, &content, modal);
@@ -191,7 +192,7 @@ impl PinePopoverContent {
         // instead of racing between outside-close (capture) and
         // trigger-toggle (bubble). See
         // `directives/on.rs` `data-pp-outside-exempt` handling.
-        if let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let _ = content.set_attribute(
                 "data-pp-outside-exempt",
                 &compound::trigger_selector(root.scope_id(), SLUG),
@@ -202,7 +203,7 @@ impl PinePopoverContent {
         // props flow through (pp-anchor's modifier syntax is
         // parsed statically at bind time).
         if let Ok(floater) = content.clone().dyn_into::<web_sys::HtmlElement>() {
-            if let Some(root) = inject::<Handle<PinePopoverRoot>>(&ROOT) {
+            if let Some(root) = ROOT.inject() {
                 compound::install_anchor_to_trigger(
                     &floater,
                     root.scope_id(),
@@ -218,7 +219,7 @@ impl PinePopoverContent {
         // Content is inside a teleported subtree; see the dialog
         // equivalent. Watch root.open and deactivate when it
         // flips false so focus + scroll lock release cleanly.
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, prev| {
                 if prev == Some(&true) && !is_open {
                     overlay::deactivate(scope);
@@ -234,7 +235,7 @@ impl PinePopoverContent {
     }
 
     pub fn on_outside(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let dismiss = root.with(|r| r.dismiss_on_outside);
             if dismiss {
                 root.update(|r: &mut PinePopoverRoot| r.close());
@@ -243,7 +244,7 @@ impl PinePopoverContent {
     }
 
     pub fn on_escape(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let dismiss = root.with(|r| r.dismiss_on_escape);
             if dismiss {
                 root.update(|r: &mut PinePopoverRoot| r.close());
@@ -261,7 +262,7 @@ pub struct PinePopoverClose {}
 #[handlers]
 impl PinePopoverClose {
     pub fn click(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PinePopoverRoot| r.close());
         }
     }

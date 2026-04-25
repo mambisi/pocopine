@@ -28,11 +28,11 @@
 //! </pine-toolbar-root>
 //! ```
 
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject, inject_key, provide};
 use serde::{Deserialize, Serialize};
 
-inject_key!(ORIENTATION: String);
+create_context!(ORIENTATION: String);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ impl Default for PineToolbarRoot {
 #[handlers]
 impl PineToolbarRoot {
     pub fn on_setup(&mut self) {
-        provide(&ORIENTATION, self.orientation.clone());
+        ORIENTATION.provide(self.orientation.clone());
     }
 }
 
@@ -114,7 +114,7 @@ pub struct PineToolbarSeparator {
 impl PineToolbarSeparator {
     pub fn on_setup(&mut self) {
         // Flip axis — horizontal toolbar → vertical separator.
-        let parent = inject::<String>(&ORIENTATION).unwrap_or_else(|| "horizontal".into());
+        let parent = ORIENTATION.inject().unwrap_or_else(|| "horizontal".into());
         self.orientation = if parent == "horizontal" {
             "vertical".into()
         } else {

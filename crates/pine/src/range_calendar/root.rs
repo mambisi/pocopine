@@ -10,11 +10,11 @@
 
 use crate::datetime::DateValue;
 use crate::range_calendar::state::RangeCalendarState;
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
-inject_key!(pub RANGE_ROOT: Handle<PineRangeCalendarRoot>);
+create_context!(pub RANGE_ROOT: Handle<PineRangeCalendarRoot>);
 
 // ── view model — per-cell flags for the template to iterate ──
 
@@ -89,7 +89,7 @@ impl PineRangeCalendarRoot {
         if self.number_of_months == 0 {
             self.number_of_months = 1;
         }
-        provide(&RANGE_ROOT, this::<Self>());
+        RANGE_ROOT.provide(this::<Self>());
         self.reflow();
     }
 
@@ -157,7 +157,7 @@ impl PineRangeCalendarRoot {
     }
 
     /// Two-step range selection. Cells dispatch this through
-    /// `inject(&RANGE_ROOT).update(|r| r.select_date(...))`.
+    /// `RANGE_ROOT.inject().update(|r| r.select_date(...))`.
     ///
     /// Emits on the per-field `pp:update:start` and
     /// `pp:update:end` channels via `emit_model_field`, so

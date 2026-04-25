@@ -37,14 +37,14 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
-inject_key!(ROOT: Handle<PineComboboxRoot>);
+create_context!(ROOT: Handle<PineComboboxRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ impl PineComboboxRoot {
             self.value = self.default_value.clone();
         }
         self.has_matches = true;
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn close(&mut self) {
@@ -143,7 +143,7 @@ pub struct PineComboboxInput {
 #[handlers]
 impl PineComboboxInput {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -195,7 +195,7 @@ impl PineComboboxInput {
             return;
         };
         let new_query = input.value();
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineComboboxRoot| r.set_query(new_query));
             schedule_match_refresh(root);
         }
@@ -203,7 +203,7 @@ impl PineComboboxInput {
 
     /// `@focus` handler — opening on focus matches Radix UX.
     pub fn on_focus(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineComboboxRoot| {
                 if !r.open && !r.disabled {
                     r.open = true;
@@ -238,7 +238,7 @@ impl PineComboboxInput {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineComboboxRoot| r.close());
         }
     }
@@ -332,7 +332,7 @@ impl Default for PineComboboxContent {
 #[handlers]
 impl PineComboboxContent {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let (lb, scope_id) = root.with(|r| (r.listbox_id.clone(), root.scope_id().0));
             self.listbox_id = lb;
             self.anchor = format!("[data-pine-combobox-input=\"{scope_id}\"]");
@@ -376,7 +376,7 @@ impl PineComboboxContent {
         // document-level listener that fires outside any scope
         // context can still close via `root.update` without
         // needing to `inject`.
-        if let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             compound::install_outside_dismiss(menu, vec![input], move || {
                 root.update(|r: &mut PineComboboxRoot| r.close());
             });
@@ -384,7 +384,7 @@ impl PineComboboxContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineComboboxRoot| r.close());
         }
     }
@@ -405,13 +405,13 @@ pub struct PineComboboxEmpty {
 #[handlers]
 impl PineComboboxEmpty {
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.empty = root.with(|r| !r.has_matches);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         watch_scope_field::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {
@@ -450,7 +450,7 @@ impl PineComboboxItem {
         if let Some(scope) = current_scope_id() {
             self.item_id = format!("pine-combobox-opt-{}", scope.0);
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.selected = root.with(|r| r.value == self.value);
         }
     }
@@ -464,7 +464,7 @@ impl PineComboboxItem {
             .to_string();
         let my_value = self.value.clone();
 
-        let Some(root) = inject::<Handle<PineComboboxRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         let root_scope = root.scope_id();
@@ -512,7 +512,7 @@ impl PineComboboxItem {
         }
         let v = self.value.clone();
         let label = self.label.clone();
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineComboboxRoot| r.select_value(v, label));
             // Also sync the DOM input's `.value` so the typed
             // string matches the chosen label.

@@ -22,7 +22,7 @@
 use crate::calendar::root::{PineCalendarRoot, ROOT};
 use crate::datetime::DateValue;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, inject, refs};
+use pocopine::{current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
@@ -75,7 +75,7 @@ pub struct PineCalendarCellTrigger {
 impl PineCalendarCellTrigger {
     pub fn on_click(&mut self) {
         let date = self.date.clone();
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineCalendarRoot| r.select_date(date.clone()));
         }
     }

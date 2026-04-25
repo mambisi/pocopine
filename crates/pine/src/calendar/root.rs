@@ -19,11 +19,11 @@
 
 use crate::calendar::state::CalendarState;
 use crate::datetime::DateValue;
+use pocopine::create_context;
 use pocopine::prelude::*;
-use pocopine::{inject_key, provide};
 use serde::{Deserialize, Serialize};
 
-inject_key!(pub ROOT: Handle<PineCalendarRoot>);
+create_context!(pub ROOT: Handle<PineCalendarRoot>);
 
 // ── serializable view model ─────────────────────────────────────
 
@@ -133,7 +133,7 @@ impl PineCalendarRoot {
         if self.number_of_months == 0 {
             self.number_of_months = 1;
         }
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
         // Seed the view model once synchronously so the initial
         // render already has `heading` / `cells` / `weekdays`
         // populated. The flat `cells` Vec means a single pp-for

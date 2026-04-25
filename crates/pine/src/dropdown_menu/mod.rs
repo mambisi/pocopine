@@ -27,7 +27,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{current_scope_id, focus, inject, inject_key, provide, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
@@ -36,7 +36,7 @@ const SLUG: &str = "dm";
 const SUB_SLUG: &str = "dm-sub";
 
 // Provide/inject key for the Root handle.
-inject_key!(ROOT: Handle<PineDropdownMenuRoot>);
+create_context!(ROOT: Handle<PineDropdownMenuRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -69,7 +69,7 @@ impl PineDropdownMenuRoot {
     // `open` stuck at false). Same pattern every other Pine
     // compound uses; DropdownMenu was the odd one out.
     pub fn on_setup(&mut self) {
-        provide(&ROOT, this::<Self>());
+        ROOT.provide(this::<Self>());
     }
 
     pub fn open_menu(&mut self) {
@@ -99,7 +99,7 @@ pub struct PineDropdownMenuTrigger {
 #[handlers]
 impl PineDropdownMenuTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) else {
+        let Some(root) = ROOT.inject() else {
             return;
         };
         // Stamp the trigger's button with its root scope id.
@@ -113,7 +113,7 @@ impl PineDropdownMenuTrigger {
     }
 
     pub fn toggle(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineDropdownMenuRoot| r.toggle());
         }
     }
@@ -204,11 +204,11 @@ impl PineDropdownMenuContent {
     /// matching the unique `data-pine-dm-trigger="N"` Trigger
     /// stamped in its `on_ready`.
     pub fn on_setup(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
         // Expose `side` to any nested Arrow.
-        provide(&CONTENT_SIDE, self.side.clone());
+        CONTENT_SIDE.provide(self.side.clone());
     }
 
     pub fn on_ready(&self, refs: pocopine::Refs) {
@@ -225,7 +225,7 @@ impl PineDropdownMenuContent {
         // of racing between outside-close (capture) and
         // trigger-toggle (bubble). See directives/on.rs for how
         // `data-pp-outside-exempt` is consumed.
-        if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             let _ = menu.set_attribute(
                 "data-pp-outside-exempt",
                 &compound::trigger_selector(root.scope_id(), SLUG),
@@ -237,7 +237,7 @@ impl PineDropdownMenuContent {
         // (the pp-anchor directive form parses modifiers
         // statically at bind time).
         if let Ok(floater) = menu.dyn_into::<web_sys::HtmlElement>() {
-            if let Some(root) = inject::<Handle<PineDropdownMenuRoot>>(&ROOT) {
+            if let Some(root) = ROOT.inject() {
                 compound::install_anchor_to_trigger(
                     &floater,
                     root.scope_id(),
@@ -252,7 +252,7 @@ impl PineDropdownMenuContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
@@ -289,7 +289,7 @@ impl PineDropdownMenuItem {
         if prevented {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
@@ -326,12 +326,12 @@ pub struct PineDropdownMenuSub {
     pub open: bool,
 }
 
-inject_key!(SUB: Handle<PineDropdownMenuSub>);
+create_context!(SUB: Handle<PineDropdownMenuSub>);
 
 #[handlers]
 impl PineDropdownMenuSub {
     pub fn on_setup(&mut self) {
-        provide(&SUB, this::<Self>());
+        SUB.provide(this::<Self>());
     }
 
     pub fn close(&mut self) {
@@ -354,7 +354,7 @@ pub struct PineDropdownMenuSubTrigger {
 #[handlers]
 impl PineDropdownMenuSubTrigger {
     pub fn on_ready(&self, refs: pocopine::Refs) {
-        let Some(sub) = inject::<Handle<PineDropdownMenuSub>>(&SUB) else {
+        let Some(sub) = SUB.inject() else {
             return;
         };
         // Stamp so SubContent can auto-anchor.
@@ -371,7 +371,7 @@ impl PineDropdownMenuSubTrigger {
         // (reka keeps the parent open), so we veto the default
         // Item-select dismissal. Item.on_select still fires first
         // via native bubble if the author stacked handlers.
-        if let Some(sub) = inject(&SUB) {
+        if let Some(sub) = SUB.inject() {
             sub.update(|s: &mut PineDropdownMenuSub| s.toggle());
         }
     }
@@ -422,14 +422,14 @@ impl Default for PineDropdownMenuSubContent {
 #[handlers]
 impl PineDropdownMenuSubContent {
     pub fn on_setup(&mut self) {
-        if let Some(sub) = inject(&SUB) {
+        if let Some(sub) = SUB.inject() {
             self.anchor = compound::trigger_selector(sub.scope_id(), SUB_SLUG);
             self.open = sub.with(|s| s.open);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(sub) = inject(&SUB) else { return };
+        let Some(sub) = SUB.inject() else { return };
         let sub_scope = sub.scope_id();
         // Watch for the sub's open transitions so roving-focus +
         // auto-focus can run when the menu mounts. pp-anchor is
@@ -444,7 +444,7 @@ impl PineDropdownMenuSubContent {
     }
 
     pub fn close(&mut self) {
-        if let Some(sub) = inject(&SUB) {
+        if let Some(sub) = SUB.inject() {
             sub.update(|s: &mut PineDropdownMenuSub| s.close());
         }
     }
@@ -487,12 +487,12 @@ pub struct PineDropdownMenuArrow {
 // Provide/inject key for Content's `side` — Arrow subscribes to
 // this to render its own `data-side`. Content writes its value
 // in `on_setup`.
-inject_key!(CONTENT_SIDE: String);
+create_context!(CONTENT_SIDE: String);
 
 #[handlers]
 impl PineDropdownMenuArrow {
     pub fn on_setup(&mut self) {
-        if let Some(side) = inject(&CONTENT_SIDE) {
+        if let Some(side) = CONTENT_SIDE.inject() {
             self.side = side;
         }
     }
@@ -534,7 +534,7 @@ pub struct PineDropdownMenuGroup {
 
 // Provide/inject key for a Group's label id. Only meaningful
 // inside a Group's subtree.
-inject_key!(GROUP_LABEL: String);
+create_context!(GROUP_LABEL: String);
 
 #[handlers]
 impl PineDropdownMenuGroup {
@@ -544,7 +544,7 @@ impl PineDropdownMenuGroup {
         };
         let label_id = format!("pine-dm-group-label-{}", scope.0);
         self.label_id = label_id.clone();
-        provide(&GROUP_LABEL, label_id);
+        GROUP_LABEL.provide(label_id);
     }
 }
 
@@ -591,7 +591,7 @@ impl Default for PineDropdownMenuCheckboxItem {
 // an ItemIndicator's subscription point. The value is the
 // owner's `ScopeId`; ItemIndicator's `on_ready` uses it with
 // `watch_scope_field` to mirror `checked`.
-inject_key!(CHECKED_OWNER: ScopeId);
+create_context!(CHECKED_OWNER: ScopeId);
 
 #[handlers]
 impl PineDropdownMenuCheckboxItem {
@@ -606,7 +606,7 @@ impl PineDropdownMenuCheckboxItem {
         // on_setup. on_mount fires post-children which would be
         // too late.
         if let Some(scope) = current_scope_id() {
-            provide(&CHECKED_OWNER, scope);
+            CHECKED_OWNER.provide(scope);
         }
     }
 
@@ -631,7 +631,7 @@ impl PineDropdownMenuCheckboxItem {
         if prevented {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
@@ -655,7 +655,7 @@ impl PineDropdownMenuItemIndicator {
     pub fn on_setup(&mut self) {
         // Read the parent item's initial `checked` synchronously
         // so the first pp-show evaluation sees the right value.
-        if let Some(owner) = inject(&CHECKED_OWNER) {
+        if let Some(owner) = CHECKED_OWNER.inject() {
             if let Some(scope) = Scope::find(owner) {
                 let v = scope.state.borrow().get("checked");
                 self.checked = v.as_bool().unwrap_or(false);
@@ -664,7 +664,7 @@ impl PineDropdownMenuItemIndicator {
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(owner) = inject(&CHECKED_OWNER) else {
+        let Some(owner) = CHECKED_OWNER.inject() else {
             return;
         };
         watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
@@ -703,13 +703,13 @@ pub struct PineDropdownMenuRadioGroup {
 // Provide/inject key for a RadioGroup's scope id. RadioItems
 // inside use it to read the group's `value` (for their own
 // `checked` mirror) and write to it on click.
-inject_key!(RADIO_GROUP: ScopeId);
+create_context!(RADIO_GROUP: ScopeId);
 
 #[handlers]
 impl PineDropdownMenuRadioGroup {
     pub fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
-            provide(&RADIO_GROUP, scope);
+            RADIO_GROUP.provide(scope);
         }
     }
 }
@@ -744,7 +744,7 @@ impl PineDropdownMenuRadioItem {
     pub fn on_setup(&mut self) {
         // Seed initial group_value + checked from the group,
         // and provide to ItemIndicator.
-        if let Some(group) = inject(&RADIO_GROUP) {
+        if let Some(group) = RADIO_GROUP.inject() {
             if let Some(scope) = Scope::find(group) {
                 let v = scope.state.borrow().get("value");
                 self.group_value = v.as_string().unwrap_or_default();
@@ -752,12 +752,12 @@ impl PineDropdownMenuRadioItem {
             }
         }
         if let Some(scope) = current_scope_id() {
-            provide(&CHECKED_OWNER, scope);
+            CHECKED_OWNER.provide(scope);
         }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
-        let Some(group) = inject(&RADIO_GROUP) else {
+        let Some(group) = RADIO_GROUP.inject() else {
             return;
         };
         watch_scope_field::<String, _>(group, "value", move |new, _| {
@@ -774,7 +774,7 @@ impl PineDropdownMenuRadioItem {
             return;
         }
         // Write the new value into the group.
-        if let Some(group) = inject(&RADIO_GROUP) {
+        if let Some(group) = RADIO_GROUP.inject() {
             if let Some(scope) = Scope::find(group) {
                 let new_value = self.value.clone();
                 let handle = scope
@@ -792,7 +792,7 @@ impl PineDropdownMenuRadioItem {
         if prevented {
             return;
         }
-        if let Some(root) = inject(&ROOT) {
+        if let Some(root) = ROOT.inject() {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
@@ -813,7 +813,7 @@ pub struct PineDropdownMenuLabel {
 #[handlers]
 impl PineDropdownMenuLabel {
     pub fn on_setup(&mut self) {
-        if let Some(id) = inject(&GROUP_LABEL) {
+        if let Some(id) = GROUP_LABEL.inject() {
             self.label_id = id;
         }
     }

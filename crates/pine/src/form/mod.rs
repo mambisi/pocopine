@@ -30,11 +30,11 @@
 //! Pine doesn't need to ship a FormData parser.
 
 use pocopine::prelude::*;
-use pocopine::{emit, inject_key, provide};
+use pocopine::{create_context, emit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-inject_key!(pub FORM: Handle<PineFormRoot>);
+create_context!(pub FORM: Handle<PineFormRoot>);
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineFormRoot.poco", role = "scope")]
@@ -57,7 +57,7 @@ pub struct PineFormRoot {
 #[handlers]
 impl PineFormRoot {
     pub fn on_setup(&mut self) {
-        provide(&FORM, this::<Self>());
+        FORM.provide(this::<Self>());
     }
 
     /// `@submit.prevent` runs this; we then re-emit the submit
