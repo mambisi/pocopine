@@ -45,11 +45,10 @@
 //! </pine-context-menu-root>
 //! ```
 
-use pocopine::events;
+use pocopine::events::{self, ev};
 use pocopine::prelude::*;
 use pocopine::{create_context, focus, watch_scope_field};
 use serde::{Deserialize, Serialize};
-use web_sys::MouseEvent;
 
 create_context!(ROOT: Handle<PineContextMenuRoot>);
 
@@ -108,10 +107,10 @@ impl PineContextMenuTrigger {
             return;
         };
 
-        events::on_scoped(&el, "contextmenu", move |ev: MouseEvent| {
-            let x = ev.client_x() as f64;
-            let y = ev.client_y() as f64;
-            ev.prevent_default();
+        events::on_scoped(&el, ev::contextmenu, move |e| {
+            let x = e.client_x() as f64;
+            let y = e.client_y() as f64;
+            e.prevent_default();
             root.update(|r| r.open_at(x, y));
         });
     }
