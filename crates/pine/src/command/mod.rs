@@ -41,31 +41,16 @@
 //! </pine-command-root>
 //! ```
 
-use pocopine::events::{self, ev, ListenerHandle};
+use pocopine::events::{self, ev};
 use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, KeyboardEvent};
 
 create_context!(ROOT: Handle<PineCommandRoot>);
-
-// Per-Root runtime — holds the global shortcut listener so
-// `on_unmount` can detach it cleanly. Dropping the handle removes
-// the listener.
-struct RootRuntime {
-    #[allow(dead_code)]
-    shortcut: Option<ListenerHandle>,
-}
-
-thread_local! {
-    static ROOT_RUNTIME: RefCell<HashMap<ScopeId, RootRuntime>> =
-        RefCell::new(HashMap::new());
-}
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -116,17 +101,11 @@ impl PineCommandRoot {
         ROOT.provide(this::<Self>());
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, scope: ScopeId) {
+    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         if self.no_shortcut {
             return;
         }
-        install_global_shortcut(scope, handle, self.shortcut.clone());
-    }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            teardown_global_shortcut(scope);
-        }
+        install_global_shortcut(handle, self.shortcut.clone());
     }
 
     pub fn open_self(&mut self) {
@@ -165,31 +144,19 @@ impl PineCommandRoot {
     }
 }
 
-fn install_global_shortcut(scope: ScopeId, handle: Handle<PineCommandRoot>, shortcut: String) {
+fn install_global_shortcut(handle: Handle<PineCommandRoot>, shortcut: String) {
     let parsed = parse_shortcut(&shortcut);
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
-    let listener = events::on(&doc, ev::keydown, move |ev| {
+    // Scope-bound: when Root unmounts the listener detaches
+    // automatically. No runtime side-table needed.
+    events::on_scoped(&doc, ev::keydown, move |ev| {
         if matches_shortcut(&ev, &parsed) {
             ev.prevent_default();
             handle.update(|r| r.toggle());
         }
     });
-    ROOT_RUNTIME.with(|r| {
-        r.borrow_mut().insert(
-            scope,
-            RootRuntime {
-                shortcut: Some(listener),
-            },
-        );
-    });
-}
-
-fn teardown_global_shortcut(scope: ScopeId) {
-    // Removing the runtime drops the ListenerHandle, which detaches
-    // the document-level keydown listener.
-    ROOT_RUNTIME.with(|r| r.borrow_mut().remove(&scope));
 }
 
 #[derive(Clone)]
