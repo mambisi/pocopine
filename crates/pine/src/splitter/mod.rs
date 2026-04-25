@@ -30,31 +30,16 @@
 //! </pine-splitter-group>
 //! ```
 
-use pocopine::events::ListenerHandle;
+use pocopine::events::{self, ev, ListenerHandle};
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id};
+use pocopine::{create_context, current_scope_id, refs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::PointerEvent;
 
 create_context!(GROUP: Handle<PineSplitterGroup>);
-
-// Per-Group runtime: handle-level drag state + the document-level
-// pointer listeners installed for the currently-active handle.
-// `drag_listeners` owns the `ListenerHandle`s — dropping the Vec
-// removes the listeners; `on_unmount` clears the runtime entirely.
-struct GroupRuntime {
-    group_el: Option<web_sys::Element>,
-    drag_listeners: Vec<ListenerHandle>,
-    dragging_pointer_id: Option<i32>,
-}
-
-thread_local! {
-    static GROUP_RUNTIME: RefCell<HashMap<ScopeId, GroupRuntime>> =
-        RefCell::new(HashMap::new());
-}
 
 // ── Group ─────────────────────────────────────────────────────────
 
@@ -108,29 +93,6 @@ impl Default for PineSplitterGroup {
 impl PineSplitterGroup {
     pub fn on_setup(&mut self) {
         GROUP.provide(this::<Self>());
-    }
-
-    pub fn on_ready(&self, refs: pocopine::Refs) {
-        if let Some(scope) = current_scope_id() {
-            if let Some(el) = refs.get("group") {
-                GROUP_RUNTIME.with(|r| {
-                    r.borrow_mut().insert(
-                        scope,
-                        GroupRuntime {
-                            group_el: Some(el),
-                            drag_listeners: Vec::new(),
-                            dragging_pointer_id: None,
-                        },
-                    );
-                });
-            }
-        }
-    }
-
-    pub fn on_unmount(&mut self) {
-        if let Some(scope) = current_scope_id() {
-            teardown_runtime(scope);
-        }
     }
 }
 
@@ -199,12 +161,6 @@ impl PineSplitterGroup {
         self.sizes[after_idx] = a_cur - final_delta;
         final_delta
     }
-}
-
-fn teardown_runtime(scope: ScopeId) {
-    // Removing the runtime drops the `Vec<ListenerHandle>`, whose
-    // destructor detaches the document-level pointer listeners.
-    GROUP_RUNTIME.with(|r| r.borrow_mut().remove(&scope));
 }
 
 // ── Panel ─────────────────────────────────────────────────────────
@@ -453,11 +409,13 @@ fn start_drag(
     ev: PointerEvent,
 ) {
     let group_scope = group.scope_id();
-    let Some(group_el) = GROUP_RUNTIME.with(|r| {
-        r.borrow()
-            .get(&group_scope)
-            .and_then(|rt| rt.group_el.clone())
-    }) else {
+    // Group's element is the one that carries `pp-ref="group"`; we
+    // resolve through the cross-scope refs API instead of stashing
+    // a reference in a runtime side-table.
+    let Some(group_el) = refs::get_on(group_scope, "group") else {
+        return;
+    };
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
 
@@ -468,73 +426,55 @@ fn start_drag(
         ev.client_x() as f64
     };
     let start_before_size = group.with(|g| g.sizes.get(before_idx).copied().unwrap_or(0.0));
+    let pointer_id = ev.pointer_id();
 
-    GROUP_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&group_scope) {
-            rt.dragging_pointer_id = Some(ev.pointer_id());
-        }
-    });
+    // Document-level pointer listeners live for exactly this drag.
+    // The handles share an `Rc<RefCell<Vec<_>>>`; the release
+    // closure clears the vec, dropping every handle and detaching
+    // its listener immediately.
+    let handles: Rc<RefCell<Vec<ListenerHandle>>> = Rc::new(RefCell::new(Vec::with_capacity(3)));
 
-    // Document-level pointer listeners installed for the duration
-    // of this drag. The handles live in `GroupRuntime.drag_listeners`
-    // — when teardown_runtime drops the Vec, the listeners detach.
-    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-
-    let group_for_move = group.clone();
-    let direction_for_move = direction.clone();
-    let group_el_for_move = group_el.clone();
-    let move_handle = pocopine::events::on(&doc, pocopine::events::ev::pointermove, move |ev| {
-        let active = GROUP_RUNTIME.with(|r| {
-            r.borrow()
-                .get(&group_scope)
-                .and_then(|rt| rt.dragging_pointer_id)
-                == Some(ev.pointer_id())
-        });
-        if !active {
-            return;
-        }
-        ev.prevent_default();
-        // Recompute the group rect each move — the user may
-        // resize the viewport mid-drag.
-        let rect_now = group_el_for_move.get_bounding_client_rect();
-        let (pointer_now, span) = if direction_for_move == "vertical" {
-            (ev.client_y() as f64, rect_now.height().max(1.0))
-        } else {
-            (ev.client_x() as f64, rect_now.width().max(1.0))
-        };
-        let delta_px = pointer_now - start_pointer;
-        let delta_pct = (delta_px / span) * 100.0;
-        // Resize relative to the starting before-size so the total
-        // drag is absolute, not cumulative with jitter.
-        group_for_move.update(|g: &mut PineSplitterGroup| {
-            let b_cur = g.sizes.get(before_idx).copied().unwrap_or(0.0);
-            let desired = start_before_size + delta_pct;
-            let step = desired - b_cur;
-            g.resize(before_idx, after_idx, step);
-        });
-    });
-
-    let release = move |ev: PointerEvent| {
-        GROUP_RUNTIME.with(|r| {
-            let mut map = r.borrow_mut();
-            if let Some(rt) = map.get_mut(&group_scope) {
-                if rt.dragging_pointer_id == Some(ev.pointer_id()) {
-                    rt.dragging_pointer_id = None;
-                }
+    let move_handle = events::on(&doc, ev::pointermove, {
+        let group = group.clone();
+        let group_el = group_el.clone();
+        move |ev| {
+            if ev.pointer_id() != pointer_id {
+                return;
             }
-        });
-    };
-    // `release` captures only `group_scope: ScopeId` (Copy), so the
-    // closure is itself Copy — no `.clone()` needed across the two
-    // installs.
-    let up_handle = pocopine::events::on(&doc, pocopine::events::ev::pointerup, release);
-    let cancel_handle = pocopine::events::on(&doc, pocopine::events::ev::pointercancel, release);
-
-    GROUP_RUNTIME.with(|r| {
-        if let Some(rt) = r.borrow_mut().get_mut(&group_scope) {
-            rt.drag_listeners = vec![move_handle, up_handle, cancel_handle];
+            ev.prevent_default();
+            // Recompute the group rect each move — the user may
+            // resize the viewport mid-drag.
+            let rect_now = group_el.get_bounding_client_rect();
+            let (pointer_now, span) = if direction == "vertical" {
+                (ev.client_y() as f64, rect_now.height().max(1.0))
+            } else {
+                (ev.client_x() as f64, rect_now.width().max(1.0))
+            };
+            let delta_px = pointer_now - start_pointer;
+            let delta_pct = (delta_px / span) * 100.0;
+            // Resize relative to the starting before-size so the
+            // total drag is absolute, not cumulative with jitter.
+            group.update(|g: &mut PineSplitterGroup| {
+                let b_cur = g.sizes.get(before_idx).copied().unwrap_or(0.0);
+                let desired = start_before_size + delta_pct;
+                let step = desired - b_cur;
+                g.resize(before_idx, after_idx, step);
+            });
         }
     });
+
+    let release = {
+        let handles = handles.clone();
+        move |ev: PointerEvent| {
+            if ev.pointer_id() == pointer_id {
+                handles.borrow_mut().clear();
+            }
+        }
+    };
+    let up_handle = events::on(&doc, ev::pointerup, release.clone());
+    let cancel_handle = events::on(&doc, ev::pointercancel, release);
+
+    handles
+        .borrow_mut()
+        .extend([move_handle, up_handle, cancel_handle]);
 }
