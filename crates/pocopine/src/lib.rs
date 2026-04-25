@@ -6,7 +6,9 @@
 
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
-pub use pocopine_core::{animate, events, focus, id, profiler, refs, scroll_lock, text, tick};
+pub use pocopine_core::{
+    animate, events, focus, id, profiler, refs, scroll_lock, text, tick, timers,
+};
 pub use pocopine_core::{
     assert_registry_clean, batch, computed, current_effect, current_scope_id, dispatch_event,
     effect, effect_with, emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from,

@@ -47,6 +47,7 @@ pub mod task;
 pub mod templates;
 pub mod text;
 pub mod tick;
+pub mod timers;
 pub mod walker;
 pub mod watch;
 
