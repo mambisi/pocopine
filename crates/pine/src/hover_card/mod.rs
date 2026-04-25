@@ -44,12 +44,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::compound;
+use pocopine::events::{self, ev, ListenerHandle};
 use pocopine::prelude::*;
 use pocopine::{create_context, refs, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{Event, EventTarget};
 
 const SLUG: &str = "hover-card";
 
@@ -67,18 +67,16 @@ thread_local! {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct RootRuntime {
     pending_open: Option<i32>,
     pending_close: Option<i32>,
-    /// Listener closures retained for teardown — Trigger + Content
-    /// each stash theirs here so `on_unmount` can remove them.
-    trigger_enter: Option<Closure<dyn FnMut(Event)>>,
-    trigger_leave: Option<Closure<dyn FnMut(Event)>>,
-    trigger_focus: Option<Closure<dyn FnMut(Event)>>,
-    trigger_blur: Option<Closure<dyn FnMut(Event)>>,
+    /// Listener handles retained for teardown — Trigger + Content
+    /// each stash theirs here so the listeners detach on
+    /// `on_unmount` (dropping the Vec runs each handle's destructor).
+    trigger_listeners: Vec<ListenerHandle>,
     trigger_el: Option<web_sys::Element>,
-    content_enter: Option<Closure<dyn FnMut(Event)>>,
-    content_leave: Option<Closure<dyn FnMut(Event)>>,
+    content_listeners: Vec<ListenerHandle>,
     content_el: Option<web_sys::Element>,
 }
 
@@ -158,44 +156,38 @@ fn install_trigger_listeners(
     trigger_el: web_sys::Element,
     root: Handle<PineHoverCardRoot>,
 ) {
-    let enter = make_open_scheduler(root_id, root.clone());
-    let leave = make_close_scheduler(root_id, root.clone());
-    let focus = {
-        // Focus opens immediately (no delay) to match keyboard-user
-        // expectations — matches Radix's HoverCard behaviour.
-        let root = root.clone();
-        Closure::wrap(Box::new(move |_ev: Event| {
-            cancel_close(root_id);
-            root.update(|s| s.open = true);
-        }) as Box<dyn FnMut(Event)>)
-    };
-    let blur = make_close_scheduler(root_id, root);
-
-    let target: &EventTarget = trigger_el.as_ref();
-    let _ = target.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("focusin", focus.as_ref().unchecked_ref());
-    let _ = target.add_event_listener_with_callback("focusout", blur.as_ref().unchecked_ref());
+    let open_scheduler = make_open_scheduler(root_id, root.clone());
+    let close_scheduler = make_close_scheduler(root_id, root.clone());
+    let mouseenter_open = open_scheduler.clone();
+    let enter = events::on(&trigger_el, ev::mouseenter, move |_e| mouseenter_open());
+    let mouseleave_close = close_scheduler.clone();
+    let leave = events::on(&trigger_el, ev::mouseleave, move |_e| mouseleave_close());
+    // Focus opens immediately (no delay) to match keyboard-user
+    // expectations — matches Radix's HoverCard behaviour.
+    let focus_root = root.clone();
+    let focus = events::on(&trigger_el, ev::focusin, move |_e| {
+        cancel_close(root_id);
+        focus_root.update(|s| s.open = true);
+    });
+    let blur = events::on(&trigger_el, ev::focusout, move |_e| close_scheduler());
 
     RUNTIME.with(|r| {
         let mut map = r.borrow_mut();
         let entry = map.entry(root_id).or_default();
         entry.trigger_el = Some(trigger_el);
-        entry.trigger_enter = Some(enter);
-        entry.trigger_leave = Some(leave);
-        entry.trigger_focus = Some(focus);
-        entry.trigger_blur = Some(blur);
+        entry.trigger_listeners = vec![enter, leave, focus, blur];
     });
+    // Suppress an unused-warning when only some events use `root`.
+    let _ = root;
 }
 
-/// Build a closure that schedules `open = true` after `open_delay`.
+/// Build a callable that schedules `open = true` after `open_delay`.
 /// Cancels any pending close timer first — the pointer re-entered
 /// a tracked surface, so we don't want the card to close under us.
-fn make_open_scheduler(
-    root_id: ScopeId,
-    root: Handle<PineHoverCardRoot>,
-) -> Closure<dyn FnMut(Event)> {
-    Closure::wrap(Box::new(move |_ev: Event| {
+/// Wrapped in `Rc` so the same scheduler can be cloned into multiple
+/// listener closures without rebuilding the timer-bookkeeping state.
+fn make_open_scheduler(root_id: ScopeId, root: Handle<PineHoverCardRoot>) -> std::rc::Rc<dyn Fn()> {
+    std::rc::Rc::new(move || {
         cancel_close(root_id);
         // Don't restart the open timer if one is already pending —
         // a second mouseenter on the same surface during the delay
@@ -231,7 +223,7 @@ fn make_open_scheduler(
                 });
             }
         }
-    }) as Box<dyn FnMut(Event)>)
+    })
 }
 
 /// Build a closure that schedules `open = false` after `close_delay`.
@@ -241,8 +233,8 @@ fn make_open_scheduler(
 fn make_close_scheduler(
     root_id: ScopeId,
     root: Handle<PineHoverCardRoot>,
-) -> Closure<dyn FnMut(Event)> {
-    Closure::wrap(Box::new(move |_ev: Event| {
+) -> std::rc::Rc<dyn Fn()> {
+    std::rc::Rc::new(move || {
         cancel_open(root_id);
         let delay = root.with(|r| r.close_delay);
         let root_for_timer = root.clone();
@@ -271,7 +263,7 @@ fn make_close_scheduler(
                 });
             }
         }
-    }) as Box<dyn FnMut(Event)>)
+    })
 }
 
 fn cancel_open(root_id: ScopeId) {
@@ -299,33 +291,14 @@ fn cancel_close(root_id: ScopeId) {
 }
 
 fn teardown_trigger(root_id: ScopeId) {
-    let Some(el) = RUNTIME.with(|r| {
-        r.borrow_mut()
-            .get_mut(&root_id)
-            .and_then(|e| e.trigger_el.take())
-    }) else {
-        return;
-    };
-    let target: &EventTarget = el.as_ref();
+    // Clear the trigger listener handles — dropping the Vec
+    // detaches all four listeners. The runtime entry itself stays
+    // (Content may still be live).
     RUNTIME.with(|r| {
         let mut map = r.borrow_mut();
         if let Some(e) = map.get_mut(&root_id) {
-            if let Some(c) = e.trigger_enter.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
-            }
-            if let Some(c) = e.trigger_leave.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
-            }
-            if let Some(c) = e.trigger_focus.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("focusin", c.as_ref().unchecked_ref());
-            }
-            if let Some(c) = e.trigger_blur.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("focusout", c.as_ref().unchecked_ref());
-            }
+            e.trigger_el = None;
+            e.trigger_listeners.clear();
         }
     });
     cancel_open(root_id);
@@ -413,21 +386,17 @@ impl PineHoverCardContent {
         // enters it, schedule close when pointer leaves. This is
         // the thing that lets users move mouse from Trigger across
         // the gap into Content without the card vanishing.
-        let enter = make_open_scheduler(root_id, root.clone());
-        let leave = make_close_scheduler(root_id, root);
+        let open = make_open_scheduler(root_id, root.clone());
+        let close = make_close_scheduler(root_id, root);
 
-        let target: &EventTarget = content.as_ref();
-        let _ =
-            target.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref());
-        let _ =
-            target.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref());
+        let enter = events::on(&content, ev::mouseenter, move |_e| open());
+        let leave = events::on(&content, ev::mouseleave, move |_e| close());
 
         RUNTIME.with(|r| {
             let mut map = r.borrow_mut();
             let entry = map.entry(root_id).or_default();
             entry.content_el = Some(content);
-            entry.content_enter = Some(enter);
-            entry.content_leave = Some(leave);
+            entry.content_listeners = vec![enter, leave];
         });
     }
 
@@ -438,25 +407,13 @@ impl PineHoverCardContent {
 }
 
 fn teardown_content(root_id: ScopeId) {
-    let Some(el) = RUNTIME.with(|r| {
-        r.borrow_mut()
-            .get_mut(&root_id)
-            .and_then(|e| e.content_el.take())
-    }) else {
-        return;
-    };
-    let target: &EventTarget = el.as_ref();
+    // Clear the content listener handles — dropping the Vec
+    // detaches the two hover listeners.
     RUNTIME.with(|r| {
         let mut map = r.borrow_mut();
         if let Some(e) = map.get_mut(&root_id) {
-            if let Some(c) = e.content_enter.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("mouseenter", c.as_ref().unchecked_ref());
-            }
-            if let Some(c) = e.content_leave.take() {
-                let _ = target
-                    .remove_event_listener_with_callback("mouseleave", c.as_ref().unchecked_ref());
-            }
+            e.content_el = None;
+            e.content_listeners.clear();
         }
     });
 }
