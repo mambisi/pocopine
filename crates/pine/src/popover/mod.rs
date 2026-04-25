@@ -70,7 +70,7 @@ impl Default for PinePopoverRoot {
 
 #[handlers]
 impl PinePopoverRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -100,7 +100,7 @@ pub struct PinePopoverTrigger {
 
 #[handlers]
 impl PinePopoverTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -171,13 +171,13 @@ impl Default for PinePopoverContent {
 
 #[handlers]
 impl PinePopoverContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+    fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         let Some(content) = refs.get("content") else {
             return;
         };
@@ -228,7 +228,7 @@ impl PinePopoverContent {
         }
     }
 
-    pub fn on_unmount(&mut self) {
+    fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
             overlay::deactivate(scope);
         }

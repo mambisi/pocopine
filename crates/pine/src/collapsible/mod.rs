@@ -46,7 +46,7 @@ pub struct PineCollapsibleRoot {
 
 #[handlers]
 impl PineCollapsibleRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 

@@ -56,7 +56,7 @@ pub struct PineFormRoot {
 
 #[handlers]
 impl PineFormRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         FORM.provide(this::<Self>());
     }
 

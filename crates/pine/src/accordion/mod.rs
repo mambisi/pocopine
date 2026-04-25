@@ -70,7 +70,7 @@ impl Default for PineAccordionRoot {
 
 #[handlers]
 impl PineAccordionRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -133,7 +133,7 @@ pub struct PineAccordionItem {
 
 #[handlers]
 impl PineAccordionItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         // Seed initial `open` from the root's current state so
         // Trigger / Content see the right value on first bind.
         if let Some(root) = ROOT.inject() {
@@ -147,7 +147,7 @@ impl PineAccordionItem {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -201,7 +201,7 @@ pub struct PineAccordionTrigger {
 
 #[handlers]
 impl PineAccordionTrigger {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 let s = scope.state.borrow();
@@ -211,7 +211,7 @@ impl PineAccordionTrigger {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = ITEM.inject() else { return };
         watch_scope_field_scoped::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
@@ -241,7 +241,7 @@ pub struct PineAccordionContent {
 
 #[handlers]
 impl PineAccordionContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 self.open = scope.state.borrow().get("open").as_bool().unwrap_or(false);
@@ -249,7 +249,7 @@ impl PineAccordionContent {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = ITEM.inject() else { return };
         watch_scope_field_scoped::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);

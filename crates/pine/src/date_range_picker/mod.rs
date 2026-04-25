@@ -87,7 +87,7 @@ impl Default for PineDateRangePicker {
 
 #[handlers]
 impl PineDateRangePicker {
-    pub fn on_mount(&mut self) {
+    fn on_mount(&mut self) {
         if self.placeholder_text.is_empty() {
             self.placeholder_text = "Pick a date range".into();
         }

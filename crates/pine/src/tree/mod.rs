@@ -88,14 +88,14 @@ impl Default for PineTreeRoot {
 
 #[handlers]
 impl PineTreeRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.tree_id = format!("pine-tree-{}", scope.0);
         }
         ROOT.provide(this::<Self>());
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root_el) = refs.get("tree") else {
             return;
         };
@@ -236,7 +236,7 @@ pub struct PineTreeItem {
 
 #[handlers]
 impl PineTreeItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.item_id = format!("pine-tree-item-{}", scope.0);
             // Make this Item's scope id injectable by any Toggle
@@ -255,7 +255,7 @@ impl PineTreeItem {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -404,7 +404,7 @@ pub struct PineTreeItemToggle {
 
 #[handlers]
 impl PineTreeItemToggle {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(item) = ITEM.inject() {
             if let Some(scope) = Scope::find(item) {
                 let s = scope.state.borrow();
@@ -414,7 +414,7 @@ impl PineTreeItemToggle {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = ITEM.inject() else {
             return;
         };

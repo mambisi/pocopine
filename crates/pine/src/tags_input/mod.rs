@@ -90,7 +90,7 @@ pub struct PineTagsInputRoot {
 
 #[handlers]
 impl PineTagsInputRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -160,7 +160,7 @@ pub struct PineTagsInputItem {
 
 #[handlers]
 impl PineTagsInputItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         // Publish our scope id so nested ItemText / ItemDelete
         // can resolve the value live from our state, not from a
         // snapshot taken before reactive `:value` bindings have
@@ -188,7 +188,7 @@ pub struct PineTagsInputItemText {
 
 #[handlers]
 impl PineTagsInputItemText {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         // Seed from whatever the Item's scope currently has —
         // may still be "" if the reactive `:value` binding
         // hasn't fired yet; the `on_ready` watch covers that.
@@ -204,7 +204,7 @@ impl PineTagsInputItemText {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item_scope) = ITEM.inject() else {
             return;
         };

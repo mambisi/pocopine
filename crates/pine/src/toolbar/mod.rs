@@ -67,7 +67,7 @@ impl Default for PineToolbarRoot {
 
 #[handlers]
 impl PineToolbarRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ORIENTATION.provide(self.orientation.clone());
     }
 }
@@ -112,7 +112,7 @@ pub struct PineToolbarSeparator {
 
 #[handlers]
 impl PineToolbarSeparator {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         // Flip axis — horizontal toolbar → vertical separator.
         let parent = ORIENTATION.inject().unwrap_or_else(|| "horizontal".into());
         self.orientation = if parent == "horizontal" {

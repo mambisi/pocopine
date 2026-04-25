@@ -89,7 +89,7 @@ pub struct PineSelectRoot {
 
 #[handlers]
 impl PineSelectRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.listbox_id = format!("pine-select-listbox-{}", scope.0);
         }
@@ -153,7 +153,7 @@ pub struct PineSelectTrigger {
 
 #[handlers]
 impl PineSelectTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -187,7 +187,7 @@ pub struct PineSelectValue {
 
 #[handlers]
 impl PineSelectValue {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             root.with(|r| {
                 self.has_value = !r.value.is_empty();
@@ -200,7 +200,7 @@ impl PineSelectValue {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -277,7 +277,7 @@ impl Default for PineSelectContent {
 
 #[handlers]
 impl PineSelectContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             let (scope, lb) = root.with(|r| (root.scope_id(), r.listbox_id.clone()));
             self.anchor = compound::trigger_selector(scope, SLUG);
@@ -285,7 +285,7 @@ impl PineSelectContent {
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(menu) = refs.get("menu") else { return };
         // Exempt our own trigger from `@click.outside` so the
         // trigger-while-open click closes cleanly instead of
@@ -405,7 +405,7 @@ create_context!(SELECTED_OWNER: pocopine::ScopeId);
 
 #[handlers]
 impl PineSelectItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.selected = root.with(|r| r.value == self.value);
         }
@@ -417,7 +417,7 @@ impl PineSelectItem {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         // Register the item's label with Root so Value can show
         // the rendered text.
         let label = refs
@@ -469,7 +469,7 @@ pub struct PineSelectItemIndicator {
 
 #[handlers]
 impl PineSelectItemIndicator {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(owner) = SELECTED_OWNER.inject() {
             if let Some(scope) = pocopine::Scope::find(owner) {
                 let v = scope.state.borrow().get("selected");
@@ -478,7 +478,7 @@ impl PineSelectItemIndicator {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(owner) = SELECTED_OWNER.inject() else {
             return;
         };

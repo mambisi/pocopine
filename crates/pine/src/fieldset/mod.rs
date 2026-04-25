@@ -55,7 +55,7 @@ pub struct PineFieldsetRoot {
 
 #[handlers]
 impl PineFieldsetRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.legend_id = format!("pine-fieldset-legend-{}", scope.0);
         }

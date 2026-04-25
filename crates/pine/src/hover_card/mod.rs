@@ -105,7 +105,7 @@ impl Default for PineHoverCardRoot {
 
 #[handlers]
 impl PineHoverCardRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
         // Mint the shared debounce slots — Trigger and Content
         // inject them to coordinate the open/close timing across
@@ -130,7 +130,7 @@ pub struct PineHoverCardTrigger {}
 
 #[handlers]
 impl PineHoverCardTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
         let Some(state) = STATE.inject() else { return };
         let root_id = root.scope_id();
@@ -254,13 +254,13 @@ impl Default for PineHoverCardContent {
 
 #[handlers]
 impl PineHoverCardContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(content) = refs.get("content") else {
             return;
         };

@@ -53,7 +53,7 @@ pub struct PinePasswordToggleFieldRoot {
 
 #[handlers]
 impl PinePasswordToggleFieldRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -70,7 +70,7 @@ pub struct PinePasswordToggleFieldInput {}
 
 #[handlers]
 impl PinePasswordToggleFieldInput {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
         let Some(wrap) = refs.get("slot") else { return };
         let Some(inp) = wrap.query_selector("input").ok().flatten() else {

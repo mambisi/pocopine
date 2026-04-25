@@ -49,7 +49,7 @@ use pocopine::prelude::*;
 use pocopine::{create_context, focus};
 use serde::{Deserialize, Serialize};
 
-create_context!(pub ROOT: Handle<PineContextMenuRoot>);
+create_context!(ROOT: Handle<PineContextMenuRoot>);
 
 // ── Root ──────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ impl Default for PineContextMenuRoot {
 
 #[handlers]
 impl PineContextMenuRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -100,7 +100,7 @@ pub struct PineContextMenuTrigger {}
 
 #[handlers]
 impl PineContextMenuTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
         let Some(el) = refs.get("trigger") else {
             return;
@@ -125,7 +125,14 @@ pub struct PineContextMenuPortal {
 
 #[handlers]
 impl PineContextMenuPortal {
-    pub fn on_ready(
+    // Not `pub`: handler methods are dispatched by the macro's
+    // generated forwarder in the same module, never called from
+    // outside. Cross-component coordination flows through events
+    // (child → parent) and props/context (parent → child), not
+    // direct method calls. Keeping the method module-private lets
+    // the `Inject<ROOT, _>` extractor's marker stay default-private
+    // too — no cascading visibility widening.
+    fn on_ready(
         &self,
         handle: pocopine::Handle<Self>,
         root: pocopine::Inject<ROOT, pocopine::Handle<PineContextMenuRoot>>,
@@ -166,7 +173,7 @@ pub struct PineContextMenuContent {
 
 #[handlers]
 impl PineContextMenuContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             let (x, y) = root.with(|r| (r.pointer_x, r.pointer_y));
             self.pointer_x = x;
@@ -174,7 +181,7 @@ impl PineContextMenuContent {
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         // Roving + auto-focus the first item once the teleported
         // clone has committed — identical path to DropdownMenu's
         // menu root, just a different ref name.

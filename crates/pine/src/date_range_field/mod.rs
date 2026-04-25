@@ -52,7 +52,7 @@ pub struct PineDateRangeField {
 
 #[handlers]
 impl PineDateRangeField {
-    pub fn on_mount(&mut self) {
+    fn on_mount(&mut self) {
         if self.separator.is_empty() {
             self.separator = " – ".into();
         }

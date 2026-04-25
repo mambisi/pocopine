@@ -104,7 +104,7 @@ impl Default for PineDateField {
 
 #[handlers]
 impl PineDateField {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         let segs = self.segments_from_value();
         self.sync_display(&segs);
     }

@@ -75,7 +75,7 @@ impl Default for PineToggleGroupRoot {
 
 #[handlers]
 impl PineToggleGroupRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             ROOT.provide(scope);
         }
@@ -136,7 +136,7 @@ pub struct PineToggleGroupItem {
 
 #[handlers]
 impl PineToggleGroupItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             if let Some(scope) = Scope::find(root) {
                 if let Some(rc) = scope.typed::<PineToggleGroupRoot>() {
@@ -146,7 +146,7 @@ impl PineToggleGroupItem {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_s = root;

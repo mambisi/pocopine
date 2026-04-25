@@ -133,7 +133,7 @@ impl Default for PineScrollAreaRoot {
 
 #[handlers]
 impl PineScrollAreaRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
         // Mint the fade-out debounce slot once at setup; descendants
         // inject and reuse it across every scroll event. `new_scoped`
@@ -225,7 +225,7 @@ pub struct PineScrollAreaViewport {}
 
 #[handlers]
 impl PineScrollAreaViewport {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(viewport_el) = refs.get("viewport") else {
             return;
         };
@@ -354,7 +354,7 @@ impl Default for PineScrollAreaScrollbar {
 
 #[handlers]
 impl PineScrollAreaScrollbar {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         SCROLLBAR.provide(this::<Self>());
         SCROLLBAR_ORIENTATION.provide(self.orientation.clone());
         if let Some(root) = ROOT.inject() {
@@ -370,7 +370,7 @@ impl PineScrollAreaScrollbar {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -444,7 +444,7 @@ pub struct PineScrollAreaThumb {
 
 #[handlers]
 impl PineScrollAreaThumb {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.orientation = SCROLLBAR_ORIENTATION
             .inject()
             .unwrap_or_else(|| "vertical".into());
@@ -469,7 +469,7 @@ impl PineScrollAreaThumb {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -676,13 +676,13 @@ pub struct PineScrollAreaCorner {
 
 #[handlers]
 impl PineScrollAreaCorner {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.show = root.with(|r| r.v_visible && r.h_visible);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };

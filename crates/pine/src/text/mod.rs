@@ -70,13 +70,13 @@ impl Default for PineText {
 
 #[handlers]
 impl PineText {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if self.line_height <= 0.0 {
             self.line_height = 20.0;
         }
     }
 
-    pub fn on_ready(&self) {
+    fn on_ready(&self) {
         // Apply the clamp style synchronously — the scope is live
         // in on_ready. Measurement defers because `handle.update`
         // inside on_ready is the RefCell double-borrow trap.

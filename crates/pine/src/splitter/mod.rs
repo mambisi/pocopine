@@ -91,7 +91,7 @@ impl Default for PineSplitterGroup {
 
 #[handlers]
 impl PineSplitterGroup {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         GROUP.provide(this::<Self>());
     }
 }
@@ -196,7 +196,7 @@ pub struct PineSplitterPanel {
 
 #[handlers]
 impl PineSplitterPanel {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         // Defaults are opt-in: authors leave them 0 to let Group
         // split evenly. Set the bounds so clamp doesn't collapse
         // everything to 0 when only `default_size` is set.
@@ -228,7 +228,7 @@ impl PineSplitterPanel {
         // `direction` is mirrored by `#[observe(GROUP)]`.
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(group) = GROUP.inject() else {
             return;
         };
@@ -278,7 +278,7 @@ pub struct PineSplitterResizeHandle {
 
 #[handlers]
 impl PineSplitterResizeHandle {
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(group) = GROUP.inject() else {
             return;
         };

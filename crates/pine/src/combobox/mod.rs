@@ -82,7 +82,7 @@ pub struct PineComboboxRoot {
 
 #[handlers]
 impl PineComboboxRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.listbox_id = format!("pine-combobox-listbox-{}", scope.0);
         }
@@ -142,7 +142,7 @@ pub struct PineComboboxInput {
 
 #[handlers]
 impl PineComboboxInput {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -331,7 +331,7 @@ impl Default for PineComboboxContent {
 
 #[handlers]
 impl PineComboboxContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             let (lb, scope_id) = root.with(|r| (r.listbox_id.clone(), root.scope_id().0));
             self.listbox_id = lb;
@@ -339,7 +339,7 @@ impl PineComboboxContent {
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         // Anchor the listbox to the Input. Without this the
         // teleported `<ul>` lands at the top of `<body>` with
         // default positioning, leaving the dropdown invisible
@@ -404,13 +404,13 @@ pub struct PineComboboxEmpty {
 
 #[handlers]
 impl PineComboboxEmpty {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.empty = root.with(|r| !r.has_matches);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -445,7 +445,7 @@ pub struct PineComboboxItem {
 
 #[handlers]
 impl PineComboboxItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.visible = true;
         if let Some(scope) = current_scope_id() {
             self.item_id = format!("pine-combobox-opt-{}", scope.0);
@@ -455,7 +455,7 @@ impl PineComboboxItem {
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let label = refs
             .get("item")
             .and_then(|el| el.text_content())

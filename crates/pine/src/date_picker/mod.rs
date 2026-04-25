@@ -84,7 +84,7 @@ impl Default for PineDatePicker {
 
 #[handlers]
 impl PineDatePicker {
-    pub fn on_mount(&mut self) {
+    fn on_mount(&mut self) {
         if self.placeholder_text.is_empty() {
             self.placeholder_text = "Pick a date".into();
         }

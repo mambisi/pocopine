@@ -76,7 +76,7 @@ impl Default for PineDialogRoot {
 
 #[handlers]
 impl PineDialogRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         let Some(scope) = current_scope_id() else {
             return;
         };
@@ -177,7 +177,7 @@ pub struct PineDialogContent {
 
 #[handlers]
 impl PineDialogContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = TITLE_ID.inject() {
             self.title_id = id;
         }
@@ -186,7 +186,7 @@ impl PineDialogContent {
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+    fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         // Install focus trap + scroll lock via the shared overlay
         // helper. Content is inside Portal's teleported subtree,
         // which `MutationObserver` on the mount root can't
@@ -215,7 +215,7 @@ impl PineDialogContent {
         }
     }
 
-    pub fn on_unmount(&mut self) {
+    fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
             overlay::deactivate(scope);
         }
@@ -241,7 +241,7 @@ pub struct PineDialogTitle {
 
 #[handlers]
 impl PineDialogTitle {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = TITLE_ID.inject() {
             self.title_id = id;
         }
@@ -258,7 +258,7 @@ pub struct PineDialogDescription {
 
 #[handlers]
 impl PineDialogDescription {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = DESCRIPTION_ID.inject() {
             self.description_id = id;
         }

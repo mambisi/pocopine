@@ -84,7 +84,7 @@ impl Default for PineAlertDialogRoot {
 
 #[handlers]
 impl PineAlertDialogRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         let Some(scope) = current_scope_id() else {
             return;
         };
@@ -190,7 +190,7 @@ pub struct PineAlertDialogContent {
 
 #[handlers]
 impl PineAlertDialogContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = TITLE_ID.inject() {
             self.title_id = id;
         }
@@ -199,7 +199,7 @@ impl PineAlertDialogContent {
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
+    fn on_ready(&self, refs: pocopine::Refs, scope: ScopeId) {
         let Some(content) = refs.get("content") else {
             return;
         };
@@ -218,7 +218,7 @@ impl PineAlertDialogContent {
         }
     }
 
-    pub fn on_unmount(&mut self) {
+    fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
             overlay::deactivate(scope);
         }
@@ -244,7 +244,7 @@ pub struct PineAlertDialogTitle {
 
 #[handlers]
 impl PineAlertDialogTitle {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = TITLE_ID.inject() {
             self.title_id = id;
         }
@@ -261,7 +261,7 @@ pub struct PineAlertDialogDescription {
 
 #[handlers]
 impl PineAlertDialogDescription {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(id) = DESCRIPTION_ID.inject() {
             self.description_id = id;
         }

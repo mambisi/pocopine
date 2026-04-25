@@ -37,7 +37,7 @@ pub struct PineAvatarRoot {
 
 #[handlers]
 impl PineAvatarRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 }

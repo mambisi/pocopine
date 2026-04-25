@@ -40,7 +40,7 @@ pub struct PineTimeRangeField {
 
 #[handlers]
 impl PineTimeRangeField {
-    pub fn on_mount(&mut self) {
+    fn on_mount(&mut self) {
         if self.separator.is_empty() {
             self.separator = " – ".into();
         }

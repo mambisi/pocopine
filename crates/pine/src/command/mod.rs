@@ -90,7 +90,7 @@ pub struct PineCommandRoot {
 
 #[handlers]
 impl PineCommandRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.listbox_id = format!("pine-command-list-{}", scope.0);
         }
@@ -101,7 +101,7 @@ impl PineCommandRoot {
         ROOT.provide(this::<Self>());
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         if self.no_shortcut {
             return;
         }
@@ -271,7 +271,7 @@ pub struct PineCommandContent {}
 
 #[handlers]
 impl PineCommandContent {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         // Focus the input once Content mounts.
         let Some(content_el) = refs.get("content") else {
             return;
@@ -309,7 +309,7 @@ pub struct PineCommandInput {
 
 #[handlers]
 impl PineCommandInput {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };
@@ -482,14 +482,14 @@ pub struct PineCommandItem {
 
 #[handlers]
 impl PineCommandItem {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.visible = true;
         if let Some(scope) = current_scope_id() {
             self.item_id = format!("pine-command-opt-{}", scope.0);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let label = refs
             .get("item")
             .and_then(|el| el.text_content())
@@ -548,13 +548,13 @@ pub struct PineCommandEmpty {
 
 #[handlers]
 impl PineCommandEmpty {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.empty = root.with(|r| !r.has_matches);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else {
             return;
         };

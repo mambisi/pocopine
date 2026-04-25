@@ -87,12 +87,12 @@ impl Default for PineOtpField {
 
 #[handlers]
 impl PineOtpField {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.refresh_mode();
         self.rebuild_slots();
     }
 
-    pub fn on_ready(&self) {
+    fn on_ready(&self) {
         // Slot `<input>`s exist now — mirror the initial value
         // onto their `.value` properties.
         self.sync_slot_display();

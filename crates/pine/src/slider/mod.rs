@@ -91,7 +91,7 @@ impl Default for PineSliderRoot {
 
 #[handlers]
 impl PineSliderRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.recompute_percent();
         ROOT.provide(this::<Self>());
     }
@@ -111,7 +111,7 @@ impl PineSliderRoot {
         self.recompute_percent();
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>, refs: pocopine::Refs) {
         let Some(root_el) = refs.get("root") else {
             return;
         };

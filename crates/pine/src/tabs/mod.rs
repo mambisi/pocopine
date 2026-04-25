@@ -62,7 +62,7 @@ impl Default for PineTabsRoot {
 
 #[handlers]
 impl PineTabsRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 
@@ -108,14 +108,14 @@ pub struct PineTabsTrigger {
 
 #[handlers]
 impl PineTabsTrigger {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
@@ -151,14 +151,14 @@ pub struct PineTabsContent {
 
 #[handlers]
 impl PineTabsContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.trigger_id = format!("pine-tabs-trigger-{}-{}", root.scope_id().0, self.value);
             self.selected = root.with(|r| r.value == self.value);
         }
     }
 
-    pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();

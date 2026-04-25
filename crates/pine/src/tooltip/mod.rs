@@ -88,11 +88,11 @@ impl Default for PineTooltipProvider {
 
 #[handlers]
 impl PineTooltipProvider {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         PROVIDER.provide(this::<Self>());
     }
 
-    pub fn on_unmount(&mut self) {
+    fn on_unmount(&mut self) {
         if let Some(scope) = current_scope_id() {
             CURRENT_OPEN.with(|m| {
                 m.borrow_mut().remove(&scope);
@@ -137,7 +137,7 @@ impl Default for PineTooltipRoot {
 
 #[handlers]
 impl PineTooltipRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
         // Inherit Provider's default delay if Root is still at its
         // own default (700). An explicit `delay_duration` on the
@@ -151,7 +151,7 @@ impl PineTooltipRoot {
         }
     }
 
-    pub fn on_ready(&self, scope: ScopeId) {
+    fn on_ready(&self, scope: ScopeId) {
         // Singleton policy — watch our own `open` field. When it
         // flips true, evict whichever tooltip is currently open
         // in this Provider and take the slot. When it flips
@@ -216,7 +216,7 @@ pub struct PineTooltipTrigger {}
 
 #[handlers]
 impl PineTooltipTrigger {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else { return };
         // Stamp the trigger's slot root so Content's auto-anchor
         // resolves to it. `pp-ref="trigger"` points at the
@@ -312,13 +312,13 @@ impl Default for PineTooltipContent {
 
 #[handlers]
 impl PineTooltipContent {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(root) = ROOT.inject() {
             self.anchor = compound::trigger_selector(root.scope_id(), SLUG);
         }
     }
 
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(content) = refs.get("content") else {
             return;
         };

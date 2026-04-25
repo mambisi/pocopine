@@ -102,7 +102,7 @@ pub struct PineFieldRoot {
 
 #[handlers]
 impl PineFieldRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if let Some(scope) = current_scope_id() {
             self.control_id = format!("pine-field-control-{}", scope.0);
             self.description_id = format!("pine-field-description-{}", scope.0);
@@ -175,7 +175,7 @@ pub struct PineFieldControl {}
 
 #[handlers]
 impl PineFieldControl {
-    pub fn on_ready(&self, refs: pocopine::Refs) {
+    fn on_ready(&self, refs: pocopine::Refs) {
         let Some(root) = ROOT.inject() else {
             return;
         };

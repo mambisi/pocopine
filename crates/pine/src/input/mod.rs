@@ -89,14 +89,14 @@ impl Default for PineInput {
 
 #[handlers]
 impl PineInput {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if self.r#type.is_empty() {
             self.r#type = "text".into();
         }
         self.filled = !self.value.is_empty();
     }
 
-    pub fn on_ready(&self) {
+    fn on_ready(&self) {
         // Seed the DOM input's `.value` property from `self.value`.
         // The template's `:value` binding would only touch the HTML
         // attribute, which doesn't round-trip after the user types.

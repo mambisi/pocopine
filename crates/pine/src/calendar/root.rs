@@ -129,7 +129,7 @@ pub struct PineCalendarRoot {
 
 #[handlers]
 impl PineCalendarRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         if self.number_of_months == 0 {
             self.number_of_months = 1;
         }
@@ -143,7 +143,7 @@ impl PineCalendarRoot {
         self.reflow();
     }
 
-    pub fn on_mount(&mut self) {
+    fn on_mount(&mut self) {
         // pp-model / pp-bind effects fire between on_setup and
         // on_mount, so by this point any author-supplied
         // `placeholder`, `value`, `min-value`, `max-value`, etc.

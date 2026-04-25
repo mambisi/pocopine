@@ -59,7 +59,7 @@ impl Default for PineProgressRoot {
 
 #[handlers]
 impl PineProgressRoot {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
     }
 }

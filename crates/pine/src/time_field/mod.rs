@@ -101,7 +101,7 @@ impl Default for PineTimeField {
 
 #[handlers]
 impl PineTimeField {
-    pub fn on_setup(&mut self) {
+    fn on_setup(&mut self) {
         self.has_seconds = seconds_visible(self.step);
         let segs = TimeSegments::parse(&self.value);
         self.sync_display(&segs);
