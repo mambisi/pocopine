@@ -54,7 +54,6 @@ pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
 pub use context::{inject, provide, ContextKey, ContextMarker};
-pub use extractors::{Inject, NearestParent, Parent};
 pub use directives::for_plan::{
     register_row_plans, BindingKind, StaticBinding, StaticListener, StaticRowPlan,
 };
@@ -62,6 +61,7 @@ pub use emit::{
     emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
     emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, Emit,
 };
+pub use extractors::{Inject, NearestParent, Parent};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
