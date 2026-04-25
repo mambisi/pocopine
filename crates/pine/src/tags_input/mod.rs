@@ -208,7 +208,7 @@ impl PineTagsInputItemText {
         let Some(item_scope) = ITEM.inject() else {
             return;
         };
-        pocopine::watch_scope_field::<String, _>(item_scope, "value", move |v, _| {
+        pocopine::watch_scope_field_scoped::<String, _>(item_scope, "value", move |v, _| {
             let v = v.clone();
             handle.update(|s| s.text = v);
         });

@@ -24,7 +24,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped};
 use pocopine_core::reactive::ScopeId;
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
@@ -106,7 +106,7 @@ pub struct PineRadioGroupItem {
     #[prop]
     pub disabled: bool,
     /// Mirrored from Root's `value` — `true` when this Item is
-    /// the currently-selected one. Watched via `watch_scope_field`
+    /// the currently-selected one. Watched via `watch_scope_field_scoped`
     /// so template bindings (`aria-checked`, `data-state`) stay in
     /// sync without an explicit signal plumbed through props.
     pub checked: bool,
@@ -134,7 +134,7 @@ impl PineRadioGroupItem {
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
-        watch_scope_field::<String, _>(root, "value", move |new, _| {
+        watch_scope_field_scoped::<String, _>(root, "value", move |new, _| {
             let new_v = new.clone();
             handle.update(|s| {
                 s.group_value = new_v.clone();
@@ -201,7 +201,7 @@ impl PineRadioGroupIndicator {
         let Some(owner) = CHECKED_OWNER.inject() else {
             return;
         };
-        watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
+        watch_scope_field_scoped::<bool, _>(owner, "checked", move |&c, _| {
             handle.update(|s| s.checked = c);
         });
     }

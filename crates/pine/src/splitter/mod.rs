@@ -179,7 +179,7 @@ pub struct PineSplitterPanel {
     #[prop]
     pub max_size: f64,
     /// Mirrored from `GROUP.direction` via the macro-installed
-    /// observer (replaces a hand-written `watch_scope_field`).
+    /// observer (replaces a hand-written `watch_scope_field_scoped`).
     #[observe(GROUP)]
     pub direction: String,
     /// This panel's index in Group.sizes / panel_index. Seeded at
@@ -239,7 +239,7 @@ impl PineSplitterPanel {
         // reason (a drag, a keyboard step, a later panel
         // registering and renormalizing), pull the slot matching
         // our index.
-        pocopine::watch_scope_field::<Vec<f64>, _>(group_scope, "sizes", move |v, _| {
+        pocopine::watch_scope_field_scoped::<Vec<f64>, _>(group_scope, "sizes", move |v, _| {
             let idx = handle_for_watch.with(|s| s.my_index);
             if let Some(&new_size) = v.get(idx) {
                 handle_for_watch.update(|s| s.size = new_size);
@@ -302,7 +302,7 @@ impl PineSplitterResizeHandle {
 
         let group_scope = group.scope_id();
         let handle_for_aria = handle;
-        pocopine::watch_scope_field::<Vec<f64>, _>(group_scope, "sizes", move |v, _| {
+        pocopine::watch_scope_field_scoped::<Vec<f64>, _>(group_scope, "sizes", move |v, _| {
             let idx = handle_for_aria.with(|s| s.before_idx);
             if let Some(&val) = v.get(idx) {
                 handle_for_aria.update(|s| s.aria_value = val);

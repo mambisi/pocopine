@@ -41,7 +41,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
@@ -208,7 +208,7 @@ impl PineSelectValue {
         let root_for_watch = root;
 
         // Re-pull the label whenever the current value changes.
-        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |v, _| {
             let current = v.clone();
             let label = root_for_watch
                 .with(|r| r.labels.get(&current).cloned())
@@ -437,7 +437,7 @@ impl PineSelectItem {
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
         let h = handle;
-        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |v, _| {
             let is_selected = v == &my_value;
             h.update(|s| s.selected = is_selected);
         });
@@ -482,7 +482,7 @@ impl PineSelectItemIndicator {
         let Some(owner) = SELECTED_OWNER.inject() else {
             return;
         };
-        watch_scope_field::<bool, _>(owner, "selected", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(owner, "selected", move |&v, _| {
             handle.update(|s| s.selected = v);
         });
     }

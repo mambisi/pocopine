@@ -37,7 +37,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -165,7 +165,7 @@ impl PineComboboxInput {
             schedule_install_virtual(input_el.clone(), listbox_id.clone(), installed.clone());
             let input_for_watch = input_el;
             let listbox_for_watch = listbox_id;
-            watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
+            watch_scope_field_scoped::<bool, _>(root_scope, "open", move |&is_open, _| {
                 if !is_open {
                     return;
                 }
@@ -414,7 +414,7 @@ impl PineComboboxEmpty {
         let Some(root) = ROOT.inject() else {
             return;
         };
-        watch_scope_field::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {
             handle.update(|s| s.empty = !v);
         });
     }
@@ -486,7 +486,7 @@ impl PineComboboxItem {
         // Mirror root.value for aria-selected + data-state.
         let h = handle.clone();
         let my_value_for_value_watch = my_value.clone();
-        watch_scope_field::<String, _>(root_scope, "value", move |v, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |v, _| {
             let is_selected = v == &my_value_for_value_watch;
             h.update(|s| s.selected = is_selected);
         });
@@ -498,7 +498,7 @@ impl PineComboboxItem {
         let my_value_lc = my_value.to_lowercase();
         let label_lc = label.to_lowercase();
         let h = handle;
-        watch_scope_field::<String, _>(root_scope, "query", move |q, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "query", move |q, _| {
             let query = q.to_lowercase();
             let visible =
                 query.is_empty() || label_lc.contains(&query) || my_value_lc.contains(&query);

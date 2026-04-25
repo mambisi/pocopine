@@ -43,7 +43,7 @@
 
 use pocopine::events::{self, ev};
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -69,7 +69,7 @@ pub struct PineCommandRoot {
     #[model]
     pub open: bool,
     /// Live search query. Mirrored into Items' `visible` via
-    /// `watch_scope_field`, same pattern as PineCombobox.
+    /// `watch_scope_field_scoped`, same pattern as PineCombobox.
     pub query: String,
     /// Global shortcut key combo that toggles the palette.
     /// Format: `Mod+<key>` or `Ctrl+<key>` / `Meta+<key>`. The
@@ -326,7 +326,7 @@ impl PineCommandInput {
             schedule_install_virtual(input_el.clone(), listbox_id.clone(), installed.clone());
             let input_for_watch = input_el;
             let listbox_for_watch = listbox_id;
-            watch_scope_field::<bool, _>(root_scope, "open", move |&is_open, _| {
+            watch_scope_field_scoped::<bool, _>(root_scope, "open", move |&is_open, _| {
                 if !is_open {
                     return;
                 }
@@ -512,7 +512,7 @@ impl PineCommandItem {
         };
         let root_scope = root.scope_id();
         let h = handle;
-        watch_scope_field::<String, _>(root_scope, "query", move |q, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "query", move |q, _| {
             let query = q.to_lowercase();
             let visible =
                 query.is_empty() || label_lc.contains(&query) || value_lc.contains(&query);
@@ -558,7 +558,7 @@ impl PineCommandEmpty {
         let Some(root) = ROOT.inject() else {
             return;
         };
-        watch_scope_field::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "has_matches", move |&v, _| {
             handle.update(|s| s.empty = !v);
         });
     }

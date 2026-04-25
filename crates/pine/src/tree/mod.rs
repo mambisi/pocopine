@@ -300,14 +300,14 @@ impl PineTreeItem {
         let my_value_sel = my_value.clone();
         let h_sel_1 = handle.clone();
         let root_for_sel_1 = root.clone();
-        pocopine::watch_scope_field::<String, _>(root_scope, "value", move |_, _| {
+        pocopine::watch_scope_field_scoped::<String, _>(root_scope, "value", move |_, _| {
             let is_sel = root_for_sel_1.with(|r| r.is_selected(&my_value_sel));
             h_sel_1.update(|s| s.selected = is_sel);
         });
         let my_value_sel2 = my_value.clone();
         let h_sel_2 = handle.clone();
         let root_for_sel_2 = root.clone();
-        pocopine::watch_scope_field::<Vec<String>, _>(root_scope, "values", move |_, _| {
+        pocopine::watch_scope_field_scoped::<Vec<String>, _>(root_scope, "values", move |_, _| {
             let is_sel = root_for_sel_2.with(|r| r.is_selected(&my_value_sel2));
             h_sel_2.update(|s| s.selected = is_sel);
         });
@@ -317,15 +317,19 @@ impl PineTreeItem {
         let ancestor_values_exp = ancestor_values;
         let h_exp = handle;
         let root_for_exp = root;
-        pocopine::watch_scope_field::<Vec<String>, _>(root_scope, "expanded", move |v, _| {
-            let is_exp = v.iter().any(|x| x == &my_value_exp);
-            let vis = compute_parent_visible(&ancestor_values_exp, v);
-            h_exp.update(|s| {
-                s.expanded = is_exp;
-                s.parent_visible = vis;
-            });
-            let _ = &root_for_exp;
-        });
+        pocopine::watch_scope_field_scoped::<Vec<String>, _>(
+            root_scope,
+            "expanded",
+            move |v, _| {
+                let is_exp = v.iter().any(|x| x == &my_value_exp);
+                let vis = compute_parent_visible(&ancestor_values_exp, v);
+                h_exp.update(|s| {
+                    s.expanded = is_exp;
+                    s.parent_visible = vis;
+                });
+                let _ = &root_for_exp;
+            },
+        );
     }
 
     /// `@click.stop` on the Item root. Selection only — expansion
@@ -415,11 +419,11 @@ impl PineTreeItemToggle {
             return;
         };
         let h_exp = handle.clone();
-        pocopine::watch_scope_field::<bool, _>(item, "expanded", move |&v, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(item, "expanded", move |&v, _| {
             h_exp.update(|s| s.expanded = v);
         });
         let h_has = handle;
-        pocopine::watch_scope_field::<bool, _>(item, "has_children", move |&v, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(item, "has_children", move |&v, _| {
             h_has.update(|s| s.has_children = v);
         });
     }

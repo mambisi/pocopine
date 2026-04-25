@@ -26,7 +26,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped};
 use pocopine_core::reactive::ScopeId;
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
@@ -129,7 +129,7 @@ pub struct PineToggleGroupItem {
     #[prop]
     pub disabled: bool,
     /// Mirrored from Root's selection. Watched via
-    /// `watch_scope_field` on both `value` and `values`; exactly
+    /// `watch_scope_field_scoped` on both `value` and `values`; exactly
     /// one applies per tick based on Root's `type`.
     pub pressed: bool,
 }
@@ -153,7 +153,7 @@ impl PineToggleGroupItem {
         // Single-mode watcher — Root.value.
         let me1 = handle.clone();
         let my_value1 = my_value.clone();
-        watch_scope_field::<String, _>(root_s, "value", move |_, _| {
+        watch_scope_field_scoped::<String, _>(root_s, "value", move |_, _| {
             let is_pressed = Scope::find(root_s)
                 .and_then(|s| s.typed::<PineToggleGroupRoot>())
                 .map(|rc| rc.borrow().item_pressed(&my_value1))
@@ -163,7 +163,7 @@ impl PineToggleGroupItem {
         // Multiple-mode watcher — Root.values.
         let me2 = handle;
         let my_value2 = my_value;
-        watch_scope_field::<Vec<String>, _>(root_s, "values", move |_, _| {
+        watch_scope_field_scoped::<Vec<String>, _>(root_s, "values", move |_, _| {
             let is_pressed = Scope::find(root_s)
                 .and_then(|s| s.typed::<PineToggleGroupRoot>())
                 .map(|rc| rc.borrow().item_pressed(&my_value2))

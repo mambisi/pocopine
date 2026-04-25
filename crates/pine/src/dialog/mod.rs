@@ -32,7 +32,7 @@
 
 use crate::overlay;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 
 create_context!(ROOT: Handle<PineDialogRoot>);
@@ -207,7 +207,7 @@ impl PineDialogContent {
         overlay::activate(scope, &content, modal);
 
         if let Some(root) = ROOT.inject() {
-            watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, prev| {
+            watch_scope_field_scoped::<bool, _>(root.scope_id(), "open", move |&is_open, prev| {
                 if prev == Some(&true) && !is_open {
                     overlay::deactivate(scope);
                 }

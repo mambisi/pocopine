@@ -27,7 +27,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 
 create_context!(ROOT: Handle<PineAccordionRoot>);
@@ -157,7 +157,7 @@ impl PineAccordionItem {
         let my_value_1 = my_value.clone();
         let me_1 = handle.clone();
         let root_1 = root.clone();
-        watch_scope_field::<String, _>(root_scope, "value", move |_, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |_, _| {
             let is_open = root_1.with(|r| r.item_open(&my_value_1));
             me_1.update(|s| s.open = is_open);
         });
@@ -167,7 +167,7 @@ impl PineAccordionItem {
         let my_value_2 = my_value;
         let me_2 = handle;
         let root_2 = root;
-        watch_scope_field::<Vec<String>, _>(root_scope, "values", move |_, _| {
+        watch_scope_field_scoped::<Vec<String>, _>(root_scope, "values", move |_, _| {
             let is_open = root_2.with(|r| r.item_open(&my_value_2));
             me_2.update(|s| s.open = is_open);
         });
@@ -213,7 +213,7 @@ impl PineAccordionTrigger {
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = ITEM.inject() else { return };
-        watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
+        watch_scope_field_scoped::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
     }
@@ -251,7 +251,7 @@ impl PineAccordionContent {
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(item) = ITEM.inject() else { return };
-        watch_scope_field::<bool, _>(item, "open", move |&is_open, _| {
+        watch_scope_field_scoped::<bool, _>(item, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
     }

@@ -27,7 +27,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, watch_scope_field};
+use pocopine::{create_context, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 
 create_context!(ROOT: Handle<PineTabsRoot>);
@@ -119,7 +119,7 @@ impl PineTabsTrigger {
         let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
-        watch_scope_field::<String, _>(root_scope, "value", move |new, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |new, _| {
             let is_selected = new == &my_value;
             handle.update(|s| s.selected = is_selected);
         });
@@ -162,7 +162,7 @@ impl PineTabsContent {
         let Some(root) = ROOT.inject() else { return };
         let my_value = self.value.clone();
         let root_scope = root.scope_id();
-        watch_scope_field::<String, _>(root_scope, "value", move |new, _| {
+        watch_scope_field_scoped::<String, _>(root_scope, "value", move |new, _| {
             let is_selected = new == &my_value;
             handle.update(|s| s.selected = is_selected);
         });

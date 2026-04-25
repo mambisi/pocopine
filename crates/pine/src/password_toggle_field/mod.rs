@@ -31,7 +31,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, watch_scope_field};
+use pocopine::{create_context, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 
 create_context!(ROOT: Handle<PinePasswordToggleFieldRoot>);
@@ -79,7 +79,7 @@ impl PinePasswordToggleFieldInput {
         let initial = root.with(|r| r.visible);
         let _ = inp.set_attribute("type", if initial { "text" } else { "password" });
         let inp_cap = inp.clone();
-        watch_scope_field::<bool, _>(root.scope_id(), "visible", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "visible", move |&v, _| {
             let _ = inp_cap.set_attribute("type", if v { "text" } else { "password" });
         });
     }

@@ -27,7 +27,7 @@
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field};
+use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
@@ -435,7 +435,7 @@ impl PineDropdownMenuSubContent {
         // auto-focus can run when the menu mounts. pp-anchor is
         // handled declaratively in the template; we only need to
         // forward `open` into self.
-        watch_scope_field::<bool, _>(sub_scope, "open", move |&is_open, _| {
+        watch_scope_field_scoped::<bool, _>(sub_scope, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
             if is_open {
                 focus_first_sub_item();
@@ -573,7 +573,7 @@ pub struct PineDropdownMenuCheckboxItem {
     pub disabled: bool,
     /// Computed mirror of `state != "unchecked"` for
     /// ItemIndicator's pp-if. Kept as a bool so
-    /// `watch_scope_field::<bool>` in ItemIndicator stays simple.
+    /// `watch_scope_field_scoped::<bool>` in ItemIndicator stays simple.
     pub checked: bool,
 }
 
@@ -590,7 +590,7 @@ impl Default for PineDropdownMenuCheckboxItem {
 // Provide/inject key for a Checkbox or Radio item's scope id —
 // an ItemIndicator's subscription point. The value is the
 // owner's `ScopeId`; ItemIndicator's `on_ready` uses it with
-// `watch_scope_field` to mirror `checked`.
+// `watch_scope_field_scoped` to mirror `checked`.
 create_context!(CHECKED_OWNER: ScopeId);
 
 #[handlers]
@@ -642,7 +642,7 @@ impl PineDropdownMenuCheckboxItem {
 /// Renders its slot only when the enclosing CheckboxItem /
 /// RadioItem is currently checked. Injects the owner's scope id
 /// and mirrors its `checked` field through
-/// `watch_scope_field`, so any state change in the parent item
+/// `watch_scope_field_scoped`, so any state change in the parent item
 /// reactively shows/hides this indicator.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PineDropdownMenuItemIndicator.poco", role = "visual")]
@@ -667,7 +667,7 @@ impl PineDropdownMenuItemIndicator {
         let Some(owner) = CHECKED_OWNER.inject() else {
             return;
         };
-        watch_scope_field::<bool, _>(owner, "checked", move |&c, _| {
+        watch_scope_field_scoped::<bool, _>(owner, "checked", move |&c, _| {
             handle.update(|s| s.checked = c);
         });
     }
@@ -718,7 +718,7 @@ impl PineDropdownMenuRadioGroup {
 
 /// Radio-selection menu item. `role="menuitemradio"`. Its
 /// `checked` bool mirrors `group.value == self.value`, updated
-/// reactively via `watch_scope_field` on the injected group.
+/// reactively via `watch_scope_field_scoped` on the injected group.
 /// Also provides `CHECKED_OWNER` so nested ItemIndicators
 /// work identically to CheckboxItem.
 #[derive(Default, Serialize, Deserialize)]
@@ -760,7 +760,7 @@ impl PineDropdownMenuRadioItem {
         let Some(group) = RADIO_GROUP.inject() else {
             return;
         };
-        watch_scope_field::<String, _>(group, "value", move |new, _| {
+        watch_scope_field_scoped::<String, _>(group, "value", move |new, _| {
             let new_v = new.clone();
             handle.update(|s| {
                 s.group_value = new_v.clone();

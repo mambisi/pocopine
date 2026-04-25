@@ -46,7 +46,7 @@
 //! ```
 
 use pocopine::prelude::*;
-use pocopine::{create_context, focus, watch_scope_field};
+use pocopine::{create_context, focus, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 
 create_context!(ROOT: Handle<PineContextMenuRoot>);
@@ -127,7 +127,7 @@ pub struct PineContextMenuPortal {
 impl PineContextMenuPortal {
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(root) = ROOT.inject() else { return };
-        watch_scope_field::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
         });
     }

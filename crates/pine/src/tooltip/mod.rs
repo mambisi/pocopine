@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::compound;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field, ScopeId};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped, ScopeId};
 use pocopine_core::scope::Scope;
 use serde::{Deserialize, Serialize};
 
@@ -162,7 +162,7 @@ impl PineTooltipRoot {
             return;
         };
         let prov_id = prov.scope_id();
-        watch_scope_field::<bool, _>(root_id, "open", move |&is_open, _| {
+        watch_scope_field_scoped::<bool, _>(root_id, "open", move |&is_open, _| {
             if is_open {
                 singleton_take_over(root_id, prov_id);
             } else {

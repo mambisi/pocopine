@@ -381,7 +381,7 @@ impl PineScrollAreaScrollbar {
         let h1 = handle.clone();
         let o1 = orientation.clone();
         let r1 = root.clone();
-        pocopine::watch_scope_field::<bool, _>(root_scope, "v_visible", move |&v, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(root_scope, "v_visible", move |&v, _| {
             if o1 == "vertical" {
                 let has = r1.with(|r| r.has_vertical);
                 h1.update(|s| {
@@ -393,7 +393,7 @@ impl PineScrollAreaScrollbar {
         let h2 = handle.clone();
         let o2 = orientation.clone();
         let r2 = root.clone();
-        pocopine::watch_scope_field::<bool, _>(root_scope, "h_visible", move |&v, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(root_scope, "h_visible", move |&v, _| {
             if o2 == "horizontal" {
                 let has = r2.with(|r| r.has_horizontal);
                 h2.update(|s| {
@@ -407,18 +407,22 @@ impl PineScrollAreaScrollbar {
         // doesn't toggle.
         let h3 = handle.clone();
         let o3 = orientation.clone();
-        pocopine::watch_scope_field::<bool, _>(root_scope, "has_vertical", move |&v, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(root_scope, "has_vertical", move |&v, _| {
             if o3 == "vertical" {
                 h3.update(|s| s.has_overflow = v);
             }
         });
         let h4 = handle;
         let o4 = orientation;
-        pocopine::watch_scope_field::<bool, _>(root_scope, "has_horizontal", move |&v, _| {
-            if o4 == "horizontal" {
-                h4.update(|s| s.has_overflow = v);
-            }
-        });
+        pocopine::watch_scope_field_scoped::<bool, _>(
+            root_scope,
+            "has_horizontal",
+            move |&v, _| {
+                if o4 == "horizontal" {
+                    h4.update(|s| s.has_overflow = v);
+                }
+            },
+        );
     }
 }
 
@@ -506,7 +510,7 @@ impl PineScrollAreaThumb {
             "client_width",
         ] {
             let r = recompute.clone();
-            pocopine::watch_scope_field::<f64, _>(root_scope, field, move |_, _| r());
+            pocopine::watch_scope_field_scoped::<f64, _>(root_scope, field, move |_, _| r());
         }
     }
 
@@ -690,12 +694,12 @@ impl PineScrollAreaCorner {
         let r1 = root.clone();
         let h1 = handle.clone();
         let rc = recompute;
-        pocopine::watch_scope_field::<bool, _>(root_scope, "v_visible", move |_, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(root_scope, "v_visible", move |_, _| {
             rc(r1.clone(), h1.clone());
         });
         let r2 = root;
         let h2 = handle;
-        pocopine::watch_scope_field::<bool, _>(root_scope, "h_visible", move |_, _| {
+        pocopine::watch_scope_field_scoped::<bool, _>(root_scope, "h_visible", move |_, _| {
             recompute(r2.clone(), h2.clone());
         });
     }

@@ -42,7 +42,7 @@
 
 use crate::form::FORM;
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, watch_scope_field};
+use pocopine::{create_context, current_scope_id, watch_scope_field_scoped};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
@@ -122,7 +122,7 @@ impl PineFieldRoot {
             }
             let handle = this::<Self>();
             let name_for_watch = name;
-            watch_scope_field::<HashMap<String, String>, _>(
+            watch_scope_field_scoped::<HashMap<String, String>, _>(
                 form.scope_id(),
                 "errors",
                 move |errors, _prev| {
@@ -221,13 +221,13 @@ impl PineFieldControl {
         // so external validators (or the native `invalid` event
         // below) flow onto the DOM.
         let inner_for_invalid = inner.clone();
-        watch_scope_field::<bool, _>(root.scope_id(), "invalid", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "invalid", move |&v, _| {
             let _ =
                 inner_for_invalid.set_attribute("aria-invalid", if v { "true" } else { "false" });
         });
         // Reactive: forward Root.disabled onto the inner input.
         let inner_for_disabled = inner.clone();
-        watch_scope_field::<bool, _>(root.scope_id(), "disabled", move |&v, _| {
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "disabled", move |&v, _| {
             if v {
                 let _ = inner_for_disabled.set_attribute("disabled", "");
             } else {
