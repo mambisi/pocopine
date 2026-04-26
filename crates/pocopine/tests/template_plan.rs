@@ -332,6 +332,36 @@ impl PlanIfModelDirectiveHost {
     }
 }
 
+/// Role component whose template root uses `pp-as`. The compiled
+/// plan owns root-level attrs/listeners and applies them to the
+/// hoisted user element.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanAsDirectiveChild.html", role = "interactive")]
+struct PlanAsDirectiveChild {
+    active: bool,
+}
+
+#[handlers]
+impl PlanAsDirectiveChild {
+    pub fn activate(&mut self) {
+        self.active = true;
+    }
+}
+
+/// Host whose lifted pp-if body contains a `pp-as` custom tag.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfAsDirectiveHost.html")]
+struct PlanIfAsDirectiveHost {
+    open: bool,
+}
+
+#[handlers]
+impl PlanIfAsDirectiveHost {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -452,6 +482,8 @@ fn register_all() {
     PlanIfHostDirectiveHost::register();
     PlanModelDirectiveChild::register();
     PlanIfModelDirectiveHost::register();
+    PlanAsDirectiveChild::register();
+    PlanIfAsDirectiveHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -934,6 +966,70 @@ async fn lifted_child_host_model_installs_without_fallback_walk() {
         compiled_fallback_walk_count(),
         0,
         "planned child host pp-model should not need walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — `pp-as` component templates
+/// can bind root-level template attrs/listeners to the hoisted
+/// user element without a recursive fallback walk.
+#[wasm_bindgen_test]
+async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let child_plan = template_plan_for("plan-as-directive-child")
+        .expect("pp-as child should register a root template plan");
+    assert!(
+        !child_plan.requires_walker,
+        "root-level pp-as template plan should be walker-complete",
+    );
+    let host_plan = template_plan_for("plan-if-as-directive-host")
+        .expect("pp-as host should register a template plan");
+    let body = host_plan.if_plans[0]
+        .body
+        .expect("pp-as child body should lift");
+    let _ = body;
+
+    let host = mount("<plan-if-as-directive-host></plan-if-as-directive-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".piadh-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let button = host
+        .query_selector(".piadh-user-button")
+        .unwrap()
+        .expect("hoisted pp-as button should mount");
+    assert_eq!(
+        button.get_attribute("data-state").as_deref(),
+        Some("idle"),
+        "compiled root binding should install on hoisted user element",
+    );
+    assert!(
+        button
+            .get_attribute("class")
+            .unwrap_or_default()
+            .contains("padc-root"),
+        "template root class should merge onto hoisted user element",
+    );
+
+    button.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        button.get_attribute("data-state").as_deref(),
+        Some("active"),
+        "compiled root listener should run in the child scope",
+    );
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled pp-as child should not need walker fallback",
     );
 
     host.remove();

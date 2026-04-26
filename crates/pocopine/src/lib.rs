@@ -71,8 +71,8 @@ pub mod __private {
         StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::templates_plan::{
-        apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
-        stamp_if_body, template_plan_for, StaticTemplatePlan,
+        apply_static_plan, apply_static_pp_as_plan, plan_failure_count, register_template_plan,
+        reset_plan_failure_count, stamp_if_body, template_plan_for, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to

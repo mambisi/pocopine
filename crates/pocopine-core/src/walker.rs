@@ -730,6 +730,14 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     // 8. Fallthrough from the tag's own attrs (RFC-010).
     apply_fallthrough_attrs(el, &user_root, &scope);
 
+    // RFC-058 pp-as slice: template-root directives stripped from
+    // a compiled `<root pp-as>` plan bind to the hoisted user
+    // element. The pp-as-specific applier intentionally skips slot
+    // outlets because the user element is already the slot content.
+    if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
+        crate::templates_plan::apply_static_pp_as_plan(&user_root, scope.id, &proxy, plan, tag);
+    }
+
     // 9. No <slot> materialisation under pp-as — the user's element
     //    IS the content. Install an empty slot store just to keep
     //    lifecycle symmetry with the normal path.

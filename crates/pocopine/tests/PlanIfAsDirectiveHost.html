@@ -1,0 +1,8 @@
+<div class="piadh-root">
+  <button class="piadh-toggle" pp-on:click="toggle">toggle</button>
+  <template pp-if="open">
+    <plan-as-directive-child pp-as>
+      <button class="piadh-user-button">user button</button>
+    </plan-as-directive-child>
+  </template>
+</div>
