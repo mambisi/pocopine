@@ -496,10 +496,22 @@ fn mount_component(
     // Clone the registered template in. `set_inner_html` drops the
     // tag's former children, which is the "capture" side of the old
     // flow.
-    let Some(html) = template_for(tag) else {
-        return;
-    };
-    el.set_inner_html(&html);
+    //
+    // RFC-058 Phase 6.4 — prefer `template_clone_for` (parses the
+    // HTML once into a cached `<template>` element, every mount
+    // clones the `.content` `DocumentFragment`) over re-parsing
+    // the HTML string per mount. Falls back to `set_inner_html`
+    // when the cache miss can't repopulate (no document, parse
+    // refused, …) so behaviour stays parity-correct.
+    if let Some(fragment) = crate::templates::template_clone_for(tag) {
+        el.set_inner_html("");
+        let _ = el.append_child(fragment.as_ref());
+    } else {
+        let Some(html) = template_for(tag) else {
+            return;
+        };
+        el.set_inner_html(&html);
+    }
 
     // Bind scope to the template's root element and strip pp-data so the
     // recursive walker doesn't try to re-instantiate.
