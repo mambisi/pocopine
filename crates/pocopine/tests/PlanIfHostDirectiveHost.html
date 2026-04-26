@@ -1,0 +1,6 @@
+<div class="pihdh-root">
+  <button class="pihdh-toggle" pp-on:click="toggle">toggle</button>
+  <template pp-if="open">
+    <plan-host-directive-child :label="title" @click="bump"></plan-host-directive-child>
+  </template>
+</div>

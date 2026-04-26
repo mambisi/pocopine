@@ -43,11 +43,11 @@ use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element};
 
-use crate::directives;
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
     StaticListener, StaticRef, StaticSlotOutlet, StaticTeleportPlan,
 };
+use crate::directives::{self, DirectiveCall};
 use crate::expr;
 use crate::reactive::ScopeId;
 use crate::slot_fragment::SlotSet;
@@ -334,6 +334,7 @@ pub fn apply_static_plan(
             }
             crate::walker::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
         }
+        install_child_host_directives(&el, scope_id, proxy, c, template_name);
     }
     for fp in plan.for_plans {
         let Some(el) = resolve(root, fp.template_node_path) else {
@@ -437,6 +438,65 @@ pub fn apply_static_plan(
     }
     for slot in slot_outlets {
         crate::walker::materialize_compiled_slot_outlet(&slot);
+    }
+}
+
+fn install_child_host_directives(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    child: &StaticChildMount,
+    template_name: &str,
+) {
+    for b in child.bindings {
+        let ast = match expr::parse_cached(b.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "child-host-binding-parse",
+                    template_name,
+                    child.node_path,
+                    Some(b.expr_src),
+                );
+                continue;
+            }
+        };
+        directives::bind::install(el, proxy, b.arg, ast);
+    }
+    for l in child.listeners {
+        let ast = match expr::parse_cached(l.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "child-host-listener-parse",
+                    template_name,
+                    child.node_path,
+                    Some(l.expr_src),
+                );
+                continue;
+            }
+        };
+        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
+        directives::on::install(
+            el,
+            scope_id,
+            proxy,
+            l.event,
+            &modifiers,
+            Rc::new(directives::on::backfill_legacy_call(ast)),
+        );
+    }
+    for m in child.models {
+        let modifiers: Vec<String> = m.modifiers.iter().map(|s| (*s).to_string()).collect();
+        let call = DirectiveCall {
+            el,
+            proxy,
+            scope_id,
+            arg: m.arg.map(str::to_string),
+            modifiers,
+            value: m.expr_src.to_string(),
+        };
+        directives::model::run(&call);
     }
 }
 

@@ -257,6 +257,44 @@ impl PlanIfChildHost {
     }
 }
 
+/// Child with a parent-writable prop used by the child-host
+/// directive plan regression.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanHostDirectiveChild.html")]
+struct PlanHostDirectiveChild {
+    #[prop]
+    label: String,
+}
+
+#[handlers]
+impl PlanHostDirectiveChild {}
+
+/// Host whose lifted pp-if body contains a custom tag with
+/// parent-scope host directives. Without StaticChildMount host
+/// directive descriptors this shape required walker fallback to
+/// install `:label` and `@click` on the custom tag.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfHostDirectiveHost.html")]
+struct PlanIfHostDirectiveHost {
+    open: bool,
+    title: String,
+    count: u32,
+}
+
+#[handlers]
+impl PlanIfHostDirectiveHost {
+    pub fn on_setup(&mut self) {
+        self.title = "initial-host-title".into();
+    }
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+    pub fn bump(&mut self) {
+        self.count += 1;
+        self.title = format!("host-count-{}", self.count);
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -373,6 +411,8 @@ fn register_all() {
     PlanSlotDynamicHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
+    PlanHostDirectiveChild::register();
+    PlanIfHostDirectiveHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -727,6 +767,54 @@ async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
         compiled_fallback_walk_count(),
         0,
         "planned child mount in lifted pp-if body should not need walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — child-component host
+/// directives inside lifted bodies are installed from
+/// `StaticChildMount`, after the child scope exists. This keeps
+/// parent prop binds and host listeners out of fallback walk.
+#[wasm_bindgen_test]
+async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-if-host-directive-host")
+        .expect("plan-if-host-directive-host registers a template plan");
+    let body = plan.if_plans[0]
+        .body
+        .expect("host directive child body should lift");
+    let _ = body;
+
+    let host = mount("<plan-if-host-directive-host></plan-if-host-directive-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".pihdh-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let label = host
+        .query_selector(".phdc-label")
+        .unwrap()
+        .expect("child label should mount");
+    assert_eq!(label.text_content().as_deref(), Some("initial-host-title"));
+
+    label.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        label.text_content().as_deref(),
+        Some("host-count-1"),
+        "custom-tag @click should dispatch to parent and :label should update child prop",
+    );
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "planned child host directives should not need walker fallback",
     );
 
     host.remove();
