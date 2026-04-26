@@ -105,6 +105,35 @@ impl PlanForLoop {
     }
 }
 
+/// RFC-058 Phase 3 — leaf child component the parent below
+/// nests. Plan-eligible (one `pp-text` on a native tag), so it
+/// itself registers a template plan; the parent's plan
+/// references it via a `StaticChildMount` entry.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanChildLeaf.html")]
+struct PlanChildLeaf {
+    caption: String,
+}
+
+#[handlers]
+impl PlanChildLeaf {
+    pub fn on_setup(&mut self) {
+        self.caption = "leaf-mounted".into();
+    }
+}
+
+/// Parent whose template contains a `<plan-child-leaf>` tag.
+/// Drives the Phase 3.4 evidence — the parent's plan must
+/// carry exactly one `StaticChildMount` entry, and mounting
+/// the parent must mount the leaf without us reaching for the
+/// walker's auto-discovery path.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanChildHost.html")]
+struct PlanChildHost {}
+
+#[handlers]
+impl PlanChildHost {}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -115,6 +144,8 @@ fn register_all() {
     PlanTextEcho::register();
     PlanRefInit::register();
     PlanForLoop::register();
+    PlanChildLeaf::register();
+    PlanChildHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -237,6 +268,46 @@ async fn template_with_pp_for_skips_template_plan() {
         .unwrap()
         .expect("walker-driven pp-for should still mount the row");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3 — the parent's plan carries one
+/// `StaticChildMount` entry per non-HTML5 tag in its
+/// plan-eligible subtree, the runtime applier mounts the leaf
+/// child explicitly via `mount_child_component`, and the
+/// walker's `__pp_mounted` guard turns its subsequent
+/// auto-discovery into a no-op. Net effect today is parity
+/// with the walker-driven path; the test pins the structural
+/// contract so Phase 6 can drop walker discovery without
+/// regression.
+#[wasm_bindgen_test]
+async fn parent_plan_drives_child_mount_via_static_child_mount() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-child-host")
+        .expect("plan-child-host has a plan-eligible template — one nested non-HTML5 tag");
+    assert_eq!(
+        plan.child_mounts.len(),
+        1,
+        "exactly one `<plan-child-leaf>` site",
+    );
+    assert_eq!(plan.child_mounts[0].tag, "plan-child-leaf");
+
+    let host = mount("<plan-child-host></plan-child-host>");
+    tick().await;
+
+    let leaf_text = read(&host, ".pcl-leaf");
+    assert_eq!(
+        leaf_text, "leaf-mounted",
+        "the leaf must mount and bind its own plan via the parent's child-mount entry",
+    );
+    assert_eq!(
+        plan_failure_count(),
+        0,
+        "child-mount install must not trip the fail-fast counter",
+    );
 
     host.remove();
 }
