@@ -167,6 +167,25 @@ struct PlanSlotHostStatic {}
 #[handlers]
 impl PlanSlotHostStatic {}
 
+/// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
+/// The classifier lifts the directive into a `StaticIfPlan`,
+/// strips `pp-if` from the cleaned HTML, and the runtime
+/// applier installs the controller via `if_::install`. The
+/// `<template>` body stays on the walker's clone+walk path
+/// (Phase 4.1d will lift it).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfHost.html")]
+struct PlanIfHost {
+    open: bool,
+}
+
+#[handlers]
+impl PlanIfHost {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -181,6 +200,7 @@ fn register_all() {
     PlanChildHost::register();
     PlanSlotChild::register();
     PlanSlotHostStatic::register();
+    PlanIfHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -351,6 +371,55 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     // DOM (the host had no slot content for the child to capture
     // by name), so finding it here is positive evidence the
     // fragment hook fired.
+
+    host.remove();
+}
+
+/// RFC-058 Phase 4.1 — the macro lifted `<template pp-if>` out
+/// of the runtime walker's directive-dispatch path into a
+/// `StaticIfPlan` entry. The applier installs the controller
+/// via `if_::install`, the truthy expression toggles the
+/// branch in/out, and `plan_failure_count` stays at 0.
+#[wasm_bindgen_test]
+async fn macro_emitted_if_plan_drives_pp_if_controller() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-if-host")
+        .expect("plan-if-host has a plan-eligible template (button + pp-if site)");
+    assert_eq!(
+        plan.if_plans.len(),
+        1,
+        "exactly one `<template pp-if>` site",
+    );
+    assert_eq!(plan.if_plans[0].expr_src, "open");
+
+    let host = mount("<plan-if-host></plan-if-host>");
+    tick().await;
+
+    assert!(
+        host.query_selector(".pih-branch").unwrap().is_none(),
+        "branch must be absent while `open` is false",
+    );
+
+    let toggle = host.query_selector(".pih-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert!(
+        host.query_selector(".pih-branch").unwrap().is_some(),
+        "branch must mount once `open` flips to true",
+    );
+
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert!(
+        host.query_selector(".pih-branch").unwrap().is_none(),
+        "branch must unmount once `open` flips back to false",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

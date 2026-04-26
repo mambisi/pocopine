@@ -123,6 +123,14 @@ struct AnalysisCtx {
     /// `StaticChildMount.slots` literal references the function
     /// the macro emits below it.
     slot_fragment_emissions: Vec<(syn::Ident, String)>,
+    /// RFC-058 Phase 4.1b — `pp-if` controller sites the
+    /// classifier lifted out of the runtime walker's
+    /// directive-dispatch path. Each entry pins a
+    /// `<template>`'s `node_path` + the truthy expression
+    /// source; the runtime applier resolves the template,
+    /// parses the expression, and calls
+    /// [`crate::directives::if_::install`].
+    if_plans: Vec<IfPlanLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -172,6 +180,11 @@ struct RefLite {
     name: String,
 }
 
+struct IfPlanLite {
+    template_node_path: Vec<u16>,
+    expr_src: String,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -197,6 +210,7 @@ impl AnalysisCtx {
             || !self.inits.is_empty()
             || !self.refs.is_empty()
             || !self.child_mounts.is_empty()
+            || !self.if_plans.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -236,6 +250,7 @@ impl AnalysisCtx {
         let inits_tokens = self.inits.iter().map(emit_init);
         let refs_tokens = self.refs.iter().map(emit_ref);
         let child_mounts_tokens = self.child_mounts.iter().map(emit_child_mount);
+        let if_plans_tokens = self.if_plans.iter().map(emit_if_plan);
         quote! {
             ::pocopine::__private::StaticTemplatePlan {
                 bindings: &[ #(#bindings_tokens),* ],
@@ -243,6 +258,7 @@ impl AnalysisCtx {
                 inits: &[ #(#inits_tokens),* ],
                 refs: &[ #(#refs_tokens),* ],
                 child_mounts: &[ #(#child_mounts_tokens),* ],
+                if_plans: &[ #(#if_plans_tokens),* ],
             }
         }
     }
@@ -317,6 +333,17 @@ fn emit_ref(r: &RefLite) -> TokenStream {
     }
 }
 
+fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
+    let path = emit_node_path(&ip.template_node_path);
+    let expr = proc_macro2::Literal::string(&ip.expr_src);
+    quote! {
+        ::pocopine::__private::StaticIfPlan {
+            template_node_path: #path,
+            expr_src: #expr,
+        }
+    }
+}
+
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
@@ -350,13 +377,51 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         return;
     }
 
-    // Whole-element block boundaries: pp-for / pp-if /
-    // pp-teleport / <slot>. Every directive on or under these
-    // stays on the walker — including any child-component tag
-    // wrapped in one (the walker's `pp-if` / `pp-for` /
-    // `pp-teleport` controllers own mount lifecycle for those
-    // subtrees and pre-mounting from the plan would race them).
+    // Whole-element block boundaries: pp-for / pp-teleport /
+    // `<slot>`. Every directive on or under these stays on the
+    // walker — the walker's `pp-for` / `pp-teleport`
+    // controllers own mount lifecycle for those subtrees and
+    // pre-mounting from the plan would race them. RFC-058
+    // Phases 4.2 / 4.3 graduate them; v1 keeps them on the
+    // walker.
     if is_block_boundary(el) {
+        return;
+    }
+
+    // RFC-058 Phase 4.1b — `pp-if` on a `<template>` host
+    // graduates into a `StaticIfPlan` entry. The applier
+    // resolves the template + parses the expression at compile
+    // time; the macro strips the `pp-if` attribute from the
+    // cleaned HTML so the runtime walker's directive-dispatch
+    // path doesn't double-install the effect. The template
+    // body lives in `<template>.content` (a separate
+    // `DocumentFragment` that doesn't appear in `el.children`),
+    // so body content stays on the walker — exactly like
+    // today's clone+walk path. Phase 4.1c+ will lift the body
+    // into a fragment function.
+    //
+    // Co-occurrence with `pp-teleport` falls back to the
+    // walker for v1 — the templates_plan applier doesn't
+    // capture the teleport target, so leaving the
+    // pp-if attribute on the cleaned HTML keeps today's
+    // walker pipeline running.
+    if let Some(if_expr) = pp_if_value(el) {
+        if el.tag == "template"
+            && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
+            && pocopine_expr::parse(&if_expr).is_ok()
+        {
+            ctx.if_plans.push(IfPlanLite {
+                template_node_path: path.clone(),
+                expr_src: if_expr,
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-if".to_string(),
+            });
+            return;
+        }
+        // Ineligible (wrong host, has pp-teleport, or expr
+        // doesn't parse) — fall through to walker as today.
         return;
     }
 
@@ -441,11 +506,18 @@ fn is_block_boundary(el: &Element) -> bool {
         return true;
     }
     for (name, _) in &el.attrs {
-        if name == "pp-for" || name == "pp-if" || name == "pp-teleport" {
+        if name == "pp-for" || name == "pp-teleport" {
             return true;
         }
     }
     false
+}
+
+fn pp_if_value(el: &Element) -> Option<String> {
+    el.attrs
+        .iter()
+        .find(|(n, _)| n == "pp-if")
+        .map(|(_, v)| v.clone())
 }
 
 enum ClassifyOutcome {
