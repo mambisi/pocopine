@@ -508,6 +508,20 @@ struct PlanTeleportHost {}
 #[handlers]
 impl PlanTeleportHost {}
 
+/// RFC-058 Phase 3 hardening — host whose root carries the
+/// runtime-only `pp-roving.both` directive. The macro lifts it
+/// into a `StaticOpaqueDirective` entry instead of preserving it
+/// on the cleaned HTML and flipping `requires_walker`. The
+/// applier dispatches it through the same registry the walker
+/// uses, after every other plan entry has resolved (so the
+/// container's items are in the DOM when roving installs).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanOpaqueDirectiveHost.html")]
+struct PlanOpaqueDirectiveHost {}
+
+#[handlers]
+impl PlanOpaqueDirectiveHost {}
+
 /// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed list
 /// with one `pp-text` binding per row. The macro emits a body
 /// fragment fn that installs `pp-text` against the row's
@@ -606,6 +620,7 @@ fn register_all() {
     PlanScopedSlotChild::register();
     PlanScopedSlotHost::register();
     PlanUnliftableDefaultHost::register();
+    PlanOpaqueDirectiveHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1745,4 +1760,73 @@ async fn unliftable_default_slot_flips_requires_walker() {
         !names.contains(&"default"),
         "the unliftable default subtree must NOT emit a fragment — the walker captures it instead",
     );
+}
+
+/// RFC-058 Phase 3 hardening — `pp-roving.both` lifts into a
+/// `StaticOpaqueDirective` entry instead of preserving the attr
+/// on the cleaned HTML and forcing requires_walker. The applier
+/// dispatches it through the runtime registry after slot
+/// materialisation, so the container's items are in the DOM
+/// when roving's `query_items` runs.
+#[wasm_bindgen_test]
+async fn macro_lifts_opaque_runtime_directive() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-opaque-directive-host")
+        .expect("plan-opaque-directive-host registers a template plan");
+    assert!(
+        !plan.requires_walker,
+        "an allowlisted opaque directive must NOT flip requires_walker",
+    );
+    assert_eq!(
+        plan.opaque_directives.len(),
+        1,
+        "the pp-roving.both attr must lift into one opaque-directive entry",
+    );
+    let d = &plan.opaque_directives[0];
+    assert_eq!(d.name, "roving");
+    assert_eq!(d.arg, None);
+    assert_eq!(d.modifiers, &["both"]);
+
+    let host = mount("<plan-opaque-directive-host></plan-opaque-directive-host>");
+    tick().await;
+
+    // The roving controller stamps tabindex on the items —
+    // first item gets `tabindex="0"`, the rest get `-1`. This
+    // proves the dispatch reached `roving::run` against the
+    // post-slot-materialisation DOM.
+    let items = host.query_selector_all(".podh-item").unwrap();
+    assert_eq!(items.length(), 3);
+    assert_eq!(
+        items
+            .get(0)
+            .unwrap()
+            .dyn_ref::<HtmlElement>()
+            .unwrap()
+            .get_attribute("tabindex")
+            .as_deref(),
+        Some("0"),
+        "first roving item should be the tabstop",
+    );
+    assert_eq!(
+        items
+            .get(1)
+            .unwrap()
+            .dyn_ref::<HtmlElement>()
+            .unwrap()
+            .get_attribute("tabindex")
+            .as_deref(),
+        Some("-1"),
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "lifting pp-roving must remove the walker fallback that previously drove it",
+    );
+
+    host.remove();
 }

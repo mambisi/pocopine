@@ -5896,19 +5896,16 @@ async fn pine_template_plan_fallback_audit() {
 
     // High-water mark — ratchet down as hardening lands; raising
     // it should require a deliberate review since every increment
-    // is a step away from RFC-058 walker removal. As of the
-    // initial Phase 3 audit landing, every offender uses one of:
-    //   • `pp-roving` on `<root>` (8 of 12 — toolbar, tabs,
-    //     radio-group, toggle-group, select-content, dropdown-
-    //     menu-content, context-menu-content, scroll-area-
-    //     viewport)
-    //   • `pp-resize` on a child host (scroll-area-viewport)
-    //   • host whose template wraps a `pine-popover-root` with
-    //     framework attrs the macro doesn't yet plan
-    //     (date-picker, date-range-picker, date-range-field,
-    //     time-range-field)
-    // Each category is the target for a focused Phase 3 slice.
-    const FALLBACK_CEILING: usize = 12;
+    // is a step away from RFC-058 walker removal.
+    //
+    // Initial Phase 3 audit: 12 offenders. After the
+    // `pp-roving` / `pp-resize` opaque-directive lift the
+    // remaining 4 are date/time picker hosts whose templates
+    // wrap a `pine-popover-root` with framework attrs the macro
+    // doesn't yet plan (pine-date-picker / pine-date-range-field
+    // / pine-date-range-picker / pine-time-range-field). That's
+    // the next focused slice.
+    const FALLBACK_CEILING: usize = 4;
     assert!(
         walker_owned.len() <= FALLBACK_CEILING,
         "Pine walker-fallback surface grew: {} > ceiling {}. Tags: {:#?}",
