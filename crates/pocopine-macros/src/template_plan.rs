@@ -1516,17 +1516,34 @@ fn is_key_modifier(m: &str) -> bool {
             | "meta"
             | "enter"
             | "escape"
+            | "esc"
             | "tab"
             | "space"
+            | "backspace"
+            | "delete"
+            | "del"
             | "arrow-up"
             | "arrow-down"
             | "arrow-left"
             | "arrow-right"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+            | "home"
+            | "end"
+            | "page-up"
+            | "page-down"
     ) || m.len() == 1
+        || is_word_key(m)
 }
 
 fn is_debounce_modifier(m: &str) -> bool {
     m == "debounce"
+}
+
+fn is_word_key(m: &str) -> bool {
+    !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn is_debounce_ms(m: &str) -> bool {
@@ -1887,4 +1904,32 @@ fn escape_attr(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_supported_modifier;
+
+    #[test]
+    fn supported_listener_modifiers_include_runtime_named_keys() {
+        for modifier in [
+            "backspace",
+            "delete",
+            "del",
+            "esc",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "page-up",
+            "page-down",
+        ] {
+            assert!(
+                is_supported_modifier(modifier),
+                "{modifier} should compile instead of requiring walker fallback"
+            );
+        }
+    }
 }
