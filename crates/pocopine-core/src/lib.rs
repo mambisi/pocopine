@@ -40,6 +40,7 @@ pub mod scope;
 pub mod scroll_lock;
 pub mod server;
 pub mod signal;
+pub mod slot_fragment;
 pub mod slot_scope;
 pub mod slots;
 pub mod store;
