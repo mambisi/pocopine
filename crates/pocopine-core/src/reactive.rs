@@ -344,34 +344,45 @@ pub fn track_signal(signal_id: SignalId) {
     });
 }
 
-/// Snapshot `subs` into `TRIGGER_SCRATCH` (length-prefixed region),
-/// route per-effect scheduler or queue, schedule flush if needed.
-/// Factored out so `trigger` and `trigger_signal` share the dispatch
-/// path — they diverge only on how they look up subscribers.
+/// Snapshot `subs` into a local buffer, route per-effect scheduler or
+/// queue, schedule flush if needed. Factored out so `trigger` and
+/// `trigger_signal` share the dispatch path — they diverge only on
+/// how they look up subscribers.
 fn dispatch_subs(subs: &HashSet<EffectId>) {
     if subs.is_empty() {
         return;
     }
-    // Snapshot ids into the thread-local scratch so effect-run code
-    // (`clear_deps_for` → HashMap mutate) can't invalidate the iteration.
-    let ids_len = TRIGGER_SCRATCH.with(|s| {
-        let mut v = s.borrow_mut();
-        v.clear();
-        v.extend(subs.iter().copied());
-        v.len()
-    });
+    // Take ownership of the thread-local scratch so re-entrant
+    // dispatch_subs calls (an inline scheduler that mutates a signal
+    // and triggers another dispatch) don't clobber our buffer
+    // mid-iteration. Pre-fix, the shared scratch surfaced as
+    // "RefCell already borrowed" or "index out of bounds: len 0
+    // index N" deep in the trigger path — both symptoms of the inner
+    // call having `clear()`ed the outer call's snapshot.
+    let mut local = TRIGGER_SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    local.clear();
+    local.extend(subs.iter().copied());
+    let ids_len = local.len();
     if ids_len == 0 {
+        // Restore the (empty, possibly pre-grown) buffer for reuse.
+        TRIGGER_SCRATCH.with(|s| {
+            let mut current = s.borrow_mut();
+            if local.capacity() > current.capacity() {
+                *current = local;
+            }
+        });
         return;
     }
-    // Drain scratch into dispatch. Schedulers fire inline; the rest
-    // accumulate in QUEUE. No intermediate HashSet<EffectId> clone.
+    // Drain the local buffer into dispatch. Schedulers fire inline;
+    // the rest accumulate in QUEUE. No intermediate HashSet<EffectId>
+    // clone, and re-entry is safe because each dispatch owns its
+    // own buffer.
     let mut any_queued = false;
     // Devtools — collect the just-queued ids so the hook sees the
     // delta, not the whole queue. Empty when feature is off.
     #[cfg(feature = "devtools")]
     let mut newly_queued: Vec<EffectId> = Vec::new();
-    for i in 0..ids_len {
-        let eid = TRIGGER_SCRATCH.with(|s| s.borrow()[i]);
+    for &eid in local.iter().take(ids_len) {
         let sched = SCHEDULERS.with(|s| s.borrow().get(&eid).cloned());
         match sched {
             Some(s) => s(eid),
@@ -385,7 +396,16 @@ fn dispatch_subs(subs: &HashSet<EffectId>) {
             }
         }
     }
-    TRIGGER_SCRATCH.with(|s| s.borrow_mut().clear());
+    local.clear();
+    // Return the buffer for the next non-reentrant call to reuse —
+    // keep whichever copy has the larger capacity so we don't lose
+    // the pre-grown allocation.
+    TRIGGER_SCRATCH.with(|s| {
+        let mut current = s.borrow_mut();
+        if local.capacity() > current.capacity() {
+            *current = local;
+        }
+    });
     #[cfg(feature = "devtools")]
     if !newly_queued.is_empty() {
         crate::devtools::hooks::fire_queue_change(&newly_queued);
