@@ -1233,12 +1233,46 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             stamps: Vec::new(),
         });
 
-    // Build the literal to feed into `compile_template`. Without
-    // stamps it's the raw `include_str!` (existing path); with
-    // stamps it's the stamped source spliced at macro time. We
-    // keep the `const _: &str = include_str!(...)` dependency-pin
-    // so cargo still rebuilds when the `.poco` changes.
-    let template_literal_tokens = if row_plans.stamps.is_empty() {
+    // RFC-058 Phase 2.3 — compile a whole-template plan when
+    // the AST has no `pp-for` row stamps competing for the
+    // serialised template bytes. Layering both compilers (row
+    // stamps need byte positions in the rewritten HTML; the
+    // template-plan classifier serialises freshly from the AST)
+    // is a Phase 2 v2 follow-up; v1 prefers row plans when they
+    // exist (battle-tested, hot-list workloads care most) and
+    // falls through to template plans otherwise.
+    let template_plan = if row_plans.stamps.is_empty() {
+        template_ast
+            .as_ref()
+            .map(template_plan::analyze_template_plan)
+            .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
+                plan_tokens: None,
+                cleaned_html: None,
+            })
+    } else {
+        template_plan::EmittedTemplatePlan {
+            plan_tokens: None,
+            cleaned_html: None,
+        }
+    };
+
+    // Build the literal to feed into `compile_template`:
+    //
+    //   * Template plan present  → cleaned HTML with classified
+    //     attributes stripped + `data-pp-text-managed` markers.
+    //   * Else row stamps present → original source with
+    //     `data-pp-row-plan="<id>"` spliced into each
+    //     `<template pp-for>` opening tag.
+    //   * Else raw `include_str!` (the existing pre-RFC-058
+    //     path).
+    //
+    // We keep the `const _: &str = include_str!(...)` dependency
+    // pin in `register_template_stmt` so cargo still rebuilds
+    // when the `.poco` changes.
+    let template_literal_tokens = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
+        let lit = proc_macro2::Literal::string(cleaned);
+        quote! { #lit }
+    } else if row_plans.stamps.is_empty() {
         quote! { include_str!(#template_path) }
     } else {
         let source = template_ast
@@ -1262,6 +1296,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    let register_template_plan_stmt = match template_plan.plan_tokens {
+        Some(plan_tokens) => quote! {
+            const __POC_TEMPLATE_PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
+            ::pocopine::__private::register_template_plan(
+                #name_str,
+                &__POC_TEMPLATE_PLAN,
+            );
+        },
+        None => quote! {},
+    };
+
     let register_template_stmt = quote! {
         #template_warnings
         const _: &str = include_str!(#template_path);
@@ -1274,6 +1319,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ),
         );
         #register_row_plans_stmt
+        #register_template_plan_stmt
     };
 
     let register_style_stmt = match args.style.as_ref() {
