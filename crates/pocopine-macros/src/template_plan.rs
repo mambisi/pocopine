@@ -1057,21 +1057,79 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 }
             }
         }
-        // RFC-058 Phase 3.5b — if the custom tag's children are
-        // entirely static (no `pp-*` / `@` / `:` attrs anywhere
-        // in the subtree, no nested non-HTML5 tags, no `<slot>`
-        // element), lift them into a fragment function. The
-        // parent passes that fragment via the static-plan
-        // child-mount entry; the runtime walker's
-        // `materialize_slot` invokes it instead of running the
-        // legacy capture/replay path. Anything dynamic stays on
-        // the walker — slot content with directives needs the
-        // parent-proxy machinery this v1 doesn't ship yet.
+        // RFC-058 Phase 3.5b–3.5f — partition the custom tag's
+        // children into one default-slot subtree + N named-slot
+        // subtrees (`<template pp-slot="NAME">…</template>`),
+        // and lift each independently into a slot fragment fn.
+        // The parent passes the fragments via the static-plan
+        // child-mount entry; the runtime `materialize_slot`
+        // looks them up by name before falling back to the
+        // legacy walker capture path.
+        //
+        // `pp-let` scoped slots stay walker-driven (Phase 3.5g
+        // graduates them). When a named slot can't lift —
+        // pp-let, or an ineligible body — we set
+        // `requires_walker` so the wrapping fragment walks the
+        // cleaned HTML via the legacy capture path for that
+        // slot. The `<template pp-slot>` element itself stays
+        // in the cleaned HTML in every case so `capture_slots`
+        // can still pick it up; for lifted slots, the fragment
+        // registry wins the lookup race in `materialize_slot`.
         let mut slot_fragments: Vec<(String, syn::Ident)> = Vec::new();
         if !el.children.is_empty() {
-            if let Some(emission) = analyze_slot_subtree(&el.children, emissions) {
-                slot_fragments.push(("default".to_string(), emission.ident().clone()));
-                emissions.slot_fragments.push(emission);
+            let mut default_children: Vec<Node> = Vec::new();
+            for child in &el.children {
+                let tpl = child.as_element().filter(|e| e.tag == "template");
+                let Some(tpl) = tpl else {
+                    default_children.push(child.clone());
+                    continue;
+                };
+                let pp_slot = tpl
+                    .attrs
+                    .iter()
+                    .find(|(n, _)| n == "pp-slot")
+                    .map(|(_, v)| v.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let Some(slot_name) = pp_slot else {
+                    // `<template>` without a meaningful pp-slot
+                    // attr falls into the default subtree —
+                    // mirrors `capture_slots`'s catch-all.
+                    default_children.push(child.clone());
+                    continue;
+                };
+                if tpl.attrs.iter().any(|(n, _)| n == "pp-let") {
+                    // Scoped slot — Phase 3.5g territory. Don't
+                    // lift; let the wrapping fragment fall back
+                    // to the walker so `capture_slots` builds a
+                    // `SlotScope` and `materialize_slot` chains
+                    // bindings through `pp-let`.
+                    ctx.requires_walker = true;
+                    continue;
+                }
+                match analyze_slot_subtree(&tpl.children, emissions) {
+                    Some(emission) => {
+                        // Duplicate `pp-slot=NAME` at compile time:
+                        // both lift fragments get pushed; the
+                        // runtime `SlotSet::named` HashMap insert
+                        // means the LAST one wins, matching the
+                        // walker's "later wins" semantics on
+                        // duplicate captures.
+                        slot_fragments.push((slot_name, emission.ident().clone()));
+                        emissions.slot_fragments.push(emission);
+                    }
+                    None => {
+                        // Slot body falls outside the lift
+                        // envelope — fall back to walker for
+                        // this name.
+                        ctx.requires_walker = true;
+                    }
+                }
+            }
+            if !default_children.is_empty() {
+                if let Some(emission) = analyze_slot_subtree(&default_children, emissions) {
+                    slot_fragments.push(("default".to_string(), emission.ident().clone()));
+                    emissions.slot_fragments.push(emission);
+                }
             }
         }
         ctx.child_mounts.push(ChildMountLite {

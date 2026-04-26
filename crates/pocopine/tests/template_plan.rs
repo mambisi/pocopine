@@ -399,6 +399,44 @@ impl PlanSlotInitHost {
     }
 }
 
+/// RFC-058 Phase 3.5f — child with `<slot>` (default) + two
+/// named slots (`header`, `footer`). Drives the named-slot
+/// fragment lifting evidence: each `<template pp-slot="NAME">`
+/// in the parent's slot content lifts into its own fragment fn
+/// and routes through `materialize_slot` by name.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanNamedSlotChild.html")]
+struct PlanNamedSlotChild {}
+
+#[handlers]
+impl PlanNamedSlotChild {}
+
+/// RFC-058 Phase 3.5f — host that fills two named slots
+/// (`header`, `footer`) plus default content under a
+/// `<plan-named-slot-child>`. The macro must emit three slot
+/// fragments (`default`, `header`, `footer`) in the child-mount
+/// entry; the runtime resolves each by name in
+/// `materialize_slot` without falling back to the walker.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanNamedSlotHost.html")]
+struct PlanNamedSlotHost {}
+
+#[handlers]
+impl PlanNamedSlotHost {}
+
+/// RFC-058 Phase 3.5f — host whose only slot designation is a
+/// `<template pp-slot="footer" pp-let="r">`. Scoped slots stay
+/// walker-driven (Phase 3.5g graduates them). The host's plan
+/// must flip `requires_walker` and the child-mount entry must
+/// NOT contain a `footer` fragment, but the rendered DOM still
+/// shows the user template via the legacy capture path.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanLetSlotHost.html")]
+struct PlanLetSlotHost {}
+
+#[handlers]
+impl PlanLetSlotHost {}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -523,6 +561,9 @@ fn register_all() {
     PlanIfAsDirectiveHost::register();
     PlanIfInitBodyHost::register();
     PlanSlotInitHost::register();
+    PlanNamedSlotChild::register();
+    PlanNamedSlotHost::register();
+    PlanLetSlotHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1477,6 +1518,114 @@ async fn parent_plan_drives_child_mount_via_static_child_mount() {
         0,
         "child-mount install must not trip the fail-fast counter",
     );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3.5f — the macro partitions a custom-tag's
+/// slot children into one default subtree + N named-slot
+/// subtrees and lifts each independently into a slot fragment.
+/// The child-mount entry carries one `(name, fragment)` pair
+/// per lifted slot; the runtime `materialize_slot` resolves
+/// each by name through `SlotSet::lookup` rather than the
+/// legacy capture path.
+#[wasm_bindgen_test]
+async fn macro_emits_named_slot_fragment() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-named-slot-host")
+        .expect("plan-named-slot-host has one nested non-HTML5 tag");
+    assert_eq!(plan.child_mounts.len(), 1, "exactly one child-mount site");
+    let child = &plan.child_mounts[0];
+    assert_eq!(child.tag, "plan-named-slot-child");
+    assert_eq!(
+        child.slots.len(),
+        3,
+        "default + header + footer subtrees must each lift into their own fragment",
+    );
+    let names: Vec<&str> = child.slots.iter().map(|s| s.name).collect();
+    assert!(names.contains(&"default"));
+    assert!(names.contains(&"header"));
+    assert!(names.contains(&"footer"));
+
+    let host = mount("<plan-named-slot-host></plan-named-slot-host>");
+    tick().await;
+
+    let header = host
+        .query_selector(".pnsh-header-content")
+        .unwrap()
+        .expect("header slot must mount via the lifted fragment");
+    assert_eq!(
+        header.text_content().as_deref(),
+        Some("macro-emitted-header")
+    );
+
+    let body = host
+        .query_selector(".pnsh-default-content")
+        .unwrap()
+        .expect("default content must mount via the lifted fragment");
+    assert_eq!(
+        body.text_content().as_deref(),
+        Some("macro-emitted-default")
+    );
+
+    let footer = host
+        .query_selector(".pnsh-footer-content")
+        .unwrap()
+        .expect("footer slot must mount via the lifted fragment");
+    assert_eq!(
+        footer.text_content().as_deref(),
+        Some("macro-emitted-footer")
+    );
+
+    // Pin: the lifted named slots take the same compiled path as
+    // the default lift — no walker fallback for any slot.
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "named slot fragments must take the compiled path, not walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3.5f → 3.5g boundary — `<template pp-slot
+/// pp-let>` is scoped-slot territory and stays walker-driven.
+/// The macro must NOT lift it (no fragment entry under that
+/// name) and must flip `requires_walker = true` on the host's
+/// plan so the walker still drives the host body. The legacy
+/// capture path renders the user's template content.
+#[wasm_bindgen_test]
+async fn pp_let_slot_falls_back_to_walker() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-let-slot-host")
+        .expect("plan-let-slot-host has one nested non-HTML5 tag");
+    assert!(
+        plan.requires_walker,
+        "pp-let slot must flip requires_walker so the walker still drives the host",
+    );
+    assert_eq!(plan.child_mounts.len(), 1);
+    let names: Vec<&str> = plan.child_mounts[0].slots.iter().map(|s| s.name).collect();
+    assert!(
+        !names.contains(&"footer"),
+        "pp-let slot must NOT lift into a fragment — Phase 3.5g territory",
+    );
+
+    let host = mount("<plan-let-slot-host></plan-let-slot-host>");
+    tick().await;
+
+    let letslot = host
+        .query_selector(".plsh-letslot")
+        .unwrap()
+        .expect("scoped slot content must still render via the walker capture path");
+    assert_eq!(letslot.text_content().as_deref(), Some("letslot-content"));
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }
