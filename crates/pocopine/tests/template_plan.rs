@@ -536,6 +536,29 @@ impl PlanInterpHost {
     }
 }
 
+/// RFC-058 Phase 6.2 regression — host whose single carrier
+/// element holds two interpolated text nodes separated by an
+/// element child (`a {{x}}<em>middle</em>b {{y}}`). The macro
+/// emits two `StaticInterp` entries both targeting the same
+/// parent, with `text_index` 0 and 1 keyed against the original
+/// DOM. `apply_static_plan` must keep those indices valid even
+/// though installing index 0 mutates the live text-node list
+/// (inserts new siblings, removes the placeholder).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanInterpMultiHost.html")]
+struct PlanInterpMultiHost {
+    x: String,
+    y: String,
+}
+
+#[handlers]
+impl PlanInterpMultiHost {
+    pub fn on_setup(&mut self) {
+        self.x = "X".into();
+        self.y = "Y".into();
+    }
+}
+
 /// RFC-058 Phase 3 hardening — host with `pp-ref` on a
 /// custom child host. Drives the regression that without
 /// classifier coverage for `pp-ref` on a non-HTML5 tag the
@@ -664,6 +687,7 @@ fn register_all() {
     PlanOpaqueDirectiveHost::register();
     PlanChildHostRefHost::register();
     PlanInterpHost::register();
+    PlanInterpMultiHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -2034,6 +2058,60 @@ async fn macro_lifts_text_interpolation() {
         "lifted interp must take the compiled path with no walker fallback",
     );
 
+    host.remove();
+}
+
+/// RFC-058 Phase 6.2 regression — when a single parent carries
+/// two `{{expr}}` text nodes separated by an element, the
+/// macro emits both entries with `text_index` keyed against
+/// the original DOM (0 and 1). `apply_static_plan` walks the
+/// entries in order, but each `install_planned` mutates the
+/// parent's live text-node list — inserting static + dynamic
+/// siblings before the placeholder, then removing the
+/// placeholder. After the first install completes, what was
+/// `text_index = 1` in the macro's view (the original
+/// "b {{y}}" text) is no longer the second text-node child;
+/// the dynamic node injected by the first install now occupies
+/// that slot. Without a snapshot or a reverse-order traversal,
+/// the second install targets the wrong text node, the y
+/// binding clobbers the x binding, and the original
+/// "b {{y}}" stays in the DOM as literal text.
+///
+/// Asserts both interpolations land in the right slots and
+/// reactively update independently.
+#[wasm_bindgen_test]
+async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<plan-interp-multi-host></plan-interp-multi-host>");
+    tick().await;
+
+    let line_text = read(&host, ".pimh-line");
+    assert_eq!(
+        line_text, "a Xmiddleb Y",
+        "both interp entries must resolve against the right text slots",
+    );
+
+    let host_tag = host
+        .query_selector("plan-interp-multi-host")
+        .unwrap()
+        .unwrap();
+    let host_root = host_tag.first_element_child().unwrap();
+    let (_id, host_proxy) =
+        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+
+    js_sys::Reflect::set(&host_proxy, &"x".into(), &"NEW_X".into()).unwrap();
+    js_sys::Reflect::set(&host_proxy, &"y".into(), &"NEW_Y".into()).unwrap();
+    tick().await;
+
+    assert_eq!(
+        read(&host, ".pimh-line"),
+        "a NEW_Xmiddleb NEW_Y",
+        "both bindings must remain independent — y must not have clobbered x",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
     host.remove();
 }
 
