@@ -5891,17 +5891,6 @@ async fn pine_template_plan_fallback_audit() {
         .into(),
     );
 
-    // High-water mark — ratchet down as hardening lands; raising
-    // it should require a deliberate review since every increment
-    // is a step away from RFC-058 walker removal.
-    //
-    // Initial Phase 3 audit: 12 offenders. After the
-    // `pp-roving` / `pp-resize` opaque-directive lift the
-    // remaining 4 are date/time picker hosts whose templates
-    // wrap a `pine-popover-root` with framework attrs the macro
-    // doesn't yet plan (pine-date-picker / pine-date-range-field
-    // / pine-date-range-picker / pine-time-range-field). That's
-    // the next focused slice.
     assert_eq!(
         walker_owned.len(),
         0,
