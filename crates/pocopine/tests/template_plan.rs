@@ -362,6 +362,43 @@ impl PlanIfAsDirectiveHost {
     }
 }
 
+/// Host whose lifted pp-if body contains `pp-init`. The init
+/// handler reads a descendant planned ref, proving compiled
+/// finalization preserves the walker's post-order init semantics.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfInitBodyHost.html")]
+struct PlanIfInitBodyHost {
+    open: bool,
+}
+
+#[handlers]
+impl PlanIfInitBodyHost {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+    pub fn seed_body(&mut self) {
+        if let Some(el) = pocopine::refs::get("target") {
+            el.set_text_content(Some("body-init-fired"));
+        }
+    }
+}
+
+/// Host whose compiled slot fragment contains `pp-init`. The slot
+/// materializer finalizes inserted fragment roots after splicing,
+/// so the init should fire without fallback walk.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanSlotInitHost.html")]
+struct PlanSlotInitHost {}
+
+#[handlers]
+impl PlanSlotInitHost {
+    pub fn seed_slot(&mut self) {
+        if let Some(el) = pocopine::refs::get("slot_target") {
+            el.set_text_content(Some("slot-init-fired"));
+        }
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -484,6 +521,8 @@ fn register_all() {
     PlanIfModelDirectiveHost::register();
     PlanAsDirectiveChild::register();
     PlanIfAsDirectiveHost::register();
+    PlanIfInitBodyHost::register();
+    PlanSlotInitHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1030,6 +1069,70 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
         compiled_fallback_walk_count(),
         0,
         "compiled pp-as child should not need walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — `pp-init` inside a lifted
+/// `pp-if` body fires during compiled subtree finalization, after
+/// descendant planned refs have registered.
+#[wasm_bindgen_test]
+async fn lifted_pp_if_body_init_fires_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-if-init-body-host")
+        .expect("plan-if-init-body-host registers a template plan");
+    let body = plan.if_plans[0].body.expect("pp-init body should lift");
+    let _ = body;
+
+    let host = mount("<plan-if-init-body-host></plan-if-init-body-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".piibh-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let target = host
+        .query_selector(".piibh-target")
+        .unwrap()
+        .expect("body init target should mount");
+    assert_eq!(target.text_content().as_deref(), Some("body-init-fired"));
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled pp-if body init should not need walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — `pp-init` inside a compiled
+/// slot fragment fires after the fragment is inserted and
+/// finalized, without falling back to recursive directive
+/// discovery.
+#[wasm_bindgen_test]
+async fn lifted_slot_fragment_init_fires_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let host = mount("<plan-slot-init-host></plan-slot-init-host>");
+    tick().await;
+
+    let target = host
+        .query_selector(".psih-target")
+        .unwrap()
+        .expect("slot init target should mount");
+    assert_eq!(target.text_content().as_deref(), Some("slot-init-fired"));
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled slot fragment init should not need walker fallback",
     );
 
     host.remove();

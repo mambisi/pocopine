@@ -1,0 +1,8 @@
+<div class="piibh-root">
+  <button class="piibh-toggle" pp-on:click="toggle">toggle</button>
+  <template pp-if="open">
+    <div class="piibh-body" pp-init="seed_body">
+      <span class="piibh-target" pp-ref="target"></span>
+    </div>
+  </template>
+</div>
