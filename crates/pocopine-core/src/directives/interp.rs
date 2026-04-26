@@ -39,6 +39,15 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
     if parent.has_attribute("pp-text") {
         return;
     }
+    // RFC-058 Phase 2 — `data-pp-text-managed` is the macro's
+    // marker for "this element used to carry `pp-text` but the
+    // attribute was stripped at compile time and the static
+    // template plan owns the textContent now". Same skip
+    // semantics as the `pp-text` check above so braces inside
+    // a planned text value don't get hijacked by interpolation.
+    if parent.has_attribute("data-pp-text-managed") {
+        return;
+    }
 
     // Snapshot the child node list first — splitting inserts new
     // siblings, which would invalidate a live NodeList.

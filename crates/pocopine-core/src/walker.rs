@@ -533,6 +533,18 @@ fn mount_component(el: &Element, tag: &str) {
         if !ak.is_empty() {
             let _ = el.set_attribute("data-pp-animate", ak);
         }
+
+        // RFC-058 Phase 2.5 fast-path: if the macro emitted a
+        // template plan for this tag, apply it now. The
+        // recursive walk that runs next still visits the
+        // subtree to handle preserved attributes (pp-for /
+        // pp-if / pp-teleport / slots / pp-model / pp-route /
+        // anything outside the v1 envelope). Stripped
+        // attributes were removed from the cleaned HTML at
+        // macro time so the walker simply doesn't see them.
+        if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
+            crate::templates_plan::apply_static_plan(&root, scope.id, &proxy, plan, tag);
+        }
     }
 
     // Mark the tag as mounted so the recursive walk doesn't re-enter this
