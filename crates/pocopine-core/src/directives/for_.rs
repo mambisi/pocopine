@@ -409,7 +409,7 @@ fn run_naive(
                     if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
                         walker::walk_compiled_fallback(&clone_root);
                     } else {
-                        walker::mark_walked(&clone_root);
+                        walker::finalize_compiled_subtree(&clone_root);
                     }
                 } else {
                     walker::walk(&clone_root);

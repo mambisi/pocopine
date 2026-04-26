@@ -198,6 +198,12 @@ struct AnalysisCtx {
     /// so the runtime row-plan registry lookup still finds its
     /// target after the template-plan rewrite.
     row_plan_assignments: Vec<(Vec<u16>, u32)>,
+    /// True when this template/fragment still contains
+    /// framework-owned attributes that the emitted plan does not
+    /// install. Fragment mounting uses this as the guard between
+    /// compiled post-order finalization and temporary walker
+    /// fallback.
+    requires_walker: bool,
 }
 
 /// Shared across the whole top-level analysis — fragment fn
@@ -450,6 +456,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let for_plans_tokens = ctx.for_plans.iter().map(emit_for_plan);
     let teleport_plans_tokens = ctx.teleport_plans.iter().map(emit_teleport_plan);
     let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
+    let requires_walker = ctx.requires_walker;
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
             bindings: &[ #(#bindings_tokens),* ],
@@ -461,6 +468,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             for_plans: &[ #(#for_plans_tokens),* ],
             teleport_plans: &[ #(#teleport_plans_tokens),* ],
             slot_outlets: &[ #(#slot_outlets_tokens),* ],
+            requires_walker: #requires_walker,
         }
     }
 }
@@ -936,6 +944,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // walker's `__pp_mounted` guard turns the discovery into a
     // no-op afterwards.
     if !is_html5_native(&el.tag) {
+        if el.attrs.iter().any(|(name, _)| is_framework_attr(name)) {
+            ctx.requires_walker = true;
+        }
         // RFC-058 Phase 3.5b — if the custom tag's children are
         // entirely static (no `pp-*` / `@` / `:` attrs anywhere
         // in the subtree, no nested non-HTML5 tags, no `<slot>`
@@ -971,7 +982,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     had_text = true;
                 }
             }
-            ClassifyOutcome::Preserved => {}
+            ClassifyOutcome::Preserved => {
+                if is_framework_attr(name) {
+                    ctx.requires_walker = true;
+                }
+            }
         }
     }
     if had_text {
@@ -1000,6 +1015,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
 
 fn is_html5_native(tag: &str) -> bool {
     crate::HTML5_ELEMENTS.binary_search(&tag).is_ok()
+}
+
+fn is_framework_attr(name: &str) -> bool {
+    name.starts_with("pp-") || name.starts_with('@') || name.starts_with(':')
 }
 
 fn pp_if_value(el: &Element) -> Option<String> {

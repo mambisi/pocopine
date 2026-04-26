@@ -113,6 +113,11 @@ pub struct StaticTemplatePlan {
     /// have installed, so the recursive walker no longer has to
     /// discover `<slot>` elements for planned templates.
     pub slot_outlets: &'static [StaticSlotOutlet],
+    /// True when the cleaned HTML still contains framework-owned
+    /// attributes that this plan does not install. Compiled
+    /// fragments can skip fallback only when their own plan and
+    /// every planned child component are walker-complete.
+    pub requires_walker: bool,
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -508,10 +513,14 @@ pub fn stamp_if_body(
 /// lifecycle, slot outlet, and preserved-directive handling until
 /// those are compiled explicitly.
 pub(crate) fn plan_requires_compiled_fallback(plan: &StaticTemplatePlan) -> bool {
-    !plan.child_mounts.is_empty()
-        || !plan.if_plans.is_empty()
-        || !plan.for_plans.is_empty()
-        || !plan.teleport_plans.is_empty()
+    if plan.requires_walker {
+        return true;
+    }
+    plan.child_mounts.iter().any(|c| {
+        template_plan_for(c.tag)
+            .map(plan_requires_compiled_fallback)
+            .unwrap_or(true)
+    })
 }
 
 /// Read the marker set by [`stamp_if_body`] for lifted controller
