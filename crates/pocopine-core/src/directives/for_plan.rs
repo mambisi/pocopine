@@ -155,6 +155,35 @@ pub struct StaticChildMount {
     pub node_path: &'static [u16],
     pub tag: &'static str,
     pub slots: &'static [StaticSlotFragment],
+    pub bindings: &'static [StaticChildHostBinding],
+    pub listeners: &'static [StaticChildHostListener],
+    pub models: &'static [StaticChildHostModel],
+}
+
+/// Parent-scope `pp-bind:<prop>` / `:<prop>` planned on a
+/// child-component host. Installed after the child mounts so the
+/// bind helper can resolve the child scope and write through the
+/// prop gate.
+#[doc(hidden)]
+pub struct StaticChildHostBinding {
+    pub arg: &'static str,
+    pub expr_src: &'static str,
+}
+
+/// Parent-scope event listener planned on a child-component host.
+#[doc(hidden)]
+pub struct StaticChildHostListener {
+    pub event: &'static str,
+    pub modifiers: &'static [&'static str],
+    pub expr_src: &'static str,
+}
+
+/// `pp-model[:field]` planned on a child-component host.
+#[doc(hidden)]
+pub struct StaticChildHostModel {
+    pub arg: Option<&'static str>,
+    pub modifiers: &'static [&'static str],
+    pub expr_src: &'static str,
 }
 
 /// One macro-emitted slot fragment binding within a

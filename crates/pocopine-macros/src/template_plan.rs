@@ -395,6 +395,26 @@ struct ChildMountLite {
     /// `StaticSlotFragment.fragment` literal in the plan
     /// references the same `fn` the macro emits below.
     slot_fragments: Vec<(String, syn::Ident)>,
+    host_bindings: Vec<ChildHostBindingLite>,
+    host_listeners: Vec<ChildHostListenerLite>,
+    host_models: Vec<ChildHostModelLite>,
+}
+
+struct ChildHostBindingLite {
+    arg: String,
+    expr_src: String,
+}
+
+struct ChildHostListenerLite {
+    event: String,
+    modifiers: Vec<String>,
+    expr_src: String,
+}
+
+struct ChildHostModelLite {
+    arg: Option<String>,
+    modifiers: Vec<String>,
+    expr_src: String,
 }
 
 impl AnalysisCtx {
@@ -709,11 +729,60 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
             }
         }
     });
+    let binding_tokens = c.host_bindings.iter().map(|b| {
+        let arg = proc_macro2::Literal::string(&b.arg);
+        let expr = proc_macro2::Literal::string(&b.expr_src);
+        quote! {
+            ::pocopine::__private::StaticChildHostBinding {
+                arg: #arg,
+                expr_src: #expr,
+            }
+        }
+    });
+    let listener_tokens = c.host_listeners.iter().map(|l| {
+        let event = proc_macro2::Literal::string(&l.event);
+        let expr = proc_macro2::Literal::string(&l.expr_src);
+        let modifiers = l.modifiers.iter().map(|m| {
+            let m = proc_macro2::Literal::string(m);
+            quote! { #m }
+        });
+        quote! {
+            ::pocopine::__private::StaticChildHostListener {
+                event: #event,
+                modifiers: &[ #(#modifiers),* ],
+                expr_src: #expr,
+            }
+        }
+    });
+    let model_tokens = c.host_models.iter().map(|m| {
+        let expr = proc_macro2::Literal::string(&m.expr_src);
+        let arg_tokens = match m.arg.as_deref() {
+            Some(arg) => {
+                let arg = proc_macro2::Literal::string(arg);
+                quote! { ::core::option::Option::Some(#arg) }
+            }
+            None => quote! { ::core::option::Option::None },
+        };
+        let modifiers = m.modifiers.iter().map(|modifier| {
+            let modifier = proc_macro2::Literal::string(modifier);
+            quote! { #modifier }
+        });
+        quote! {
+            ::pocopine::__private::StaticChildHostModel {
+                arg: #arg_tokens,
+                modifiers: &[ #(#modifiers),* ],
+                expr_src: #expr,
+            }
+        }
+    });
     quote! {
         ::pocopine::__private::StaticChildMount {
             node_path: #path,
             tag: #tag,
             slots: &[ #(#slot_tokens),* ],
+            bindings: &[ #(#binding_tokens),* ],
+            listeners: &[ #(#listener_tokens),* ],
+            models: &[ #(#model_tokens),* ],
         }
     }
 }
@@ -944,8 +1013,42 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // walker's `__pp_mounted` guard turns the discovery into a
     // no-op afterwards.
     if !is_html5_native(&el.tag) {
-        if el.attrs.iter().any(|(name, _)| is_framework_attr(name)) {
+        let mut host_bindings = Vec::new();
+        let mut host_listeners = Vec::new();
+        let mut host_models = Vec::new();
+        if el.attrs.iter().any(|(name, _)| name == "pp-as") {
             ctx.requires_walker = true;
+        } else {
+            for (name, value) in &el.attrs {
+                match classify_child_host_attr(name, value) {
+                    ChildHostAttrOutcome::Binding(binding) => {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                        host_bindings.push(binding);
+                    }
+                    ChildHostAttrOutcome::Listener(listener) => {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                        host_listeners.push(listener);
+                    }
+                    ChildHostAttrOutcome::Model(model) => {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                        host_models.push(model);
+                    }
+                    ChildHostAttrOutcome::Preserved => {
+                        if is_framework_attr(name) {
+                            ctx.requires_walker = true;
+                        }
+                    }
+                }
+            }
         }
         // RFC-058 Phase 3.5b — if the custom tag's children are
         // entirely static (no `pp-*` / `@` / `:` attrs anywhere
@@ -968,11 +1071,18 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             node_path: path.clone(),
             tag: el.tag.clone(),
             slot_fragments,
+            host_bindings,
+            host_listeners,
+            host_models,
         });
         return;
     }
 
     // Classify every attribute on this element.
+    if el.attrs.iter().any(|(name, _)| name == "pp-as") {
+        ctx.requires_walker = true;
+        return;
+    }
     let mut listener_unsupported_modifier = false;
     let mut had_text = false;
     for (name, value) in &el.attrs {
@@ -1290,6 +1400,90 @@ fn classify_listener(
     ClassifyOutcome::Stripped { is_text: false }
 }
 
+enum ChildHostAttrOutcome {
+    Binding(ChildHostBindingLite),
+    Listener(ChildHostListenerLite),
+    Model(ChildHostModelLite),
+    Preserved,
+}
+
+fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
+    if let Some(rest) = name.strip_prefix('@') {
+        return classify_child_host_listener(rest, value);
+    }
+    if let Some(arg) = name.strip_prefix(':') {
+        if arg.is_empty() || arg.contains('.') || pocopine_expr::parse(value).is_err() {
+            return ChildHostAttrOutcome::Preserved;
+        }
+        return ChildHostAttrOutcome::Binding(ChildHostBindingLite {
+            arg: arg.to_string(),
+            expr_src: value.to_string(),
+        });
+    }
+    let Some(rest) = name.strip_prefix("pp-") else {
+        return ChildHostAttrOutcome::Preserved;
+    };
+    if let Some(arg) = rest.strip_prefix("bind:") {
+        if arg.is_empty() || arg.contains('.') || pocopine_expr::parse(value).is_err() {
+            return ChildHostAttrOutcome::Preserved;
+        }
+        return ChildHostAttrOutcome::Binding(ChildHostBindingLite {
+            arg: arg.to_string(),
+            expr_src: value.to_string(),
+        });
+    }
+    if let Some(rest) = rest.strip_prefix("on:") {
+        return classify_child_host_listener(rest, value);
+    }
+    if rest == "model" || rest.starts_with("model.") || rest.starts_with("model:") {
+        let (arg, modifiers) = parse_child_host_model(rest);
+        if value.trim().is_empty() {
+            return ChildHostAttrOutcome::Preserved;
+        }
+        return ChildHostAttrOutcome::Model(ChildHostModelLite {
+            arg,
+            modifiers,
+            expr_src: value.to_string(),
+        });
+    }
+    ChildHostAttrOutcome::Preserved
+}
+
+fn classify_child_host_listener(rest: &str, value: &str) -> ChildHostAttrOutcome {
+    let mut parts = rest.split('.');
+    let Some(event) = parts.next().filter(|s| !s.is_empty()) else {
+        return ChildHostAttrOutcome::Preserved;
+    };
+    let modifiers: Vec<String> = parts.map(str::to_string).collect();
+    if !modifiers.iter().all(|m| is_supported_modifier(m)) || pocopine_expr::parse(value).is_err() {
+        return ChildHostAttrOutcome::Preserved;
+    }
+    ChildHostAttrOutcome::Listener(ChildHostListenerLite {
+        event: event.to_string(),
+        modifiers,
+        expr_src: value.to_string(),
+    })
+}
+
+fn parse_child_host_model(rest: &str) -> (Option<String>, Vec<String>) {
+    let body = rest.strip_prefix("model").unwrap_or(rest);
+    if let Some(after_colon) = body.strip_prefix(':') {
+        let mut parts = after_colon.split('.');
+        let arg = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
+        let modifiers = parts.map(str::to_string).collect();
+        return (arg, modifiers);
+    }
+    if let Some(after_dot) = body.strip_prefix('.') {
+        let modifiers = after_dot
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        return (None, modifiers);
+    }
+    (None, Vec::new())
+}
+
 fn is_supported_modifier(m: &str) -> bool {
     matches!(
         m,
@@ -1361,13 +1555,12 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     // body fragment's own static plan, and the runtime fallback
     // walk over the cleaned fragment binds any preserved
     // directives inside the mounted child template.
+    let is_custom = !is_html5_native(&el.tag);
     for (name, _) in &el.attrs {
-        if name == "pp-init"
-            || name == "pp-data"
-            || name == "pp-model"
-            || name.starts_with("pp-model:")
-            || name == "pp-route"
-        {
+        if name == "pp-init" || name == "pp-data" || name == "pp-route" {
+            return false;
+        }
+        if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
             return false;
         }
     }
@@ -1519,13 +1712,12 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             // (which lands at the same `walk()` path that
             // emits child_mount entries + nested slot
             // fragments into the shared `Emissions` queue).
+            let is_custom = !is_html5_native(&el.tag);
             for (name, _) in &el.attrs {
-                if name == "pp-init"
-                    || name == "pp-data"
-                    || name == "pp-model"
-                    || name.starts_with("pp-model:")
-                    || name == "pp-route"
-                {
+                if name == "pp-init" || name == "pp-data" || name == "pp-route" {
+                    return false;
+                }
+                if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
                     return false;
                 }
             }

@@ -66,8 +66,9 @@ pub mod __private {
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
-        IfBodyFn, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticRef,
-        StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
+        IfBodyFn, StaticChildHostBinding, StaticChildHostListener, StaticChildHostModel,
+        StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticRef, StaticSlotFragment,
+        StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::templates_plan::{
         apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
