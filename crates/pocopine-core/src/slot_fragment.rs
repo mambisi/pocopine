@@ -68,6 +68,16 @@ pub struct SlotMountCtx<'a> {
     pub child_scope_id: ScopeId,
 }
 
+/// One entry in a [`SlotSet`] — the macro-emitted fragment fn
+/// plus optional scoped-slot metadata (the parent's `pp-let`
+/// identifier when the slot was authored as
+/// `<template pp-slot="N" pp-let="ident">`, RFC-058 Phase 3.5g).
+#[derive(Clone, Copy)]
+pub struct SlotEntry {
+    pub fragment: SlotFragment,
+    pub scoped_let: Option<&'static str>,
+}
+
 /// Set of slot fragments a parent passes to a child mount call.
 /// Built fluently by the macro:
 ///
@@ -77,13 +87,13 @@ pub struct SlotMountCtx<'a> {
 ///     .named("footer", parent_footer_slot_fn);
 /// ```
 ///
-/// Backed by a small `HashMap<&'static str, SlotFragment>` —
+/// Backed by a small `HashMap<&'static str, SlotEntry>` —
 /// the slot-name keys are macro-emitted string literals so the
 /// hash cost is negligible at typical slot counts (1-3 slots
 /// per component is the canonical case).
 #[derive(Default)]
 pub struct SlotSet {
-    fragments: HashMap<&'static str, SlotFragment>,
+    fragments: HashMap<&'static str, SlotEntry>,
 }
 
 /// Reserved slot name for the default (unnamed) slot. Matches
@@ -102,20 +112,54 @@ impl SlotSet {
     /// Register the parent's default slot fragment. Convenience
     /// for `named(DEFAULT_SLOT_NAME, frag)`.
     pub fn default_slot(mut self, frag: SlotFragment) -> Self {
-        self.fragments.insert(DEFAULT_SLOT_NAME, frag);
+        self.fragments.insert(
+            DEFAULT_SLOT_NAME,
+            SlotEntry {
+                fragment: frag,
+                scoped_let: None,
+            },
+        );
         self
     }
 
     /// Register a named slot fragment.
     pub fn named(mut self, name: &'static str, frag: SlotFragment) -> Self {
-        self.fragments.insert(name, frag);
+        self.fragments.insert(
+            name,
+            SlotEntry {
+                fragment: frag,
+                scoped_let: None,
+            },
+        );
         self
     }
 
-    /// Look up the fragment for `name`, or `None` if the parent
+    /// Register a named scoped slot fragment authored with
+    /// `pp-let="ident"` (RFC-058 Phase 3.5g). The runtime
+    /// constructs a [`crate::slot_scope::SlotScope`] from the
+    /// child's `<slot>` element bindings before invoking the
+    /// fragment, so directives inside resolve `ident.field`
+    /// against the parent's bound state.
+    pub fn scoped(
+        mut self,
+        name: &'static str,
+        frag: SlotFragment,
+        let_ident: &'static str,
+    ) -> Self {
+        self.fragments.insert(
+            name,
+            SlotEntry {
+                fragment: frag,
+                scoped_let: Some(let_ident),
+            },
+        );
+        self
+    }
+
+    /// Look up the entry for `name`, or `None` if the parent
     /// didn't supply one for that slot. The child should fall
     /// back to its compiled default slot content in that case.
-    pub fn get(&self, name: &str) -> Option<SlotFragment> {
+    pub fn get(&self, name: &str) -> Option<SlotEntry> {
         self.fragments.get(name).copied()
     }
 
@@ -182,20 +226,20 @@ pub fn install(
     });
 }
 
-/// Look up the parent fragment for `(child_scope_id, name)`,
-/// returning the fragment fn alongside the parent context the
-/// installer captured. `None` when the parent didn't register a
-/// [`SlotSet`] for this child, or registered one without an
-/// entry for `name`. Caller (the walker's slot materialiser)
-/// falls back to the legacy capture path when this returns
-/// `None`.
-pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<(SlotFragment, ScopeId, JsValue)> {
+/// Look up the parent entry for `(child_scope_id, name)`,
+/// returning the fragment fn + scoped-slot metadata alongside
+/// the parent context the installer captured. `None` when the
+/// parent didn't register a [`SlotSet`] for this child, or
+/// registered one without an entry for `name`. Caller (the
+/// walker's slot materialiser) falls back to the legacy capture
+/// path when this returns `None`.
+pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<(SlotEntry, ScopeId, JsValue)> {
     FRAGMENTS.with(|m| {
         let map = m.borrow();
         let installed = map.get(&child_scope_id)?;
-        let frag = installed.set.get(name)?;
+        let entry = installed.set.get(name)?;
         Some((
-            frag,
+            entry,
             installed.parent_scope_id,
             installed.parent_proxy.clone(),
         ))

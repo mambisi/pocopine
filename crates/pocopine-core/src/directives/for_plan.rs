@@ -198,10 +198,20 @@ pub struct StaticChildHostModel {
 /// the parent's generated `register()` body — invoking it
 /// stamps the parent-authored slot DOM into the
 /// [`crate::slot_fragment::SlotMountCtx::host`] buffer.
+///
+/// `scoped_let` is `Some(ident)` when the parent authored
+/// `<template pp-slot="NAME" pp-let="ident">…</template>`
+/// (RFC-058 Phase 3.5g). The runtime materialiser builds a
+/// [`crate::slot_scope::SlotScope`] from the child's `<slot>`
+/// element bindings and invokes the fragment against the slot
+/// scope's proxy so `ident.field` resolves through RFC-011
+/// scoped-slot semantics. `None` for plain default + named
+/// slots, which run against the parent proxy directly.
 #[doc(hidden)]
 pub struct StaticSlotFragment {
     pub name: &'static str,
     pub fragment: crate::slot_fragment::SlotFragment,
+    pub scoped_let: Option<&'static str>,
 }
 
 /// Static-lifetime descriptor for a `<slot>` outlet inside a

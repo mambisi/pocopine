@@ -330,7 +330,10 @@ pub fn apply_static_plan(
         } else {
             let mut set = SlotSet::new();
             for s in c.slots {
-                set = set.named(s.name, s.fragment);
+                set = match s.scoped_let {
+                    Some(let_ident) => set.scoped(s.name, s.fragment, let_ident),
+                    None => set.named(s.name, s.fragment),
+                };
             }
             crate::walker::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
         }

@@ -1149,30 +1149,69 @@ fn materialize_slot(slot_el: &Element) {
         }
     };
 
-    // RFC-058 Phase 3.5a fast-path: if the parent registered a
-    // [`SlotFragment`] for `(owner_scope_id, slot_name)` via
-    // [`mount_child_component_with_slots`], invoke it instead of
-    // running the legacy capture/replay path. The fragment writes
-    // into a DocumentFragment buffer; we splice the buffered
-    // children before `slot_el` and remove the slot, matching the
-    // legacy path's positional semantics.
+    // RFC-058 Phase 3.5a/3.5g fast-path: if the parent registered
+    // a [`SlotEntry`] for `(owner_scope_id, slot_name)` via
+    // [`mount_child_component_with_slots`], invoke its fragment
+    // instead of running the legacy capture/replay path.
     //
-    // `:prop` slot bindings + `pp-let` scoped slots stay on the
-    // legacy path for v1 — Phase 3.5+ teaches the fragment ABI
-    // about scoped slots; v1 fragments target opaque + simple
-    // default-slot cases first.
-    if bindings.is_empty() {
-        if let Some((fragment_fn, parent_scope_id, parent_proxy)) =
-            crate::slot_fragment::lookup(owner_scope_id, &slot_name)
-        {
+    // For plain default + named slots (entry.scoped_let is None)
+    // the fragment runs against the parent proxy directly, which
+    // requires the slot to have no `:prop` bindings (those are a
+    // RFC-011 scoped-slot affordance, only meaningful with
+    // pp-let). For scoped slots (entry.scoped_let is Some(ident),
+    // RFC-058 Phase 3.5g) we build a [`SlotScope`] from the
+    // child's `<slot>` `:prop` bindings and invoke the fragment
+    // against the slot scope's proxy so directives inside resolve
+    // `ident.field` through SlotScope's RFC-011 routing.
+    if let Some((entry, parent_scope_id, parent_proxy)) =
+        crate::slot_fragment::lookup(owner_scope_id, &slot_name)
+    {
+        let take_fast_path = match entry.scoped_let {
+            None => bindings.is_empty(),
+            Some(_) => true,
+        };
+        if take_fast_path {
             let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
                 return;
             };
+            // For scoped fragments, construct the SlotScope
+            // upfront so the fragment installs against the slot
+            // scope's proxy. The scope id pinned on every
+            // inserted element matches the proxy used at install
+            // time, keeping reactive subscriptions consistent.
+            let (fragment_parent_scope_id, fragment_parent_proxy, slot_scope_for_pin) =
+                match entry.scoped_let {
+                    Some(let_ident) => {
+                        let slot_state = SlotScope {
+                            ident: let_ident.to_string(),
+                            bindings: bindings.clone(),
+                            // `:prop="path"` evaluates against the
+                            // scope that authored the `<slot>`
+                            // — i.e. the child component whose
+                            // template the `<slot>` lives in.
+                            bind_source: owner_proxy.clone(),
+                            // Fall-through reads land on the
+                            // parent (caller) proxy — that's what
+                            // makes `@click="parent_handler"`
+                            // inside scoped slots work.
+                            caller: parent_proxy.clone(),
+                        };
+                        let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
+                        // Inject-chain: the slot scope sits
+                        // inside the slot-owning child template,
+                        // so children chain through the child
+                        // for inject lookups.
+                        crate::context::set_parent(slot_scope.id, owner_scope_id);
+                        let proxy = slot_scope.into_proxy();
+                        (slot_scope.id, proxy, Some(slot_scope.id))
+                    }
+                    None => (parent_scope_id, parent_proxy.clone(), None),
+                };
             let buffer = doc.create_document_fragment();
-            fragment_fn(crate::slot_fragment::SlotMountCtx {
+            (entry.fragment)(crate::slot_fragment::SlotMountCtx {
                 host: &buffer,
-                parent_scope_id,
-                parent_proxy: &parent_proxy,
+                parent_scope_id: fragment_parent_scope_id,
+                parent_proxy: &fragment_parent_proxy,
                 child_scope_id: owner_scope_id,
             });
             // Splice buffered children before slot_el, then drop
@@ -1188,6 +1227,9 @@ fn materialize_slot(slot_el: &Element) {
             for n in snapshot {
                 let _ = parent.insert_before(&n, Some(slot_el));
                 if let Ok(e) = n.dyn_into::<Element>() {
+                    if let Some(slot_scope_id) = slot_scope_for_pin {
+                        bind_borrowed_scope_to(&e, slot_scope_id, &fragment_parent_proxy);
+                    }
                     finalize_compiled_subtree(&e);
                 }
             }

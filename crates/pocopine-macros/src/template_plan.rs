@@ -394,7 +394,14 @@ struct ChildMountLite {
     /// [`AnalysisCtx::slot_fragment_emissions`] so the
     /// `StaticSlotFragment.fragment` literal in the plan
     /// references the same `fn` the macro emits below.
-    slot_fragments: Vec<(String, syn::Ident)>,
+    ///
+    /// The third tuple slot is the parent's `pp-let` identifier
+    /// when the slot was authored as `<template pp-slot="NAME"
+    /// pp-let="ident">…</template>` (RFC-058 Phase 3.5g);
+    /// `None` for plain default + named slots. The runtime
+    /// uses it to construct a [`SlotScope`] before invoking the
+    /// fragment.
+    slot_fragments: Vec<(String, syn::Ident, Option<String>)>,
     host_bindings: Vec<ChildHostBindingLite>,
     host_listeners: Vec<ChildHostListenerLite>,
     host_models: Vec<ChildHostModelLite>,
@@ -720,12 +727,20 @@ fn emit_slot_outlet(s: &SlotOutletLite) -> TokenStream {
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
-    let slot_tokens = c.slot_fragments.iter().map(|(name, ident)| {
+    let slot_tokens = c.slot_fragments.iter().map(|(name, ident, pp_let)| {
         let name_lit = proc_macro2::Literal::string(name);
+        let scoped_let_tokens = match pp_let {
+            Some(let_ident) => {
+                let lit = proc_macro2::Literal::string(let_ident);
+                quote! { Some(#lit) }
+            }
+            None => quote! { None },
+        };
         quote! {
             ::pocopine::__private::StaticSlotFragment {
                 name: #name_lit,
                 fragment: #ident,
+                scoped_let: #scoped_let_tokens,
             }
         }
     });
@@ -1057,7 +1072,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 }
             }
         }
-        // RFC-058 Phase 3.5b–3.5f — partition the custom tag's
+        // RFC-058 Phase 3.5b–3.5g — partition the custom tag's
         // children into one default-slot subtree + N named-slot
         // subtrees (`<template pp-slot="NAME">…</template>`),
         // and lift each independently into a slot fragment fn.
@@ -1066,16 +1081,21 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         // looks them up by name before falling back to the
         // legacy walker capture path.
         //
-        // `pp-let` scoped slots stay walker-driven (Phase 3.5g
-        // graduates them). When a named slot can't lift —
-        // pp-let, or an ineligible body — we set
-        // `requires_walker` so the wrapping fragment walks the
-        // cleaned HTML via the legacy capture path for that
-        // slot. The `<template pp-slot>` element itself stays
-        // in the cleaned HTML in every case so `capture_slots`
-        // can still pick it up; for lifted slots, the fragment
+        // `<template pp-slot="N" pp-let="ident">` (Phase 3.5g)
+        // also lifts: we record the `pp-let` identifier on the
+        // slot-fragment entry so the runtime materialiser
+        // builds a `SlotScope` from the child's `<slot>`
+        // bindings and invokes the fragment against the slot
+        // scope's proxy. Eligibility is the same as plain
+        // named slots — the body must be plan-eligible — and
+        // bodies that can't lift still flip `requires_walker`
+        // so the legacy capture path drives them.
+        //
+        // The `<template pp-slot>` element itself stays in the
+        // cleaned HTML in every case so `capture_slots` can
+        // still pick it up; for lifted slots, the fragment
         // registry wins the lookup race in `materialize_slot`.
-        let mut slot_fragments: Vec<(String, syn::Ident)> = Vec::new();
+        let mut slot_fragments: Vec<(String, syn::Ident, Option<String>)> = Vec::new();
         if !el.children.is_empty() {
             let mut default_children: Vec<Node> = Vec::new();
             for child in &el.children {
@@ -1097,15 +1117,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     default_children.push(child.clone());
                     continue;
                 };
-                if tpl.attrs.iter().any(|(n, _)| n == "pp-let") {
-                    // Scoped slot — Phase 3.5g territory. Don't
-                    // lift; let the wrapping fragment fall back
-                    // to the walker so `capture_slots` builds a
-                    // `SlotScope` and `materialize_slot` chains
-                    // bindings through `pp-let`.
-                    ctx.requires_walker = true;
-                    continue;
-                }
+                let pp_let = tpl
+                    .attrs
+                    .iter()
+                    .find(|(n, _)| n == "pp-let")
+                    .map(|(_, v)| v.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 match analyze_slot_subtree(&tpl.children, emissions) {
                     Some(emission) => {
                         // Duplicate `pp-slot=NAME` at compile time:
@@ -1114,7 +1131,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // means the LAST one wins, matching the
                         // walker's "later wins" semantics on
                         // duplicate captures.
-                        slot_fragments.push((slot_name, emission.ident().clone()));
+                        slot_fragments.push((slot_name, emission.ident().clone(), pp_let));
                         emissions.slot_fragments.push(emission);
                     }
                     None => {
@@ -1125,9 +1142,20 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     }
                 }
             }
-            if !default_children.is_empty() {
+            // Skip lifting a default fragment when the leftover
+            // children are pure whitespace — formatter newlines
+            // around a `<template pp-slot>` block shouldn't
+            // synthesise a default slot fragment the child never
+            // queries (the legacy capture path's matching default
+            // entry is similarly inert in that case).
+            let has_meaningful_default = default_children.iter().any(|n| match n {
+                Node::Text(text, _) => !text.trim().is_empty(),
+                Node::Comment(_, _) => false,
+                _ => true,
+            });
+            if has_meaningful_default {
                 if let Some(emission) = analyze_slot_subtree(&default_children, emissions) {
-                    slot_fragments.push(("default".to_string(), emission.ident().clone()));
+                    slot_fragments.push(("default".to_string(), emission.ident().clone(), None));
                     emissions.slot_fragments.push(emission);
                 }
             }
