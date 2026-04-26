@@ -17,6 +17,7 @@ members = [
     "jsbench/pocopine",
     "jsbench/leptos",
     "jsbench/yew",
+    "jsbench/tags_input_repro",
     "examples/website",
     "examples/site",
     "examples/spa",

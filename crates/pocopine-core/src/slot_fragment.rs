@@ -311,8 +311,16 @@ pub fn stamp_dynamic_slot(
     let key = wasm_bindgen::JsValue::from_str(crate::walker::CTX_PARENT_KEY);
     let val = wasm_bindgen::JsValue::from_f64(child_scope_id.0 as f64);
     let _ = js_sys::Reflect::set(temp.as_ref(), &key, &val);
-    crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
-
+    // Stamp every top-level child BEFORE `apply_static_plan`
+    // runs — controllers like `pp-for` resolve their template
+    // element's `CTX_PARENT_KEY` at install time to seed the
+    // LoopScope's inject chain through the slot owner. If we
+    // stamped after `apply_static_plan`, the install would see
+    // `None` and fall back to the install scope, which is the
+    // SLOT AUTHOR (caller) — wrong direction; descendants then
+    // can't `inject()` providers from the slot owner (the
+    // tags-input chip × bug — `ROOT.inject()` returned `None`
+    // for items rendered via a `pp-for` inside the slot).
     let elements = temp.children();
     let mut element_snapshot: Vec<Element> = Vec::with_capacity(elements.length() as usize);
     for i in 0..elements.length() {
@@ -322,6 +330,7 @@ pub fn stamp_dynamic_slot(
             element_snapshot.push(el);
         }
     }
+    crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
     if crate::templates_plan::plan_requires_compiled_fallback(plan) {
         for el in &element_snapshot {
             crate::walker::walk_compiled_fallback(el);
