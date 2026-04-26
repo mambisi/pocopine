@@ -45,7 +45,7 @@ use web_sys::{console, Element};
 use crate::directives;
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticListener, StaticRef,
+    StaticListener, StaticRef, StaticTeleportPlan,
 };
 use crate::expr;
 use crate::reactive::ScopeId;
@@ -97,6 +97,13 @@ pub struct StaticTemplatePlan {
     /// still resolves keyed lists. Empty for templates with no
     /// `pp-for` site.
     pub for_plans: &'static [StaticForPlan],
+    /// `pp-teleport` controller sites without a co-occurring
+    /// `pp-if` (RFC-058 Phase 4.3). The macro strips
+    /// `pp-teleport` from the cleaned HTML; the applier resolves
+    /// the target selector via
+    /// [`crate::directives::teleport::install`]. Empty for
+    /// templates with no plan-eligible `pp-teleport` site.
+    pub teleport_plans: &'static [StaticTeleportPlan],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -328,6 +335,30 @@ pub fn apply_static_plan(
             fp.key_expr.map(|s| s.to_string()),
             fp.stagger_ms,
         );
+    }
+    for tp in plan.teleport_plans {
+        let Some(el) = resolve(root, tp.template_node_path) else {
+            fail(
+                "teleport-plan",
+                template_name,
+                tp.template_node_path,
+                Some(tp.selector),
+            );
+            continue;
+        };
+        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
+            Ok(t) => t,
+            Err(_) => {
+                fail(
+                    "teleport-plan-template",
+                    template_name,
+                    tp.template_node_path,
+                    Some(tp.selector),
+                );
+                continue;
+            }
+        };
+        directives::teleport::install(template, tp.selector);
     }
     for ip in plan.if_plans {
         let Some(el) = resolve(root, ip.template_node_path) else {

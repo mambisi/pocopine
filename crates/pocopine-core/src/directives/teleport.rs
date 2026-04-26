@@ -72,10 +72,26 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    let Some(target) = resolve_target(&call.value) else {
+    install(template, &call.value);
+}
+
+/// Compiled-path entry point. Skips the `<template>` cast +
+/// the `pp-if` co-occurrence check (the macro only graduates
+/// pp-teleport sites that pass that check at compile time).
+///
+/// Called by `apply_static_plan` for every `StaticTeleportPlan`
+/// entry the classifier emitted. RFC-058 Phase 4.3 — extracted
+/// so the runtime walker dispatch path and the plan applier
+/// share one mount body. The owning scope still pins onto the
+/// clone via `walker::enclosing_scope` so directives inside the
+/// teleported subtree resolve the intended proxy after the DOM
+/// move.
+pub fn install(template: HtmlTemplateElement, selector: &str) {
+    let template_el: Element = template.clone().into();
+
+    let Some(target) = resolve_target(selector) else {
         console::error_1(&JsValue::from_str(&format!(
-            "pp-teleport: target selector {:?} did not match any element",
-            call.value
+            "pp-teleport: target selector {selector:?} did not match any element"
         )));
         return;
     };
@@ -91,7 +107,7 @@ pub fn run(call: &DirectiveCall) {
     // resolve the intended proxy after the DOM move. The scope is
     // borrowed — removing the clone must not evict the owning
     // component's scope from the registry.
-    if let Some((scope_id, proxy)) = walker::enclosing_scope(call.el) {
+    if let Some((scope_id, proxy)) = walker::enclosing_scope(&template_el) {
         bind_borrowed_scope_to(&clone_root, scope_id, &proxy);
     }
 
@@ -101,10 +117,10 @@ pub fn run(call: &DirectiveCall) {
         let _ = Reflect::set(
             clone_root.as_ref(),
             &TELEPORT_ORIGIN_KEY.into(),
-            call.el.as_ref(),
+            template_el.as_ref(),
         );
         walker::walk(&clone_root);
-        stash_teleported(call.el, &clone_root);
+        stash_teleported(&template_el, &clone_root);
     }
 }
 

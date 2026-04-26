@@ -194,6 +194,21 @@ pub struct StaticIfPlan {
     pub expr_src: &'static str,
 }
 
+/// Static-lifetime descriptor for a `<template pp-teleport="...">`
+/// site without a co-occurring `pp-if`. RFC-058 Phase 4.3.
+///
+/// `selector` is the target query string the runtime resolves
+/// once at install time via [`crate::directives::teleport::resolve_target`].
+/// The macro guarantees this entry only graduates when no
+/// `pp-if` is present on the same element — when both are
+/// present, `pp-if`'s install path consults the teleport
+/// attribute directly and pp-teleport stays on the walker.
+#[doc(hidden)]
+pub struct StaticTeleportPlan {
+    pub template_node_path: &'static [u16],
+    pub selector: &'static str,
+}
+
 /// Static-lifetime descriptor for a `<template pp-for="...">`
 /// site. RFC-058 Phase 4.2.
 ///
