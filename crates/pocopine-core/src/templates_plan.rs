@@ -156,6 +156,17 @@ pub fn template_plan_for(tag: &str) -> Option<&'static StaticTemplatePlan> {
     TEMPLATE_PLANS.with(|registry| registry.borrow().get(tag).copied())
 }
 
+/// Snapshot every registered component tag. Order is
+/// implementation-defined (HashMap iteration); callers that
+/// need stable ordering should sort. Intended for audit /
+/// survey tooling — RFC-058 Phase 3 hardening uses it to
+/// enumerate which compiled plans still trip
+/// [`StaticTemplatePlan::requires_walker`] so the migration to
+/// a walker-free runtime can target the remaining offenders.
+pub fn registered_template_tags() -> Vec<String> {
+    TEMPLATE_PLANS.with(|registry| registry.borrow().keys().cloned().collect())
+}
+
 /// Cumulative count of plan-install failures observed since
 /// process start. Increments via [`record_plan_failure`] when an
 /// `apply_static_plan` entry's `node_path` doesn't resolve to a
