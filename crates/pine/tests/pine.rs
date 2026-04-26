@@ -2063,7 +2063,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
         .unwrap()
         .expect("A trigger wrapper");
     a_wrap
-        .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
+        .dispatch_event(&web_sys::MouseEvent::new("mouseenter").unwrap())
         .unwrap();
     sleep_ms(5).await;
     tick().await;
@@ -2079,7 +2079,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
         .unwrap()
         .expect("B trigger wrapper");
     b_wrap
-        .dispatch_event(&web_sys::Event::new("mouseenter").unwrap())
+        .dispatch_event(&web_sys::MouseEvent::new("mouseenter").unwrap())
         .unwrap();
     sleep_ms(5).await;
     tick().await;
@@ -2097,7 +2097,7 @@ async fn tooltip_provider_singleton_evicts_previous() {
     // in body, so without this the next tooltip test sees a
     // stale `[role="tooltip"]` element.
     b_wrap
-        .dispatch_event(&web_sys::Event::new("mouseleave").unwrap())
+        .dispatch_event(&web_sys::MouseEvent::new("mouseleave").unwrap())
         .unwrap();
     sleep_ms(5).await;
     tick().await;
@@ -2364,7 +2364,7 @@ async fn hover_card_hover_opens_and_leave_closes() {
         .query_selector(".pine-hover-card-trigger")
         .unwrap()
         .unwrap();
-    let enter = web_sys::Event::new("mouseenter").unwrap();
+    let enter = web_sys::MouseEvent::new("mouseenter").unwrap();
     trig_wrap.dispatch_event(&enter).unwrap();
     // setTimeout(0) schedules on the task queue, which only runs
     // after our microtasks drain — a real yield is required.
@@ -2380,7 +2380,7 @@ async fn hover_card_hover_opens_and_leave_closes() {
     );
 
     // Leave the trigger → close timer fires (0 delay).
-    let leave = web_sys::Event::new("mouseleave").unwrap();
+    let leave = web_sys::MouseEvent::new("mouseleave").unwrap();
     trig_wrap.dispatch_event(&leave).unwrap();
     sleep_ms(5).await;
     tick().await;
@@ -3855,12 +3855,14 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
         .expect("listbox selector query ran")
         .expect("listbox mounted after focus");
 
-    // Type "v" — filters to "Vue" + "Svelte".
+    // Type "v" — filters to "Vue" + "Svelte". Use a real
+    // `InputEvent` so the framework's typed listener
+    // (`events::ev::input` → `InputEvent`) actually receives
+    // it; a plain `Event` silently drops at the
+    // `dyn_into::<InputEvent>` downcast inside the wrapper.
     input.set_value("v");
-    let init = web_sys::EventInit::new();
-    init.set_bubbles(true);
     input
-        .dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &init).unwrap())
+        .dispatch_event(&web_sys::InputEvent::new("input").unwrap())
         .unwrap();
     tick().await;
     sleep_ms(5).await;
@@ -4085,10 +4087,18 @@ async fn combobox_mousedown_on_input_does_not_close() {
 
     // Simulate a second mousedown on the input — the dismiss
     // listener IS live now. It must see the Input as "inside".
-    let init = web_sys::EventInit::new();
-    init.set_bubbles(true);
+    // Use a real `MouseEvent` because the listener is typed
+    // (`events::ev::mousedown` → `MouseEvent`) and a plain
+    // `Event` would silently fail the `dyn_into::<MouseEvent>`
+    // downcast inside the framework's typed-listener wrapper.
+    // `bubbles: true` so the body dispatch below propagates
+    // up to the dismiss listener attached on `document`.
+    let mouse_init = web_sys::MouseEventInit::new();
+    mouse_init.set_bubbles(true);
     input
-        .dispatch_event(&web_sys::Event::new_with_event_init_dict("mousedown", &init).unwrap())
+        .dispatch_event(
+            &web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &mouse_init).unwrap(),
+        )
         .unwrap();
     tick().await;
     sleep_ms(5).await;
@@ -4105,7 +4115,9 @@ async fn combobox_mousedown_on_input_does_not_close() {
     let body = doc().body().unwrap();
     let body_target: &web_sys::EventTarget = body.as_ref();
     body_target
-        .dispatch_event(&web_sys::Event::new_with_event_init_dict("mousedown", &init).unwrap())
+        .dispatch_event(
+            &web_sys::MouseEvent::new_with_mouse_event_init_dict("mousedown", &mouse_init).unwrap(),
+        )
         .unwrap();
     tick().await;
     sleep_ms(5).await;
