@@ -5395,8 +5395,13 @@ async fn field_state_flags_track_focus_blur_input() {
     assert!(root_div.has_attribute("data-focused"));
 
     input.set_value("abc");
+    // Dispatch a real `InputEvent` — the typed listener
+    // (`events::ev::input`) downcasts via `dyn_into::<InputEvent>`
+    // and silently drops a plain `Event` whose runtime type
+    // doesn't match. Browsers always produce `InputEvent` for
+    // typed-into-input cases, so this matches the production path.
     target
-        .dispatch_event(&web_sys::Event::new("input").unwrap())
+        .dispatch_event(&web_sys::InputEvent::new("input").unwrap())
         .unwrap();
     tick().await;
     assert!(root_div.has_attribute("data-dirty"));
@@ -5745,7 +5750,7 @@ async fn date_range_field_tab_bridges_start_end_edges() {
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("month"));
     assert!(active
-        .closest("pine-date-field.pine-date-range-field-end")
+        .closest(".pine-date-range-field-end")
         .unwrap()
         .is_some());
 
@@ -5763,7 +5768,7 @@ async fn date_range_field_tab_bridges_start_end_edges() {
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("year"));
     assert!(active
-        .closest("pine-date-field.pine-date-range-field-start")
+        .closest(".pine-date-range-field-start")
         .unwrap()
         .is_some());
 
@@ -5798,7 +5803,7 @@ async fn time_range_field_tab_bridges_start_end_edges() {
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("hour"));
     assert!(active
-        .closest("pine-time-field.pine-time-range-field-end")
+        .closest(".pine-time-range-field-end")
         .unwrap()
         .is_some());
 
@@ -5816,7 +5821,7 @@ async fn time_range_field_tab_bridges_start_end_edges() {
     let active = doc().active_element().unwrap();
     assert_eq!(active.get_attribute("data-part").as_deref(), Some("minute"));
     assert!(active
-        .closest("pine-time-field.pine-time-range-field-start")
+        .closest(".pine-time-range-field-start")
         .unwrap()
         .is_some());
 
