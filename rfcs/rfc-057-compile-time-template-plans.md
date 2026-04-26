@@ -2,11 +2,19 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft — council amendments incorporated (pass 3), awaiting re-review |
+| **Status** | Superseded by [RFC 058](./rfc-058-compiled-views-walker-removal.md) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-26 |
-| **Supersedes** | — |
+| **Superseded by** | [RFC 058](./rfc-058-compiled-views-walker-removal.md) |
 | **Related** | [RFC 050](./rfc-050-html5ever-compile-time-parser.md), [RFC 054](./rfc-054-compiled-pp-for-row-plans.md), [issue #10](https://github.com/mambisi/pocopine/issues/10) |
+
+> **Status note:** the council answer to RFC-058 §9 question 5
+> superseded this RFC. The static-template-plan design here is
+> still useful — it lands as RFC-058's **Phase 2** transitional
+> step (HTML stamp + node-path handles) on the way to fully
+> generated mount/hydrate functions and walker quarantine. Read
+> RFC-058 first; come back to this one only for the §5.1–§5.7
+> static-plan details that Phase 2 reuses verbatim.
 
 ## 1. Summary
 
