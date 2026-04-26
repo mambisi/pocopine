@@ -51,16 +51,6 @@ const FLIP_ID_KEY: &str = "__pp_flip_id";
 struct Entry {
     el: Element,
     last_rect: web_sys::DomRect,
-    /// `true` until the first `run_check` sweep records a real
-    /// rect. Set when `run` captures the install-time rect on a
-    /// not-yet-connected element (the slot-fragment install path
-    /// runs `apply_static_plan` on detached DOM in a `<temp>`
-    /// host before the rendered children are spliced into the
-    /// live tree — `getBoundingClientRect` returns all-zeros for
-    /// detached elements). Without this, the next sweep diffs
-    /// `(0,0)` against the now-laid-out rect and animates the
-    /// chip flying in from the document origin.
-    first_seen: bool,
 }
 
 thread_local! {
@@ -74,17 +64,6 @@ pub fn run(call: &DirectiveCall) {
     install_observer();
     let el = call.el.clone();
     let rect = el.get_bounding_client_rect();
-    // RFC-058 Phase 6.4 — slot-fragment installs run
-    // `apply_static_plan` against detached DOM (the `<temp>`
-    // host inside `stamp_dynamic_slot`); `getBoundingClientRect`
-    // on a detached element returns all-zeros. The next observer
-    // sweep would then diff `(0,0)` against the now-laid-out
-    // rect and animate the element from the document origin —
-    // visible as a chip "flying in from the upper-left" on each
-    // pp-for add. Mark the entry `first_seen = true` so the
-    // first sweep refreshes the rect without playing an
-    // animation.
-    let first_seen = !el.is_connected();
     let id = NEXT_ID.with(|c| {
         let v = c.get();
         c.set(v + 1);
@@ -96,7 +75,6 @@ pub fn run(call: &DirectiveCall) {
             Entry {
                 el: el.clone(),
                 last_rect: rect,
-                first_seen,
             },
         );
     });
@@ -165,10 +143,10 @@ fn run_check() {
     for id in ids {
         // Read the entry, then release the borrow before calling
         // `flip_from_snapshot` (which can re-enter via observers).
-        let (el, old_rect, first_seen) = match REGISTRY.with(|m| {
+        let (el, old_rect) = match REGISTRY.with(|m| {
             m.borrow()
                 .get(&id)
-                .map(|e| (e.el.clone(), e.last_rect.clone(), e.first_seen))
+                .map(|e| (e.el.clone(), e.last_rect.clone()))
         }) {
             Some(p) => p,
             None => continue,
@@ -178,18 +156,6 @@ fn run_check() {
             continue;
         }
         let new_rect = el.get_bounding_client_rect();
-        if first_seen {
-            // Element was detached at install time; this sweep is
-            // its first appearance in live layout. Refresh the
-            // stored rect without animating.
-            REGISTRY.with(|m| {
-                if let Some(e) = m.borrow_mut().get_mut(&id) {
-                    e.last_rect = new_rect;
-                    e.first_seen = false;
-                }
-            });
-            continue;
-        }
         let dx = old_rect.left() - new_rect.left();
         let dy = old_rect.top() - new_rect.top();
         if dx.abs() >= 2.0 || dy.abs() >= 2.0 {
