@@ -375,11 +375,10 @@ fn run_naive(
             // RFC-058 Phase 4.2c — when the macro emitted a body
             // fragment for this pp-for site, build the row root
             // through the fragment (which stamps cleaned HTML +
-            // installs every directive against the row's
-            // LoopScope via the Phase 1 helpers — no
-            // `walker::walk` involvement). Otherwise fall back
-            // to the legacy `clone_template_body` +
-            // `walker::walk` path.
+            // installs generated entries against the row's
+            // LoopScope via the Phase 1 helpers). We still run
+            // the walker after insertion so preserved fallback
+            // directives in nested custom-component templates bind.
             let (clone_root, fragment_built) = match body {
                 Some(f) => match f(scope.id, &proxy) {
                     Some(root) => (root, true),
@@ -406,7 +405,13 @@ fn run_naive(
                 .insert_before(clone_root.as_ref(), Some(template_el.as_ref()))
                 .is_ok()
             {
-                if !fragment_built {
+                if fragment_built {
+                    if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
+                        walker::walk_compiled_fallback(&clone_root);
+                    } else {
+                        walker::mark_walked(&clone_root);
+                    }
+                } else {
                     walker::walk(&clone_root);
                 }
                 fresh.push(clone_root);

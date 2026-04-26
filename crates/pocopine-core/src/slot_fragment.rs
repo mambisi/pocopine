@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::DocumentFragment;
+use web_sys::{DocumentFragment, Element};
 
 use crate::reactive::ScopeId;
 
@@ -245,6 +245,7 @@ pub fn stamp_dynamic_slot(
     plan: &'static crate::templates_plan::StaticTemplatePlan,
     parent_scope_id: ScopeId,
     parent_proxy: &JsValue,
+    child_scope_id: ScopeId,
 ) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
@@ -253,7 +254,36 @@ pub fn stamp_dynamic_slot(
         return;
     };
     temp.set_inner_html(html);
+    crate::walker::bind_borrowed_scope_to(&temp, parent_scope_id, parent_proxy);
+    // RFC-027 inject chain — stamp `CTX_PARENT_KEY` on the
+    // temp host so any nested `mount_child_component` call
+    // inside `apply_static_plan` resolves its inject parent
+    // to the slot owner (the child component whose template
+    // contains the `<slot>`), not to the parent caller scope
+    // we're installing bindings against. Mirrors what
+    // `materialize_slot`'s legacy capture path does for
+    // walker-driven slot content (see `walker.rs` near the
+    // CTX_PARENT_KEY stamp inside `bind_borrowed_scope_to`).
+    let key = wasm_bindgen::JsValue::from_str(crate::walker::CTX_PARENT_KEY);
+    let val = wasm_bindgen::JsValue::from_f64(child_scope_id.0 as f64);
+    let _ = js_sys::Reflect::set(temp.as_ref(), &key, &val);
     crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
+
+    let elements = temp.children();
+    let mut element_snapshot: Vec<Element> = Vec::with_capacity(elements.length() as usize);
+    for i in 0..elements.length() {
+        if let Some(el) = elements.item(i) {
+            crate::walker::bind_borrowed_scope_to(&el, parent_scope_id, parent_proxy);
+            let _ = js_sys::Reflect::set(el.as_ref(), &key, &val);
+            element_snapshot.push(el);
+        }
+    }
+    if crate::templates_plan::plan_requires_compiled_fallback(plan) {
+        for el in &element_snapshot {
+            crate::walker::walk_compiled_fallback(el);
+        }
+    }
+
     let kids = temp.child_nodes();
     let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);
     for i in 0..kids.length() {

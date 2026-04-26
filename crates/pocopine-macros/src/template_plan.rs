@@ -97,10 +97,11 @@ pub(crate) fn analyze_template_plan(
         row_plan_assignments: row_plan_assignments.to_vec(),
         ..AnalysisCtx::default()
     };
+    let mut emissions = Emissions::default();
     let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
-            walk(el, &mut ctx, &mut path);
+            walk(el, &mut ctx, &mut emissions, &mut path);
         }
     }
     if !ctx.has_any_entry() && row_plan_assignments.is_empty() {
@@ -112,8 +113,8 @@ pub(crate) fn analyze_template_plan(
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
-    let slot_fragment_fns = ctx.emit_slot_fragment_fns();
-    let if_body_fns = ctx.emit_if_body_fns();
+    let slot_fragment_fns = emit_slot_fragment_fns(&emissions);
+    let if_body_fns = emit_if_body_fns(&emissions);
     // When the only "entry" is a row-plan stamp (template has no
     // plan-eligible directive on its own), still emit cleaned HTML
     // so the row-plan attribute is baked in — but skip the
@@ -131,6 +132,15 @@ pub(crate) fn analyze_template_plan(
     }
 }
 
+/// Per-subtree analysis state. Each lifted body / slot subtree
+/// runs `walk()` against its own `AnalysisCtx`; the entries
+/// it accumulates (bindings, listeners, refs, child_mounts,
+/// nested controller plans, stripped attrs, text-managed
+/// paths) belong to that subtree's per-fragment plan only.
+///
+/// Shared state (fragment fn emissions + ID counters) lives
+/// on `Emissions` so nested lifts can register fragment fns
+/// into the same top-level register() body.
 #[derive(Default)]
 struct AnalysisCtx {
     bindings: Vec<BindingLite>,
@@ -147,27 +157,6 @@ struct AnalysisCtx {
     /// `__pp_mounted` guard makes the discovery a no-op for
     /// any tag the plan already mounted.
     child_mounts: Vec<ChildMountLite>,
-    /// RFC-058 Phase 3.5b + 3.5c — slot fragment emissions the
-    /// macro should publish as `fn` items inside the parent's
-    /// generated `register()` body. Static fragments stamp HTML
-    /// only; dynamic fragments carry an inline static plan that
-    /// installs bindings/listeners/refs against the parent
-    /// scope. Indexed by `ChildMountLite.slot_fragments` — the
-    /// same ident appears in both places so the
-    /// `StaticChildMount.slots` literal references the function
-    /// the macro emits below it.
-    slot_fragment_emissions: Vec<SlotFragmentEmission>,
-    /// RFC-058 Phase 4.1d — `pp-if` body fragments the macro
-    /// should emit as `fn` items inside the parent's
-    /// `register()` body. Each fragment's body builds a
-    /// `StaticTemplatePlan` const for the body's
-    /// bindings/listeners/refs, then calls `stamp_if_body`
-    /// against the parent scope to materialise + install at
-    /// mount time. Indexed by `IfPlanLite.body_fn_ident` —
-    /// the same ident appears in both places so the
-    /// `StaticIfPlan.body` literal references the function
-    /// the macro emits below it.
-    if_body_emissions: Vec<IfBodyEmission>,
     /// RFC-058 Phase 4.1b — `pp-if` controller sites the
     /// classifier lifted out of the runtime walker's
     /// directive-dispatch path. Each entry pins a
@@ -190,6 +179,11 @@ struct AnalysisCtx {
     /// selector; the runtime applier resolves the target and
     /// calls [`crate::directives::teleport::install`].
     teleport_plans: Vec<TeleportPlanLite>,
+    /// RFC-058 Phase 3.5e — `<slot>` outlets discovered inside
+    /// compiled component templates. The runtime applier
+    /// materialises these explicitly instead of relying on the
+    /// recursive walker to discover `<slot>` elements.
+    slot_outlets: Vec<SlotOutletLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -204,6 +198,50 @@ struct AnalysisCtx {
     /// so the runtime row-plan registry lookup still finds its
     /// target after the template-plan rewrite.
     row_plan_assignments: Vec<(Vec<u16>, u32)>,
+}
+
+/// Shared across the whole top-level analysis — fragment fn
+/// emissions for slot fragments (Phase 3.5b/3.5c) and pp-if
+/// body fragments (Phase 4.1d). Lifted bodies and slot
+/// subtrees share the same emissions queue so every emitted
+/// fn lives at the top of the parent's `register()` body and
+/// nested fragments can reference each other by ident.
+///
+/// The counters bump monotonically across nested lifts so
+/// each emission gets a unique `__poc_*_<n>` ident even when
+/// allocations interleave.
+#[derive(Default)]
+struct Emissions {
+    /// RFC-058 Phase 3.5b + 3.5c — slot fragment emissions.
+    slot_fragments: Vec<SlotFragmentEmission>,
+    /// RFC-058 Phase 4.1d — `pp-if` / `pp-for` / `pp-teleport`
+    /// body fragments. All three controller body lifts share
+    /// this queue (the fn signature is identical and they're
+    /// all emitted the same way).
+    if_bodies: Vec<IfBodyEmission>,
+    /// Monotonic counter for `__poc_slot_frag_<n>` ident
+    /// allocation. Bumped on every slot fragment emission so
+    /// nested lifts get unique idents even when they allocate
+    /// out-of-order with the outer push.
+    next_slot_frag_id: usize,
+    /// Monotonic counter for `__poc_*_body_<n>` ident
+    /// allocation (pp-if / pp-for / pp-teleport bodies share
+    /// the same counter).
+    next_if_body_id: usize,
+}
+
+impl Emissions {
+    fn alloc_slot_frag_ident(&mut self, prefix: &str) -> syn::Ident {
+        let id = self.next_slot_frag_id;
+        self.next_slot_frag_id += 1;
+        format_ident!("__poc_{}_{}", prefix, id)
+    }
+
+    fn alloc_if_body_ident(&mut self, prefix: &str) -> syn::Ident {
+        let id = self.next_if_body_id;
+        self.next_if_body_id += 1;
+        format_ident!("__poc_{}_{}", prefix, id)
+    }
 }
 
 struct StrippedAttr {
@@ -250,17 +288,27 @@ struct RefLite {
 /// only; dynamic slots carry inline plan entries that install
 /// bindings/listeners/refs against the parent scope (RFC-058
 /// Phase 3.5c).
+///
+/// `Dynamic` is intentionally fatter than `Static` — it owns a
+/// full `AnalysisCtx` for the slot subtree so the per-fragment
+/// plan literal can include nested child_mounts / controllers
+/// (Phase 3.5d). At macro-expansion frequencies the size
+/// difference is irrelevant; suppress the clippy lint that
+/// would otherwise force a `Box`.
+#[allow(clippy::large_enum_variant)]
 enum SlotFragmentEmission {
     Static {
         ident: syn::Ident,
         html: String,
     },
+    /// Dynamic slot — carries an `AnalysisCtx` so the per-
+    /// fragment `StaticTemplatePlan` literal includes any
+    /// child_mounts / nested controllers the recursive
+    /// classifier accumulated for the slot's subtree.
     Dynamic {
         ident: syn::Ident,
         html: String,
-        bindings: Vec<BindingLite>,
-        listeners: Vec<ListenerLite>,
-        refs: Vec<RefLite>,
+        plan: AnalysisCtx,
     },
 }
 
@@ -273,17 +321,20 @@ impl SlotFragmentEmission {
     }
 }
 
+/// Macro-emitted `pp-if` / `pp-for` / `pp-teleport` body
+/// fragment. Carries the body's full `AnalysisCtx` so the
+/// per-fragment plan literal includes any child_mounts +
+/// nested controllers the recursive lift accumulated.
 struct IfBodyEmission {
     ident: syn::Ident,
     html: String,
-    bindings: Vec<BindingLite>,
-    listeners: Vec<ListenerLite>,
-    refs: Vec<RefLite>,
+    plan: AnalysisCtx,
 }
 
 struct IfPlanLite {
     template_node_path: Vec<u16>,
     expr_src: String,
+    teleport_selector: Option<String>,
     /// RFC-058 Phase 4.1d — `Some` when the body subtree was
     /// lift-eligible and the macro emitted a body fragment fn
     /// the `StaticIfPlan` literal should reference. `None`
@@ -317,6 +368,11 @@ struct TeleportPlanLite {
     body_fn_ident: Option<syn::Ident>,
 }
 
+struct SlotOutletLite {
+    node_path: Vec<u16>,
+    name: String,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -345,6 +401,7 @@ impl AnalysisCtx {
             || !self.if_plans.is_empty()
             || !self.for_plans.is_empty()
             || !self.teleport_plans.is_empty()
+            || !self.slot_outlets.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -371,129 +428,112 @@ impl AnalysisCtx {
             .map(|(_, id)| *id)
     }
 
-    /// RFC-058 Phase 4.1d — generate one
-    /// `fn <ident>(scope_id, proxy) -> Option<Element> { … }`
-    /// item per `pp-if` body fragment the analyser lifted.
-    /// The body builds a `StaticTemplatePlan` const for the
-    /// body's bindings/listeners/refs (no inits, no nested
-    /// controllers, no slots — v1 envelope guarantees that),
-    /// then calls `stamp_if_body` to materialise + install
-    /// against the parent scope.
-    fn emit_if_body_fns(&self) -> TokenStream {
-        let items = self.if_body_emissions.iter().map(|emission| {
-            let ident = &emission.ident;
-            let html_lit = proc_macro2::Literal::string(&emission.html);
-            let bindings_tokens = emission.bindings.iter().map(emit_binding);
-            let listeners_tokens = emission.listeners.iter().map(emit_listener);
-            let refs_tokens = emission.refs.iter().map(emit_ref);
-            quote! {
-                fn #ident(
-                    scope_id: ::pocopine::ScopeId,
-                    proxy: &::pocopine::__private::JsValue,
-                ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
-                    const PLAN: ::pocopine::__private::StaticTemplatePlan =
-                        ::pocopine::__private::StaticTemplatePlan {
-                            bindings: &[ #(#bindings_tokens),* ],
-                            listeners: &[ #(#listeners_tokens),* ],
-                            inits: &[],
-                            refs: &[ #(#refs_tokens),* ],
-                            child_mounts: &[],
-                            if_plans: &[],
-                            for_plans: &[],
-                            teleport_plans: &[],
-                        };
-                    ::pocopine::__private::stamp_if_body(
-                        #html_lit,
-                        &PLAN,
-                        scope_id,
-                        proxy,
-                    )
+    fn emit_plan_tokens(&self) -> TokenStream {
+        emit_static_template_plan_literal(self)
+    }
+}
+
+/// Render the inline `StaticTemplatePlan` literal for a fully
+/// populated `AnalysisCtx`. Reused by the per-template emitter
+/// and by the per-fragment emitters (`pp-if` body, `pp-for`
+/// row body, `pp-teleport` body, dynamic slot fragments) so
+/// every plan literal has the same shape — including
+/// child_mounts / if_plans / for_plans / teleport_plans for
+/// recursive lifting (Phase 3.5d).
+fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
+    let bindings_tokens = ctx.bindings.iter().map(emit_binding);
+    let listeners_tokens = ctx.listeners.iter().map(emit_listener);
+    let inits_tokens = ctx.inits.iter().map(emit_init);
+    let refs_tokens = ctx.refs.iter().map(emit_ref);
+    let child_mounts_tokens = ctx.child_mounts.iter().map(emit_child_mount);
+    let if_plans_tokens = ctx.if_plans.iter().map(emit_if_plan);
+    let for_plans_tokens = ctx.for_plans.iter().map(emit_for_plan);
+    let teleport_plans_tokens = ctx.teleport_plans.iter().map(emit_teleport_plan);
+    let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
+    quote! {
+        ::pocopine::__private::StaticTemplatePlan {
+            bindings: &[ #(#bindings_tokens),* ],
+            listeners: &[ #(#listeners_tokens),* ],
+            inits: &[ #(#inits_tokens),* ],
+            refs: &[ #(#refs_tokens),* ],
+            child_mounts: &[ #(#child_mounts_tokens),* ],
+            if_plans: &[ #(#if_plans_tokens),* ],
+            for_plans: &[ #(#for_plans_tokens),* ],
+            teleport_plans: &[ #(#teleport_plans_tokens),* ],
+            slot_outlets: &[ #(#slot_outlets_tokens),* ],
+        }
+    }
+}
+
+/// Generate `fn` items for every accumulated `pp-if` /
+/// `pp-for` / `pp-teleport` body fragment. Body fragments
+/// share the same shape: `(scope_id, &proxy) ->
+/// Option<Element>` that stamps cleaned HTML and applies a
+/// per-fragment `StaticTemplatePlan` against the passed
+/// scope. Recursive lifting (Phase 3.5d) populates the
+/// per-fragment plan's `child_mounts` / `if_plans` /
+/// `for_plans` / `teleport_plans` for nested custom tags +
+/// nested controllers inside the body.
+fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
+    let items = emissions.if_bodies.iter().map(|emission| {
+        let ident = &emission.ident;
+        let html_lit = proc_macro2::Literal::string(&emission.html);
+        let plan_literal = emit_static_template_plan_literal(&emission.plan);
+        quote! {
+            fn #ident(
+                scope_id: ::pocopine::ScopeId,
+                proxy: &::pocopine::__private::JsValue,
+            ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
+                const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
+                ::pocopine::__private::stamp_if_body(
+                    #html_lit,
+                    &PLAN,
+                    scope_id,
+                    proxy,
+                )
+            }
+        }
+    });
+    quote! { #(#items)* }
+}
+
+/// Generate `fn` items for every accumulated slot fragment.
+/// Static slots stamp HTML only; dynamic slots stamp HTML +
+/// apply a per-fragment plan against the parent scope. Phase
+/// 3.5d's recursive lifting populates the dynamic plan's
+/// `child_mounts` for nested custom tags inside slot content.
+fn emit_slot_fragment_fns(emissions: &Emissions) -> TokenStream {
+    let items = emissions
+        .slot_fragments
+        .iter()
+        .map(|emission| match emission {
+            SlotFragmentEmission::Static { ident, html } => {
+                let html_lit = proc_macro2::Literal::string(html);
+                quote! {
+                    fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
+                        ::pocopine::__private::stamp_static_html(ctx.host, #html_lit);
+                    }
+                }
+            }
+            SlotFragmentEmission::Dynamic { ident, html, plan } => {
+                let html_lit = proc_macro2::Literal::string(html);
+                let plan_literal = emit_static_template_plan_literal(plan);
+                quote! {
+                    fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
+                        const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
+                        ::pocopine::__private::stamp_dynamic_slot(
+                            ctx.host,
+                            #html_lit,
+                            &PLAN,
+                            ctx.parent_scope_id,
+                            ctx.parent_proxy,
+                            ctx.child_scope_id,
+                        );
+                    }
                 }
             }
         });
-        quote! { #(#items)* }
-    }
-
-    /// Generate one `fn <ident>(ctx: SlotMountCtx) { … }` item
-    /// per emitted slot fragment. The macro splices the
-    /// returned `TokenStream` into the parent's `register()`
-    /// body so the fragment idents are in scope when the
-    /// `StaticTemplatePlan` literal references them. Empty
-    /// stream when no fragment was emitted — same as today's
-    /// pre-Phase-3.5b behaviour.
-    fn emit_slot_fragment_fns(&self) -> TokenStream {
-        let items = self
-            .slot_fragment_emissions
-            .iter()
-            .map(|emission| match emission {
-                SlotFragmentEmission::Static { ident, html } => {
-                    let html_lit = proc_macro2::Literal::string(html);
-                    quote! {
-                        fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
-                            ::pocopine::__private::stamp_static_html(ctx.host, #html_lit);
-                        }
-                    }
-                }
-                SlotFragmentEmission::Dynamic {
-                    ident,
-                    html,
-                    bindings,
-                    listeners,
-                    refs,
-                } => {
-                    let html_lit = proc_macro2::Literal::string(html);
-                    let bindings_tokens = bindings.iter().map(emit_binding);
-                    let listeners_tokens = listeners.iter().map(emit_listener);
-                    let refs_tokens = refs.iter().map(emit_ref);
-                    quote! {
-                        fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
-                            const PLAN: ::pocopine::__private::StaticTemplatePlan =
-                                ::pocopine::__private::StaticTemplatePlan {
-                                    bindings: &[ #(#bindings_tokens),* ],
-                                    listeners: &[ #(#listeners_tokens),* ],
-                                    inits: &[],
-                                    refs: &[ #(#refs_tokens),* ],
-                                    child_mounts: &[],
-                                    if_plans: &[],
-                                    for_plans: &[],
-                                    teleport_plans: &[],
-                                };
-                            ::pocopine::__private::stamp_dynamic_slot(
-                                ctx.host,
-                                #html_lit,
-                                &PLAN,
-                                ctx.parent_scope_id,
-                                ctx.parent_proxy,
-                            );
-                        }
-                    }
-                }
-            });
-        quote! { #(#items)* }
-    }
-
-    fn emit_plan_tokens(&self) -> TokenStream {
-        let bindings_tokens = self.bindings.iter().map(emit_binding);
-        let listeners_tokens = self.listeners.iter().map(emit_listener);
-        let inits_tokens = self.inits.iter().map(emit_init);
-        let refs_tokens = self.refs.iter().map(emit_ref);
-        let child_mounts_tokens = self.child_mounts.iter().map(emit_child_mount);
-        let if_plans_tokens = self.if_plans.iter().map(emit_if_plan);
-        let for_plans_tokens = self.for_plans.iter().map(emit_for_plan);
-        let teleport_plans_tokens = self.teleport_plans.iter().map(emit_teleport_plan);
-        quote! {
-            ::pocopine::__private::StaticTemplatePlan {
-                bindings: &[ #(#bindings_tokens),* ],
-                listeners: &[ #(#listeners_tokens),* ],
-                inits: &[ #(#inits_tokens),* ],
-                refs: &[ #(#refs_tokens),* ],
-                child_mounts: &[ #(#child_mounts_tokens),* ],
-                if_plans: &[ #(#if_plans_tokens),* ],
-                for_plans: &[ #(#for_plans_tokens),* ],
-                teleport_plans: &[ #(#teleport_plans_tokens),* ],
-            }
-        }
-    }
+    quote! { #(#items)* }
 }
 
 fn emit_node_path(path: &[u16]) -> TokenStream {
@@ -568,6 +608,13 @@ fn emit_ref(r: &RefLite) -> TokenStream {
 fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     let path = emit_node_path(&ip.template_node_path);
     let expr = proc_macro2::Literal::string(&ip.expr_src);
+    let teleport_selector_tokens = match ip.teleport_selector.as_deref() {
+        Some(selector) => {
+            let selector = proc_macro2::Literal::string(selector);
+            quote! { ::core::option::Option::Some(#selector) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
     // RFC-058 Phase 4.1d-c will populate `body` with a
     // macro-emitted `IfBodyFn` when the body subtree qualifies
     // for fragment lifting; v1 ships `None` so every site
@@ -581,6 +628,7 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
         ::pocopine::__private::StaticIfPlan {
             template_node_path: #path,
             expr_src: #expr,
+            teleport_selector: #teleport_selector_tokens,
             body: #body_tokens,
         }
     }
@@ -630,6 +678,17 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
     }
 }
 
+fn emit_slot_outlet(s: &SlotOutletLite) -> TokenStream {
+    let path = emit_node_path(&s.node_path);
+    let name = proc_macro2::Literal::string(&s.name);
+    quote! {
+        ::pocopine::__private::StaticSlotOutlet {
+            node_path: #path,
+            name: #name,
+        }
+    }
+}
+
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
@@ -653,7 +712,7 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
 
 // ─── walk + classification ───────────────────────────────────────
 
-fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
+fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &mut Vec<u16>) {
     if el.synthetic {
         // Synthetic elements (html5ever auto-inserted) confuse
         // the path-indexing model since the runtime walks
@@ -700,14 +759,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
                 let body_fn_ident = if row_plan_claims_site {
                     None
                 } else {
-                    analyze_lift_body(el).map(|(html, body_ctx)| {
-                        let ident = format_ident!("__poc_for_body_{}", ctx.if_body_emissions.len());
-                        ctx.if_body_emissions.push(IfBodyEmission {
+                    analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                        let ident = emissions.alloc_if_body_ident("for_body");
+                        emissions.if_bodies.push(IfBodyEmission {
                             ident: ident.clone(),
                             html,
-                            bindings: body_ctx.bindings,
-                            listeners: body_ctx.listeners,
-                            refs: body_ctx.refs,
+                            plan: body_ctx,
                         });
                         ident
                     })
@@ -755,18 +812,22 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
     if let Some(selector) = pp_teleport_value(el) {
         let has_if = el.attrs.iter().any(|(n, _)| n == "pp-if");
         let has_for = el.attrs.iter().any(|(n, _)| n == "pp-for");
-        if el.tag == "template" && !has_if && !has_for && !selector.trim().is_empty() {
+        if has_if && !has_for {
+            // The pp-if classifier below owns the combined
+            // `pp-if` + `pp-teleport` site. It records the
+            // selector on StaticIfPlan and strips both source
+            // attrs so runtime discovery cannot double-install
+            // either controller.
+        } else if el.tag == "template" && !has_if && !has_for && !selector.trim().is_empty() {
             // RFC-058 Phase 4.3c — try to lift the teleport
             // body into a fragment fn (same v1 envelope as
             // pp-if / pp-for body lifting).
-            let body_fn_ident = analyze_lift_body(el).map(|(html, body_ctx)| {
-                let ident = format_ident!("__poc_teleport_body_{}", ctx.if_body_emissions.len());
-                ctx.if_body_emissions.push(IfBodyEmission {
+            let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                let ident = emissions.alloc_if_body_ident("teleport_body");
+                emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
                     html,
-                    bindings: body_ctx.bindings,
-                    listeners: body_ctx.listeners,
-                    refs: body_ctx.refs,
+                    plan: body_ctx,
                 });
                 ident
             });
@@ -783,12 +844,27 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         }
         // Ineligible (wrong host, has pp-if/pp-for, empty
         // selector) — leave the walker to dispatch.
-        return;
+        if !has_if {
+            return;
+        }
     }
 
-    // Whole-element block boundary: `<slot>`. Every directive
-    // on or under it stays on the walker.
-    if is_block_boundary(el) {
+    // RFC-058 Phase 3.5e — `<slot>` outlets graduate into the
+    // template plan. The cleaned HTML keeps the actual element
+    // and attributes; the applier materialises the outlet after
+    // all other path-based entries resolve.
+    if el.tag == "slot" {
+        let name = el
+            .attrs
+            .iter()
+            .find(|(n, _)| n == "name")
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        ctx.slot_outlets.push(SlotOutletLite {
+            node_path: path.clone(),
+            name,
+        });
         return;
     }
 
@@ -803,17 +879,14 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
     // so body content stays on the walker — exactly like
     // today's clone+walk path. Phase 4.1c+ will lift the body
     // into a fragment function.
-    //
-    // Co-occurrence with `pp-teleport` falls back to the
-    // walker for v1 — the templates_plan applier doesn't
-    // capture the teleport target, so leaving the
-    // pp-if attribute on the cleaned HTML keeps today's
-    // walker pipeline running.
     if let Some(if_expr) = pp_if_value(el) {
-        if el.tag == "template"
-            && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
-            && pocopine_expr::parse(&if_expr).is_ok()
-        {
+        let teleport_selector = el
+            .attrs
+            .iter()
+            .find(|(n, _)| n == "pp-teleport")
+            .map(|(_, v)| v.clone())
+            .filter(|s| !s.trim().is_empty());
+        if el.tag == "template" && pocopine_expr::parse(&if_expr).is_ok() {
             // RFC-058 Phase 4.1d — try to lift the body
             // subtree into a fragment fn the runtime installer
             // invokes instead of `clone_template_body` +
@@ -821,26 +894,31 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
             // natives + plan-eligible directives only); when
             // the body falls outside, `body_fn_ident` stays
             // `None` and the legacy clone+walk path runs.
-            let body_fn_ident = analyze_lift_body(el).map(|(html, body_ctx)| {
-                let ident = format_ident!("__poc_if_body_{}", ctx.if_body_emissions.len());
-                ctx.if_body_emissions.push(IfBodyEmission {
+            let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                let ident = emissions.alloc_if_body_ident("if_body");
+                emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
                     html,
-                    bindings: body_ctx.bindings,
-                    listeners: body_ctx.listeners,
-                    refs: body_ctx.refs,
+                    plan: body_ctx,
                 });
                 ident
             });
             ctx.if_plans.push(IfPlanLite {
                 template_node_path: path.clone(),
                 expr_src: if_expr,
+                teleport_selector: teleport_selector.clone(),
                 body_fn_ident,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.clone(),
                 name: "pp-if".to_string(),
             });
+            if teleport_selector.is_some() {
+                ctx.stripped.push(StrippedAttr {
+                    node_path: path.clone(),
+                    name: "pp-teleport".to_string(),
+                });
+            }
             return;
         }
         // Ineligible (wrong host, has pp-teleport, or expr
@@ -870,11 +948,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         // parent-proxy machinery this v1 doesn't ship yet.
         let mut slot_fragments: Vec<(String, syn::Ident)> = Vec::new();
         if !el.children.is_empty() {
-            if let Some(emission) =
-                analyze_slot_subtree(&el.children, ctx.slot_fragment_emissions.len())
-            {
+            if let Some(emission) = analyze_slot_subtree(&el.children, emissions) {
                 slot_fragments.push(("default".to_string(), emission.ident().clone()));
-                ctx.slot_fragment_emissions.push(emission);
+                emissions.slot_fragments.push(emission);
             }
         }
         ctx.child_mounts.push(ChildMountLite {
@@ -916,7 +992,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
                 .filter(|n| matches!(n, Node::Element(_)))
                 .count() as u16;
             path.push(idx);
-            walk(child_el, ctx, path);
+            walk(child_el, ctx, emissions, path);
             path.pop();
         }
     }
@@ -924,10 +1000,6 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
 
 fn is_html5_native(tag: &str) -> bool {
     crate::HTML5_ELEMENTS.binary_search(&tag).is_ok()
-}
-
-fn is_block_boundary(el: &Element) -> bool {
-    el.tag == "slot"
 }
 
 fn pp_if_value(el: &Element) -> Option<String> {
@@ -1243,14 +1315,8 @@ fn is_debounce_ms(m: &str) -> bool {
 /// `walker::walk` path the controller already drives.
 ///
 /// Excludes:
-///   * non-HTML5 tags (would need recursive child-mount
-///     emission inside a body fragment — Phase 4.1d v2);
 ///   * `<slot>` elements (would need slot capture/replay
 ///     hooks inside a body fragment — Phase 3.5c+);
-///   * nested controllers (`pp-for` / `pp-if` / `pp-teleport`)
-///     — same scope-acrobatics they already have at template
-///     level, but inside a fragment hosted on the parent
-///     scope. Defer to v2;
 ///   * `pp-init` (the deferred-fire ordering depends on the
 ///     walker's post-order drain — fragment paths don't
 ///     trigger it);
@@ -1271,14 +1337,13 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     if el.tag == "slot" {
         return false;
     }
-    if !is_html5_native(&el.tag) {
-        return false;
-    }
+    // Phase 3.5d expansion: non-HTML5 tags are allowed here.
+    // `walk()` emits child_mount entries for them into the
+    // body fragment's own static plan, and the runtime fallback
+    // walk over the cleaned fragment binds any preserved
+    // directives inside the mounted child template.
     for (name, _) in &el.attrs {
-        if name == "pp-for"
-            || name == "pp-if"
-            || name == "pp-teleport"
-            || name == "pp-init"
+        if name == "pp-init"
             || name == "pp-data"
             || name == "pp-model"
             || name.starts_with("pp-model:")
@@ -1298,14 +1363,21 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
 }
 
 /// Analyse a `<template>` element's body subtree for fragment
-/// lifting (shared between `pp-if` Phase 4.1d and `pp-for`
-/// Phase 4.2c — both use the same v1 envelope and per-mount
-/// install pattern). Returns `Some` when the body's element
-/// children reduce to a single root + the subtree passes
-/// `if_body_subtree_is_eligible`. The cleaned HTML +
-/// collected bindings/listeners/refs flow into the macro's
-/// `if_body_emissions` slot for later `fn` emission.
-fn analyze_lift_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
+/// lifting (shared between `pp-if` Phase 4.1d, `pp-for` Phase
+/// 4.2c, and `pp-teleport` Phase 4.3c). Returns `Some` when
+/// the body's element children reduce to a single root + the
+/// subtree passes `if_body_subtree_is_eligible`.
+///
+/// Phase 3.5d expansion: nested custom tags + nested
+/// controllers (`pp-if` / `pp-for` / `pp-teleport`) inside the
+/// body are eligible. Walks into a fresh `AnalysisCtx` so
+/// per-subtree state stays isolated; nested fragment fns get
+/// pushed into the shared `Emissions` queue so every emission
+/// lands at the top of the parent's `register()` body.
+fn analyze_lift_body(
+    template_el: &Element,
+    emissions: &mut Emissions,
+) -> Option<(String, AnalysisCtx)> {
     // Single element child — same constraint pp-if::install
     // already enforces at runtime via `clone_template_body`.
     let mut elements: Vec<&Element> = Vec::new();
@@ -1323,19 +1395,12 @@ fn analyze_lift_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
     }
     let mut ctx = AnalysisCtx::default();
     let mut path: Vec<u16> = Vec::new();
-    walk(root_el, &mut ctx, &mut path);
-    // Defensive: the eligibility check excluded everything
-    // that would emit non-binding/listener/ref entries, but
-    // re-check before ratifying — a stale envelope mismatch
-    // would produce a body fragment with entries `apply_static_plan`
-    // can't honor against the body's static plan shape.
-    if !ctx.child_mounts.is_empty()
-        || !ctx.if_plans.is_empty()
-        || !ctx.for_plans.is_empty()
-        || !ctx.teleport_plans.is_empty()
-        || !ctx.inits.is_empty()
-        || !ctx.slot_fragment_emissions.is_empty()
-    {
+    walk(root_el, &mut ctx, emissions, &mut path);
+    // Defensive: pp-init / pp-data / pp-model / pp-route are
+    // excluded by the eligibility check above. If anything
+    // else slips in (eligibility / walk drift), bail rather
+    // than emit an incorrect body plan.
+    if !ctx.inits.is_empty() {
         return None;
     }
     let mut html = String::new();
@@ -1361,7 +1426,7 @@ fn analyze_lift_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
 /// `stamp_dynamic_slot` helper wraps the children in a
 /// temporary `<div>` so `apply_static_plan` can resolve
 /// `node_path`s against a single element root.
-fn analyze_slot_subtree(nodes: &[Node], next_id: usize) -> Option<SlotFragmentEmission> {
+fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<SlotFragmentEmission> {
     if !slot_subtree_is_lift_eligible(nodes) {
         return None;
     }
@@ -1375,32 +1440,28 @@ fn analyze_slot_subtree(nodes: &[Node], next_id: usize) -> Option<SlotFragmentEm
                 .filter(|n| matches!(n, Node::Element(_)))
                 .count() as u16;
             path.push(idx);
-            walk(el, &mut ctx, &mut path);
+            walk(el, &mut ctx, emissions, &mut path);
             path.pop();
         }
     }
-    // Defensive: the eligibility check excluded everything that
-    // would emit non-binding/listener/ref entries, but
-    // re-check before ratifying.
-    if !ctx.child_mounts.is_empty()
-        || !ctx.if_plans.is_empty()
-        || !ctx.for_plans.is_empty()
-        || !ctx.teleport_plans.is_empty()
-        || !ctx.inits.is_empty()
-        || !ctx.slot_fragment_emissions.is_empty()
-    {
+    // pp-init excluded above; bail if it slipped through.
+    if !ctx.inits.is_empty() {
         return None;
     }
     let html = serialize_slot_children_with(nodes, &ctx);
-    let is_dynamic = !ctx.bindings.is_empty() || !ctx.listeners.is_empty() || !ctx.refs.is_empty();
-    let ident = format_ident!("__poc_slot_frag_{}", next_id);
+    let is_dynamic = !ctx.bindings.is_empty()
+        || !ctx.listeners.is_empty()
+        || !ctx.refs.is_empty()
+        || !ctx.child_mounts.is_empty()
+        || !ctx.if_plans.is_empty()
+        || !ctx.for_plans.is_empty()
+        || !ctx.teleport_plans.is_empty();
+    let ident = emissions.alloc_slot_frag_ident("slot_frag");
     if is_dynamic {
         Some(SlotFragmentEmission::Dynamic {
             ident,
             html,
-            bindings: ctx.bindings,
-            listeners: ctx.listeners,
-            refs: ctx.refs,
+            plan: ctx,
         })
     } else {
         Some(SlotFragmentEmission::Static { ident, html })
@@ -1433,14 +1494,14 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             if el.tag == "slot" {
                 return false;
             }
-            if !is_html5_native(&el.tag) {
-                return false;
-            }
+            // Phase 3.5d expansion: non-HTML5 tags = nested
+            // child mounts are now allowed. The walker
+            // handles them via `analyze_slot_subtree` recursion
+            // (which lands at the same `walk()` path that
+            // emits child_mount entries + nested slot
+            // fragments into the shared `Emissions` queue).
             for (name, _) in &el.attrs {
-                if name == "pp-for"
-                    || name == "pp-if"
-                    || name == "pp-teleport"
-                    || name == "pp-init"
+                if name == "pp-init"
                     || name == "pp-data"
                     || name == "pp-model"
                     || name.starts_with("pp-model:")
@@ -1461,8 +1522,19 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
 fn serialize_slot_children_with(nodes: &[Node], ctx: &AnalysisCtx) -> String {
     let mut out = String::new();
     let mut path: Vec<u16> = Vec::new();
-    for node in nodes {
-        emit_node(node, ctx, &mut out, &mut path);
+    for (i, node) in nodes.iter().enumerate() {
+        if matches!(node, Node::Element(_)) {
+            let idx = nodes
+                .iter()
+                .take(i)
+                .filter(|n| matches!(n, Node::Element(_)))
+                .count() as u16;
+            path.push(idx);
+            emit_node(node, ctx, &mut out, &mut path);
+            path.pop();
+        } else {
+            emit_node(node, ctx, &mut out, &mut path);
+        }
     }
     out
 }
