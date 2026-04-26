@@ -172,7 +172,9 @@ fn fire_deferred_init(el: &Element) {
 
 /// Fire the component-level `on_mount` lifecycle hook on elements
 /// that own a (non-borrowed) scope. Runs post-order so the handler
-/// sees the fully-bound subtree (refs included).
+/// sees the fully-bound subtree (refs included). Walker entry —
+/// resolves the scope id from the element and dispatches to the
+/// public phase helpers.
 ///
 /// `trigger_scope` fires afterwards **only when the component
 /// actually defined `on_mount`** — otherwise the hook is a no-op
@@ -191,60 +193,83 @@ fn fire_mount_hook(el: &Element) {
         return;
     }
     let id = ScopeId(id_num as u64);
-    let Some(scope) = Scope::find(id) else { return };
+    fire_mount_post_order(el, id);
+    fire_ready_next_tick(el, id);
+}
 
-    // Snapshot both hook flags before borrowing — `has_on_mount`
-    // reads through an immutable borrow, `mount()` needs a mutable
-    // one, and we want to check `has_on_ready` without racing.
-    let (has_mount, has_ready) = {
-        let s = scope.state.borrow();
-        (s.has_on_mount(), s.has_on_ready())
+/// Fire the component-level `on_mount` lifecycle hook on `el`
+/// using `scope_id` as the bound scope. Public so that
+/// generated mount code (RFC-058 Phase 2+) can invoke it
+/// directly without re-discovering the scope through the
+/// element's private `SCOPE_ID_KEY`.
+///
+/// No-ops cleanly when the scope no longer exists or the
+/// component didn't declare an `on_mount` hook (skips the
+/// `trigger_scope` sweep too — see `fire_mount_hook`).
+///
+/// `on_mount` mutates `&mut self` directly, so this also
+/// invalidates the per-scope `FIELD_CACHE` before triggering
+/// subscribers — same pattern as `Scope::invoke`. Without it,
+/// post-mount renders pull the pre-mutation cached `JsValue`
+/// and the DOM stays at its seeded values.
+pub fn fire_mount_post_order(el: &Element, scope_id: ScopeId) {
+    let Some(scope) = Scope::find(scope_id) else {
+        return;
     };
+    let has_mount = scope.state.borrow().has_on_mount();
+    if !has_mount {
+        return;
+    }
+    let ctx = crate::lifecycle::LifecycleContext::__new(
+        el,
+        scope_id,
+        crate::lifecycle::LifecyclePhase::Mount,
+    );
+    crate::scope::with_current_scope_id(scope_id, || {
+        scope.state.borrow_mut().mount(ctx);
+    });
+    crate::scope::invalidate_field_cache(scope_id);
+    crate::reactive::trigger_scope(scope_id);
+}
 
-    if has_mount {
+/// Schedule the component-level `on_ready` lifecycle hook for
+/// `scope_id` to fire on the next microtask after `el` has been
+/// fully bound. Public so generated mount code (RFC-058 Phase 2+)
+/// can schedule it without rediscovering the scope through the
+/// element's private `SCOPE_ID_KEY`.
+///
+/// RFC-026/029: deferred via `tick::next` so the surrounding
+/// walker frame has unwound and `pp-if` / `pp-teleport` children
+/// have had a chance to commit. The hook fires through an
+/// **immutable** borrow on `state` — proxy reads inside the
+/// callback (`watch_field`, `refs::get_on` touching the proxy,
+/// `$event`) require `state.borrow()` on the proxy's `get` trap,
+/// which is compatible with other immutable borrows.
+///
+/// No-ops cleanly when the scope no longer exists at fire time
+/// or the component didn't declare an `on_ready` hook.
+pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
+    let Some(scope) = Scope::find(scope_id) else {
+        return;
+    };
+    let has_ready = scope.state.borrow().has_on_ready();
+    if !has_ready {
+        return;
+    }
+    let el_owned = el.clone();
+    crate::tick::next(move || {
+        let Some(scope) = Scope::find(scope_id) else {
+            return;
+        };
         let ctx = crate::lifecycle::LifecycleContext::__new(
-            el,
-            id,
-            crate::lifecycle::LifecyclePhase::Mount,
+            &el_owned,
+            scope_id,
+            crate::lifecycle::LifecyclePhase::Ready,
         );
-        crate::scope::with_current_scope_id(id, || {
-            scope.state.borrow_mut().mount(ctx);
+        crate::scope::with_current_scope_id(scope_id, || {
+            scope.state.borrow().on_ready(ctx);
         });
-        // `on_mount` mutates `&mut self` directly — bypass the
-        // proxy `set` trap so the JS-side `FIELD_CACHE` doesn't see
-        // the writes. Drop the cache before triggering subscribers
-        // so re-running effects re-read fresh state through the
-        // proxy `get` trap. Without this, post-mount renders pull
-        // the pre-mutation cached `JsValue` and the DOM stays at
-        // its seeded values. Mirrors the pattern in `Scope::invoke`.
-        crate::scope::invalidate_field_cache(id);
-        crate::reactive::trigger_scope(id);
-    }
-
-    if has_ready {
-        // RFC-026/029: defer `on_ready` to the next microtask so
-        // the surrounding walker frame has unwound and pp-if /
-        // pp-teleport children have had a chance to commit. Own the
-        // element by cloning into the closure so the fresh
-        // `LifecycleContext` at invoke time borrows a live handle.
-        // The hook is invoked through an IMMUTABLE borrow — proxy
-        // reads inside the hook (watch_field, refs::get_on that
-        // touches the proxy, `$event`) require state.borrow() on
-        // the get trap, which is compatible with other immutable
-        // borrows.
-        let el_owned = el.clone();
-        crate::tick::next(move || {
-            let Some(scope) = Scope::find(id) else { return };
-            let ctx = crate::lifecycle::LifecycleContext::__new(
-                &el_owned,
-                id,
-                crate::lifecycle::LifecyclePhase::Ready,
-            );
-            crate::scope::with_current_scope_id(id, || {
-                scope.state.borrow().on_ready(ctx);
-            });
-        });
-    }
+    });
 }
 
 fn bind(el: &Element) {
@@ -1483,6 +1508,20 @@ pub(crate) fn release_subtree(node: &Node) {
     let unmount_start = crate::profiler::unmount::start();
     release_subtree_inner(node);
     crate::profiler::unmount::record_total(unmount_start);
+}
+
+/// Release every effect, listener, scope, and ref tied to the
+/// elements rooted at `el`. Public entry point for generated
+/// mount code (RFC-058 Phase 2+) that owns subtree teardown
+/// directly — `pp-if`'s controller, `pp-for`'s row removal,
+/// route-cluster swap, etc.
+///
+/// Wraps the existing private `release_subtree_inner` walk and
+/// records unmount timing through the profiler. Honours the
+/// RFC-054 `RELEASE_SKIP_KEY` short-circuit for bulk-cleared
+/// rows.
+pub fn release_compiled_subtree(el: &Element) {
+    release_subtree(el.as_ref());
 }
 
 fn release_subtree_inner(node: &Node) {
