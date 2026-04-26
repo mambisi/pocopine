@@ -1744,6 +1744,15 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
     );
     tick().await;
 
+    let portal_plan = pocopine_core::templates_plan::template_plan_for("pine-dialog-portal")
+        .expect("dialog portal should compile its pp-if + pp-teleport controller");
+    assert_eq!(portal_plan.if_plans.len(), 1);
+    assert_eq!(
+        portal_plan.if_plans[0].teleport_selector,
+        Some("body"),
+        "pp-if + pp-teleport should be represented in StaticIfPlan, not left to walker discovery",
+    );
+
     // Click Trigger → open.
     host.query_selector(".dg-trig")
         .unwrap()
