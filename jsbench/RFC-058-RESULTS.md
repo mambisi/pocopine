@@ -155,3 +155,71 @@ wasm-pack build --release --target web examples/counter
 ls -la examples/counter/pkg/counter_bg.wasm
 gzip -c examples/counter/pkg/counter_bg.wasm | wc -c
 ```
+
+## Phase 6.2 + 6.3 — feature decomposition snapshot
+
+Measured at `wip/rfc/58-phase6` HEAD (Phase 6.2 `{{expr}}`
+text-interpolation lift + Phase 6.3 walker recursion skip for
+plan-clean subtrees). Same `wasm-pack build --release --target
+web examples/counter` method; the four feature combos came from
+toggling the `pocopine` dependency line in
+`examples/counter/Cargo.toml` between runs and restoring after.
+
+| Build (counter)                           | Raw wasm | Gzip wasm |
+|-------------------------------------------|---------:|----------:|
+| `default` (`devtools` + `legacy-dom`)     |  712 477 |  270 806  |
+| `default-features = false` + `devtools`   |  710 570 |  269 988  |
+| `default-features = false` + `legacy-dom` |  595 587 |  226 866  |
+| `default-features = false` (lean)         |  593 447 |  226 368  |
+
+Two readings:
+
+* **`devtools` is the heavy feature.** Dropping it alone saves
+  **-114 983 raw / -43 122 gzip** (about -16 % of the binary).
+  Authors who want a small bundle should opt out of `devtools`
+  before anything else.
+* **`legacy-dom` saves comparatively little — by design.**
+  Toggling `legacy-dom` off (with `devtools` matching) saves
+  **-1 907 raw / -818 gzip** (-0.27 %). The feature today gates
+  only the `MutationObserver` install + its callback closure;
+  every other walker entry point (`walk` / `bind` / the
+  directive `run` shims / `interp::scan_children` /
+  `mount_component`'s scan path) stays always-on because
+  router pages, controller-body fallbacks, and externally-
+  injected DOM still need walker discovery.
+
+### Why Phase 6.2 + 6.3 don't move the size needle (yet)
+
+Both phases reduce **runtime** overhead (fewer redundant
+descendant binds, parser cost moved to compile time) without
+changing the always-on code surface:
+
+* Phase 6.2 added `interp::install_planned` + the planned
+  segment plumbing (always linked) in exchange for the
+  walker still shipping `parse_segments` / `scan_children`
+  unchanged.
+* Phase 6.3 added a 3-line `walker_clean_plan` check + the
+  call into `finalize_compiled_subtree` (already always-on)
+  in exchange for skipping recursive `walk` calls. Neither
+  side dropped any code.
+
+The structural binary win is gated on **moving `walk` / `bind`
+/ the directive `run` shims behind `legacy-dom`**, which
+requires a compiled-only entry point that walks the tree for
+registered component tags without invoking `bind` on every
+descendant. The `walker_clean_plan` check from Phase 6.3
+already proves the descend-without-bind shape is safe for
+compiled subtrees; the remaining work is exposing it as an
+alternative to `start` for lean builds.
+
+### Verification
+
+* `wasm-pack test --firefox --headless crates/pocopine` — 28
+  template_plan + 50 walker + 0 rfc_056_emit (ignored). All
+  green.
+* `wasm-pack test --firefox --headless crates/pine` —
+  103/103 green; `pine_template_plan_fallback_audit`
+  continues to assert the exact-zero gate.
+* `cargo test -p pocopine-macros` — 82 unit tests including
+  the new `parse_interp_segments_handles_documented_shapes`
+  parser-drift guard.
