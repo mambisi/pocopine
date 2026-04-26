@@ -49,6 +49,13 @@ pub(crate) struct EmittedRowPlans {
     /// how to inject `data-pp-row-plan="<id>"` into the
     /// `<template pp-for>` opening tag.
     pub stamps: Vec<TemplateStamp>,
+    /// RFC-058 §6.2 layering — `(template_node_path, plan_id)`
+    /// for every emitted row plan, indexed by document order
+    /// over the template AST. The template-plan classifier
+    /// consults this to bake `data-pp-row-plan="<id>"` into the
+    /// cleaned HTML directly so the row-plan registry lookup
+    /// still finds its target after the template-plan rewrite.
+    pub assignments: Vec<(Vec<u16>, u32)>,
 }
 
 /// One byte-range rewrite the caller applies to the raw `.poco`
@@ -67,9 +74,10 @@ pub(crate) struct TemplateStamp {
 /// or none qualify under §5.2.
 pub(crate) fn analyze_row_plans(ast: &TemplateAst) -> EmittedRowPlans {
     let mut ctx = AnalysisCtx::default();
+    let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
-            walk(el, ast, &mut ctx);
+            walk(el, ast, &mut ctx, &mut path);
         }
     }
     ctx.finalize()
@@ -80,6 +88,7 @@ struct AnalysisCtx {
     next_id: u32,
     plan_tokens: Vec<TokenStream>,
     stamps: Vec<TemplateStamp>,
+    assignments: Vec<(Vec<u16>, u32)>,
 }
 
 impl AnalysisCtx {
@@ -90,12 +99,14 @@ impl AnalysisCtx {
                 array_tokens: quote! { &[] },
                 has_plans: false,
                 stamps: Vec::new(),
+                assignments: Vec::new(),
             };
         }
         EmittedRowPlans {
             array_tokens: quote! { &[ #(#plans),* ] },
             has_plans: true,
             stamps: self.stamps,
+            assignments: self.assignments,
         }
     }
 }
@@ -107,13 +118,23 @@ impl AnalysisCtx {
 /// continue descending so nested `pp-for`s still get their
 /// chance.
 #[allow(clippy::only_used_in_recursion)]
-fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx) {
+fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
     if el.synthetic {
         // Synthetic elements (html5ever's auto-inserted `<tbody>`)
-        // — skip but recurse.
-        for child in &el.children {
+        // — skip but recurse. Don't push a path index for the
+        // synthetic wrapper itself; the runtime walker doesn't
+        // see it either.
+        for (i, child) in el.children.iter().enumerate() {
             if let Node::Element(child_el) = child {
-                walk(child_el, ast, ctx);
+                let idx = el
+                    .children
+                    .iter()
+                    .take(i)
+                    .filter(|n| matches!(n, Node::Element(_)))
+                    .count() as u16;
+                path.push(idx);
+                walk(child_el, ast, ctx, path);
+                path.pop();
             }
         }
         return;
@@ -124,6 +145,7 @@ fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx) {
             Some((plan_tokens, stamp)) => {
                 ctx.plan_tokens.push(plan_tokens);
                 ctx.stamps.push(stamp);
+                ctx.assignments.push((path.clone(), ctx.next_id));
                 ctx.next_id += 1;
                 // Don't descend into the row body — we own it
                 // (the plan describes its dynamic surface
@@ -140,9 +162,17 @@ fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx) {
         }
     }
 
-    for child in &el.children {
+    for (i, child) in el.children.iter().enumerate() {
         if let Node::Element(child_el) = child {
-            walk(child_el, ast, ctx);
+            let idx = el
+                .children
+                .iter()
+                .take(i)
+                .filter(|n| matches!(n, Node::Element(_)))
+                .count() as u16;
+            path.push(idx);
+            walk(child_el, ast, ctx, path);
+            path.pop();
         }
     }
 }

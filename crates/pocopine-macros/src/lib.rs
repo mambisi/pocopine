@@ -1231,32 +1231,26 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             array_tokens: quote! { &[] },
             has_plans: false,
             stamps: Vec::new(),
+            assignments: Vec::new(),
         });
 
-    // RFC-058 Phase 2.3 — compile a whole-template plan when
-    // the AST has no `pp-for` row stamps competing for the
-    // serialised template bytes. Layering both compilers (row
-    // stamps need byte positions in the rewritten HTML; the
-    // template-plan classifier serialises freshly from the AST)
-    // is a Phase 2 v2 follow-up; v1 prefers row plans when they
-    // exist (battle-tested, hot-list workloads care most) and
-    // falls through to template plans otherwise.
-    let template_plan = if row_plans.stamps.is_empty() {
-        template_ast
-            .as_ref()
-            .map(template_plan::analyze_template_plan)
-            .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
-                plan_tokens: None,
-                cleaned_html: None,
-                slot_fragment_fns: proc_macro2::TokenStream::new(),
-            })
-    } else {
-        template_plan::EmittedTemplatePlan {
+    // RFC-058 §6.2 layering (resolved) — template-plan + row-plan
+    // compilers coexist on one template. The row-plan analyser
+    // hands its `(template_node_path, plan_id)` assignments to
+    // the template-plan classifier, which bakes
+    // `data-pp-row-plan="<id>"` directly into the cleaned HTML
+    // during serialization. The byte-position stamps in
+    // `row_plans.stamps` then become redundant — used only as
+    // the fallback when the template-plan classifier didn't run
+    // (no eligible directive anywhere AND no row plans either).
+    let template_plan = template_ast
+        .as_ref()
+        .map(|ast| template_plan::analyze_template_plan(ast, &row_plans.assignments))
+        .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
             slot_fragment_fns: proc_macro2::TokenStream::new(),
-        }
-    };
+        });
 
     // Build the literal to feed into `compile_template`:
     //
