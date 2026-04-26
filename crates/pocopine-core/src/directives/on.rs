@@ -11,6 +11,8 @@
 //! | `once`             | browser removes the listener after one fire           |
 //! | `window`           | attach to `window` instead of `el`                    |
 //! | `document`         | attach to `document` instead of `el`                  |
+//! | `capture`          | install in capture phase (`addEventListener(..., {capture: true})`) |
+//! | `outside`          | only fires when target is outside `el`; implies capture |
 //! | `debounce[.<ms>]`  | wait `ms` (default 300) of quiet after the last event |
 
 use std::cell::{Cell, RefCell};
@@ -90,6 +92,7 @@ pub fn install(
     let on_window = modifiers.iter().any(|m| m == "window");
     let on_document = modifiers.iter().any(|m| m == "document");
     let outside = modifiers.iter().any(|m| m == "outside");
+    let capture = modifiers.iter().any(|m| m == "capture");
     let debounce_ms: Option<u32> = parse_debounce(modifiers);
 
     // Persistent closure used by `setTimeout` in the debounce branch.
@@ -269,10 +272,14 @@ pub fn install(
 
     let opts = AddEventListenerOptions::new();
     opts.set_once(once);
-    if outside {
-        // Capture so this runs before descendants can stop the
-        // event — otherwise a child's `@click.stop` hides the
-        // outside click from us.
+    if outside || capture {
+        // `outside` always uses capture (so this runs before
+        // descendants can stop the event — otherwise a child's
+        // `@click.stop` hides the outside click from us).
+        // `.capture` is the user-facing modifier for the same
+        // semantic without the outside-only filter, used for
+        // listeners that need to see the event before bubble-
+        // phase descendants.
         opts.set_capture(true);
     }
     // Tie the listener's lifetime to `el` so `release_subtree`
