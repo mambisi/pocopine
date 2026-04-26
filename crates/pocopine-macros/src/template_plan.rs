@@ -344,9 +344,9 @@ struct IfPlanLite {
     /// RFC-058 Phase 4.1d — `Some` when the body subtree was
     /// lift-eligible and the macro emitted a body fragment fn
     /// the `StaticIfPlan` literal should reference. `None`
-    /// when the body falls outside the v1 envelope (nested
-    /// custom tag, `<slot>`, nested controller, `pp-init`,
-    /// etc.) — the runtime installer falls back to the legacy
+    /// when the body falls outside the v1 envelope (`<slot>`,
+    /// `pp-data`, native `pp-model`, `pp-route`, etc.) — the
+    /// runtime installer falls back to the legacy
     /// `clone_template_body` + `walker::walk` path.
     body_fn_ident: Option<syn::Ident>,
 }
@@ -1544,9 +1544,6 @@ fn is_debounce_ms(m: &str) -> bool {
 /// Excludes:
 ///   * `<slot>` elements (would need slot capture/replay
 ///     hooks inside a body fragment — Phase 3.5c+);
-///   * `pp-init` (the deferred-fire ordering depends on the
-///     walker's post-order drain — fragment paths don't
-///     trigger it);
 ///   * `pp-data` / `pp-model` / `pp-route` (component scope
 ///     boundaries — the body fragment installs against the
 ///     enclosing scope only).
@@ -1571,7 +1568,7 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     // directives inside the mounted child template.
     let is_custom = !is_plan_native(&el.tag);
     for (name, _) in &el.attrs {
-        if name == "pp-init" || name == "pp-data" || name == "pp-route" {
+        if name == "pp-data" || name == "pp-route" {
             return false;
         }
         if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
@@ -1622,13 +1619,6 @@ fn analyze_lift_body(
     let mut ctx = AnalysisCtx::default();
     let mut path: Vec<u16> = Vec::new();
     walk(root_el, &mut ctx, emissions, &mut path);
-    // Defensive: pp-init / pp-data / pp-model / pp-route are
-    // excluded by the eligibility check above. If anything
-    // else slips in (eligibility / walk drift), bail rather
-    // than emit an incorrect body plan.
-    if !ctx.inits.is_empty() {
-        return None;
-    }
     let mut html = String::new();
     let mut sp: Vec<u16> = Vec::new();
     emit_element(root_el, &ctx, &mut html, &mut sp);
@@ -1639,8 +1629,7 @@ fn analyze_lift_body(
 
 /// RFC-058 Phase 3.5b + 3.5c — analyse a `<custom-tag>`'s
 /// children for slot fragment lifting. Returns `None` when
-/// anything in the subtree falls outside the v1 envelope (any
-/// nested custom tag, `<slot>`, nested controller, `pp-init` /
+/// anything in the subtree falls outside the v1 envelope (`<slot>`,
 /// `pp-data` / `pp-model` / `pp-route`). Otherwise returns
 /// `Some(SlotFragmentEmission)` — `Static` when the subtree
 /// has no plan-eligible directive (3.5b path), `Dynamic` when
@@ -1669,10 +1658,6 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
             walk(el, &mut ctx, emissions, &mut path);
             path.pop();
         }
-    }
-    // pp-init excluded above; bail if it slipped through.
-    if !ctx.inits.is_empty() {
-        return None;
     }
     let html = serialize_slot_children_with(nodes, &ctx);
     let is_dynamic = !ctx.bindings.is_empty()
@@ -1704,8 +1689,7 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
 /// `pp-teleport` — same scope semantics they already have at
 /// template level but inside a parent-scope fragment), and
 /// the directives whose semantics the fragment can't honour
-/// (`pp-init` deferred-fire ordering depends on the walker;
-/// `pp-data` / `pp-model` / `pp-route` are component scope
+/// (`pp-data` / `pp-model` / `pp-route` are component scope
 /// boundaries).
 fn slot_subtree_is_lift_eligible(nodes: &[Node]) -> bool {
     nodes.iter().all(slot_node_is_lift_eligible)
@@ -1728,7 +1712,7 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             // fragments into the shared `Emissions` queue).
             let is_custom = !is_plan_native(&el.tag);
             for (name, _) in &el.attrs {
-                if name == "pp-init" || name == "pp-data" || name == "pp-route" {
+                if name == "pp-data" || name == "pp-route" {
                     return false;
                 }
                 if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
