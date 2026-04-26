@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use wasm_bindgen::JsValue;
-use web_sys::console;
+use web_sys::{console, Element};
 
 use super::DirectiveCall;
 use crate::expr::{self, Spanned};
@@ -14,9 +14,6 @@ use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
 
 pub fn run(call: &DirectiveCall) {
-    let el = call.el.clone();
-    let proxy = call.proxy.clone();
-    let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
         Ok(a) => a,
         Err(e) => {
@@ -27,11 +24,28 @@ pub fn run(call: &DirectiveCall) {
             return;
         }
     };
+    install(call.el, call.proxy, ast);
+}
+
+/// Install a `pp-text` effect on `el` that writes `expr`'s
+/// stringified value into the element's `textContent` and
+/// re-runs whenever the expression's reactive dependencies
+/// change. The effect's lifetime is tracked to `el` via
+/// [`crate::walker::track_effect_on`] so it's released when
+/// the element's subtree is torn down.
+///
+/// This is the cleanup-safe install entry point. Callers (the
+/// runtime walker, future generated views) parse and validate
+/// `expr` first; this function does the install only.
+pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
+    let el_owned = el.clone();
+    let proxy_owned = proxy.clone();
+    let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let id = effect(move || {
-        let el_for_magic = el.clone();
+        let el_for_magic = el_owned.clone();
         let prev = prev.clone();
         with_current_el(&el_for_magic, || {
-            let v = expr::evaluate(&ast, &proxy);
+            let v = expr::evaluate(&ast, &proxy_owned);
             let next = js_to_string(&v);
             {
                 let p = prev.borrow();
@@ -39,11 +53,11 @@ pub fn run(call: &DirectiveCall) {
                     return;
                 }
             }
-            el.set_text_content(Some(&next));
+            el_owned.set_text_content(Some(&next));
             *prev.borrow_mut() = Some(next);
         });
     });
-    track_effect_on(call.el, id);
+    track_effect_on(el, id);
 }
 
 fn js_to_string(v: &JsValue) -> String {

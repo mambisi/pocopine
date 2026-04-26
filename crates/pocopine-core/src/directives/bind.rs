@@ -32,8 +32,6 @@ use crate::walker::track_effect_on;
 
 pub fn run(call: &DirectiveCall) {
     let Some(attr) = call.arg.clone() else { return };
-    let el = call.el.clone();
-    let parent_proxy = call.proxy.clone();
     let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
         Ok(a) => a,
         Err(e) => {
@@ -44,13 +42,33 @@ pub fn run(call: &DirectiveCall) {
             return;
         }
     };
+    install(call.el, call.proxy, &attr, ast);
+}
 
-    // Capture child-component target info at bind time. The scope
-    // id is stable for the lifetime of the element; we use it at
-    // each effect tick to consult `is_prop` on the child's state
-    // so parents can't write through to `#[state]` fields.
-    let child_target = crate::walker::child_component_scope(call.el);
-    let child_field = super::normalize_prop_name(&attr);
+/// Install a `pp-bind:<attr>` effect on `el` that re-evaluates
+/// `expr` whenever its reactive dependencies change and applies
+/// the result to the target.
+///
+/// Two branches inside the effect body:
+///
+/// * **Prop write** — when `el` is a registered child-component
+///   tag, the value writes through to the child's proxy. RFC-031
+///   guards against parents writing `#[state]` fields.
+/// * **Attribute write** — otherwise, follows the upstream
+///   Alpine `class` / `style` / plain-attr shape with last-value
+///   memoisation.
+///
+/// Cleanup-safe install entry point.
+pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<expr::Expr>) {
+    let el_owned = el.clone();
+    let parent_proxy_owned = parent_proxy.clone();
+    let attr_owned = attr.to_string();
+    // Capture child-component target info at install time. The
+    // scope id is stable for the lifetime of the element; we use
+    // it at each effect tick to consult `is_prop` on the child's
+    // state so parents can't write through to `#[state]` fields.
+    let child_target = crate::walker::child_component_scope(el);
+    let child_field = super::normalize_prop_name(attr);
 
     // Memo of the last value written to this attribute. Serialised
     // to a String so the compare is cheap + monomorphic (class and
@@ -59,8 +77,8 @@ pub fn run(call: &DirectiveCall) {
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     let id = effect(move || {
-        with_current_el(&el.clone(), || {
-            let v = expr::evaluate(&ast, &parent_proxy);
+        with_current_el(&el_owned.clone(), || {
+            let v = expr::evaluate(&ast, &parent_proxy_owned);
             match &child_target {
                 Some((child_scope_id, cp)) => {
                     let target_field =
@@ -83,11 +101,11 @@ pub fn run(call: &DirectiveCall) {
                         },
                     );
                 }
-                None => apply_memoised(&el, &attr, &v, &prev),
+                None => apply_memoised(&el_owned, &attr_owned, &v, &prev),
             }
         });
     });
-    track_effect_on(call.el, id);
+    track_effect_on(el, id);
 }
 
 /// [`apply`] wrapped with a last-value memo. Skips `set_attribute`

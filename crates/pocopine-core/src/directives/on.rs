@@ -24,25 +24,13 @@ use web_sys::{console, AddEventListenerOptions, Element, Event, EventTarget, Key
 use super::DirectiveCall;
 use crate::expr::{self, Expr, Spanned};
 use crate::magics::with_current_event;
+use crate::reactive::ScopeId;
 use crate::scope::with_current_el;
 
 pub fn run(call: &DirectiveCall) {
     let Some(event) = call.arg.clone() else {
         return;
     };
-    let scope_id = call.scope_id;
-    let el = call.el.clone();
-    let proxy = call.proxy.clone();
-
-    let prevent = call.modifiers.iter().any(|m| m == "prevent");
-    let stop = call.modifiers.iter().any(|m| m == "stop");
-    let self_only = call.modifiers.iter().any(|m| m == "self");
-    let once = call.modifiers.iter().any(|m| m == "once");
-    let on_window = call.modifiers.iter().any(|m| m == "window");
-    let on_document = call.modifiers.iter().any(|m| m == "document");
-    let outside = call.modifiers.iter().any(|m| m == "outside");
-    let debounce_ms: Option<u32> = parse_debounce(&call.modifiers);
-
     // Parse the directive value as an expression at bind time
     // (RFC-024). Call-and-assign statements + sequences land here;
     // plain handler names (`@click="on_click"`) parse to a bare
@@ -60,6 +48,49 @@ pub fn run(call: &DirectiveCall) {
             return;
         }
     };
+    install(
+        call.el,
+        call.scope_id,
+        call.proxy,
+        &event,
+        &call.modifiers,
+        ast,
+    );
+}
+
+/// Install a `pp-on:<event>[.<mod>...]` listener on `el` (or on
+/// `window` / `document` per the modifier set), routing fired
+/// events through `expr` with `$event` available in scope.
+///
+/// `modifiers` carries the post-`.` tokens — `prevent`, `stop`,
+/// `self`, `once`, `window`, `document`, `outside`, key
+/// modifiers, and the `debounce` + numeric-ms pair. The set
+/// must match what RFC-057 §6.1's table expects; the macro-side
+/// classifier validates ahead of time, so reaching this with
+/// an unknown token is a framework bug.
+///
+/// Cleanup-safe install entry point — the listener's lifetime
+/// ties to `el` via [`crate::walker::track_listener_on_with_opts`].
+pub fn install(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    event: &str,
+    modifiers: &[String],
+    ast: Rc<Spanned<Expr>>,
+) {
+    let event = event.to_string();
+    let el = el.clone();
+    let proxy = proxy.clone();
+
+    let prevent = modifiers.iter().any(|m| m == "prevent");
+    let stop = modifiers.iter().any(|m| m == "stop");
+    let self_only = modifiers.iter().any(|m| m == "self");
+    let once = modifiers.iter().any(|m| m == "once");
+    let on_window = modifiers.iter().any(|m| m == "window");
+    let on_document = modifiers.iter().any(|m| m == "document");
+    let outside = modifiers.iter().any(|m| m == "outside");
+    let debounce_ms: Option<u32> = parse_debounce(modifiers);
 
     // Persistent closure used by `setTimeout` in the debounce branch.
     // Built once per listener so rapid events don't allocate a fresh
@@ -106,8 +137,7 @@ pub fn run(call: &DirectiveCall) {
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
     // Key modifiers (RFC-013). Cloned into the closure below.
-    let key_modifiers: Vec<String> = call
-        .modifiers
+    let key_modifiers: Vec<String> = modifiers
         .iter()
         .filter(|m| is_key_modifier(m))
         .cloned()
