@@ -15,6 +15,7 @@ use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::JsValue;
 
 use crate::path::resolve_path;
+use crate::reactive::ScopeId;
 use crate::scope::ComponentState;
 
 pub struct SlotScope {
@@ -34,6 +35,12 @@ pub struct SlotScope {
     /// inside the slot has to resolve against the caller, not the
     /// component that declared the slot.
     pub caller: JsValue,
+    /// Scope id of the caller — `caller`'s proxy alone isn't enough
+    /// to dispatch handlers because [`crate::scope::invoke_handler`]
+    /// works off ids, not proxies. Without this, `@click="handler"`
+    /// inside a scoped slot would hit [`SlotScope::invoke`] (which
+    /// only knows the proxy) and the call would silently no-op.
+    pub caller_scope_id: ScopeId,
 }
 
 impl ComponentState for SlotScope {
@@ -69,7 +76,13 @@ impl ComponentState for SlotScope {
         &[]
     }
 
-    fn invoke(&mut self, _key: &str, _args: &Array) -> JsValue {
-        JsValue::UNDEFINED
+    fn invoke(&mut self, key: &str, args: &Array) -> JsValue {
+        // Delegate to the caller's scope so handler expressions
+        // inside scoped slots — `@click="parent_handler"` — reach
+        // the component that authored the slot content. The slot
+        // scope itself owns no handlers; without this delegation,
+        // handler dispatch would silently no-op for every compiled
+        // and walker-driven scoped slot listener.
+        crate::scope::invoke_handler(self.caller_scope_id, key, args)
     }
 }

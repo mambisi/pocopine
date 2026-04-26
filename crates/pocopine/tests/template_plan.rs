@@ -424,6 +424,18 @@ struct PlanNamedSlotHost {}
 #[handlers]
 impl PlanNamedSlotHost {}
 
+/// RFC-058 Phase 3.5g (review fix) — host whose default slot
+/// content carries `pp-data`, which the lift envelope rejects
+/// (component-scope boundary). The named footer slot still
+/// lifts; the default branch must flip `requires_walker` so
+/// the legacy capture path drives the unliftable subtree.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanUnliftableDefaultHost.html")]
+struct PlanUnliftableDefaultHost {}
+
+#[handlers]
+impl PlanUnliftableDefaultHost {}
+
 /// RFC-058 Phase 3.5g — child whose `<slot>` declares
 /// scoped-slot `:prop` bindings. The child's `current` field
 /// drives those bindings; the host below uses `pp-let="ctx"`
@@ -451,10 +463,19 @@ impl PlanScopedSlotChild {}
 /// resolves through SlotScope's RFC-011 routing.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanScopedSlotHost.html")]
-struct PlanScopedSlotHost {}
+struct PlanScopedSlotHost {
+    mark: String,
+}
 
 #[handlers]
-impl PlanScopedSlotHost {}
+impl PlanScopedSlotHost {
+    pub fn on_setup(&mut self) {
+        self.mark = "initial".into();
+    }
+    pub fn bump(&mut self) {
+        self.mark = "bumped-from-scoped-slot".into();
+    }
+}
 
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
@@ -584,6 +605,7 @@ fn register_all() {
     PlanNamedSlotHost::register();
     PlanScopedSlotChild::register();
     PlanScopedSlotHost::register();
+    PlanUnliftableDefaultHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1674,6 +1696,19 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
         "ctx.label must reactively re-resolve when the child's `current` changes",
     );
 
+    // Codex review fix: dispatch a handler from inside the scoped
+    // slot. The button's `@click="bump"` resolves through
+    // SlotScope's invoke fall-through to the parent's handler;
+    // without that delegation the click would silently no-op.
+    let bump = host.query_selector(".pssh-bump").unwrap().unwrap();
+    bump.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert_eq!(
+        read(&host, ".pssh-mark"),
+        "bumped-from-scoped-slot",
+        "@click inside a scoped slot must invoke the parent handler via SlotScope::invoke fall-through",
+    );
+
     assert_eq!(plan_failure_count(), 0);
     assert_eq!(
         compiled_fallback_walk_count(),
@@ -1682,4 +1717,32 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     );
 
     host.remove();
+}
+
+/// RFC-058 Phase 3.5g (review fix) — when the partition can
+/// lift one named slot but the default subtree fails the lift
+/// envelope (here `pp-data` makes the default walker-only),
+/// the default branch must flip `requires_walker` so the
+/// legacy capture path drives the unliftable subtree. The
+/// liftable named slot still ends up in `slots`.
+#[wasm_bindgen_test]
+async fn unliftable_default_slot_flips_requires_walker() {
+    register_all();
+
+    let plan = template_plan_for("plan-unliftable-default-host")
+        .expect("plan-unliftable-default-host has one nested non-HTML5 tag");
+    assert!(
+        plan.requires_walker,
+        "default subtree with pp-data must flip requires_walker so the walker drives it",
+    );
+    assert_eq!(plan.child_mounts.len(), 1);
+    let names: Vec<&str> = plan.child_mounts[0].slots.iter().map(|s| s.name).collect();
+    assert!(
+        names.contains(&"footer"),
+        "the liftable named slot must still emit a fragment",
+    );
+    assert!(
+        !names.contains(&"default"),
+        "the unliftable default subtree must NOT emit a fragment — the walker captures it instead",
+    );
 }
