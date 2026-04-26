@@ -394,7 +394,7 @@ pub fn apply_static_plan(
                 continue;
             }
         };
-        directives::if_::install(template, proxy.clone(), ast);
+        directives::if_::install(template, proxy.clone(), ast, ip.body);
     }
     for i in plan.inits {
         let Some(el) = resolve(root, i.node_path) else {
@@ -415,6 +415,49 @@ fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
         current = current.children().item(idx as u32)?;
     }
     Some(current)
+}
+
+/// RFC-058 Phase 4.1d — `pp-if` body fragment runtime helper.
+///
+/// Parses `html` (the macro-cleaned body markup) into a fresh
+/// `<template>`'s content, extracts the single root element,
+/// then applies the per-body `StaticTemplatePlan` against the
+/// parent scope so every directive in the body installs via
+/// the Phase 1 helpers (no walker `walk` / `bind` /
+/// `dispatch` involvement). Returns the root element ready
+/// for the `if_::install` caller to pin its borrowed scope on
+/// + insert into the live DOM.
+///
+/// `None` return signals the body HTML didn't parse to a
+/// single root element — same shape as the legacy
+/// `clone_template_body` miss; the caller surfaces a console
+/// error and bails the mount.
+pub fn stamp_if_body(
+    html: &str,
+    plan: &'static StaticTemplatePlan,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+) -> Option<Element> {
+    let doc = web_sys::window().and_then(|w| w.document())?;
+    let template_el = doc.create_element("template").ok()?;
+    template_el.set_inner_html(html);
+    let template_el = template_el
+        .dyn_into::<web_sys::HtmlTemplateElement>()
+        .ok()?;
+    let content = template_el.content();
+    let kids = content.child_nodes();
+    let mut root: Option<Element> = None;
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            if let Ok(el) = n.dyn_into::<Element>() {
+                root = Some(el);
+                break;
+            }
+        }
+    }
+    let root = root?;
+    apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
+    Some(root)
 }
 
 fn fail(kind: &str, template_name: &str, node_path: &[u16], expr_src: Option<&str>) {

@@ -1,0 +1,9 @@
+<div class="pibh-root">
+  <button class="pibh-toggle" pp-on:click="toggle">toggle</button>
+  <template pp-if="open">
+    <div class="pibh-branch">
+      <span class="pibh-label" pp-text="label"></span>
+      <button class="pibh-bump" pp-on:click="bump">bump</button>
+    </div>
+  </template>
+</div>

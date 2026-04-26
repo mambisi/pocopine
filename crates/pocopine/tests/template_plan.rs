@@ -228,6 +228,34 @@ struct PlanTeleportHost {}
 #[handlers]
 impl PlanTeleportHost {}
 
+/// RFC-058 Phase 4.1d — pp-if with a body that carries `pp-text`
+/// + `@click` against the parent scope. The body subtree
+/// qualifies for fragment lifting (HTML5-native, plan-eligible
+/// directives only), so the macro emits a body fragment fn that
+/// installs both directives via the Phase 1 helpers — no
+/// `walker::walk` involvement on the cloned body.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfBodyHost.html")]
+struct PlanIfBodyHost {
+    open: bool,
+    label: String,
+    count: u32,
+}
+
+#[handlers]
+impl PlanIfBodyHost {
+    pub fn on_setup(&mut self) {
+        self.label = "initial".into();
+    }
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+    pub fn bump(&mut self) {
+        self.count += 1;
+        self.label = format!("count-{}", self.count);
+    }
+}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -245,6 +273,7 @@ fn register_all() {
     PlanIfHost::register();
     PlanForMixed::register();
     PlanTeleportHost::register();
+    PlanIfBodyHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -371,6 +400,69 @@ async fn template_with_only_pp_for_emits_for_plan() {
         .unwrap()
         .expect("pp-for row must mount via the for-plan + row-plan path");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 Phase 4.1d — body fragment lifting. The macro emits
+/// a body fragment fn that stamps the cleaned body HTML and
+/// installs both `pp-text` and `@click` against the parent
+/// scope via the Phase 1 helpers. Toggling pp-if in/out
+/// exercises mount + unmount; clicking the body's @click
+/// handler proves the listener installed against the parent
+/// scope; updating the parent's `label` field through that
+/// handler proves the pp-text effect is reactively wired.
+#[wasm_bindgen_test]
+async fn macro_emitted_pp_if_body_fragment_installs_directives() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-if-body-host")
+        .expect("plan-if-body-host registers a template plan");
+    assert_eq!(plan.if_plans.len(), 1);
+    assert!(
+        plan.if_plans[0].body.is_some(),
+        "body with pp-text + @click on HTML5 natives must lift",
+    );
+
+    let host = mount("<plan-if-body-host></plan-if-body-host>");
+    tick().await;
+
+    // Toggle open → body mounts via fragment.
+    let toggle = host.query_selector(".pibh-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let label = host
+        .query_selector(".pibh-label")
+        .unwrap()
+        .expect("body must mount via the fragment");
+    assert_eq!(
+        label.text_content().as_deref(),
+        Some("initial"),
+        "pp-text in body must read parent scope's `label`",
+    );
+
+    // Click the body's @click → parent's `bump` fires → `label`
+    // updates → reactive effect re-runs → DOM changes.
+    let bump = host.query_selector(".pibh-bump").unwrap().unwrap();
+    bump.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        label.text_content().as_deref(),
+        Some("count-1"),
+        "@click in body must dispatch to parent scope's `bump`",
+    );
+
+    // Toggle off → body unmounts. Tracked effects on the body
+    // root must release so a subsequent re-mount + label change
+    // doesn't cause double-fires.
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(host.query_selector(".pibh-label").unwrap().is_none());
+
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }
@@ -545,6 +637,13 @@ async fn macro_emitted_if_plan_drives_pp_if_controller() {
         "exactly one `<template pp-if>` site",
     );
     assert_eq!(plan.if_plans[0].expr_src, "open");
+    // RFC-058 Phase 4.1d — PlanIfHost's body is just a `<span>`
+    // with no directives, so it falls inside the v1 lift
+    // envelope and the macro emits a body fragment fn.
+    assert!(
+        plan.if_plans[0].body.is_some(),
+        "static-only pp-if body must lift into a body fragment",
+    );
 
     let host = mount("<plan-if-host></plan-if-host>");
     tick().await;

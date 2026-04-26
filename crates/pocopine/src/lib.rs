@@ -66,12 +66,12 @@ pub mod __private {
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
-        StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticRef, StaticSlotFragment,
-        StaticTeleportPlan,
+        IfBodyFn, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticRef,
+        StaticSlotFragment, StaticTeleportPlan,
     };
     pub use pocopine_core::templates_plan::{
         apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
-        template_plan_for, StaticTemplatePlan,
+        stamp_if_body, template_plan_for, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
@@ -98,6 +98,7 @@ pub mod __private {
     pub use wasm_bindgen;
     pub use wasm_bindgen::JsValue;
     pub use wasm_bindgen_futures;
+    pub use web_sys;
 }
 
 /// Dispatch an async action and apply a state update when it resolves.
