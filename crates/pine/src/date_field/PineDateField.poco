@@ -15,12 +15,12 @@
         aria-label="Month"
         :tabindex="disabled ? -1 : 0"
         data-part="month"
-        :data-active="active_part === 'month'"
-        :data-placeholder="month_display === 'MM'"
+        :data-active="active_part == 'month'"
+        :data-placeholder="month_display == 'MM'"
         pp-text="month_display"
         @focus="focus_month"
         @blur="on_blur"
-        @keydown.prevent.stop="on_key"></span>
+        @keydown="on_key"></span>
   <span class="pine-date-field-separator" aria-hidden="true">/</span>
   <span class="pine-date-field-segment"
         pp-ref="segment-day"
@@ -28,12 +28,12 @@
         aria-label="Day"
         :tabindex="disabled ? -1 : 0"
         data-part="day"
-        :data-active="active_part === 'day'"
-        :data-placeholder="day_display === 'DD'"
+        :data-active="active_part == 'day'"
+        :data-placeholder="day_display == 'DD'"
         pp-text="day_display"
         @focus="focus_day"
         @blur="on_blur"
-        @keydown.prevent.stop="on_key"></span>
+        @keydown="on_key"></span>
   <span class="pine-date-field-separator" aria-hidden="true">/</span>
   <span class="pine-date-field-segment"
         pp-ref="segment-year"
@@ -41,10 +41,10 @@
         aria-label="Year"
         :tabindex="disabled ? -1 : 0"
         data-part="year"
-        :data-active="active_part === 'year'"
-        :data-placeholder="year_display === 'YYYY'"
+        :data-active="active_part == 'year'"
+        :data-placeholder="year_display == 'YYYY'"
         pp-text="year_display"
         @focus="focus_year"
         @blur="on_blur"
-        @keydown.prevent.stop="on_key"></span>
+        @keydown="on_key"></span>
 </div>
