@@ -149,6 +149,24 @@ struct PlanSlotChild {}
 #[handlers]
 impl PlanSlotChild {}
 
+/// RFC-058 Phase 3.5b — parent whose template wraps
+/// `<plan-slot-child>` around static slot content. The
+/// classifier must lift the children into a fragment function
+/// the macro emits inside the parent's `register()`; the
+/// parent's plan references that fragment via a
+/// `StaticSlotFragment` entry; the runtime applier passes the
+/// `SlotSet` through `mount_child_component_with_slots`; and
+/// the walker's `materialize_slot` invokes the fragment
+/// instead of running the legacy capture/replay path. End-to-
+/// end macro-driven slot rendering with no walker
+/// auto-discovery for the slot subtree.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanSlotHostStatic.html")]
+struct PlanSlotHostStatic {}
+
+#[handlers]
+impl PlanSlotHostStatic {}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -162,6 +180,7 @@ fn register_all() {
     PlanChildLeaf::register();
     PlanChildHost::register();
     PlanSlotChild::register();
+    PlanSlotHostStatic::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -332,6 +351,48 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     // DOM (the host had no slot content for the child to capture
     // by name), so finding it here is positive evidence the
     // fragment hook fired.
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3.5b — the macro lifted the parent's static
+/// slot content into a fragment function and emitted a
+/// `StaticSlotFragment` reference on the child-mount entry.
+/// At mount time the runtime applier flips onto
+/// `mount_child_component_with_slots` and the walker's
+/// `materialize_slot` invokes the fragment instead of
+/// replaying captured DOM. End-to-end macro-driven slot
+/// rendering with no walker auto-discovery in the slot
+/// subtree.
+#[wasm_bindgen_test]
+async fn macro_emitted_slot_fragment_renders_static_slot_content() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-slot-host-static")
+        .expect("plan-slot-host-static is plan-eligible (one nested non-HTML5 tag)");
+    assert_eq!(plan.child_mounts.len(), 1, "exactly one child-mount site");
+    let child = &plan.child_mounts[0];
+    assert_eq!(child.tag, "plan-slot-child");
+    assert_eq!(
+        child.slots.len(),
+        1,
+        "static slot subtree must lift into one default fragment",
+    );
+    assert_eq!(child.slots[0].name, "default");
+
+    let host = mount("<plan-slot-host-static></plan-slot-host-static>");
+    tick().await;
+
+    let marker = host
+        .query_selector(".pshs-author-marker")
+        .unwrap()
+        .expect("macro-emitted fragment must stamp the parent-authored span into the child slot");
+    assert_eq!(
+        marker.text_content().as_deref(),
+        Some("macro-emitted-static-fragment"),
+    );
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

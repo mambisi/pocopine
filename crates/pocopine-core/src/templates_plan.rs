@@ -48,6 +48,7 @@ use crate::directives::for_plan::{
 };
 use crate::expr;
 use crate::reactive::ScopeId;
+use crate::slot_fragment::SlotSet;
 
 // ─── macro-emitted static shape ─────────────────────────────────
 
@@ -267,7 +268,15 @@ pub fn apply_static_plan(
             fail("child-mount", template_name, c.node_path, Some(c.tag));
             continue;
         };
-        crate::walker::mount_child_component(&el, c.tag);
+        if c.slots.is_empty() {
+            crate::walker::mount_child_component(&el, c.tag);
+        } else {
+            let mut set = SlotSet::new();
+            for s in c.slots {
+                set = set.named(s.name, s.fragment);
+            }
+            crate::walker::mount_child_component_with_slots(&el, c.tag, set);
+        }
     }
     for i in plan.inits {
         let Some(el) = resolve(root, i.node_path) else {

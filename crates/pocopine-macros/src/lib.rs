@@ -1248,11 +1248,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
                 plan_tokens: None,
                 cleaned_html: None,
+                slot_fragment_fns: proc_macro2::TokenStream::new(),
             })
     } else {
         template_plan::EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
+            slot_fragment_fns: proc_macro2::TokenStream::new(),
         }
     };
 
@@ -1297,13 +1299,22 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let register_template_plan_stmt = match template_plan.plan_tokens {
-        Some(plan_tokens) => quote! {
-            const __POC_TEMPLATE_PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
-            ::pocopine::__private::register_template_plan(
-                #name_str,
-                &__POC_TEMPLATE_PLAN,
-            );
-        },
+        Some(plan_tokens) => {
+            // RFC-058 Phase 3.5b — slot fragment `fn` items go
+            // before the `const __POC_TEMPLATE_PLAN` so the
+            // plan literal can reference them by ident. Empty
+            // when the analyser didn't lift any slot content
+            // into a fragment.
+            let slot_fns = template_plan.slot_fragment_fns;
+            quote! {
+                #slot_fns
+                const __POC_TEMPLATE_PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
+                ::pocopine::__private::register_template_plan(
+                    #name_str,
+                    &__POC_TEMPLATE_PLAN,
+                );
+            }
+        }
         None => quote! {},
     };
 

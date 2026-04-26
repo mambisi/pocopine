@@ -59,6 +59,13 @@ pub(crate) struct EmittedTemplatePlan {
     /// no entries — the caller falls back to the original
     /// source bytes.
     pub cleaned_html: Option<String>,
+    /// RFC-058 Phase 3.5b — `fn` items the macro should emit
+    /// inside the parent's `register()` body so the
+    /// `StaticChildMount.slots` literal in `plan_tokens` can
+    /// reference them by name. Empty token stream when the
+    /// classifier didn't lift any slot content into a
+    /// fragment.
+    pub slot_fragment_fns: TokenStream,
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -78,13 +85,16 @@ pub(crate) fn analyze_template_plan(ast: &TemplateAst) -> EmittedTemplatePlan {
         return EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
+            slot_fragment_fns: TokenStream::new(),
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
+    let slot_fragment_fns = ctx.emit_slot_fragment_fns();
     let plan_tokens = ctx.emit_plan_tokens();
     EmittedTemplatePlan {
         plan_tokens: Some(plan_tokens),
         cleaned_html: Some(cleaned_html),
+        slot_fragment_fns,
     }
 }
 
@@ -104,6 +114,15 @@ struct AnalysisCtx {
     /// `__pp_mounted` guard makes the discovery a no-op for
     /// any tag the plan already mounted.
     child_mounts: Vec<ChildMountLite>,
+    /// RFC-058 Phase 3.5b — `(fn_ident, slot_html)` pairs the
+    /// macro should emit as `fn` items inside the parent's
+    /// generated `register()` body. Each fragment's `fn` body
+    /// is `::pocopine::__private::stamp_static_html(ctx.host,
+    /// "<slot_html>")`. Indexed by `ChildMountLite.slot_fragments`
+    /// — the same ident appears in both places so the
+    /// `StaticChildMount.slots` literal references the function
+    /// the macro emits below it.
+    slot_fragment_emissions: Vec<(String, String)>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -156,6 +175,19 @@ struct RefLite {
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
+    /// `(slot_name, generated_fn_ident_str)` pairs for every
+    /// statically-eligible slot the macro lifted into a
+    /// fragment function. Empty when the parent left no
+    /// children inside the custom tag, or when the children
+    /// contained anything walker-only (any `pp-*` / `@` /
+    /// `:` directive, any non-HTML5 tag, any `<slot>` / pp-let
+    /// / pp-for / pp-if / pp-teleport descendant).
+    ///
+    /// The ident strings match entries in
+    /// [`AnalysisCtx::slot_fragment_emissions`] so the
+    /// `StaticSlotFragment.fragment` literal in the plan
+    /// references the same `fn` the macro emits below.
+    slot_fragments: Vec<(String, String)>,
 }
 
 impl AnalysisCtx {
@@ -177,6 +209,26 @@ impl AnalysisCtx {
         self.text_managed_paths
             .iter()
             .any(|p| p.as_slice() == node_path)
+    }
+
+    /// Generate one `fn <ident>(ctx: SlotMountCtx) { … }` item
+    /// per emitted slot fragment. The macro splices the
+    /// returned `TokenStream` into the parent's `register()`
+    /// body so the fragment idents are in scope when the
+    /// `StaticTemplatePlan` literal references them. Empty
+    /// stream when no fragment was emitted — same as today's
+    /// pre-Phase-3.5b behaviour.
+    fn emit_slot_fragment_fns(&self) -> TokenStream {
+        let items = self.slot_fragment_emissions.iter().map(|(name, html)| {
+            let ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+            let html_lit = proc_macro2::Literal::string(html);
+            quote! {
+                fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
+                    ::pocopine::__private::stamp_static_html(ctx.host, #html_lit);
+                }
+            }
+        });
+        quote! { #(#items)* }
     }
 
     fn emit_plan_tokens(&self) -> TokenStream {
@@ -269,10 +321,21 @@ fn emit_ref(r: &RefLite) -> TokenStream {
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
+    let slot_tokens = c.slot_fragments.iter().map(|(name, ident_str)| {
+        let name_lit = proc_macro2::Literal::string(name);
+        let ident = syn::Ident::new(ident_str, proc_macro2::Span::call_site());
+        quote! {
+            ::pocopine::__private::StaticSlotFragment {
+                name: #name_lit,
+                fragment: #ident,
+            }
+        }
+    });
     quote! {
         ::pocopine::__private::StaticChildMount {
             node_path: #path,
             tag: #tag,
+            slots: &[ #(#slot_tokens),* ],
         }
     }
 }
@@ -309,9 +372,27 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
     // walker's `__pp_mounted` guard turns the discovery into a
     // no-op afterwards.
     if !is_html5_native(&el.tag) {
+        // RFC-058 Phase 3.5b — if the custom tag's children are
+        // entirely static (no `pp-*` / `@` / `:` attrs anywhere
+        // in the subtree, no nested non-HTML5 tags, no `<slot>`
+        // element), lift them into a fragment function. The
+        // parent passes that fragment via the static-plan
+        // child-mount entry; the runtime walker's
+        // `materialize_slot` invokes it instead of running the
+        // legacy capture/replay path. Anything dynamic stays on
+        // the walker — slot content with directives needs the
+        // parent-proxy machinery this v1 doesn't ship yet.
+        let mut slot_fragments: Vec<(String, String)> = Vec::new();
+        if !el.children.is_empty() && slot_subtree_is_static(&el.children) {
+            let html = serialize_slot_children(&el.children);
+            let ident = format!("__poc_slot_frag_{}", ctx.slot_fragment_emissions.len());
+            ctx.slot_fragment_emissions.push((ident.clone(), html));
+            slot_fragments.push(("default".to_string(), ident));
+        }
         ctx.child_mounts.push(ChildMountLite {
             node_path: path.clone(),
             tag: el.tag.clone(),
+            slot_fragments,
         });
         return;
     }
@@ -632,6 +713,73 @@ fn is_debounce_modifier(m: &str) -> bool {
 
 fn is_debounce_ms(m: &str) -> bool {
     m.parse::<u32>().is_ok()
+}
+
+// ─── static slot eligibility + serialization ─────────────────────
+
+/// RFC-058 Phase 3.5b — `true` when every node in the subtree
+/// can be stamped via the static-HTML fragment path with no
+/// behavioural change against today's walker capture/replay.
+///
+/// Eligibility (intentionally narrow):
+///   * every element is HTML5 native (no nested custom tags —
+///     defer recursive child-component fragment lifting to a
+///     follow-up that grows the fragment ABI);
+///   * no `<slot>` element (would change semantics on
+///     materialisation);
+///   * no attribute starts with `pp-`, `@`, or `:` (any
+///     directive needs the parent-proxy machinery this v1
+///     doesn't ship — Phase 3.5c+ teaches the fragment ABI
+///     about parent-scope binding install).
+fn slot_subtree_is_static(nodes: &[Node]) -> bool {
+    for node in nodes {
+        if !slot_node_is_static(node) {
+            return false;
+        }
+    }
+    true
+}
+
+fn slot_node_is_static(node: &Node) -> bool {
+    match node {
+        Node::Element(el) => {
+            if el.synthetic {
+                // Walk through synthetic html5ever wrappers — they
+                // don't appear in authored markup so they can't
+                // make a subtree dynamic on their own.
+                return slot_subtree_is_static(&el.children);
+            }
+            if el.tag == "slot" {
+                return false;
+            }
+            if !is_html5_native(&el.tag) {
+                return false;
+            }
+            for (name, _) in &el.attrs {
+                if name.starts_with("pp-") || name.starts_with('@') || name.starts_with(':') {
+                    return false;
+                }
+            }
+            slot_subtree_is_static(&el.children)
+        }
+        Node::Text(_, _) | Node::Comment(_, _) => true,
+    }
+}
+
+/// Re-serialise a static slot subtree to HTML. Reuses the same
+/// emit-element walker the cleaned-HTML serializer uses, with
+/// an empty `AnalysisCtx` so nothing gets stripped or
+/// `data-pp-text-managed`-stamped — slot content qualified by
+/// `slot_subtree_is_static` has no plan-eligible attributes by
+/// construction, so the empty context is correct.
+fn serialize_slot_children(nodes: &[Node]) -> String {
+    let empty_ctx = AnalysisCtx::default();
+    let mut out = String::new();
+    let mut path: Vec<u16> = Vec::new();
+    for node in nodes {
+        emit_node(node, &empty_ctx, &mut out, &mut path);
+    }
+    out
 }
 
 // ─── cleaned HTML serializer ─────────────────────────────────────

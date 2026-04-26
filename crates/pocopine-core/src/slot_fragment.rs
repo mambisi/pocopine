@@ -27,6 +27,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use wasm_bindgen::JsCast;
 use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
@@ -164,4 +165,40 @@ pub fn clear(child_scope_id: ScopeId) {
     FRAGMENTS.with(|m| {
         m.borrow_mut().remove(&child_scope_id);
     });
+}
+
+/// Stamp a static HTML string into the slot fragment buffer.
+///
+/// RFC-058 Phase 3.5b — the macro emits one [`SlotFragment`]
+/// per child-mount site whose slot content is statically
+/// eligible (no `pp-*` / `@` / `:` directives, no
+/// non-HTML5-native descendants); the body of that fragment
+/// is just `stamp_static_html(ctx.host, "<inline html>")`. By
+/// going through a `<template>` element rather than
+/// `set_inner_html` directly on the buffer, the parse picks
+/// up the correct content-model rules (e.g. `<tr>` inside
+/// `<table>`, `<li>` outside `<ul>`) the same way the
+/// browser would for any author-written markup.
+pub fn stamp_static_html(host: &DocumentFragment, html: &str) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(template) = doc.create_element("template") else {
+        return;
+    };
+    template.set_inner_html(html);
+    let Ok(template) = template.dyn_into::<web_sys::HtmlTemplateElement>() else {
+        return;
+    };
+    let content = template.content();
+    let kids = content.child_nodes();
+    let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            snapshot.push(n);
+        }
+    }
+    for n in snapshot {
+        let _ = host.append_child(&n);
+    }
 }
