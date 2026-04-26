@@ -155,6 +155,14 @@ struct AnalysisCtx {
     /// parses the expression, and calls
     /// [`crate::directives::if_::install`].
     if_plans: Vec<IfPlanLite>,
+    /// RFC-058 Phase 4.2 — `pp-for` controller sites the
+    /// classifier lifted out of the runtime walker's
+    /// directive-dispatch path. The classifier parses
+    /// `pp-for="<item> in <items>"` at compile time + reads
+    /// `pp-key` / `pp-stagger` siblings into the entry; the
+    /// applier hands the pre-resolved pieces to
+    /// [`crate::directives::for_::install`].
+    for_plans: Vec<ForPlanLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -216,6 +224,14 @@ struct IfPlanLite {
     expr_src: String,
 }
 
+struct ForPlanLite {
+    template_node_path: Vec<u16>,
+    item_name: String,
+    items_expr: String,
+    key_expr: Option<String>,
+    stagger_ms: u32,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -242,6 +258,7 @@ impl AnalysisCtx {
             || !self.refs.is_empty()
             || !self.child_mounts.is_empty()
             || !self.if_plans.is_empty()
+            || !self.for_plans.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -294,6 +311,7 @@ impl AnalysisCtx {
         let refs_tokens = self.refs.iter().map(emit_ref);
         let child_mounts_tokens = self.child_mounts.iter().map(emit_child_mount);
         let if_plans_tokens = self.if_plans.iter().map(emit_if_plan);
+        let for_plans_tokens = self.for_plans.iter().map(emit_for_plan);
         quote! {
             ::pocopine::__private::StaticTemplatePlan {
                 bindings: &[ #(#bindings_tokens),* ],
@@ -302,6 +320,7 @@ impl AnalysisCtx {
                 refs: &[ #(#refs_tokens),* ],
                 child_mounts: &[ #(#child_mounts_tokens),* ],
                 if_plans: &[ #(#if_plans_tokens),* ],
+                for_plans: &[ #(#for_plans_tokens),* ],
             }
         }
     }
@@ -387,6 +406,29 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     }
 }
 
+fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
+    let path = emit_node_path(&fp.template_node_path);
+    let item_lit = proc_macro2::Literal::string(&fp.item_name);
+    let items_lit = proc_macro2::Literal::string(&fp.items_expr);
+    let key_tokens = match fp.key_expr.as_deref() {
+        Some(k) => {
+            let lit = proc_macro2::Literal::string(k);
+            quote! { ::core::option::Option::Some(#lit) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    let stagger = proc_macro2::Literal::u32_unsuffixed(fp.stagger_ms);
+    quote! {
+        ::pocopine::__private::StaticForPlan {
+            template_node_path: #path,
+            item_name: #item_lit,
+            items_expr: #items_lit,
+            key_expr: #key_tokens,
+            stagger_ms: #stagger,
+        }
+    }
+}
+
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
@@ -420,13 +462,68 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         return;
     }
 
-    // Whole-element block boundaries: pp-for / pp-teleport /
-    // `<slot>`. Every directive on or under these stays on the
-    // walker — the walker's `pp-for` / `pp-teleport`
-    // controllers own mount lifecycle for those subtrees and
-    // pre-mounting from the plan would race them. RFC-058
-    // Phases 4.2 / 4.3 graduate them; v1 keeps them on the
-    // walker.
+    // RFC-058 Phase 4.2 — `pp-for` on a `<template>` host
+    // graduates into a `StaticForPlan` entry. Same eligibility
+    // shape as Phase 4.1's pp-if: must be on `<template>`,
+    // parseable `<item> in <items>`, no co-occurring
+    // `pp-teleport` (defer that combo to the walker — the
+    // applier doesn't capture teleport targets in v1). The
+    // `data-pp-row-plan` attribute the §6.2 layering bakes
+    // into the cleaned HTML stays alongside the strip so the
+    // RFC-054 row-plan registry still resolves keyed lists.
+    if let Some(for_attr) = pp_for_value(el) {
+        if el.tag == "template" && !el.attrs.iter().any(|(n, _)| n == "pp-teleport") {
+            if let Some((item_name, items_expr)) = parse_pp_for(&for_attr) {
+                let key_expr = el
+                    .attrs
+                    .iter()
+                    .find(|(n, _)| n == "pp-key")
+                    .map(|(_, v)| v.clone())
+                    .filter(|s| !s.trim().is_empty());
+                let stagger_ms = el
+                    .attrs
+                    .iter()
+                    .find(|(n, _)| n == "pp-stagger")
+                    .and_then(|(_, v)| v.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                ctx.for_plans.push(ForPlanLite {
+                    template_node_path: path.clone(),
+                    item_name,
+                    items_expr,
+                    key_expr,
+                    stagger_ms,
+                });
+                ctx.stripped.push(StrippedAttr {
+                    node_path: path.clone(),
+                    name: "pp-for".to_string(),
+                });
+                ctx.stripped.push(StrippedAttr {
+                    node_path: path.clone(),
+                    name: "pp-key".to_string(),
+                });
+                ctx.stripped.push(StrippedAttr {
+                    node_path: path.clone(),
+                    name: "pp-stagger".to_string(),
+                });
+                // Don't recurse — the row body is owned by the
+                // RFC-054 row plan (when present) or the walker
+                // (when absent). Either way the template-plan
+                // classifier doesn't follow `<template>` content.
+                return;
+            }
+        }
+        // Ineligible (wrong host, has pp-teleport, or expr
+        // doesn't parse) — fall through to block-boundary skip
+        // so today's walker dispatch handles it.
+        return;
+    }
+
+    // Whole-element block boundaries: pp-teleport / `<slot>`.
+    // Every directive on or under these stays on the walker —
+    // the walker's `pp-teleport` controller owns mount
+    // lifecycle for that subtree and pre-mounting from the
+    // plan would race it. RFC-058 Phase 4.3 graduates
+    // pp-teleport; v1 keeps it on the walker.
     if is_block_boundary(el) {
         return;
     }
@@ -549,7 +646,7 @@ fn is_block_boundary(el: &Element) -> bool {
         return true;
     }
     for (name, _) in &el.attrs {
-        if name == "pp-for" || name == "pp-teleport" {
+        if name == "pp-teleport" {
             return true;
         }
     }
@@ -561,6 +658,31 @@ fn pp_if_value(el: &Element) -> Option<String> {
         .iter()
         .find(|(n, _)| n == "pp-if")
         .map(|(_, v)| v.clone())
+}
+
+fn pp_for_value(el: &Element) -> Option<String> {
+    el.attrs
+        .iter()
+        .find(|(n, _)| n == "pp-for")
+        .map(|(_, v)| v.clone())
+}
+
+/// Mirror of `crate::directives::for_::parse_expr` so the
+/// classifier can pre-validate `pp-for="<item> in <items>"`.
+fn parse_pp_for(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    let (lhs, rhs) = s.split_once(" in ")?;
+    let ident = lhs.trim();
+    let items = rhs.trim();
+    if ident.is_empty() || items.is_empty() {
+        return None;
+    }
+    if !ident.chars().all(|c| c.is_alphanumeric() || c == '_')
+        || ident.chars().next().is_some_and(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((ident.to_string(), items.to_string()))
 }
 
 enum ClassifyOutcome {

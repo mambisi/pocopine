@@ -333,19 +333,22 @@ async fn planned_pp_init_observes_planned_pp_ref() {
     host.remove();
 }
 
-/// A template whose only plan-relevant content is the pp-for
-/// itself emits no template plan — the row-plan analyser still
-/// owns the row body via `data-pp-row-plan` (now baked in by
-/// the template-plan serializer per §6.2 layering, even when
-/// no template plan is registered) and the runtime walker
-/// dispatch for pp-for picks it up unchanged.
+/// RFC-058 Phase 4.2 — pp-for itself graduates into a
+/// `StaticForPlan` entry on the template plan. This template
+/// has no other plan-relevant content; the plan registers
+/// solely for the pp-for site and the runtime applier hands
+/// the parsed `<item> in <items>` to `for_::install`. Row
+/// content still flows through the RFC-054 row-plan registry
+/// via the §6.2-layered `data-pp-row-plan` stamp.
 #[wasm_bindgen_test]
-async fn template_with_only_pp_for_emits_no_template_plan() {
+async fn template_with_only_pp_for_emits_for_plan() {
     register_all();
-    assert!(
-        template_plan_for("plan-for-loop").is_none(),
-        "no plan-eligible directive outside the pp-for → no template plan registered",
-    );
+    let plan = template_plan_for("plan-for-loop")
+        .expect("pp-for itself counts as a plan entry post-Phase-4.2");
+    assert_eq!(plan.for_plans.len(), 1, "exactly one pp-for site");
+    assert_eq!(plan.for_plans[0].item_name, "row");
+    assert_eq!(plan.for_plans[0].items_expr, "rows");
+    assert_eq!(plan.for_plans[0].key_expr, Some("row.id"));
 
     let host = mount("<plan-for-loop></plan-for-loop>");
     tick().await;
@@ -353,8 +356,42 @@ async fn template_with_only_pp_for_emits_no_template_plan() {
     let li = host
         .query_selector("li")
         .unwrap()
-        .expect("pp-for row must mount via the row-plan path");
+        .expect("pp-for row must mount via the for-plan + row-plan path");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 Phase 4.2 — pp-for + non-pp-for plan-eligible
+/// directive coexisting confirms `for_plans` + `bindings` +
+/// row-plan stamping all run on the same template.
+#[wasm_bindgen_test]
+async fn macro_emitted_for_plan_drives_pp_for_controller() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-for-mixed")
+        .expect("plan-for-mixed has both a pp-text and a pp-for");
+    assert_eq!(
+        plan.for_plans.len(),
+        1,
+        "the pp-for site lifts into a for-plan entry",
+    );
+    assert_eq!(plan.for_plans[0].item_name, "row");
+    assert_eq!(plan.for_plans[0].items_expr, "rows");
+    assert_eq!(plan.for_plans[0].key_expr, Some("row.id"));
+    assert!(
+        !plan.bindings.is_empty(),
+        "the pp-text outside the pp-for keeps registering as a binding",
+    );
+
+    let host = mount("<plan-for-mixed></plan-for-mixed>");
+    tick().await;
+
+    assert_eq!(read(&host, ".pfm-title"), "mixed-title");
+    let rows = host.query_selector_all("li").unwrap();
+    assert_eq!(rows.length(), 2);
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

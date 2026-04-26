@@ -194,6 +194,32 @@ pub struct StaticIfPlan {
     pub expr_src: &'static str,
 }
 
+/// Static-lifetime descriptor for a `<template pp-for="...">`
+/// site. RFC-058 Phase 4.2.
+///
+/// The macro parses `pp-for="<item> in <items>"` at compile
+/// time and hands both halves to the applier. `key_expr` is
+/// `None` for unkeyed lists (the runtime falls back to the
+/// naive rebuild path); `stagger_ms` is `0` when no
+/// `pp-stagger` attribute was present.
+///
+/// The applier resolves the `<template>` element via
+/// `template_node_path` and calls
+/// [`crate::directives::for_::install`]. Coexists with the
+/// RFC-054 row-plan registry: when a row plan is registered
+/// for the same `<template>`, the RFC-054 fast path still
+/// fires because the §6.2-layered cleaned HTML preserves the
+/// `data-pp-row-plan="<id>"` attribute the registry lookup
+/// keys on.
+#[doc(hidden)]
+pub struct StaticForPlan {
+    pub template_node_path: &'static [u16],
+    pub item_name: &'static str,
+    pub items_expr: &'static str,
+    pub key_expr: Option<&'static str>,
+    pub stagger_ms: u32,
+}
+
 /// One macro-emitted row plan. The macro emits
 /// `pub static __POC_ROW_PLANS_<COMPONENT>: &[StaticRowPlan] =
 /// &[ … ];` and a registration call alongside
