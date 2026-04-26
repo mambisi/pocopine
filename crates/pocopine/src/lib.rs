@@ -65,7 +65,9 @@ pub mod __private {
     // macro emits a `&'static StaticTemplatePlan` per component
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
-    pub use pocopine_core::directives::for_plan::{StaticChildMount, StaticInit, StaticRef};
+    pub use pocopine_core::directives::for_plan::{
+        StaticChildMount, StaticInit, StaticRef, StaticSlotFragment,
+    };
     pub use pocopine_core::templates_plan::{
         apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
         template_plan_for, StaticTemplatePlan,
@@ -82,7 +84,7 @@ pub mod __private {
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.
     pub use pocopine_core::slot_fragment::{
-        SlotFragment, SlotMountCtx, SlotSet, DEFAULT_SLOT_NAME,
+        stamp_static_html, SlotFragment, SlotMountCtx, SlotSet, DEFAULT_SLOT_NAME,
     };
     // RFC-058 Phase 1.1 / 1.7 — cleanup-safe directive install
     // helpers. Generated mount code (Phase 2+) calls these

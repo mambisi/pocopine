@@ -142,15 +142,37 @@ pub struct StaticRef {
 /// drops the walker discovery and the plan-driven path becomes
 /// the sole entry.
 ///
-/// v1 envelope: just `host_path` + `tag`. Static / dynamic prop
-/// pre-passing and parent-owned slot fragments graduate the
-/// envelope in Phase 3 follow-ups; v1 keeps slot content + prop
-/// attribute scanning on the walker (the parent's cleaned HTML
-/// preserves both).
+/// `slots` carries the parent-authored slot fragments from
+/// RFC-058 Phase 3.5b. Empty slice means the parent didn't
+/// emit any fragments (either the slot content was dynamic and
+/// the macro left it on the walker's capture path, or the
+/// custom tag had no children). Non-empty slice flips the
+/// applier onto [`crate::walker::mount_child_component_with_slots`]
+/// so the walker's `materialize_slot` invokes the parent's
+/// fragment instead of replaying captured DOM.
 #[doc(hidden)]
 pub struct StaticChildMount {
     pub node_path: &'static [u16],
     pub tag: &'static str,
+    pub slots: &'static [StaticSlotFragment],
+}
+
+/// One macro-emitted slot fragment binding within a
+/// [`StaticChildMount`]. RFC-058 Phase 3.5b.
+///
+/// `name` matches the wire-name the runtime walker uses to
+/// look up slot content (`"default"` for the unnamed slot,
+/// otherwise the value of `pp-slot="<name>"` on the parent's
+/// `<template>` wrapper).
+///
+/// `fragment` is a stateless `fn` pointer the macro wired into
+/// the parent's generated `register()` body — invoking it
+/// stamps the parent-authored slot DOM into the
+/// [`crate::slot_fragment::SlotMountCtx::host`] buffer.
+#[doc(hidden)]
+pub struct StaticSlotFragment {
+    pub name: &'static str,
+    pub fragment: crate::slot_fragment::SlotFragment,
 }
 
 /// One macro-emitted row plan. The macro emits
