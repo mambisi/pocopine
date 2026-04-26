@@ -25,6 +25,17 @@ impl TagsReproApp {
     pub fn seed_500(&mut self) {
         self.tags = (0..500).map(|i| format!("t{i}")).collect();
     }
+    pub fn add_one(&mut self) {
+        let n = self.tags.len();
+        self.tags.push(format!("added{n}"));
+    }
+    pub fn shuffle(&mut self) {
+        if self.tags.len() < 2 {
+            return;
+        }
+        let head = self.tags.remove(0);
+        self.tags.push(head);
+    }
 }
 
 #[wasm_bindgen(start)]

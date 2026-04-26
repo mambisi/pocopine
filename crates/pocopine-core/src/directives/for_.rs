@@ -174,7 +174,20 @@ fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &
 }
 
 fn flip_target_for_entry(entry: &PrevItem) -> Option<Element> {
-    if entry.element.parent_node().is_none()
+    // RFC-058 Phase 6.4 — `clone_template_body` returns an
+    // Element whose `parent_node` is the cloned
+    // `DocumentFragment` it was extracted from, NOT `None`.
+    // The original `parent_node().is_none()` guard intended to
+    // skip new (not-yet-inserted) entries was therefore a
+    // no-op for cloneNode-based clones, and the snapshot
+    // captured `(0, 0)` because the fragment is detached from
+    // the live document. flip_batch then animated the entry
+    // from origin to its final position — visible as a chip
+    // "flying in from the document upper-left" on every add.
+    // `is_connected` is true only when the element is part of
+    // the live document tree, which is the actual signal
+    // pp-for needs.
+    if !entry.element.is_connected()
         || entry.element.get_attribute("data-pp-animate").as_deref() != Some("flip")
     {
         return None;
