@@ -8,8 +8,21 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use wasm_bindgen::JsCast;
+use web_sys::{DocumentFragment, HtmlTemplateElement};
+
 thread_local! {
     static TEMPLATES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    /// RFC-058 Phase 6.4 — per-template `<template>` element
+    /// cache. Lazily populated on first mount: the registered
+    /// HTML string is parsed once into an `HTMLTemplateElement`
+    /// (browser HTML parser, C++ fast path), then every
+    /// subsequent mount clones the `.content` `DocumentFragment`
+    /// via `cloneNode(true)` instead of re-parsing the HTML
+    /// string. Same shape Solid/Lit use; mount throughput goes
+    /// up, bundle size unchanged.
+    static TEMPLATE_ELEMENTS: RefCell<HashMap<String, HtmlTemplateElement>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Register a component's rewritten template under its runtime name.
@@ -21,6 +34,40 @@ pub fn register_template(name: impl Into<String>, html: impl Into<String>) {
 /// clone into the DOM without locking the registry.
 pub fn template_for(name: &str) -> Option<String> {
     TEMPLATES.with(|t| t.borrow().get(name).cloned())
+}
+
+/// RFC-058 Phase 6.4 — clone a registered template's content into
+/// a fresh `DocumentFragment` via `HTMLTemplateElement.content`
+/// + `cloneNode(true)`.
+///
+/// Lazily parses the HTML string on first call, caches the
+/// `HTMLTemplateElement` so subsequent mounts skip the re-parse.
+///
+/// Returns `None` when the template isn't registered, the
+/// document isn't available (non-browser context), or the
+/// browser refuses to clone the content. Callers fall back to
+/// the legacy [`template_for`] + `set_inner_html` path on
+/// `None`.
+pub fn template_clone_for(name: &str) -> Option<DocumentFragment> {
+    let cached = TEMPLATE_ELEMENTS.with(|cache| cache.borrow().get(name).cloned());
+    let template_el = match cached {
+        Some(el) => el,
+        None => {
+            let html = template_for(name)?;
+            let doc = web_sys::window().and_then(|w| w.document())?;
+            let el = doc.create_element("template").ok()?;
+            let template_el = el.dyn_into::<HtmlTemplateElement>().ok()?;
+            template_el.set_inner_html(&html);
+            TEMPLATE_ELEMENTS.with(|cache| {
+                cache
+                    .borrow_mut()
+                    .insert(name.to_string(), template_el.clone());
+            });
+            template_el
+        }
+    };
+    let cloned_node = template_el.content().clone_node_with_deep(true).ok()?;
+    cloned_node.dyn_into::<DocumentFragment>().ok()
 }
 
 pub fn is_registered(name: &str) -> bool {

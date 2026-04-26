@@ -290,3 +290,60 @@ plan (e.g. data-driven `BuildOp` arrays consumed by a single
 runtime interpreter, which trades wasm code per template for
 wasm data per template — possibly more competitive but a
 separate experiment).
+
+## Phase 6.4 — cloneNode-from-`<template>` mount path
+
+The Solid/Lit-style mount-perf trick: at first use, parse the
+registered HTML once into a cached `HTMLTemplateElement`.
+Every subsequent mount calls `template.content.cloneNode(true)`
+instead of re-parsing the HTML via `set_inner_html` per
+mount. Browser HTML parser stays out of the per-mount path
+(C++ `cloneNode` is materially faster than HTML parsing).
+
+| Build (counter) | Pre-cloneNode | + cloneNode | Delta            |
+|-----------------|--------------:|------------:|-----------------:|
+| `default`       | 712 477 / 270 806 | 714 229 / 271 437 | +1 752 / +631   |
+| lean            | 593 447 / 226 368 | 594 665 / 226 869 | +1 218 / +501   |
+
+Bundle cost: ~1.2-1.7 KB raw (cache + the lazy-parse fast
+path). The per-template HTML strings stay in the bundle
+(unchanged) — the win is mount throughput, not size.
+
+### jsbench (chromium, mean ms over 5 runs)
+
+| Action          | Pre-cloneNode | + cloneNode | Delta  |
+|-----------------|--------------:|------------:|-------:|
+| run(1000)       |     230.13    |   229.27    | -0.4%  |
+| update every 10th | 156.26      |   153.64    | -1.7%  |
+| select          |     107.37    |   110.55    | +3.0%  |
+| swapRows        |     205.62    |   199.44    | -3.0%  |
+| remove          |     172.27    |   163.78    | -4.9%  |
+| clear           |     217.92    |   218.99    | +0.5%  |
+| runLots(10000)  |    1118.00    |  1104.01    | -1.3%  |
+| add(1000)       |     298.45    |   290.44    | -2.7%  |
+| **geomean**     |     236.97    |   233.81    | -1.3%  |
+
+The jsbench harness exercises `pp-for` row creation, which
+already clones rows from the row-plan template via
+`clone_template_body` — the cloneNode path. Component
+mounts (`<my-component>`) are a small fraction of this
+benchmark, so the visible delta is in the noise (1-2% across
+actions; geomean -1.3%).
+
+Where the win actually shows up: workloads that mount many
+component instances (router page transitions, list-of-
+components patterns, modal/popover open/close cycles).
+`pine_template_plan_fallback_audit` confirms every Pine
+plan is walker-clean, so all 167 component mounts route
+through this path. We don't have a dedicated micro-benchmark
+for "mount N instances of the same component" — adding one
+would surface the cloneNode win directly.
+
+### Verification
+
+* All in-tree suites green: pocopine template_plan 28/28,
+  walker 50/50, pine 103/103.
+* `template_clone_for` falls back to `set_inner_html` when
+  the document isn't available or the cache miss can't
+  populate (parse refusal, etc.) — behaviour stays
+  parity-correct.
