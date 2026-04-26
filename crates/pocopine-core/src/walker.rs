@@ -210,6 +210,14 @@ fn fire_mount_hook(el: &Element) {
         crate::scope::with_current_scope_id(id, || {
             scope.state.borrow_mut().mount(ctx);
         });
+        // `on_mount` mutates `&mut self` directly — bypass the
+        // proxy `set` trap so the JS-side `FIELD_CACHE` doesn't see
+        // the writes. Drop the cache before triggering subscribers
+        // so re-running effects re-read fresh state through the
+        // proxy `get` trap. Without this, post-mount renders pull
+        // the pre-mutation cached `JsValue` and the DOM stays at
+        // its seeded values. Mirrors the pattern in `Scope::invoke`.
+        crate::scope::invalidate_field_cache(id);
         crate::reactive::trigger_scope(id);
     }
 
