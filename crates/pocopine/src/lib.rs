@@ -77,7 +77,7 @@ pub mod __private {
     // `register_row_plans` re-exports above.
     pub use pocopine_core::walker::{
         defer_init_on, fire_mount_post_order, fire_ready_next_tick, mount_child_component,
-        release_compiled_subtree,
+        mount_child_component_with_slots, release_compiled_subtree,
     };
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.

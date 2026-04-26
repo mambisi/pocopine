@@ -24,9 +24,10 @@
 //! replaces the runtime capture path for compiled parents with
 //! direct fragment-function passing.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
-use web_sys::Element;
+use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
 
@@ -40,14 +41,20 @@ use crate::reactive::ScopeId;
 /// Component Model boundary (RFC-058 §5.10).
 pub type SlotFragment = fn(ctx: SlotMountCtx<'_>);
 
-/// Per-invocation context for a slot fragment. Owns the host
-/// element the fragment should append into, plus both scope
-/// ids — the parent's (so directive expressions evaluate in
-/// the right scope) and the child's (so refs registered inside
-/// the slotted content participate in the correct child
-/// component's `refs::register` table).
+/// Per-invocation context for a slot fragment. The fragment
+/// appends DOM into `host` (a buffer the runtime then splices
+/// before the live `<slot>` element it's materialising), and
+/// receives both scope ids — the parent's (so directive
+/// expressions evaluate in the right scope) and the child's
+/// (so refs registered inside the slotted content participate
+/// in the correct child component's `refs::register` table).
+///
+/// Using a `DocumentFragment` rather than the live slot host
+/// keeps the fragment side oblivious to where in the DOM the
+/// content lands — same buffer pattern the legacy walker's
+/// capture/replay path uses (see [`crate::walker::materialize_slot`]).
 pub struct SlotMountCtx<'a> {
-    pub host: &'a Element,
+    pub host: &'a DocumentFragment,
     pub parent_scope_id: ScopeId,
     pub child_scope_id: ScopeId,
 }
@@ -110,4 +117,51 @@ impl SlotSet {
     pub fn is_empty(&self) -> bool {
         self.fragments.is_empty()
     }
+}
+
+// ─── runtime registry ────────────────────────────────────────────
+
+thread_local! {
+    /// Fragments the parent passed for each child component
+    /// instance, keyed by the child's `ScopeId`. Populated by
+    /// [`crate::walker::mount_child_component_with_slots`] right
+    /// after [`crate::walker::mount_component`] instantiates the
+    /// child, consumed by [`crate::walker::materialize_slot`]
+    /// when the child template's `<slot>` element is reached.
+    /// Cleared from [`crate::scope::Scope::remove`] so the map
+    /// doesn't outlive the child component.
+    static FRAGMENTS: RefCell<HashMap<ScopeId, SlotSet>> = RefCell::new(HashMap::new());
+}
+
+/// Register the parent-supplied [`SlotSet`] for a child component
+/// instance. Idempotent — a repeat call replaces the prior set
+/// (the runtime walker remounts the same scope id only after
+/// teardown, so this only fires for fresh mounts).
+///
+/// No-op when the set is empty so an opaque mount call (every
+/// `<my-tag></my-tag>` site) doesn't leak a registry entry.
+pub fn install(scope_id: ScopeId, set: SlotSet) {
+    if set.is_empty() {
+        return;
+    }
+    FRAGMENTS.with(|m| {
+        m.borrow_mut().insert(scope_id, set);
+    });
+}
+
+/// Look up the parent fragment for `(child_scope_id, name)`.
+/// Returns `None` when the parent didn't register a [`SlotSet`]
+/// for this child, or registered one without an entry for
+/// `name`. Caller (the walker's slot materialiser) falls back to
+/// the legacy capture path when this returns `None`.
+pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<SlotFragment> {
+    FRAGMENTS.with(|m| m.borrow().get(&child_scope_id)?.get(name))
+}
+
+/// Drop the fragment registration for `child_scope_id`. Hooked
+/// from [`crate::scope::Scope::remove`].
+pub fn clear(child_scope_id: ScopeId) {
+    FRAGMENTS.with(|m| {
+        m.borrow_mut().remove(&child_scope_id);
+    });
 }

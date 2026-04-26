@@ -574,6 +574,40 @@ pub fn mount_child_component(host_el: &Element, name: &str) {
     mount_component(host_el, name);
 }
 
+/// RFC-058 Phase 3.5a — variant of [`mount_child_component`] that
+/// also registers the parent-supplied [`crate::slot_fragment::SlotSet`]
+/// against the freshly-mounted child's scope, so the walker's
+/// [`materialize_slot`] picks up parent-authored slot content
+/// from the fragment registry instead of going through the legacy
+/// capture/replay path.
+///
+/// Behaviour matches `mount_child_component` exactly when `slots`
+/// is empty — the registry stays clear and `materialize_slot`
+/// falls through to the legacy path. Generated parent code in
+/// Phase 3.5b+ chooses this variant whenever it has a fragment
+/// to pass.
+pub fn mount_child_component_with_slots(
+    host_el: &Element,
+    name: &str,
+    slots: crate::slot_fragment::SlotSet,
+) {
+    mount_component(host_el, name);
+    if slots.is_empty() {
+        return;
+    }
+    // Resolve the child's scope id from the rendered root mount_component
+    // just stamped. `first_element_child` covers both the standard mount
+    // path (template root holds SCOPE_ID_KEY) and the pp-as path (hoisted
+    // user element holds SCOPE_ID_KEY).
+    let Some(root) = first_element_child(host_el) else {
+        return;
+    };
+    let Some(child_scope_id) = scope_id_of_element(&root) else {
+        return;
+    };
+    crate::slot_fragment::install(child_scope_id, slots);
+}
+
 /// Attempt to mount `tag` on `el` in `pp-as` mode: hoist the tag's
 /// single child element as the rendered root, merging the template
 /// root's attributes onto it.
@@ -1084,6 +1118,55 @@ fn materialize_slot(slot_el: &Element) {
             return;
         }
     };
+
+    // RFC-058 Phase 3.5a fast-path: if the parent registered a
+    // [`SlotFragment`] for `(owner_scope_id, slot_name)` via
+    // [`mount_child_component_with_slots`], invoke it instead of
+    // running the legacy capture/replay path. The fragment writes
+    // into a DocumentFragment buffer; we splice the buffered
+    // children before `slot_el` and remove the slot, matching the
+    // legacy path's positional semantics.
+    //
+    // `:prop` slot bindings + `pp-let` scoped slots stay on the
+    // legacy path for v1 — Phase 3.5+ teaches the fragment ABI
+    // about scoped slots; v1 fragments target opaque + simple
+    // default-slot cases first.
+    if bindings.is_empty() {
+        if let Some(fragment_fn) = crate::slot_fragment::lookup(owner_scope_id, &slot_name) {
+            let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+                return;
+            };
+            // Find the parent scope by climbing the slot owner's
+            // injection-parent chain. The owner's parent is the
+            // component that authored the slot content (the
+            // caller); fragments evaluate parent expressions
+            // against that scope.
+            let parent_scope_id = crate::context::parent_of(owner_scope_id)
+                .or_else(|| enclosing_inject_parent(slot_el))
+                .unwrap_or(owner_scope_id);
+            let buffer = doc.create_document_fragment();
+            fragment_fn(crate::slot_fragment::SlotMountCtx {
+                host: &buffer,
+                parent_scope_id,
+                child_scope_id: owner_scope_id,
+            });
+            // Splice buffered children before slot_el, then drop
+            // slot_el. Snapshot first because moves mutate the
+            // live child list.
+            let kids = buffer.child_nodes();
+            let mut snapshot: Vec<Node> = Vec::with_capacity(kids.length() as usize);
+            for i in 0..kids.length() {
+                if let Some(n) = kids.item(i) {
+                    snapshot.push(n);
+                }
+            }
+            for n in snapshot {
+                let _ = parent.insert_before(&n, Some(slot_el));
+            }
+            let _ = parent.remove_child(slot_el);
+            return;
+        }
+    }
 
     // Walk up the scope chain to find the component that captured
     // the user's slot content. Starts at the enclosing scope and

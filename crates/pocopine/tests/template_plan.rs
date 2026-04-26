@@ -134,6 +134,21 @@ struct PlanChildHost {}
 #[handlers]
 impl PlanChildHost {}
 
+/// RFC-058 Phase 3.5a — minimal `<slot>`-bearing child for
+/// the slot-fragment evidence test. The child's template stamps
+/// a `<slot>`; the test mounts the child via
+/// `mount_child_component_with_slots` with a hand-built
+/// `SlotSet` whose default fragment writes a sentinel into the
+/// `DocumentFragment` buffer. `materialize_slot` must invoke
+/// the fragment (not the legacy capture path) because the test
+/// passes no slot content via the host's children.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanSlotChild.html")]
+struct PlanSlotChild {}
+
+#[handlers]
+impl PlanSlotChild {}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -146,6 +161,7 @@ fn register_all() {
     PlanForLoop::register();
     PlanChildLeaf::register();
     PlanChildHost::register();
+    PlanSlotChild::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -268,6 +284,54 @@ async fn template_with_pp_for_skips_template_plan() {
         .unwrap()
         .expect("walker-driven pp-for should still mount the row");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3.5a — the slot-fragment runtime hook: a
+/// hand-built `SlotSet` passed via
+/// `mount_child_component_with_slots` is invoked by
+/// `materialize_slot` instead of the legacy capture/replay
+/// path. Demonstrates the parent-owned slot fragment ABI
+/// end-to-end; Phase 3.5b graduates the macro to emit these
+/// fragments automatically.
+#[wasm_bindgen_test]
+async fn slot_fragment_runtime_hook_replaces_capture_path() {
+    use pocopine_core::slot_fragment::{SlotMountCtx, SlotSet};
+
+    register_all();
+
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    body.append_child(&host).unwrap();
+
+    let child = doc().create_element("plan-slot-child").unwrap();
+    host.append_child(&child).unwrap();
+
+    fn fragment(ctx: SlotMountCtx<'_>) {
+        let doc = web_sys::window().unwrap().document().unwrap();
+        let span = doc.create_element("span").unwrap();
+        span.set_attribute("class", "psc-fragment-marker").unwrap();
+        span.set_text_content(Some("from-fragment"));
+        ctx.host.append_child(&span).unwrap();
+    }
+
+    let slots = SlotSet::new().default_slot(fragment);
+    pocopine_core::walker::mount_child_component_with_slots(&child, "plan-slot-child", slots);
+
+    pocopine_core::walker::start(&host);
+    tick().await;
+
+    let marker = host
+        .query_selector(".psc-fragment-marker")
+        .unwrap()
+        .expect("fragment-emitted span must replace the child's <slot>");
+    assert_eq!(marker.text_content().as_deref(), Some("from-fragment"));
+
+    // The legacy capture path would have left no marker in the
+    // DOM (the host had no slot content for the child to capture
+    // by name), so finding it here is positive evidence the
+    // fragment hook fired.
 
     host.remove();
 }
