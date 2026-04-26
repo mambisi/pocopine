@@ -295,6 +295,43 @@ impl PlanIfHostDirectiveHost {
     }
 }
 
+/// Child with a generated model channel used by the compiled
+/// child-host `pp-model` regression.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanModelDirectiveChild.html")]
+struct PlanModelDirectiveChild {
+    #[model]
+    value: String,
+}
+
+#[handlers]
+impl PlanModelDirectiveChild {
+    pub fn set_value(&mut self, value: String) {
+        self.value = value;
+    }
+}
+
+/// Host whose lifted pp-if body contains a custom tag with
+/// parent-scope `pp-model:value`. This specifically covers the
+/// `StaticChildHostModel` path, separate from `:prop` and
+/// `@event`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfModelDirectiveHost.html")]
+struct PlanIfModelDirectiveHost {
+    open: bool,
+    email: String,
+}
+
+#[handlers]
+impl PlanIfModelDirectiveHost {
+    pub fn on_setup(&mut self) {
+        self.email = "initial-model-email".into();
+    }
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -413,6 +450,8 @@ fn register_all() {
     PlanIfChildHost::register();
     PlanHostDirectiveChild::register();
     PlanIfHostDirectiveHost::register();
+    PlanModelDirectiveChild::register();
+    PlanIfModelDirectiveHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -815,6 +854,86 @@ async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
         compiled_fallback_walk_count(),
         0,
         "planned child host directives should not need walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — child-component `pp-model`
+/// inside a lifted body is installed from `StaticChildMount`
+/// after the child scope exists. Parent -> child and child ->
+/// parent both work without fallback walk.
+#[wasm_bindgen_test]
+async fn lifted_child_host_model_installs_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-if-model-directive-host")
+        .expect("plan-if-model-directive-host registers a template plan");
+    let body = plan.if_plans[0]
+        .body
+        .expect("model directive child body should lift");
+    let _ = body;
+
+    let host = mount("<plan-if-model-directive-host></plan-if-model-directive-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".pimdh-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let child_value = host
+        .query_selector(".pmdc-value")
+        .unwrap()
+        .expect("child model value should mount");
+    assert_eq!(
+        child_value.text_content().as_deref(),
+        Some("initial-model-email"),
+        "compiled pp-model:value should mirror parent into child",
+    );
+
+    let child = host
+        .query_selector("plan-model-directive-child")
+        .unwrap()
+        .unwrap();
+    let child_root = child.first_element_child().unwrap();
+    let (child_scope, _) =
+        pocopine_core::walker::scope_of_element(&child_root).expect("child scope");
+    let args = js_sys::Array::new();
+    args.push(&JsValue::from_str("child-model-update"));
+    pocopine_core::scope::invoke_handler(child_scope, "set_value", &args);
+    tick().await;
+
+    let parent_value = host
+        .query_selector(".pimdh-email")
+        .unwrap()
+        .expect("parent model mirror should mount");
+    assert_eq!(
+        parent_value.text_content().as_deref(),
+        Some("child-model-update"),
+        "child model update should emit through compiled host pp-model",
+    );
+    assert_eq!(
+        child_value.text_content().as_deref(),
+        Some("child-model-update"),
+        "parent mirror should flow back into child without fallback",
+    );
+
+    let args = js_sys::Array::new();
+    args.push(&JsValue::from_str(""));
+    pocopine_core::scope::invoke_handler(child_scope, "set_value", &args);
+    tick().await;
+    assert_eq!(
+        parent_value.text_content().as_deref(),
+        Some(""),
+        "empty string model updates should not be dropped",
+    );
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "planned child host pp-model should not need walker fallback",
     );
 
     host.remove();
