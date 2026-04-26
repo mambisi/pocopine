@@ -140,11 +140,7 @@ pub fn install(
     let timer: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
     // Key modifiers (RFC-013). Cloned into the closure below.
-    let key_modifiers: Vec<String> = modifiers
-        .iter()
-        .filter(|m| is_key_modifier(m))
-        .cloned()
-        .collect();
+    let key_modifiers = collect_key_modifiers(modifiers);
 
     let el_for_closure = el.clone();
     // Keep the debounce closure alive by moving it into the outer
@@ -338,16 +334,37 @@ fn parse_debounce(modifiers: &[String]) -> Option<u32> {
     None
 }
 
+fn collect_key_modifiers(modifiers: &[String]) -> Vec<String> {
+    modifiers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if i > 0 && modifiers[i - 1] == "debounce" && m.parse::<u32>().is_ok() {
+                return None;
+            }
+            is_key_modifier(m).then(|| m.clone())
+        })
+        .collect()
+}
+
 /// Modifiers that participate in the RFC-013 key filter. Everything
 /// else (`prevent`, `stop`, `self`, `once`, `window`, `document`,
-/// `debounce`, `outside`, numeric debounce args) is handled elsewhere
+/// `debounce`, `outside`, `capture`, numeric debounce args) is handled elsewhere
 /// and must be explicitly excluded so a directive like
 /// `pp-on:click.outside` doesn't accidentally treat `outside` as a
 /// keyboard key name and filter out every non-keyboard event.
 fn is_key_modifier(m: &str) -> bool {
     if matches!(
         m,
-        "prevent" | "stop" | "self" | "once" | "window" | "document" | "debounce" | "outside"
+        "prevent"
+            | "stop"
+            | "self"
+            | "once"
+            | "window"
+            | "document"
+            | "debounce"
+            | "outside"
+            | "capture"
     ) {
         return false;
     }
@@ -409,4 +426,31 @@ fn key_filter_matches(ev: &Event, modifiers: &[String]) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_key_modifiers, is_key_modifier};
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_string()).collect()
+    }
+
+    #[test]
+    fn capture_is_not_a_key_filter() {
+        assert!(!is_key_modifier("capture"));
+    }
+
+    #[test]
+    fn debounce_delay_is_not_a_key_filter() {
+        assert_eq!(
+            collect_key_modifiers(&strings(&["debounce", "500"])),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn numeric_key_shortcuts_still_filter_when_not_debounce_delay() {
+        assert_eq!(collect_key_modifiers(&strings(&["1"])), strings(&["1"]));
+    }
 }
