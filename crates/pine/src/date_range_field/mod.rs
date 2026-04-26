@@ -66,13 +66,23 @@ impl PineDateRangeField {
             return;
         };
         let part = target.get_attribute("data-part");
+        // Class-only selector: the `pine-date-range-field-{start,end}`
+        // class is authored on the inner `<pine-date-field>` custom
+        // tag, but the walker strips fallthrough class/style off the
+        // outer custom tag after forwarding them onto the rendered
+        // template root. So the class lives on the inner
+        // `<div class="pine-date-field">`, not on the
+        // `<pine-date-field>` custom element. A combined
+        // `pine-date-field.pine-date-range-field-start` selector
+        // matches nothing post-strip; a class-only selector matches
+        // the rendered root, which is what we want.
         let in_start = target
-            .closest("pine-date-field.pine-date-range-field-start")
+            .closest(".pine-date-range-field-start")
             .ok()
             .flatten()
             .is_some();
         let in_end = target
-            .closest("pine-date-field.pine-date-range-field-end")
+            .closest(".pine-date-range-field-end")
             .ok()
             .flatten()
             .is_some();

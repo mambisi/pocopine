@@ -54,13 +54,19 @@ impl PineTimeRangeField {
             return;
         };
         let part = target.get_attribute("data-part");
+        // Class-only selector — see PineDateRangeField::on_key for
+        // the rationale: the walker strips fallthrough class/style
+        // off the outer custom tag after forwarding, so the
+        // `pine-time-range-field-{start,end}` class lives on the
+        // inner rendered `<div class="pine-time-field">` rather
+        // than on the `<pine-time-field>` custom element.
         let in_start = target
-            .closest("pine-time-field.pine-time-range-field-start")
+            .closest(".pine-time-range-field-start")
             .ok()
             .flatten()
             .is_some();
         let in_end = target
-            .closest("pine-time-field.pine-time-range-field-end")
+            .closest(".pine-time-range-field-end")
             .ok()
             .flatten()
             .is_some();
