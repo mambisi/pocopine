@@ -1,0 +1,10 @@
+<div class="tags-for-host">
+  <pine-tags-input-root>
+    <template pp-for="tag in tags" pp-key="tag">
+      <pine-tags-input-item :value="tag" class="tfh-chip">
+        <pine-tags-input-item-text></pine-tags-input-item-text>
+        <pine-tags-input-item-delete class="tfh-chip-x">×</pine-tags-input-item-delete>
+      </pine-tags-input-item>
+    </template>
+  </pine-tags-input-root>
+</div>

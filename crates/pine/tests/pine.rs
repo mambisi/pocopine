@@ -5849,6 +5849,86 @@ async fn time_range_field_tab_bridges_start_end_edges() {
     host.remove();
 }
 
+/// Outer authoring component for the inject-chain regression —
+/// owns the `tags` array that pp-for iterates. The slot
+/// AUTHOR (this scope) and slot OWNER (`pine-tags-input-root`)
+/// are intentionally distinct so the chain test exercises the
+/// real-world structure that broke the chip-delete bug.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template = "TagsForHost.html")]
+struct TagsForHost {
+    tags: Vec<String>,
+}
+
+#[handlers]
+impl TagsForHost {
+    pub fn on_setup(&mut self) {
+        self.tags = vec!["alpha".into(), "beta".into(), "gamma".into()];
+    }
+}
+
+/// Deterministic structural regression for the chip-delete bug —
+/// independent of event-dispatch ordering, which differs across
+/// headless Firefox / Chromium and was why the click-based test
+/// above passed in CI while real-browser delete-clicks failed.
+///
+/// Mounts a fixture that mirrors the website demo's structure:
+/// `<tags-for-host>` (an authoring component) wraps
+/// `<pine-tags-input-root>` (the slot owner) whose default slot
+/// contains a `<template pp-for>` over the host's `tags`. The
+/// slot AUTHOR and slot OWNER are distinct scopes — exactly the
+/// shape that broke when `pp-for::install` ignored the
+/// `CTX_PARENT_KEY` set by the slot materialiser.
+///
+/// Walks the inject parent chain from the chip × button's scope
+/// upward and asserts that the chain reaches a scope whose
+/// element has the `pine-tags-input-root` tag. Without that hop,
+/// `<pine-tags-input-item-delete>::ROOT.inject()` returns
+/// `None` and the chip × becomes inert.
+#[wasm_bindgen_test]
+async fn tags_input_per_chip_inject_chain_reaches_root() {
+    TagsForHost::register();
+    let host = mount("<tags-for-host></tags-for-host>");
+    tick().await;
+    sleep_ms(10).await;
+    tick().await;
+
+    let chip_x = host
+        .query_selector(".tfh-chip-x")
+        .unwrap()
+        .expect("chip × must mount");
+    let (delete_scope, _) = pocopine_core::walker::scope_of_element(&chip_x).expect("delete scope");
+
+    let mut cur = Some(delete_scope);
+    let mut chain: Vec<(u64, Option<String>)> = Vec::new();
+    let mut found_root = false;
+    while let Some(s) = cur {
+        let tag = pocopine_core::walker::find_element_for_scope(s)
+            .and_then(|el| el.parent_element().map(|p| p.tag_name().to_lowercase()));
+        chain.push((s.0, tag.clone()));
+        if tag.as_deref() == Some("pine-tags-input-root") {
+            found_root = true;
+            break;
+        }
+        cur = pocopine_core::context::parent_of(s);
+        if chain.len() > 12 {
+            break;
+        }
+    }
+
+    assert!(
+        found_root,
+        "chip × inject chain must reach pine-tags-input-root's scope; \
+         got chain {chain:?}. Without this hop, `ROOT.inject()` returns \
+         None and the chip × handler becomes inert. The cause is usually \
+         that `pp-for::install` ignored `CTX_PARENT_KEY` on the template \
+         element when setting the LoopScope's inject parent — the \
+         LoopScope chained to the slot author instead of the slot owner.",
+    );
+
+    host.remove();
+}
+
 // ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
 
 /// Survey every registered Pine template plan and assert none
@@ -5900,3 +5980,35 @@ async fn pine_template_plan_fallback_audit() {
         walker_owned,
     );
 }
+
+// ─── pp-for FLIP regressions ─────────────────────────────────────
+//
+// The chip-flying-from-origin regression
+// (`flip_target_for_entry` using `parent_node().is_none()`
+// instead of `!is_connected()`) is timing-dependent at the
+// visible-DOM layer: WAAPI `animate(... fill: "none")` clears
+// the transform after the animation settles, and headless
+// Firefox's wasm-bindgen-test harness exercises a different
+// rendering / scheduling path than chromium so the bug pattern
+// (entry with `parent_node` from a cloned `DocumentFragment`
+// + `!is_connected` + `data-pp-animate=flip`) doesn't reliably
+// reproduce in this suite.
+//
+// The regression suite for that bug lives at
+// `jsbench/tags_input_repro/perf.py` — a Playwright + chromium
+// driver that adds a chip and inspects its `transform` matrix
+// across the first 8 frames. Run it manually after touching
+// `flip_target_for_entry`, `clone_template_body`,
+// `stamp_dynamic_slot`, or anything in the slot-fragment install
+// path:
+//
+// ```
+// wasm-pack build --release --target web jsbench/tags_input_repro
+// python3 jsbench/tags_input_repro/perf.py
+// ```
+//
+// A passing run shows frame 0 with `transform: scale(0.95)` (the
+// pp-transition entrance) and the chip at its final laid-out
+// position. A regression shows `matrix(1, 0, 0, 1, -X, -Y)` on
+// frame 0 with X/Y matching the chip's final position — flying
+// in from the document upper-left.
