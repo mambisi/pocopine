@@ -170,7 +170,7 @@ def run(browser_name: str) -> int:
         print(f"  {err}")
     print(f"console msgs (delete-related):")
     for line in all_console:
-        if any(k in line for k in ["[delete]", "[error]", "for_::install", "materialize_slot"]):
+        if any(k in line for k in ["[delete]", "[error]", "for_::install", "materialize_slot", "flip_with_new_rect"]):
             print(f"  {line}")
     print(f"failures: {len(failures)}")
     for f in failures:

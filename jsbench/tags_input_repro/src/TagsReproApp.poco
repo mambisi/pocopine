@@ -14,4 +14,6 @@
 
   <div id="state" pp-text="tags"></div>
   <button id="seed-500" pp-on:click="seed_500">Seed 500</button>
+  <button id="add-one" pp-on:click="add_one">Add one</button>
+  <button id="shuffle" pp-on:click="shuffle">Shuffle</button>
 </div>
