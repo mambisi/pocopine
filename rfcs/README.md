@@ -66,3 +66,4 @@ Conventions:
 | 055 | [Typed context ergonomics on top of keyed `provide` / `inject`](./rfc-055-typed-context.md) | Deferred to 056 |
 | 056 | [Component interaction safety batch](./rfc-056-component-interaction-safety-batch.md) | Implemented (all phases + follow-on infrastructure) |
 | 057 | [Compile-time template plans](./rfc-057-compile-time-template-plans.md) | Draft |
+| 058 | [Compiled views and walker removal](./rfc-058-compiled-views-walker-removal.md) | Draft |
