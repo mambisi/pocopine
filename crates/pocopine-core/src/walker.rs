@@ -392,28 +392,6 @@ fn bind(el: &Element) {
 ///  * bind the scope to the template's root and strip its `pp-data`,
 ///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * move captured children into the first `<slot>` within the template.
-/// Mount the registered component named `name` onto the
-/// `host_el` host. Public façade over the runtime walker's
-/// existing `mount_component`. Generated mount code (RFC-058
-/// Phase 2+) calls this when it encounters a child-component
-/// site instead of leaving the tag for the walker's auto-
-/// discovery pass to find.
-///
-/// Preserves the full ten-step ordering the walker has today:
-/// instantiate scope → set RFC-027 parent context → apply
-/// static props → run `on_setup` → build proxy → capture slot
-/// content → stamp template HTML → bind scope to template root
-/// → fallthrough attrs → transition presets → mark mounted.
-///
-/// v1 façade only — slot content + parent-driven dynamic prop
-/// writes still come from the host DOM as the walker has
-/// always done. Phase 3 grows the explicit `ChildMount`
-/// envelope that lets generated parents pass slot fragments
-/// and static/dynamic prop tables directly.
-pub fn mount_child_component(host_el: &Element, name: &str) {
-    mount_component(host_el, name);
-}
-
 fn mount_component(el: &Element, tag: &str) {
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
@@ -560,6 +538,28 @@ fn mount_component(el: &Element, tag: &str) {
     // Mark the tag as mounted so the recursive walk doesn't re-enter this
     // branch if, for some reason, the walker visits it again.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
+}
+
+/// Mount the registered component named `name` onto `host_el`.
+/// Public façade over the runtime walker's existing
+/// `mount_component`. Generated mount code (RFC-058 Phase 2+)
+/// calls this when it encounters a child-component site instead
+/// of leaving the tag for the walker's auto-discovery pass to
+/// find.
+///
+/// Preserves the full ten-step ordering the walker has today:
+/// instantiate scope → set RFC-027 parent context → apply static
+/// props → run `on_setup` → build proxy → capture slot content
+/// → stamp template HTML → bind scope to template root →
+/// fallthrough attrs → transition presets → mark mounted.
+///
+/// v1 façade only — slot content + parent-driven dynamic prop
+/// writes still come from the host DOM as the walker has always
+/// done. Phase 3 grows the explicit `ChildMount` envelope that
+/// lets generated parents pass slot fragments and prop tables
+/// directly.
+pub fn mount_child_component(host_el: &Element, name: &str) {
+    mount_component(host_el, name);
 }
 
 /// Attempt to mount `tag` on `el` in `pp-as` mode: hoist the tag's
