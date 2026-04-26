@@ -216,6 +216,18 @@ impl PlanIfHost {
     }
 }
 
+/// RFC-058 Phase 4.3 — host with one `<template pp-teleport>`
+/// site. The classifier lifts the directive into a
+/// `StaticTeleportPlan`, strips `pp-teleport` from the cleaned
+/// HTML, and the runtime applier resolves the target via
+/// `teleport::install`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanTeleportHost.html")]
+struct PlanTeleportHost {}
+
+#[handlers]
+impl PlanTeleportHost {}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 fn doc() -> web_sys::Document {
@@ -232,6 +244,7 @@ fn register_all() {
     PlanSlotHostStatic::register();
     PlanIfHost::register();
     PlanForMixed::register();
+    PlanTeleportHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -360,6 +373,44 @@ async fn template_with_only_pp_for_emits_for_plan() {
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
 
     host.remove();
+}
+
+/// RFC-058 Phase 4.3 — pp-teleport on `<template>` graduates
+/// into a `StaticTeleportPlan`. The applier resolves the
+/// target selector and clones the template body to it; the
+/// portal content lands on `<body>` and the back-link to the
+/// origin template is set so consumers can walk back to the
+/// host scope.
+#[wasm_bindgen_test]
+async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-teleport-host")
+        .expect("plan-teleport-host has one pp-teleport site");
+    assert_eq!(plan.teleport_plans.len(), 1);
+    assert_eq!(plan.teleport_plans[0].selector, "body");
+
+    let host = mount("<plan-teleport-host></plan-teleport-host>");
+    tick().await;
+
+    let body = doc().body().unwrap();
+    let portal = body
+        .query_selector(".pth-portal")
+        .unwrap()
+        .expect("teleported content must land in <body>");
+    assert_eq!(portal.text_content().as_deref(), Some("teleported-content"));
+    // The portal must NOT be inside the host (it was teleported out).
+    assert!(host.query_selector(".pth-portal").unwrap().is_none());
+    assert_eq!(plan_failure_count(), 0);
+
+    // Manual cleanup so the portal doesn't leak into sibling
+    // tests on `body` (the test's mount observer is rooted at
+    // `host`, so detaching host doesn't fire release for the
+    // inner template — same semantics as today's walker path).
+    pocopine_core::walker::release_compiled_subtree(&host);
+    host.remove();
+    portal.remove();
 }
 
 /// RFC-058 Phase 4.2 — pp-for + non-pp-for plan-eligible

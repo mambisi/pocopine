@@ -163,6 +163,12 @@ struct AnalysisCtx {
     /// applier hands the pre-resolved pieces to
     /// [`crate::directives::for_::install`].
     for_plans: Vec<ForPlanLite>,
+    /// RFC-058 Phase 4.3 — `pp-teleport` controller sites
+    /// without a co-occurring `pp-if`. Each entry pins the
+    /// `<template>`'s `node_path` + the literal target
+    /// selector; the runtime applier resolves the target and
+    /// calls [`crate::directives::teleport::install`].
+    teleport_plans: Vec<TeleportPlanLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -232,6 +238,11 @@ struct ForPlanLite {
     stagger_ms: u32,
 }
 
+struct TeleportPlanLite {
+    template_node_path: Vec<u16>,
+    selector: String,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -259,6 +270,7 @@ impl AnalysisCtx {
             || !self.child_mounts.is_empty()
             || !self.if_plans.is_empty()
             || !self.for_plans.is_empty()
+            || !self.teleport_plans.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -312,6 +324,7 @@ impl AnalysisCtx {
         let child_mounts_tokens = self.child_mounts.iter().map(emit_child_mount);
         let if_plans_tokens = self.if_plans.iter().map(emit_if_plan);
         let for_plans_tokens = self.for_plans.iter().map(emit_for_plan);
+        let teleport_plans_tokens = self.teleport_plans.iter().map(emit_teleport_plan);
         quote! {
             ::pocopine::__private::StaticTemplatePlan {
                 bindings: &[ #(#bindings_tokens),* ],
@@ -321,6 +334,7 @@ impl AnalysisCtx {
                 child_mounts: &[ #(#child_mounts_tokens),* ],
                 if_plans: &[ #(#if_plans_tokens),* ],
                 for_plans: &[ #(#for_plans_tokens),* ],
+                teleport_plans: &[ #(#teleport_plans_tokens),* ],
             }
         }
     }
@@ -402,6 +416,17 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
         ::pocopine::__private::StaticIfPlan {
             template_node_path: #path,
             expr_src: #expr,
+        }
+    }
+}
+
+fn emit_teleport_plan(tp: &TeleportPlanLite) -> TokenStream {
+    let path = emit_node_path(&tp.template_node_path);
+    let sel = proc_macro2::Literal::string(&tp.selector);
+    quote! {
+        ::pocopine::__private::StaticTeleportPlan {
+            template_node_path: #path,
+            selector: #sel,
         }
     }
 }
@@ -518,12 +543,34 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         return;
     }
 
-    // Whole-element block boundaries: pp-teleport / `<slot>`.
-    // Every directive on or under these stays on the walker —
-    // the walker's `pp-teleport` controller owns mount
-    // lifecycle for that subtree and pre-mounting from the
-    // plan would race it. RFC-058 Phase 4.3 graduates
-    // pp-teleport; v1 keeps it on the walker.
+    // RFC-058 Phase 4.3 — `pp-teleport` on a `<template>` host
+    // graduates into a `StaticTeleportPlan` entry. Eligibility:
+    // host is `<template>`, no co-occurring `pp-if` (pp-if owns
+    // the mount cycle in that combo and reads pp-teleport
+    // itself), no co-occurring `pp-for` (pp-for graduated above
+    // and shouldn't be paired with pp-teleport on the same
+    // element — degenerate case, leave on walker).
+    if let Some(selector) = pp_teleport_value(el) {
+        let has_if = el.attrs.iter().any(|(n, _)| n == "pp-if");
+        let has_for = el.attrs.iter().any(|(n, _)| n == "pp-for");
+        if el.tag == "template" && !has_if && !has_for && !selector.trim().is_empty() {
+            ctx.teleport_plans.push(TeleportPlanLite {
+                template_node_path: path.clone(),
+                selector,
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.clone(),
+                name: "pp-teleport".to_string(),
+            });
+            return;
+        }
+        // Ineligible (wrong host, has pp-if/pp-for, empty
+        // selector) — leave the walker to dispatch.
+        return;
+    }
+
+    // Whole-element block boundary: `<slot>`. Every directive
+    // on or under it stays on the walker.
     if is_block_boundary(el) {
         return;
     }
@@ -642,15 +689,7 @@ fn is_html5_native(tag: &str) -> bool {
 }
 
 fn is_block_boundary(el: &Element) -> bool {
-    if el.tag == "slot" {
-        return true;
-    }
-    for (name, _) in &el.attrs {
-        if name == "pp-teleport" {
-            return true;
-        }
-    }
-    false
+    el.tag == "slot"
 }
 
 fn pp_if_value(el: &Element) -> Option<String> {
@@ -664,6 +703,13 @@ fn pp_for_value(el: &Element) -> Option<String> {
     el.attrs
         .iter()
         .find(|(n, _)| n == "pp-for")
+        .map(|(_, v)| v.clone())
+}
+
+fn pp_teleport_value(el: &Element) -> Option<String> {
+    el.attrs
+        .iter()
+        .find(|(n, _)| n == "pp-teleport")
         .map(|(_, v)| v.clone())
 }
 
