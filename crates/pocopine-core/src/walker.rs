@@ -60,7 +60,7 @@ const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 /// where `<Trigger>` authored inside `<Root>` must inject from
 /// `<Root>`, regardless of where the user's enclosing template
 /// scope points.
-const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
+pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
 pub fn start_on_body() {
@@ -322,7 +322,7 @@ fn bind(el: &Element) {
     // SCOPE_ID_KEY would mistake the loop scope for "already mounted"
     // and skip the component mount entirely.
     if is_registered(&tag) && get_private(el, "__pp_mounted").is_none() {
-        mount_component(el, &tag);
+        mount_component(el, &tag, None);
     }
 
     // Snapshot all pp-* attributes — some directives mutate the element
@@ -402,7 +402,11 @@ fn bind(el: &Element) {
 ///  * bind the scope to the template's root and strip its `pp-data`,
 ///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * move captured children into the first `<slot>` within the template.
-fn mount_component(el: &Element, tag: &str) {
+fn mount_component(
+    el: &Element,
+    tag: &str,
+    supplied_slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
+) {
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
     // engages when all the structural constraints hold; otherwise
@@ -463,6 +467,9 @@ fn mount_component(el: &Element, tag: &str) {
     // in the default slot.
     let slot_store = capture_slots(el);
     slots::put(scope.id, slot_store);
+    if let Some((slots, parent_scope_id, parent_proxy)) = supplied_slots {
+        crate::slot_fragment::install(scope.id, slots, parent_scope_id, parent_proxy);
+    }
 
     // Clone the registered template in. `set_inner_html` drops the
     // tag's former children, which is the "capture" side of the old
@@ -575,21 +582,21 @@ fn mount_component(el: &Element, tag: &str) {
 /// → stamp template HTML → bind scope to template root →
 /// fallthrough attrs → transition presets → mark mounted.
 ///
-/// v1 façade only — slot content + parent-driven dynamic prop
-/// writes still come from the host DOM as the walker has always
-/// done. Phase 3 grows the explicit `ChildMount` envelope that
-/// lets generated parents pass slot fragments and prop tables
-/// directly.
+/// v1 façade only — parent-driven dynamic prop writes still
+/// come from the host DOM as the walker has always done.
+/// Generated parents with lifted slot content call the
+/// `*_with_slots` variant below.
 pub fn mount_child_component(host_el: &Element, name: &str) {
-    mount_component(host_el, name);
+    mount_component(host_el, name, None);
 }
 
 /// RFC-058 Phase 3.5a — variant of [`mount_child_component`] that
 /// also registers the parent-supplied [`crate::slot_fragment::SlotSet`]
-/// against the freshly-mounted child's scope, so the walker's
-/// [`materialize_slot`] picks up parent-authored slot content
-/// from the fragment registry instead of going through the legacy
-/// capture/replay path.
+/// against the freshly-created child's scope before the child's
+/// template plan runs. That lets compiled `<slot>` outlets pick
+/// up parent-authored slot content from the fragment registry
+/// instead of waiting for the recursive walker to discover the
+/// slot element.
 ///
 /// `parent_scope_id` + `parent_proxy` (RFC-058 Phase 3.5c) get
 /// stored alongside the set so dynamic slot content (slot
@@ -598,10 +605,8 @@ pub fn mount_child_component(host_el: &Element, name: &str) {
 /// fragment fires.
 ///
 /// Behaviour matches `mount_child_component` exactly when `slots`
-/// is empty — the registry stays clear and `materialize_slot`
-/// falls through to the legacy path. Generated parent code in
-/// Phase 3.5b+ chooses this variant whenever it has a fragment
-/// to pass.
+/// is empty. Generated parent code in Phase 3.5b+ chooses this
+/// variant whenever it has a fragment to pass.
 pub fn mount_child_component_with_slots(
     host_el: &Element,
     name: &str,
@@ -609,21 +614,15 @@ pub fn mount_child_component_with_slots(
     parent_scope_id: ScopeId,
     parent_proxy: &JsValue,
 ) {
-    mount_component(host_el, name);
     if slots.is_empty() {
+        mount_component(host_el, name, None);
         return;
     }
-    // Resolve the child's scope id from the rendered root mount_component
-    // just stamped. `first_element_child` covers both the standard mount
-    // path (template root holds SCOPE_ID_KEY) and the pp-as path (hoisted
-    // user element holds SCOPE_ID_KEY).
-    let Some(root) = first_element_child(host_el) else {
-        return;
-    };
-    let Some(child_scope_id) = scope_id_of_element(&root) else {
-        return;
-    };
-    crate::slot_fragment::install(child_scope_id, slots, parent_scope_id, parent_proxy.clone());
+    mount_component(
+        host_el,
+        name,
+        Some((slots, parent_scope_id, parent_proxy.clone())),
+    );
 }
 
 /// Attempt to mount `tag` on `el` in `pp-as` mode: hoist the tag's
@@ -1103,6 +1102,11 @@ fn normalise_shorthand_attr(name: &str) -> String {
     name.to_string()
 }
 
+/// Compiled template-plan entry point for `<slot>` outlets.
+pub(crate) fn materialize_compiled_slot_outlet(slot_el: &Element) {
+    materialize_slot(slot_el);
+}
+
 /// Replace a `<slot>` element in a component template with the
 /// matching user-provided content (from the slot store) or the
 /// slot's own default children. Per RFC-011 §5.2.
@@ -1533,12 +1537,35 @@ struct ListenerEntry {
 }
 
 thread_local! {
+    static COMPILED_FALLBACK_WALKS: Cell<u32> = const { Cell::new(0) };
+
     /// Monotonically-increasing id stamped on each element that
     /// tracks listeners. Same shape as the per-scope id stamp —
     /// cheap integer in a JS private field, rich state side-tabled.
     static LISTENER_NEXT_ID: Cell<u64> = const { Cell::new(1) };
     static LISTENERS: RefCell<HashMap<u64, Vec<ListenerEntry>>> =
         RefCell::new(HashMap::new());
+}
+
+/// Walker-discovery bridge used only by compiled-view paths that
+/// still have preserved runtime-owned behavior inside a generated
+/// fragment. RFC-058 Phase 6 should drive this counter to zero,
+/// then remove this wrapper and the corresponding call sites.
+pub fn walk_compiled_fallback(el: &Element) {
+    COMPILED_FALLBACK_WALKS.with(|c| c.set(c.get().saturating_add(1)));
+    walk(el);
+}
+
+/// Number of compiled-path fallback walks since the last reset.
+/// Tests use this as the migration guard for RFC-058 walker
+/// removal work.
+pub fn compiled_fallback_walk_count() -> u32 {
+    COMPILED_FALLBACK_WALKS.with(Cell::get)
+}
+
+/// Reset the compiled fallback walk counter.
+pub fn reset_compiled_fallback_walk_count() {
+    COMPILED_FALLBACK_WALKS.with(|c| c.set(0));
 }
 
 fn listener_slot_for(el: &Element) -> u64 {

@@ -175,6 +175,24 @@ pub struct StaticSlotFragment {
     pub fragment: crate::slot_fragment::SlotFragment,
 }
 
+/// Static-lifetime descriptor for a `<slot>` outlet inside a
+/// compiled component template. RFC-058 Phase 3.5e.
+///
+/// The macro leaves the `<slot>` element in the cleaned HTML
+/// so named slots, default fallback children, and scoped-slot
+/// `:prop` attributes keep the same runtime shape. The template
+/// plan records the outlet path so `apply_static_plan` can
+/// materialise it explicitly after all other path-based plan
+/// entries have resolved. That removes `<slot>` from the
+/// recursive walker's discovery path for planned templates while
+/// retaining the legacy materialiser as the scoped/fallback
+/// bridge.
+#[doc(hidden)]
+pub struct StaticSlotOutlet {
+    pub node_path: &'static [u16],
+    pub name: &'static str,
+}
+
 /// Static-lifetime descriptor for a `<template pp-if="<expr>">`
 /// site. RFC-058 Phase 4.1b (controller) + 4.1d (body lifting).
 ///
@@ -189,6 +207,12 @@ pub struct StaticSlotFragment {
 /// parses it via `expr::parse_cached` and hands the AST to
 /// [`crate::directives::if_::install`].
 ///
+/// `teleport_selector` is `Some` for a co-occurring
+/// `pp-if` + `pp-teleport` site. The macro strips both source
+/// attributes so the runtime walker does not double-install
+/// either directive; the compiled if controller uses this
+/// selector directly when the branch mounts.
+///
 /// `body` is the macro-emitted [`IfBodyFn`] when the body
 /// subtree qualified for Phase 4.1d lifting. The runtime
 /// installer invokes the fragment to materialise the body
@@ -202,6 +226,7 @@ pub struct StaticSlotFragment {
 pub struct StaticIfPlan {
     pub template_node_path: &'static [u16],
     pub expr_src: &'static str,
+    pub teleport_selector: Option<&'static str>,
     pub body: Option<IfBodyFn>,
 }
 

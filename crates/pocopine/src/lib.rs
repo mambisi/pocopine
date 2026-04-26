@@ -67,7 +67,7 @@ pub mod __private {
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
         IfBodyFn, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticRef,
-        StaticSlotFragment, StaticTeleportPlan,
+        StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::templates_plan::{
         apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
@@ -79,8 +79,9 @@ pub mod __private {
     // namespace. Same shape as the existing `register_template` /
     // `register_row_plans` re-exports above.
     pub use pocopine_core::walker::{
-        defer_init_on, fire_mount_post_order, fire_ready_next_tick, mount_child_component,
-        mount_child_component_with_slots, release_compiled_subtree,
+        compiled_fallback_walk_count, defer_init_on, fire_mount_post_order, fire_ready_next_tick,
+        mount_child_component, mount_child_component_with_slots, release_compiled_subtree,
+        reset_compiled_fallback_walk_count, walk_compiled_fallback,
     };
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.

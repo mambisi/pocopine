@@ -154,10 +154,18 @@ pub fn install(
             &TELEPORT_ORIGIN_KEY.into(),
             template_el.as_ref(),
         );
-        // Walk only when no body fragment ran — the fragment
-        // already installed every directive in the subtree, so a
-        // walk would race a duplicate install.
-        if !fragment_built {
+        // Walk the cleaned fragment after insertion so preserved
+        // fallback directives inside nested custom-component
+        // templates still install. Plan-owned attributes were
+        // stripped by the macro, and generated child mounts are
+        // guarded by `__pp_mounted`.
+        if fragment_built {
+            if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
+                walker::walk_compiled_fallback(&clone_root);
+            } else {
+                walker::mark_walked(&clone_root);
+            }
+        } else {
             walker::walk(&clone_root);
         }
         stash_teleported(&template_el, &clone_root);

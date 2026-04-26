@@ -53,7 +53,7 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    install(template, call.proxy.clone(), ast, None);
+    install(template, call.proxy.clone(), ast, None, None);
 }
 
 /// Compiled-path entry point. Same lifecycle as [`run`] but skips
@@ -81,14 +81,17 @@ pub fn install(
     parent_proxy: JsValue,
     ast: Spanned<expr::Expr>,
     body_fn: Option<crate::directives::for_plan::IfBodyFn>,
+    teleport_selector: Option<&str>,
 ) {
     let template_el: Element = template.clone().into();
     let track_anchor = template_el.clone();
 
     // Resolve the teleport target + enclosing scope once at setup.
     // Both are stable for the lifetime of the template host.
-    let teleport_target: Option<Element> = template_el
-        .get_attribute("pp-teleport")
+    let teleport_selector = teleport_selector
+        .map(str::to_string)
+        .or_else(|| template_el.get_attribute("pp-teleport"));
+    let teleport_target: Option<Element> = teleport_selector
         .as_deref()
         .and_then(teleport::resolve_target);
     // Pin the owning scope on every pp-if clone regardless of
@@ -195,11 +198,19 @@ pub fn install(
                         // this template gets removed from body).
                         teleport::stash(&template_el, &clone_root);
                     }
-                    // Walk only when the macro DIDN'T emit a body
-                    // fragment — the fragment already installed
-                    // every directive in the subtree, so a walk
-                    // would race a duplicate install.
-                    if !fragment_built {
+                    // Walk the cleaned fragment after insertion so
+                    // preserved fallback directives inside nested
+                    // custom-component templates still install. The
+                    // macro stripped plan-owned attributes, and child
+                    // mounts carry `__pp_mounted`, so this does not
+                    // duplicate generated installs.
+                    if fragment_built {
+                        if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
+                            walker::walk_compiled_fallback(&clone_root);
+                        } else {
+                            walker::mark_walked(&clone_root);
+                        }
+                    } else {
                         walker::walk(&clone_root);
                     }
                     *current.borrow_mut() = Some(clone_root.clone());

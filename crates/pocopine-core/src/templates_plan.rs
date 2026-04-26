@@ -39,17 +39,20 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element};
 
 use crate::directives;
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticListener, StaticRef, StaticTeleportPlan,
+    StaticListener, StaticRef, StaticSlotOutlet, StaticTeleportPlan,
 };
 use crate::expr;
 use crate::reactive::ScopeId;
 use crate::slot_fragment::SlotSet;
+
+const COMPILED_FALLBACK_WALK_KEY: &str = "__pp_compiled_fallback_walk";
 
 // ─── macro-emitted static shape ─────────────────────────────────
 
@@ -104,6 +107,12 @@ pub struct StaticTemplatePlan {
     /// [`crate::directives::teleport::install`]. Empty for
     /// templates with no plan-eligible `pp-teleport` site.
     pub teleport_plans: &'static [StaticTeleportPlan],
+    /// `<slot>` outlet sites in a compiled component template
+    /// (RFC-058 Phase 3.5e). These are materialised explicitly
+    /// by the plan applier after all other path-resolved entries
+    /// have installed, so the recursive walker no longer has to
+    /// discover `<slot>` elements for planned templates.
+    pub slot_outlets: &'static [StaticSlotOutlet],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -211,6 +220,23 @@ pub fn apply_static_plan(
     plan: &'static StaticTemplatePlan,
     template_name: &str,
 ) {
+    // Slot materialisation mutates the element-child list by
+    // replacing `<slot>` with author/default content. Snapshot
+    // the outlet elements up front, then materialise them only
+    // after every other plan entry has resolved its path.
+    let mut slot_outlets: Vec<Element> = Vec::with_capacity(plan.slot_outlets.len());
+    for s in plan.slot_outlets {
+        let Some(el) = resolve(root, s.node_path) else {
+            fail("slot-outlet", template_name, s.node_path, Some(s.name));
+            continue;
+        };
+        if el.local_name() != "slot" {
+            fail("slot-outlet-tag", template_name, s.node_path, Some(s.name));
+            continue;
+        }
+        slot_outlets.push(el);
+    }
+
     // Order matches the walker's pre-/post-order intuition: refs
     // first (so a planned `pp-ref` is visible to any planned
     // `pp-init` further down), then bindings (effects subscribe
@@ -395,7 +421,7 @@ pub fn apply_static_plan(
                 continue;
             }
         };
-        directives::if_::install(template, proxy.clone(), ast, ip.body);
+        directives::if_::install(template, proxy.clone(), ast, ip.body, ip.teleport_selector);
     }
     for i in plan.inits {
         let Some(el) = resolve(root, i.node_path) else {
@@ -403,6 +429,9 @@ pub fn apply_static_plan(
             continue;
         };
         crate::walker::defer_init_on(&el, scope_id, i.expr_src);
+    }
+    for slot in slot_outlets {
+        crate::walker::materialize_compiled_slot_outlet(&slot);
     }
 }
 
@@ -457,8 +486,44 @@ pub fn stamp_if_body(
         }
     }
     let root = root?;
+    crate::walker::bind_borrowed_scope_to(&root, scope_id, proxy);
+    let ctx_key = JsValue::from_str(crate::walker::CTX_PARENT_KEY);
+    let ctx_val = JsValue::from_f64(scope_id.0 as f64);
+    let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
     apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
+    if plan_requires_compiled_fallback(plan) {
+        let _ = Reflect::set(
+            root.as_ref(),
+            &JsValue::from_str(COMPILED_FALLBACK_WALK_KEY),
+            &JsValue::TRUE,
+        );
+    }
     Some(root)
+}
+
+/// True when a fragment plan still needs the temporary runtime
+/// discovery bridge after `apply_static_plan` runs. Native-only
+/// bindings/listeners/refs are complete after the plan install;
+/// nested components/controllers still need walker-backed
+/// lifecycle, slot outlet, and preserved-directive handling until
+/// those are compiled explicitly.
+pub(crate) fn plan_requires_compiled_fallback(plan: &StaticTemplatePlan) -> bool {
+    !plan.child_mounts.is_empty()
+        || !plan.if_plans.is_empty()
+        || !plan.for_plans.is_empty()
+        || !plan.teleport_plans.is_empty()
+}
+
+/// Read the marker set by [`stamp_if_body`] for lifted controller
+/// body fragments.
+pub(crate) fn fragment_requires_compiled_fallback(root: &Element) -> bool {
+    Reflect::get(
+        root.as_ref(),
+        &JsValue::from_str(COMPILED_FALLBACK_WALK_KEY),
+    )
+    .ok()
+    .map(|v| v.is_truthy())
+    .unwrap_or(false)
 }
 
 fn fail(kind: &str, template_name: &str, node_path: &[u16], expr_src: Option<&str>) {
