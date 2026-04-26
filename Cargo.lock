@@ -3285,6 +3285,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tags_input_repro"
+version = "0.1.0"
+dependencies = [
+ "pine",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "tailwind-demo"
 version = "0.1.0"
 dependencies = [

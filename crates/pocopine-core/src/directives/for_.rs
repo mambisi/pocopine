@@ -288,6 +288,22 @@ pub fn install(
 ) {
     let template_el: Element = template.clone().into();
     let track_anchor = template_el.clone();
+    // RFC-027 inject chain — when this `pp-for` was authored as
+    // slot content, the slot materialiser stamped
+    // `CTX_PARENT_KEY` on the `<template>` element pointing at
+    // the slot OWNER (the component whose template contains the
+    // `<slot>`). The LoopScope's inject parent should chain
+    // through the owner so descendants reach the owner's
+    // provided contexts (e.g. the `ROOT` context that
+    // `pine-tags-input-root.on_setup` provides). Without this,
+    // a `pp-for` of `<pine-tags-input-item>`s inside the root's
+    // slot has its LoopScope chain to the SLOT AUTHOR (the page
+    // component) instead of through the root, and
+    // `<pine-tags-input-item-delete>::ROOT.inject()` returns
+    // `None`. The `parent_scope_id` arg stays the AUTHOR scope
+    // so directive resolution (`tag` etc.) keeps reading from
+    // the caller, per RFC-011.
+    let inject_parent_id = crate::walker::ctx_parent_of(&template_el).unwrap_or(parent_scope_id);
     // `pp-stagger="<ms>"` on the template spreads the enter
     // animation of newly-inserted clones across time — `i * stagger`
     // ms delay per clone, in insertion order. Keeps a batch mount
@@ -300,6 +316,7 @@ pub fn install(
             key,
             parent_proxy,
             parent_scope_id,
+            inject_parent_id,
             template,
             template_el,
             stagger_ms,
@@ -310,6 +327,7 @@ pub fn install(
             items_expr,
             parent_proxy,
             parent_scope_id,
+            inject_parent_id,
             template,
             template_el,
             stagger_ms,
@@ -328,6 +346,7 @@ fn run_naive(
     items_expr: String,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
+    inject_parent_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
     stagger_ms: u32,
@@ -369,7 +388,7 @@ fn run_naive(
                 parent_scope_id,
             };
             let scope = Scope::new(Rc::new(RefCell::new(loop_state)));
-            crate::context::set_parent(scope.id, parent_scope_id);
+            crate::context::set_parent(scope.id, inject_parent_id);
             let proxy = scope.into_proxy();
 
             // RFC-058 Phase 4.2c — when the macro emitted a body
@@ -480,6 +499,7 @@ fn run_keyed(
     key_expr: String,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
+    inject_parent_id: ScopeId,
     template: HtmlTemplateElement,
     template_el: Element,
     stagger_ms: u32,
@@ -713,7 +733,7 @@ fn run_keyed(
                     parent_scope_id,
                 }));
                 let scope = Scope::new(loop_rc.clone());
-                crate::context::set_parent(scope.id, parent_scope_id);
+                crate::context::set_parent(scope.id, inject_parent_id);
 
                 let clone_start = crate::profiler::mount::start();
                 // RFC-058 Phase 4.2c — when no row plan claims

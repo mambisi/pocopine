@@ -1466,6 +1466,17 @@ pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
 /// inside Content's slot — falls through to the nearest ancestor
 /// with `SCOPE_ID_KEY` (the slot author's scope) and misses the
 /// compound's provide/inject chain entirely.
+/// Read the explicit `CTX_PARENT_KEY` stamp off `el` if one was
+/// set (by slot materialisation, body-fragment install, etc.).
+/// Public so directive installers (`pp-for`, `pp-if`,
+/// `pp-teleport`) can route their internal scopes' inject
+/// parents through the same key the walker uses.
+pub fn ctx_parent_of(el: &Element) -> Option<ScopeId> {
+    get_private(el, CTX_PARENT_KEY)
+        .and_then(|v| v.as_f64())
+        .map(|n| ScopeId(n as u64))
+}
+
 fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {
     let mut cur: Option<Element> = el.parent_element();
     while let Some(e) = cur {

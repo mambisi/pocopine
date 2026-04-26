@@ -1,0 +1,15 @@
+[package]
+name = "tags_input_repro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine" }
+pine = { path = "../../crates/pine" }
+wasm-bindgen = { workspace = true }
+serde = { workspace = true }

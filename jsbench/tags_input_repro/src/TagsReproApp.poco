@@ -1,0 +1,17 @@
+<div id="repro-root">
+  <h2>tags-input pp-for delete repro</h2>
+  <p>Click the × on the middle chip; it should disappear.</p>
+
+  <pine-tags-input-root pp-model:values="tags" id="tags-root">
+    <template pp-for="tag in tags" pp-key="tag">
+      <pine-tags-input-item :value="tag" class="chip">
+        <pine-tags-input-item-text></pine-tags-input-item-text>
+        <pine-tags-input-item-delete class="chip-x" aria-label="Remove tag">×</pine-tags-input-item-delete>
+      </pine-tags-input-item>
+    </template>
+    <pine-tags-input-input placeholder="add tag…" class="t-input"></pine-tags-input-input>
+  </pine-tags-input-root>
+
+  <div id="state" pp-text="tags"></div>
+  <button id="seed-500" pp-on:click="seed_500">Seed 500</button>
+</div>
