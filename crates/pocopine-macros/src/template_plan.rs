@@ -1012,12 +1012,19 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // walker's recursive descent reaches the tag, and the
     // walker's `__pp_mounted` guard turns the discovery into a
     // no-op afterwards.
-    if !is_html5_native(&el.tag) {
+    if !is_plan_native(&el.tag) {
         let mut host_bindings = Vec::new();
         let mut host_listeners = Vec::new();
         let mut host_models = Vec::new();
-        if el.attrs.iter().any(|(name, _)| name == "pp-as") {
-            ctx.requires_walker = true;
+        let has_pp_as = el.attrs.iter().any(|(name, _)| name == "pp-as");
+        if has_pp_as {
+            if el
+                .attrs
+                .iter()
+                .any(|(name, _)| name != "pp-as" && is_framework_attr(name))
+            {
+                ctx.requires_walker = true;
+            }
         } else {
             for (name, value) in &el.attrs {
                 match classify_child_host_attr(name, value) {
@@ -1079,13 +1086,16 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
 
     // Classify every attribute on this element.
-    if el.attrs.iter().any(|(name, _)| name == "pp-as") {
+    if el.attrs.iter().any(|(name, _)| name == "pp-as") && el.tag != "root" {
         ctx.requires_walker = true;
         return;
     }
     let mut listener_unsupported_modifier = false;
     let mut had_text = false;
     for (name, value) in &el.attrs {
+        if el.tag == "root" && name == "pp-as" {
+            continue;
+        }
         match classify_attr(name, value, path, ctx, &mut listener_unsupported_modifier) {
             ClassifyOutcome::Stripped { is_text } => {
                 if is_text {
@@ -1125,6 +1135,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
 
 fn is_html5_native(tag: &str) -> bool {
     crate::HTML5_ELEMENTS.binary_search(&tag).is_ok()
+}
+
+fn is_plan_native(tag: &str) -> bool {
+    tag == "root" || is_html5_native(tag)
 }
 
 fn is_framework_attr(name: &str) -> bool {
@@ -1555,7 +1569,7 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     // body fragment's own static plan, and the runtime fallback
     // walk over the cleaned fragment binds any preserved
     // directives inside the mounted child template.
-    let is_custom = !is_html5_native(&el.tag);
+    let is_custom = !is_plan_native(&el.tag);
     for (name, _) in &el.attrs {
         if name == "pp-init" || name == "pp-data" || name == "pp-route" {
             return false;
@@ -1712,7 +1726,7 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             // (which lands at the same `walk()` path that
             // emits child_mount entries + nested slot
             // fragments into the shared `Emissions` queue).
-            let is_custom = !is_html5_native(&el.tag);
+            let is_custom = !is_plan_native(&el.tag);
             for (name, _) in &el.attrs {
                 if name == "pp-init" || name == "pp-data" || name == "pp-route" {
                     return false;

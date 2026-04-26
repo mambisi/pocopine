@@ -441,6 +441,82 @@ pub fn apply_static_plan(
     }
 }
 
+/// Apply the root-owned part of a template plan to the user
+/// element hoisted by `pp-as`.
+///
+/// In `pp-as` mode the user element is already the slot content,
+/// so the normal plan applier must not materialise `<slot>` outlets
+/// or descend into template children. Root-level refs, bindings,
+/// listeners, and deferred inits still belong to the component
+/// template and should bind against the hoisted element in the
+/// component scope.
+#[doc(hidden)]
+pub fn apply_static_pp_as_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    plan: &'static StaticTemplatePlan,
+    template_name: &str,
+) {
+    for r in plan.refs.iter().filter(|r| r.node_path.is_empty()) {
+        crate::refs::register(scope_id, r.name, root);
+    }
+    for b in plan.bindings.iter().filter(|b| b.node_path.is_empty()) {
+        let ast = match expr::parse_cached(b.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "pp-as-binding-parse",
+                    template_name,
+                    b.node_path,
+                    Some(b.expr_src),
+                );
+                continue;
+            }
+        };
+        match b.kind {
+            BindingKind::Text => directives::text::install(root, proxy, ast),
+            BindingKind::Html => directives::html::install(root, proxy, ast),
+            BindingKind::Show => directives::show::install(root, proxy, ast),
+            BindingKind::Bind { arg } => directives::bind::install(root, proxy, arg, ast),
+            BindingKind::Class => {
+                fail(
+                    "pp-as-binding-kind",
+                    template_name,
+                    b.node_path,
+                    Some(b.expr_src),
+                );
+            }
+        }
+    }
+    for l in plan.listeners.iter().filter(|l| l.node_path.is_empty()) {
+        let ast = match expr::parse_cached(l.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "pp-as-listener-parse",
+                    template_name,
+                    l.node_path,
+                    Some(l.expr_src),
+                );
+                continue;
+            }
+        };
+        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
+        directives::on::install(
+            root,
+            scope_id,
+            proxy,
+            l.event,
+            &modifiers,
+            Rc::new(directives::on::backfill_legacy_call(ast)),
+        );
+    }
+    for i in plan.inits.iter().filter(|i| i.node_path.is_empty()) {
+        crate::walker::defer_init_on(root, scope_id, i.expr_src);
+    }
+}
+
 fn install_child_host_directives(
     el: &Element,
     scope_id: ScopeId,
