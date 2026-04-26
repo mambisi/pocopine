@@ -27,7 +27,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
@@ -50,6 +50,13 @@ pub type SlotFragment = fn(ctx: SlotMountCtx<'_>);
 /// (so refs registered inside the slotted content participate
 /// in the correct child component's `refs::register` table).
 ///
+/// `parent_proxy` is the parent component's `js_sys::Proxy`,
+/// captured at slot-set install time (RFC-058 Phase 3.5c).
+/// Dynamic slot fragments — content with `pp-text` / `@click`
+/// / `pp-bind` etc. that reads or writes parent state — pass
+/// it to `apply_static_plan` when stamping bindings against
+/// the parent scope. Static fragments ignore it.
+///
 /// Using a `DocumentFragment` rather than the live slot host
 /// keeps the fragment side oblivious to where in the DOM the
 /// content lands — same buffer pattern the legacy walker's
@@ -57,6 +64,7 @@ pub type SlotFragment = fn(ctx: SlotMountCtx<'_>);
 pub struct SlotMountCtx<'a> {
     pub host: &'a DocumentFragment,
     pub parent_scope_id: ScopeId,
+    pub parent_proxy: &'a JsValue,
     pub child_scope_id: ScopeId,
 }
 
@@ -122,6 +130,17 @@ impl SlotSet {
 
 // ─── runtime registry ────────────────────────────────────────────
 
+/// Stored per child instance — the parent-supplied [`SlotSet`]
+/// alongside the parent's scope id + proxy captured at install
+/// time. RFC-058 Phase 3.5c threads the parent context through
+/// to [`SlotMountCtx`] so dynamic slot content can install
+/// bindings against the parent scope.
+struct InstalledSlots {
+    set: SlotSet,
+    parent_scope_id: ScopeId,
+    parent_proxy: JsValue,
+}
+
 thread_local! {
     /// Fragments the parent passed for each child component
     /// instance, keyed by the child's `ScopeId`. Populated by
@@ -131,32 +150,56 @@ thread_local! {
     /// when the child template's `<slot>` element is reached.
     /// Cleared from [`crate::scope::Scope::remove`] so the map
     /// doesn't outlive the child component.
-    static FRAGMENTS: RefCell<HashMap<ScopeId, SlotSet>> = RefCell::new(HashMap::new());
+    static FRAGMENTS: RefCell<HashMap<ScopeId, InstalledSlots>> = RefCell::new(HashMap::new());
 }
 
 /// Register the parent-supplied [`SlotSet`] for a child component
-/// instance. Idempotent — a repeat call replaces the prior set
-/// (the runtime walker remounts the same scope id only after
+/// instance, capturing the parent's scope id + proxy alongside.
+/// Idempotent — a repeat call replaces the prior set (the
+/// runtime walker remounts the same scope id only after
 /// teardown, so this only fires for fresh mounts).
 ///
 /// No-op when the set is empty so an opaque mount call (every
 /// `<my-tag></my-tag>` site) doesn't leak a registry entry.
-pub fn install(scope_id: ScopeId, set: SlotSet) {
+pub fn install(
+    child_scope_id: ScopeId,
+    set: SlotSet,
+    parent_scope_id: ScopeId,
+    parent_proxy: JsValue,
+) {
     if set.is_empty() {
         return;
     }
     FRAGMENTS.with(|m| {
-        m.borrow_mut().insert(scope_id, set);
+        m.borrow_mut().insert(
+            child_scope_id,
+            InstalledSlots {
+                set,
+                parent_scope_id,
+                parent_proxy,
+            },
+        );
     });
 }
 
-/// Look up the parent fragment for `(child_scope_id, name)`.
-/// Returns `None` when the parent didn't register a [`SlotSet`]
-/// for this child, or registered one without an entry for
-/// `name`. Caller (the walker's slot materialiser) falls back to
-/// the legacy capture path when this returns `None`.
-pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<SlotFragment> {
-    FRAGMENTS.with(|m| m.borrow().get(&child_scope_id)?.get(name))
+/// Look up the parent fragment for `(child_scope_id, name)`,
+/// returning the fragment fn alongside the parent context the
+/// installer captured. `None` when the parent didn't register a
+/// [`SlotSet`] for this child, or registered one without an
+/// entry for `name`. Caller (the walker's slot materialiser)
+/// falls back to the legacy capture path when this returns
+/// `None`.
+pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<(SlotFragment, ScopeId, JsValue)> {
+    FRAGMENTS.with(|m| {
+        let map = m.borrow();
+        let installed = map.get(&child_scope_id)?;
+        let frag = installed.set.get(name)?;
+        Some((
+            frag,
+            installed.parent_scope_id,
+            installed.parent_proxy.clone(),
+        ))
+    })
 }
 
 /// Drop the fragment registration for `child_scope_id`. Hooked
@@ -179,6 +222,50 @@ pub fn clear(child_scope_id: ScopeId) {
 /// up the correct content-model rules (e.g. `<tr>` inside
 /// `<table>`, `<li>` outside `<ul>`) the same way the
 /// browser would for any author-written markup.
+/// Stamp slot HTML with directives + apply a static plan against
+/// the parent scope. RFC-058 Phase 3.5c — emitted by the macro
+/// for slot subtrees that carry plan-eligible directives
+/// (`pp-text`, `pp-bind`, `@click`, etc.).
+///
+/// Goes through a temporary `<div>` host so `apply_static_plan`
+/// can resolve `node_path`s against a single root element. The
+/// plan installs every directive against the parent scope using
+/// the Phase 1 helpers (effects subscribe to the parent proxy,
+/// listeners delegate via the parent's scope), and the
+/// just-installed children move into the slot fragment buffer
+/// the runtime then splices before the live `<slot>` element.
+///
+/// The detached-DOM install is safe — text/html/bind/show
+/// effects run synchronously at install and write to detached
+/// DOM; listeners attach to detached elements and fire normally
+/// once the children land in the document.
+pub fn stamp_dynamic_slot(
+    host: &DocumentFragment,
+    html: &str,
+    plan: &'static crate::templates_plan::StaticTemplatePlan,
+    parent_scope_id: ScopeId,
+    parent_proxy: &JsValue,
+) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(temp) = doc.create_element("div") else {
+        return;
+    };
+    temp.set_inner_html(html);
+    crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
+    let kids = temp.child_nodes();
+    let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            snapshot.push(n);
+        }
+    }
+    for n in snapshot {
+        let _ = host.append_child(&n);
+    }
+}
+
 pub fn stamp_static_html(host: &DocumentFragment, html: &str) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;

@@ -197,6 +197,32 @@ struct PlanSlotHostStatic {}
 #[handlers]
 impl PlanSlotHostStatic {}
 
+/// RFC-058 Phase 3.5c — parent whose slot content carries
+/// `pp-text` + `@click` against the parent scope. The
+/// classifier graduates the subtree from "static-only" to
+/// "dynamic" eligibility, emits a `stamp_dynamic_slot`-based
+/// fragment that installs both directives via the Phase 1
+/// helpers against the parent proxy, and the runtime
+/// `materialize_slot` invokes it instead of the legacy
+/// capture/replay path.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanSlotDynamicHost.html")]
+struct PlanSlotDynamicHost {
+    title: String,
+    count: u32,
+}
+
+#[handlers]
+impl PlanSlotDynamicHost {
+    pub fn on_setup(&mut self) {
+        self.title = "initial".into();
+    }
+    pub fn bump(&mut self) {
+        self.count += 1;
+        self.title = format!("count-{}", self.count);
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -310,6 +336,7 @@ fn register_all() {
     PlanTeleportHost::register();
     PlanIfBodyHost::register();
     PlanForBodyHost::register();
+    PlanSlotDynamicHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -485,6 +512,57 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     assert_eq!(
         after.get(2).unwrap().text_content().as_deref(),
         Some("row-3"),
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3.5c — dynamic slot fragment lifting. The
+/// macro emits a fragment fn whose body installs `pp-text` and
+/// `@click` against the parent scope via `stamp_dynamic_slot`
+/// + `apply_static_plan`. The slot content reads parent state
+/// (`title`) and writes to it (`bump`) — proving the
+/// parent_proxy thread captures the right scope at install
+/// time and the bindings/listeners install correctly inside
+/// the slotted subtree.
+#[wasm_bindgen_test]
+async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-slot-dynamic-host")
+        .expect("plan-slot-dynamic-host has plan-eligible directives");
+    assert_eq!(plan.child_mounts.len(), 1, "one child-mount site");
+    assert_eq!(
+        plan.child_mounts[0].slots.len(),
+        1,
+        "default slot lifts into one fragment",
+    );
+    assert_eq!(plan.child_mounts[0].slots[0].name, "default");
+
+    let host = mount("<plan-slot-dynamic-host></plan-slot-dynamic-host>");
+    tick().await;
+
+    let label = host
+        .query_selector(".psdh-label")
+        .unwrap()
+        .expect("slot label must mount via the dynamic fragment");
+    assert_eq!(
+        label.text_content().as_deref(),
+        Some("initial"),
+        "pp-text in slot must read parent scope's `title`",
+    );
+
+    let bump = host.query_selector(".psdh-bump").unwrap().unwrap();
+    bump.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    assert_eq!(
+        label.text_content().as_deref(),
+        Some("count-1"),
+        "@click in slot must dispatch to parent scope's `bump`",
     );
 
     assert_eq!(plan_failure_count(), 0);
@@ -694,7 +772,16 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     }
 
     let slots = SlotSet::new().default_slot(fragment);
-    pocopine_core::walker::mount_child_component_with_slots(&child, "plan-slot-child", slots);
+    // Hand-built fragment doesn't read parent_proxy — pass dummy
+    // (ScopeId(0), JsValue::UNDEFINED). The runtime never derefs
+    // them because the static fragment ignores the field.
+    pocopine_core::walker::mount_child_component_with_slots(
+        &child,
+        "plan-slot-child",
+        slots,
+        pocopine::ScopeId(0),
+        &JsValue::UNDEFINED,
+    );
 
     pocopine_core::walker::start(&host);
     tick().await;
