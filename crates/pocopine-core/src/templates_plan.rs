@@ -44,7 +44,7 @@ use web_sys::{console, Element};
 
 use crate::directives;
 use crate::directives::for_plan::{
-    BindingKind, StaticBinding, StaticInit, StaticListener, StaticRef,
+    BindingKind, StaticBinding, StaticChildMount, StaticInit, StaticListener, StaticRef,
 };
 use crate::expr;
 use crate::reactive::ScopeId;
@@ -70,6 +70,13 @@ pub struct StaticTemplatePlan {
     pub listeners: &'static [StaticListener],
     pub inits: &'static [StaticInit],
     pub refs: &'static [StaticRef],
+    /// Child-component mount sites the macro discovered in this
+    /// template (RFC-058 Phase 3). Each entry names a non-HTML5
+    /// tag the runtime applier mounts via
+    /// [`crate::walker::mount_child_component`] before the walker
+    /// recurses. Empty for templates that contain no child
+    /// components — the prior Phase 2 envelope.
+    pub child_mounts: &'static [StaticChildMount],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -182,7 +189,13 @@ pub fn apply_static_plan(
     // `pp-init` further down), then bindings (effects subscribe
     // before any synchronous trigger), then listeners
     // (delegation surface ready before user interaction), then
-    // inits (enqueued for the walker's post-order drain).
+    // child mounts (RFC-058 Phase 3 — explicit
+    // `mount_child_component` calls before the walker's
+    // recursive descent reaches each `<custom-tag>`; the
+    // walker's `__pp_mounted` guard makes the discovery a
+    // no-op for tags this loop already mounted), then inits
+    // (enqueued for the walker's post-order drain so the
+    // handler observes child mounts as well as planned refs).
     for r in plan.refs {
         let Some(el) = resolve(root, r.node_path) else {
             fail("ref", template_name, r.node_path, None);
@@ -248,6 +261,13 @@ pub fn apply_static_plan(
             &modifiers,
             Rc::new(directives::on::backfill_legacy_call(ast)),
         );
+    }
+    for c in plan.child_mounts {
+        let Some(el) = resolve(root, c.node_path) else {
+            fail("child-mount", template_name, c.node_path, Some(c.tag));
+            continue;
+        };
+        crate::walker::mount_child_component(&el, c.tag);
     }
     for i in plan.inits {
         let Some(el) = resolve(root, i.node_path) else {

@@ -65,7 +65,7 @@ pub mod __private {
     // macro emits a `&'static StaticTemplatePlan` per component
     // and registers it via `register_template_plan` alongside the
     // existing `register_template` call.
-    pub use pocopine_core::directives::for_plan::{StaticInit, StaticRef};
+    pub use pocopine_core::directives::for_plan::{StaticChildMount, StaticInit, StaticRef};
     pub use pocopine_core::templates_plan::{
         apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
         template_plan_for, StaticTemplatePlan,
