@@ -130,6 +130,29 @@ pub struct StaticRef {
     pub name: &'static str,
 }
 
+/// Static-lifetime descriptor for a child-component mount site.
+///
+/// RFC-058 Phase 3 — emitted by the macro for every non-HTML5
+/// tag inside a plan-eligible template, so the runtime applier
+/// can call [`crate::walker::mount_child_component`] explicitly
+/// instead of leaving the tag for the walker's auto-discovery
+/// pass to find. Today the walker still walks the subtree; its
+/// `__pp_mounted` guard makes the discovery a no-op for any tag
+/// the plan already mounted. Phase 6 (`legacy-dom` quarantine)
+/// drops the walker discovery and the plan-driven path becomes
+/// the sole entry.
+///
+/// v1 envelope: just `host_path` + `tag`. Static / dynamic prop
+/// pre-passing and parent-owned slot fragments graduate the
+/// envelope in Phase 3 follow-ups; v1 keeps slot content + prop
+/// attribute scanning on the walker (the parent's cleaned HTML
+/// preserves both).
+#[doc(hidden)]
+pub struct StaticChildMount {
+    pub node_path: &'static [u16],
+    pub tag: &'static str,
+}
+
 /// One macro-emitted row plan. The macro emits
 /// `pub static __POC_ROW_PLANS_<COMPONENT>: &[StaticRowPlan] =
 /// &[ … ];` and a registration call alongside

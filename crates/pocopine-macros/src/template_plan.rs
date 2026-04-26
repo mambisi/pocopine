@@ -168,12 +168,18 @@ impl AnalysisCtx {
         let listeners_tokens = self.listeners.iter().map(emit_listener);
         let inits_tokens = self.inits.iter().map(emit_init);
         let refs_tokens = self.refs.iter().map(emit_ref);
+        // RFC-058 Phase 3.3 (deferred) — child-mount entries.
+        // Phase 3.1 ships the slice empty; the runtime applier
+        // already iterates it and the `__pp_mounted` walker
+        // guard means an empty list keeps today's
+        // walker-discovered mount path active end-to-end.
         quote! {
             ::pocopine::__private::StaticTemplatePlan {
                 bindings: &[ #(#bindings_tokens),* ],
                 listeners: &[ #(#listeners_tokens),* ],
                 inits: &[ #(#inits_tokens),* ],
                 refs: &[ #(#refs_tokens),* ],
+                child_mounts: &[],
             }
         }
     }
