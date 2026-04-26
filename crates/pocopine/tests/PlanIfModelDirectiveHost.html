@@ -1,0 +1,7 @@
+<div class="pimdh-root">
+  <button class="pimdh-toggle" pp-on:click="toggle">toggle</button>
+  <span class="pimdh-email" pp-text="email"></span>
+  <template pp-if="open">
+    <plan-model-directive-child pp-model:value="email"></plan-model-directive-child>
+  </template>
+</div>
