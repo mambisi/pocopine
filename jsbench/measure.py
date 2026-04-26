@@ -12,7 +12,8 @@ Modes:
   python measure.py [<harness-dir>]
       Run the bench plan (2 warmups + 5 measured passes) against
       the given harness directory (default: jsbench/pocopine).
-      Reports mean / p50 / p95 / max wall-clock per action.
+      Reports mean / p50 / p95 / max wall-clock per action,
+      plus a geometric mean across action means.
 
   python measure.py --profile-mount [<harness-dir>]
       Click `runLots(10000)` once with the pocopine
@@ -39,6 +40,7 @@ import argparse
 import contextlib
 import http.server
 import json
+import math
 import socketserver
 import statistics
 import threading
@@ -118,13 +120,22 @@ def row_count(page) -> int:
     return page.locator("tbody tr").count()
 
 
-def measure_action(page, button_id: str, settle_ms: int) -> dict[str, object]:
+def click_action(page, action_id: str) -> None:
+    if action_id == "select":
+        page.locator("tbody tr:nth-child(2) td.col-md-4 a").click()
+    elif action_id == "remove":
+        page.locator("tbody tr:nth-child(2) td.col-md-1 a").click()
+    else:
+        page.locator(f"#{action_id}").click()
+
+
+def measure_action(page, action_id: str, settle_ms: int) -> dict[str, object]:
     t0 = time.perf_counter()
-    page.locator(f"#{button_id}").click()
+    click_action(page, action_id)
     time.sleep(settle_ms / 1000.0)
     t1 = time.perf_counter()
     return {
-        "button": button_id,
+        "button": action_id,
         "wall_ms": (t1 - t0) * 1000.0,
         "action": text(page, ".metrics span:nth-child(1) strong"),
         "app_ms": text(page, ".metrics span:nth-child(2) strong"),
@@ -134,6 +145,23 @@ def measure_action(page, button_id: str, settle_ms: int) -> dict[str, object]:
 
 def fmt_ms(value: float) -> str:
     return f"{value:8.2f}"
+
+
+def geometric_mean(values: list[float]) -> float:
+    positives = [value for value in values if value > 0.0]
+    if not positives:
+        return 0.0
+    return math.exp(sum(math.log(value) for value in positives) / len(positives))
+
+
+def print_geomean(means: list[float]) -> None:
+    if not means:
+        return
+    print("-" * 78)
+    print(
+        f"{'geomean':<22} {fmt_ms(geometric_mean(means))} "
+        f"{'':>8} {'':>8} {'':>8} {'':>8} {len(means):>4}"
+    )
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -150,15 +178,21 @@ def percentile(values: list[float], p: float) -> float:
 
 
 def standard_plan() -> list[tuple[str, int]]:
+    # Close to the js-framework-benchmark keyed table action family:
+    # create 1k, replace all, partial update, select row, swap rows,
+    # remove row, clear, create many, clear, create 1k, append, clear.
     return [
         ("run", 100),
-        ("clear", 50),
         ("run", 100),
         ("update", 100),
+        ("select", 50),
         ("swaprows", 100),
+        ("remove", 100),
         ("clear", 50),
         ("runlots", 250),
-        ("update", 150),
+        ("clear", 80),
+        ("run", 100),
+        ("update", 100),
         ("add", 150),
         ("clear", 80),
     ]
@@ -293,10 +327,12 @@ def print_bench_distribution(
         f"{'spread':>8}    n"
     )
     print("-" * 78)
+    means = []
     for action, values in walls.items():
         if not values:
             continue
         mean = statistics.mean(values)
+        means.append(mean)
         p50 = percentile(values, 50)
         p95 = percentile(values, 95)
         worst = max(values)
@@ -305,6 +341,7 @@ def print_bench_distribution(
             f"{action:<22} {fmt_ms(mean)} {fmt_ms(p50)} {fmt_ms(p95)} "
             f"{fmt_ms(worst)} {spread:7.2f}x {len(values):>4}"
         )
+    print_geomean(means)
 
     print()
     print("Slowest-run phase breakdown:")
@@ -406,10 +443,12 @@ def main() -> int:
         f"{'spread':>8}    n"
     )
     print("-" * 78)
+    means = []
     for action, values in grouped.items():
         if not values:
             continue
         mean = statistics.mean(values)
+        means.append(mean)
         p50 = percentile(values, 50)
         p95 = percentile(values, 95)
         worst = max(values)
@@ -418,6 +457,7 @@ def main() -> int:
             f"{action:<22} {fmt_ms(mean)} {fmt_ms(p50)} {fmt_ms(p95)} "
             f"{fmt_ms(worst)} {spread:7.2f}x {len(values):>4}"
         )
+    print_geomean(means)
     return 0
 
 
