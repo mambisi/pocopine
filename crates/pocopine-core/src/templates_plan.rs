@@ -37,8 +37,17 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use crate::directives::for_plan::{StaticBinding, StaticInit, StaticListener, StaticRef};
+use wasm_bindgen::JsValue;
+use web_sys::{console, Element};
+
+use crate::directives;
+use crate::directives::for_plan::{
+    BindingKind, StaticBinding, StaticInit, StaticListener, StaticRef,
+};
+use crate::expr;
+use crate::reactive::ScopeId;
 
 // ─── macro-emitted static shape ─────────────────────────────────
 
@@ -119,13 +128,164 @@ pub fn reset_plan_failure_count() {
 }
 
 /// Record one plan-install failure. Called from
-/// [`crate::walker`] / future `apply_static_plan` when an
-/// install entry can't deliver. In debug builds this also
-/// panics with a message naming the template + entry; release
-/// builds log to `console.error` and continue (the surrounding
-/// mount keeps going so a single misclassification doesn't
-/// take down the page).
+/// [`crate::walker`] / [`apply_static_plan`] when an install
+/// entry can't deliver. In debug builds this also panics with
+/// a message naming the template + entry; release builds log
+/// to `console.error` and continue (the surrounding mount
+/// keeps going so a single misclassification doesn't take
+/// down the page).
 #[doc(hidden)]
 pub fn record_plan_failure() {
     PLAN_FAILURES.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+// ─── runtime apply ───────────────────────────────────────────────
+
+/// Apply a registered template plan against the freshly-stamped
+/// subtree rooted at `root`. Called from
+/// [`crate::walker::mount_component`]'s fast-path right after
+/// the template HTML is set + the scope is bound.
+///
+/// Behaviour:
+///
+/// * For each `StaticInit` — enqueue via
+///   [`crate::walker::defer_init_on`] so the handler fires
+///   post-order alongside any walker-discovered `pp-init`.
+/// * For each `StaticRef` — register against the scope's ref
+///   table via [`crate::refs::register`].
+/// * For each `StaticBinding` — install the matching directive
+///   helper (`text` / `html` / `bind` / `show`) using the
+///   parsed expression AST.
+/// * For each `StaticListener` — install via
+///   [`crate::directives::on::install`] with the parsed AST
+///   wrapped in `Rc`.
+///
+/// Fail-fast policy (RFC-057 §5.6 council pass 3):
+/// stripped attributes are owned by the plan. If a `node_path`
+/// doesn't resolve to a live DOM node or an `expr_src` doesn't
+/// parse — both are framework bugs (the macro stripped a
+/// directive whose plan entry can't deliver). Debug builds
+/// panic with a message naming the template + entry; release
+/// builds log to `console.error`, increment the
+/// [`plan_failure_count`] counter, and abandon the install for
+/// that single entry. The surrounding mount continues so a
+/// single misclassification doesn't take the whole app down.
+pub fn apply_static_plan(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    plan: &'static StaticTemplatePlan,
+    template_name: &str,
+) {
+    // Order matches the walker's pre-/post-order intuition: refs
+    // first (so a planned `pp-ref` is visible to any planned
+    // `pp-init` further down), then bindings (effects subscribe
+    // before any synchronous trigger), then listeners
+    // (delegation surface ready before user interaction), then
+    // inits (enqueued for the walker's post-order drain).
+    for r in plan.refs {
+        let Some(el) = resolve(root, r.node_path) else {
+            fail("ref", template_name, r.node_path, None);
+            continue;
+        };
+        crate::refs::register(scope_id, r.name, &el);
+    }
+    for b in plan.bindings {
+        let Some(el) = resolve(root, b.node_path) else {
+            fail("binding", template_name, b.node_path, Some(b.expr_src));
+            continue;
+        };
+        let ast = match expr::parse_cached(b.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "binding-parse",
+                    template_name,
+                    b.node_path,
+                    Some(b.expr_src),
+                );
+                continue;
+            }
+        };
+        match b.kind {
+            BindingKind::Text => directives::text::install(&el, proxy, ast),
+            BindingKind::Html => directives::html::install(&el, proxy, ast),
+            BindingKind::Show => directives::show::install(&el, proxy, ast),
+            BindingKind::Bind { arg } => directives::bind::install(&el, proxy, arg, ast),
+            BindingKind::Class => {
+                // RFC-054 row plans use `Class`; template plans
+                // emit `Bind { arg: "class" }`. Reaching this
+                // branch via an apply_static_plan call means a
+                // macro bug let a row-only kind into the
+                // template plan. Treat as fail-fast.
+                fail("binding-kind", template_name, b.node_path, Some(b.expr_src));
+            }
+        }
+    }
+    for l in plan.listeners {
+        let Some(el) = resolve(root, l.node_path) else {
+            fail("listener", template_name, l.node_path, Some(l.expr_src));
+            continue;
+        };
+        let ast = match expr::parse_cached(l.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "listener-parse",
+                    template_name,
+                    l.node_path,
+                    Some(l.expr_src),
+                );
+                continue;
+            }
+        };
+        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
+        directives::on::install(
+            &el,
+            scope_id,
+            proxy,
+            l.event,
+            &modifiers,
+            Rc::new(directives::on::backfill_legacy_call(ast)),
+        );
+    }
+    for i in plan.inits {
+        let Some(el) = resolve(root, i.node_path) else {
+            fail("init", template_name, i.node_path, Some(i.expr_src));
+            continue;
+        };
+        crate::walker::defer_init_on(&el, scope_id, i.expr_src);
+    }
+}
+
+/// Walk `node_path` from `root` by element-child indices to
+/// reach the live DOM node the plan entry targets. Returns
+/// `None` when any index is out-of-bounds — caller treats that
+/// as a fail-fast event.
+fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
+    let mut current: Element = root.clone();
+    for &idx in node_path {
+        current = current.children().item(idx as u32)?;
+    }
+    Some(current)
+}
+
+fn fail(kind: &str, template_name: &str, node_path: &[u16], expr_src: Option<&str>) {
+    record_plan_failure();
+    let msg = match expr_src {
+        Some(src) => format!(
+            "pocopine: template plan {kind} install failed for `{template_name}` at \
+             node_path {node_path:?} (expr: {src:?}). This is a framework bug — the \
+             macro stripped a directive whose plan entry cannot deliver."
+        ),
+        None => format!(
+            "pocopine: template plan {kind} install failed for `{template_name}` at \
+             node_path {node_path:?}. This is a framework bug — the macro stripped a \
+             directive whose plan entry cannot deliver."
+        ),
+    };
+    if cfg!(debug_assertions) {
+        panic!("{msg}");
+    }
+    console::error_1(&JsValue::from_str(&msg));
 }

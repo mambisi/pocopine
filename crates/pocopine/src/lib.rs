@@ -67,7 +67,8 @@ pub mod __private {
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{StaticInit, StaticRef};
     pub use pocopine_core::templates_plan::{
-        plan_failure_count, register_template_plan, reset_plan_failure_count, StaticTemplatePlan,
+        apply_static_plan, plan_failure_count, register_template_plan, reset_plan_failure_count,
+        template_plan_for, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
