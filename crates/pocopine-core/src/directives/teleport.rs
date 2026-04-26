@@ -108,6 +108,10 @@ pub fn install(
     };
 
     let pinned_scope = walker::enclosing_scope(&template_el);
+    // See `if_::install` — slot-content controllers must thread
+    // the slot owner's `CTX_PARENT_KEY` through to the body
+    // fragment's root for nested inject chain resolution.
+    let inject_parent_id_override = walker::inherited_ctx_parent_of(&template_el);
 
     let (clone_root, fragment_built) = match body_fn {
         Some(f) => {
@@ -117,7 +121,8 @@ pub fn install(
                 ));
                 return;
             };
-            match f(*scope_id, scope_proxy) {
+            let ctx_parent_id = inject_parent_id_override.unwrap_or(*scope_id);
+            match f(*scope_id, scope_proxy, ctx_parent_id) {
                 Some(root) => (root, true),
                 None => {
                     console::error_1(&JsValue::from_str(

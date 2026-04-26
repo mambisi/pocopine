@@ -327,7 +327,13 @@ pub struct StaticIfPlan {
 /// `None` return signals a runtime stamp failure (no document,
 /// HTML didn't parse to a single root element, etc.) — the
 /// caller treats it the same as a `clone_template_body` miss.
-pub type IfBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
+/// `ctx_parent_id` overrides the `CTX_PARENT_KEY` stamp on the
+/// body root so RFC-027 inject lookups from descendants chain
+/// through the slot OWNER when the controller was authored in
+/// slot content. Equals `scope_id` when the controller is in
+/// the host's own template (no override needed).
+pub type IfBodyFn =
+    fn(scope_id: ScopeId, proxy: &JsValue, ctx_parent_id: ScopeId) -> Option<web_sys::Element>;
 
 /// Static-lifetime descriptor for a `<template pp-teleport="...">`
 /// site without a co-occurring `pp-if`. RFC-058 Phase 4.3
@@ -355,7 +361,8 @@ pub struct StaticTeleportPlan {
 /// shape as [`IfBodyFn`] / [`ForBodyFn`] — stamps cleaned HTML
 /// then runs `apply_static_plan` against the enclosing scope
 /// passed in by the installer.
-pub type TeleportBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
+pub type TeleportBodyFn =
+    fn(scope_id: ScopeId, proxy: &JsValue, ctx_parent_id: ScopeId) -> Option<web_sys::Element>;
 
 /// Static-lifetime descriptor for a `<template pp-for="...">`
 /// site. RFC-058 Phase 4.2 (controller) + 4.2c (row body lifting).
@@ -402,7 +409,8 @@ pub struct StaticForPlan {
 /// installs against the parent scope once per mount cycle;
 /// pp-for body installs against a fresh `LoopScope` per row
 /// each iteration.
-pub type ForBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
+pub type ForBodyFn =
+    fn(scope_id: ScopeId, proxy: &JsValue, ctx_parent_id: ScopeId) -> Option<web_sys::Element>;
 
 /// One macro-emitted row plan. The macro emits
 /// `pub static __POC_ROW_PLANS_<COMPONENT>: &[StaticRowPlan] =

@@ -578,6 +578,7 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
             fn #ident(
                 scope_id: ::pocopine::ScopeId,
                 proxy: &::pocopine::__private::JsValue,
+                ctx_parent_id: ::pocopine::ScopeId,
             ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
                 const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
                 ::pocopine::__private::stamp_if_body(
@@ -585,6 +586,7 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
                     &PLAN,
                     scope_id,
                     proxy,
+                    ctx_parent_id,
                 )
             }
         }
@@ -959,7 +961,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 let body_fn_ident = if row_plan_claims_site {
                     None
                 } else {
-                    analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                    let lifted = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
                         let ident = emissions.alloc_if_body_ident("for_body");
                         emissions.if_bodies.push(IfBodyEmission {
                             ident: ident.clone(),
@@ -967,7 +969,15 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                             plan: body_ctx,
                         });
                         ident
-                    })
+                    });
+                    if lifted.is_none() {
+                        // Body fell outside the lifting envelope —
+                        // runtime falls back to `clone_template_body`
+                        // + `walker::walk`. Flag the plan so the
+                        // Pine fallback audit catches it.
+                        ctx.requires_walker = true;
+                    }
+                    lifted
                 };
                 ctx.for_plans.push(ForPlanLite {
                     template_node_path: path.clone(),
@@ -1031,6 +1041,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 });
                 ident
             });
+            if body_fn_ident.is_none() {
+                // Body fell outside the lifting envelope — runtime
+                // falls back to `clone_template_body` + `walker::walk`.
+                // Flag the plan so the Pine fallback audit catches it.
+                ctx.requires_walker = true;
+            }
             ctx.teleport_plans.push(TeleportPlanLite {
                 template_node_path: path.clone(),
                 selector,
@@ -1103,6 +1119,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 });
                 ident
             });
+            if body_fn_ident.is_none() {
+                // Body fell outside the lifting envelope — runtime
+                // falls back to `clone_template_body` + `walker::walk`.
+                // Flag the plan so the Pine fallback audit catches it.
+                ctx.requires_walker = true;
+            }
             ctx.if_plans.push(IfPlanLite {
                 template_node_path: path.clone(),
                 expr_src: if_expr,
