@@ -359,7 +359,7 @@ pub fn apply_static_plan(
                 continue;
             }
         };
-        directives::teleport::install(template, tp.selector);
+        directives::teleport::install(template, tp.selector, tp.body);
     }
     for ip in plan.if_plans {
         let Some(el) = resolve(root, ip.template_node_path) else {

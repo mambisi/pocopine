@@ -282,6 +282,11 @@ struct ForPlanLite {
 struct TeleportPlanLite {
     template_node_path: Vec<u16>,
     selector: String,
+    /// RFC-058 Phase 4.3c — `Some` when the teleport body
+    /// subtree was lift-eligible. The macro emits a body
+    /// fragment fn the `StaticTeleportPlan.body` literal
+    /// references.
+    body_fn_ident: Option<syn::Ident>,
 }
 
 struct ChildMountLite {
@@ -517,10 +522,15 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
 fn emit_teleport_plan(tp: &TeleportPlanLite) -> TokenStream {
     let path = emit_node_path(&tp.template_node_path);
     let sel = proc_macro2::Literal::string(&tp.selector);
+    let body_tokens = match &tp.body_fn_ident {
+        Some(ident) => quote! { ::core::option::Option::Some(#ident) },
+        None => quote! { ::core::option::Option::None },
+    };
     quote! {
         ::pocopine::__private::StaticTeleportPlan {
             template_node_path: #path,
             selector: #sel,
+            body: #body_tokens,
         }
     }
 }
@@ -679,9 +689,24 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         let has_if = el.attrs.iter().any(|(n, _)| n == "pp-if");
         let has_for = el.attrs.iter().any(|(n, _)| n == "pp-for");
         if el.tag == "template" && !has_if && !has_for && !selector.trim().is_empty() {
+            // RFC-058 Phase 4.3c — try to lift the teleport
+            // body into a fragment fn (same v1 envelope as
+            // pp-if / pp-for body lifting).
+            let body_fn_ident = analyze_lift_body(el).map(|(html, body_ctx)| {
+                let ident = format_ident!("__poc_teleport_body_{}", ctx.if_body_emissions.len());
+                ctx.if_body_emissions.push(IfBodyEmission {
+                    ident: ident.clone(),
+                    html,
+                    bindings: body_ctx.bindings,
+                    listeners: body_ctx.listeners,
+                    refs: body_ctx.refs,
+                });
+                ident
+            });
             ctx.teleport_plans.push(TeleportPlanLite {
                 template_node_path: path.clone(),
                 selector,
+                body_fn_ident,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.clone(),
