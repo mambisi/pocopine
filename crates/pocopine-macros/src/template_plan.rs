@@ -192,6 +192,13 @@ struct AnalysisCtx {
     /// runtime applier dispatches each through
     /// [`crate::directives::lookup`] after slot materialisation.
     opaque_directives: Vec<OpaqueDirectiveLite>,
+    /// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifted
+    /// out of the runtime walker. Each entry pre-parses one
+    /// text-node child's segment list at compile time; the
+    /// applier installs effects per dynamic segment, and the
+    /// runtime walker's `interp::scan_children` skips the
+    /// element via the `data-pp-interp-managed` marker.
+    interps: Vec<InterpLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -199,6 +206,12 @@ struct AnalysisCtx {
     /// Node paths where the macro removed `pp-text` and the
     /// serializer should stamp `data-pp-text-managed`.
     text_managed_paths: Vec<Vec<u16>>,
+    /// RFC-058 Phase 6.2 — node paths whose direct text children
+    /// contain `{{expr}}` interpolation the macro lifted into
+    /// `interps` entries. The cleaned-HTML serializer stamps
+    /// `data-pp-interp-managed` on each so the runtime walker's
+    /// `interp::scan_children` skips the duplicate scan.
+    interp_managed_paths: Vec<Vec<u16>>,
     /// RFC-058 §6.2 — `(template_node_path, plan_id)` pairs
     /// from the row-plan analyser. The cleaned-HTML serializer
     /// stamps `data-pp-row-plan="<id>"` onto each pp-for
@@ -399,6 +412,21 @@ struct OpaqueDirectiveLite {
     value: String,
 }
 
+/// RFC-058 Phase 6.2 — accumulated `{{expr}}` text interpolation
+/// site. `text_index` counts the target text-node among the
+/// element's direct text children (skipping element / comment
+/// children); the runtime applier resolves it the same way.
+struct InterpLite {
+    node_path: Vec<u16>,
+    text_index: u16,
+    segments: Vec<InterpSegment>,
+}
+
+enum InterpSegment {
+    Static(String),
+    Dynamic(String),
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -456,6 +484,7 @@ impl AnalysisCtx {
             || !self.teleport_plans.is_empty()
             || !self.slot_outlets.is_empty()
             || !self.opaque_directives.is_empty()
+            || !self.interps.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -466,6 +495,12 @@ impl AnalysisCtx {
 
     fn is_text_managed(&self, node_path: &[u16]) -> bool {
         self.text_managed_paths
+            .iter()
+            .any(|p| p.as_slice() == node_path)
+    }
+
+    fn is_interp_managed(&self, node_path: &[u16]) -> bool {
+        self.interp_managed_paths
             .iter()
             .any(|p| p.as_slice() == node_path)
     }
@@ -505,6 +540,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let teleport_plans_tokens = ctx.teleport_plans.iter().map(emit_teleport_plan);
     let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
     let opaque_tokens = ctx.opaque_directives.iter().map(emit_opaque_directive);
+    let interp_tokens = ctx.interps.iter().map(emit_interp);
     let requires_walker = ctx.requires_walker;
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
@@ -518,6 +554,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             teleport_plans: &[ #(#teleport_plans_tokens),* ],
             slot_outlets: &[ #(#slot_outlets_tokens),* ],
             opaque_directives: &[ #(#opaque_tokens),* ],
+            interps: &[ #(#interp_tokens),* ],
             requires_walker: #requires_walker,
         }
     }
@@ -743,6 +780,28 @@ fn emit_slot_outlet(s: &SlotOutletLite) -> TokenStream {
         ::pocopine::__private::StaticSlotOutlet {
             node_path: #path,
             name: #name,
+        }
+    }
+}
+
+fn emit_interp(ip: &InterpLite) -> TokenStream {
+    let path = emit_node_path(&ip.node_path);
+    let text_index = ip.text_index;
+    let segment_tokens = ip.segments.iter().map(|s| match s {
+        InterpSegment::Static(text) => {
+            let lit = proc_macro2::Literal::string(text);
+            quote! { ::pocopine::__private::PlannedSegment::Static(#lit) }
+        }
+        InterpSegment::Dynamic(src) => {
+            let lit = proc_macro2::Literal::string(src);
+            quote! { ::pocopine::__private::PlannedSegment::Dynamic(#lit) }
+        }
+    });
+    quote! {
+        ::pocopine::__private::StaticInterp {
+            node_path: #path,
+            text_index: #text_index,
+            segments: &[ #(#segment_tokens),* ],
         }
     }
 }
@@ -1275,6 +1334,55 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
     let _ = listener_unsupported_modifier; // already handled per-attr
 
+    // RFC-058 Phase 6.2 — scan direct text-node children for
+    // `{{expr}}` interpolation. The runtime walker's
+    // `interp::scan_children` does the same scan + parse;
+    // lifting it here at compile time means the walker can
+    // skip the carrier element via `data-pp-interp-managed`.
+    // Skip elements that already use `pp-text` (RFC-025: the
+    // directive owns the textContent, interpolation is
+    // intentionally disabled for them).
+    let owns_text = el
+        .attrs
+        .iter()
+        .any(|(n, _)| n == "pp-text" || n == "pp-html");
+    if !owns_text {
+        let mut text_index: u16 = 0;
+        let mut had_interp = false;
+        for child in &el.children {
+            let Node::Text(text, _) = child else { continue };
+            if !text.contains("{{") {
+                text_index += 1;
+                continue;
+            }
+            match parse_interp_segments(text) {
+                Ok(segments) if !segments.is_empty() => {
+                    let any_dynamic = segments
+                        .iter()
+                        .any(|s| matches!(s, InterpSegment::Dynamic(_)));
+                    if any_dynamic {
+                        ctx.interps.push(InterpLite {
+                            node_path: path.clone(),
+                            text_index,
+                            segments,
+                        });
+                        had_interp = true;
+                    }
+                }
+                _ => {
+                    // Parse error — leave the text untouched so
+                    // the walker's runtime scanner surfaces the
+                    // same error message at apply time. Don't
+                    // mark managed.
+                }
+            }
+            text_index += 1;
+        }
+        if had_interp {
+            ctx.interp_managed_paths.push(path.clone());
+        }
+    }
+
     // Recurse into element children. Path indices are over
     // *element* children only — text / comments don't shift the
     // index (matches `Element.children` in JS DOM and the
@@ -1523,6 +1631,72 @@ fn parse_pp_directive_name(rest: &str) -> Option<(String, Option<String>, Vec<St
     let mut mods = head_mods;
     mods.extend(tail_mods);
     Some((name, arg, mods))
+}
+
+/// Compile-time twin of `crate::directives::interp::parse_segments`
+/// in pocopine-core.
+///
+/// Tokenises `input` into alternating static + dynamic segments;
+/// both parsers must agree on the escape rules and the
+/// unclosed-`{{` handling, asserted by the unit tests below
+/// alongside the runtime crate's own tests.
+fn parse_interp_segments(input: &str) -> Result<Vec<InterpSegment>, String> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    let mut static_buf = String::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' && i + 2 < bytes.len() {
+            let n1 = bytes[i + 1];
+            let n2 = bytes[i + 2];
+            if (n1 == b'{' && n2 == b'{') || (n1 == b'}' && n2 == b'}') {
+                static_buf.push(n1 as char);
+                static_buf.push(n2 as char);
+                i += 3;
+                continue;
+            }
+        }
+        if b == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+            static_buf.push('\\');
+            i += 2;
+            continue;
+        }
+        if b == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            if !static_buf.is_empty() {
+                out.push(InterpSegment::Static(std::mem::take(&mut static_buf)));
+            }
+            let start = i + 2;
+            let mut j = start;
+            let mut found = false;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'}' && bytes[j + 1] == b'}' {
+                    found = true;
+                    break;
+                }
+                j += 1;
+            }
+            if !found {
+                return Err("unclosed `{{` in text".into());
+            }
+            let src = std::str::from_utf8(&bytes[start..j])
+                .map_err(|_| "non-UTF-8 text")?
+                .trim()
+                .to_string();
+            if src.is_empty() {
+                return Err("empty `{{}}` interpolation".into());
+            }
+            out.push(InterpSegment::Dynamic(src));
+            i = j + 2;
+            continue;
+        }
+        static_buf.push(b as char);
+        i += 1;
+    }
+    if !static_buf.is_empty() {
+        out.push(InterpSegment::Static(static_buf));
+    }
+    Ok(out)
 }
 
 /// Allowlist of runtime directives that are safe to lift into a
@@ -2068,6 +2242,9 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
     if ctx.is_text_managed(path) {
         out.push_str(" data-pp-text-managed=\"\"");
     }
+    if ctx.is_interp_managed(path) {
+        out.push_str(" data-pp-interp-managed=\"\"");
+    }
     // RFC-058 §6.2 layering — stamp `data-pp-row-plan="<id>"`
     // when the row-plan analyser claimed this `<template
     // pp-for>` site. Replaces the byte-position rewrite
@@ -2232,6 +2409,60 @@ mod tests {
         assert!(parse_pp_directive_name("").is_none());
         // Leading dot rejects (would yield empty head).
         assert!(parse_pp_directive_name(".both").is_none());
+    }
+
+    /// `parse_interp_segments` is the macro twin of
+    /// `crate::directives::interp::parse_segments` in pocopine-core.
+    /// Pin the documented edge cases so the two parsers don't
+    /// drift silently — anything that compiles here must also
+    /// resolve cleanly via the runtime's pre-existing scanner.
+    #[test]
+    fn parse_interp_segments_handles_documented_shapes() {
+        use super::{parse_interp_segments, InterpSegment};
+
+        fn render(segs: &[InterpSegment]) -> String {
+            let mut s = String::new();
+            for seg in segs {
+                match seg {
+                    InterpSegment::Static(t) => s.push_str(t),
+                    InterpSegment::Dynamic(t) => s.push_str(&format!("<<{t}>>")),
+                }
+            }
+            s
+        }
+
+        // Bare expression.
+        assert_eq!(render(&parse_interp_segments("{{x}}").unwrap()), "<<x>>");
+        // Static + dynamic + static.
+        assert_eq!(
+            render(&parse_interp_segments("hi {{name}}!").unwrap()),
+            "hi <<name>>!",
+        );
+        // Whitespace inside braces is trimmed.
+        assert_eq!(
+            render(&parse_interp_segments("{{   spaced   }}").unwrap()),
+            "<<spaced>>",
+        );
+        // Single braces stay literal.
+        assert_eq!(
+            render(&parse_interp_segments("a { b } c").unwrap()),
+            "a { b } c",
+        );
+        // Escaped opener stays literal.
+        assert_eq!(
+            render(&parse_interp_segments(r"\{{literal}}").unwrap()),
+            "{{literal}}",
+        );
+        // Backslash escape for backslash.
+        assert_eq!(render(&parse_interp_segments(r"a \\ b").unwrap()), r"a \ b",);
+        // Unclosed `{{` is an error.
+        assert!(parse_interp_segments("oops {{ no end").is_err());
+        // Empty `{{}}` is an error.
+        assert!(parse_interp_segments("{{}}").is_err());
+        // Pure static is fine and yields a single Static segment.
+        let segs = parse_interp_segments("just text").unwrap();
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(segs[0], InterpSegment::Static(ref s) if s == "just text"));
     }
 
     /// Each entry in the opaque-lift allowlist must look like a
