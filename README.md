@@ -5,19 +5,20 @@
 <h1 align="center">pocopine</h1>
 
 <p align="center">
-  <em>A tiny, reactive Rust/WASM UI framework with a full primitive
-  library — ships server-rendered HTML, animates by default.</em>
+  <em>A tiny, blazing-fast, reactive Rust/WASM UI framework with a
+  full primitive library — ships server-rendered HTML, animates by
+  default, benchmarks with the mature ones.</em>
 </p>
 
 ---
 
-In spirit pocopine is a Rust/WASM port of [Alpine.js][alpine] — the
-directive model, the pragmatism, the "sprinkle-of-JS" ergonomics —
-layered with a Vue-3-style reactive core (real `Proxy` traps, auto
-dep-tracking), tag-based components, a type-safe server-function
-bridge, and a built-in SPA router. Templates live in plain HTML files
-(`.poco`), styles in plain CSS files, logic in plain Rust files. No
-mixed-language SFCs, no JavaScript toolchain.
+pocopine is a directive-driven Rust/WASM UI framework: a Vue-3-style
+reactive core (real `Proxy` traps, auto dep-tracking) wired into an
+Alpine-style `pp-*` directive walker, with tag-based components, a
+type-safe server-function bridge, and a built-in SPA router.
+Templates live in plain HTML files (`.poco`), styles in plain CSS
+files, logic in plain Rust files. No mixed-language SFCs, no virtual
+DOM, no JavaScript toolchain.
 
 > Status: **pre-1.0 / experimental.** The API is still moving; every
 > breaking change lands in an RFC under [`rfcs/`](./rfcs/).
@@ -94,6 +95,41 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Tailwind-friendly transitions.** `pp-transition:enter`,
   `enter-start`, `enter-end` (and leave variants) — class strings go
   straight through, no custom CSS language.
+
+## Performance
+
+The `js-framework-benchmark` keyed-table action plan, run locally
+under headless Chromium against pinned Rust/WASM and JS competitors.
+Numbers are wall-clock geometric means (lower is better) across:
+`run(1000)`, `update every 10th`, `select`, `swapRows`, `remove`,
+`clear`, `runLots(10000)`, `add(1000)`.
+
+| framework  | geomean (ms) | vs vanilla |
+|------------|-------------:|-----------:|
+| vanilla JS |       165.10 |       1.00× |
+| Vue 3      |       169.08 |       1.02× |
+| **pocopine** |   **185.92** |   **1.13×** |
+| Yew        |       185.35 |       1.12× |
+| Leptos     |       195.40 |       1.18× |
+
+pocopine sits inside the band of mature reactive frameworks — on par
+with Yew, edge over Leptos, ~13% behind hand-tuned vanilla DOM. No
+virtual-DOM diff in the hot path; the directive walker mutates DOM
+nodes in place, fed by fine-grained `Proxy` reactivity.
+
+Reproduce locally:
+
+```bash
+./jsbench/benchmark.sh pocopine --browser chromium
+./jsbench/benchmark.sh leptos   --browser chromium
+./jsbench/benchmark.sh yew      --browser chromium
+./jsbench/benchmark.sh vue      --browser chromium
+./jsbench/benchmark.sh vanilla  --browser chromium
+```
+
+The harness pins each competitor to a fixed version and runs the
+plan with 2 warm-up + N measured passes per action. Source under
+[`jsbench/`](./jsbench/).
 
 ## Get started in 60 seconds
 
@@ -193,7 +229,8 @@ examples/              runnable apps demonstrating each feature
 Three layers you can reach for independently:
 
 1. **Runtime** — directive walker, reactive engine, component scopes.
-   Port of Alpine's model; no virtual DOM, mutations happen in place.
+   No virtual DOM; mutations happen in place against the real DOM,
+   the same shape Alpine.js popularised in the JS world.
 2. **Templates** — `.poco` files are pure HTML with `pp-*` directives.
    The `#[component]` macro wires them to Rust structs at compile
    time via `include_str!`.
