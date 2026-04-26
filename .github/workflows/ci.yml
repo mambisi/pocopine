@@ -131,7 +131,24 @@ jobs:
         with:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
+      # Install via `taiki-e/install-action` instead of
+      # `jetli/wasm-pack-action`. The jetli action shells out to
+      # the GitHub Releases CDN, which is intermittently 502'ing
+      # ("Unexpected HTTP response: 502" while downloading the
+      # `wasm-pack-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
+      # tarball) and aborts the workflow before any test job
+      # runs. taiki-e ships pre-built archives via its own
+      # mirror with retry baked in, the same way we install
+      # `wasm-bindgen-cli` below — so CI fails on the work, not
+      # on a flaky download.
+      #
+      # Pinned to 0.14.0 to match the version every job
+      # downloads (jetli was resolving "latest" each time, which
+      # made any future release a quiet regression risk).
+      - name: install wasm-pack (pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
       # Pin wasm-bindgen-cli to the workspace lockfile version so
       # the test runner's HTTP API matches what `wasm-bindgen-test`
       # in the lockfile expects. The wasm-pack-bundled copy is
@@ -178,7 +195,24 @@ jobs:
         with:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
+      # Install via `taiki-e/install-action` instead of
+      # `jetli/wasm-pack-action`. The jetli action shells out to
+      # the GitHub Releases CDN, which is intermittently 502'ing
+      # ("Unexpected HTTP response: 502" while downloading the
+      # `wasm-pack-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
+      # tarball) and aborts the workflow before any test job
+      # runs. taiki-e ships pre-built archives via its own
+      # mirror with retry baked in, the same way we install
+      # `wasm-bindgen-cli` below — so CI fails on the work, not
+      # on a flaky download.
+      #
+      # Pinned to 0.14.0 to match the version every job
+      # downloads (jetli was resolving "latest" each time, which
+      # made any future release a quiet regression risk).
+      - name: install wasm-pack (pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
       # Pin wasm-bindgen-cli to the workspace lockfile version —
       # see the `test-wasm-node` job for the rationale.
       - name: install wasm-bindgen-cli (locked)
@@ -240,7 +274,24 @@ jobs:
         with:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
+      # Install via `taiki-e/install-action` instead of
+      # `jetli/wasm-pack-action`. The jetli action shells out to
+      # the GitHub Releases CDN, which is intermittently 502'ing
+      # ("Unexpected HTTP response: 502" while downloading the
+      # `wasm-pack-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
+      # tarball) and aborts the workflow before any test job
+      # runs. taiki-e ships pre-built archives via its own
+      # mirror with retry baked in, the same way we install
+      # `wasm-bindgen-cli` below — so CI fails on the work, not
+      # on a flaky download.
+      #
+      # Pinned to 0.14.0 to match the version every job
+      # downloads (jetli was resolving "latest" each time, which
+      # made any future release a quiet regression risk).
+      - name: install wasm-pack (pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
       - uses: Swatinem/rust-cache@v2
         with:
           # Per-example cache so a regression in one doesn't
