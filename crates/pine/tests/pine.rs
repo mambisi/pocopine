@@ -5851,20 +5851,17 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 
 // ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
 
-/// Survey every registered Pine template plan and report which
-/// ones still flip `requires_walker = true`. Every walker-fallback
-/// trip is a slice that hasn't graduated to the compiled
-/// runtime yet — the macro left framework-owned attributes the
-/// plan can't install standalone (currently: `pp-as` on a
-/// non-root tag, preserved framework attrs on a child host
-/// after the macro's known-attr filter, slot subtrees that fail
-/// the lift envelope). The listed tags are the concrete targets
-/// for upcoming hardening work.
+/// Survey every registered Pine template plan and assert none
+/// flip `requires_walker = true`. The audit started at 12/167
+/// offenders; landing the `pp-roving` / `pp-resize` opaque-
+/// directive lift drove it to 4, and lifting `pp-ref` on
+/// custom hosts (the date/time picker family) drove it to 0.
 ///
-/// The asserted ceiling is a high-water mark, not a target — it
-/// turns regressions into a hard fail (a routine refactor that
-/// silently widens the walker-fallback surface trips this) while
-/// letting deliberate hardening land by lowering the constant.
+/// Asserting an exact zero turns any regression into an
+/// immediate hard fail — a routine refactor that silently
+/// widens the walker-fallback surface trips this. New offender
+/// categories should ship with their own dedicated lifting
+/// slice rather than relaxing the gate.
 #[wasm_bindgen_test]
 async fn pine_template_plan_fallback_audit() {
     pine::register_all();
@@ -5905,12 +5902,12 @@ async fn pine_template_plan_fallback_audit() {
     // doesn't yet plan (pine-date-picker / pine-date-range-field
     // / pine-date-range-picker / pine-time-range-field). That's
     // the next focused slice.
-    const FALLBACK_CEILING: usize = 4;
-    assert!(
-        walker_owned.len() <= FALLBACK_CEILING,
-        "Pine walker-fallback surface grew: {} > ceiling {}. Tags: {:#?}",
+    assert_eq!(
         walker_owned.len(),
-        FALLBACK_CEILING,
+        0,
+        "Surveyed {} of {} pine plans require walker fallback. Offenders: {:#?}",
+        walker_owned.len(),
+        tags.len(),
         walker_owned,
     );
 }

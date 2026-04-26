@@ -508,6 +508,19 @@ struct PlanTeleportHost {}
 #[handlers]
 impl PlanTeleportHost {}
 
+/// RFC-058 Phase 3 hardening — host with `pp-ref` on a
+/// custom child host. Drives the regression that without
+/// classifier coverage for `pp-ref` on a non-HTML5 tag the
+/// attr would fall to `Preserved` and flip
+/// `requires_walker = true` (the cause of the date/time
+/// picker fallbacks pre-fix).
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanChildHostRefHost.html")]
+struct PlanChildHostRefHost {}
+
+#[handlers]
+impl PlanChildHostRefHost {}
+
 /// RFC-058 Phase 3 hardening — host whose root carries the
 /// runtime-only `pp-roving.both` directive. The macro lifts it
 /// into a `StaticOpaqueDirective` entry instead of preserving it
@@ -621,6 +634,7 @@ fn register_all() {
     PlanScopedSlotHost::register();
     PlanUnliftableDefaultHost::register();
     PlanOpaqueDirectiveHost::register();
+    PlanChildHostRefHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1826,6 +1840,63 @@ async fn macro_lifts_opaque_runtime_directive() {
         compiled_fallback_walk_count(),
         0,
         "lifting pp-roving must remove the walker fallback that previously drove it",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 3 hardening — `pp-ref` on a custom-host
+/// element must lift into a regular ref entry instead of
+/// preserving the attr and forcing requires_walker. The runtime
+/// semantic matches the native-element case: register the host
+/// DOM element under the given name in the parent's ref table.
+#[wasm_bindgen_test]
+async fn macro_lifts_pp_ref_on_custom_child_host() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-child-host-ref-host")
+        .expect("plan-child-host-ref-host registers a template plan");
+    assert!(
+        !plan.requires_walker,
+        "pp-ref on a custom host must NOT flip requires_walker",
+    );
+    assert_eq!(
+        plan.refs.len(),
+        1,
+        "pp-ref on the custom host must lift into a single ref entry",
+    );
+    assert_eq!(plan.refs[0].name, "leaf");
+    assert_eq!(plan.child_mounts.len(), 1);
+
+    let host = mount("<plan-child-host-ref-host></plan-child-host-ref-host>");
+    tick().await;
+
+    // The ref is registered against the host's scope at mount
+    // time. Resolve it via `scope_of_element` + `refs::get_on`
+    // so the assertion doesn't depend on `current_scope_id`
+    // ambient state, which dies after `tick`.
+    let host_tag = host
+        .query_selector("plan-child-host-ref-host")
+        .unwrap()
+        .unwrap();
+    let host_root = host_tag.first_element_child().unwrap();
+    let (host_scope_id, _) =
+        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    let leaf_via_ref =
+        pocopine::refs::get_on(host_scope_id, "leaf").expect("ref `leaf` must resolve");
+    assert_eq!(
+        leaf_via_ref.local_name(),
+        "plan-child-leaf",
+        "the resolved ref must point at the custom-host element itself, matching the walker semantic",
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "lifting pp-ref on a custom host must remove the previous walker fallback",
     );
 
     host.remove();

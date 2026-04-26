@@ -1113,6 +1113,16 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         });
                         host_models.push(model);
                     }
+                    ChildHostAttrOutcome::Ref(ref_name) => {
+                        ctx.stripped.push(StrippedAttr {
+                            node_path: path.clone(),
+                            name: name.clone(),
+                        });
+                        ctx.refs.push(RefLite {
+                            node_path: path.clone(),
+                            name: ref_name,
+                        });
+                    }
                     ChildHostAttrOutcome::Preserved => {
                         if is_framework_attr(name) {
                             ctx.requires_walker = true;
@@ -1634,6 +1644,14 @@ enum ChildHostAttrOutcome {
     Binding(ChildHostBindingLite),
     Listener(ChildHostListenerLite),
     Model(ChildHostModelLite),
+    /// RFC-058 Phase 3 hardening — `pp-ref="<name>"` on a
+    /// custom-host element. The runtime semantic matches the
+    /// native-element case: register the host DOM element under
+    /// `name` in the parent scope's ref table. The macro emits a
+    /// regular `RefLite` against the host's node_path so
+    /// `apply_static_plan` runs the same `refs::register` call
+    /// the walker would.
+    Ref(String),
     Preserved,
 }
 
@@ -1675,6 +1693,13 @@ fn classify_child_host_attr(name: &str, value: &str) -> ChildHostAttrOutcome {
             modifiers,
             expr_src: value.to_string(),
         });
+    }
+    if rest == "ref" {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return ChildHostAttrOutcome::Preserved;
+        }
+        return ChildHostAttrOutcome::Ref(trimmed.to_string());
     }
     ChildHostAttrOutcome::Preserved
 }
