@@ -214,6 +214,35 @@ pub struct StaticSlotFragment {
     pub scoped_let: Option<&'static str>,
 }
 
+/// Plan entry for a runtime-only directive the macro doesn't
+/// have structured handling for (RFC-058 Phase 3 hardening).
+///
+/// The runtime directive registry already ships container
+/// behaviours (`pp-roving`, `pp-resize`, `pp-intersect`,
+/// `pp-anchor`, `pp-flip`) whose semantics don't depend on
+/// scope-chain quirks — they're DOM-side effects that install
+/// once and self-manage. Before this entry existed, the macro
+/// preserved them on the cleaned HTML and flipped
+/// `requires_walker = true` so the walker could discover and
+/// dispatch them. Now the macro lifts allowlisted directives
+/// into this entry; the applier invokes
+/// [`crate::directives::lookup`] just like
+/// [`crate::walker::dispatch`] would.
+///
+/// `name` is the directive head (after `pp-` strip), e.g.
+/// `"roving"`. `arg` is the part after the first `:` in the
+/// attribute name (`pp-roving:<listbox-id>` → `Some("listbox")`).
+/// `modifiers` are the `.`-separated suffixes (e.g. `["both"]`
+/// for `pp-roving.both`). `value` is the attribute value verbatim.
+#[doc(hidden)]
+pub struct StaticOpaqueDirective {
+    pub node_path: &'static [u16],
+    pub name: &'static str,
+    pub arg: Option<&'static str>,
+    pub modifiers: &'static [&'static str],
+    pub value: &'static str,
+}
+
 /// Static-lifetime descriptor for a `<slot>` outlet inside a
 /// compiled component template. RFC-058 Phase 3.5e.
 ///

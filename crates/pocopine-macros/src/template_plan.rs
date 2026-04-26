@@ -184,6 +184,14 @@ struct AnalysisCtx {
     /// materialises these explicitly instead of relying on the
     /// recursive walker to discover `<slot>` elements.
     slot_outlets: Vec<SlotOutletLite>,
+    /// RFC-058 Phase 3 hardening — runtime-only directives the
+    /// macro can lift into a compile-time entry instead of
+    /// preserving them on the cleaned HTML and forcing
+    /// requires_walker. Allowlist-driven (currently `pp-roving`,
+    /// `pp-resize`, `pp-intersect`, `pp-anchor`, `pp-flip`); the
+    /// runtime applier dispatches each through
+    /// [`crate::directives::lookup`] after slot materialisation.
+    opaque_directives: Vec<OpaqueDirectiveLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -379,6 +387,18 @@ struct SlotOutletLite {
     name: String,
 }
 
+struct OpaqueDirectiveLite {
+    node_path: Vec<u16>,
+    /// Directive head after `pp-` strip (e.g. `"roving"`).
+    name: String,
+    /// Argument after the first `:` in the attribute name.
+    arg: Option<String>,
+    /// Modifiers after each `.` in the attribute name.
+    modifiers: Vec<String>,
+    /// Attribute value verbatim.
+    value: String,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -435,6 +455,7 @@ impl AnalysisCtx {
             || !self.for_plans.is_empty()
             || !self.teleport_plans.is_empty()
             || !self.slot_outlets.is_empty()
+            || !self.opaque_directives.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -483,6 +504,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let for_plans_tokens = ctx.for_plans.iter().map(emit_for_plan);
     let teleport_plans_tokens = ctx.teleport_plans.iter().map(emit_teleport_plan);
     let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
+    let opaque_tokens = ctx.opaque_directives.iter().map(emit_opaque_directive);
     let requires_walker = ctx.requires_walker;
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
@@ -495,6 +517,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             for_plans: &[ #(#for_plans_tokens),* ],
             teleport_plans: &[ #(#teleport_plans_tokens),* ],
             slot_outlets: &[ #(#slot_outlets_tokens),* ],
+            opaque_directives: &[ #(#opaque_tokens),* ],
             requires_walker: #requires_walker,
         }
     }
@@ -720,6 +743,32 @@ fn emit_slot_outlet(s: &SlotOutletLite) -> TokenStream {
         ::pocopine::__private::StaticSlotOutlet {
             node_path: #path,
             name: #name,
+        }
+    }
+}
+
+fn emit_opaque_directive(d: &OpaqueDirectiveLite) -> TokenStream {
+    let path = emit_node_path(&d.node_path);
+    let name = proc_macro2::Literal::string(&d.name);
+    let arg_tokens = match &d.arg {
+        Some(a) => {
+            let lit = proc_macro2::Literal::string(a);
+            quote! { Some(#lit) }
+        }
+        None => quote! { None },
+    };
+    let modifiers_tokens = d.modifiers.iter().map(|m| {
+        let lit = proc_macro2::Literal::string(m);
+        quote! { #lit }
+    });
+    let value = proc_macro2::Literal::string(&d.value);
+    quote! {
+        ::pocopine::__private::StaticOpaqueDirective {
+            node_path: #path,
+            name: #name,
+            arg: #arg_tokens,
+            modifiers: &[ #(#modifiers_tokens),* ],
+            value: #value,
         }
     }
 }
@@ -1401,15 +1450,80 @@ fn classify_attr(
             });
             return ClassifyOutcome::Stripped { is_text: false };
         }
+        // RFC-058 Phase 3 hardening — allowlisted runtime
+        // directives (`pp-roving`, `pp-resize`, `pp-intersect`,
+        // `pp-anchor`, `pp-flip`) lift into a StaticOpaqueDirective
+        // entry so the macro stops flipping requires_walker for
+        // them. The applier dispatches each through the same
+        // `directives::lookup` path the walker uses.
+        //
+        // Eligibility: the attr name must parse cleanly into
+        // `(head, arg, modifiers)` and the head must be in the
+        // allowlist. Anything else (pp-data / pp-route / pp-cloak
+        // / pp-stagger / pp-transition / unknown) stays preserved
+        // and forces requires_walker.
+        if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest) {
+            if is_lift_eligible_opaque(&head) {
+                ctx.opaque_directives.push(OpaqueDirectiveLite {
+                    node_path: path.to_vec(),
+                    name: head,
+                    arg,
+                    modifiers,
+                    value: value.to_string(),
+                });
+                ctx.stripped.push(StrippedAttr {
+                    node_path: path.to_vec(),
+                    name: name.to_string(),
+                });
+                return ClassifyOutcome::Stripped { is_text: false };
+            }
+        }
         // Every other pp-* attribute (pp-data, pp-cloak,
-        // pp-model, pp-route, pp-anchor, pp-resize,
-        // pp-intersect, pp-roving, pp-flip, pp-transition:*,
-        // pp-stagger, etc.) — preserved on the cleaned HTML
-        // and handled by the runtime walker as today.
+        // pp-model, pp-route, pp-transition:*, pp-stagger, etc.)
+        // — preserved on the cleaned HTML and handled by the
+        // runtime walker as today.
         return ClassifyOutcome::Preserved;
     }
     // Plain HTML attribute — preserved.
     ClassifyOutcome::Preserved
+}
+
+/// Parse the post-`pp-` part of an attribute name into
+/// `(head, arg, modifiers)`. Mirrors the runtime
+/// `directives::parse_attr` so the lift-eligibility check sees
+/// the same shape the dispatcher would.
+fn parse_pp_directive_name(rest: &str) -> Option<(String, Option<String>, Vec<String>)> {
+    let (head_part, rest) = match rest.split_once(':') {
+        Some((h, r)) => (h, Some(r)),
+        None => (rest, None),
+    };
+    let mut head_parts = head_part.split('.');
+    let name = head_parts.next()?.to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let head_mods: Vec<String> = head_parts.map(str::to_string).collect();
+    let (arg, tail_mods) = if let Some(rest) = rest {
+        let mut it = rest.split('.');
+        let a = it.next().map(str::to_string).filter(|s| !s.is_empty());
+        (a, it.map(str::to_string).collect::<Vec<_>>())
+    } else {
+        (None, Vec::new())
+    };
+    let mut mods = head_mods;
+    mods.extend(tail_mods);
+    Some((name, arg, mods))
+}
+
+/// Allowlist of runtime directives that are safe to lift into a
+/// compile-time `StaticOpaqueDirective` entry. Each entry is a
+/// pure DOM-side effect that installs once and self-manages —
+/// no scope-chain quirks, no walker-discovery dependencies, no
+/// install-order constraints beyond "after slot materialisation"
+/// (which the applier honours by running the opaque dispatch
+/// last).
+fn is_lift_eligible_opaque(head: &str) -> bool {
+    matches!(head, "roving" | "resize" | "intersect" | "anchor" | "flip")
 }
 
 fn classify_bind(arg: &str, value: &str, path: &[u16], ctx: &mut AnalysisCtx) -> ClassifyOutcome {

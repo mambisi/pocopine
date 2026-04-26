@@ -45,7 +45,7 @@ use web_sys::{console, Element};
 
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticListener, StaticRef, StaticSlotOutlet, StaticTeleportPlan,
+    StaticListener, StaticOpaqueDirective, StaticRef, StaticSlotOutlet, StaticTeleportPlan,
 };
 use crate::directives::{self, DirectiveCall};
 use crate::expr;
@@ -113,6 +113,16 @@ pub struct StaticTemplatePlan {
     /// have installed, so the recursive walker no longer has to
     /// discover `<slot>` elements for planned templates.
     pub slot_outlets: &'static [StaticSlotOutlet],
+    /// Runtime-only directives the macro lifts via the directive
+    /// registry (RFC-058 Phase 3 hardening). One entry per
+    /// allowlisted `pp-X` attribute (currently `pp-roving`,
+    /// `pp-resize`, `pp-intersect`, `pp-anchor`, `pp-flip`); the
+    /// applier dispatches them through
+    /// [`crate::directives::lookup`] after slot materialisation
+    /// so container directives that walk descendants find a fully
+    /// settled DOM. Empty for plans whose elements use only the
+    /// macro's structured directives.
+    pub opaque_directives: &'static [StaticOpaqueDirective],
     /// True when the cleaned HTML still contains framework-owned
     /// attributes that this plan does not install. Compiled
     /// fragments can skip fallback only when their own plan and
@@ -453,6 +463,50 @@ pub fn apply_static_plan(
     for slot in slot_outlets {
         crate::walker::materialize_compiled_slot_outlet(&slot);
     }
+    // Install opaque runtime directives last so container
+    // behaviours like `pp-roving` see the slot-materialised item
+    // DOM in place (the legacy walker fired them after attribute
+    // dispatch on each item, which happened post-slot-clone).
+    install_opaque_directives(root, scope_id, proxy, plan, template_name);
+}
+
+fn install_opaque_directives(
+    root: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    plan: &'static StaticTemplatePlan,
+    template_name: &str,
+) {
+    for d in plan.opaque_directives {
+        let Some(el) = resolve(root, d.node_path) else {
+            fail("opaque-directive", template_name, d.node_path, Some(d.name));
+            continue;
+        };
+        let Some(handler) = directives::lookup(d.name) else {
+            // The macro emitted an entry for a directive the
+            // runtime registry doesn't know about — either a
+            // typo'd allowlist entry or a directive that was
+            // removed from the registry. Surface it via the
+            // fail-fast counter so tests catch the drift.
+            fail(
+                "opaque-directive-lookup",
+                template_name,
+                d.node_path,
+                Some(d.name),
+            );
+            continue;
+        };
+        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
+        let call = DirectiveCall {
+            el: &el,
+            proxy,
+            scope_id,
+            arg: d.arg.map(|s| s.to_string()),
+            modifiers,
+            value: d.value.to_string(),
+        };
+        handler(&call);
+    }
 }
 
 /// Apply the root-owned part of a template plan to the user
@@ -528,6 +582,31 @@ pub fn apply_static_pp_as_plan(
     }
     for i in plan.inits.iter().filter(|i| i.node_path.is_empty()) {
         crate::walker::defer_init_on(root, scope_id, i.expr_src);
+    }
+    for d in plan
+        .opaque_directives
+        .iter()
+        .filter(|d| d.node_path.is_empty())
+    {
+        let Some(handler) = directives::lookup(d.name) else {
+            fail(
+                "opaque-directive-lookup",
+                template_name,
+                d.node_path,
+                Some(d.name),
+            );
+            continue;
+        };
+        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
+        let call = DirectiveCall {
+            el: root,
+            proxy,
+            scope_id,
+            arg: d.arg.map(|s| s.to_string()),
+            modifiers,
+            value: d.value.to_string(),
+        };
+        handler(&call);
     }
 }
 
