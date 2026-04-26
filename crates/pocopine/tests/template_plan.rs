@@ -32,7 +32,10 @@ use pocopine::prelude::*;
 use pocopine_core::templates_plan::{
     plan_failure_count, reset_plan_failure_count, template_plan_for,
 };
-use pocopine_core::walker::{compiled_fallback_walk_count, reset_compiled_fallback_walk_count};
+use pocopine_core::walker::{
+    bind_call_count, compiled_fallback_walk_count, reset_bind_call_count,
+    reset_compiled_fallback_walk_count,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -2030,6 +2033,55 @@ async fn macro_lifts_text_interpolation() {
         0,
         "lifted interp must take the compiled path with no walker fallback",
     );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 6.3 — when a registered component plan has
+/// `requires_walker = false`, the walker invokes `bind` once on
+/// the host element, applies the entire plan, then descends via
+/// `finalize_compiled_subtree` (lifecycle-only) instead of
+/// re-binding every descendant. Pin the bind-call delta so any
+/// regression that re-introduces the redundant scan is loud.
+///
+/// `PlanInterpHost` is a non-trivial walker-clean fixture: 1
+/// outer test-harness `<div>` (the `mount()` helper's wrapper),
+/// the `<plan-interp-host>` component tag, then a template root
+/// and 3 native children inside. The legacy walk would bind all
+/// 6 elements; Phase 6.3 binds the harness wrapper + the
+/// component tag (which triggers `apply_static_plan` then
+/// `finalize_compiled_subtree`) and skips the rest, so the
+/// post-mount delta is 2.
+#[wasm_bindgen_test]
+async fn walker_skips_recursion_for_plan_clean_subtrees() {
+    register_all();
+    reset_bind_call_count();
+
+    let baseline = bind_call_count();
+    let host = mount("<plan-interp-host></plan-interp-host>");
+    tick().await;
+
+    let after = bind_call_count();
+    let delta = after - baseline;
+    assert_eq!(
+        delta, 2,
+        "plan-clean component must bind only its harness wrapper + the host element \
+         ({delta} bind calls — walker is re-entering descendants instead of routing \
+         through finalize_compiled_subtree)",
+    );
+
+    // The plan still applied correctly — sanity-check the
+    // rendered DOM and a reactive update.
+    assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
+    assert_eq!(read(&host, ".pih-bare"), "world");
+
+    let host_tag = host.query_selector("plan-interp-host").unwrap().unwrap();
+    let host_root = host_tag.first_element_child().unwrap();
+    let (_id, host_proxy) =
+        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    js_sys::Reflect::set(&host_proxy, &"label".into(), &"phase6".into()).unwrap();
+    tick().await;
+    assert_eq!(read(&host, ".pih-bare"), "phase6");
 
     host.remove();
 }

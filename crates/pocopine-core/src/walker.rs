@@ -150,7 +150,28 @@ pub fn walk(el: &Element) {
         materialize_slot(el);
         return;
     }
+    // RFC-058 Phase 6.3 — when this element is a registered
+    // component tag whose plan has `requires_walker = false`
+    // (and isn't a pp-as host whose user content needs walker
+    // discovery), `bind` will install the entire plan via
+    // `apply_static_plan`. Every descendant is then either a
+    // walker-clean native element (attrs stripped, interp lifted
+    // via Phase 6.2, slot outlets materialised by the applier)
+    // or a custom tag the applier already mounted via
+    // `child_mounts`. Recursing through `walk` would re-enter
+    // every descendant just to find nothing to bind; route the
+    // post-order through `finalize_compiled_subtree` instead so
+    // we still drive deferred init + on_mount + the walked
+    // marker without the redundant directive scan.
+    let walker_clean_plan = !el.has_attribute("pp-as")
+        && crate::templates_plan::template_plan_for(&el.local_name())
+            .map(|p| !p.requires_walker)
+            .unwrap_or(false);
     bind(el);
+    if walker_clean_plan {
+        finalize_compiled_subtree(el);
+        return;
+    }
     // Snapshot children first — directives inside `bind` can mutate
     // the live `HTMLCollection` (e.g. slot materialisation replaces
     // a child mid-iteration).
@@ -303,6 +324,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
 }
 
 fn bind(el: &Element) {
+    BIND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     // Step 0: `<pp-outlet>` is the router's mount point. Hand the
     // element over; don't try to bind directives or mount anything.
     let tag = el.local_name();
@@ -1635,6 +1657,12 @@ struct ListenerEntry {
 
 thread_local! {
     static COMPILED_FALLBACK_WALKS: Cell<u32> = const { Cell::new(0) };
+    /// RFC-058 Phase 6.3 instrumentation — counts `walker::bind`
+    /// invocations since the last reset. Tests use this to pin
+    /// that compiled, walker-clean tags don't trigger bind on
+    /// every descendant (the recursion is replaced by
+    /// `finalize_compiled_subtree` in `walk`).
+    static BIND_CALLS: Cell<u32> = const { Cell::new(0) };
 
     /// Monotonically-increasing id stamped on each element that
     /// tracks listeners. Same shape as the per-scope id stamp —
@@ -1663,6 +1691,21 @@ pub fn compiled_fallback_walk_count() -> u32 {
 /// Reset the compiled fallback walk counter.
 pub fn reset_compiled_fallback_walk_count() {
     COMPILED_FALLBACK_WALKS.with(|c| c.set(0));
+}
+
+/// RFC-058 Phase 6.3 instrumentation — number of `walker::bind`
+/// invocations since the last reset. Tests assert that compiled
+/// walker-clean components don't trip bind on every descendant
+/// (the recursion is replaced by `finalize_compiled_subtree` in
+/// `walk`); a baseline + after-mount delta of 1 means only the
+/// component root was bound, the rest skipped.
+pub fn bind_call_count() -> u32 {
+    BIND_CALLS.with(Cell::get)
+}
+
+/// Reset the bind-call instrumentation counter.
+pub fn reset_bind_call_count() {
+    BIND_CALLS.with(|c| c.set(0));
 }
 
 fn listener_slot_for(el: &Element) -> u64 {
