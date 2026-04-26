@@ -223,3 +223,70 @@ alternative to `start` for lean builds.
 * `cargo test -p pocopine-macros` — 82 unit tests including
   the new `parse_interp_segments_handles_documented_shapes`
   parser-drift guard.
+
+## Phase 6.4 experiment — DOM-builder code-gen (negative result)
+
+**Premise:** The static template plan resolves nodes by
+`node_path` and installs every binding/listener/init. The
+HTML literal is now only there to feed
+`el.set_inner_html(&html)` so the browser builds the DOM the
+plan walks. If the macro emits explicit
+`create_element` / `set_attribute` / `append_child` code
+instead, the per-template HTML bytes drop out of the wasm —
+analogous to Solid / SwiftUI's view-builder code-gen.
+
+**What we measured.** Implemented `emit_builder_tokens` in the
+macro (mirrors the cleaned-HTML serializer one-for-one,
+respects `is_stripped` / `is_text_managed` /
+`is_interp_managed` / `row_plan_id`, handles synthetic
+elements + void elements). Skipped emission for templates
+with `<template>` descendants (browser parser routes
+`<template>` children into `HTMLTemplateElement.content`,
+which `create_element` + `append_child` doesn't reproduce)
+and for templates with `role = "..."` (runtime
+`compile_template` rewrites `<root>` to the role's actual
+HTML tag, which the builder doesn't yet replicate). Kept the
+HTML registration in place to preserve `pp-as` semantics
+(any host can mount any component via `pp-as`, and that
+sandbox path needs the HTML string).
+
+| Build (counter)                   | Pre-experiment | + builder    | Delta            |
+|-----------------------------------|---------------:|-------------:|-----------------:|
+| `default` (devtools + legacy-dom) | 712 477 / 270 806 | 719 408 / 272 937 | **+6 931 / +2 131** |
+| lean (`default-features = false`) | 593 447 / 226 368 | 599 984 / 228 431 | **+6 537 / +2 063** |
+
+**Conclusion: code-gen builders cost more bytes than they
+save for templates of this size.** The cleaned HTML for
+`Counter.poco` is roughly 500 bytes; the builder code-gen
+needed ~6.5 KB raw / ~2 KB gzip on top of it. Even if we
+could fully replace the HTML registration (we can't without
+breaking `pp-as`), the builder code is already ~13× larger
+than the HTML it would replace.
+
+Why the budget blew out:
+
+* Each `create_element("div").expect("create_element")` is
+  ~30 bytes of wasm (call shim + tag string + error string).
+  A counter template with 12 elements is ~360 bytes just for
+  element creation.
+* `set_attribute` calls add ~25 bytes each. ~20 attrs across
+  the template ≈ 500 bytes.
+* `Text` and `Comment` node calls each cost a similar shim.
+* The generic `builder_append<P: AsRef<Node>, C: AsRef<Node>>`
+  helper monomorphises across `(&Element, &Element) /
+  (&Element, &Text) / (Element, &Element) / …` combinations,
+  multiplying the link-time cost.
+* Strings (`"div"`, `"class"`, `"data-pp-text-managed"`, …)
+  do dedup across templates, but the codegen overhead per
+  template dominates.
+
+**The structural Phase 6 binary win remains gated on moving
+`walk` / `bind` / the directive `run` shims behind
+`legacy-dom`** (per the previous section). Code-gen builders
+are not the lever to pull. The experiment is reverted from
+the tree; this section preserves the negative result so we
+don't re-explore the path without a substantially different
+plan (e.g. data-driven `BuildOp` arrays consumed by a single
+runtime interpreter, which trades wasm code per template for
+wasm data per template — possibly more competitive but a
+separate experiment).
