@@ -5849,6 +5849,86 @@ async fn time_range_field_tab_bridges_start_end_edges() {
     host.remove();
 }
 
+/// Reproducer for the user-reported regression: tags rendered
+/// via `pp-for` don't respond to clicks on the per-item delete
+/// button. Mounts a `<pine-tags-input-root>` whose chip layout
+/// mirrors the website demo (each tag iterates a
+/// `<pine-tags-input-item>` with a `<pine-tags-input-item-delete>`
+/// inside), seeds three tags, then dispatches a click on the
+/// middle delete button and verifies the corresponding value
+/// drops out of the root's `values`.
+///
+/// Note: this test relies on Phase 6.x mount-path state that
+/// only exists on `wip/rfc/58-phase6` (the click dispatch
+/// timing differs without those changes). The deterministic
+/// chain-walk regression below catches the same underlying
+/// bug across all branches.
+#[wasm_bindgen_test]
+async fn tags_input_per_chip_delete_click_removes_tag() {
+    let host = mount(
+        "<pine-tags-input-root id=\"tags-root\">\
+           <template pp-for=\"tag in values\" pp-key=\"tag\">\
+             <pine-tags-input-item :value=\"tag\" class=\"chip\">\
+               <pine-tags-input-item-text></pine-tags-input-item-text>\
+               <pine-tags-input-item-delete class=\"chip-x\">×</pine-tags-input-item-delete>\
+             </pine-tags-input-item>\
+           </template>\
+           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    // Seed three tags via the input field.
+    let input: HtmlInputElement = host
+        .query_selector(".t-input input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    for tag in ["alpha", "beta", "gamma"] {
+        input.set_value(tag);
+        let evt = web_sys::Event::new("input").unwrap();
+        input.dispatch_event(&evt).unwrap();
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_key("Enter");
+        let kev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+        input.dispatch_event(&kev).unwrap();
+        tick().await;
+    }
+    sleep_ms(5).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip").unwrap();
+    assert_eq!(chips.length(), 3, "three chips should mount via pp-for");
+
+    // Click the middle chip's delete button.
+    let beta_x = host
+        .query_selector_all(".chip-x")
+        .unwrap()
+        .item(1)
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    beta_x.click();
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip").unwrap();
+    assert_eq!(
+        chips.length(),
+        2,
+        "clicking the middle chip's × must remove that tag",
+    );
+
+    host.remove();
+}
+
 /// Outer authoring component for the inject-chain regression —
 /// owns the `tags` array that pp-for iterates. The slot
 /// AUTHOR (this scope) and slot OWNER (`pine-tags-input-root`)
@@ -5924,6 +6004,143 @@ async fn tags_input_per_chip_inject_chain_reaches_root() {
          that `pp-for::install` ignored `CTX_PARENT_KEY` on the template \
          element when setting the LoopScope's inject parent — the \
          LoopScope chained to the slot author instead of the slot owner.",
+=======
+/// Reproducer for the user-reported regression: tags rendered
+/// via `pp-for` don't respond to clicks on the per-item delete
+/// button. Mounts a `<pine-tags-input-root>` whose chip layout
+/// mirrors the website demo (each tag iterates a
+/// `<pine-tags-input-item>` with a `<pine-tags-input-item-delete>`
+/// inside), seeds three tags, then dispatches a click on the
+/// middle delete button and verifies the corresponding value
+/// drops out of the root's `values`.
+#[wasm_bindgen_test]
+async fn tags_input_per_chip_delete_click_removes_tag() {
+    let host = mount(
+        "<pine-tags-input-root id=\"tags-root\">\
+           <template pp-for=\"tag in values\" pp-key=\"tag\">\
+             <pine-tags-input-item :value=\"tag\" class=\"chip\">\
+               <pine-tags-input-item-text></pine-tags-input-item-text>\
+               <pine-tags-input-item-delete class=\"chip-x\">×</pine-tags-input-item-delete>\
+             </pine-tags-input-item>\
+           </template>\
+           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    // Seed three tags via the input field.
+    let input: HtmlInputElement = host
+        .query_selector(".t-input input")
+        .unwrap()
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    for tag in ["alpha", "beta", "gamma"] {
+        input.set_value(tag);
+        let evt = web_sys::Event::new("input").unwrap();
+        input.dispatch_event(&evt).unwrap();
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_key("Enter");
+        let kev =
+            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+        input.dispatch_event(&kev).unwrap();
+        tick().await;
+    }
+    sleep_ms(5).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip").unwrap();
+    assert_eq!(chips.length(), 3, "three chips should mount via pp-for");
+
+    // Click the middle chip's delete button.
+    let beta_x = host
+        .query_selector_all(".chip-x")
+        .unwrap()
+        .item(1)
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    beta_x.click();
+    tick().await;
+    sleep_ms(5).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip").unwrap();
+    assert_eq!(
+        chips.length(),
+        2,
+        "clicking the middle chip's × must remove that tag",
+    );
+
+    host.remove();
+}
+
+/// Reproducer at scale — same shape as the per-chip click test
+/// above but with 500 tags seeded directly via the root scope's
+/// `values` field. Stresses pp-for batching + the per-item
+/// delete listener attachment. Re-enables transitions so the
+/// `animate = "flip"` on `PineTagsInputItem` matches what the
+/// website demo runs with (the test harness globally disables
+/// transitions for speed; the user's report may be specific to
+/// the animated path).
+#[wasm_bindgen_test]
+async fn tags_input_500_tags_delete_click_removes_tag() {
+    pocopine_core::animate::enable_transitions();
+    let host = mount(
+        "<pine-tags-input-root>\
+           <template pp-for=\"tag in values\" pp-key=\"tag\">\
+             <pine-tags-input-item :value=\"tag\" class=\"chip500\">\
+               <pine-tags-input-item-text></pine-tags-input-item-text>\
+               <pine-tags-input-item-delete class=\"chip500-x\">×</pine-tags-input-item-delete>\
+             </pine-tags-input-item>\
+           </template>\
+         </pine-tags-input-root>",
+    );
+    tick().await;
+
+    // Seed 500 tags via the root proxy.
+    let root = host
+        .query_selector("pine-tags-input-root")
+        .unwrap()
+        .unwrap();
+    let inner = root.first_element_child().unwrap();
+    let (_, root_proxy) = pocopine_core::walker::scope_of_element(&inner).expect("root scope");
+    // Build the JS array via js_sys (no extra serde dep needed
+    // for this test crate — values are plain strings).
+    let arr = js_sys::Array::new();
+    for i in 0..500 {
+        arr.push(&wasm_bindgen::JsValue::from_str(&format!("t{i}")));
+    }
+    js_sys::Reflect::set(&root_proxy, &"values".into(), &arr).unwrap();
+    tick().await;
+    sleep_ms(50).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip500").unwrap();
+    assert_eq!(chips.length(), 500, "all 500 chips should mount");
+
+    // Click the 250th chip's delete button.
+    let mid_x = host
+        .query_selector_all(".chip500-x")
+        .unwrap()
+        .item(249)
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    mid_x.click();
+    tick().await;
+    sleep_ms(20).await;
+    tick().await;
+
+    let chips = host.query_selector_all(".chip500").unwrap();
+    assert_eq!(
+        chips.length(),
+        499,
+        "clicking the 250th chip's × must remove that tag",
     );
 
     host.remove();
