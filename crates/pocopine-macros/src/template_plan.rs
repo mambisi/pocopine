@@ -94,6 +94,16 @@ struct AnalysisCtx {
     listeners: Vec<ListenerLite>,
     inits: Vec<InitLite>,
     refs: Vec<RefLite>,
+    /// RFC-058 Phase 3.3 — child-component mount sites the
+    /// classifier discovered (every non-HTML5 tag inside the
+    /// plan-eligible portion of the template, excluding
+    /// `<slot>` / `<template>`-block wrappers / pp-for /
+    /// pp-if / pp-teleport subtrees). The runtime applier
+    /// invokes [`crate::walker::mount_child_component`] for
+    /// each before the walker recurses, and the walker's
+    /// `__pp_mounted` guard makes the discovery a no-op for
+    /// any tag the plan already mounted.
+    child_mounts: Vec<ChildMountLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -143,12 +153,18 @@ struct RefLite {
     name: String,
 }
 
+struct ChildMountLite {
+    node_path: Vec<u16>,
+    tag: String,
+}
+
 impl AnalysisCtx {
     fn has_any_entry(&self) -> bool {
         !self.bindings.is_empty()
             || !self.listeners.is_empty()
             || !self.inits.is_empty()
             || !self.refs.is_empty()
+            || !self.child_mounts.is_empty()
     }
 
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
@@ -168,18 +184,14 @@ impl AnalysisCtx {
         let listeners_tokens = self.listeners.iter().map(emit_listener);
         let inits_tokens = self.inits.iter().map(emit_init);
         let refs_tokens = self.refs.iter().map(emit_ref);
-        // RFC-058 Phase 3.3 (deferred) — child-mount entries.
-        // Phase 3.1 ships the slice empty; the runtime applier
-        // already iterates it and the `__pp_mounted` walker
-        // guard means an empty list keeps today's
-        // walker-discovered mount path active end-to-end.
+        let child_mounts_tokens = self.child_mounts.iter().map(emit_child_mount);
         quote! {
             ::pocopine::__private::StaticTemplatePlan {
                 bindings: &[ #(#bindings_tokens),* ],
                 listeners: &[ #(#listeners_tokens),* ],
                 inits: &[ #(#inits_tokens),* ],
                 refs: &[ #(#refs_tokens),* ],
-                child_mounts: &[],
+                child_mounts: &[ #(#child_mounts_tokens),* ],
             }
         }
     }
@@ -254,6 +266,17 @@ fn emit_ref(r: &RefLite) -> TokenStream {
     }
 }
 
+fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
+    let path = emit_node_path(&c.node_path);
+    let tag = proc_macro2::Literal::string(&c.tag);
+    quote! {
+        ::pocopine::__private::StaticChildMount {
+            node_path: #path,
+            tag: #tag,
+        }
+    }
+}
+
 // ─── walk + classification ───────────────────────────────────────
 
 fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
@@ -266,19 +289,30 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         return;
     }
 
-    // Whole-subtree boundary: non-HTML5 tags (per council pass 3
-    // amendment to RFC-058 §6.2). Custom elements / registered
-    // components are walker-owned for v1 because the parent's
-    // mount order is load-bearing for child-component prop
-    // writes; promoting that ordering is RFC-058 Phase 7+'s job.
-    if !is_html5_native(&el.tag) {
+    // Whole-element block boundaries: pp-for / pp-if /
+    // pp-teleport / <slot>. Every directive on or under these
+    // stays on the walker — including any child-component tag
+    // wrapped in one (the walker's `pp-if` / `pp-for` /
+    // `pp-teleport` controllers own mount lifecycle for those
+    // subtrees and pre-mounting from the plan would race them).
+    if is_block_boundary(el) {
         return;
     }
 
-    // Whole-element block boundaries: pp-for / pp-if /
-    // pp-teleport / <slot>. Every directive on or under these
-    // stays on the walker.
-    if is_block_boundary(el) {
+    // Whole-subtree boundary: non-HTML5 tags (per council pass 3
+    // amendment to RFC-058 §6.2). The element's own attributes
+    // and descendants stay walker-owned (slot content is the
+    // common case there), but RFC-058 Phase 3 captures the
+    // mount site itself: the runtime applier calls
+    // [`crate::walker::mount_child_component`] before the
+    // walker's recursive descent reaches the tag, and the
+    // walker's `__pp_mounted` guard turns the discovery into a
+    // no-op afterwards.
+    if !is_html5_native(&el.tag) {
+        ctx.child_mounts.push(ChildMountLite {
+            node_path: path.clone(),
+            tag: el.tag.clone(),
+        });
         return;
     }
 
