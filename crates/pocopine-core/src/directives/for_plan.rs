@@ -214,6 +214,27 @@ pub struct StaticSlotFragment {
     pub scoped_let: Option<&'static str>,
 }
 
+/// Plan entry for `{{expr}}` text interpolation lifted out of
+/// the runtime walker (RFC-058 Phase 6.2).
+///
+/// The macro scans an element's direct text-node children at
+/// compile time, parses `{{...}}` segments, and emits one entry
+/// per interpolated text node. The applier uses
+/// [`crate::directives::interp::install_planned`] to bind the
+/// segments to the resolved text node — same install path the
+/// walker would have run, just with the segment list pre-parsed.
+///
+/// `node_path` resolves the parent element via `apply_static_plan`'s
+/// `resolve` helper. `text_index` selects which text-node child
+/// of the parent (counting only Text nodes — element / comment
+/// children don't shift the index).
+#[doc(hidden)]
+pub struct StaticInterp {
+    pub node_path: &'static [u16],
+    pub text_index: u16,
+    pub segments: &'static [crate::directives::interp::PlannedSegment],
+}
+
 /// Plan entry for a runtime-only directive the macro doesn't
 /// have structured handling for (RFC-058 Phase 3 hardening).
 ///

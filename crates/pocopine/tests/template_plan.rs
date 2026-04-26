@@ -508,6 +508,31 @@ struct PlanTeleportHost {}
 #[handlers]
 impl PlanTeleportHost {}
 
+/// RFC-058 Phase 6.2 — host with `{{expr}}` text interpolation
+/// in two siblings (one mixed with static text, one bare) and
+/// a third sibling with no interp. The macro lifts each
+/// interpolated text node into a `StaticInterp` entry; the
+/// applier installs effects per dynamic segment; the runtime
+/// walker's `interp::scan_children` skips the carrier elements
+/// via `data-pp-interp-managed`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanInterpHost.html")]
+struct PlanInterpHost {
+    label: String,
+    count: u32,
+}
+
+#[handlers]
+impl PlanInterpHost {
+    pub fn on_setup(&mut self) {
+        self.label = "world".into();
+        self.count = 3;
+    }
+    pub fn bump(&mut self) {
+        self.count += 1;
+    }
+}
+
 /// RFC-058 Phase 3 hardening — host with `pp-ref` on a
 /// custom child host. Drives the regression that without
 /// classifier coverage for `pp-ref` on a non-HTML5 tag the
@@ -635,6 +660,7 @@ fn register_all() {
     PlanUnliftableDefaultHost::register();
     PlanOpaqueDirectiveHost::register();
     PlanChildHostRefHost::register();
+    PlanInterpHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1941,6 +1967,68 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
         compiled_fallback_walk_count(),
         0,
         "lifting pp-ref on a custom host must remove the previous walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifts into
+/// `StaticInterp` plan entries. The applier installs effects
+/// per dynamic segment using the same install path the runtime
+/// scanner produced; the walker's `interp::scan_children`
+/// honours `data-pp-interp-managed` so the duplicate scan
+/// doesn't double-install.
+#[wasm_bindgen_test]
+async fn macro_lifts_text_interpolation() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan =
+        template_plan_for("plan-interp-host").expect("plan-interp-host registers a template plan");
+    assert_eq!(
+        plan.interps.len(),
+        2,
+        "two text-node siblings carry interpolation; the third is pure static and skips lifting",
+    );
+    // Static-mixed line: 5 segments — "hello ", `{{label}}`,
+    // ", you have ", `{{count}}`, " items".
+    let mixed = plan
+        .interps
+        .iter()
+        .find(|i| i.segments.len() == 5)
+        .expect("mixed-line interp entry");
+    assert_eq!(mixed.text_index, 0);
+    // Bare interp: 1 segment — `{{label}}`.
+    let bare = plan
+        .interps
+        .iter()
+        .find(|i| i.segments.len() == 1)
+        .expect("bare interp entry");
+    assert_eq!(bare.text_index, 0);
+
+    let host = mount("<plan-interp-host></plan-interp-host>");
+    tick().await;
+
+    assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
+    assert_eq!(read(&host, ".pih-bare"), "world");
+    assert_eq!(read(&host, ".pih-static"), "no interp here");
+
+    // Reactive update flows through the planned segment.
+    let host_tag = host.query_selector("plan-interp-host").unwrap().unwrap();
+    let host_root = host_tag.first_element_child().unwrap();
+    let (_id, host_proxy) =
+        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    js_sys::Reflect::set(&host_proxy, &"label".into(), &"there".into()).unwrap();
+    tick().await;
+    assert_eq!(read(&host, ".pih-line"), "hello there, you have 3 items");
+    assert_eq!(read(&host, ".pih-bare"), "there");
+
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "lifted interp must take the compiled path with no walker fallback",
     );
 
     host.remove();

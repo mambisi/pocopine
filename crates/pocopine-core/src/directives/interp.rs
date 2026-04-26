@@ -30,6 +30,20 @@ enum Segment {
     Dynamic(String),
 }
 
+/// Static-lifetime equivalent of [`Segment`] for compile-time
+/// emitted `{{expr}}` interpolation (RFC-058 Phase 6.2).
+///
+/// The macro parses text-node children at compile time, lifts
+/// the resulting segment list into a [`crate::directives::for_plan::StaticInterp`]
+/// entry, and the runtime applier hands it to
+/// [`install_planned`] to drive the same install path the
+/// walker's runtime parser would have produced.
+#[doc(hidden)]
+pub enum PlannedSegment {
+    Static(&'static str),
+    Dynamic(&'static str),
+}
+
 /// Visit `parent`'s direct text children. For any that contain at
 /// least one `{{…}}` pair, split into static + dynamic text nodes
 /// and install an effect per dynamic segment.
@@ -46,6 +60,14 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
     // semantics as the `pp-text` check above so braces inside
     // a planned text value don't get hijacked by interpolation.
     if parent.has_attribute("data-pp-text-managed") {
+        return;
+    }
+    // RFC-058 Phase 6.2 — `data-pp-interp-managed` flags an
+    // element whose `{{expr}}` text children are owned by the
+    // static template plan. The applier already invoked
+    // [`install_planned`] for each segment; running the runtime
+    // parser again would double-install the effects.
+    if parent.has_attribute("data-pp-interp-managed") {
         return;
     }
 
@@ -89,6 +111,50 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
         }
         install(parent, proxy, &text, segments);
     }
+}
+
+/// Install a compile-time emitted segment list against a text
+/// node within `parent` (RFC-058 Phase 6.2). Mirrors the
+/// runtime-parsed [`install`] path — the only difference is
+/// where the segment list comes from.
+///
+/// `text_index` is the index of the target text node among
+/// `parent`'s direct text-node children (skipping element /
+/// comment children). If the index doesn't resolve at apply
+/// time the call is a no-op rather than a panic — survives DOM
+/// edits between macro emission and apply.
+#[doc(hidden)]
+pub fn install_planned(
+    parent: &Element,
+    proxy: &JsValue,
+    text_index: usize,
+    segments: &'static [PlannedSegment],
+) {
+    let nodes = parent.child_nodes();
+    let mut seen: usize = 0;
+    let mut target: Option<Text> = None;
+    for i in 0..nodes.length() {
+        let Some(n) = nodes.item(i) else { continue };
+        if n.node_type() != Node::TEXT_NODE {
+            continue;
+        }
+        if seen == text_index {
+            target = n.dyn_into::<Text>().ok();
+            break;
+        }
+        seen += 1;
+    }
+    let Some(original) = target else {
+        return;
+    };
+    let runtime_segments: Vec<Segment> = segments
+        .iter()
+        .map(|s| match s {
+            PlannedSegment::Static(t) => Segment::Static((*t).to_string()),
+            PlannedSegment::Dynamic(src) => Segment::Dynamic((*src).to_string()),
+        })
+        .collect();
+    install(parent, proxy, &original, runtime_segments);
 }
 
 fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Segment>) {

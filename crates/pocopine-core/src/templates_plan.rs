@@ -45,7 +45,8 @@ use web_sys::{console, Element};
 
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticListener, StaticOpaqueDirective, StaticRef, StaticSlotOutlet, StaticTeleportPlan,
+    StaticInterp, StaticListener, StaticOpaqueDirective, StaticRef, StaticSlotOutlet,
+    StaticTeleportPlan,
 };
 use crate::directives::{self, DirectiveCall};
 use crate::expr;
@@ -123,6 +124,13 @@ pub struct StaticTemplatePlan {
     /// settled DOM. Empty for plans whose elements use only the
     /// macro's structured directives.
     pub opaque_directives: &'static [StaticOpaqueDirective],
+    /// `{{expr}}` text interpolation sites lifted out of the
+    /// runtime walker (RFC-058 Phase 6.2). The macro pre-parses
+    /// the segment list at compile time; the applier hands it
+    /// to [`crate::directives::interp::install_planned`] to
+    /// install effects per dynamic segment. Empty for templates
+    /// with no interpolation.
+    pub interps: &'static [StaticInterp],
     /// True when the cleaned HTML still contains framework-owned
     /// attributes that this plan does not install. Compiled
     /// fragments can skip fallback only when their own plan and
@@ -468,6 +476,17 @@ pub fn apply_static_plan(
     // DOM in place (the legacy walker fired them after attribute
     // dispatch on each item, which happened post-slot-clone).
     install_opaque_directives(root, scope_id, proxy, plan, template_name);
+    // RFC-058 Phase 6.2 — `{{expr}}` text interpolation. The
+    // macro pre-parses segments and stamps `data-pp-interp-managed`
+    // on the carrier element so the runtime walker's
+    // `interp::scan_children` skips the duplicate scan.
+    for ip in plan.interps {
+        let Some(el) = resolve(root, ip.node_path) else {
+            fail("interp", template_name, ip.node_path, None);
+            continue;
+        };
+        directives::interp::install_planned(&el, proxy, ip.text_index as usize, ip.segments);
+    }
 }
 
 fn install_opaque_directives(
