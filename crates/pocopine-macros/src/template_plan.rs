@@ -1,10 +1,3 @@
-// Phase 2.2 lands the analyser ahead of the macro emitter that
-// consumes it (Phase 2.3). The dead-code allow lifts the
-// transient warnings; Phase 2.3 wires `analyze_template_plan`
-// into the `register_template_stmt` emission path and the
-// allow can be removed.
-#![allow(dead_code)]
-
 //! RFC-058 Phase 2 — macro-time whole-template plan compilation.
 //!
 //! Walks the parsed `TemplateAst` (produced by RFC-050's
