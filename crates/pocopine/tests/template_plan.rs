@@ -78,11 +78,11 @@ impl PlanRefInit {
     }
 }
 
-/// Whole-subtree walker-owned by virtue of the `<template
-/// pp-for>` boundary. Drives test #4 — the macro v1 prefers
-/// row-plan stamping over template-plan compilation when both
-/// would apply, so `template_plan_for("plan-for-loop")` stays
-/// `None`.
+/// Template whose only plan-relevant content is a
+/// `<template pp-for>` row. With §6.2 layering, the row-plan
+/// analyser still owns the row body, but the template-plan
+/// classifier emits no template plan because there's no
+/// eligible directive *outside* the pp-for to plan.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct PflRow {
     id: u32,
@@ -102,6 +102,36 @@ impl PlanForLoop {
             id: 1,
             label: "alpha".into(),
         }];
+    }
+}
+
+/// RFC-058 §6.2 layering — template that mixes a plan-eligible
+/// `pp-text` (outside `pp-for`) with an RFC-054 keyed row plan.
+/// Both compilers must run: the template plan is registered for
+/// the title binding, AND the row-plan registry resolves the
+/// keyed list — proving the `data-pp-row-plan` attribute
+/// survives the template-plan rewrite.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanForMixed.html")]
+struct PlanForMixed {
+    title: String,
+    rows: Vec<PflRow>,
+}
+
+#[handlers]
+impl PlanForMixed {
+    pub fn on_setup(&mut self) {
+        self.title = "mixed-title".into();
+        self.rows = vec![
+            PflRow {
+                id: 1,
+                label: "alpha".into(),
+            },
+            PflRow {
+                id: 2,
+                label: "beta".into(),
+            },
+        ];
     }
 }
 
@@ -201,6 +231,7 @@ fn register_all() {
     PlanSlotChild::register();
     PlanSlotHostStatic::register();
     PlanIfHost::register();
+    PlanForMixed::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -302,17 +333,18 @@ async fn planned_pp_init_observes_planned_pp_ref() {
     host.remove();
 }
 
-/// v1 trade-off (RFC-058 §6.2 layering follow-up): when a
-/// template carries `pp-for` row plans, the macro skips
-/// template-plan compilation and the whole subtree stays
-/// walker-owned. Confirm by mount-checking + asserting no
-/// plan was registered.
+/// A template whose only plan-relevant content is the pp-for
+/// itself emits no template plan — the row-plan analyser still
+/// owns the row body via `data-pp-row-plan` (now baked in by
+/// the template-plan serializer per §6.2 layering, even when
+/// no template plan is registered) and the runtime walker
+/// dispatch for pp-for picks it up unchanged.
 #[wasm_bindgen_test]
-async fn template_with_pp_for_skips_template_plan() {
+async fn template_with_only_pp_for_emits_no_template_plan() {
     register_all();
     assert!(
         template_plan_for("plan-for-loop").is_none(),
-        "templates carrying `pp-for` row plans skip template-plan compilation in v1",
+        "no plan-eligible directive outside the pp-for → no template plan registered",
     );
 
     let host = mount("<plan-for-loop></plan-for-loop>");
@@ -321,8 +353,40 @@ async fn template_with_pp_for_skips_template_plan() {
     let li = host
         .query_selector("li")
         .unwrap()
-        .expect("walker-driven pp-for should still mount the row");
+        .expect("pp-for row must mount via the row-plan path");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 §6.2 layering — template plan + row plan coexist
+/// on one template. The title's `pp-text` registers a template
+/// plan, the keyed list registers a row plan, and the rendered
+/// DOM proves both compilers ran successfully (the title
+/// binding fires + the rows mount).
+#[wasm_bindgen_test]
+async fn template_plan_and_row_plan_coexist_on_one_template() {
+    register_all();
+    reset_plan_failure_count();
+
+    assert!(
+        template_plan_for("plan-for-mixed").is_some(),
+        "template plan registers for the pp-text outside the pp-for",
+    );
+
+    let host = mount("<plan-for-mixed></plan-for-mixed>");
+    tick().await;
+
+    assert_eq!(read(&host, ".pfm-title"), "mixed-title");
+    let rows = host.query_selector_all("li").unwrap();
+    assert_eq!(rows.length(), 2, "row plan must mount both keyed rows");
+    assert_eq!(
+        rows.get(0).unwrap().text_content().as_deref(),
+        Some("alpha"),
+    );
+    assert_eq!(rows.get(1).unwrap().text_content().as_deref(), Some("beta"),);
+
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

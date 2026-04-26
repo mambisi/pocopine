@@ -73,15 +73,31 @@ pub(crate) struct EmittedTemplatePlan {
 /// when nothing is eligible — `EmittedTemplatePlan { None,
 /// None }` and the caller behaves as if this analysis didn't
 /// run.
-pub(crate) fn analyze_template_plan(ast: &TemplateAst) -> EmittedTemplatePlan {
-    let mut ctx = AnalysisCtx::default();
+///
+/// `row_plan_assignments` carries `(template_node_path,
+/// plan_id)` pairs from the row-plan analyzer (RFC-058 §6.2
+/// layering). When non-empty, the cleaned-HTML serializer
+/// stamps `data-pp-row-plan="<id>"` onto each `<template
+/// pp-for>` opening tag the row-plan analyzer claimed, so the
+/// row-plan registry lookup still finds its target after the
+/// template-plan rewrite. Empty slice = no row plans (or
+/// row-plan analyser hadn't run) — same behaviour as
+/// pre-§6.2 layering.
+pub(crate) fn analyze_template_plan(
+    ast: &TemplateAst,
+    row_plan_assignments: &[(Vec<u16>, u32)],
+) -> EmittedTemplatePlan {
+    let mut ctx = AnalysisCtx {
+        row_plan_assignments: row_plan_assignments.to_vec(),
+        ..AnalysisCtx::default()
+    };
     let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
             walk(el, &mut ctx, &mut path);
         }
     }
-    if !ctx.has_any_entry() {
+    if !ctx.has_any_entry() && row_plan_assignments.is_empty() {
         return EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
@@ -90,9 +106,17 @@ pub(crate) fn analyze_template_plan(ast: &TemplateAst) -> EmittedTemplatePlan {
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
     let slot_fragment_fns = ctx.emit_slot_fragment_fns();
-    let plan_tokens = ctx.emit_plan_tokens();
+    // When the only "entry" is a row-plan stamp (template has no
+    // plan-eligible directive on its own), still emit cleaned HTML
+    // so the row-plan attribute is baked in — but skip the
+    // `register_template_plan` call by leaving plan_tokens None.
+    let plan_tokens = if ctx.has_any_entry() {
+        Some(ctx.emit_plan_tokens())
+    } else {
+        None
+    };
     EmittedTemplatePlan {
-        plan_tokens: Some(plan_tokens),
+        plan_tokens,
         cleaned_html: Some(cleaned_html),
         slot_fragment_fns,
     }
@@ -138,6 +162,13 @@ struct AnalysisCtx {
     /// Node paths where the macro removed `pp-text` and the
     /// serializer should stamp `data-pp-text-managed`.
     text_managed_paths: Vec<Vec<u16>>,
+    /// RFC-058 §6.2 — `(template_node_path, plan_id)` pairs
+    /// from the row-plan analyser. The cleaned-HTML serializer
+    /// stamps `data-pp-row-plan="<id>"` onto each pp-for
+    /// `<template>` opening tag whose path matches an entry,
+    /// so the runtime row-plan registry lookup still finds its
+    /// target after the template-plan rewrite.
+    row_plan_assignments: Vec<(Vec<u16>, u32)>,
 }
 
 struct StrippedAttr {
@@ -223,6 +254,18 @@ impl AnalysisCtx {
         self.text_managed_paths
             .iter()
             .any(|p| p.as_slice() == node_path)
+    }
+
+    /// Returns `Some(plan_id)` when the row-plan analyser
+    /// assigned a row plan to the `<template pp-for>` at
+    /// `node_path`. The cleaned-HTML serializer uses this to
+    /// stamp `data-pp-row-plan="<id>"` so the runtime row-plan
+    /// registry finds its target after the rewrite.
+    fn row_plan_id(&self, node_path: &[u16]) -> Option<u32> {
+        self.row_plan_assignments
+            .iter()
+            .find(|(p, _)| p.as_slice() == node_path)
+            .map(|(_, id)| *id)
     }
 
     /// Generate one `fn <ident>(ctx: SlotMountCtx) { … }` item
@@ -913,6 +956,15 @@ fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Ve
     }
     if ctx.is_text_managed(path) {
         out.push_str(" data-pp-text-managed=\"\"");
+    }
+    // RFC-058 §6.2 layering — stamp `data-pp-row-plan="<id>"`
+    // when the row-plan analyser claimed this `<template
+    // pp-for>` site. Replaces the byte-position rewrite
+    // `for_plan::apply_stamps` would have done on the raw
+    // source — when the template-plan classifier owns the
+    // serialization, it owns this stamp too.
+    if let Some(plan_id) = ctx.row_plan_id(path) {
+        out.push_str(&format!(" data-pp-row-plan=\"{plan_id}\""));
     }
     if is_void_element(&el.tag) {
         out.push_str(" />");
