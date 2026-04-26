@@ -1845,6 +1845,34 @@ async fn macro_lifts_opaque_runtime_directive() {
     host.remove();
 }
 
+/// RFC-058 Phase 3 hardening — drift guard between the macro's
+/// opaque-directive allowlist and the runtime directive
+/// registry. The macro emits `StaticOpaqueDirective` entries
+/// trusting that `directives::lookup(name)` resolves at apply
+/// time; if a directive is removed from the registry without
+/// updating the macro, every fixture using that directive trips
+/// `plan_failure_count` silently. This test makes that drift
+/// loud at compile time by asserting each allowlisted name has
+/// a live runtime handler.
+///
+/// When you add or remove an entry from
+/// `is_lift_eligible_opaque` in
+/// `crates/pocopine-macros/src/template_plan.rs`, mirror the
+/// change here.
+#[wasm_bindgen_test]
+async fn opaque_lift_allowlist_matches_runtime_registry() {
+    const OPAQUE_LIFT_ELIGIBLE: &[&str] = &["roving", "resize", "intersect", "anchor", "flip"];
+
+    for name in OPAQUE_LIFT_ELIGIBLE {
+        assert!(
+            pocopine_core::directives::lookup(name).is_some(),
+            "macro lifts `pp-{name}` into a StaticOpaqueDirective but the runtime \
+             directive registry has no handler for it — either restore the runtime \
+             handler or drop `{name}` from `is_lift_eligible_opaque`",
+        );
+    }
+}
+
 /// RFC-058 Phase 3 hardening — `pp-ref` on a custom-host
 /// element must lift into a regular ref entry instead of
 /// preserving the attr and forcing requires_walker. The runtime
@@ -1890,6 +1918,22 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
         leaf_via_ref.local_name(),
         "plan-child-leaf",
         "the resolved ref must point at the custom-host element itself, matching the walker semantic",
+    );
+    // Fallthrough sanity: the host's `class="pchrh-leaf"` rides
+    // through RFC-010 author-class forwarding onto the leaf
+    // template's root `<span>`. Same as the walker path — the
+    // pp-ref lift must not change that semantic.
+    let leaf_root = leaf_via_ref
+        .first_element_child()
+        .expect("leaf component must mount its template root");
+    let class = leaf_root.get_attribute("class").unwrap_or_default();
+    assert!(
+        class.contains("pchrh-leaf"),
+        "host's class must fall through onto the leaf root via RFC-010 forwarding (got `{class}`)",
+    );
+    assert!(
+        class.contains("pcl-leaf"),
+        "the leaf template's own class must be preserved alongside (got `{class}`)",
     );
 
     assert_eq!(plan_failure_count(), 0);

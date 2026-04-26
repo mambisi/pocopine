@@ -2149,7 +2149,7 @@ fn escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_supported_modifier;
+    use super::{is_lift_eligible_opaque, is_supported_modifier, parse_pp_directive_name};
 
     #[test]
     fn supported_listener_modifiers_include_runtime_named_keys() {
@@ -2172,5 +2172,87 @@ mod tests {
                 "{modifier} should compile instead of requiring walker fallback"
             );
         }
+    }
+
+    /// `parse_pp_directive_name` mirrors the runtime
+    /// `directives::parse_attr` so the lift-eligibility check sees
+    /// the same shape the dispatcher would. Pin the documented
+    /// edge cases so the two parsers don't drift silently.
+    #[test]
+    fn parse_pp_directive_name_handles_documented_shapes() {
+        // Bare directive name.
+        let (name, arg, mods) = parse_pp_directive_name("roving").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg, None);
+        assert!(mods.is_empty());
+
+        // Modifiers without arg (`pp-roving.both`).
+        let (name, arg, mods) = parse_pp_directive_name("roving.both").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg, None);
+        assert_eq!(mods, vec!["both"]);
+
+        // Multiple modifiers (`pp-roving.both.nowrap`).
+        let (name, arg, mods) = parse_pp_directive_name("roving.both.nowrap").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg, None);
+        assert_eq!(mods, vec!["both", "nowrap"]);
+
+        // Arg only (`pp-roving:listbox`).
+        let (name, arg, mods) = parse_pp_directive_name("roving:listbox").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg.as_deref(), Some("listbox"));
+        assert!(mods.is_empty());
+
+        // Arg + modifiers (`pp-roving:listbox.virtual`).
+        let (name, arg, mods) = parse_pp_directive_name("roving:listbox.virtual").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg.as_deref(), Some("listbox"));
+        assert_eq!(mods, vec!["virtual"]);
+
+        // Head modifiers + arg (`pp-resize.border-box:host` —
+        // the head's modifiers come before the arg in the
+        // result vec, then the arg's tail modifiers, mirroring
+        // `directives::parse_attr`).
+        let (name, arg, mods) = parse_pp_directive_name("resize.border-box:host.foo").unwrap();
+        assert_eq!(name, "resize");
+        assert_eq!(arg.as_deref(), Some("host"));
+        assert_eq!(mods, vec!["border-box", "foo"]);
+
+        // Empty arg (`pp-roving:`) collapses to None — the
+        // runtime parser keeps `Some("")` here, but for the
+        // currently allowlisted directives an empty arg is
+        // never meaningful, so the macro normalises to None.
+        // Pin the divergence so it stays intentional.
+        let (name, arg, _) = parse_pp_directive_name("roving:").unwrap();
+        assert_eq!(name, "roving");
+        assert_eq!(arg, None);
+
+        // Empty input rejects.
+        assert!(parse_pp_directive_name("").is_none());
+        // Leading dot rejects (would yield empty head).
+        assert!(parse_pp_directive_name(".both").is_none());
+    }
+
+    /// Each entry in the opaque-lift allowlist must look like a
+    /// directive name the runtime registry could resolve. The
+    /// runtime side asserts the actual `directives::lookup`
+    /// resolution lives in `crates/pocopine/tests/template_plan.rs`
+    /// (`opaque_lift_allowlist_matches_runtime_registry`); this
+    /// side just guards the spelling.
+    #[test]
+    fn opaque_lift_allowlist_is_non_empty_and_lowercase() {
+        for name in ["roving", "resize", "intersect", "anchor", "flip"] {
+            assert!(
+                is_lift_eligible_opaque(name),
+                "{name} should be in the opaque-lift allowlist",
+            );
+            assert!(
+                name.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "directive name `{name}` should be lowercase ASCII (matches the runtime registry key style)",
+            );
+        }
+        assert!(!is_lift_eligible_opaque("text"));
+        assert!(!is_lift_eligible_opaque("model"));
     }
 }
