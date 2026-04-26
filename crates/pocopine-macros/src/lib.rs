@@ -60,6 +60,7 @@ mod slot_assertions;
 // and emits a `&[StaticRowPlan]` literal alongside template
 // stamps the caller injects into the source.
 mod for_plan;
+mod template_plan;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
 /// it with `template_parser::parse_strict`, and enforce the
@@ -428,7 +429,11 @@ struct ComputedParam {
 /// HTML Living Standard element names. A struct whose kebab-case ident
 /// matches one of these is rejected — its custom-element tag would
 /// collide with real HTML markup in parent templates.
-const HTML5_ELEMENTS: &[&str] = &[
+///
+/// `pub(crate)` so RFC-058 Phase 2's `template_plan` classifier can
+/// consult the same list when deciding "is this tag native?" — the
+/// canonical eligibility gate (see RFC-057 §6 / RFC-058 §6.2).
+pub(crate) const HTML5_ELEMENTS: &[&str] = &[
     "a",
     "abbr",
     "address",
