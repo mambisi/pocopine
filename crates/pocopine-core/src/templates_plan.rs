@@ -480,12 +480,32 @@ pub fn apply_static_plan(
     // macro pre-parses segments and stamps `data-pp-interp-managed`
     // on the carrier element so the runtime walker's
     // `interp::scan_children` skips the duplicate scan.
+    //
+    // Resolve every target text node BEFORE installing any
+    // segment list. Each `install_planned_target` inserts new
+    // text-node siblings before the placeholder and then removes
+    // the placeholder — reading `text_index` against the live
+    // list after a sibling install lands on the wrong node when
+    // multiple entries share a parent (e.g. a single carrier
+    // with `a {{x}}<em></em>b {{y}}` emits two entries against
+    // the same parent with text_index 0 and 1, but after the
+    // first install the dynamic node injected for `x` occupies
+    // text_index 1 in the live list).
+    let mut interp_targets: Vec<(Element, web_sys::Text, &'static [_])> =
+        Vec::with_capacity(plan.interps.len());
     for ip in plan.interps {
         let Some(el) = resolve(root, ip.node_path) else {
             fail("interp", template_name, ip.node_path, None);
             continue;
         };
-        directives::interp::install_planned(&el, proxy, ip.text_index as usize, ip.segments);
+        let Some(target) = directives::interp::resolve_text_target(&el, ip.text_index as usize)
+        else {
+            continue;
+        };
+        interp_targets.push((el, target, ip.segments));
+    }
+    for (el, target, segments) in &interp_targets {
+        directives::interp::install_planned_target(el, proxy, target, segments);
     }
 }
 

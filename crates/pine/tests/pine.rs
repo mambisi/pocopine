@@ -6151,7 +6151,8 @@ async fn pine_template_plan_fallback_audit() {
     ];
 
     assert_eq!(
-        walker_owned, expected,
+        walker_owned,
+        expected,
         "Pine fallback baseline drift: surveyed {} of {} plans require walker fallback.",
         walker_owned.len(),
         tags.len(),

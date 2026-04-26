@@ -113,40 +113,51 @@ pub fn scan_children(parent: &Element, proxy: &JsValue) {
     }
 }
 
-/// Install a compile-time emitted segment list against a text
-/// node within `parent` (RFC-058 Phase 6.2). Mirrors the
-/// runtime-parsed [`install`] path — the only difference is
-/// where the segment list comes from.
+/// Resolve the `text_index`-th text-node child of `parent`
+/// (skipping element / comment children). Returns `None` when
+/// the index is out of range — DOM edits between macro emission
+/// and apply degrade silently rather than panicking.
 ///
-/// `text_index` is the index of the target text node among
-/// `parent`'s direct text-node children (skipping element /
-/// comment children). If the index doesn't resolve at apply
-/// time the call is a no-op rather than a panic — survives DOM
-/// edits between macro emission and apply.
+/// Callers that drive multiple [`install_planned_target`] calls
+/// against the same parent must resolve every target via this
+/// helper **before** any install runs, since each install
+/// inserts new text-node siblings and removes the placeholder —
+/// reading `text_index` against the live list after a sibling
+/// install lands on the wrong node.
 #[doc(hidden)]
-pub fn install_planned(
-    parent: &Element,
-    proxy: &JsValue,
-    text_index: usize,
-    segments: &'static [PlannedSegment],
-) {
+pub fn resolve_text_target(parent: &Element, text_index: usize) -> Option<Text> {
     let nodes = parent.child_nodes();
     let mut seen: usize = 0;
-    let mut target: Option<Text> = None;
     for i in 0..nodes.length() {
         let Some(n) = nodes.item(i) else { continue };
         if n.node_type() != Node::TEXT_NODE {
             continue;
         }
         if seen == text_index {
-            target = n.dyn_into::<Text>().ok();
-            break;
+            return n.dyn_into::<Text>().ok();
         }
         seen += 1;
     }
-    let Some(original) = target else {
-        return;
-    };
+    None
+}
+
+/// Install a compile-time emitted segment list against a
+/// pre-resolved text node within `parent` (RFC-058 Phase 6.2).
+/// Mirrors the runtime-parsed [`install`] path — the only
+/// difference is where the segment list comes from.
+///
+/// Use [`resolve_text_target`] to obtain `target` from the
+/// macro-emitted `text_index` ahead of time. Resolving and
+/// installing in lockstep (one entry at a time) is unsafe when
+/// multiple entries share a parent: each install mutates the
+/// live text-node list, invalidating later indices.
+#[doc(hidden)]
+pub fn install_planned_target(
+    parent: &Element,
+    proxy: &JsValue,
+    target: &Text,
+    segments: &'static [PlannedSegment],
+) {
     let runtime_segments: Vec<Segment> = segments
         .iter()
         .map(|s| match s {
@@ -154,7 +165,7 @@ pub fn install_planned(
             PlannedSegment::Dynamic(src) => Segment::Dynamic((*src).to_string()),
         })
         .collect();
-    install(parent, proxy, &original, runtime_segments);
+    install(parent, proxy, target, runtime_segments);
 }
 
 fn install(parent: &Element, proxy: &JsValue, original: &Text, segments: Vec<Segment>) {
