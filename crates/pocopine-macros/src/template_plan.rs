@@ -1154,9 +1154,25 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 _ => true,
             });
             if has_meaningful_default {
-                if let Some(emission) = analyze_slot_subtree(&default_children, emissions) {
-                    slot_fragments.push(("default".to_string(), emission.ident().clone(), None));
-                    emissions.slot_fragments.push(emission);
+                match analyze_slot_subtree(&default_children, emissions) {
+                    Some(emission) => {
+                        slot_fragments.push((
+                            "default".to_string(),
+                            emission.ident().clone(),
+                            None,
+                        ));
+                        emissions.slot_fragments.push(emission);
+                    }
+                    None => {
+                        // Mirror the named-slot fallback gate:
+                        // unliftable default content must flip
+                        // requires_walker so the legacy capture
+                        // path drives the host instead of leaving
+                        // the plan in a "compiled-clean" state
+                        // while walker-owned content still rides
+                        // on the cleaned HTML.
+                        ctx.requires_walker = true;
+                    }
                 }
             }
         }

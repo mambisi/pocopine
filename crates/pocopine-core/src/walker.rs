@@ -1195,6 +1195,7 @@ fn materialize_slot(slot_el: &Element) {
                             // makes `@click="parent_handler"`
                             // inside scoped slots work.
                             caller: parent_proxy.clone(),
+                            caller_scope_id: parent_scope_id,
                         };
                         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
                         // Inject-chain: the slot scope sits
@@ -1320,6 +1321,7 @@ fn materialize_slot(slot_el: &Element) {
             // `@click="parent_handler"` works from inside the
             // slot.
             caller: slot_owner_proxy.clone(),
+            caller_scope_id: slot_owner_scope,
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
         // RFC-027 inject chain: the slot scope lives inside the

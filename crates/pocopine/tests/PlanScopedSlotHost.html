@@ -2,6 +2,8 @@
   <plan-scoped-slot-child>
     <template pp-slot="row" pp-let="ctx">
       <span class="pssh-row" pp-text="ctx.label"></span>
+      <button class="pssh-bump" pp-on:click="bump">bump</button>
     </template>
   </plan-scoped-slot-child>
+  <span class="pssh-mark" pp-text="mark"></span>
 </div>
