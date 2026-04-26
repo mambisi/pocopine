@@ -228,6 +228,41 @@ struct PlanTeleportHost {}
 #[handlers]
 impl PlanTeleportHost {}
 
+/// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed list
+/// with one `pp-text` binding per row. The macro emits a body
+/// fragment fn that installs `pp-text` against the row's
+/// `LoopScope` per iteration — no `walker::walk` on row clones.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct PfbhRow {
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanForBodyHost.html")]
+struct PlanForBodyHost {
+    rows: Vec<PfbhRow>,
+}
+
+#[handlers]
+impl PlanForBodyHost {
+    pub fn on_setup(&mut self) {
+        self.rows = vec![
+            PfbhRow {
+                label: "alpha".into(),
+            },
+            PfbhRow {
+                label: "beta".into(),
+            },
+        ];
+    }
+    pub fn add(&mut self) {
+        let n = self.rows.len() + 1;
+        self.rows.push(PfbhRow {
+            label: format!("row-{n}"),
+        });
+    }
+}
+
 /// RFC-058 Phase 4.1d — pp-if with a body that carries `pp-text`
 /// + `@click` against the parent scope. The body subtree
 /// qualifies for fragment lifting (HTML5-native, plan-eligible
@@ -274,6 +309,7 @@ fn register_all() {
     PlanForMixed::register();
     PlanTeleportHost::register();
     PlanIfBodyHost::register();
+    PlanForBodyHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -400,6 +436,58 @@ async fn template_with_only_pp_for_emits_for_plan() {
         .unwrap()
         .expect("pp-for row must mount via the for-plan + row-plan path");
     assert_eq!(li.text_content().as_deref(), Some("alpha"));
+
+    host.remove();
+}
+
+/// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed
+/// list with no row plan; the macro emits a body fragment fn
+/// the runtime invokes per row instead of `clone_template_body`
+/// + `walker::walk`. The fragment installs `pp-text` against
+/// the row's `LoopScope` per iteration; appending a new row
+/// drives the effect to mount + bind a fresh `<li>` without
+/// the walker touching the row.
+#[wasm_bindgen_test]
+async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("plan-for-body-host")
+        .expect("plan-for-body-host registers a template plan");
+    assert_eq!(plan.for_plans.len(), 1);
+    assert!(
+        plan.for_plans[0].body.is_some(),
+        "unkeyed pp-for body with one pp-text must lift",
+    );
+
+    let host = mount("<plan-for-body-host></plan-for-body-host>");
+    tick().await;
+
+    let initial_rows = host.query_selector_all(".pfbh-row").unwrap();
+    assert_eq!(initial_rows.length(), 2);
+    assert_eq!(
+        initial_rows.get(0).unwrap().text_content().as_deref(),
+        Some("alpha"),
+    );
+    assert_eq!(
+        initial_rows.get(1).unwrap().text_content().as_deref(),
+        Some("beta"),
+    );
+
+    // Append a row → effect re-runs → new row mounts via
+    // body fragment.
+    let add = host.query_selector(".pfbh-add").unwrap().unwrap();
+    add.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let after = host.query_selector_all(".pfbh-row").unwrap();
+    assert_eq!(after.length(), 3);
+    assert_eq!(
+        after.get(2).unwrap().text_content().as_deref(),
+        Some("row-3"),
+    );
+
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

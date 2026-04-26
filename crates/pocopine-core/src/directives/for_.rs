@@ -259,6 +259,7 @@ pub fn run(call: &DirectiveCall) {
         items_expr,
         key_expr,
         stagger_ms,
+        None,
     );
 }
 
@@ -274,6 +275,7 @@ pub fn run(call: &DirectiveCall) {
 /// `data-pp-row-plan` from the template element, which the
 /// template-plan classifier bakes in via the §6.2 layering
 /// path.
+#[allow(clippy::too_many_arguments)]
 pub fn install(
     template: HtmlTemplateElement,
     parent_proxy: JsValue,
@@ -282,6 +284,7 @@ pub fn install(
     items_expr: String,
     key_expr: Option<String>,
     stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
 ) {
     let template_el: Element = template.clone().into();
     let track_anchor = template_el.clone();
@@ -300,6 +303,7 @@ pub fn install(
             template,
             template_el,
             stagger_ms,
+            body,
         ),
         _ => run_naive(
             item_name,
@@ -309,6 +313,7 @@ pub fn install(
             template,
             template_el,
             stagger_ms,
+            body,
         ),
     };
 
@@ -317,6 +322,7 @@ pub fn install(
 
 /// Whole-rebuild iteration (no `pp-key`). Keeps the original
 /// RFC-004 semantics.
+#[allow(clippy::too_many_arguments)]
 fn run_naive(
     item_name: String,
     items_expr: String,
@@ -325,6 +331,7 @@ fn run_naive(
     template: HtmlTemplateElement,
     template_el: Element,
     stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
 ) -> crate::reactive::EffectId {
     let item_name: Rc<str> = item_name.into();
     let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
@@ -365,11 +372,33 @@ fn run_naive(
             crate::context::set_parent(scope.id, parent_scope_id);
             let proxy = scope.into_proxy();
 
-            let Some(clone_root) = clone_template_body(&template) else {
-                console::error_1(&JsValue::from_str(
-                    "pp-for: <template> body must contain exactly one element",
-                ));
-                break;
+            // RFC-058 Phase 4.2c — when the macro emitted a body
+            // fragment for this pp-for site, build the row root
+            // through the fragment (which stamps cleaned HTML +
+            // installs every directive against the row's
+            // LoopScope via the Phase 1 helpers — no
+            // `walker::walk` involvement). Otherwise fall back
+            // to the legacy `clone_template_body` +
+            // `walker::walk` path.
+            let (clone_root, fragment_built) = match body {
+                Some(f) => match f(scope.id, &proxy) {
+                    Some(root) => (root, true),
+                    None => {
+                        console::error_1(&JsValue::from_str(
+                            "pp-for: row body fragment failed to materialise root",
+                        ));
+                        break;
+                    }
+                },
+                None => match clone_template_body(&template) {
+                    Some(root) => (root, false),
+                    None => {
+                        console::error_1(&JsValue::from_str(
+                            "pp-for: <template> body must contain exactly one element",
+                        ));
+                        break;
+                    }
+                },
             };
             bind_scope_to(&clone_root, scope.id, &proxy);
 
@@ -377,7 +406,9 @@ fn run_naive(
                 .insert_before(clone_root.as_ref(), Some(template_el.as_ref()))
                 .is_ok()
             {
-                walker::walk(&clone_root);
+                if !fragment_built {
+                    walker::walk(&clone_root);
+                }
                 fresh.push(clone_root);
             }
         }
@@ -447,6 +478,7 @@ fn run_keyed(
     template: HtmlTemplateElement,
     template_el: Element,
     stagger_ms: u32,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
 ) -> crate::reactive::EffectId {
     let key_resolver = KeyResolver::parse(&item_name, &key_expr);
     // RFC 054 — opportunistic compiled-row-plan fast path. Looked
@@ -679,20 +711,63 @@ fn run_keyed(
                 crate::context::set_parent(scope.id, parent_scope_id);
 
                 let clone_start = crate::profiler::mount::start();
-                let Some(clone_root) = clone_template_body(&template) else {
-                    console::error_1(&JsValue::from_str(
-                        "pp-for: <template> body must contain exactly one element",
-                    ));
-                    Scope::remove(scope.id);
-                    break;
+                // RFC-058 Phase 4.2c — when no row plan claims
+                // this site AND the macro emitted a body
+                // fragment, build the row via the fragment
+                // (stamps cleaned HTML + installs every
+                // directive against the row's LoopScope via
+                // the Phase 1 helpers — no `walker::walk`
+                // involvement). Otherwise clone the template
+                // body and let the install loop run
+                // `walker::walk` / `mount_row_compiled` as
+                // before.
+                let clone_root = if row_plan.is_none() {
+                    if let Some(body_fn) = body {
+                        let proxy = scope.into_proxy();
+                        match body_fn(scope.id, &proxy) {
+                            Some(root) => {
+                                bind_scope_to(&root, scope.id, &proxy);
+                                // Mark as walked so the install
+                                // loop's `walker::walk` short-
+                                // circuits (the body fragment
+                                // already installed everything).
+                                walker::mark_walked(&root);
+                                Some(root)
+                            }
+                            None => {
+                                console::error_1(&JsValue::from_str(
+                                    "pp-for: row body fragment failed to materialise root",
+                                ));
+                                Scope::remove(scope.id);
+                                break;
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let clone_root = match clone_root {
+                    Some(root) => root,
+                    None => {
+                        let Some(root) = clone_template_body(&template) else {
+                            console::error_1(&JsValue::from_str(
+                                "pp-for: <template> body must contain exactly one element",
+                            ));
+                            Scope::remove(scope.id);
+                            break;
+                        };
+                        if elide_proxy {
+                            walker::bind_scope_id_only(&root, scope.id);
+                        } else {
+                            let proxy = scope.into_proxy();
+                            bind_scope_to(&root, scope.id, &proxy);
+                        }
+                        root
+                    }
                 };
                 crate::profiler::mount::record_clone_template_body(clone_start);
-                if elide_proxy {
-                    walker::bind_scope_id_only(&clone_root, scope.id);
-                } else {
-                    let proxy = scope.into_proxy();
-                    bind_scope_to(&clone_root, scope.id, &proxy);
-                }
                 fresh.push(PrevItem {
                     element: clone_root,
                     scope_id: scope.id,
