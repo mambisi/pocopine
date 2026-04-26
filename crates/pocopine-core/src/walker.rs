@@ -591,6 +591,12 @@ pub fn mount_child_component(host_el: &Element, name: &str) {
 /// from the fragment registry instead of going through the legacy
 /// capture/replay path.
 ///
+/// `parent_scope_id` + `parent_proxy` (RFC-058 Phase 3.5c) get
+/// stored alongside the set so dynamic slot content (slot
+/// subtrees with `pp-text` / `@click` / `pp-bind` etc.) can
+/// install bindings against the parent scope when the
+/// fragment fires.
+///
 /// Behaviour matches `mount_child_component` exactly when `slots`
 /// is empty — the registry stays clear and `materialize_slot`
 /// falls through to the legacy path. Generated parent code in
@@ -600,6 +606,8 @@ pub fn mount_child_component_with_slots(
     host_el: &Element,
     name: &str,
     slots: crate::slot_fragment::SlotSet,
+    parent_scope_id: ScopeId,
+    parent_proxy: &JsValue,
 ) {
     mount_component(host_el, name);
     if slots.is_empty() {
@@ -615,7 +623,7 @@ pub fn mount_child_component_with_slots(
     let Some(child_scope_id) = scope_id_of_element(&root) else {
         return;
     };
-    crate::slot_fragment::install(child_scope_id, slots);
+    crate::slot_fragment::install(child_scope_id, slots, parent_scope_id, parent_proxy.clone());
 }
 
 /// Attempt to mount `tag` on `el` in `pp-as` mode: hoist the tag's
@@ -1142,22 +1150,17 @@ fn materialize_slot(slot_el: &Element) {
     // about scoped slots; v1 fragments target opaque + simple
     // default-slot cases first.
     if bindings.is_empty() {
-        if let Some(fragment_fn) = crate::slot_fragment::lookup(owner_scope_id, &slot_name) {
+        if let Some((fragment_fn, parent_scope_id, parent_proxy)) =
+            crate::slot_fragment::lookup(owner_scope_id, &slot_name)
+        {
             let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
                 return;
             };
-            // Find the parent scope by climbing the slot owner's
-            // injection-parent chain. The owner's parent is the
-            // component that authored the slot content (the
-            // caller); fragments evaluate parent expressions
-            // against that scope.
-            let parent_scope_id = crate::context::parent_of(owner_scope_id)
-                .or_else(|| enclosing_inject_parent(slot_el))
-                .unwrap_or(owner_scope_id);
             let buffer = doc.create_document_fragment();
             fragment_fn(crate::slot_fragment::SlotMountCtx {
                 host: &buffer,
                 parent_scope_id,
+                parent_proxy: &parent_proxy,
                 child_scope_id: owner_scope_id,
             });
             // Splice buffered children before slot_el, then drop

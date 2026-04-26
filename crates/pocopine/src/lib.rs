@@ -85,7 +85,8 @@ pub mod __private {
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.
     pub use pocopine_core::slot_fragment::{
-        stamp_static_html, SlotFragment, SlotMountCtx, SlotSet, DEFAULT_SLOT_NAME,
+        stamp_dynamic_slot, stamp_static_html, SlotFragment, SlotMountCtx, SlotSet,
+        DEFAULT_SLOT_NAME,
     };
     // RFC-058 Phase 1.1 / 1.7 — cleanup-safe directive install
     // helpers. Generated mount code (Phase 2+) calls these

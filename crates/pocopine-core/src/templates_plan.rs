@@ -301,7 +301,7 @@ pub fn apply_static_plan(
             for s in c.slots {
                 set = set.named(s.name, s.fragment);
             }
-            crate::walker::mount_child_component_with_slots(&el, c.tag, set);
+            crate::walker::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
         }
     }
     for fp in plan.for_plans {
