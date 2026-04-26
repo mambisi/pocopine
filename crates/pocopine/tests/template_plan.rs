@@ -424,18 +424,37 @@ struct PlanNamedSlotHost {}
 #[handlers]
 impl PlanNamedSlotHost {}
 
-/// RFC-058 Phase 3.5f — host whose only slot designation is a
-/// `<template pp-slot="footer" pp-let="r">`. Scoped slots stay
-/// walker-driven (Phase 3.5g graduates them). The host's plan
-/// must flip `requires_walker` and the child-mount entry must
-/// NOT contain a `footer` fragment, but the rendered DOM still
-/// shows the user template via the legacy capture path.
+/// RFC-058 Phase 3.5g — child whose `<slot>` declares
+/// scoped-slot `:prop` bindings. The child's `current` field
+/// drives those bindings; the host below uses `pp-let="ctx"`
+/// to read them as `ctx.label`.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct PsscRow {
+    label: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
-#[component(template = "PlanLetSlotHost.html")]
-struct PlanLetSlotHost {}
+#[component(template = "PlanScopedSlotChild.html")]
+struct PlanScopedSlotChild {
+    current: PsscRow,
+}
 
 #[handlers]
-impl PlanLetSlotHost {}
+impl PlanScopedSlotChild {}
+
+/// RFC-058 Phase 3.5g — host that fills the child's scoped
+/// `row` slot via `<template pp-slot="row" pp-let="ctx">`.
+/// The macro must lift this into a slot fragment with
+/// `scoped_let = Some("ctx")`; the runtime materialiser
+/// constructs a `SlotScope` from the child's `:prop` bindings
+/// and invokes the fragment against that scope so `ctx.label`
+/// resolves through SlotScope's RFC-011 routing.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanScopedSlotHost.html")]
+struct PlanScopedSlotHost {}
+
+#[handlers]
+impl PlanScopedSlotHost {}
 
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
@@ -563,7 +582,8 @@ fn register_all() {
     PlanSlotInitHost::register();
     PlanNamedSlotChild::register();
     PlanNamedSlotHost::register();
-    PlanLetSlotHost::register();
+    PlanScopedSlotChild::register();
+    PlanScopedSlotHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -1592,40 +1612,74 @@ async fn macro_emits_named_slot_fragment() {
     host.remove();
 }
 
-/// RFC-058 Phase 3.5f → 3.5g boundary — `<template pp-slot
-/// pp-let>` is scoped-slot territory and stays walker-driven.
-/// The macro must NOT lift it (no fragment entry under that
-/// name) and must flip `requires_walker = true` on the host's
-/// plan so the walker still drives the host body. The legacy
-/// capture path renders the user's template content.
+/// RFC-058 Phase 3.5g — `<template pp-slot="N" pp-let="ident">`
+/// lifts into a slot fragment with `scoped_let = Some("ident")`.
+/// The runtime materialiser builds a `SlotScope` from the
+/// child's `<slot :prop="path">` bindings and invokes the
+/// fragment against that scope, so `pp-text="ident.field"`
+/// resolves through SlotScope's RFC-011 routing without falling
+/// back to the legacy walker capture path.
 #[wasm_bindgen_test]
-async fn pp_let_slot_falls_back_to_walker() {
+async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     register_all();
     reset_plan_failure_count();
     reset_compiled_fallback_walk_count();
 
-    let plan = template_plan_for("plan-let-slot-host")
-        .expect("plan-let-slot-host has one nested non-HTML5 tag");
-    assert!(
-        plan.requires_walker,
-        "pp-let slot must flip requires_walker so the walker still drives the host",
-    );
-    assert_eq!(plan.child_mounts.len(), 1);
-    let names: Vec<&str> = plan.child_mounts[0].slots.iter().map(|s| s.name).collect();
-    assert!(
-        !names.contains(&"footer"),
-        "pp-let slot must NOT lift into a fragment — Phase 3.5g territory",
+    let plan = template_plan_for("plan-scoped-slot-host")
+        .expect("plan-scoped-slot-host has one nested non-HTML5 tag");
+    assert_eq!(plan.child_mounts.len(), 1, "exactly one child-mount site");
+    let child = &plan.child_mounts[0];
+    assert_eq!(child.slots.len(), 1, "the row slot lifts");
+    assert_eq!(child.slots[0].name, "row");
+    assert_eq!(
+        child.slots[0].scoped_let,
+        Some("ctx"),
+        "pp-let identifier must propagate to StaticSlotFragment.scoped_let",
     );
 
-    let host = mount("<plan-let-slot-host></plan-let-slot-host>");
+    let host = mount("<plan-scoped-slot-host></plan-scoped-slot-host>");
     tick().await;
 
-    let letslot = host
-        .query_selector(".plsh-letslot")
+    // Empty initial label — the SlotScope routes `ctx.label`
+    // through the child's `current.label`, which is "" by default.
+    let row = host
+        .query_selector(".pssh-row")
         .unwrap()
-        .expect("scoped slot content must still render via the walker capture path");
-    assert_eq!(letslot.text_content().as_deref(), Some("letslot-content"));
+        .expect("scoped slot row must mount via the lifted fragment");
+    assert_eq!(row.text_content().as_deref(), Some(""));
+
+    // Mutate the child's `current` — the slot scope's bind_source
+    // is the child's proxy, so the effect re-fires.
+    let child_tag = host
+        .query_selector("plan-scoped-slot-child")
+        .unwrap()
+        .unwrap();
+    let child_root = child_tag.first_element_child().unwrap();
+    let (_id, child_proxy) =
+        pocopine_core::walker::scope_of_element(&child_root).expect("child scope");
+    let next = serde_wasm_bindgen::to_value(&PsscRow {
+        label: "scoped-from-fragment".into(),
+    })
+    .unwrap();
+    js_sys::Reflect::set(&child_proxy, &"current".into(), &next).unwrap();
+    tick().await;
+
+    let row = host
+        .query_selector(".pssh-row")
+        .unwrap()
+        .expect("scoped slot row must still be mounted after update");
+    assert_eq!(
+        row.text_content().as_deref(),
+        Some("scoped-from-fragment"),
+        "ctx.label must reactively re-resolve when the child's `current` changes",
+    );
+
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "scoped slot fragments must take the compiled path, not walker fallback",
+    );
 
     host.remove();
 }
