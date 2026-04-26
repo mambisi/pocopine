@@ -136,14 +136,35 @@ where
 /// Same shape as `events::on_scoped` and `timers::after_scoped` —
 /// the right default inside lifecycle hooks where the watcher
 /// should outlive the install but die with the scope.
+///
+/// Install is deferred a microtask via [`crate::tick::next`] for the
+/// same reason `watch_scope_field_scoped` defers: callers reach
+/// this from `on_mount` / `on_ready`, which run behind the walker's
+/// active borrow on the scope's state. The watch's first-tick
+/// callback typically calls back into the same handle (e.g.
+/// `handle.update(...)` to mirror the observed value into local
+/// state) — which would trip `RefCell::borrow_mut` against the
+/// walker's still-live borrow. Deferring the install lets the
+/// surrounding lifecycle frame unwind first.
 pub fn watch_scoped<T, S, C>(source: S, cb: C)
 where
     T: Clone + PartialEq + 'static,
     S: Fn() -> T + 'static,
     C: Fn(&T, Option<&T>) + 'static,
 {
-    let id = watch(source, cb);
-    crate::events::on_scope_unmount(move || crate::reactive::release(id));
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let pending: Rc<Cell<Option<EffectId>>> = Rc::new(Cell::new(None));
+    let pending_for_install = pending.clone();
+    crate::tick::next(move || {
+        let id = watch(source, cb);
+        pending_for_install.set(Some(id));
+    });
+    crate::events::on_scope_unmount(move || {
+        if let Some(id) = pending.take() {
+            crate::reactive::release(id);
+        }
+    });
 }
 
 /// Scope-bound counterpart to [`watch_field`].
