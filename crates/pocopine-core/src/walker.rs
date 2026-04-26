@@ -1179,6 +1179,9 @@ fn materialize_slot(slot_el: &Element) {
             }
             for n in snapshot {
                 let _ = parent.insert_before(&n, Some(slot_el));
+                if let Ok(e) = n.dyn_into::<Element>() {
+                    finalize_compiled_subtree(&e);
+                }
             }
             let _ = parent.remove_child(slot_el);
             return;
@@ -1473,6 +1476,37 @@ fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
 /// `walk()`, but we still need the `MutationObserver` to skip
 /// re-walking the subtree when keyed reorder reparents it.
 pub fn mark_walked(el: &Element) {
+    set_private(el, WALKED_KEY, &JsValue::TRUE);
+}
+
+/// Finish a compiled subtree without running directive discovery.
+///
+/// Generated fragment paths call this after `apply_static_plan`
+/// has installed every known binding/listener/controller. It
+/// preserves the walker's post-order observable work — deferred
+/// `pp-init`, `on_mount`, `on_ready`, and the re-walk guard —
+/// but intentionally does not scan attributes or mount custom
+/// tags. If a subtree still has walker-owned residue, callers
+/// must use [`walk_compiled_fallback`] instead.
+pub fn finalize_compiled_subtree(el: &Element) {
+    if get_private(el, WALKED_KEY)
+        .map(|v| v.is_truthy())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let children = el.children();
+    let mut snapshot: Vec<Element> = Vec::with_capacity(children.length() as usize);
+    for i in 0..children.length() {
+        if let Some(c) = children.item(i) {
+            snapshot.push(c);
+        }
+    }
+    for child in snapshot {
+        finalize_compiled_subtree(&child);
+    }
+    fire_deferred_init(el);
+    fire_mount_hook(el);
     set_private(el, WALKED_KEY, &JsValue::TRUE);
 }
 

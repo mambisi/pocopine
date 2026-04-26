@@ -224,6 +224,39 @@ impl PlanSlotDynamicHost {
     }
 }
 
+/// Child used by the compiled-finalize regression test. Its
+/// `on_mount` write proves a lifted fragment containing a child
+/// component can finish lifecycle without falling back to the
+/// recursive walker.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanLifecycleLeaf.html")]
+struct PlanLifecycleLeaf {
+    caption: String,
+}
+
+#[handlers]
+impl PlanLifecycleLeaf {
+    pub fn on_mount(&mut self) {
+        self.caption = "mounted-without-walk".into();
+    }
+}
+
+/// Host whose pp-if body root is a child component. This is the
+/// smallest shape that used to require `walk_compiled_fallback`
+/// only for post-order lifecycle after generated child mounting.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "PlanIfChildHost.html")]
+struct PlanIfChildHost {
+    open: bool,
+}
+
+#[handlers]
+impl PlanIfChildHost {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
+
 /// RFC-058 Phase 4.1 — host with one `<template pp-if>` site.
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
@@ -338,6 +371,8 @@ fn register_all() {
     PlanIfBodyHost::register();
     PlanForBodyHost::register();
     PlanSlotDynamicHost::register();
+    PlanLifecycleLeaf::register();
+    PlanIfChildHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -647,6 +682,51 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
         compiled_fallback_walk_count(),
         0,
         "native-only lifted pp-if bodies should not use walker fallback",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 walker-removal slice — a lifted body whose root is a
+/// child component should not need the recursive walker just to
+/// finish post-order lifecycle. The plan mounts the child, then
+/// `finalize_compiled_subtree` fires the child's `on_mount`
+/// without scanning attributes.
+#[wasm_bindgen_test]
+async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("plan-if-child-host")
+        .expect("plan-if-child-host registers a template plan");
+    assert_eq!(plan.if_plans.len(), 1);
+    assert!(
+        plan.if_plans[0].body.is_some(),
+        "pp-if body rooted at a planned child component must lift",
+    );
+
+    let host = mount("<plan-if-child-host></plan-if-child-host>");
+    tick().await;
+
+    let toggle = host.query_selector(".pich-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let leaf = host
+        .query_selector(".pll-leaf")
+        .unwrap()
+        .expect("child component in lifted body should mount");
+    assert_eq!(
+        leaf.text_content().as_deref(),
+        Some("mounted-without-walk"),
+        "child on_mount should fire through compiled finalization",
+    );
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "planned child mount in lifted pp-if body should not need walker fallback",
     );
 
     host.remove();
