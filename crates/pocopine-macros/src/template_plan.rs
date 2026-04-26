@@ -66,6 +66,12 @@ pub(crate) struct EmittedTemplatePlan {
     /// classifier didn't lift any slot content into a
     /// fragment.
     pub slot_fragment_fns: TokenStream,
+    /// RFC-058 Phase 4.1d — `fn` items the macro should emit
+    /// inside the parent's `register()` body so the
+    /// `StaticIfPlan.body` literal in `plan_tokens` can
+    /// reference them by ident. Empty token stream when the
+    /// classifier didn't lift any pp-if body into a fragment.
+    pub if_body_fns: TokenStream,
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -102,10 +108,12 @@ pub(crate) fn analyze_template_plan(
             plan_tokens: None,
             cleaned_html: None,
             slot_fragment_fns: TokenStream::new(),
+            if_body_fns: TokenStream::new(),
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
     let slot_fragment_fns = ctx.emit_slot_fragment_fns();
+    let if_body_fns = ctx.emit_if_body_fns();
     // When the only "entry" is a row-plan stamp (template has no
     // plan-eligible directive on its own), still emit cleaned HTML
     // so the row-plan attribute is baked in — but skip the
@@ -119,6 +127,7 @@ pub(crate) fn analyze_template_plan(
         plan_tokens,
         cleaned_html: Some(cleaned_html),
         slot_fragment_fns,
+        if_body_fns,
     }
 }
 
@@ -147,6 +156,17 @@ struct AnalysisCtx {
     /// `StaticChildMount.slots` literal references the function
     /// the macro emits below it.
     slot_fragment_emissions: Vec<(syn::Ident, String)>,
+    /// RFC-058 Phase 4.1d — `pp-if` body fragments the macro
+    /// should emit as `fn` items inside the parent's
+    /// `register()` body. Each fragment's body builds a
+    /// `StaticTemplatePlan` const for the body's
+    /// bindings/listeners/refs, then calls `stamp_if_body`
+    /// against the parent scope to materialise + install at
+    /// mount time. Indexed by `IfPlanLite.body_fn_ident` —
+    /// the same ident appears in both places so the
+    /// `StaticIfPlan.body` literal references the function
+    /// the macro emits below it.
+    if_body_emissions: Vec<IfBodyEmission>,
     /// RFC-058 Phase 4.1b — `pp-if` controller sites the
     /// classifier lifted out of the runtime walker's
     /// directive-dispatch path. Each entry pins a
@@ -225,9 +245,25 @@ struct RefLite {
     name: String,
 }
 
+struct IfBodyEmission {
+    ident: syn::Ident,
+    html: String,
+    bindings: Vec<BindingLite>,
+    listeners: Vec<ListenerLite>,
+    refs: Vec<RefLite>,
+}
+
 struct IfPlanLite {
     template_node_path: Vec<u16>,
     expr_src: String,
+    /// RFC-058 Phase 4.1d — `Some` when the body subtree was
+    /// lift-eligible and the macro emitted a body fragment fn
+    /// the `StaticIfPlan` literal should reference. `None`
+    /// when the body falls outside the v1 envelope (nested
+    /// custom tag, `<slot>`, nested controller, `pp-init`,
+    /// etc.) — the runtime installer falls back to the legacy
+    /// `clone_template_body` + `walker::walk` path.
+    body_fn_ident: Option<syn::Ident>,
 }
 
 struct ForPlanLite {
@@ -295,6 +331,49 @@ impl AnalysisCtx {
             .iter()
             .find(|(p, _)| p.as_slice() == node_path)
             .map(|(_, id)| *id)
+    }
+
+    /// RFC-058 Phase 4.1d — generate one
+    /// `fn <ident>(scope_id, proxy) -> Option<Element> { … }`
+    /// item per `pp-if` body fragment the analyser lifted.
+    /// The body builds a `StaticTemplatePlan` const for the
+    /// body's bindings/listeners/refs (no inits, no nested
+    /// controllers, no slots — v1 envelope guarantees that),
+    /// then calls `stamp_if_body` to materialise + install
+    /// against the parent scope.
+    fn emit_if_body_fns(&self) -> TokenStream {
+        let items = self.if_body_emissions.iter().map(|emission| {
+            let ident = &emission.ident;
+            let html_lit = proc_macro2::Literal::string(&emission.html);
+            let bindings_tokens = emission.bindings.iter().map(emit_binding);
+            let listeners_tokens = emission.listeners.iter().map(emit_listener);
+            let refs_tokens = emission.refs.iter().map(emit_ref);
+            quote! {
+                fn #ident(
+                    scope_id: ::pocopine::ScopeId,
+                    proxy: &::pocopine::__private::JsValue,
+                ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
+                    const PLAN: ::pocopine::__private::StaticTemplatePlan =
+                        ::pocopine::__private::StaticTemplatePlan {
+                            bindings: &[ #(#bindings_tokens),* ],
+                            listeners: &[ #(#listeners_tokens),* ],
+                            inits: &[],
+                            refs: &[ #(#refs_tokens),* ],
+                            child_mounts: &[],
+                            if_plans: &[],
+                            for_plans: &[],
+                            teleport_plans: &[],
+                        };
+                    ::pocopine::__private::stamp_if_body(
+                        #html_lit,
+                        &PLAN,
+                        scope_id,
+                        proxy,
+                    )
+                }
+            }
+        });
+        quote! { #(#items)* }
     }
 
     /// Generate one `fn <ident>(ctx: SlotMountCtx) { … }` item
@@ -412,10 +491,20 @@ fn emit_ref(r: &RefLite) -> TokenStream {
 fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     let path = emit_node_path(&ip.template_node_path);
     let expr = proc_macro2::Literal::string(&ip.expr_src);
+    // RFC-058 Phase 4.1d-c will populate `body` with a
+    // macro-emitted `IfBodyFn` when the body subtree qualifies
+    // for fragment lifting; v1 ships `None` so every site
+    // routes through the legacy `clone_template_body` +
+    // `walker::walk` path the runtime applier already drives.
+    let body_tokens = match &ip.body_fn_ident {
+        Some(ident) => quote! { ::core::option::Option::Some(#ident) },
+        None => quote! { ::core::option::Option::None },
+    };
     quote! {
         ::pocopine::__private::StaticIfPlan {
             template_node_path: #path,
             expr_src: #expr,
+            body: #body_tokens,
         }
     }
 }
@@ -597,9 +686,28 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
             && !el.attrs.iter().any(|(n, _)| n == "pp-teleport")
             && pocopine_expr::parse(&if_expr).is_ok()
         {
+            // RFC-058 Phase 4.1d — try to lift the body
+            // subtree into a fragment fn the runtime installer
+            // invokes instead of `clone_template_body` +
+            // `walker::walk`. v1 envelope is narrow (HTML5
+            // natives + plan-eligible directives only); when
+            // the body falls outside, `body_fn_ident` stays
+            // `None` and the legacy clone+walk path runs.
+            let body_fn_ident = analyze_if_body(el).map(|(html, body_ctx)| {
+                let ident = format_ident!("__poc_if_body_{}", ctx.if_body_emissions.len());
+                ctx.if_body_emissions.push(IfBodyEmission {
+                    ident: ident.clone(),
+                    html,
+                    bindings: body_ctx.bindings,
+                    listeners: body_ctx.listeners,
+                    refs: body_ctx.refs,
+                });
+                ident
+            });
             ctx.if_plans.push(IfPlanLite {
                 template_node_path: path.clone(),
                 expr_src: if_expr,
+                body_fn_ident,
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.clone(),
@@ -994,6 +1102,114 @@ fn is_debounce_modifier(m: &str) -> bool {
 
 fn is_debounce_ms(m: &str) -> bool {
     m.parse::<u32>().is_ok()
+}
+
+// ─── pp-if body lift eligibility + analysis ──────────────────────
+
+/// RFC-058 Phase 4.1d v1 envelope — `true` when every node in
+/// the `pp-if` body subtree is safe to install via the Phase
+/// 1 helpers + `apply_static_plan`. Anything outside this
+/// envelope falls back to the legacy `clone_template_body` +
+/// `walker::walk` path the controller already drives.
+///
+/// Excludes:
+///   * non-HTML5 tags (would need recursive child-mount
+///     emission inside a body fragment — Phase 4.1d v2);
+///   * `<slot>` elements (would need slot capture/replay
+///     hooks inside a body fragment — Phase 3.5c+);
+///   * nested controllers (`pp-for` / `pp-if` / `pp-teleport`)
+///     — same scope-acrobatics they already have at template
+///     level, but inside a fragment hosted on the parent
+///     scope. Defer to v2;
+///   * `pp-init` (the deferred-fire ordering depends on the
+///     walker's post-order drain — fragment paths don't
+///     trigger it);
+///   * `pp-data` / `pp-model` / `pp-route` (component scope
+///     boundaries — the body fragment installs against the
+///     enclosing scope only).
+fn if_body_subtree_is_eligible(el: &Element) -> bool {
+    if el.synthetic {
+        for child in &el.children {
+            if let Node::Element(child_el) = child {
+                if !if_body_subtree_is_eligible(child_el) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    if el.tag == "slot" {
+        return false;
+    }
+    if !is_html5_native(&el.tag) {
+        return false;
+    }
+    for (name, _) in &el.attrs {
+        if name == "pp-for"
+            || name == "pp-if"
+            || name == "pp-teleport"
+            || name == "pp-init"
+            || name == "pp-data"
+            || name == "pp-model"
+            || name.starts_with("pp-model:")
+            || name == "pp-route"
+        {
+            return false;
+        }
+    }
+    for child in &el.children {
+        if let Node::Element(child_el) = child {
+            if !if_body_subtree_is_eligible(child_el) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Analyse a `<template pp-if>` element's body for fragment
+/// lifting. Returns `Some` when the body's element children
+/// reduce to a single root + the subtree passes
+/// `if_body_subtree_is_eligible`. The cleaned HTML + collected
+/// bindings/listeners/refs flow into the macro's
+/// `if_body_emissions` slot for later `fn` emission.
+fn analyze_if_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
+    // Single element child — same constraint pp-if::install
+    // already enforces at runtime via `clone_template_body`.
+    let mut elements: Vec<&Element> = Vec::new();
+    for child in &template_el.children {
+        if let Node::Element(child_el) = child {
+            elements.push(child_el);
+        }
+    }
+    if elements.len() != 1 {
+        return None;
+    }
+    let root_el = elements[0];
+    if !if_body_subtree_is_eligible(root_el) {
+        return None;
+    }
+    let mut ctx = AnalysisCtx::default();
+    let mut path: Vec<u16> = Vec::new();
+    walk(root_el, &mut ctx, &mut path);
+    // Defensive: the eligibility check excluded everything
+    // that would emit non-binding/listener/ref entries, but
+    // re-check before ratifying — a stale envelope mismatch
+    // would produce a body fragment with entries `apply_static_plan`
+    // can't honor against the body's static plan shape.
+    if !ctx.child_mounts.is_empty()
+        || !ctx.if_plans.is_empty()
+        || !ctx.for_plans.is_empty()
+        || !ctx.teleport_plans.is_empty()
+        || !ctx.inits.is_empty()
+        || !ctx.slot_fragment_emissions.is_empty()
+    {
+        return None;
+    }
+    let mut html = String::new();
+    let mut sp: Vec<u16> = Vec::new();
+    emit_element(root_el, &ctx, &mut html, &mut sp);
+    Some((html, ctx))
 }
 
 // ─── static slot eligibility + serialization ─────────────────────

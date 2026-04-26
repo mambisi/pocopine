@@ -1250,6 +1250,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             plan_tokens: None,
             cleaned_html: None,
             slot_fragment_fns: proc_macro2::TokenStream::new(),
+            if_body_fns: proc_macro2::TokenStream::new(),
         });
 
     // Build the literal to feed into `compile_template`:
@@ -1294,14 +1295,16 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let register_template_plan_stmt = match template_plan.plan_tokens {
         Some(plan_tokens) => {
-            // RFC-058 Phase 3.5b — slot fragment `fn` items go
-            // before the `const __POC_TEMPLATE_PLAN` so the
-            // plan literal can reference them by ident. Empty
-            // when the analyser didn't lift any slot content
-            // into a fragment.
+            // RFC-058 Phase 3.5b + 4.1d — fragment `fn` items
+            // (slot + pp-if body) go before the
+            // `const __POC_TEMPLATE_PLAN` so the plan literal
+            // can reference them by ident. Empty token streams
+            // when the analyser didn't lift anything.
             let slot_fns = template_plan.slot_fragment_fns;
+            let if_body_fns = template_plan.if_body_fns;
             quote! {
                 #slot_fns
+                #if_body_fns
                 const __POC_TEMPLATE_PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
                 ::pocopine::__private::register_template_plan(
                     #name_str,

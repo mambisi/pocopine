@@ -53,7 +53,7 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    install(template, call.proxy.clone(), ast);
+    install(template, call.proxy.clone(), ast, None);
 }
 
 /// Compiled-path entry point. Same lifecycle as [`run`] but skips
@@ -66,7 +66,22 @@ pub fn run(call: &DirectiveCall) {
 /// effect-install body instead of growing two parallel
 /// implementations of the truthy-toggle / transition / teleport
 /// orchestration.
-pub fn install(template: HtmlTemplateElement, parent_proxy: JsValue, ast: Spanned<expr::Expr>) {
+///
+/// `body_fn` is the optional macro-emitted body fragment from
+/// RFC-058 Phase 4.1d. When `Some`, the truthy branch
+/// constructs the cloned root via the fragment (which stamps
+/// cleaned HTML + installs every directive against the parent
+/// scope via the Phase 1 helpers — no walker `walk` involvement).
+/// When `None`, the legacy `clone_template_body` +
+/// `walker::walk` path runs as before; the body has something
+/// outside the v1 lifting envelope (nested custom tag, slot,
+/// nested controller, `pp-init`, etc.).
+pub fn install(
+    template: HtmlTemplateElement,
+    parent_proxy: JsValue,
+    ast: Spanned<expr::Expr>,
+    body_fn: Option<crate::directives::for_plan::IfBodyFn>,
+) {
     let template_el: Element = template.clone().into();
     let track_anchor = template_el.clone();
 
@@ -95,17 +110,59 @@ pub fn install(template: HtmlTemplateElement, parent_proxy: JsValue, ast: Spanne
         let existing = current.borrow().clone();
         match (truthy, existing) {
             (true, None) => {
-                let Some(clone_root) = clone_template_body(&template) else {
-                    console::error_1(&JsValue::from_str(
-                        "pp-if: <template> body must contain exactly one element",
-                    ));
-                    return;
+                // RFC-058 Phase 4.1d body fragment fast-path —
+                // when the macro emitted a body fragment, build
+                // the clone root via that fragment (which calls
+                // `apply_static_plan` against the parent scope
+                // to install every directive without going
+                // through `walker::walk`). Otherwise fall back
+                // to the legacy `clone_template_body` +
+                // `walker::walk` path.
+                let (clone_root, fragment_built) = match body_fn {
+                    Some(f) => {
+                        // The fragment installs directives against
+                        // the parent scope at construction time, so
+                        // we need the pinned scope's id + proxy
+                        // available. The fragment is opt-in only
+                        // when pinned_scope resolves (otherwise
+                        // we have no scope to install against).
+                        let Some((scope_id, scope_proxy)) = pinned_scope.as_ref() else {
+                            console::error_1(&JsValue::from_str(
+                                "pp-if: body fragment requires an enclosing scope",
+                            ));
+                            return;
+                        };
+                        match f(*scope_id, scope_proxy) {
+                            Some(root) => (root, true),
+                            None => {
+                                console::error_1(&JsValue::from_str(
+                                    "pp-if: body fragment failed to materialise root",
+                                ));
+                                return;
+                            }
+                        }
+                    }
+                    None => match clone_template_body(&template) {
+                        Some(root) => (root, false),
+                        None => {
+                            console::error_1(&JsValue::from_str(
+                                "pp-if: <template> body must contain exactly one element",
+                            ));
+                            return;
+                        }
+                    },
                 };
 
                 // Pin the owning scope onto the clone BEFORE walking
                 // so teleported content still resolves directives
                 // against the intended proxy. Borrow-mode: removing
                 // the clone must not evict the component's scope.
+                //
+                // For the fragment path the directives already
+                // installed against the parent scope, but the
+                // `bind_borrowed_scope_to` stamp is still needed
+                // so `enclosing_scope` resolves to the parent for
+                // any subsequent walker pass (e.g. devtools).
                 if let Some((scope_id, proxy)) = pinned_scope.as_ref() {
                     bind_borrowed_scope_to(&clone_root, *scope_id, proxy);
                 }
@@ -138,7 +195,13 @@ pub fn install(template: HtmlTemplateElement, parent_proxy: JsValue, ast: Spanne
                         // this template gets removed from body).
                         teleport::stash(&template_el, &clone_root);
                     }
-                    walker::walk(&clone_root);
+                    // Walk only when the macro DIDN'T emit a body
+                    // fragment — the fragment already installed
+                    // every directive in the subtree, so a walk
+                    // would race a duplicate install.
+                    if !fragment_built {
+                        walker::walk(&clone_root);
+                    }
                     *current.borrow_mut() = Some(clone_root.clone());
                     // Subtree dispatch — Pine compounds (Dialog,
                     // Popover, …) stamp preset attrs on inner custom

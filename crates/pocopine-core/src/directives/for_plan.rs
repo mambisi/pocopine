@@ -176,23 +176,44 @@ pub struct StaticSlotFragment {
 }
 
 /// Static-lifetime descriptor for a `<template pp-if="<expr>">`
-/// site. RFC-058 Phase 4.1b.
+/// site. RFC-058 Phase 4.1b (controller) + 4.1d (body lifting).
 ///
 /// `template_node_path` resolves the `<template>` element
 /// inside the cleaned plan root — the macro keeps the element
 /// in the rewritten HTML so `clone_template_body` still has
-/// something to clone, but strips the `pp-if` attribute so the
-/// runtime walker's directive-dispatch path doesn't double-
-/// install the effect.
+/// something to clone (legacy path), but strips the `pp-if`
+/// attribute so the runtime walker's directive-dispatch path
+/// doesn't double-install the effect.
 ///
 /// `expr_src` is the original truthy expression. The applier
 /// parses it via `expr::parse_cached` and hands the AST to
 /// [`crate::directives::if_::install`].
+///
+/// `body` is the macro-emitted [`IfBodyFn`] when the body
+/// subtree qualified for Phase 4.1d lifting. The runtime
+/// installer invokes the fragment to materialise the body
+/// (parses cleaned HTML, runs `apply_static_plan` against the
+/// parent scope) instead of going through the legacy
+/// `clone_template_body` + `walker::walk` path. `None` falls
+/// back to today's clone+walk — the body had something Phase
+/// 4.1d's v1 envelope can't handle (nested custom tag,
+/// `<slot>`, nested controller, `pp-init`, etc.).
 #[doc(hidden)]
 pub struct StaticIfPlan {
     pub template_node_path: &'static [u16],
     pub expr_src: &'static str,
+    pub body: Option<IfBodyFn>,
 }
+
+/// Macro-emitted constructor for a `pp-if` body. Returns the
+/// freshly-stamped root element with all directives installed
+/// against the parent scope, ready for the runtime installer
+/// to insert + drive transitions on.
+///
+/// `None` return signals a runtime stamp failure (no document,
+/// HTML didn't parse to a single root element, etc.) — the
+/// caller treats it the same as a `clone_template_body` miss.
+pub type IfBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
 
 /// Static-lifetime descriptor for a `<template pp-teleport="...">`
 /// site without a co-occurring `pp-if`. RFC-058 Phase 4.3.
