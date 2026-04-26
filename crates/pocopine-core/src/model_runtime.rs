@@ -94,7 +94,17 @@ fn snapshot_models(scope_id: ScopeId) -> HashMap<String, (String, JsValue, Strin
     let Some(scope) = Scope::find(scope_id) else {
         return HashMap::new();
     };
-    let state = scope.state.borrow();
+    // Re-entrant `Scope::invoke` (handler → DOM mutation → synchronous
+    // event dispatch → another `Scope::invoke` for the same scope)
+    // arrives here with the outer's `borrow_mut` still held. We
+    // cannot snapshot under a live mutable borrow, but panicking on
+    // the inner invoke is the wrong call — the outer write is still
+    // valid; we just lose the inner write's diff. Skip silently:
+    // model `pp:update:*` events for the inner invoke degrade to
+    // best-effort rather than aborting the whole event chain.
+    let Ok(state) = scope.state.try_borrow() else {
+        return HashMap::new();
+    };
     let mut out = HashMap::new();
     for key in state.keys() {
         if !state.is_model(key) {
