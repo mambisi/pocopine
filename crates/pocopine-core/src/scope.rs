@@ -302,6 +302,7 @@ impl Scope {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
         crate::refs::clear_scope(id);
         crate::slots::clear(id);
+        crate::slot_fragment::clear(id);
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);
         crate::events::clear_scope(id);
