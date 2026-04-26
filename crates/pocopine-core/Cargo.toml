@@ -15,9 +15,28 @@ crate-type = ["cdylib", "rlib"]
 # `default-features = false` for minimal release bundles —
 # devtools.rs is ~1200 LOC of UI shell + MutationObserver glue
 # that's pure binary-size cost when unused.
-default = ["devtools"]
+default = ["devtools", "legacy-dom"]
 devtools = []
 mount-profiler = []
+# RFC-058 Phase 6 v1 — runtime walker's MutationObserver-based
+# auto-discovery for adopted / externally-injected DOM. Default-on
+# today: every example still relies on it indirectly (the initial
+# `start_on_body` path uses `walker::walk` for the root tag, but
+# the observer is what catches dynamic insertions like router
+# page changes, markdown render output, server-rendered partials
+# that aren't compiled by pocopine).
+#
+# Apps that bootstrap entirely through compiled-view mounts and
+# never adopt external DOM can `default-features = false` to
+# drop the observer's ~200-line `MutationRecord` callback +
+# closure registration. The walker's `walk` / `bind` /
+# `mount_component` themselves stay always-on — controllers
+# call them for `pp-if` / `pp-for` / `pp-teleport` body content
+# and for slot materialisation. Phases 4.1d / 4.2c / 4.3
+# follow-ups (body fragment lifting) graduate those into
+# fragment fns, at which point more of the walker can move
+# behind this same flag.
+legacy-dom = []
 
 [dependencies]
 pocopine-expr = { workspace = true }

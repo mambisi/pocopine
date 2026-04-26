@@ -11,9 +11,15 @@ description = "Rust/WASM framework with an Alpine.js-style client runtime."
 # `cargo add pocopine` keeps the in-browser scope inspector available.
 # Users who want minimum-binary release builds opt out with
 # `pocopine = { default-features = false }` in their Cargo.toml.
-default = ["devtools"]
+default = ["devtools", "legacy-dom"]
 devtools = ["pocopine-core/devtools"]
 mount-profiler = ["pocopine-core/mount-profiler"]
+# RFC-058 Phase 6 v1 — see `pocopine-core/Cargo.toml` for the
+# trade-off. Default-on; opt out with `default-features = false`
+# when the app bootstraps entirely through compiled-view mounts
+# and never adopts external DOM. Phases 4.1d / 4.2c / 4.3
+# follow-ups graduate more of the walker behind this same flag.
+legacy-dom = ["pocopine-core/legacy-dom"]
 
 [dependencies]
 pocopine-core = { workspace = true, default-features = false }
