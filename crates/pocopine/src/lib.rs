@@ -61,6 +61,25 @@ pub mod __private {
         HandlerDispatch, LifecycleContext, Scope, StaticBinding, StaticListener, StaticRowPlan,
         Store, WriteOrigin,
     };
+    // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
+    // for the future generated mount/hydrate code (Phase 2+) to
+    // call through the umbrella's stable `::pocopine::__private`
+    // namespace. Same shape as the existing `register_template` /
+    // `register_row_plans` re-exports above.
+    pub use pocopine_core::walker::{
+        defer_init_on, fire_mount_post_order, fire_ready_next_tick, release_compiled_subtree,
+    };
+    // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
+    // ships the type surface; Phase 3 wires consumers.
+    pub use pocopine_core::slot_fragment::{
+        SlotFragment, SlotMountCtx, SlotSet, DEFAULT_SLOT_NAME,
+    };
+    // RFC-058 Phase 1.1 / 1.7 — cleanup-safe directive install
+    // helpers. Generated mount code (Phase 2+) calls these
+    // directly instead of going through the runtime `dispatch` /
+    // `DirectiveCall` path. Re-exported as a module so the macro
+    // can write `::pocopine::__private::directives::text::install`.
+    pub use pocopine_core::directives;
     pub use serde;
     pub use serde_wasm_bindgen;
     pub use wasm_bindgen;
