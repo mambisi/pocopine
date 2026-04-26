@@ -175,6 +175,25 @@ pub struct StaticSlotFragment {
     pub fragment: crate::slot_fragment::SlotFragment,
 }
 
+/// Static-lifetime descriptor for a `<template pp-if="<expr>">`
+/// site. RFC-058 Phase 4.1b.
+///
+/// `template_node_path` resolves the `<template>` element
+/// inside the cleaned plan root — the macro keeps the element
+/// in the rewritten HTML so `clone_template_body` still has
+/// something to clone, but strips the `pp-if` attribute so the
+/// runtime walker's directive-dispatch path doesn't double-
+/// install the effect.
+///
+/// `expr_src` is the original truthy expression. The applier
+/// parses it via `expr::parse_cached` and hands the AST to
+/// [`crate::directives::if_::install`].
+#[doc(hidden)]
+pub struct StaticIfPlan {
+    pub template_node_path: &'static [u16],
+    pub expr_src: &'static str,
+}
+
 /// One macro-emitted row plan. The macro emits
 /// `pub static __POC_ROW_PLANS_<COMPONENT>: &[StaticRowPlan] =
 /// &[ … ];` and a registration call alongside

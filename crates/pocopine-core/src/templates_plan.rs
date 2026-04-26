@@ -39,12 +39,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element};
 
 use crate::directives;
 use crate::directives::for_plan::{
-    BindingKind, StaticBinding, StaticChildMount, StaticInit, StaticListener, StaticRef,
+    BindingKind, StaticBinding, StaticChildMount, StaticIfPlan, StaticInit, StaticListener,
+    StaticRef,
 };
 use crate::expr;
 use crate::reactive::ScopeId;
@@ -78,6 +79,14 @@ pub struct StaticTemplatePlan {
     /// recurses. Empty for templates that contain no child
     /// components — the prior Phase 2 envelope.
     pub child_mounts: &'static [StaticChildMount],
+    /// `pp-if` controller sites the classifier lifted out of
+    /// the runtime walker's directive-dispatch path (RFC-058
+    /// Phase 4.1b). The macro strips the `pp-if` attribute from
+    /// the cleaned HTML — the applier installs the effect via
+    /// [`crate::directives::if_::install`] against the
+    /// `<template>` element resolved through `template_node_path`.
+    /// Empty for templates with no `pp-if` site.
+    pub if_plans: &'static [StaticIfPlan],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -277,6 +286,42 @@ pub fn apply_static_plan(
             }
             crate::walker::mount_child_component_with_slots(&el, c.tag, set);
         }
+    }
+    for ip in plan.if_plans {
+        let Some(el) = resolve(root, ip.template_node_path) else {
+            fail(
+                "if-plan",
+                template_name,
+                ip.template_node_path,
+                Some(ip.expr_src),
+            );
+            continue;
+        };
+        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
+            Ok(t) => t,
+            Err(_) => {
+                fail(
+                    "if-plan-template",
+                    template_name,
+                    ip.template_node_path,
+                    Some(ip.expr_src),
+                );
+                continue;
+            }
+        };
+        let ast = match expr::parse_cached(ip.expr_src) {
+            Ok(a) => a,
+            Err(_) => {
+                fail(
+                    "if-plan-parse",
+                    template_name,
+                    ip.template_node_path,
+                    Some(ip.expr_src),
+                );
+                continue;
+            }
+        };
+        directives::if_::install(template, proxy.clone(), ast);
     }
     for i in plan.inits {
         let Some(el) = resolve(root, i.node_path) else {
