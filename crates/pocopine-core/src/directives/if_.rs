@@ -42,8 +42,6 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    let parent_proxy = call.proxy.clone();
-    let template_el: Element = call.el.clone();
     let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
         Ok(a) => a,
         Err(e) => {
@@ -54,6 +52,23 @@ pub fn run(call: &DirectiveCall) {
             return;
         }
     };
+
+    install(template, call.proxy.clone(), ast);
+}
+
+/// Compiled-path entry point. Same lifecycle as [`run`] but skips
+/// the `<template>` cast + expression parse — both already done
+/// at compile time by the macro.
+///
+/// Called by `apply_static_plan` for every `StaticIfPlan` entry
+/// the classifier emitted. RFC-058 Phase 4.1a — extracted so the
+/// runtime walker dispatch path and the plan applier share one
+/// effect-install body instead of growing two parallel
+/// implementations of the truthy-toggle / transition / teleport
+/// orchestration.
+pub fn install(template: HtmlTemplateElement, parent_proxy: JsValue, ast: Spanned<expr::Expr>) {
+    let template_el: Element = template.clone().into();
+    let track_anchor = template_el.clone();
 
     // Resolve the teleport target + enclosing scope once at setup.
     // Both are stable for the lifetime of the template host.
@@ -184,7 +199,7 @@ pub fn run(call: &DirectiveCall) {
         }
     });
 
-    track_effect_on(call.el, effect_id);
+    track_effect_on(&track_anchor, effect_id);
 }
 
 fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
