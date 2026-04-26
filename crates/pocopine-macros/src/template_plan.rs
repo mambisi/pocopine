@@ -272,6 +272,11 @@ struct ForPlanLite {
     items_expr: String,
     key_expr: Option<String>,
     stagger_ms: u32,
+    /// RFC-058 Phase 4.2c — `Some` when the row body subtree
+    /// was lift-eligible AND no RFC-054 row plan claimed the
+    /// same site. The macro emits a body fragment fn the
+    /// `StaticForPlan.body` literal references.
+    body_fn_ident: Option<syn::Ident>,
 }
 
 struct TeleportPlanLite {
@@ -532,6 +537,10 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
         None => quote! { ::core::option::Option::None },
     };
     let stagger = proc_macro2::Literal::u32_unsuffixed(fp.stagger_ms);
+    let body_tokens = match &fp.body_fn_ident {
+        Some(ident) => quote! { ::core::option::Option::Some(#ident) },
+        None => quote! { ::core::option::Option::None },
+    };
     quote! {
         ::pocopine::__private::StaticForPlan {
             template_node_path: #path,
@@ -539,6 +548,7 @@ fn emit_for_plan(fp: &ForPlanLite) -> TokenStream {
             items_expr: #items_lit,
             key_expr: #key_tokens,
             stagger_ms: #stagger,
+            body: #body_tokens,
         }
     }
 }
@@ -600,12 +610,38 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
                     .find(|(n, _)| n == "pp-stagger")
                     .and_then(|(_, v)| v.trim().parse::<u32>().ok())
                     .unwrap_or(0);
+                // RFC-058 Phase 4.2c — try to lift the row body
+                // into a fragment fn. Skip when an RFC-054 row
+                // plan claims this site (the row-plan fast path
+                // is strictly better than per-row
+                // `apply_static_plan` — proxy elision, no
+                // per-row effect creation, etc.).
+                let row_plan_claims_site = ctx
+                    .row_plan_assignments
+                    .iter()
+                    .any(|(p, _)| p.as_slice() == path.as_slice());
+                let body_fn_ident = if row_plan_claims_site {
+                    None
+                } else {
+                    analyze_lift_body(el).map(|(html, body_ctx)| {
+                        let ident = format_ident!("__poc_for_body_{}", ctx.if_body_emissions.len());
+                        ctx.if_body_emissions.push(IfBodyEmission {
+                            ident: ident.clone(),
+                            html,
+                            bindings: body_ctx.bindings,
+                            listeners: body_ctx.listeners,
+                            refs: body_ctx.refs,
+                        });
+                        ident
+                    })
+                };
                 ctx.for_plans.push(ForPlanLite {
                     template_node_path: path.clone(),
                     item_name,
                     items_expr,
                     key_expr,
                     stagger_ms,
+                    body_fn_ident,
                 });
                 ctx.stripped.push(StrippedAttr {
                     node_path: path.clone(),
@@ -693,7 +729,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
             // natives + plan-eligible directives only); when
             // the body falls outside, `body_fn_ident` stays
             // `None` and the legacy clone+walk path runs.
-            let body_fn_ident = analyze_if_body(el).map(|(html, body_ctx)| {
+            let body_fn_ident = analyze_lift_body(el).map(|(html, body_ctx)| {
                 let ident = format_ident!("__poc_if_body_{}", ctx.if_body_emissions.len());
                 ctx.if_body_emissions.push(IfBodyEmission {
                     ident: ident.clone(),
@@ -1167,13 +1203,15 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     true
 }
 
-/// Analyse a `<template pp-if>` element's body for fragment
-/// lifting. Returns `Some` when the body's element children
-/// reduce to a single root + the subtree passes
-/// `if_body_subtree_is_eligible`. The cleaned HTML + collected
-/// bindings/listeners/refs flow into the macro's
+/// Analyse a `<template>` element's body subtree for fragment
+/// lifting (shared between `pp-if` Phase 4.1d and `pp-for`
+/// Phase 4.2c — both use the same v1 envelope and per-mount
+/// install pattern). Returns `Some` when the body's element
+/// children reduce to a single root + the subtree passes
+/// `if_body_subtree_is_eligible`. The cleaned HTML +
+/// collected bindings/listeners/refs flow into the macro's
 /// `if_body_emissions` slot for later `fn` emission.
-fn analyze_if_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
+fn analyze_lift_body(template_el: &Element) -> Option<(String, AnalysisCtx)> {
     // Single element child — same constraint pp-if::install
     // already enforces at runtime via `clone_template_body`.
     let mut elements: Vec<&Element> = Vec::new();

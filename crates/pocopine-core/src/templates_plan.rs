@@ -334,6 +334,7 @@ pub fn apply_static_plan(
             fp.items_expr.to_string(),
             fp.key_expr.map(|s| s.to_string()),
             fp.stagger_ms,
+            fp.body,
         );
     }
     for tp in plan.teleport_plans {

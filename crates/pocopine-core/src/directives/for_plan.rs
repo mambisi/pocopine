@@ -231,7 +231,7 @@ pub struct StaticTeleportPlan {
 }
 
 /// Static-lifetime descriptor for a `<template pp-for="...">`
-/// site. RFC-058 Phase 4.2.
+/// site. RFC-058 Phase 4.2 (controller) + 4.2c (row body lifting).
 ///
 /// The macro parses `pp-for="<item> in <items>"` at compile
 /// time and hands both halves to the applier. `key_expr` is
@@ -247,6 +247,15 @@ pub struct StaticTeleportPlan {
 /// fires because the §6.2-layered cleaned HTML preserves the
 /// `data-pp-row-plan="<id>"` attribute the registry lookup
 /// keys on.
+///
+/// `body` is the macro-emitted [`ForBodyFn`] when the row
+/// body subtree qualified for Phase 4.2c lifting AND no
+/// RFC-054 row plan claimed the same site (the row-plan fast
+/// path is strictly better than per-row `apply_static_plan`).
+/// Per-row mounts invoke the fragment to materialise + install
+/// directives against the row's `LoopScope` instead of going
+/// through `clone_template_body` + `walker::walk`. `None`
+/// falls back to today's clone+walk.
 #[doc(hidden)]
 pub struct StaticForPlan {
     pub template_node_path: &'static [u16],
@@ -254,7 +263,19 @@ pub struct StaticForPlan {
     pub items_expr: &'static str,
     pub key_expr: Option<&'static str>,
     pub stagger_ms: u32,
+    pub body: Option<ForBodyFn>,
 }
+
+/// Macro-emitted constructor for a `pp-for` row body. Called
+/// per row mount with the row's `LoopScope` id + proxy.
+///
+/// Same signature as [`IfBodyFn`] — both stamp cleaned HTML
+/// then run `apply_static_plan` against the passed scope.
+/// Distinct types so call sites stay legible: pp-if body
+/// installs against the parent scope once per mount cycle;
+/// pp-for body installs against a fresh `LoopScope` per row
+/// each iteration.
+pub type ForBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
 
 /// One macro-emitted row plan. The macro emits
 /// `pub static __POC_ROW_PLANS_<COMPONENT>: &[StaticRowPlan] =

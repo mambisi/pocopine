@@ -1,0 +1,8 @@
+<div class="pfbh-root">
+  <button class="pfbh-add" pp-on:click="add">add</button>
+  <ul>
+    <template pp-for="row in rows">
+      <li class="pfbh-row" pp-text="row.label"></li>
+    </template>
+  </ul>
+</div>
