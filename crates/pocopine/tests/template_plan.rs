@@ -570,6 +570,12 @@ async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
         .expect("plan-teleport-host has one pp-teleport site");
     assert_eq!(plan.teleport_plans.len(), 1);
     assert_eq!(plan.teleport_plans[0].selector, "body");
+    // RFC-058 Phase 4.3c — PlanTeleportHost's body is a static
+    // `<span>` so it lifts into a body fragment.
+    assert!(
+        plan.teleport_plans[0].body.is_some(),
+        "static-only pp-teleport body must lift into a body fragment",
+    );
 
     let host = mount("<plan-teleport-host></plan-teleport-host>");
     tick().await;

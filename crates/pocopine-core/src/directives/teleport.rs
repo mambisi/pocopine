@@ -72,7 +72,7 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    install(template, &call.value);
+    install(template, &call.value, None);
 }
 
 /// Compiled-path entry point. Skips the `<template>` cast +
@@ -86,7 +86,18 @@ pub fn run(call: &DirectiveCall) {
 /// clone via `walker::enclosing_scope` so directives inside the
 /// teleported subtree resolve the intended proxy after the DOM
 /// move.
-pub fn install(template: HtmlTemplateElement, selector: &str) {
+///
+/// `body_fn` is the optional macro-emitted body fragment from
+/// RFC-058 Phase 4.3c. When `Some`, the clone root is built via
+/// the fragment (which stamps cleaned HTML + installs every
+/// directive against the enclosing scope via the Phase 1
+/// helpers — no `walker::walk` involvement). When `None`, the
+/// legacy `clone_template_body` + `walker::walk` path runs.
+pub fn install(
+    template: HtmlTemplateElement,
+    selector: &str,
+    body_fn: Option<crate::directives::for_plan::TeleportBodyFn>,
+) {
     let template_el: Element = template.clone().into();
 
     let Some(target) = resolve_target(selector) else {
@@ -96,19 +107,43 @@ pub fn install(template: HtmlTemplateElement, selector: &str) {
         return;
     };
 
-    let Some(clone_root) = clone_template_body(&template) else {
-        console::error_1(&JsValue::from_str(
-            "pp-teleport: <template> body must contain exactly one element",
-        ));
-        return;
+    let pinned_scope = walker::enclosing_scope(&template_el);
+
+    let (clone_root, fragment_built) = match body_fn {
+        Some(f) => {
+            let Some((scope_id, scope_proxy)) = pinned_scope.as_ref() else {
+                console::error_1(&JsValue::from_str(
+                    "pp-teleport: body fragment requires an enclosing scope",
+                ));
+                return;
+            };
+            match f(*scope_id, scope_proxy) {
+                Some(root) => (root, true),
+                None => {
+                    console::error_1(&JsValue::from_str(
+                        "pp-teleport: body fragment failed to materialise root",
+                    ));
+                    return;
+                }
+            }
+        }
+        None => match clone_template_body(&template) {
+            Some(root) => (root, false),
+            None => {
+                console::error_1(&JsValue::from_str(
+                    "pp-teleport: <template> body must contain exactly one element",
+                ));
+                return;
+            }
+        },
     };
 
     // Pin the owning scope onto the clone so directives inside still
     // resolve the intended proxy after the DOM move. The scope is
     // borrowed — removing the clone must not evict the owning
     // component's scope from the registry.
-    if let Some((scope_id, proxy)) = walker::enclosing_scope(&template_el) {
-        bind_borrowed_scope_to(&clone_root, scope_id, &proxy);
+    if let Some((scope_id, proxy)) = pinned_scope.as_ref() {
+        bind_borrowed_scope_to(&clone_root, *scope_id, proxy);
     }
 
     if target.append_child(clone_root.as_ref()).is_ok() {
@@ -119,7 +154,12 @@ pub fn install(template: HtmlTemplateElement, selector: &str) {
             &TELEPORT_ORIGIN_KEY.into(),
             template_el.as_ref(),
         );
-        walker::walk(&clone_root);
+        // Walk only when no body fragment ran — the fragment
+        // already installed every directive in the subtree, so a
+        // walk would race a duplicate install.
+        if !fragment_built {
+            walker::walk(&clone_root);
+        }
         stash_teleported(&template_el, &clone_root);
     }
 }

@@ -216,7 +216,8 @@ pub struct StaticIfPlan {
 pub type IfBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
 
 /// Static-lifetime descriptor for a `<template pp-teleport="...">`
-/// site without a co-occurring `pp-if`. RFC-058 Phase 4.3.
+/// site without a co-occurring `pp-if`. RFC-058 Phase 4.3
+/// (controller) + 4.3c (body lifting).
 ///
 /// `selector` is the target query string the runtime resolves
 /// once at install time via [`crate::directives::teleport::resolve_target`].
@@ -224,11 +225,23 @@ pub type IfBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::El
 /// `pp-if` is present on the same element — when both are
 /// present, `pp-if`'s install path consults the teleport
 /// attribute directly and pp-teleport stays on the walker.
+///
+/// `body` is the macro-emitted [`TeleportBodyFn`] when the
+/// teleport body subtree qualified for Phase 4.3c lifting.
+/// `None` falls back to today's `clone_template_body` +
+/// `walker::walk` path the runtime installer already drives.
 #[doc(hidden)]
 pub struct StaticTeleportPlan {
     pub template_node_path: &'static [u16],
     pub selector: &'static str,
+    pub body: Option<TeleportBodyFn>,
 }
+
+/// Macro-emitted constructor for a `pp-teleport` body. Same
+/// shape as [`IfBodyFn`] / [`ForBodyFn`] — stamps cleaned HTML
+/// then runs `apply_static_plan` against the enclosing scope
+/// passed in by the installer.
+pub type TeleportBodyFn = fn(scope_id: ScopeId, proxy: &JsValue) -> Option<web_sys::Element>;
 
 /// Static-lifetime descriptor for a `<template pp-for="...">`
 /// site. RFC-058 Phase 4.2 (controller) + 4.2c (row body lifting).
