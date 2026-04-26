@@ -78,4 +78,13 @@ impl ComponentState for LoopScope {
         // inside a loop body silently no-op.
         crate::scope::invoke_handler(self.parent_scope_id, key, args)
     }
+
+    // Loop scopes fall through to the parent for everything that
+    // isn't the loop ident — caching parent-derived reads at the
+    // child level would mask later parent triggers. The loop ident
+    // itself is fine to recompute (it's just `self.item.clone()`),
+    // and skipping the cache costs nothing in that fast path.
+    fn cacheable_fields(&self) -> bool {
+        false
+    }
 }

@@ -23,6 +23,19 @@ pub trait ComponentState: 'static {
     /// Read a declared field as a JsValue (for proxy `get`).
     fn get(&self, key: &str) -> JsValue;
 
+    /// Whether this state's `get` returns values worth caching in the
+    /// per-scope `FIELD_CACHE`. Defaults to `true` for component
+    /// states (where `get` re-serialises Rust state through serde and
+    /// the cache cuts the cost down to one allocation per trigger
+    /// cycle). Override to `false` for "derived" scopes whose `get`
+    /// reads through to a parent proxy — `SlotScope`'s `ctx` ident
+    /// composes a fresh JS object from the owner's current field
+    /// values on each call, so caching it would freeze the slot at
+    /// its first-render snapshot even after the owner mutates.
+    fn cacheable_fields(&self) -> bool {
+        true
+    }
+
     /// Write a declared field from a JsValue (for proxy `set`).
     fn set(&mut self, key: &str, value: JsValue);
 
@@ -407,6 +420,17 @@ impl Scope {
                     return magics::resolve(&key_str, scope_id);
                 }
                 track(scope_id, &key_str);
+                // Derived scopes (`SlotScope`, etc.) compose their
+                // return value from a parent proxy on every read —
+                // caching would freeze the value at the first call.
+                // Skip the cache lookup AND the cache write for
+                // those; the trigger that matters lands on the
+                // parent scope's key, picked up via the inner
+                // `Reflect::get` inside `state.get`.
+                let cacheable = state_for_get.borrow().cacheable_fields();
+                if !cacheable {
+                    return state_for_get.borrow().get(&key_str);
+                }
                 // RFC 054 phase A — field cache short-circuit. The
                 // first `get` for a field invokes the macro-emitted
                 // `ComponentState::get` (which serialises via

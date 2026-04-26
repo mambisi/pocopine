@@ -52,6 +52,15 @@ impl ComponentState for SlotScope {
         Reflect::get(&self.caller, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
     }
 
+    // Slot scopes derive their value from a parent proxy on every
+    // call, so caching would freeze the slot at its first-render
+    // snapshot. Reactivity rides through the parent's per-key
+    // trigger picked up by the inner `resolve_path` / `Reflect::get`
+    // calls above.
+    fn cacheable_fields(&self) -> bool {
+        false
+    }
+
     fn set(&mut self, _key: &str, _value: JsValue) {
         // Slot scopes are read-only.
     }
