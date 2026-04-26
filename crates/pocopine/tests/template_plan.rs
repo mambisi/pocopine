@@ -32,6 +32,7 @@ use pocopine::prelude::*;
 use pocopine_core::templates_plan::{
     plan_failure_count, reset_plan_failure_count, template_plan_for,
 };
+use pocopine_core::walker::{compiled_fallback_walk_count, reset_compiled_fallback_walk_count};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -478,6 +479,7 @@ async fn template_with_only_pp_for_emits_for_plan() {
 async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     register_all();
     reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-for-body-host")
         .expect("plan-for-body-host registers a template plan");
@@ -515,6 +517,11 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     );
 
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "native-only lifted pp-for bodies should not use walker fallback",
+    );
 
     host.remove();
 }
@@ -531,6 +538,7 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
 async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     register_all();
     reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-slot-dynamic-host")
         .expect("plan-slot-dynamic-host has plan-eligible directives");
@@ -566,6 +574,11 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     );
 
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "native-only dynamic slot fragments should not use walker fallback",
+    );
 
     host.remove();
 }
@@ -582,6 +595,7 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
 async fn macro_emitted_pp_if_body_fragment_installs_directives() {
     register_all();
     reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-if-body-host")
         .expect("plan-if-body-host registers a template plan");
@@ -629,6 +643,11 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
     assert!(host.query_selector(".pibh-label").unwrap().is_none());
 
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "native-only lifted pp-if bodies should not use walker fallback",
+    );
 
     host.remove();
 }
@@ -643,6 +662,7 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
 async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
     register_all();
     reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
 
     let plan = template_plan_for("plan-teleport-host")
         .expect("plan-teleport-host has one pp-teleport site");
@@ -667,6 +687,11 @@ async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
     // The portal must NOT be inside the host (it was teleported out).
     assert!(host.query_selector(".pth-portal").unwrap().is_none());
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "native-only lifted pp-teleport bodies should not use walker fallback",
+    );
 
     // Manual cleanup so the portal doesn't leak into sibling
     // tests on `body` (the test's mount observer is rooted at
@@ -755,6 +780,17 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     use pocopine_core::slot_fragment::{SlotMountCtx, SlotSet};
 
     register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let child_plan = template_plan_for("plan-slot-child")
+        .expect("slot-bearing child must register a compiled slot-outlet plan");
+    assert_eq!(
+        child_plan.slot_outlets.len(),
+        1,
+        "the child's <slot> is materialised by apply_static_plan",
+    );
+    assert_eq!(child_plan.slot_outlets[0].name, "default");
 
     let body = doc().body().unwrap();
     let host = doc().create_element("div").unwrap();
@@ -796,6 +832,12 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     // DOM (the host had no slot content for the child to capture
     // by name), so finding it here is positive evidence the
     // fragment hook fired.
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled slot-outlet materialisation should not need fallback for a static fragment",
+    );
 
     host.remove();
 }
@@ -869,6 +911,16 @@ async fn macro_emitted_if_plan_drives_pp_if_controller() {
 async fn macro_emitted_slot_fragment_renders_static_slot_content() {
     register_all();
     reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let child_plan =
+        template_plan_for("plan-slot-child").expect("plan-slot-child has a compiled <slot> outlet");
+    assert_eq!(
+        child_plan.slot_outlets.len(),
+        1,
+        "child slot outlet must be explicit in the template plan",
+    );
+    assert_eq!(child_plan.slot_outlets[0].name, "default");
 
     let plan = template_plan_for("plan-slot-host-static")
         .expect("plan-slot-host-static is plan-eligible (one nested non-HTML5 tag)");
@@ -894,6 +946,11 @@ async fn macro_emitted_slot_fragment_renders_static_slot_content() {
         Some("macro-emitted-static-fragment"),
     );
     assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "static slot fragment + compiled slot outlet should avoid walker fallback",
+    );
 
     host.remove();
 }
