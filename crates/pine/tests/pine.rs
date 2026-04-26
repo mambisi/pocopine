@@ -5848,3 +5848,72 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 
     host.remove();
 }
+
+// ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
+
+/// Survey every registered Pine template plan and report which
+/// ones still flip `requires_walker = true`. Every walker-fallback
+/// trip is a slice that hasn't graduated to the compiled
+/// runtime yet — the macro left framework-owned attributes the
+/// plan can't install standalone (currently: `pp-as` on a
+/// non-root tag, preserved framework attrs on a child host
+/// after the macro's known-attr filter, slot subtrees that fail
+/// the lift envelope). The listed tags are the concrete targets
+/// for upcoming hardening work.
+///
+/// The asserted ceiling is a high-water mark, not a target — it
+/// turns regressions into a hard fail (a routine refactor that
+/// silently widens the walker-fallback surface trips this) while
+/// letting deliberate hardening land by lowering the constant.
+#[wasm_bindgen_test]
+async fn pine_template_plan_fallback_audit() {
+    pine::register_all();
+
+    let mut tags: Vec<String> = pocopine_core::templates_plan::registered_template_tags()
+        .into_iter()
+        .filter(|t| t.starts_with("pine-"))
+        .collect();
+    tags.sort();
+
+    let mut walker_owned: Vec<&str> = Vec::new();
+    for tag in &tags {
+        if let Some(plan) = pocopine_core::templates_plan::template_plan_for(tag) {
+            if plan.requires_walker {
+                walker_owned.push(tag.as_str());
+            }
+        }
+    }
+
+    web_sys::console::log_1(
+        &format!(
+            "RFC-058 fallback audit: {}/{} pine plans require walker fallback. Offenders: {:?}",
+            walker_owned.len(),
+            tags.len(),
+            walker_owned,
+        )
+        .into(),
+    );
+
+    // High-water mark — ratchet down as hardening lands; raising
+    // it should require a deliberate review since every increment
+    // is a step away from RFC-058 walker removal. As of the
+    // initial Phase 3 audit landing, every offender uses one of:
+    //   • `pp-roving` on `<root>` (8 of 12 — toolbar, tabs,
+    //     radio-group, toggle-group, select-content, dropdown-
+    //     menu-content, context-menu-content, scroll-area-
+    //     viewport)
+    //   • `pp-resize` on a child host (scroll-area-viewport)
+    //   • host whose template wraps a `pine-popover-root` with
+    //     framework attrs the macro doesn't yet plan
+    //     (date-picker, date-range-picker, date-range-field,
+    //     time-range-field)
+    // Each category is the target for a focused Phase 3 slice.
+    const FALLBACK_CEILING: usize = 12;
+    assert!(
+        walker_owned.len() <= FALLBACK_CEILING,
+        "Pine walker-fallback surface grew: {} > ceiling {}. Tags: {:#?}",
+        walker_owned.len(),
+        FALLBACK_CEILING,
+        walker_owned,
+    );
+}
