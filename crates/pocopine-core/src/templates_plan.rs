@@ -44,8 +44,8 @@ use web_sys::{console, Element};
 
 use crate::directives;
 use crate::directives::for_plan::{
-    BindingKind, StaticBinding, StaticChildMount, StaticIfPlan, StaticInit, StaticListener,
-    StaticRef,
+    BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
+    StaticListener, StaticRef,
 };
 use crate::expr;
 use crate::reactive::ScopeId;
@@ -87,6 +87,16 @@ pub struct StaticTemplatePlan {
     /// `<template>` element resolved through `template_node_path`.
     /// Empty for templates with no `pp-if` site.
     pub if_plans: &'static [StaticIfPlan],
+    /// `pp-for` controller sites (RFC-058 Phase 4.2). The macro
+    /// strips `pp-for` / `pp-key` / `pp-stagger` from the
+    /// cleaned HTML; the applier installs the effect via
+    /// [`crate::directives::for_::install`] with the parsed
+    /// item / items / key / stagger pre-resolved. The
+    /// `data-pp-row-plan` attribute the §6.2 layering bakes
+    /// in stays alongside, so the RFC-054 row-plan registry
+    /// still resolves keyed lists. Empty for templates with no
+    /// `pp-for` site.
+    pub for_plans: &'static [StaticForPlan],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -286,6 +296,38 @@ pub fn apply_static_plan(
             }
             crate::walker::mount_child_component_with_slots(&el, c.tag, set);
         }
+    }
+    for fp in plan.for_plans {
+        let Some(el) = resolve(root, fp.template_node_path) else {
+            fail(
+                "for-plan",
+                template_name,
+                fp.template_node_path,
+                Some(fp.items_expr),
+            );
+            continue;
+        };
+        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
+            Ok(t) => t,
+            Err(_) => {
+                fail(
+                    "for-plan-template",
+                    template_name,
+                    fp.template_node_path,
+                    Some(fp.items_expr),
+                );
+                continue;
+            }
+        };
+        directives::for_::install(
+            template,
+            proxy.clone(),
+            scope_id,
+            fp.item_name.to_string(),
+            fp.items_expr.to_string(),
+            fp.key_expr.map(|s| s.to_string()),
+            fp.stagger_ms,
+        );
     }
     for ip in plan.if_plans {
         let Some(el) = resolve(root, ip.template_node_path) else {

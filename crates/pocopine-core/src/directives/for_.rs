@@ -242,20 +242,54 @@ pub fn run(call: &DirectiveCall) {
         }
     };
 
-    let parent_proxy = call.proxy.clone();
-    let parent_scope_id = call.scope_id;
     let template_el: Element = call.el.clone();
-    let key_expr = template_el.get_attribute("pp-key");
-    // `pp-stagger="<ms>"` on the template spreads the enter
-    // animation of newly-inserted clones across time — `i * stagger`
-    // ms delay per clone, in insertion order. Keeps a batch mount
-    // of a big list (stress fixture dropping 500 tags at once)
-    // from firing every scale-in simultaneously.
+    let key_expr = template_el
+        .get_attribute("pp-key")
+        .filter(|k| !k.trim().is_empty());
     let stagger_ms: u32 = template_el
         .get_attribute("pp-stagger")
         .and_then(|s| s.trim().parse::<u32>().ok())
         .unwrap_or(0);
 
+    install(
+        template,
+        call.proxy.clone(),
+        call.scope_id,
+        item_name,
+        items_expr,
+        key_expr,
+        stagger_ms,
+    );
+}
+
+/// Compiled-path entry point. Skips the `<template>` cast +
+/// `pp-for` parse + `pp-key` / `pp-stagger` attribute reads —
+/// the macro provides everything pre-resolved.
+///
+/// Called by `apply_static_plan` for every `StaticForPlan`
+/// entry the classifier emitted. RFC-058 Phase 4.2 — extracted
+/// so the runtime walker dispatch path and the plan applier
+/// share one keyed/naive selection body. Coexists with the
+/// RFC-054 row-plan registry: `lookup_for_template` reads
+/// `data-pp-row-plan` from the template element, which the
+/// template-plan classifier bakes in via the §6.2 layering
+/// path.
+pub fn install(
+    template: HtmlTemplateElement,
+    parent_proxy: JsValue,
+    parent_scope_id: ScopeId,
+    item_name: String,
+    items_expr: String,
+    key_expr: Option<String>,
+    stagger_ms: u32,
+) {
+    let template_el: Element = template.clone().into();
+    let track_anchor = template_el.clone();
+    // `pp-stagger="<ms>"` on the template spreads the enter
+    // animation of newly-inserted clones across time — `i * stagger`
+    // ms delay per clone, in insertion order. Keeps a batch mount
+    // of a big list (stress fixture dropping 500 tags at once)
+    // from firing every scale-in simultaneously.
     let effect_id = match key_expr {
         Some(key) if !key.trim().is_empty() => run_keyed(
             item_name,
@@ -278,7 +312,7 @@ pub fn run(call: &DirectiveCall) {
         ),
     };
 
-    track_effect_on(call.el, effect_id);
+    track_effect_on(&track_anchor, effect_id);
 }
 
 /// Whole-rebuild iteration (no `pp-key`). Keeps the original
