@@ -40,7 +40,7 @@
 //! today (attribute-preserved fallback, RFC-057 §8.1).
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
 use crate::template_parser::{Element, Node, TemplateAst};
 
@@ -122,7 +122,7 @@ struct AnalysisCtx {
     /// — the same ident appears in both places so the
     /// `StaticChildMount.slots` literal references the function
     /// the macro emits below it.
-    slot_fragment_emissions: Vec<(String, String)>,
+    slot_fragment_emissions: Vec<(syn::Ident, String)>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -175,7 +175,7 @@ struct RefLite {
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
-    /// `(slot_name, generated_fn_ident_str)` pairs for every
+    /// `(slot_name, generated_fn_ident)` pairs for every
     /// statically-eligible slot the macro lifted into a
     /// fragment function. Empty when the parent left no
     /// children inside the custom tag, or when the children
@@ -183,11 +183,11 @@ struct ChildMountLite {
     /// `:` directive, any non-HTML5 tag, any `<slot>` / pp-let
     /// / pp-for / pp-if / pp-teleport descendant).
     ///
-    /// The ident strings match entries in
+    /// The idents match entries in
     /// [`AnalysisCtx::slot_fragment_emissions`] so the
     /// `StaticSlotFragment.fragment` literal in the plan
     /// references the same `fn` the macro emits below.
-    slot_fragments: Vec<(String, String)>,
+    slot_fragments: Vec<(String, syn::Ident)>,
 }
 
 impl AnalysisCtx {
@@ -219,8 +219,7 @@ impl AnalysisCtx {
     /// stream when no fragment was emitted — same as today's
     /// pre-Phase-3.5b behaviour.
     fn emit_slot_fragment_fns(&self) -> TokenStream {
-        let items = self.slot_fragment_emissions.iter().map(|(name, html)| {
-            let ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+        let items = self.slot_fragment_emissions.iter().map(|(ident, html)| {
             let html_lit = proc_macro2::Literal::string(html);
             quote! {
                 fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
@@ -321,9 +320,8 @@ fn emit_ref(r: &RefLite) -> TokenStream {
 fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let path = emit_node_path(&c.node_path);
     let tag = proc_macro2::Literal::string(&c.tag);
-    let slot_tokens = c.slot_fragments.iter().map(|(name, ident_str)| {
+    let slot_tokens = c.slot_fragments.iter().map(|(name, ident)| {
         let name_lit = proc_macro2::Literal::string(name);
-        let ident = syn::Ident::new(ident_str, proc_macro2::Span::call_site());
         quote! {
             ::pocopine::__private::StaticSlotFragment {
                 name: #name_lit,
@@ -382,10 +380,10 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, path: &mut Vec<u16>) {
         // legacy capture/replay path. Anything dynamic stays on
         // the walker — slot content with directives needs the
         // parent-proxy machinery this v1 doesn't ship yet.
-        let mut slot_fragments: Vec<(String, String)> = Vec::new();
+        let mut slot_fragments: Vec<(String, syn::Ident)> = Vec::new();
         if !el.children.is_empty() && slot_subtree_is_static(&el.children) {
             let html = serialize_slot_children(&el.children);
-            let ident = format!("__poc_slot_frag_{}", ctx.slot_fragment_emissions.len());
+            let ident = format_ident!("__poc_slot_frag_{}", ctx.slot_fragment_emissions.len());
             ctx.slot_fragment_emissions.push((ident.clone(), html));
             slot_fragments.push(("default".to_string(), ident));
         }
