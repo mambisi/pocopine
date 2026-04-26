@@ -170,6 +170,26 @@ fn fire_deferred_init(el: &Element) {
     dispatch(el, &proxy, scope_id, "pp-init", &value);
 }
 
+/// Defer a `pp-init` handler invocation on `el` until the
+/// surrounding subtree's binding pass completes (post-order
+/// drain in `walk` — see `fire_deferred_init`). Public entry
+/// point for both the runtime walker and generated mount code
+/// (RFC-058 Phase 2+); both must funnel through this helper so
+/// the deferred-init pending state stays owned by a single
+/// implementation.
+///
+/// `scope_id` is accepted for API symmetry with the other
+/// Phase 1 helpers — the actual fire-time dispatch
+/// rediscovers the scope through `enclosing_scope(el)` because
+/// the same element may be re-queued under a fresh scope by
+/// `pp-for` row reuse. Future revisions may switch to stamping
+/// the scope id directly so the rediscovery is skipped; the
+/// public helper signature already accommodates that.
+pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
+    let _ = scope_id; // see doc-comment
+    set_private(el, INIT_PENDING_KEY, &JsValue::from_str(expr_src));
+}
+
 /// Fire the component-level `on_mount` lifecycle hook on elements
 /// that own a (non-borrowed) scope. Runs post-order so the handler
 /// sees the fully-bound subtree (refs included). Walker entry —
@@ -347,7 +367,7 @@ fn bind(el: &Element) {
         dispatch(el, &proxy, scope_id, name, value);
     }
     if let Some(v) = init_value {
-        set_private(el, INIT_PENDING_KEY, &JsValue::from_str(&v));
+        defer_init_on(el, scope_id, &v);
     }
     // Silence the unused-`proxy` warning — the deferred init path looks
     // it up again via `enclosing_scope` at fire time.
