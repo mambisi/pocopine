@@ -18,10 +18,9 @@ use js_sys::{Array, Reflect};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{
-    DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement, MutationObserver,
-    MutationObserverInit, MutationRecord, Node, NodeList,
-};
+use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement, Node};
+#[cfg(feature = "legacy-dom")]
+use web_sys::{MutationObserver, MutationObserverInit, MutationRecord, NodeList};
 
 use crate::directives::{lookup, parse_attr, DirectiveCall};
 use crate::reactive::{release, EffectId, ScopeId};
@@ -71,11 +70,22 @@ pub fn start_on_body() {
     start(&body);
 }
 
-/// Walk `root`, bind directives on it and all descendants, then install a
-/// `MutationObserver` so later DOM mutations are picked up too.
+/// Walk `root`, bind directives on it and all descendants, then
+/// install a `MutationObserver` so later DOM mutations are picked
+/// up too.
+///
+/// The observer install is gated on the RFC-058 Phase 6
+/// `legacy-dom` feature. Without the feature the initial
+/// synchronous walk still runs (compiled views still need it for
+/// the root tag), but dynamically-inserted DOM (markdown render
+/// output, server-rendered partials, externally adopted nodes)
+/// won't be auto-discovered. Apps that bootstrap entirely through
+/// compiled-view mounts can `default-features = false` to drop
+/// the observer's binary cost.
 pub fn start(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     walk(root);
+    #[cfg(feature = "legacy-dom")]
     install_observer(root);
 }
 
@@ -1478,6 +1488,7 @@ pub fn mark_bulk_release(el: &Element) {
     set_private(el, BULK_RELEASE_KEY, &JsValue::TRUE);
 }
 
+#[cfg(feature = "legacy-dom")]
 fn clear_private(el: &Element, key: &str) {
     let _ = Reflect::delete_property(el.as_ref(), &key.into());
 }
@@ -1727,6 +1738,17 @@ fn release_subtree_inner(node: &Node) {
     }
 }
 
+/// `MutationObserver` install for `legacy-dom` builds. Picks up
+/// DOM nodes inserted after the initial `start()` walk —
+/// router-driven page changes (when the route component itself
+/// isn't a compiled-view child mount), markdown render output,
+/// `set_inner_html` calls in user code, externally adopted DOM.
+///
+/// RFC-058 Phase 6 v1 — gated behind the `legacy-dom` feature.
+/// Compiled-view-only builds (`default-features = false`) drop
+/// the ~200-line callback closure + the observer registration
+/// from the binary entirely.
+#[cfg(feature = "legacy-dom")]
 fn install_observer(root: &Element) {
     let cb = Closure::wrap(Box::new(move |records: JsValue, _obs: JsValue| {
         let Ok(arr) = records.dyn_into::<Array>() else {

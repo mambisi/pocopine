@@ -77,6 +77,52 @@ delta net-negative across the board:
   dispatch surface — order-of-magnitude bigger than the v1
   metadata cost this column tracks.
 
+## Phase 6 v1 — observer quarantine via `legacy-dom`
+
+The runtime walker's `MutationObserver`-based auto-discovery
+(catches DOM nodes inserted after the initial `start()` walk
+— router page changes via the slow path, markdown render
+output, externally adopted DOM) graduates behind a
+`legacy-dom` feature flag. Default-on, so existing apps keep
+working unchanged. Apps that bootstrap entirely through
+compiled-view mounts opt out via `default-features = false`.
+
+Measured on counter (devtools held constant — only the
+`legacy-dom` flag flips):
+
+| build (devtools on)         | raw wasm bytes | gzip wasm bytes |
+|-----------------------------|---------------:|----------------:|
+| default (`+ legacy-dom`)    |      695 628   |       263 970   |
+| `legacy-dom` off            |      692 853   |       263 365   |
+| **delta**                   |   **-2 775** (-0.40 %) |   **-605** (-0.23 %) |
+
+Modest — the v1 cfg gates only `install_observer` and its
+helpers (the ~200-line `MutationRecord` callback closure plus
+the `clear_private` helper used by the bulk-clear short-
+circuit). The walker's `walk` / `bind` / `mount_component`
+themselves stay always-on because Phase 4's controllers
+(`pp-if` / `pp-for` / `pp-teleport`) call them for body
+content rendering.
+
+The bigger drops land when:
+
+* **Phase 4.1d / 4.2c / 4.3 follow-ups** — body fragment
+  lifting for `pp-if` / `pp-for` / `pp-teleport`. Once the
+  controllers stamp their bodies via fragment fns instead of
+  cloning a `<template>` and walking it, `walk` / `bind` /
+  `mount_component` move behind `legacy-dom` too.
+* **Phase 3.5c** — dynamic slot fragments. `materialize_slot`'s
+  legacy capture/replay path also walks captured DOM; once
+  every slot site has a fragment, the legacy path can move
+  behind the flag.
+* Walker dispatch shims in `directives/{text,html,bind,show,
+  on,init,model,route,if_,for_,teleport}.rs` (the `pub fn run`
+  entry points called via `bind`'s directive dispatch) all
+  go behind the flag at the same time as `bind` itself.
+
+Cumulatively those bring the default `pocopine` wasm down by
+~10-15× more than the v1 observer quarantine alone.
+
 ## What Phase 2 got out of the door
 
 The acceptance bar for Phase 2 was parity, not a size win:
