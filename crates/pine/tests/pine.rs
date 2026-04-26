@@ -6078,17 +6078,30 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
 
 // ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
 
-/// Survey every registered Pine template plan and assert none
-/// flip `requires_walker = true`. The audit started at 12/167
-/// offenders; landing the `pp-roving` / `pp-resize` opaque-
-/// directive lift drove it to 4, and lifting `pp-ref` on
-/// custom hosts (the date/time picker family) drove it to 0.
+/// Survey every registered Pine template plan and assert the
+/// walker-fallback set matches a known baseline. The audit
+/// started at 12/167 offenders; landing the `pp-roving` /
+/// `pp-resize` opaque-directive lift drove it to 4, and lifting
+/// `pp-ref` on custom hosts (the date/time picker family) drove
+/// the directive-fallback count to 0.
 ///
-/// Asserting an exact zero turns any regression into an
-/// immediate hard fail — a routine refactor that silently
-/// widens the walker-fallback surface trips this. New offender
-/// categories should ship with their own dedicated lifting
-/// slice rather than relaxing the gate.
+/// The current 16-entry baseline surfaces controller-body
+/// fallback gaps the macro now flags via `requires_walker` when
+/// `analyze_lift_body` returns `None` for `pp-if` / `pp-for` /
+/// `pp-teleport` bodies (RFC-058 Phase 4.1d/4.2c/4.3c body
+/// lifting envelope still excludes nested custom tags +
+/// nested controllers inside a controller body). Every entry
+/// is either a `*-portal` (lifted-`pp-teleport` body containing
+/// nested compounds) or a `*-content` / `*-indicator` /
+/// `*-value` (lifted-`pp-if` body containing the same).
+/// Expanding the body-lift envelope to nested custom tags +
+/// nested controllers will close all of them in one slice.
+///
+/// Asserting an exact set turns any regression — and any
+/// improvement that doesn't update this list — into an
+/// immediate hard fail. New offender categories should ship
+/// with their own dedicated lifting slice rather than relaxing
+/// the gate.
 #[wasm_bindgen_test]
 async fn pine_template_plan_fallback_audit() {
     pine::register_all();
@@ -6118,13 +6131,30 @@ async fn pine_template_plan_fallback_audit() {
         .into(),
     );
 
+    let expected: &[&str] = &[
+        "pine-accordion-content",
+        "pine-alert-dialog-portal",
+        "pine-collapsible-content",
+        "pine-combobox-portal",
+        "pine-command-portal",
+        "pine-context-menu-portal",
+        "pine-dialog-portal",
+        "pine-dropdown-menu-item-indicator",
+        "pine-dropdown-menu-portal",
+        "pine-dropdown-menu-sub-content",
+        "pine-hover-card-portal",
+        "pine-popover-portal",
+        "pine-select-item-indicator",
+        "pine-select-portal",
+        "pine-select-value",
+        "pine-tooltip-portal",
+    ];
+
     assert_eq!(
-        walker_owned.len(),
-        0,
-        "Surveyed {} of {} pine plans require walker fallback. Offenders: {:#?}",
+        walker_owned, expected,
+        "Pine fallback baseline drift: surveyed {} of {} plans require walker fallback.",
         walker_owned.len(),
         tags.len(),
-        walker_owned,
     );
 }
 

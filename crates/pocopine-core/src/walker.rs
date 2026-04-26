@@ -1511,6 +1511,26 @@ pub fn ctx_parent_of(el: &Element) -> Option<ScopeId> {
         .map(|n| ScopeId(n as u64))
 }
 
+/// Walk `el` then its element ancestors looking for the nearest
+/// `CTX_PARENT_KEY` stamp. Used by directive installers
+/// (`pp-for`, `pp-if`, `pp-teleport`) when the controller's
+/// `<template>` is wrapped inside slot content — the slot
+/// materialiser only stamps the top-level child of the slot
+/// fragment, so a `<div><template pp-for>` wrapper won't carry
+/// the stamp on the template itself. Walking ancestors lets the
+/// installer recover the slot owner's scope id and chain its
+/// internal scopes' inject parents through it.
+pub fn inherited_ctx_parent_of(el: &Element) -> Option<ScopeId> {
+    let mut cur: Option<Element> = Some(el.clone());
+    while let Some(e) = cur {
+        if let Some(id) = get_private(&e, CTX_PARENT_KEY).and_then(|v| v.as_f64()) {
+            return Some(ScopeId(id as u64));
+        }
+        cur = e.parent_element();
+    }
+    None
+}
+
 fn enclosing_inject_parent(el: &Element) -> Option<ScopeId> {
     let mut cur: Option<Element> = el.parent_element();
     while let Some(e) = cur {

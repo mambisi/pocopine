@@ -316,7 +316,14 @@ pub fn install(
     // `None`. The `parent_scope_id` arg stays the AUTHOR scope
     // so directive resolution (`tag` etc.) keeps reading from
     // the caller, per RFC-011.
-    let inject_parent_id = crate::walker::ctx_parent_of(&template_el).unwrap_or(parent_scope_id);
+    // Walk ancestors (not just the template itself) — when the
+    // pp-for is wrapped inside slot content like
+    // `<div><template pp-for>`, the slot materialiser only stamps
+    // the top-level slot child (the wrapping `<div>`), not the
+    // nested `<template>`. Reading just the template would miss
+    // the owner stamp and chain to the slot author.
+    let inject_parent_id =
+        crate::walker::inherited_ctx_parent_of(&template_el).unwrap_or(parent_scope_id);
     // `pp-stagger="<ms>"` on the template spreads the enter
     // animation of newly-inserted clones across time — `i * stagger`
     // ms delay per clone, in insertion order. Keeps a batch mount
@@ -412,7 +419,7 @@ fn run_naive(
             // the walker after insertion so preserved fallback
             // directives in nested custom-component templates bind.
             let (clone_root, fragment_built) = match body {
-                Some(f) => match f(scope.id, &proxy) {
+                Some(f) => match f(scope.id, &proxy, scope.id) {
                     Some(root) => (root, true),
                     None => {
                         console::error_1(&JsValue::from_str(
@@ -762,7 +769,7 @@ fn run_keyed(
                 let clone_root = if row_plan.is_none() {
                     if let Some(body_fn) = body {
                         let proxy = scope.into_proxy();
-                        match body_fn(scope.id, &proxy) {
+                        match body_fn(scope.id, &proxy, scope.id) {
                             Some(root) => {
                                 bind_scope_to(&root, scope.id, &proxy);
                                 // Mark as walked so the install

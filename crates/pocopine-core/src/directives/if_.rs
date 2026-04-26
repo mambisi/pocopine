@@ -104,6 +104,14 @@ pub fn install(
     // matches a slot store on the wrong scope) and any
     // directive that reads from the owning scope's proxy.
     let pinned_scope = walker::enclosing_scope(&template_el);
+    // RFC-027 inject chain — when the controller template is
+    // authored in slot content, its enclosing scope is the slot
+    // AUTHOR (so directives bind against the right proxy) but
+    // descendants' inject parent must chain through the slot
+    // OWNER. The slot materialiser stamps `CTX_PARENT_KEY` on
+    // the top-level slot child; walk ancestors so a controller
+    // wrapped under that top-level child still finds it.
+    let inject_parent_id_override = walker::inherited_ctx_parent_of(&template_el);
 
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 
@@ -135,7 +143,8 @@ pub fn install(
                             ));
                             return;
                         };
-                        match f(*scope_id, scope_proxy) {
+                        let ctx_parent_id = inject_parent_id_override.unwrap_or(*scope_id);
+                        match f(*scope_id, scope_proxy, ctx_parent_id) {
                             Some(root) => (root, true),
                             None => {
                                 console::error_1(&JsValue::from_str(

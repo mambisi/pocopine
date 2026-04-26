@@ -720,6 +720,7 @@ pub fn stamp_if_body(
     plan: &'static StaticTemplatePlan,
     scope_id: ScopeId,
     proxy: &JsValue,
+    ctx_parent_id: ScopeId,
 ) -> Option<Element> {
     let doc = web_sys::window().and_then(|w| w.document())?;
     let template_el = doc.create_element("template").ok()?;
@@ -740,8 +741,18 @@ pub fn stamp_if_body(
     }
     let root = root?;
     crate::walker::bind_borrowed_scope_to(&root, scope_id, proxy);
+    // CTX_PARENT_KEY drives RFC-027 inject chain resolution for
+    // nested custom tags inside this body fragment. Callers pass
+    // `ctx_parent_id` distinct from `scope_id` when the controller
+    // template was authored in slot content — `scope_id` is the
+    // slot AUTHOR's scope (so directives bind against the right
+    // proxy) but the inject parent must chain through the slot
+    // OWNER. For pp-for body fragments `ctx_parent_id` equals the
+    // LoopScope id; the loop scope's `parent` is already set to
+    // the resolved inject parent at install time, so the chain
+    // walks correctly from there.
     let ctx_key = JsValue::from_str(crate::walker::CTX_PARENT_KEY);
-    let ctx_val = JsValue::from_f64(scope_id.0 as f64);
+    let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
     let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
     apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
     if plan_requires_compiled_fallback(plan) {
