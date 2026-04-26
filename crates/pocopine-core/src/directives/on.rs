@@ -295,7 +295,16 @@ pub fn install(
 /// one-arg call of `on_click($event)`. Keeps every existing handler
 /// that declared `(&mut self, ev: Event)` working unchanged without
 /// the author having to write `@click="on_click($event)"`.
-fn backfill_legacy_call(ast: Spanned<Expr>) -> Spanned<Expr> {
+/// Backfill the RFC-058 § 5.5 install path: the `pp-on` parser
+/// allows authors to write `@click="on_click"` (a bare path) and
+/// expects the runtime to invoke it as `on_click($event)`. The
+/// rewrite happens at parse time inside `run` today; the
+/// public install helper accepts an already-parsed AST, so the
+/// Phase 2.4 plan applier needs the same rewrite available.
+/// Public so [`crate::templates_plan::apply_static_plan`] can
+/// call it before handing the AST to [`install`].
+#[doc(hidden)]
+pub fn backfill_legacy_call(ast: Spanned<Expr>) -> Spanned<Expr> {
     match ast.value {
         Expr::Path(ref segs) if segs.len() == 1 => {
             let name = segs[0].clone();
