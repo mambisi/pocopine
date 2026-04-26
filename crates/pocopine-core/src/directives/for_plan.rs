@@ -42,17 +42,40 @@ use crate::scope::{with_current_el, Scope};
 
 /// Kind of binding the macro recognised. Drives the patch
 /// strategy at mount/reuse time.
+///
+/// `Text` and `Class` are the RFC-054 row-plan-only variants
+/// emitted by the keyed-list compiler. The other variants are
+/// RFC-058 Phase 2 template-plan additions; they're carried
+/// in this same enum so both compilers share the runtime
+/// hydration path even though they target different scopes
+/// (per-row instance vs whole-template).
 #[derive(Clone, Copy, Debug)]
 pub enum BindingKind {
     /// `pp-text="<expr>"` — stringify the value, write
-    /// `textContent`. Memoised against the last value via
-    /// `RowInstance.binding_cache`.
+    /// `textContent`. Memoised against the last value.
     Text,
     /// `:class="<expr>"` / `pp-bind:class="<expr>"` —
     /// serialise via [`crate::directives::bind`]'s class
     /// shaping (string OR object form), write the result
     /// to `class`. Memoised against the serialised form.
+    /// **RFC-054 row-plan only** — RFC-058 template plans
+    /// emit `Bind { arg: "class" }` instead so a single grep
+    /// shows which compiler emitted the entry.
     Class,
+    /// `pp-html="<expr>"` — write the stringified value to
+    /// `innerHTML`. RFC-058 Phase 2 template-plan addition.
+    Html,
+    /// `pp-bind:<arg>="<expr>"` / `:<arg>="<expr>"` — bind a
+    /// native HTML attribute (data-/aria-/class/style/plain
+    /// attr) to the expression, with the
+    /// [`crate::directives::bind`] memoisation path.
+    /// RFC-058 Phase 2 — child-component prop targets are
+    /// **not** eligible (whole element falls back to walker).
+    Bind { arg: &'static str },
+    /// `pp-show="<expr>"` — toggle `display` style by
+    /// truthiness; routes through transition presets when
+    /// present. RFC-058 Phase 2 template-plan addition.
+    Show,
 }
 
 /// Static-lifetime binding descriptor emitted by the macro. The
@@ -65,14 +88,46 @@ pub struct StaticBinding {
     pub expr_src: &'static str,
 }
 
-/// Static-lifetime listener descriptor. v1 supports only bare
-/// `@<event>="<expr>"` — no modifiers — so the static shape is
-/// just `(node_path, event_name, expr_src)`.
+/// Static-lifetime listener descriptor.
+///
+/// `modifiers` is the post-`.` token list — `prevent`, `stop`,
+/// `self`, `once`, `window`, `document`, `outside`, `capture`,
+/// key modifiers, and the `debounce` + numeric-ms pair (two
+/// adjacent slots). The set must match what the runtime
+/// [`crate::directives::on::install`] helper expects — the
+/// macro-side classifier validates ahead of time, so reaching
+/// the install with an unknown token is a framework bug.
+///
+/// RFC-054 row plans emit an empty `modifiers: &[]`; RFC-058
+/// template plans populate it from the parsed `@event.<mod>`
+/// chain.
 #[doc(hidden)]
 pub struct StaticListener {
     pub node_path: &'static [u16],
     pub event: &'static str,
+    pub modifiers: &'static [&'static str],
     pub expr_src: &'static str,
+}
+
+/// Static-lifetime descriptor for a `pp-init="<expr>"` entry.
+/// The expression is enqueued onto the walker's deferred-init
+/// pending list ([`crate::walker::defer_init_on`]) so the
+/// handler fires post-order after descendants are bound and
+/// refs are registered. RFC-058 Phase 2 template-plan addition.
+#[doc(hidden)]
+pub struct StaticInit {
+    pub node_path: &'static [u16],
+    pub expr_src: &'static str,
+}
+
+/// Static-lifetime descriptor for a `pp-ref="<name>"` entry.
+/// Resolves the named ref against the current scope at mount
+/// time via [`crate::refs::register`]. RFC-058 Phase 2 template-
+/// plan addition.
+#[doc(hidden)]
+pub struct StaticRef {
+    pub node_path: &'static [u16],
+    pub name: &'static str,
 }
 
 /// One macro-emitted row plan. The macro emits
@@ -1138,6 +1193,19 @@ fn apply_binding(
                 let _ = el.set_attribute("class", &serialised);
             }
             Some(Rc::from(serialised))
+        }
+        // RFC-058 Phase 2 template-plan variants. The keyed row
+        // compiler never emits these (it only emits `Text` /
+        // `Class`), so reaching this branch on the row-plan
+        // path means a macro bug let a template-plan binding
+        // ride a `StaticRowPlan`. Treat it as a framework bug
+        // rather than silently dropping.
+        BindingKind::Html | BindingKind::Bind { .. } | BindingKind::Show => {
+            console::warn_1(&JsValue::from_str(
+                "rfc-054: row plan received an RFC-058 template-plan-only \
+                 BindingKind (Html / Bind / Show); skipping",
+            ));
+            None
         }
     }
 }

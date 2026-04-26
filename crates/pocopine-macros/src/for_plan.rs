@@ -252,6 +252,7 @@ fn try_compile_row(template_el: &Element, plan_id: u32) -> Option<(TokenStream, 
             ::pocopine::__private::StaticListener {
                 node_path: &[ #(#path_elems),* ],
                 event: #event_lit,
+                modifiers: &[],
                 expr_src: #expr_lit,
             }
         }

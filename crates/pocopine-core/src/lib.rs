@@ -47,6 +47,7 @@ pub mod store;
 pub mod styles;
 pub mod task;
 pub mod templates;
+pub mod templates_plan;
 pub mod text;
 pub mod tick;
 pub mod timers;

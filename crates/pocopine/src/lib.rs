@@ -61,6 +61,14 @@ pub mod __private {
         HandlerDispatch, LifecycleContext, Scope, StaticBinding, StaticListener, StaticRowPlan,
         Store, WriteOrigin,
     };
+    // RFC-058 Phase 2 — template-plan shape + registry. The
+    // macro emits a `&'static StaticTemplatePlan` per component
+    // and registers it via `register_template_plan` alongside the
+    // existing `register_template` call.
+    pub use pocopine_core::directives::for_plan::{StaticInit, StaticRef};
+    pub use pocopine_core::templates_plan::{
+        plan_failure_count, register_template_plan, reset_plan_failure_count, StaticTemplatePlan,
+    };
     // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
     // call through the umbrella's stable `::pocopine::__private`
