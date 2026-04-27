@@ -2911,6 +2911,12 @@ async fn delegated_listener_after_proxy_elision() {
 /// the handler. If the previous teardown was incorrectly skipped
 /// the new clone would inherit a stale scope id and the click
 /// would route to nowhere.
+///
+/// RFC-058 Phase 6.5 — gated behind `legacy-dom` because the
+/// mechanism under test (the `MutationObserver` callback that
+/// clears `BULK_RELEASE_KEY`) is only compiled with that
+/// feature. Compiled-only apps don't run this code path.
+#[cfg(feature = "legacy-dom")]
 #[wasm_bindgen_test]
 async fn lever5b_marker_clears_so_later_removes_teardown_normally() {
     let host = mount("<bulk-list></bulk-list>");
