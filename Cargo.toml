@@ -56,3 +56,17 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 strsim = "0.11"
+
+# RFC-058 Phase 6.5 — match Yew's release-profile knobs.
+# `opt-level = "z"` collapses size-vs-speed in favour of size;
+# `lto = true` lets the linker inline + dead-code-eliminate
+# across crate boundaries; `codegen-units = 1` removes the
+# parallelism-granularity barrier that prevents LTO from
+# seeing the whole tree; `panic = "abort"` is a no-op on
+# `wasm32-unknown-unknown` (the target already aborts) but
+# keeps the profile portable to other targets.
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
