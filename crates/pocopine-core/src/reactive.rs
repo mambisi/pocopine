@@ -171,8 +171,19 @@ pub fn effect_scoped(f: impl Fn() + 'static) {
 /// not run; a `scheduler` diverts `trigger` to user code instead of the
 /// default microtask flush.
 pub fn effect_with(f: impl Fn() + 'static, opts: EffectOptions) -> EffectId {
+    effect_with_dyn(Rc::new(f), opts)
+}
+
+// RFC-058 Phase 6.5 — type-erased body. The generic shim above
+// performs the `Rc::new(f)` coercion to `EffectFn` (one
+// monomorphization per call site, but each is just the
+// `Rc::new + forward` instructions). The body that does the
+// registry insertion + run lives here as a single instantiation.
+// Twiggy showed `effect_with::<F>` totalling ~7 KB across pp-for
+// / pp-if / pp-text / pp-bind closure types before this
+// consolidation.
+fn effect_with_dyn(f: EffectFn, opts: EffectOptions) -> EffectId {
     let id = next_effect_id();
-    let f: EffectFn = Rc::new(f);
     EFFECTS.with(|e| e.borrow_mut().insert(id, f.clone()));
     if let Some(sched) = opts.scheduler {
         SCHEDULERS.with(|s| s.borrow_mut().insert(id, sched));

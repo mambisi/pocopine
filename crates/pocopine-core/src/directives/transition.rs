@@ -523,6 +523,17 @@ fn collect_animated(root: &Element) -> Vec<Element> {
 /// the longest enter completes; with no animated elements it's
 /// synchronous.
 pub fn enter_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
+    enter_subtree_dyn(root, Box::new(on_done));
+}
+
+// RFC-058 Phase 6.5 — type-erased implementation. The generic
+// shim above forwards into this single boxed instantiation so
+// the bulk of `enter_subtree`'s body collapses to one wasm
+// function regardless of how many distinct closure types call
+// it. Twiggy showed `transition::enter_subtree::<F>` totalling
+// ~7 KB across pp-for / pp-if / show / for_::run_keyed closure
+// types before this consolidation.
+fn enter_subtree_dyn(root: &Element, on_done: Box<dyn FnOnce() + 'static>) {
     let elems = collect_animated(root);
     if elems.is_empty() {
         on_done();
@@ -731,6 +742,12 @@ pub fn enter_subtree_staggered<F: FnOnce() + 'static>(root: &Element, stagger_ms
 /// plenty of time to land first — if they don't, we fire `on_done`
 /// anyway so the DOM doesn't leak.
 pub fn leave_subtree<F: FnOnce() + 'static>(root: &Element, on_done: F) {
+    leave_subtree_dyn(root, Box::new(on_done));
+}
+
+// RFC-058 Phase 6.5 — type-erased counterpart to
+// `enter_subtree_dyn`. Same monomorphization-collapse rationale.
+fn leave_subtree_dyn(root: &Element, on_done: Box<dyn FnOnce() + 'static>) {
     let elems = collect_animated(root);
     if elems.is_empty() {
         on_done();
