@@ -7,19 +7,12 @@ repository.workspace = true
 description = "Rust/WASM framework with an Alpine.js-style client runtime."
 
 [features]
-# RFC-058 Phase 6.5 — defaults are opt-in. `cargo add pocopine`
-# now ships the smallest viable runtime; consumers opt into
-# `devtools` (in-browser scope inspector) and `legacy-dom`
-# (MutationObserver auto-discovery for adopted DOM) explicitly.
+# RFC-058 Phase 6.5 — pure compiled-views runtime. Consumers
+# opt into `devtools` (in-browser scope inspector) and
+# `mount-profiler` (per-mount timing instrumentation).
 default = []
 devtools = ["pocopine-core/devtools"]
 mount-profiler = ["pocopine-core/mount-profiler"]
-# Runtime walker's MutationObserver-based auto-discovery for
-# adopted / externally-injected DOM. Opt-in — apps that boot
-# entirely through compiled-view mounts (`App::run_compiled`)
-# and never adopt external DOM stay walker-free. See
-# `pocopine-core/Cargo.toml` for the gate's current scope.
-legacy-dom = ["pocopine-core/legacy-dom"]
 
 [dependencies]
 pocopine-core = { workspace = true, default-features = false }

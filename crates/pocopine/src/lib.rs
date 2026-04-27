@@ -33,15 +33,7 @@ pub use pocopine_core::{create_context, inject_key};
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{component, handlers, server, store, Emit};
 
-/// Re-export of [`pocopine_core::run`]. Gated behind `legacy-dom`
-/// (RFC-058 Phase 6.5) — apps that don't enable the feature use
-/// [`App::run_compiled`] instead.
-#[cfg(feature = "legacy-dom")]
-pub use pocopine_core::run;
-
 pub mod prelude {
-    #[cfg(feature = "legacy-dom")]
-    pub use crate::run;
     #[allow(deprecated)]
     pub use crate::InjectKey;
     pub use crate::{
@@ -89,10 +81,8 @@ pub mod __private {
     // namespace. Same shape as the existing `register_template` /
     // `register_row_plans` re-exports above.
     pub use pocopine_core::walker::{
-        compiled_fallback_walk_count, defer_init_on, finalize_compiled_subtree,
-        fire_mount_post_order, fire_ready_next_tick, mount_child_component,
-        mount_child_component_with_slots, release_compiled_subtree,
-        reset_compiled_fallback_walk_count, walk_compiled_fallback,
+        defer_init_on, finalize_compiled_subtree, fire_mount_post_order, fire_ready_next_tick,
+        mount_child_component, mount_child_component_with_slots, release_compiled_subtree,
     };
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.

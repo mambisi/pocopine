@@ -10,28 +10,14 @@ description = "Client-side reactive runtime for pocopine — a Rust/WASM port of
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# RFC-058 Phase 6.5 — defaults are opt-in. `cargo add pocopine-core`
-# now ships the smallest viable runtime; consumers opt into
-# `devtools` for the in-browser scope inspector and into
-# `legacy-dom` for runtime DOM auto-discovery. CI / test runs
-# pass `--features legacy-dom` when exercising the observer or
-# the runtime walker discovery path.
+# RFC-058 Phase 6.5 — pure compiled-views runtime. The runtime
+# walker is gone; only the macro-emitted plan applier mounts
+# components. Consumers opt into `devtools` for the in-browser
+# scope inspector and `mount-profiler` for the per-mount
+# instrumentation; both are pure binary-size cost when unused.
 default = []
-# Compile the devtools overlay (scope inspector + state panel).
-# Opt-in — devtools.rs is ~1200 LOC of UI shell + MutationObserver
-# glue, pure binary-size cost when unused. Apps enable it via
-# `pocopine = { features = ["devtools"] }` and `App::with_devtools()`.
 devtools = []
 mount-profiler = []
-# Runtime walker's MutationObserver-based auto-discovery for
-# adopted / externally-injected DOM (router page changes,
-# markdown render output, server-rendered partials, anything
-# pocopine didn't compile itself). Opt-in: apps that bootstrap
-# entirely through compiled-view mounts and never adopt
-# external DOM stay walker-free. Phases 4.1d / 4.2c / 4.3
-# follow-ups graduate more of the walker behind this same
-# flag.
-legacy-dom = []
 
 [dependencies]
 pocopine-expr = { workspace = true }
@@ -92,7 +78,6 @@ features = [
     "MouseEvent",
     "MutationObserver",
     "MutationObserverInit",
-    "MutationRecord",
     "NamedNodeMap",
     "Navigator",
     "Node",
