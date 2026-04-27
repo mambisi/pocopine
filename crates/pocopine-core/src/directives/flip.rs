@@ -42,8 +42,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use web_sys::{Element, MutationObserver, MutationObserverInit};
 
-use super::DirectiveCall;
-use crate::reactive::EffectId;
+use crate::reactive::{EffectId, ScopeId};
 use crate::walker::track_effect_on;
 
 const FLIP_ID_KEY: &str = "__pp_flip_id";
@@ -60,9 +59,17 @@ thread_local! {
     static SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub fn run(call: &DirectiveCall) {
+/// Compiled-path install entry. Called by `apply_static_plan` for
+/// each `pp-flip` site the macro lifted into the template plan.
+pub fn install_opaque(
+    el: &Element,
+    _arg: Option<&str>,
+    _modifiers: &[String],
+    _value: &str,
+    _scope_id: ScopeId,
+    _proxy: &JsValue,
+) {
     install_observer();
-    let el = call.el.clone();
     let rect = el.get_bounding_client_rect();
     let id = NEXT_ID.with(|c| {
         let v = c.get();
@@ -91,13 +98,7 @@ pub fn run(call: &DirectiveCall) {
     let release_id: EffectId = crate::reactive::effect(move || {
         let _ = id_for_release;
     });
-    // Stash a release hook on the element via track_effect_on so
-    // the walker tears it down when the element is removed.
-    track_effect_on(call.el, release_id);
-    // Also register the unregister-from-registry side: hook into
-    // release via a private finalisation slot. Simplest path:
-    // rely on the MutationObserver to drop entries whose elements
-    // are no longer document-connected on the next sweep.
+    track_effect_on(el, release_id);
 }
 
 fn install_observer() {

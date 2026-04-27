@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, ResizeObserver, ResizeObserverEntry};
 
-use super::DirectiveCall;
+use crate::reactive::ScopeId;
 use crate::scope::invoke_handler;
 
 /// Key under which the installed [`ResizeObserver`] is stored on the
@@ -20,12 +20,21 @@ use crate::scope::invoke_handler;
 /// [`release`].
 const OBS_KEY: &str = "__pp_resize_obs";
 
-pub fn run(call: &DirectiveCall) {
-    let handler = call.value.clone();
-    let scope_id = call.scope_id;
-    let host_el = call.el.clone();
-    let on_document = call.modifiers.iter().any(|m| m == "document");
-    let border_box = call.modifiers.iter().any(|m| m == "border-box");
+/// Compiled-path install entry. Called by `apply_static_plan` for
+/// each `pp-resize="handler"` site the macro lifted into the
+/// template plan.
+pub fn install_opaque(
+    el: &Element,
+    _arg: Option<&str>,
+    modifiers: &[String],
+    value: &str,
+    scope_id: ScopeId,
+    _proxy: &JsValue,
+) {
+    let handler = value.to_string();
+    let host_el = el.clone();
+    let on_document = modifiers.iter().any(|m| m == "document");
+    let border_box = modifiers.iter().any(|m| m == "border-box");
 
     let target: Element = if on_document {
         match web_sys::window()

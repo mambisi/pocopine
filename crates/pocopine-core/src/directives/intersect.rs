@@ -14,7 +14,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, IntersectionObserver, IntersectionObserverEntry, IntersectionObserverInit};
 
-use super::DirectiveCall;
+use crate::reactive::ScopeId;
 use crate::scope::invoke_handler;
 
 const OBS_KEY: &str = "__pp_intersect_obs";
@@ -26,19 +26,28 @@ enum Edge {
     Leave,
 }
 
-pub fn run(call: &DirectiveCall) {
-    let handler = call.value.clone();
-    let scope_id = call.scope_id;
-    let el = call.el.clone();
-    let once = call.modifiers.iter().any(|m| m == "once");
+/// Compiled-path install entry. Called by `apply_static_plan` for
+/// each `pp-intersect[:enter|:leave]="handler"` site the macro
+/// lifted into the template plan.
+pub fn install_opaque(
+    el: &Element,
+    arg: Option<&str>,
+    modifiers: &[String],
+    value: &str,
+    scope_id: ScopeId,
+    _proxy: &JsValue,
+) {
+    let handler = value.to_string();
+    let el = el.clone();
+    let once = modifiers.iter().any(|m| m == "once");
 
-    let edge = match call.arg.as_deref() {
+    let edge = match arg {
         Some("leave") => Edge::Leave,
         _ => Edge::Enter, // bare or `:enter`
     };
 
-    let threshold = resolve_threshold(&call.modifiers);
-    let root_margin = resolve_root_margin(&call.modifiers);
+    let threshold = resolve_threshold(modifiers);
+    let root_margin = resolve_root_margin(modifiers);
 
     let init = IntersectionObserverInit::new();
     init.set_threshold(&JsValue::from_f64(threshold));
