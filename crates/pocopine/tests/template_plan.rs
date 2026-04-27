@@ -559,6 +559,25 @@ impl PlanInterpMultiHost {
     }
 }
 
+/// RFC-058 Phase 6.5 — fixture for the `start_compiled` walker-
+/// required branch. `pp-model` on a native input is in the §7
+/// deferred set, so the macro flips `requires_walker = true` on
+/// the plan; the runtime applier installs the lifted plan
+/// entries, then the start path must run a fallback walker pass
+/// to wire up `pp-model`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "StartCompiledModelHost.html")]
+struct StartCompiledModelHost {
+    value: String,
+}
+
+#[handlers]
+impl StartCompiledModelHost {
+    pub fn on_setup(&mut self) {
+        self.value = "seed".into();
+    }
+}
+
 /// RFC-058 Phase 3 hardening — host with `pp-ref` on a
 /// custom child host. Drives the regression that without
 /// classifier coverage for `pp-ref` on a non-HTML5 tag the
@@ -688,6 +707,7 @@ fn register_all() {
     PlanChildHostRefHost::register();
     PlanInterpHost::register();
     PlanInterpMultiHost::register();
+    StartCompiledModelHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -2164,6 +2184,62 @@ async fn start_compiled_skips_walker_recursion_for_registered_tags() {
         compiled_fallback_walk_count(),
         0,
         "compiled-only path must not trip walker fallback for a walker-clean plan",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 6.5 — `start_compiled` must drive the walker
+/// fallback for plans the macro flagged with
+/// `requires_walker = true` (e.g. `pp-model` on a native input,
+/// in the §7 deferred set). Mounts a host whose template has
+/// the model directive, asserts the input is reactive, and
+/// pins `compiled_fallback_walk_count` at 1 — proving the
+/// fallback path engaged exactly once for the single host.
+#[wasm_bindgen_test]
+async fn start_compiled_runs_walker_fallback_for_walker_required_plans() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("start-compiled-model-host")
+        .expect("start-compiled-model-host registers a template plan");
+    assert!(
+        plan.requires_walker,
+        "fixture relies on pp-model flipping requires_walker — if the macro starts \
+         lifting pp-model, swap the fixture for one that still trips the fallback",
+    );
+
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html("<start-compiled-model-host></start-compiled-model-host>");
+    body.append_child(&host).unwrap();
+    pocopine_core::walker::start_compiled(&host);
+    tick().await;
+
+    assert_eq!(read(&host, ".scmh-readout"), "seed");
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        1,
+        "start_compiled must run walk_compiled_fallback once for the walker-required plan",
+    );
+    assert_eq!(plan_failure_count(), 0);
+
+    let input = host
+        .query_selector(".scmh-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .unwrap();
+    input.set_value("typed");
+    let event = web_sys::Event::new("input").unwrap();
+    input.dispatch_event(&event).unwrap();
+    tick().await;
+
+    assert_eq!(
+        read(&host, ".scmh-readout"),
+        "typed",
+        "pp-model must wire input → scope after start_compiled mounts via fallback",
     );
 
     host.remove();

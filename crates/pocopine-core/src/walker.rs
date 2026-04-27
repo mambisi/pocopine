@@ -133,7 +133,23 @@ pub fn start_compiled(root: &Element) {
             continue;
         }
         let tag = el.local_name();
+        let walker_clean = crate::templates_plan::template_plan_for(&tag)
+            .map(|p| !p.requires_walker)
+            .unwrap_or(false);
         mount_component(&el, &tag, None);
+        // Drive lifecycle for the freshly mounted subtree. For
+        // walker-clean plans the cheaper `finalize_compiled_subtree`
+        // skips the per-descendant `bind` and only fires
+        // `pp-init` + `on_mount` post-order. For plans that still
+        // need the walker (e.g. `pp-model` on a native input —
+        // RFC-058 §7 deferral), `walk_compiled_fallback` performs
+        // the legacy directive scan over the subtree to install
+        // any un-lifted attributes the macro left in place.
+        if walker_clean {
+            finalize_compiled_subtree(&el);
+        } else {
+            walk_compiled_fallback(&el);
+        }
     }
 }
 
