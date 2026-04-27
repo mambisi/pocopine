@@ -142,6 +142,24 @@ pub fn start_compiled(root: &Element) {
         let walker_clean = crate::templates_plan::template_plan_for(&tag)
             .map(|p| !p.requires_walker)
             .unwrap_or(false);
+        // RFC-058 Phase 6.5 — refuse to mount a walker-required
+        // plan in a compiled-only build. Without `legacy-dom`
+        // the fallback walk that would install the un-lifted
+        // directives is a no-op, so silently mounting would
+        // leave handlers / bindings inert. Hard-fail with a
+        // diagnostic before `mount_component` runs so the
+        // failure points at the plan, not at the missing
+        // behaviour later.
+        #[cfg(not(feature = "legacy-dom"))]
+        if !walker_clean {
+            web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+                "pocopine: <{tag}>'s plan requires the runtime walker (`pp-*` directives \
+                 outside the compiled lift envelope). Enable the `legacy-dom` feature \
+                 (`pocopine = {{ features = [\"legacy-dom\"] }}`) or remove the offending \
+                 directives from the template. Skipping mount."
+            )));
+            continue;
+        }
         mount_component(&el, &tag, None);
         // Drive lifecycle for the freshly mounted subtree. For
         // walker-clean plans the cheaper `finalize_compiled_subtree`

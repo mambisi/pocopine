@@ -150,6 +150,24 @@ impl App {
             crate::registry::render_boot_error(&errors);
             return;
         }
+        // RFC-058 Phase 6.5 — refuse to boot a compiled-only app
+        // with registered routes when `legacy-dom` is off. The
+        // router currently uses `walker::walk` to mount each
+        // route's component into the `<pp-outlet>`, and the walker
+        // is gated behind the feature; without it the page would
+        // silently render blank. The diagnostic points at the
+        // exact remediation so the failure mode isn't a black box.
+        #[cfg(not(feature = "legacy-dom"))]
+        if compiled_only && !self.routes.is_empty() {
+            web_sys::console::error_1(&JsValue::from_str(
+                "pocopine: `App::run_compiled` with `App::route` requires the \
+                 `legacy-dom` feature — the router mounts route components via the \
+                 runtime walker (`<pp-outlet>` discovery + `walker::walk`). Either \
+                 enable `pocopine = { features = [\"legacy-dom\"] }` or drop \
+                 `App::route` and mount your shell explicitly. Aborting boot.",
+            ));
+            return;
+        }
         // Inject the animate-preset atom stylesheet before any
         // component `register()` injects per-component styles, so
         // the preset atoms live earlier in the cascade and

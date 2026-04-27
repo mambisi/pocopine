@@ -46,7 +46,7 @@ fn next_dyn(f: Box<dyn FnOnce() + 'static>) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let js = Closure::once_into_js(move || f());
+    let js = Closure::once_into_js(f);
     window.queue_microtask(js.unchecked_ref());
 }
 
@@ -62,6 +62,6 @@ fn after_flush_dyn(f: Box<dyn FnOnce() + 'static>) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let js = Closure::once_into_js(move || f());
+    let js = Closure::once_into_js(f);
     let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(js.unchecked_ref(), 0);
 }
