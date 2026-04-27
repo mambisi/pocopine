@@ -89,6 +89,54 @@ pub fn start(root: &Element) {
     install_observer(root);
 }
 
+/// RFC-058 Phase 6.5 — compiled-only mount entry. Skips the
+/// recursive directive scan over `root`'s subtree: only
+/// registered component tags get mounted, and each mount drives
+/// its template plan via [`crate::templates_plan::apply_static_plan`].
+/// Body-level `pp-*` attributes (e.g. `pp-data` on a
+/// server-rendered wrapper) are NOT bound by this entry — apps
+/// that need that path keep [`start`].
+///
+/// Discovers component tags via a single
+/// [`Element::query_selector_all`] call against the union of
+/// every registered plan tag, then mounts in document order.
+/// Inner component tags inside a parent's compiled subtree
+/// will already be mounted by the parent's `apply_static_plan`
+/// child_mounts pass before the iteration reaches them; the
+/// `__pp_mounted` guard short-circuits the duplicate mount.
+///
+/// The `MutationObserver` install is intentionally omitted —
+/// dynamically-inserted DOM is out of scope for compiled-only
+/// builds. Apps that need observation-based discovery for
+/// adopted DOM keep [`start`] and the `legacy-dom` feature.
+pub fn start_compiled(root: &Element) {
+    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
+    let tags = crate::templates_plan::registered_template_tags();
+    if tags.is_empty() {
+        return;
+    }
+    // Build a comma-separated tag selector. Tag names emitted by
+    // the macro are kebab-case ASCII identifiers — no escaping
+    // needed for `query_selector_all`.
+    let selector = tags.join(",");
+    let Ok(matches) = root.query_selector_all(&selector) else {
+        return;
+    };
+    for i in 0..matches.length() {
+        let Some(node) = matches.item(i) else {
+            continue;
+        };
+        let Ok(el) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        if get_private(&el, "__pp_mounted").is_some() {
+            continue;
+        }
+        let tag = el.local_name();
+        mount_component(&el, &tag, None);
+    }
+}
+
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
 /// through it. The element is assumed to **own** this scope — when the
 /// element unmounts, `release_subtree` removes the scope from the

@@ -2115,6 +2115,60 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
     host.remove();
 }
 
+/// RFC-058 Phase 6.5 — `walker::start_compiled` mounts every
+/// registered component tag inside `root` via the compiled
+/// path without binding the wrapper or any non-component
+/// descendant. Where the legacy `walker::start` recursively
+/// dispatches `bind` on every element below `root`,
+/// `start_compiled` resolves the registered tags via a single
+/// `query_selector_all`, then routes each through
+/// `mount_component` directly — `bind` itself is never invoked
+/// on the wrapper, the intermediate `<section>`, or the
+/// component tag. The plan applier handles every directive on
+/// every descendant via `apply_static_plan`.
+///
+/// Pin the bind-call delta of 0 so any regression that
+/// re-introduces a body-level recursive scan is loud.
+#[wasm_bindgen_test]
+async fn start_compiled_skips_walker_recursion_for_registered_tags() {
+    register_all();
+    reset_bind_call_count();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_attribute("class", "scsr-wrapper").unwrap();
+    host.set_inner_html(
+        r#"<section class="scsr-section">
+              <plan-interp-host></plan-interp-host>
+           </section>"#,
+    );
+    body.append_child(&host).unwrap();
+    let baseline = bind_call_count();
+    pocopine_core::walker::start_compiled(&host);
+    tick().await;
+
+    let post = bind_call_count() - baseline;
+    assert_eq!(
+        post, 0,
+        "start_compiled mounts via apply_static_plan directly — no bind call on the wrapper, section, or component tag",
+    );
+
+    assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
+    assert_eq!(read(&host, ".pih-bare"), "world");
+    assert_eq!(read(&host, ".pih-static"), "no interp here");
+
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled-only path must not trip walker fallback for a walker-clean plan",
+    );
+
+    host.remove();
+}
+
 /// RFC-058 Phase 6.3 — when a registered component plan has
 /// `requires_walker = false`, the walker invokes `bind` once on
 /// the host element, applies the entire plan, then descends via

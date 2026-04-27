@@ -125,6 +125,21 @@ impl App {
     /// when collisions exist the boot error surface is rendered and
     /// no further mount work runs.
     pub fn run(self) {
+        self.boot(false);
+    }
+
+    /// RFC-058 Phase 6.5 — same lifecycle as [`run`] but mounts via
+    /// the compiled-only [`walker::start_compiled`] entry instead
+    /// of the recursive directive scan. Apps whose body contains
+    /// only registered component tags (the canonical compiled
+    /// shape) save the per-descendant `bind` cost; the
+    /// `MutationObserver` install and body-level `pp-*` discovery
+    /// are skipped.
+    pub fn run_compiled(self) {
+        self.boot(true);
+    }
+
+    fn boot(self, compiled_only: bool) {
         if let Err(errors) = crate::registry::verify_registry() {
             crate::registry::render_boot_error(&errors);
             return;
@@ -137,7 +152,16 @@ impl App {
         for f in self.before_mount {
             f();
         }
-        walker::start_on_body();
+        if compiled_only {
+            if let Some(body) = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.body())
+            {
+                walker::start_compiled(&body.into());
+            }
+        } else {
+            walker::start_on_body();
+        }
         if !self.routes.is_empty() {
             router::init();
         }
