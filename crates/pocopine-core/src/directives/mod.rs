@@ -3,8 +3,6 @@
 //! A directive is a `fn(&DirectiveCall)`; the walker calls it once per
 //! matching attribute after resolving the enclosing scope.
 
-use once_cell::sync::OnceCell;
-use std::collections::HashMap;
 use wasm_bindgen::JsValue;
 use web_sys::Element;
 
@@ -46,50 +44,61 @@ pub struct DirectiveCall<'a> {
 
 pub type DirectiveFn = fn(&DirectiveCall);
 
-static REGISTRY: OnceCell<HashMap<&'static str, DirectiveFn>> = OnceCell::new();
-
-fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
-    REGISTRY.get_or_init(|| {
-        let mut m: HashMap<&'static str, DirectiveFn> = HashMap::new();
-        // RFC-058 Phase 6.5 — opaque-directive lift allowlist. The
-        // compiled path's `apply_static_plan` looks these up by name
-        // for `StaticOpaqueDirective` entries; they're the only
-        // directives compiled-only apps need at runtime.
-        m.insert("resize", resize::run);
-        m.insert("intersect", intersect::run);
-        m.insert("anchor", anchor::run);
-        m.insert("roving", roving::run);
-        m.insert("flip", flip::run);
-        // RFC-058 Phase 6.5 — every other `run()` is a walker-only
-        // entry: the runtime walker's `dispatch` loop calls them
-        // when scanning `pp-*` attributes on user-authored DOM.
-        // Compiled apps install these directives via the typed
-        // `install_*` entries on `apply_static_plan` instead, so
-        // the registry stays bare without `legacy-dom`. With the
-        // feature off, the linker drops every `run()` body listed
-        // below (and their transitive `DirectiveCall` extraction
-        // helpers) — that's the bulk of the Phase 6.5 size win.
-        #[cfg(feature = "legacy-dom")]
-        {
-            m.insert("text", text::run);
-            m.insert("html", html::run);
-            m.insert("bind", bind::run);
-            m.insert("on", on::run);
-            m.insert("show", show::run);
-            m.insert("model", model::run);
-            m.insert("init", init::run);
-            m.insert("route", route::run);
-            m.insert("for", for_::run);
-            m.insert("if", if_::run);
-            m.insert("teleport", teleport::run);
-            m.insert("ref", ref_::run);
-        }
-        m
-    })
-}
+// RFC-058 Phase 6.5 size pass — registry was a
+// `OnceCell<HashMap<&'static str, DirectiveFn>>` for ~5 entries
+// without `legacy-dom` and ~17 with. Twiggy showed the
+// HashMap's `reserve_rehash` instantiation alone cost ~2.2 KB.
+// A `&'static [(&str, DirectiveFn)]` + linear scan is smaller,
+// faster (no hash, no allocation, no OnceCell), and the lookup
+// is only called from `apply_static_plan` for opaque directives
+// + `walker::dispatch` for legacy-dom — neither is a hot loop.
+const REGISTRY: &[(&str, DirectiveFn)] = &[
+    // RFC-058 Phase 6.5 opaque-directive lift allowlist. The
+    // compiled path's `apply_static_plan` looks these up by name
+    // for `StaticOpaqueDirective` entries; they're the only
+    // directives compiled-only apps need at runtime.
+    ("resize", resize::run),
+    ("intersect", intersect::run),
+    ("anchor", anchor::run),
+    ("roving", roving::run),
+    ("flip", flip::run),
+    // Every other `run()` is a walker-only entry: the runtime
+    // walker's `dispatch` loop calls them when scanning `pp-*`
+    // attributes on user-authored DOM. Compiled apps install
+    // these via the typed `install_*` entries on
+    // `apply_static_plan` instead, so the registry stays bare
+    // without `legacy-dom`. With the feature off, the linker
+    // drops every `run()` body listed below (and their
+    // transitive `DirectiveCall` extraction helpers) — that's
+    // the bulk of the Phase 6.5 size win.
+    #[cfg(feature = "legacy-dom")]
+    ("text", text::run),
+    #[cfg(feature = "legacy-dom")]
+    ("html", html::run),
+    #[cfg(feature = "legacy-dom")]
+    ("bind", bind::run),
+    #[cfg(feature = "legacy-dom")]
+    ("on", on::run),
+    #[cfg(feature = "legacy-dom")]
+    ("show", show::run),
+    #[cfg(feature = "legacy-dom")]
+    ("model", model::run),
+    #[cfg(feature = "legacy-dom")]
+    ("init", init::run),
+    #[cfg(feature = "legacy-dom")]
+    ("route", route::run),
+    #[cfg(feature = "legacy-dom")]
+    ("for", for_::run),
+    #[cfg(feature = "legacy-dom")]
+    ("if", if_::run),
+    #[cfg(feature = "legacy-dom")]
+    ("teleport", teleport::run),
+    #[cfg(feature = "legacy-dom")]
+    ("ref", ref_::run),
+];
 
 pub fn lookup(name: &str) -> Option<DirectiveFn> {
-    registry().get(name).copied()
+    REGISTRY.iter().find(|(n, _)| *n == name).map(|(_, f)| *f)
 }
 
 /// Parse an attribute name like `pp-bind:class.camel` into
