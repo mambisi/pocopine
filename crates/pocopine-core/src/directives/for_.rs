@@ -408,13 +408,24 @@ fn run_naive(
                 if fragment_built {
                     walker::finalize_compiled_subtree(&clone_root);
                 } else {
-                    // RFC-058 Phase 6.5 — body must come from the
-                    // macro fragment now that the runtime walker is
-                    // gone. Surface the misclassification through
-                    // the fail-fast counter so the test harness
-                    // catches a plan emitting `pp-for` without a
-                    // compiled body.
-                    crate::templates_plan::record_plan_failure();
+                    // RFC-058 Phase 6.5 — `body_fn = None` means
+                    // the macro couldn't lift this row's body
+                    // (typical of pp-for inside user-authored slot
+                    // content, where the macro doesn't see the
+                    // runtime-captured slot template). Stamp
+                    // `CTX_PARENT_KEY` = the LoopScope so any
+                    // custom tag inside the cloned body chains
+                    // its inject parent through this row's scope
+                    // — matches what `stamp_if_body` does for the
+                    // body_fn = Some path. Then drive registered-
+                    // tag discovery + lifecycle. Native `pp-*`
+                    // directives on the clone stay inert — that's
+                    // the documented compiled-only contract.
+                    let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                    let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
+                    let _ = js_sys::Reflect::set(clone_root.as_ref(), &ctx_key, &ctx_val);
+                    walker::mount_registered_in_subtree(&clone_root);
+                    walker::finalize_compiled_subtree(&clone_root);
                 }
                 fresh.push(clone_root);
             }
@@ -767,6 +778,15 @@ fn run_keyed(
                             let proxy = scope.into_proxy();
                             bind_scope_to(&root, scope.id, &proxy);
                         }
+                        // RFC-058 Phase 6.5 — stamp `CTX_PARENT_KEY`
+                        // = LoopScope so any custom tag inside the
+                        // cloned row body chains its inject parent
+                        // through this row's scope. Mirrors what
+                        // `stamp_if_body` does for the body_fn
+                        // path.
+                        let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                        let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
+                        let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
                         root
                     }
                 };
@@ -1150,11 +1170,16 @@ fn run_keyed(
                 }
             }
             crate::profiler::mount::record_generic_row_mounted();
-            // RFC-058 Phase 6.5 — the runtime walker is gone.
-            // Generic (non-row-plan) rows can't bind anything in
-            // this regime; surface the misclassification as a
-            // fail-fast plan failure.
-            crate::templates_plan::record_plan_failure();
+            // RFC-058 Phase 6.5 — generic (non-row-plan) rows
+            // either came from `body_fn` (already bound by
+            // `apply_static_plan` inside the body fragment fn) or
+            // from `clone_template_body` (unbound). For both,
+            // fire lifecycle on the row + scan for registered
+            // custom tags inside (a no-op for body_fn rows since
+            // child mounts already ran during the body fragment's
+            // `apply_static_plan`, but cheap).
+            walker::mount_registered_in_subtree(el);
+            walker::finalize_compiled_subtree(el);
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /

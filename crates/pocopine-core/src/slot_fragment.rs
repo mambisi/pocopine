@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{DocumentFragment, Element};
+use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
 
