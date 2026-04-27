@@ -130,6 +130,25 @@ pub struct StaticRef {
     pub name: &'static str,
 }
 
+/// Static-lifetime descriptor for `pp-model[.modifier]="field"`
+/// on a native input/textarea/select. RFC-058 Phase 6.5 — lifts
+/// the previously walker-only directive into the static plan so
+/// compiled-only apps wire two-way input bindings without going
+/// through `walker::dispatch`. Component-target `pp-model` (with
+/// or without an arg) is a separate entry on `StaticChildMount`
+/// (see [`StaticChildHostModel`]); this type covers only native
+/// elements, the path that walker dispatch routed via
+/// `model::run_native`.
+#[doc(hidden)]
+pub struct StaticNativeModel {
+    pub node_path: &'static [u16],
+    pub expr_src: &'static str,
+    /// `.number` modifier — coerce input string to f64 on write.
+    pub number: bool,
+    /// `.lazy` modifier — listen on `change` instead of `input`.
+    pub lazy: bool,
+}
+
 /// Static-lifetime descriptor for a child-component mount site.
 ///
 /// RFC-058 Phase 3 — emitted by the macro for every non-HTML5

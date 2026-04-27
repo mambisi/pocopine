@@ -17,7 +17,7 @@ name = "server"
 path = "src/bin/server.rs"
 
 [dependencies]
-pocopine = { path = "../../crates/pocopine" }
+pocopine = { path = "../../crates/pocopine", features = ["devtools", "legacy-dom"] }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 web-sys = { version = "0.3", features = ["Window", "Performance"] }

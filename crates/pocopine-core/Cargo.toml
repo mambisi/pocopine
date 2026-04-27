@@ -10,32 +10,27 @@ description = "Client-side reactive runtime for pocopine — a Rust/WASM port of
 crate-type = ["cdylib", "rlib"]
 
 [features]
+# RFC-058 Phase 6.5 — defaults are opt-in. `cargo add pocopine-core`
+# now ships the smallest viable runtime; consumers opt into
+# `devtools` for the in-browser scope inspector and into
+# `legacy-dom` for runtime DOM auto-discovery. CI / test runs
+# pass `--features legacy-dom` when exercising the observer or
+# the runtime walker discovery path.
+default = []
 # Compile the devtools overlay (scope inspector + state panel).
-# Default-on: most users develop with it. Turn off with
-# `default-features = false` for minimal release bundles —
-# devtools.rs is ~1200 LOC of UI shell + MutationObserver glue
-# that's pure binary-size cost when unused.
-default = ["devtools", "legacy-dom"]
+# Opt-in — devtools.rs is ~1200 LOC of UI shell + MutationObserver
+# glue, pure binary-size cost when unused. Apps enable it via
+# `pocopine = { features = ["devtools"] }` and `App::with_devtools()`.
 devtools = []
 mount-profiler = []
-# RFC-058 Phase 6 v1 — runtime walker's MutationObserver-based
-# auto-discovery for adopted / externally-injected DOM. Default-on
-# today: every example still relies on it indirectly (the initial
-# `start_on_body` path uses `walker::walk` for the root tag, but
-# the observer is what catches dynamic insertions like router
-# page changes, markdown render output, server-rendered partials
-# that aren't compiled by pocopine).
-#
-# Apps that bootstrap entirely through compiled-view mounts and
-# never adopt external DOM can `default-features = false` to
-# drop the observer's ~200-line `MutationRecord` callback +
-# closure registration. The walker's `walk` / `bind` /
-# `mount_component` themselves stay always-on — controllers
-# call them for `pp-if` / `pp-for` / `pp-teleport` body content
-# and for slot materialisation. Phases 4.1d / 4.2c / 4.3
-# follow-ups (body fragment lifting) graduate those into
-# fragment fns, at which point more of the walker can move
-# behind this same flag.
+# Runtime walker's MutationObserver-based auto-discovery for
+# adopted / externally-injected DOM (router page changes,
+# markdown render output, server-rendered partials, anything
+# pocopine didn't compile itself). Opt-in: apps that bootstrap
+# entirely through compiled-view mounts and never adopt
+# external DOM stay walker-free. Phases 4.1d / 4.2c / 4.3
+# follow-ups graduate more of the walker behind this same
+# flag.
 legacy-dom = []
 
 [dependencies]

@@ -92,12 +92,16 @@ pub(crate) struct EmittedTemplatePlan {
 pub(crate) fn analyze_template_plan(
     ast: &TemplateAst,
     row_plan_assignments: &[(Vec<u16>, u32)],
+    role: Option<(String, String)>,
 ) -> EmittedTemplatePlan {
     let mut ctx = AnalysisCtx {
         row_plan_assignments: row_plan_assignments.to_vec(),
         ..AnalysisCtx::default()
     };
-    let mut emissions = Emissions::default();
+    let mut emissions = Emissions {
+        role: role.clone(),
+        ..Emissions::default()
+    };
     let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
@@ -199,6 +203,14 @@ struct AnalysisCtx {
     /// runtime walker's `interp::scan_children` skips the
     /// element via the `data-pp-interp-managed` marker.
     interps: Vec<InterpLite>,
+    /// RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
+    /// native input/textarea/select. The previously walker-only
+    /// directive lifts into a static plan entry the applier
+    /// installs via `directives::model::install_native`.
+    /// Component-target `pp-model` (registered tag, with or
+    /// without an arg) stays on `ChildHostModelLite`; this
+    /// vec covers only native targets.
+    native_models: Vec<NativeModelLite>,
     /// Set of (node_path, attr_name) entries the cleaned-HTML
     /// serializer should drop. Lookup is O(scan) per attribute
     /// — fine at typical template sizes.
@@ -255,6 +267,15 @@ struct Emissions {
     /// allocation (pp-if / pp-for / pp-teleport bodies share
     /// the same counter).
     next_if_body_id: usize,
+    /// RFC-058 Phase 6.5 — `(role_tag, role_attrs)` for the
+    /// component's `<root>` placeholder, copied from the
+    /// `#[component(role = "...")]` attribute. The runtime
+    /// `compile_template` substitutes `<root>` in the parent's
+    /// registered HTML; lifted body fragments + slot fragments
+    /// stamp their own cleaned HTML directly via `set_inner_html`
+    /// and need the substitution applied at compile time so the
+    /// fragment root materialises with the right tag.
+    role: Option<(String, String)>,
 }
 
 impl Emissions {
@@ -427,6 +448,16 @@ enum InterpSegment {
     Dynamic(String),
 }
 
+/// RFC-058 Phase 6.5 — accumulated `pp-model[.modifier]="field"`
+/// site on a native input/textarea/select. Component-target
+/// `pp-model` (registered tag) keeps using `ChildHostModelLite`.
+struct NativeModelLite {
+    node_path: Vec<u16>,
+    expr_src: String,
+    number: bool,
+    lazy: bool,
+}
+
 struct ChildMountLite {
     node_path: Vec<u16>,
     tag: String,
@@ -541,6 +572,7 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let slot_outlets_tokens = ctx.slot_outlets.iter().map(emit_slot_outlet);
     let opaque_tokens = ctx.opaque_directives.iter().map(emit_opaque_directive);
     let interp_tokens = ctx.interps.iter().map(emit_interp);
+    let native_model_tokens = ctx.native_models.iter().map(emit_native_model);
     let requires_walker = ctx.requires_walker;
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
@@ -555,7 +587,23 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             slot_outlets: &[ #(#slot_outlets_tokens),* ],
             opaque_directives: &[ #(#opaque_tokens),* ],
             interps: &[ #(#interp_tokens),* ],
+            native_models: &[ #(#native_model_tokens),* ],
             requires_walker: #requires_walker,
+        }
+    }
+}
+
+fn emit_native_model(nm: &NativeModelLite) -> TokenStream {
+    let path_tokens = emit_node_path(&nm.node_path);
+    let expr_lit = proc_macro2::Literal::string(&nm.expr_src);
+    let number = nm.number;
+    let lazy = nm.lazy;
+    quote! {
+        ::pocopine::__private::StaticNativeModel {
+            node_path: #path_tokens,
+            expr_src: #expr_lit,
+            number: #number,
+            lazy: #lazy,
         }
     }
 }
@@ -1334,11 +1382,19 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     }
     let mut listener_unsupported_modifier = false;
     let mut had_text = false;
+    let host_is_native = is_plan_native(&el.tag);
     for (name, value) in &el.attrs {
         if el.tag == "root" && name == "pp-as" {
             continue;
         }
-        match classify_attr(name, value, path, ctx, &mut listener_unsupported_modifier) {
+        match classify_attr(
+            name,
+            value,
+            path,
+            ctx,
+            host_is_native,
+            &mut listener_unsupported_modifier,
+        ) {
             ClassifyOutcome::Stripped { is_text } => {
                 if is_text {
                     had_text = true;
@@ -1485,6 +1541,7 @@ fn classify_attr(
     value: &str,
     path: &[u16],
     ctx: &mut AnalysisCtx,
+    host_is_native: bool,
     listener_unsupported_modifier: &mut bool,
 ) -> ClassifyOutcome {
     // RFC-020 listener shorthand: `@event[.mod]`.
@@ -1618,9 +1675,37 @@ fn classify_attr(
                 return ClassifyOutcome::Stripped { is_text: false };
             }
         }
+        // RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
+        // native input/textarea/select. Component-target
+        // `pp-model` (registered tag, with or without a `:arg`)
+        // stays on the runtime walker for now and is collected
+        // by `parse_child_host_model` on the parent
+        // `ChildMountLite`. Lifting only fires when host is
+        // native AND the directive has no `:arg` (the arg form
+        // is for component target prop selection, not native
+        // inputs).
+        if host_is_native && (rest == "model" || rest.starts_with("model.")) {
+            // Parse modifiers (`.number`, `.lazy`). Accept any
+            // unknown modifier silently — runtime currently does
+            // the same; surfacing is a future enhancement.
+            let modifiers: Vec<&str> = rest.split('.').skip(1).collect();
+            let number = modifiers.contains(&"number");
+            let lazy = modifiers.contains(&"lazy");
+            ctx.native_models.push(NativeModelLite {
+                node_path: path.to_vec(),
+                expr_src: value.to_string(),
+                number,
+                lazy,
+            });
+            ctx.stripped.push(StrippedAttr {
+                node_path: path.to_vec(),
+                name: name.to_string(),
+            });
+            return ClassifyOutcome::Stripped { is_text: false };
+        }
         // Every other pp-* attribute (pp-data, pp-cloak,
-        // pp-model, pp-route, pp-transition:*, pp-stagger, etc.)
-        // — preserved on the cleaned HTML and handled by the
+        // pp-route, pp-transition:*, pp-stagger, etc.) —
+        // preserved on the cleaned HTML and handled by the
         // runtime walker as today.
         return ClassifyOutcome::Preserved;
     }
@@ -1995,9 +2080,16 @@ fn is_debounce_ms(m: &str) -> bool {
 /// envelope falls back to the legacy `clone_template_body` +
 /// `walker::walk` path the controller already drives.
 ///
+/// RFC-058 Phase 6.5 expansion: `<slot>` elements are now
+/// allowed. The macro records them in the body fragment's
+/// `slot_outlets`; the runtime applier materialises each via
+/// `walker::materialize_compiled_slot_outlet`, which falls
+/// through to the same `slot_fragment::lookup` path the parent
+/// template uses. The body's stamped `CTX_PARENT_KEY` carries
+/// the slot owner scope through to descendants so nested
+/// inject chains resolve correctly.
+///
 /// Excludes:
-///   * `<slot>` elements (would need slot capture/replay
-///     hooks inside a body fragment — Phase 3.5c+);
 ///   * `pp-data` / `pp-model` / `pp-route` (component scope
 ///     boundaries — the body fragment installs against the
 ///     enclosing scope only).
@@ -2012,22 +2104,20 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
         }
         return true;
     }
-    if el.tag == "slot" {
-        return false;
-    }
     // Phase 3.5d expansion: non-HTML5 tags are allowed here.
     // `walk()` emits child_mount entries for them into the
     // body fragment's own static plan, and the runtime fallback
     // walk over the cleaned fragment binds any preserved
     // directives inside the mounted child template.
-    let is_custom = !is_plan_native(&el.tag);
+    let _ = is_plan_native(&el.tag); // kept for symmetry with slot eligibility
     for (name, _) in &el.attrs {
         if name == "pp-data" || name == "pp-route" {
             return false;
         }
-        if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
-            return false;
-        }
+        // RFC-058 Phase 6.5 — both branches of `pp-model` are
+        // compile-time handled now: native targets lift to
+        // `NativeModelLite`, component targets to
+        // `ChildHostModelLite`. No need to gate either form.
     }
     for child in &el.children {
         if let Node::Element(child_el) = child {
@@ -2076,7 +2166,23 @@ fn analyze_lift_body(
     let mut html = String::new();
     let mut sp: Vec<u16> = Vec::new();
     emit_element(root_el, &ctx, &mut html, &mut sp);
+    if let Some((tag, attrs)) = emissions.role.as_ref() {
+        html = apply_role_substitution(&html, tag, attrs);
+    }
     Some((html, ctx))
+}
+
+/// Compile-time mirror of `pocopine_core::templates::compile_template`'s
+/// `<root>` rewrite. Body fragments and dynamic slot fragments stamp
+/// their cleaned HTML directly via `set_inner_html` (no runtime
+/// `compile_template` pass), so the macro applies the same
+/// substitution before the literal lands in the fragment fn.
+fn apply_role_substitution(html: &str, tag: &str, attrs: &str) -> String {
+    let with_open_self_close = html
+        .replace("<root>", &format!("<{tag} {attrs}>"))
+        .replace("<root/>", &format!("<{tag} {attrs}/>"))
+        .replace("<root ", &format!("<{tag} {attrs} "));
+    with_open_self_close.replace("</root>", &format!("</{tag}>"))
 }
 
 // ─── slot subtree eligibility + emission ─────────────────────────
@@ -2114,6 +2220,11 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
         }
     }
     let html = serialize_slot_children_with(nodes, &ctx);
+    let html = if let Some((tag, attrs)) = emissions.role.as_ref() {
+        apply_role_substitution(&html, tag, attrs)
+    } else {
+        html
+    };
     let is_dynamic = !ctx.bindings.is_empty()
         || !ctx.listeners.is_empty()
         || !ctx.refs.is_empty()
@@ -2164,14 +2275,14 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             // (which lands at the same `walk()` path that
             // emits child_mount entries + nested slot
             // fragments into the shared `Emissions` queue).
-            let is_custom = !is_plan_native(&el.tag);
+            let _ = is_plan_native(&el.tag); // kept for parity with body eligibility
             for (name, _) in &el.attrs {
                 if name == "pp-data" || name == "pp-route" {
                     return false;
                 }
-                if !is_custom && (name == "pp-model" || name.starts_with("pp-model:")) {
-                    return false;
-                }
+                // RFC-058 Phase 6.5 — `pp-model` lifts in both
+                // forms (native via `NativeModelLite`, component
+                // via `ChildHostModelLite`). No walker needed.
             }
             slot_subtree_is_lift_eligible(&el.children)
         }

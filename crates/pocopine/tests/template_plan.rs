@@ -559,6 +559,25 @@ impl PlanInterpMultiHost {
     }
 }
 
+/// RFC-058 Phase 6.5 — fixture for the `start_compiled` walker-
+/// required branch. `pp-model` on a native input is in the §7
+/// deferred set, so the macro flips `requires_walker = true` on
+/// the plan; the runtime applier installs the lifted plan
+/// entries, then the start path must run a fallback walker pass
+/// to wire up `pp-model`.
+#[derive(Default, Serialize, Deserialize)]
+#[component(template = "StartCompiledModelHost.html")]
+struct StartCompiledModelHost {
+    value: String,
+}
+
+#[handlers]
+impl StartCompiledModelHost {
+    pub fn on_setup(&mut self) {
+        self.value = "seed".into();
+    }
+}
+
 /// RFC-058 Phase 3 hardening — host with `pp-ref` on a
 /// custom child host. Drives the regression that without
 /// classifier coverage for `pp-ref` on a non-HTML5 tag the
@@ -688,6 +707,7 @@ fn register_all() {
     PlanChildHostRefHost::register();
     PlanInterpHost::register();
     PlanInterpMultiHost::register();
+    StartCompiledModelHost::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -696,7 +716,7 @@ fn mount(host_html: &str) -> Element {
     let host = doc().create_element("div").unwrap();
     host.set_inner_html(host_html);
     body.append_child(&host).unwrap();
-    pocopine_core::walker::start(&host);
+    pocopine_core::walker::start_compiled(&host);
     host
 }
 
@@ -1470,7 +1490,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
         &JsValue::UNDEFINED,
     );
 
-    pocopine_core::walker::start(&host);
+    pocopine_core::walker::start_compiled(&host);
     tick().await;
 
     let marker = host
@@ -2115,6 +2135,120 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
     host.remove();
 }
 
+/// RFC-058 Phase 6.5 — `walker::start_compiled` mounts every
+/// registered component tag inside `root` via the compiled
+/// path without binding the wrapper or any non-component
+/// descendant. Where the legacy `walker::start` recursively
+/// dispatches `bind` on every element below `root`,
+/// `start_compiled` resolves the registered tags via a single
+/// `query_selector_all`, then routes each through
+/// `mount_component` directly — `bind` itself is never invoked
+/// on the wrapper, the intermediate `<section>`, or the
+/// component tag. The plan applier handles every directive on
+/// every descendant via `apply_static_plan`.
+///
+/// Pin the bind-call delta of 0 so any regression that
+/// re-introduces a body-level recursive scan is loud.
+#[wasm_bindgen_test]
+async fn start_compiled_skips_walker_recursion_for_registered_tags() {
+    register_all();
+    reset_bind_call_count();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_attribute("class", "scsr-wrapper").unwrap();
+    host.set_inner_html(
+        r#"<section class="scsr-section">
+              <plan-interp-host></plan-interp-host>
+           </section>"#,
+    );
+    body.append_child(&host).unwrap();
+    let baseline = bind_call_count();
+    pocopine_core::walker::start_compiled(&host);
+    tick().await;
+
+    let post = bind_call_count() - baseline;
+    assert_eq!(
+        post, 0,
+        "start_compiled mounts via apply_static_plan directly — no bind call on the wrapper, section, or component tag",
+    );
+
+    assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
+    assert_eq!(read(&host, ".pih-bare"), "world");
+    assert_eq!(read(&host, ".pih-static"), "no interp here");
+
+    assert_eq!(plan_failure_count(), 0);
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "compiled-only path must not trip walker fallback for a walker-clean plan",
+    );
+
+    host.remove();
+}
+
+/// RFC-058 Phase 6.5 — `pp-model` on a native input now lifts
+/// into a [`StaticNativeModel`] entry on the template plan
+/// instead of forcing `requires_walker = true`. `start_compiled`
+/// installs the read-side effect + write-side listener directly
+/// via `directives::model::install_native`; no walker fallback
+/// runs. Pin `compiled_fallback_walk_count` at 0 + the input's
+/// reactive end-to-end behaviour to lock the lift.
+#[wasm_bindgen_test]
+async fn pp_model_on_native_input_lifts_without_walker_fallback() {
+    register_all();
+    reset_plan_failure_count();
+    reset_compiled_fallback_walk_count();
+
+    let plan = template_plan_for("start-compiled-model-host")
+        .expect("start-compiled-model-host registers a template plan");
+    assert!(
+        !plan.requires_walker,
+        "lifted native pp-model must NOT flip requires_walker",
+    );
+    assert_eq!(
+        plan.native_models.len(),
+        1,
+        "the fixture's single <input pp-model> must produce one StaticNativeModel entry",
+    );
+
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html("<start-compiled-model-host></start-compiled-model-host>");
+    body.append_child(&host).unwrap();
+    pocopine_core::walker::start_compiled(&host);
+    tick().await;
+
+    assert_eq!(read(&host, ".scmh-readout"), "seed");
+    assert_eq!(
+        compiled_fallback_walk_count(),
+        0,
+        "lifted native pp-model must not need walker fallback",
+    );
+    assert_eq!(plan_failure_count(), 0);
+
+    let input = host
+        .query_selector(".scmh-input")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .unwrap();
+    input.set_value("typed");
+    let event = web_sys::Event::new("input").unwrap();
+    input.dispatch_event(&event).unwrap();
+    tick().await;
+
+    assert_eq!(
+        read(&host, ".scmh-readout"),
+        "typed",
+        "lifted pp-model must wire input → scope through the compiled path",
+    );
+
+    host.remove();
+}
+
 /// RFC-058 Phase 6.3 — when a registered component plan has
 /// `requires_walker = false`, the walker invokes `bind` once on
 /// the host element, applies the entire plan, then descends via
@@ -2141,11 +2275,15 @@ async fn walker_skips_recursion_for_plan_clean_subtrees() {
 
     let after = bind_call_count();
     let delta = after - baseline;
+    // RFC-058 Phase 6.5 — `mount()` now uses `start_compiled`,
+    // which routes through `mount_component` directly without
+    // ever calling `bind`. The previous walker entry (`start`)
+    // bound the harness wrapper + the host element (delta=2);
+    // the compiled entry binds nothing (delta=0).
     assert_eq!(
-        delta, 2,
-        "plan-clean component must bind only its harness wrapper + the host element \
-         ({delta} bind calls — walker is re-entering descendants instead of routing \
-         through finalize_compiled_subtree)",
+        delta, 0,
+        "compiled entry mounts via apply_static_plan — no `bind` calls expected \
+         ({delta} bind calls observed)",
     );
 
     // The plan still applied correctly — sanity-check the

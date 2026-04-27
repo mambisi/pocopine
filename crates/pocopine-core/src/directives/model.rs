@@ -113,11 +113,29 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
 // ─── native input path ────────────────────────────────────────────
 
 fn run_native(call: &DirectiveCall) {
-    let proxy = call.proxy.clone();
-    let key = call.value.clone();
-    let el = call.el.clone();
     let number = call.modifiers.iter().any(|m| m == "number");
     let lazy = call.modifiers.iter().any(|m| m == "lazy");
+    install_native(call.el, call.proxy, call.value.clone(), number, lazy);
+}
+
+/// RFC-058 Phase 6.5 — compiled-path entry for `pp-model` on a
+/// native input/textarea/select. Same effect + listener wiring
+/// as the runtime walker dispatch (`run_native`); extracted so
+/// `apply_static_plan` can install it directly without going
+/// through the directive registry. The macro emits one
+/// [`crate::directives::for_plan::StaticNativeModel`] per
+/// `<input pp-model="field">` site and the runtime applier
+/// routes through here, dropping the runtime walker dependency
+/// for native model bindings.
+pub fn install_native(
+    el: &web_sys::Element,
+    proxy: &JsValue,
+    key: String,
+    number: bool,
+    lazy: bool,
+) {
+    let proxy = proxy.clone();
+    let el = el.clone();
 
     // Read side: proxy[key] -> element value.
     let proxy_r = proxy.clone();
@@ -129,7 +147,7 @@ fn run_native(call: &DirectiveCall) {
             write_to_element(&el_r, &v);
         });
     });
-    track_effect_on(call.el, id);
+    track_effect_on(&el, id);
 
     // Write side: input event -> proxy[key] = element value.
     let proxy_w = proxy.clone();
@@ -142,7 +160,7 @@ fn run_native(call: &DirectiveCall) {
 
     let event_name = if lazy { "change" } else { "input" };
     let target: web_sys::EventTarget = el.clone().into();
-    track_listener_on(call.el, target, event_name, false, handler);
+    track_listener_on(&el, target, event_name, false, handler);
 }
 
 fn write_to_element(el: &web_sys::Element, v: &JsValue) {

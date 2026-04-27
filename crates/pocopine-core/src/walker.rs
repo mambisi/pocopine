@@ -22,6 +22,7 @@ use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement
 #[cfg(feature = "legacy-dom")]
 use web_sys::{MutationObserver, MutationObserverInit, MutationRecord, NodeList};
 
+#[cfg(feature = "legacy-dom")]
 use crate::directives::{lookup, parse_attr, DirectiveCall};
 use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
@@ -63,6 +64,15 @@ const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
+///
+/// Gated behind `legacy-dom`: the legacy entry runs the
+/// recursive walker over `<body>` so user-authored `pp-*`
+/// directives outside compiled components get bound. Apps
+/// that bootstrap entirely through compiled views call
+/// [`crate::App::run_compiled`] (which delegates to
+/// [`start_compiled`]) and need neither this entry nor the
+/// `legacy-dom` feature.
+#[cfg(feature = "legacy-dom")]
 pub fn start_on_body() {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
@@ -74,19 +84,97 @@ pub fn start_on_body() {
 /// install a `MutationObserver` so later DOM mutations are picked
 /// up too.
 ///
-/// The observer install is gated on the RFC-058 Phase 6
-/// `legacy-dom` feature. Without the feature the initial
-/// synchronous walk still runs (compiled views still need it for
-/// the root tag), but dynamically-inserted DOM (markdown render
-/// output, server-rendered partials, externally adopted nodes)
-/// won't be auto-discovered. Apps that bootstrap entirely through
-/// compiled-view mounts can `default-features = false` to drop
-/// the observer's binary cost.
+/// Gated behind `legacy-dom` (RFC-058 Phase 6.5). The recursive
+/// directive scan + the `MutationObserver` install both depend
+/// on this feature; compiled-only apps mount via
+/// [`start_compiled`] instead.
+#[cfg(feature = "legacy-dom")]
 pub fn start(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     walk(root);
-    #[cfg(feature = "legacy-dom")]
     install_observer(root);
+}
+
+/// RFC-058 Phase 6.5 — compiled-only mount entry. Skips the
+/// recursive directive scan over `root`'s subtree: only
+/// registered component tags get mounted, and each mount drives
+/// its template plan via [`crate::templates_plan::apply_static_plan`].
+/// Body-level `pp-*` attributes (e.g. `pp-data` on a
+/// server-rendered wrapper) are NOT bound by this entry — apps
+/// that need that path keep [`start`].
+///
+/// Discovers component tags via a single
+/// [`Element::query_selector_all`] call against the union of
+/// every registered plan tag, then mounts in document order.
+/// Inner component tags inside a parent's compiled subtree
+/// will already be mounted by the parent's `apply_static_plan`
+/// child_mounts pass before the iteration reaches them; the
+/// `__pp_mounted` guard short-circuits the duplicate mount.
+///
+/// The `MutationObserver` install is intentionally omitted —
+/// dynamically-inserted DOM is out of scope for compiled-only
+/// builds. Apps that need observation-based discovery for
+/// adopted DOM keep [`start`] and the `legacy-dom` feature.
+pub fn start_compiled(root: &Element) {
+    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
+    let tags = crate::templates_plan::registered_template_tags();
+    if tags.is_empty() {
+        return;
+    }
+    // Build a comma-separated tag selector. Tag names emitted by
+    // the macro are kebab-case ASCII identifiers — no escaping
+    // needed for `query_selector_all`.
+    let selector = tags.join(",");
+    let Ok(matches) = root.query_selector_all(&selector) else {
+        return;
+    };
+    for i in 0..matches.length() {
+        let Some(node) = matches.item(i) else {
+            continue;
+        };
+        let Ok(el) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        if get_private(&el, "__pp_mounted").is_some() {
+            continue;
+        }
+        let tag = el.local_name();
+        let walker_clean = crate::templates_plan::template_plan_for(&tag)
+            .map(|p| !p.requires_walker)
+            .unwrap_or(false);
+        // RFC-058 Phase 6.5 — refuse to mount a walker-required
+        // plan in a compiled-only build. Without `legacy-dom`
+        // the fallback walk that would install the un-lifted
+        // directives is a no-op, so silently mounting would
+        // leave handlers / bindings inert. Hard-fail with a
+        // diagnostic before `mount_component` runs so the
+        // failure points at the plan, not at the missing
+        // behaviour later.
+        #[cfg(not(feature = "legacy-dom"))]
+        if !walker_clean {
+            web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+                "pocopine: <{tag}>'s plan requires the runtime walker (`pp-*` directives \
+                 outside the compiled lift envelope). Enable the `legacy-dom` feature \
+                 (`pocopine = {{ features = [\"legacy-dom\"] }}`) or remove the offending \
+                 directives from the template. Skipping mount."
+            )));
+            continue;
+        }
+        mount_component(&el, &tag, None);
+        // Drive lifecycle for the freshly mounted subtree. For
+        // walker-clean plans the cheaper `finalize_compiled_subtree`
+        // skips the per-descendant `bind` and only fires
+        // `pp-init` + `on_mount` post-order. For plans that still
+        // need the walker (e.g. `pp-model` on a native input —
+        // RFC-058 §7 deferral), `walk_compiled_fallback` performs
+        // the legacy directive scan over the subtree to install
+        // any un-lifted attributes the macro left in place.
+        if walker_clean {
+            finalize_compiled_subtree(&el);
+        } else {
+            walk_compiled_fallback(&el);
+        }
+    }
 }
 
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
@@ -145,6 +233,18 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
 /// at walk time with either the user's captured content (via the
 /// slot store keyed by the owning component) or the slot's own
 /// default children, then the replacement is walked recursively.
+///
+/// RFC-058 Phase 6.5 — without `legacy-dom` this is a no-op stub.
+/// Compiled apps mount registered tags through `start_compiled` /
+/// `mount_component` and install every directive via
+/// `apply_static_plan`; the runtime walker has nothing to do.
+/// Callers that still funnel a clone through `walk` (pp-if /
+/// pp-for / pp-teleport's `body_fn = None` fallback,
+/// `walk_compiled_fallback`, the router's outlet walk, the
+/// MutationObserver callback) silently lose un-lifted directive
+/// bindings without the feature — the documented contract for
+/// the gate.
+#[cfg(feature = "legacy-dom")]
 pub fn walk(el: &Element) {
     if el.local_name() == "slot" {
         materialize_slot(el);
@@ -190,15 +290,18 @@ pub fn walk(el: &Element) {
     set_private(el, WALKED_KEY, &JsValue::TRUE);
 }
 
+#[cfg(not(feature = "legacy-dom"))]
+pub fn walk(_el: &Element) {}
+
 fn fire_deferred_init(el: &Element) {
     let Some(value) = get_private(el, INIT_PENDING_KEY).and_then(|v| v.as_string()) else {
         return;
     };
     let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
-    let Some((scope_id, proxy)) = enclosing_scope(el) else {
+    let Some((scope_id, _proxy)) = enclosing_scope(el) else {
         return;
     };
-    dispatch(el, &proxy, scope_id, "pp-init", &value);
+    crate::directives::init::install(el, scope_id, &value);
 }
 
 /// Defer a `pp-init` handler invocation on `el` until the
@@ -323,6 +426,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
     });
 }
 
+#[cfg(feature = "legacy-dom")]
 fn bind(el: &Element) {
     BIND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     // Step 0: `<pp-outlet>` is the router's mount point. Hand the
@@ -347,6 +451,19 @@ fn bind(el: &Element) {
         mount_component(el, &tag, None);
     }
 
+    // RFC-058 Phase 6.5 — `pp-*` attribute scan + dispatch is
+    // walker-only. Compiled apps install every directive via
+    // `apply_static_plan`; the per-element scan only matters for
+    // user-authored `pp-*` outside compiled components (the
+    // `legacy-dom` envelope). With the feature off, `bind` ends
+    // here; `walk` still recurses into descendants to discover
+    // inner registered tags.
+    #[cfg(feature = "legacy-dom")]
+    bind_legacy_attrs(el);
+}
+
+#[cfg(feature = "legacy-dom")]
+fn bind_legacy_attrs(el: &Element) {
     // Snapshot all pp-* attributes — some directives mutate the element
     // (e.g. `set_attribute`) which would invalidate a live NamedNodeMap.
     //
@@ -1130,6 +1247,11 @@ fn first_element_child(el: &Element) -> Option<Element> {
 /// `@foo` → `pp-on:foo`. Anything else — including a bare `:` or
 /// `@` with no tail — is returned unchanged so the normal pp-*
 /// filter can drop it.
+///
+/// Walker-only — RFC-058 Phase 6.5: compiled apps don't scan
+/// `pp-*` attributes at runtime, so the shorthand normaliser is
+/// gated behind `legacy-dom`.
+#[cfg(feature = "legacy-dom")]
 fn normalise_shorthand_attr(name: &str) -> String {
     if let Some(rest) = name.strip_prefix(':') {
         if !rest.is_empty() {
@@ -1444,6 +1566,7 @@ pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     scope_of_element(&root)
 }
 
+#[cfg(feature = "legacy-dom")]
 fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {
     let Some((dname, arg, modifiers)) = parse_attr(name) else {
         return;
@@ -1708,9 +1831,16 @@ thread_local! {
 /// still have preserved runtime-owned behavior inside a generated
 /// fragment. RFC-058 Phase 6 should drive this counter to zero,
 /// then remove this wrapper and the corresponding call sites.
+///
+/// Without `legacy-dom` this is a no-op (the underlying `walk`
+/// is also gated). The counter still increments so tests can
+/// detect attempted fallbacks even in compiled-only builds.
 pub fn walk_compiled_fallback(el: &Element) {
     COMPILED_FALLBACK_WALKS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(feature = "legacy-dom")]
     walk(el);
+    #[cfg(not(feature = "legacy-dom"))]
+    let _ = el;
 }
 
 /// Number of compiled-path fallback walks since the last reset.

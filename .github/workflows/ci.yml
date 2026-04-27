@@ -183,12 +183,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # RFC-058 Phase 6.5 — both walker tests and Pine
+          # depend on the runtime walker entry, which is gated
+          # behind `legacy-dom`. Without the feature flag the
+          # `walker.rs` test crate compiles to "no tests to
+          # run" (it's gated at file scope) and Pine's
+          # `mount()` helper fails to find `walker::start`.
           - name: pocopine-walker
             crate: crates/pocopine
-            args: --test walker
+            args: --features legacy-dom --test walker
           - name: pine
             crate: crates/pine
-            args: ""
+            args: --features legacy-dom
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

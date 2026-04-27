@@ -33,5 +33,5 @@ impl Counter {
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    App::new().register::<Counter>().run();
+    App::new().register::<Counter>().run_compiled();
 }
