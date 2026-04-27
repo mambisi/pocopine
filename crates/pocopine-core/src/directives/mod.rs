@@ -51,23 +51,39 @@ static REGISTRY: OnceCell<HashMap<&'static str, DirectiveFn>> = OnceCell::new();
 fn registry() -> &'static HashMap<&'static str, DirectiveFn> {
     REGISTRY.get_or_init(|| {
         let mut m: HashMap<&'static str, DirectiveFn> = HashMap::new();
-        m.insert("text", text::run);
-        m.insert("html", html::run);
-        m.insert("bind", bind::run);
-        m.insert("on", on::run);
-        m.insert("show", show::run);
-        m.insert("model", model::run);
-        m.insert("init", init::run);
-        m.insert("route", route::run);
-        m.insert("for", for_::run);
-        m.insert("if", if_::run);
-        m.insert("teleport", teleport::run);
-        m.insert("ref", ref_::run);
+        // RFC-058 Phase 6.5 — opaque-directive lift allowlist. The
+        // compiled path's `apply_static_plan` looks these up by name
+        // for `StaticOpaqueDirective` entries; they're the only
+        // directives compiled-only apps need at runtime.
         m.insert("resize", resize::run);
         m.insert("intersect", intersect::run);
         m.insert("anchor", anchor::run);
         m.insert("roving", roving::run);
         m.insert("flip", flip::run);
+        // RFC-058 Phase 6.5 — every other `run()` is a walker-only
+        // entry: the runtime walker's `dispatch` loop calls them
+        // when scanning `pp-*` attributes on user-authored DOM.
+        // Compiled apps install these directives via the typed
+        // `install_*` entries on `apply_static_plan` instead, so
+        // the registry stays bare without `legacy-dom`. With the
+        // feature off, the linker drops every `run()` body listed
+        // below (and their transitive `DirectiveCall` extraction
+        // helpers) — that's the bulk of the Phase 6.5 size win.
+        #[cfg(feature = "legacy-dom")]
+        {
+            m.insert("text", text::run);
+            m.insert("html", html::run);
+            m.insert("bind", bind::run);
+            m.insert("on", on::run);
+            m.insert("show", show::run);
+            m.insert("model", model::run);
+            m.insert("init", init::run);
+            m.insert("route", route::run);
+            m.insert("for", for_::run);
+            m.insert("if", if_::run);
+            m.insert("teleport", teleport::run);
+            m.insert("ref", ref_::run);
+        }
         m
     })
 }

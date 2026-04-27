@@ -22,6 +22,7 @@ use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement
 #[cfg(feature = "legacy-dom")]
 use web_sys::{MutationObserver, MutationObserverInit, MutationRecord, NodeList};
 
+#[cfg(feature = "legacy-dom")]
 use crate::directives::{lookup, parse_attr, DirectiveCall};
 use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
@@ -264,10 +265,10 @@ fn fire_deferred_init(el: &Element) {
         return;
     };
     let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
-    let Some((scope_id, proxy)) = enclosing_scope(el) else {
+    let Some((scope_id, _proxy)) = enclosing_scope(el) else {
         return;
     };
-    dispatch(el, &proxy, scope_id, "pp-init", &value);
+    crate::directives::init::install(el, scope_id, &value);
 }
 
 /// Defer a `pp-init` handler invocation on `el` until the
@@ -416,6 +417,19 @@ fn bind(el: &Element) {
         mount_component(el, &tag, None);
     }
 
+    // RFC-058 Phase 6.5 — `pp-*` attribute scan + dispatch is
+    // walker-only. Compiled apps install every directive via
+    // `apply_static_plan`; the per-element scan only matters for
+    // user-authored `pp-*` outside compiled components (the
+    // `legacy-dom` envelope). With the feature off, `bind` ends
+    // here; `walk` still recurses into descendants to discover
+    // inner registered tags.
+    #[cfg(feature = "legacy-dom")]
+    bind_legacy_attrs(el);
+}
+
+#[cfg(feature = "legacy-dom")]
+fn bind_legacy_attrs(el: &Element) {
     // Snapshot all pp-* attributes — some directives mutate the element
     // (e.g. `set_attribute`) which would invalidate a live NamedNodeMap.
     //
@@ -1199,6 +1213,11 @@ fn first_element_child(el: &Element) -> Option<Element> {
 /// `@foo` → `pp-on:foo`. Anything else — including a bare `:` or
 /// `@` with no tail — is returned unchanged so the normal pp-*
 /// filter can drop it.
+///
+/// Walker-only — RFC-058 Phase 6.5: compiled apps don't scan
+/// `pp-*` attributes at runtime, so the shorthand normaliser is
+/// gated behind `legacy-dom`.
+#[cfg(feature = "legacy-dom")]
 fn normalise_shorthand_attr(name: &str) -> String {
     if let Some(rest) = name.strip_prefix(':') {
         if !rest.is_empty() {
@@ -1513,6 +1532,7 @@ pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     scope_of_element(&root)
 }
 
+#[cfg(feature = "legacy-dom")]
 fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {
     let Some((dname, arg, modifiers)) = parse_attr(name) else {
         return;
