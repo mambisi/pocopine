@@ -45,8 +45,8 @@ use web_sys::{console, Element};
 
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticInterp, StaticListener, StaticOpaqueDirective, StaticRef, StaticSlotOutlet,
-    StaticTeleportPlan,
+    StaticInterp, StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef,
+    StaticSlotOutlet, StaticTeleportPlan,
 };
 use crate::directives::{self, DirectiveCall};
 use crate::expr;
@@ -131,6 +131,13 @@ pub struct StaticTemplatePlan {
     /// install effects per dynamic segment. Empty for templates
     /// with no interpolation.
     pub interps: &'static [StaticInterp],
+    /// `pp-model[.modifier]="field"` sites on native input /
+    /// textarea / select elements (RFC-058 Phase 6.5). Lifted
+    /// out of `walker::dispatch` so compiled-only apps wire
+    /// two-way input bindings without the runtime walker.
+    /// Component-target `pp-model` is on `StaticChildMount`
+    /// instead.
+    pub native_models: &'static [StaticNativeModel],
     /// True when the cleaned HTML still contains framework-owned
     /// attributes that this plan does not install. Compiled
     /// fragments can skip fallback only when their own plan and
@@ -506,6 +513,22 @@ pub fn apply_static_plan(
     }
     for (el, target, segments) in &interp_targets {
         directives::interp::install_planned_target(el, proxy, target, segments);
+    }
+    // RFC-058 Phase 6.5 — `pp-model` on native inputs lifted out
+    // of `walker::dispatch`. The macro already parsed the
+    // modifier list (`.number`, `.lazy`); the applier installs
+    // the read-side effect + write-side listener directly.
+    for nm in plan.native_models {
+        let Some(el) = resolve(root, nm.node_path) else {
+            fail(
+                "native pp-model",
+                template_name,
+                nm.node_path,
+                Some(nm.expr_src),
+            );
+            continue;
+        };
+        directives::model::install_native(&el, proxy, nm.expr_src.to_string(), nm.number, nm.lazy);
     }
 }
 

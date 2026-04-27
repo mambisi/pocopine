@@ -716,7 +716,7 @@ fn mount(host_html: &str) -> Element {
     let host = doc().create_element("div").unwrap();
     host.set_inner_html(host_html);
     body.append_child(&host).unwrap();
-    pocopine_core::walker::start(&host);
+    pocopine_core::walker::start_compiled(&host);
     host
 }
 
@@ -1490,7 +1490,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
         &JsValue::UNDEFINED,
     );
 
-    pocopine_core::walker::start(&host);
+    pocopine_core::walker::start_compiled(&host);
     tick().await;
 
     let marker = host
@@ -2189,15 +2189,15 @@ async fn start_compiled_skips_walker_recursion_for_registered_tags() {
     host.remove();
 }
 
-/// RFC-058 Phase 6.5 — `start_compiled` must drive the walker
-/// fallback for plans the macro flagged with
-/// `requires_walker = true` (e.g. `pp-model` on a native input,
-/// in the §7 deferred set). Mounts a host whose template has
-/// the model directive, asserts the input is reactive, and
-/// pins `compiled_fallback_walk_count` at 1 — proving the
-/// fallback path engaged exactly once for the single host.
+/// RFC-058 Phase 6.5 — `pp-model` on a native input now lifts
+/// into a [`StaticNativeModel`] entry on the template plan
+/// instead of forcing `requires_walker = true`. `start_compiled`
+/// installs the read-side effect + write-side listener directly
+/// via `directives::model::install_native`; no walker fallback
+/// runs. Pin `compiled_fallback_walk_count` at 0 + the input's
+/// reactive end-to-end behaviour to lock the lift.
 #[wasm_bindgen_test]
-async fn start_compiled_runs_walker_fallback_for_walker_required_plans() {
+async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     register_all();
     reset_plan_failure_count();
     reset_compiled_fallback_walk_count();
@@ -2205,9 +2205,13 @@ async fn start_compiled_runs_walker_fallback_for_walker_required_plans() {
     let plan = template_plan_for("start-compiled-model-host")
         .expect("start-compiled-model-host registers a template plan");
     assert!(
-        plan.requires_walker,
-        "fixture relies on pp-model flipping requires_walker — if the macro starts \
-         lifting pp-model, swap the fixture for one that still trips the fallback",
+        !plan.requires_walker,
+        "lifted native pp-model must NOT flip requires_walker",
+    );
+    assert_eq!(
+        plan.native_models.len(),
+        1,
+        "the fixture's single <input pp-model> must produce one StaticNativeModel entry",
     );
 
     let body = doc().body().unwrap();
@@ -2220,8 +2224,8 @@ async fn start_compiled_runs_walker_fallback_for_walker_required_plans() {
     assert_eq!(read(&host, ".scmh-readout"), "seed");
     assert_eq!(
         compiled_fallback_walk_count(),
-        1,
-        "start_compiled must run walk_compiled_fallback once for the walker-required plan",
+        0,
+        "lifted native pp-model must not need walker fallback",
     );
     assert_eq!(plan_failure_count(), 0);
 
@@ -2239,7 +2243,7 @@ async fn start_compiled_runs_walker_fallback_for_walker_required_plans() {
     assert_eq!(
         read(&host, ".scmh-readout"),
         "typed",
-        "pp-model must wire input → scope after start_compiled mounts via fallback",
+        "lifted pp-model must wire input → scope through the compiled path",
     );
 
     host.remove();
@@ -2271,11 +2275,15 @@ async fn walker_skips_recursion_for_plan_clean_subtrees() {
 
     let after = bind_call_count();
     let delta = after - baseline;
+    // RFC-058 Phase 6.5 — `mount()` now uses `start_compiled`,
+    // which routes through `mount_component` directly without
+    // ever calling `bind`. The previous walker entry (`start`)
+    // bound the harness wrapper + the host element (delta=2);
+    // the compiled entry binds nothing (delta=0).
     assert_eq!(
-        delta, 2,
-        "plan-clean component must bind only its harness wrapper + the host element \
-         ({delta} bind calls — walker is re-entering descendants instead of routing \
-         through finalize_compiled_subtree)",
+        delta, 0,
+        "compiled entry mounts via apply_static_plan — no `bind` calls expected \
+         ({delta} bind calls observed)",
     );
 
     // The plan still applied correctly — sanity-check the

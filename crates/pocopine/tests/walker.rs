@@ -1,5 +1,13 @@
 //! Walker + `pp-for` integration tests. Covers the regressions that
-//! broke HN's recursive comment tree:
+//! broke HN's recursive comment tree.
+//!
+//! RFC-058 Phase 6.5 — gated behind `legacy-dom`: every test in this
+//! file exercises the runtime walker entry (`walker::start` →
+//! `walker::walk` recursion + `MutationObserver` install). Compiled-
+//! only consumers that don't enable the feature don't run these
+//! paths and don't compile this test crate.
+#![cfg(feature = "legacy-dom")]
+//!
 //!
 //! 1. Component tags mount even when they sit directly inside a
 //!    `pp-for` body (LoopScope `SCOPE_ID_KEY` no longer shadows the
