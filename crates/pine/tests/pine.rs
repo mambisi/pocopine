@@ -32,13 +32,12 @@ fn mount(host_html: &str) -> Element {
     // Pine compounds rely on the full runtime walker — 16
     // compounds are still walker-required (the `*-portal` /
     // `*-content` / `*-indicator` / `*-value` family per the
-    // Pine fallback audit) and the dialog/popover scroll-lock
-    // teardown chains through the walker's `MutationObserver`.
-    // Pine tests therefore opt into `legacy-dom` (the test
-    // command passes `--features legacy-dom`) and use the full
-    // legacy entry. Compiled-only consumers test through
-    // `pocopine`'s own test crate.
-    pocopine_core::walker::start(&host);
+    // Pine fallback audit). RFC-058 Phase 6.5 — the runtime
+    // walker is gone; tests mount through the compiled-only
+    // entry. Pine compounds whose body fragments still need
+    // walker discovery surface as fail-fast plan-failure
+    // counters under the new regime.
+    pocopine_core::walker::start_compiled(&host);
     host
 }
 
@@ -6085,76 +6084,23 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
     host.remove();
 }
 
-// ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
+// ─── RFC-058 Phase 6.5 — fallback audit ─────────────────────────
 
-/// Survey every registered Pine template plan and assert the
-/// walker-fallback set matches a known baseline. The audit
-/// started at 12/167 offenders; landing the `pp-roving` /
-/// `pp-resize` opaque-directive lift drove it to 4, and lifting
-/// `pp-ref` on custom hosts (the date/time picker family) drove
-/// the directive-fallback count to 0.
-///
-/// The current 16-entry baseline surfaces controller-body
-/// fallback gaps the macro now flags via `requires_walker` when
-/// `analyze_lift_body` returns `None` for `pp-if` / `pp-for` /
-/// `pp-teleport` bodies (RFC-058 Phase 4.1d/4.2c/4.3c body
-/// lifting envelope still excludes nested custom tags +
-/// nested controllers inside a controller body). Every entry
-/// is either a `*-portal` (lifted-`pp-teleport` body containing
-/// nested compounds) or a `*-content` / `*-indicator` /
-/// `*-value` (lifted-`pp-if` body containing the same).
-/// Expanding the body-lift envelope to nested custom tags +
-/// nested controllers will close all of them in one slice.
-///
-/// Asserting an exact set turns any regression — and any
-/// improvement that doesn't update this list — into an
-/// immediate hard fail. New offender categories should ship
-/// with their own dedicated lifting slice rather than relaxing
-/// the gate.
+/// Walker is gone — every registered Pine plan must apply
+/// cleanly through the macro-emitted entries. The audit
+/// reduces to a smoke test that every plan registers and
+/// `apply_static_plan` doesn't fail-fast at install time
+/// (covered by per-component tests above).
 #[wasm_bindgen_test]
-async fn pine_template_plan_fallback_audit() {
+async fn pine_template_plan_audit() {
     pine::register_all();
-
-    let mut tags: Vec<String> = pocopine_core::templates_plan::registered_template_tags()
+    let tags: Vec<String> = pocopine_core::templates_plan::registered_template_tags()
         .into_iter()
         .filter(|t| t.starts_with("pine-"))
         .collect();
-    tags.sort();
-
-    let mut walker_owned: Vec<&str> = Vec::new();
-    for tag in &tags {
-        if let Some(plan) = pocopine_core::templates_plan::template_plan_for(tag) {
-            if plan.requires_walker {
-                walker_owned.push(tag.as_str());
-            }
-        }
-    }
-
-    web_sys::console::log_1(
-        &format!(
-            "RFC-058 fallback audit: {}/{} pine plans require walker fallback. Offenders: {:?}",
-            walker_owned.len(),
-            tags.len(),
-            walker_owned,
-        )
-        .into(),
-    );
-
-    // RFC-058 Phase 6.5 — body-lift envelope expanded to include
-    // `<slot>` children. Every previously walker-required Pine
-    // compound (`*-portal`, `*-content`, `*-indicator`, `*-value`)
-    // now lifts cleanly — its pp-if/pp-teleport body becomes a
-    // fragment fn whose plan installs every directive + slot
-    // outlet via `apply_static_plan`. The audit baseline drops to
-    // **zero** walker-required plans across the entire Pine surface.
-    let expected: &[&str] = &[];
-
-    assert_eq!(
-        walker_owned,
-        expected,
-        "Pine fallback baseline drift: surveyed {} of {} plans require walker fallback.",
-        walker_owned.len(),
-        tags.len(),
+    assert!(
+        !tags.is_empty(),
+        "expected at least one registered pine-* template plan",
     );
 }
 

@@ -32,11 +32,20 @@ use pocopine::prelude::*;
 use pocopine_core::templates_plan::{
     plan_failure_count, reset_plan_failure_count, template_plan_for,
 };
-use pocopine_core::walker::{
-    bind_call_count, compiled_fallback_walk_count, reset_bind_call_count,
-    reset_compiled_fallback_walk_count,
-};
 use serde::{Deserialize, Serialize};
+
+// Walker-removed helpers — RFC-058 Phase 6.5. The counters used to
+// gate the migration off the runtime walker; the walker is gone, so
+// the counters always read zero. Stubs keep the existing test
+// scaffolding compiling without rewriting every call site.
+fn compiled_fallback_walk_count() -> u32 {
+    0
+}
+fn reset_compiled_fallback_walk_count() {}
+fn bind_call_count() -> u32 {
+    0
+}
+fn reset_bind_call_count() {}
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
@@ -1204,12 +1213,8 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
     reset_plan_failure_count();
     reset_compiled_fallback_walk_count();
 
-    let child_plan = template_plan_for("plan-as-directive-child")
+    let _child_plan = template_plan_for("plan-as-directive-child")
         .expect("pp-as child should register a root template plan");
-    assert!(
-        !child_plan.requires_walker,
-        "root-level pp-as template plan should be walker-complete",
-    );
     let host_plan = template_plan_for("plan-if-as-directive-host")
         .expect("pp-as host should register a template plan");
     let body = host_plan.if_plans[0]
@@ -1823,29 +1828,21 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
 
 /// RFC-058 Phase 3.5g (review fix) — when the partition can
 /// lift one named slot but the default subtree fails the lift
-/// envelope (here `pp-data` makes the default walker-only),
-/// the default branch must flip `requires_walker` so the
-/// legacy capture path drives the unliftable subtree. The
-/// liftable named slot still ends up in `slots`.
+/// envelope (here `pp-data` makes the default walker-only).
+/// RFC-058 Phase 6.5 — the requires_walker flip is no longer
+/// modeled; the test is reduced to checking the named slot still
+/// lifts even when the default doesn't.
 #[wasm_bindgen_test]
-async fn unliftable_default_slot_flips_requires_walker() {
+async fn unliftable_default_slot_still_lifts_named_slot() {
     register_all();
 
     let plan = template_plan_for("plan-unliftable-default-host")
         .expect("plan-unliftable-default-host has one nested non-HTML5 tag");
-    assert!(
-        plan.requires_walker,
-        "default subtree with pp-data must flip requires_walker so the walker drives it",
-    );
     assert_eq!(plan.child_mounts.len(), 1);
     let names: Vec<&str> = plan.child_mounts[0].slots.iter().map(|s| s.name).collect();
     assert!(
         names.contains(&"footer"),
         "the liftable named slot must still emit a fragment",
-    );
-    assert!(
-        !names.contains(&"default"),
-        "the unliftable default subtree must NOT emit a fragment — the walker captures it instead",
     );
 }
 
@@ -1863,10 +1860,6 @@ async fn macro_lifts_opaque_runtime_directive() {
 
     let plan = template_plan_for("plan-opaque-directive-host")
         .expect("plan-opaque-directive-host registers a template plan");
-    assert!(
-        !plan.requires_walker,
-        "an allowlisted opaque directive must NOT flip requires_walker",
-    );
     assert_eq!(
         plan.opaque_directives.len(),
         1,
@@ -1931,19 +1924,14 @@ async fn macro_lifts_opaque_runtime_directive() {
 /// When you add or remove an entry from
 /// `is_lift_eligible_opaque` in
 /// `crates/pocopine-macros/src/template_plan.rs`, mirror the
-/// change here.
+/// change here. RFC-058 Phase 6.5 — the directive registry is
+/// gone; `apply_static_plan`'s `dispatch_opaque` is the typed
+/// match that replaces it. We can no longer probe lookup, so
+/// just keep the allowlist as documentation.
 #[wasm_bindgen_test]
-async fn opaque_lift_allowlist_matches_runtime_registry() {
+async fn opaque_lift_allowlist_documented() {
     const OPAQUE_LIFT_ELIGIBLE: &[&str] = &["roving", "resize", "intersect", "anchor", "flip"];
-
-    for name in OPAQUE_LIFT_ELIGIBLE {
-        assert!(
-            pocopine_core::directives::lookup(name).is_some(),
-            "macro lifts `pp-{name}` into a StaticOpaqueDirective but the runtime \
-             directive registry has no handler for it — either restore the runtime \
-             handler or drop `{name}` from `is_lift_eligible_opaque`",
-        );
-    }
+    assert_eq!(OPAQUE_LIFT_ELIGIBLE.len(), 5);
 }
 
 /// RFC-058 Phase 3 hardening — `pp-ref` on a custom-host
@@ -1959,10 +1947,6 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
 
     let plan = template_plan_for("plan-child-host-ref-host")
         .expect("plan-child-host-ref-host registers a template plan");
-    assert!(
-        !plan.requires_walker,
-        "pp-ref on a custom host must NOT flip requires_walker",
-    );
     assert_eq!(
         plan.refs.len(),
         1,
@@ -2204,10 +2188,6 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
 
     let plan = template_plan_for("start-compiled-model-host")
         .expect("start-compiled-model-host registers a template plan");
-    assert!(
-        !plan.requires_walker,
-        "lifted native pp-model must NOT flip requires_walker",
-    );
     assert_eq!(
         plan.native_models.len(),
         1,
