@@ -22,27 +22,15 @@ use std::rc::Rc;
 use js_sys::{Object, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element};
+use web_sys::Element;
 
-use super::DirectiveCall;
 use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
 
-pub fn run(call: &DirectiveCall) {
-    let Some(attr) = call.arg.clone() else { return };
-    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
-        Ok(a) => a,
-        Err(e) => {
-            console::error_1(&JsValue::from_str(&format!(
-                "pp-bind:{}: {} (at {}..{})",
-                attr, e.message, e.span.start, e.span.end
-            )));
-            return;
-        }
-    };
-    install(call.el, call.proxy, &attr, ast);
+fn normalize_prop_name(name: &str) -> String {
+    name.replace('-', "_")
 }
 
 /// Install a `pp-bind:<attr>` effect on `el` that re-evaluates
@@ -68,7 +56,7 @@ pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<ex
     // it at each effect tick to consult `is_prop` on the child's
     // state so parents can't write through to `#[state]` fields.
     let child_target = crate::walker::child_component_scope(el);
-    let child_field = super::normalize_prop_name(attr);
+    let child_field = normalize_prop_name(attr);
 
     // Memo of the last value written to this attribute. Serialised
     // to a String so the compare is cheap + monomorphic (class and

@@ -21,44 +21,12 @@ use std::rc::Rc;
 use js_sys::Function;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{console, AddEventListenerOptions, Element, Event, EventTarget, KeyboardEvent, Node};
+use web_sys::{AddEventListenerOptions, Element, Event, EventTarget, KeyboardEvent, Node};
 
-use super::DirectiveCall;
 use crate::expr::{self, Expr, Spanned};
 use crate::magics::with_current_event;
 use crate::reactive::ScopeId;
 use crate::scope::with_current_el;
-
-pub fn run(call: &DirectiveCall) {
-    let Some(event) = call.arg.clone() else {
-        return;
-    };
-    // Parse the directive value as an expression at bind time
-    // (RFC-024). Call-and-assign statements + sequences land here;
-    // plain handler names (`@click="on_click"`) parse to a bare
-    // `Expr::Path(["on_click"])` and get rewritten to the
-    // compatibility shape `on_click($event)` so existing
-    // single-identifier handlers keep receiving the event as
-    // their first arg.
-    let ast: Rc<Spanned<Expr>> = match expr::parse_cached(&call.value) {
-        Ok(a) => Rc::new(backfill_legacy_call(a)),
-        Err(e) => {
-            console::error_1(&JsValue::from_str(&format!(
-                "pp-on:{}: {} (at {}..{})",
-                event, e.message, e.span.start, e.span.end
-            )));
-            return;
-        }
-    };
-    install(
-        call.el,
-        call.scope_id,
-        call.proxy,
-        &event,
-        &call.modifiers,
-        ast,
-    );
-}
 
 /// Install a `pp-on:<event>[.<mod>...]` listener on `el` (or on
 /// `window` / `document` per the modifier set), routing fired

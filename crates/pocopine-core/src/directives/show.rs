@@ -6,28 +6,13 @@
 //! `display: none` is deferred until the leave animation completes.
 
 use wasm_bindgen::prelude::*;
-use web_sys::{console, Element, HtmlElement};
+use web_sys::{Element, HtmlElement};
 
 use super::transition;
-use super::DirectiveCall;
 use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
-
-pub fn run(call: &DirectiveCall) {
-    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
-        Ok(a) => a,
-        Err(e) => {
-            console::error_1(&JsValue::from_str(&format!(
-                "pp-show: {} (at {}..{})",
-                e.message, e.span.start, e.span.end
-            )));
-            return;
-        }
-    };
-    install(call.el, call.proxy, ast);
-}
 
 /// Install a `pp-show` effect on `el` that toggles its `display`
 /// style by the truthiness of `expr`. If the element carries any

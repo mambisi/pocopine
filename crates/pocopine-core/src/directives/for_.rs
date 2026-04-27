@@ -27,7 +27,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
 
-use super::DirectiveCall;
 use crate::loop_scope::LoopScope;
 use crate::path::resolve_path;
 use crate::reactive::{effect, trigger_scope, ScopeId};
@@ -166,7 +165,9 @@ fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &
     }
 
     let scope_ids: Vec<ScopeId> = entries.iter().map(|entry| entry.scope_id).collect();
-    crate::walker::mark_bulk_release(parent_el);
+    // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
+    // marker is gone with the walker. Synchronous bulk teardown
+    // does the work directly below.
     crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
     Scope::remove_compiled_rows(&scope_ids);
     parent_el.replace_children_with_node_1(template_el.as_ref());
@@ -234,46 +235,6 @@ fn restore_leaver_layout(entry: &PrevItem) {
     ] {
         let _ = style.remove_property(prop);
     }
-}
-
-pub fn run(call: &DirectiveCall) {
-    let Some((item_name, items_expr)) = parse_expr(&call.value) else {
-        console::error_1(&JsValue::from_str(&format!(
-            "pp-for: expected `<ident> in <path>`, got {:?}",
-            call.value
-        )));
-        return;
-    };
-
-    let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
-        Ok(t) => t,
-        Err(_) => {
-            console::error_1(&JsValue::from_str(
-                "pp-for: must be on a <template> element (see rfc-004)",
-            ));
-            return;
-        }
-    };
-
-    let template_el: Element = call.el.clone();
-    let key_expr = template_el
-        .get_attribute("pp-key")
-        .filter(|k| !k.trim().is_empty());
-    let stagger_ms: u32 = template_el
-        .get_attribute("pp-stagger")
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-
-    install(
-        template,
-        call.proxy.clone(),
-        call.scope_id,
-        item_name,
-        items_expr,
-        key_expr,
-        stagger_ms,
-        None,
-    );
 }
 
 /// Compiled-path entry point. Skips the `<template>` cast +
@@ -445,13 +406,15 @@ fn run_naive(
                 .is_ok()
             {
                 if fragment_built {
-                    if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
-                        walker::walk_compiled_fallback(&clone_root);
-                    } else {
-                        walker::finalize_compiled_subtree(&clone_root);
-                    }
+                    walker::finalize_compiled_subtree(&clone_root);
                 } else {
-                    walker::walk(&clone_root);
+                    // RFC-058 Phase 6.5 — body must come from the
+                    // macro fragment now that the runtime walker is
+                    // gone. Surface the misclassification through
+                    // the fail-fast counter so the test harness
+                    // catches a plan emitting `pp-for` without a
+                    // compiled body.
+                    crate::templates_plan::record_plan_failure();
                 }
                 fresh.push(clone_root);
             }
@@ -772,11 +735,6 @@ fn run_keyed(
                         match body_fn(scope.id, &proxy, scope.id) {
                             Some(root) => {
                                 bind_scope_to(&root, scope.id, &proxy);
-                                // Mark as walked so the install
-                                // loop's `walker::walk` short-
-                                // circuits (the body fragment
-                                // already installed everything).
-                                walker::mark_walked(&root);
                                 Some(root)
                             }
                             None => {
@@ -921,7 +879,9 @@ fn run_keyed(
                     // skips the entire batch's `release_subtree`
                     // sweep, then clears the marker. One
                     // `Reflect::set` per clear instead of 10K.
-                    crate::walker::mark_bulk_release(parent_el);
+                    // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
+                    // marker is gone with the walker. Synchronous bulk teardown
+                    // does the work directly below.
                     // RFC 054 Lever 5 — bulk teardown. The per-row
                     // unmount path was O(N²) due to
                     // `LIST_WATCHERS.members.retain(|id| id != sid)`
@@ -1186,12 +1146,15 @@ fn run_keyed(
                         sid,
                         proxy_for_mount.as_ref(),
                     );
-                    walker::mark_walked(el);
                     continue;
                 }
             }
             crate::profiler::mount::record_generic_row_mounted();
-            walker::walk(el);
+            // RFC-058 Phase 6.5 — the runtime walker is gone.
+            // Generic (non-row-plan) rows can't bind anything in
+            // this regime; surface the misclassification as a
+            // fail-fast plan failure.
+            crate::templates_plan::record_plan_failure();
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /
@@ -1336,6 +1299,11 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
 
 /// Parse `"item in items"`. Returns `None` on anything we don't want
 /// to accept in v0 (destructuring, `(i, x) in ...`, empty halves).
+///
+/// Walker removal kept this helper for tests only — the macro now
+/// pre-parses the expression at compile time and feeds the resolved
+/// `(item_name, items_expr)` straight into `install`.
+#[cfg(test)]
 fn parse_expr(s: &str) -> Option<(String, String)> {
     let s = s.trim();
     let (lhs, rhs) = s.split_once(" in ")?;

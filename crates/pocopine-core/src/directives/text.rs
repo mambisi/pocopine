@@ -5,27 +5,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use wasm_bindgen::JsValue;
-use web_sys::{console, Element};
+use web_sys::Element;
 
-use super::DirectiveCall;
 use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::track_effect_on;
-
-pub fn run(call: &DirectiveCall) {
-    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
-        Ok(a) => a,
-        Err(e) => {
-            console::error_1(&JsValue::from_str(&format!(
-                "pp-text: {} (at {}..{})",
-                e.message, e.span.start, e.span.end
-            )));
-            return;
-        }
-    };
-    install(call.el, call.proxy, ast);
-}
 
 /// Install a `pp-text` effect on `el` that writes `expr`'s
 /// stringified value into the element's `textContent` and
