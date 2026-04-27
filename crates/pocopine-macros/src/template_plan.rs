@@ -92,12 +92,16 @@ pub(crate) struct EmittedTemplatePlan {
 pub(crate) fn analyze_template_plan(
     ast: &TemplateAst,
     row_plan_assignments: &[(Vec<u16>, u32)],
+    role: Option<(String, String)>,
 ) -> EmittedTemplatePlan {
     let mut ctx = AnalysisCtx {
         row_plan_assignments: row_plan_assignments.to_vec(),
         ..AnalysisCtx::default()
     };
-    let mut emissions = Emissions::default();
+    let mut emissions = Emissions {
+        role: role.clone(),
+        ..Emissions::default()
+    };
     let mut path: Vec<u16> = Vec::new();
     for node in &ast.roots {
         if let Node::Element(el) = node {
@@ -263,6 +267,15 @@ struct Emissions {
     /// allocation (pp-if / pp-for / pp-teleport bodies share
     /// the same counter).
     next_if_body_id: usize,
+    /// RFC-058 Phase 6.5 — `(role_tag, role_attrs)` for the
+    /// component's `<root>` placeholder, copied from the
+    /// `#[component(role = "...")]` attribute. The runtime
+    /// `compile_template` substitutes `<root>` in the parent's
+    /// registered HTML; lifted body fragments + slot fragments
+    /// stamp their own cleaned HTML directly via `set_inner_html`
+    /// and need the substitution applied at compile time so the
+    /// fragment root materialises with the right tag.
+    role: Option<(String, String)>,
 }
 
 impl Emissions {
@@ -2067,9 +2080,16 @@ fn is_debounce_ms(m: &str) -> bool {
 /// envelope falls back to the legacy `clone_template_body` +
 /// `walker::walk` path the controller already drives.
 ///
+/// RFC-058 Phase 6.5 expansion: `<slot>` elements are now
+/// allowed. The macro records them in the body fragment's
+/// `slot_outlets`; the runtime applier materialises each via
+/// `walker::materialize_compiled_slot_outlet`, which falls
+/// through to the same `slot_fragment::lookup` path the parent
+/// template uses. The body's stamped `CTX_PARENT_KEY` carries
+/// the slot owner scope through to descendants so nested
+/// inject chains resolve correctly.
+///
 /// Excludes:
-///   * `<slot>` elements (would need slot capture/replay
-///     hooks inside a body fragment — Phase 3.5c+);
 ///   * `pp-data` / `pp-model` / `pp-route` (component scope
 ///     boundaries — the body fragment installs against the
 ///     enclosing scope only).
@@ -2083,9 +2103,6 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
             }
         }
         return true;
-    }
-    if el.tag == "slot" {
-        return false;
     }
     // Phase 3.5d expansion: non-HTML5 tags are allowed here.
     // `walk()` emits child_mount entries for them into the
@@ -2149,7 +2166,23 @@ fn analyze_lift_body(
     let mut html = String::new();
     let mut sp: Vec<u16> = Vec::new();
     emit_element(root_el, &ctx, &mut html, &mut sp);
+    if let Some((tag, attrs)) = emissions.role.as_ref() {
+        html = apply_role_substitution(&html, tag, attrs);
+    }
     Some((html, ctx))
+}
+
+/// Compile-time mirror of `pocopine_core::templates::compile_template`'s
+/// `<root>` rewrite. Body fragments and dynamic slot fragments stamp
+/// their cleaned HTML directly via `set_inner_html` (no runtime
+/// `compile_template` pass), so the macro applies the same
+/// substitution before the literal lands in the fragment fn.
+fn apply_role_substitution(html: &str, tag: &str, attrs: &str) -> String {
+    let with_open_self_close = html
+        .replace("<root>", &format!("<{tag} {attrs}>"))
+        .replace("<root/>", &format!("<{tag} {attrs}/>"))
+        .replace("<root ", &format!("<{tag} {attrs} "));
+    with_open_self_close.replace("</root>", &format!("</{tag}>"))
 }
 
 // ─── slot subtree eligibility + emission ─────────────────────────
@@ -2187,6 +2220,11 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
         }
     }
     let html = serialize_slot_children_with(nodes, &ctx);
+    let html = if let Some((tag, attrs)) = emissions.role.as_ref() {
+        apply_role_substitution(&html, tag, attrs)
+    } else {
+        html
+    };
     let is_dynamic = !ctx.bindings.is_empty()
         || !ctx.listeners.is_empty()
         || !ctx.refs.is_empty()

@@ -6140,24 +6140,14 @@ async fn pine_template_plan_fallback_audit() {
         .into(),
     );
 
-    let expected: &[&str] = &[
-        "pine-accordion-content",
-        "pine-alert-dialog-portal",
-        "pine-collapsible-content",
-        "pine-combobox-portal",
-        "pine-command-portal",
-        "pine-context-menu-portal",
-        "pine-dialog-portal",
-        "pine-dropdown-menu-item-indicator",
-        "pine-dropdown-menu-portal",
-        "pine-dropdown-menu-sub-content",
-        "pine-hover-card-portal",
-        "pine-popover-portal",
-        "pine-select-item-indicator",
-        "pine-select-portal",
-        "pine-select-value",
-        "pine-tooltip-portal",
-    ];
+    // RFC-058 Phase 6.5 — body-lift envelope expanded to include
+    // `<slot>` children. Every previously walker-required Pine
+    // compound (`*-portal`, `*-content`, `*-indicator`, `*-value`)
+    // now lifts cleanly — its pp-if/pp-teleport body becomes a
+    // fragment fn whose plan installs every directive + slot
+    // outlet via `apply_static_plan`. The audit baseline drops to
+    // **zero** walker-required plans across the entire Pine surface.
+    let expected: &[&str] = &[];
 
     assert_eq!(
         walker_owned,

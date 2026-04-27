@@ -1145,6 +1145,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // role is a compile-time error; an explicitly-omitted role
     // keeps the classic `inject_pp_data`-only path so non-primitive
     // components don't need a placeholder root.
+    let mut role_for_template_plan: Option<(String, String)> = None;
     let role_arg: proc_macro2::TokenStream = match args.role.as_ref() {
         Some(lit) => {
             let role_name = lit.value();
@@ -1160,6 +1161,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             };
+            // RFC-058 Phase 6.5 — body / slot fragments need the
+            // same `<root>` substitution `compile_template`
+            // applies at runtime. The runtime version stamps
+            // `data-pine-role="<role>"`; mirror that exact attr
+            // shape here so DOM / CSS selectors agree across the
+            // two paths.
+            role_for_template_plan =
+                Some((tag.to_string(), format!("data-pine-role=\"{}\"", role_name)));
             quote! { Some((#tag, #role_name)) }
         }
         None => quote! { None },
@@ -1245,7 +1254,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // (no eligible directive anywhere AND no row plans either).
     let template_plan = template_ast
         .as_ref()
-        .map(|ast| template_plan::analyze_template_plan(ast, &row_plans.assignments))
+        .map(|ast| {
+            template_plan::analyze_template_plan(
+                ast,
+                &row_plans.assignments,
+                role_for_template_plan.clone(),
+            )
+        })
         .unwrap_or_else(|| template_plan::EmittedTemplatePlan {
             plan_tokens: None,
             cleaned_html: None,
