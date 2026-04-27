@@ -63,6 +63,15 @@ const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 
 /// Convenience used by `#[wasm_bindgen(js_name=start)]`.
+///
+/// Gated behind `legacy-dom`: the legacy entry runs the
+/// recursive walker over `<body>` so user-authored `pp-*`
+/// directives outside compiled components get bound. Apps
+/// that bootstrap entirely through compiled views call
+/// [`crate::App::run_compiled`] (which delegates to
+/// [`start_compiled`]) and need neither this entry nor the
+/// `legacy-dom` feature.
+#[cfg(feature = "legacy-dom")]
 pub fn start_on_body() {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
@@ -74,18 +83,14 @@ pub fn start_on_body() {
 /// install a `MutationObserver` so later DOM mutations are picked
 /// up too.
 ///
-/// The observer install is gated on the RFC-058 Phase 6
-/// `legacy-dom` feature. Without the feature the initial
-/// synchronous walk still runs (compiled views still need it for
-/// the root tag), but dynamically-inserted DOM (markdown render
-/// output, server-rendered partials, externally adopted nodes)
-/// won't be auto-discovered. Apps that bootstrap entirely through
-/// compiled-view mounts can `default-features = false` to drop
-/// the observer's binary cost.
+/// Gated behind `legacy-dom` (RFC-058 Phase 6.5). The recursive
+/// directive scan + the `MutationObserver` install both depend
+/// on this feature; compiled-only apps mount via
+/// [`start_compiled`] instead.
+#[cfg(feature = "legacy-dom")]
 pub fn start(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     walk(root);
-    #[cfg(feature = "legacy-dom")]
     install_observer(root);
 }
 

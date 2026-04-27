@@ -124,6 +124,10 @@ impl App {
     /// RFC 056 §6.2: before any walker work the registry is verified;
     /// when collisions exist the boot error surface is rendered and
     /// no further mount work runs.
+    ///
+    /// Gated behind `legacy-dom` (RFC-058 Phase 6.5). Apps that
+    /// don't enable the feature use [`Self::run_compiled`].
+    #[cfg(feature = "legacy-dom")]
     pub fn run(self) {
         self.boot(false);
     }
@@ -135,6 +139,8 @@ impl App {
     /// shape) save the per-descendant `bind` cost; the
     /// `MutationObserver` install and body-level `pp-*` discovery
     /// are skipped.
+    ///
+    /// Always available — does not require `legacy-dom`.
     pub fn run_compiled(self) {
         self.boot(true);
     }
@@ -160,7 +166,10 @@ impl App {
                 walker::start_compiled(&body.into());
             }
         } else {
+            #[cfg(feature = "legacy-dom")]
             walker::start_on_body();
+            #[cfg(not(feature = "legacy-dom"))]
+            unreachable!("non-compiled boot reached without `legacy-dom` feature");
         }
         if !self.routes.is_empty() {
             router::init();

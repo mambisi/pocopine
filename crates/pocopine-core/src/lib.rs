@@ -103,6 +103,7 @@ pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
 pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
+#[cfg(feature = "legacy-dom")]
 pub use walker::{start, start_on_body};
 pub use watch::{
     watch, watch_field, watch_field_scoped, watch_scope_field, watch_scope_field_now,
@@ -114,6 +115,9 @@ pub use watch::{
 /// Verifies the component registry first (RFC 056 §6.2). When any
 /// collision was recorded during `register()` calls, the boot error
 /// surface is rendered and the walker is *not* started.
+///
+/// Gated behind `legacy-dom` (RFC-058 Phase 6.5).
+#[cfg(feature = "legacy-dom")]
 pub fn run() {
     if let Err(errors) = registry::verify_registry() {
         registry::render_boot_error(&errors);

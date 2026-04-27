@@ -16,7 +16,7 @@ pub use pocopine_core::{
     emit_model_field, emit_raw, emit_raw_from, fetch, flush_sync, inject, invalidate_field,
     invalidate_field_cache, mount_profile_enabled, on_cleanup, on_scope_unmount,
     patch_list_at_inline, patch_list_indices_inline, provide, registered_component_names,
-    registry_errors, release, replace_field_inline, report_mount_profile, reset_mount_profile, run,
+    registry_errors, release, replace_field_inline, report_mount_profile, reset_mount_profile,
     run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store,
     swap_list_indices_inline, this, trigger_scope, verify_registry, watch, watch_field,
     watch_field_scoped, watch_scope_field, watch_scope_field_now, watch_scope_field_scoped,
@@ -33,17 +33,25 @@ pub use pocopine_core::{create_context, inject_key};
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{component, handlers, server, store, Emit};
 
+/// Re-export of [`pocopine_core::run`]. Gated behind `legacy-dom`
+/// (RFC-058 Phase 6.5) — apps that don't enable the feature use
+/// [`App::run_compiled`] instead.
+#[cfg(feature = "legacy-dom")]
+pub use pocopine_core::run;
+
 pub mod prelude {
+    #[cfg(feature = "legacy-dom")]
+    pub use crate::run;
     #[allow(deprecated)]
     pub use crate::InjectKey;
     pub use crate::{
         batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
         emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, handlers,
-        inject_key, on, on_cleanup, on_emit, run, rw_signal, signal, spawn, spawn_latest,
-        spawn_scoped, store, this, watch, App, Component, ComponentState, Computed, ContextKey,
-        ContextMarker, Emit, Handle, Inject, NearestParent, Parent, RwSignal, Scope, ScopeId,
-        ServerError, ServerResult, Setter, Signal, Store,
+        inject_key, on, on_cleanup, on_emit, rw_signal, signal, spawn, spawn_latest, spawn_scoped,
+        store, this, watch, App, Component, ComponentState, Computed, ContextKey, ContextMarker,
+        Emit, Handle, Inject, NearestParent, Parent, RwSignal, Scope, ScopeId, ServerError,
+        ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
