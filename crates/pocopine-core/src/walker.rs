@@ -215,6 +215,18 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
 /// at walk time with either the user's captured content (via the
 /// slot store keyed by the owning component) or the slot's own
 /// default children, then the replacement is walked recursively.
+///
+/// RFC-058 Phase 6.5 — without `legacy-dom` this is a no-op stub.
+/// Compiled apps mount registered tags through `start_compiled` /
+/// `mount_component` and install every directive via
+/// `apply_static_plan`; the runtime walker has nothing to do.
+/// Callers that still funnel a clone through `walk` (pp-if /
+/// pp-for / pp-teleport's `body_fn = None` fallback,
+/// `walk_compiled_fallback`, the router's outlet walk, the
+/// MutationObserver callback) silently lose un-lifted directive
+/// bindings without the feature — the documented contract for
+/// the gate.
+#[cfg(feature = "legacy-dom")]
 pub fn walk(el: &Element) {
     if el.local_name() == "slot" {
         materialize_slot(el);
@@ -259,6 +271,9 @@ pub fn walk(el: &Element) {
     fire_mount_hook(el);
     set_private(el, WALKED_KEY, &JsValue::TRUE);
 }
+
+#[cfg(not(feature = "legacy-dom"))]
+pub fn walk(_el: &Element) {}
 
 fn fire_deferred_init(el: &Element) {
     let Some(value) = get_private(el, INIT_PENDING_KEY).and_then(|v| v.as_string()) else {
@@ -393,6 +408,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
     });
 }
 
+#[cfg(feature = "legacy-dom")]
 fn bind(el: &Element) {
     BIND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     // Step 0: `<pp-outlet>` is the router's mount point. Hand the
@@ -1797,9 +1813,16 @@ thread_local! {
 /// still have preserved runtime-owned behavior inside a generated
 /// fragment. RFC-058 Phase 6 should drive this counter to zero,
 /// then remove this wrapper and the corresponding call sites.
+///
+/// Without `legacy-dom` this is a no-op (the underlying `walk`
+/// is also gated). The counter still increments so tests can
+/// detect attempted fallbacks even in compiled-only builds.
 pub fn walk_compiled_fallback(el: &Element) {
     COMPILED_FALLBACK_WALKS.with(|c| c.set(c.get().saturating_add(1)));
+    #[cfg(feature = "legacy-dom")]
     walk(el);
+    #[cfg(not(feature = "legacy-dom"))]
+    let _ = el;
 }
 
 /// Number of compiled-path fallback walks since the last reset.
