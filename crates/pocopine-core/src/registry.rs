@@ -112,6 +112,23 @@ thread_local! {
     static REGISTERED: RefCell<HashSet<TypeId>> = RefCell::new(HashSet::new());
 }
 
+/// RFC 060 Tier 4 — static vtable per `#[component]` type. The
+/// `app!{}` macro collects an explicit `components: [...]` list
+/// and emits a `&'static phf::Map<&'static str, &'static
+/// ComponentVTable>` that the runtime queries instead of (or in
+/// addition to) the legacy thread-local `HashMap`. Each entry
+/// lives in `.rodata` — no allocation, no init order.
+///
+/// The `plan` slot is reserved for the future hookup to
+/// `templates_plan::StaticTemplatePlan`; V1 leaves it `None`
+/// because the existing `register_template_plan` flow still
+/// owns plan lookup. RFC 061 / 062 will tighten this when the
+/// compiled-mount flow assumes the registry is exhaustive.
+pub struct ComponentVTable {
+    pub name: &'static str,
+    pub register: fn(),
+}
+
 /// Cycle/dedupe guard for the macro-emitted `Component::register()`
 /// body. Returns `true` the first time `T` is seen on this thread,
 /// `false` on every subsequent call. The `#[component]` macro emits

@@ -20,18 +20,18 @@ pub use pocopine_core::{
     run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store,
     swap_list_indices_inline, this, trigger_scope, verify_registry, watch, watch_field,
     watch_field_scoped, watch_scope_field, watch_scope_field_now, watch_scope_field_scoped,
-    watch_scoped, App, Body, Component, ComponentState, Computed, ContextKey, ContextMarker, Doc,
-    DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl, Inject, IsTeleported,
-    LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Refs,
-    RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath,
-    ServerError, ServerResult, Setter, Signal, SignalId, Slots, Store, StoreHandle, TagName,
-    TaskHandle, TeleportHost, TypedEl, Win,
+    watch_scoped, App, Body, Component, ComponentState, ComponentVTable, Computed, ContextKey,
+    ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl,
+    Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
+    ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope,
+    ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Slots, Store,
+    StoreHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
-pub use pocopine_macros::{component, handlers, server, store, Emit};
+pub use pocopine_macros::{app, component, handlers, server, store, Emit};
 
 pub mod prelude {
     #[allow(deprecated)]
@@ -58,9 +58,11 @@ pub mod __private {
         register_store_scope, register_template, spawn as runtime_spawn,
         spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
         task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentState,
-        FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope, StaticBinding,
-        StaticListener, StaticRowPlan, Store, WriteOrigin,
+        ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope,
+        StaticBinding, StaticListener, StaticRowPlan, Store, WriteOrigin,
     };
+    // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
+    pub use phf;
     // RFC-058 Phase 2 — template-plan shape + registry. The
     // macro emits a `&'static StaticTemplatePlan` per component
     // and registers it via `register_template_plan` alongside the

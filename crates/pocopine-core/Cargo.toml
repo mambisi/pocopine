@@ -29,6 +29,10 @@ serde_json = "1"
 serde-wasm-bindgen = { workspace = true }
 once_cell = { workspace = true }
 unicode-segmentation = "1"
+# RFC 060 Tier 4 — `&'static phf::Map<&'static str,
+# &'static ComponentVTable>` populated by the `app!{}` macro
+# at expansion time from an explicit `components: [...]` list.
+phf = { version = "0.13", features = ["macros"] }
 
 [dependencies.web-sys]
 version = "0.3"

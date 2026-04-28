@@ -118,6 +118,25 @@ impl App {
         self
     }
 
+    /// RFC 060 Tier 4 — variant of [`Self::run`] that drives the
+    /// registry off an explicit `&'static phf::Map<&'static str,
+    /// &'static ComponentVTable>` produced by the `app!{}`
+    /// macro. Iterates the map's values and calls each vtable's
+    /// `register` fn (idempotent via the Tier 1
+    /// `mark_registered` guard) before mounting. The thread-local
+    /// runtime registries still back lookups; this method is
+    /// the bridge between the static phf surface and the
+    /// existing runtime data.
+    pub fn run_with_registry(
+        self,
+        registry: &'static phf::Map<&'static str, &'static crate::registry::ComponentVTable>,
+    ) {
+        for vtable in registry.values() {
+            (vtable.register)();
+        }
+        self.run();
+    }
+
     /// Fire pre-mount hooks, mount registered components on the body,
     /// initialise the router (if any routes were registered), then
     /// fire post-mount hooks.

@@ -23,6 +23,9 @@ js-sys = { workspace = true }
 serde = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
 web-sys = { version = "0.3", features = ["Element"] }
+# RFC 060 Tier 4 — re-exported via `__private::phf` for the
+# `app!{}` macro's expansion site.
+phf = { version = "0.13", features = ["macros"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
