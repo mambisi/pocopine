@@ -2,6 +2,11 @@
 //! `wasm-pack test --firefox --headless crates/pine`.
 
 #![cfg(target_arch = "wasm32")]
+// RFC 061 Phase 1 — the `mount` helper still calls
+// `walker::start_compiled` to mount raw `<pine-x>` HTML.
+// Rewrites land in Phase 3 (~106 fixtures, per the migration
+// plan); Phase 1 just silences the deprecation warning here.
+#![allow(deprecated)]
 
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;

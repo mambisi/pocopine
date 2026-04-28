@@ -61,6 +61,14 @@
 //! compiles the directives at expansion time and the bridge is
 //! never reached.
 
+// RFC 061 Phase 1 — this file IS the bridge. Internal calls
+// from one bridge function to another are unavoidable until the
+// whole module retires in Phase 3. File-level allow keeps the
+// public deprecation warnings on the surface (downstream
+// callers still see them) while letting the bridge compile
+// quietly until deletion.
+#![allow(deprecated)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -117,6 +125,9 @@ const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
 /// After mounting components, every `<pp-outlet>` element under
 /// `root` is registered with the router so route navigations can
 /// paint into it.
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     `App::run()` will discover a [pp-app] root in Phase 2. \
+                     Use `App::mount_subtree::<C>(host)` for tooling subtree mounts.")]
 pub fn start_compiled(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     let tags = crate::templates::registered_template_names();
@@ -220,6 +231,9 @@ fn fire_deferred_init(el: &Element) {
 /// rediscovers the scope through `enclosing_scope(el)` because
 /// the same element may be re-queued under a fresh scope by
 /// `pp-for` row reuse.
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     Init binding moves to compile-time emission; \
+                     this runtime helper is removed in Phase 3.")]
 pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
     let _ = scope_id; // see doc-comment
     set_private(el, INIT_PENDING_KEY, &JsValue::from_str(expr_src));
@@ -504,6 +518,9 @@ fn mount_component(
 /// Mount the registered component named `name` onto `host_el`.
 /// Public façade over `mount_component` for the macro-emitted
 /// child-mount path.
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     Macros will emit typed mount calls in Phase 3; \
+                     this string-keyed entry retires.")]
 pub fn mount_child_component(host_el: &Element, name: &str) {
     mount_component(host_el, name, None);
 }
@@ -518,6 +535,9 @@ pub fn mount_child_component(host_el: &Element, name: &str) {
 /// so dynamic slot content (slot subtrees with `pp-text` / `@click`
 /// / `pp-bind` etc.) can install bindings against the parent scope
 /// when the fragment fires.
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     Macros will emit typed mount calls in Phase 3; \
+                     this string-keyed entry retires.")]
 pub fn mount_child_component_with_slots(
     host_el: &Element,
     name: &str,
@@ -1198,6 +1218,10 @@ fn materialize_adopted_slot(
 /// materialiser ([`materialize_adopted_slot`]) can drive
 /// component / controller discovery over freshly-cloned
 /// template bodies.
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     Adopted-DOM bridge retires; slot content + \
+                     pp-for bodies will flow through compiled fragments \
+                     only in Phase 3.")]
 pub fn mount_adopted_components(root: &Element) {
     // Step 1: install runtime controllers on user-authored
     // `<template pp-*>` elements. Done first because pp-for /

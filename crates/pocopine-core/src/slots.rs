@@ -7,6 +7,12 @@
 //! out of here by name when it hits a `<slot>` element, cloning the
 //! fragment per materialisation so the same named slot inside a
 //! `pp-for` renders once per iteration.
+//!
+//! **RFC 061 — deprecated, deletion in Phase 3.** Slot content
+//! flows through `slot_fragment::*` (compiled, parent-emitted)
+//! once the adopted-DOM bridge retires. The `pub mod slots`
+//! declaration in `lib.rs` carries the `#[deprecated]`
+//! attribute.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

@@ -301,6 +301,10 @@ impl Scope {
     pub fn remove(id: ScopeId) {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
         crate::refs::clear_scope(id);
+        // RFC 061 Phase 1 — `slots` module deprecated; cleanup
+        // call removed in Phase 3 with the rest of the runtime
+        // slot store.
+        #[allow(deprecated)]
         crate::slots::clear(id);
         crate::slot_fragment::clear(id);
         crate::id::clear_scope(id);

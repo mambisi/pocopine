@@ -35,6 +35,12 @@
 //!   on framework bugs; attribute-preserved fallbacks degrade
 //!   silently to the runtime walker as today.
 
+// RFC 061 Phase 1 — the static-plan applier calls
+// `walker::mount_child_component{,_with_slots}` and
+// `walker::defer_init_on`. All three retire in Phase 3 when
+// the compiled-mount path takes over.
+#![allow(deprecated)]
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;

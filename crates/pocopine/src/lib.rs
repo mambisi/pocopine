@@ -82,6 +82,17 @@ pub mod __private {
     // call through the umbrella's stable `::pocopine::__private`
     // namespace. Same shape as the existing `register_template` /
     // `register_row_plans` re-exports above.
+    //
+    // RFC 061 Phase 1 — `defer_init_on`,
+    // `mount_child_component`, and
+    // `mount_child_component_with_slots` are deprecated; the
+    // re-exports stay for the macro's compiled emission path.
+    // Phase 3 deletes them along with the underlying walker
+    // functions. Suppressing the deprecation warning on the
+    // re-export line keeps macro-generated code quiet without
+    // hiding the warning from external callers (they hit the
+    // deprecation on the function itself).
+    #[allow(deprecated)]
     pub use pocopine_core::walker::{
         defer_init_on, finalize_compiled_subtree, fire_mount_post_order, fire_ready_next_tick,
         mount_child_component, mount_child_component_with_slots, release_compiled_subtree,
