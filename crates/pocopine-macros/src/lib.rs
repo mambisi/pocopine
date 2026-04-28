@@ -1544,6 +1544,23 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    // RFC 060 Tier 1 — emit a transitive `T::register()` call per
+    // `uses = [...]` entry so the consumer's registration brings
+    // every reachable component along with it. The cycle/dedupe
+    // guard at the top of `register()` (see `mark_registered`)
+    // makes this safe for cyclic graphs.
+    let register_uses_stmts: proc_macro2::TokenStream = match args.uses.as_ref() {
+        Some(table) => {
+            let calls = table.entries.iter().map(|(_tag, type_path)| {
+                quote! {
+                    <#type_path as ::pocopine::__private::Component>::register();
+                }
+            });
+            quote! { #(#calls)* }
+        }
+        None => quote! {},
+    };
+
     // Give each registration function a distinct name so multiple components
     // in one module don't trip the `pub fn register()` duplicate.
     let _register_fn = format_ident!("__pocopine_register_{}", struct_ident);
@@ -1733,6 +1750,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             /// with the pocopine runtime. Idempotent. Call directly or via
             /// [`pocopine::App::register`].
             pub fn register() {
+                if !::pocopine::__private::mark_registered::<#struct_ident>() {
+                    return;
+                }
                 ::pocopine::__private::register_component(
                     #name_str,
                     concat!(module_path!(), "::", stringify!(#struct_ident)),
@@ -1747,6 +1767,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #register_template_stmt
                 #register_style_stmt
                 #register_display_stmt
+                #register_uses_stmts
             }
         }
 

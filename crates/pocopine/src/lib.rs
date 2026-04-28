@@ -54,12 +54,12 @@ pub mod __private {
     pub use js_sys;
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
-        inject_style, register_component, register_row_plans, register_store_scope,
-        register_template, spawn as runtime_spawn, spawn_latest as runtime_spawn_latest,
-        spawn_scoped as runtime_spawn_scoped, store_scope, task::TaskHandle, track,
-        with_write_origin, BindingKind, Component, ComponentState, FromHandlerArg, Handle,
-        HandlerDispatch, LifecycleContext, Scope, StaticBinding, StaticListener, StaticRowPlan,
-        Store, WriteOrigin,
+        inject_style, mark_registered, register_component, register_row_plans,
+        register_store_scope, register_template, spawn as runtime_spawn,
+        spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
+        task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentState,
+        FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope, StaticBinding,
+        StaticListener, StaticRowPlan, Store, WriteOrigin,
     };
     // RFC-058 Phase 2 — template-plan shape + registry. The
     // macro emits a `&'static StaticTemplatePlan` per component
