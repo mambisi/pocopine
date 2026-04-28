@@ -76,7 +76,7 @@ pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
     Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, MountEpoch, ParentId, Refs,
-    ScopePath, Slots, TagName, TeleportHost, TypedEl, Win,
+    ScopePath, TagName, TeleportHost, TypedEl, Win,
 };
 pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};

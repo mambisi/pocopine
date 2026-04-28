@@ -18,11 +18,6 @@
 //!   effects re-fired via `trigger_scope`. New keys get new clones;
 //!   dropped keys get removed. See RFC-007.
 
-// RFC 061 Phase 1 — `pp-for`'s row-mount path calls
-// `walker::mount_adopted_components` for body discovery. Both
-// retire together in Phase 3.
-#![allow(deprecated)]
-
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;

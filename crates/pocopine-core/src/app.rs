@@ -23,7 +23,7 @@
 //! `Counter::register()` and `pocopine::run()` still work for
 //! ad-hoc use — the trait is what `App` calls under the hood.
 
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::Element;
 
@@ -183,12 +183,7 @@ impl App {
         };
         let pp_app = document.query_selector("[pp-app]").ok().flatten();
         if let Some(host) = pp_app {
-            // Phase 2 still flows through the bridge's
-            // `start_compiled` (now scoped to the [pp-app]
-            // subtree, not document.body). Phase 3 swaps this
-            // for the typed compiled-mount path.
-            #[allow(deprecated)]
-            walker::start_compiled(&host);
+            mount_pp_app_subtree(&host);
         } else {
             render_missing_pp_app_root();
             return;
@@ -242,9 +237,6 @@ impl App {
     /// + DOM cleanly.
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
-        // Phase 2 still routes through the deprecated bridge;
-        // Phase 3 swaps for a typed compiled-mount entry.
-        #[allow(deprecated)]
         walker::mount_child_component(host, C::NAME);
         SubtreeHandle { host: host.clone() }
     }
@@ -266,6 +258,44 @@ impl SubtreeHandle {
     pub fn unmount(self) {
         walker::release_compiled_subtree(&self.host);
         self.host.set_inner_html("");
+    }
+}
+
+/// RFC 061 Phase 3 — replacement for the deleted
+/// `walker::start_compiled` body. Mounts every registered
+/// custom-tag descendant of the `[pp-app]` host via the typed
+/// `mount_child_component` path, fires lifecycle hooks via
+/// `finalize_compiled_subtree`, then registers any
+/// `<pp-outlet>` element so the router can paint matched
+/// routes.
+fn mount_pp_app_subtree(host: &Element) {
+    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
+    let names = crate::templates::registered_template_names();
+    if !names.is_empty() {
+        let selector = names.join(",");
+        if let Ok(matches) = host.query_selector_all(&selector) {
+            for i in 0..matches.length() {
+                let Some(node) = matches.item(i) else {
+                    continue;
+                };
+                let Ok(el) = node.dyn_into::<Element>() else {
+                    continue;
+                };
+                let tag = el.local_name();
+                walker::mount_child_component(&el, &tag);
+                walker::finalize_compiled_subtree(&el);
+            }
+        }
+    }
+    if let Ok(outlets) = host.query_selector_all("pp-outlet") {
+        for i in 0..outlets.length() {
+            let Some(node) = outlets.item(i) else {
+                continue;
+            };
+            if let Ok(el) = node.dyn_into::<Element>() {
+                router::set_outlet(el);
+            }
+        }
     }
 }
 
