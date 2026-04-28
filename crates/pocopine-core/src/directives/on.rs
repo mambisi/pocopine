@@ -40,7 +40,7 @@ use crate::scope::with_current_el;
 /// an unknown token is a framework bug.
 ///
 /// Cleanup-safe install entry point — the listener's lifetime
-/// ties to `el` via [`crate::walker::track_listener_on_with_opts`].
+/// ties to `el` via [`crate::mount::track_listener_on_with_opts`].
 pub fn install(
     el: &Element,
     scope_id: ScopeId,
@@ -251,7 +251,7 @@ pub fn install(
     // unmount. Replaces the old `closure.forget()` which leaked the
     // listener AND — for `.window` / `.document` / `.outside`
     // variants — kept it firing past unmount.
-    crate::walker::track_listener_on_with_opts(&el, target, &event, &opts, closure);
+    crate::mount::track_listener_on_with_opts(&el, target, &event, &opts, closure);
 }
 
 /// Backward-compat: a directive value that's a single identifier

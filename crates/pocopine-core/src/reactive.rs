@@ -462,7 +462,7 @@ pub fn trigger_signal(signal_id: SignalId) {
 /// Drop every reactivity-side entry associated with `scope_id`.
 /// Called from `Scope::remove` alongside refs/slots/id/context
 /// cleanups. Effects associated with the scope are independently
-/// released via `walker::release_subtree` → `release(EffectId)`;
+/// released via `mount::release_subtree` → `release(EffectId)`;
 /// this just evicts the scope's inner DEPS map.
 pub fn clear_scope(scope_id: ScopeId) {
     DEPS.with(|d| {

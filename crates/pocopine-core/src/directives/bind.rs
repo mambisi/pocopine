@@ -25,9 +25,9 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::expr::{self, Spanned};
+use crate::mount::track_effect_on;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::track_effect_on;
 
 fn normalize_prop_name(name: &str) -> String {
     name.replace('-', "_")
@@ -55,7 +55,7 @@ pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<ex
     // scope id is stable for the lifetime of the element; we use
     // it at each effect tick to consult `is_prop` on the child's
     // state so parents can't write through to `#[state]` fields.
-    let child_target = crate::walker::child_component_scope(el);
+    let child_target = crate::mount::child_component_scope(el);
     let child_field = normalize_prop_name(attr);
 
     // Memo of the last value written to this attribute. Serialised

@@ -25,10 +25,10 @@ use web_sys::{
     CustomEvent, Element, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement,
 };
 
+use crate::mount::{child_component_proxy, track_effect_on, track_listener_on};
 use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::{child_component_proxy, track_effect_on, track_listener_on};
 
 /// Compiled-path entry used by `apply_static_plan`'s
 /// child-host model dispatch. Routes through the component or
@@ -69,7 +69,7 @@ fn install_component(
 
     // Resolve the child's scope id once — we need it to consult
     // `is_prop` per RFC-031 before every mirror-in write.
-    let child_scope_id = crate::walker::child_component_scope(&el).map(|(id, _)| id);
+    let child_scope_id = crate::mount::child_component_scope(&el).map(|(id, _)| id);
 
     // Parent → child: mirror proxy[key] into the child's
     // `<child_field>` prop. Same shape as pp-bind's child-prop path,
@@ -133,12 +133,12 @@ fn install_component(
 
 /// RFC-058 Phase 6.5 — compiled-path entry for `pp-model` on a
 /// native input/textarea/select. Same effect + listener wiring
-/// as the runtime walker dispatch (`run_native`); extracted so
+/// as the runtime mount dispatch (`run_native`); extracted so
 /// `apply_static_plan` can install it directly without going
 /// through the directive registry. The macro emits one
 /// [`crate::directives::for_plan::StaticNativeModel`] per
 /// `<input pp-model="field">` site and the runtime applier
-/// routes through here, dropping the runtime walker dependency
+/// routes through here, dropping the runtime mount dependency
 /// for native model bindings.
 pub fn install_native(
     el: &web_sys::Element,

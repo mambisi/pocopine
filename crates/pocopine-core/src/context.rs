@@ -118,7 +118,7 @@ impl<T: 'static> std::fmt::Debug for ContextKey<T> {
 type ProvideMap = HashMap<u64, Box<dyn Any>>;
 
 thread_local! {
-    /// Child → parent map, populated by the walker when a new
+    /// Child → parent map, populated by the mount when a new
     /// scope is minted. Cleared on `Scope::remove`.
     static PARENTS: RefCell<HashMap<ScopeId, ScopeId>> =
         RefCell::new(HashMap::new());
@@ -130,7 +130,7 @@ thread_local! {
 }
 
 /// Record that `parent` is the scope that enclosed `child` at
-/// mount time. Called by the walker right after minting the
+/// mount time. Called by the mount right after minting the
 /// child's scope.
 pub fn set_parent(child: ScopeId, parent: ScopeId) {
     PARENTS.with(|p| {

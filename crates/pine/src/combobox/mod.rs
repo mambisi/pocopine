@@ -473,7 +473,7 @@ impl PineComboboxItem {
         // synchronously inside Root.open's reactive flush (via
         // Portal + pp-if), and calling `handle.update` from
         // inside that same flush re-enters the RefCell borrow
-        // the walker is already holding on *some* ancestor's
+        // the mount is already holding on *some* ancestor's
         // state. `tick::next` (micro-task) runs after the
         // current flush completes, so our state writes land
         // cleanly.
@@ -536,7 +536,7 @@ fn find_input_scope(_root_scope: pocopine::ScopeId) -> Option<pocopine::ScopeId>
     // Simplest: scan the document for the one input with
     // `pp-ref="input"` inside this Root's subtree. We don't
     // know the exact scope, so fall back to current_scope_id's
-    // walker-managed stack when called inside Root.update —
+    // mount-managed stack when called inside Root.update —
     // which isn't the case here. Pragmatic v1: return None and
     // rely on the watch on `query` (which happens when Root
     // writes query) to re-sync the DOM via the Input's own

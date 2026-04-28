@@ -2,7 +2,7 @@
 //!
 //! The `#[component]` macro emits a call to [`register_template`] with the
 //! component's compiled HTML. The macro pipes the raw `.poco` contents
-//! through [`inject_pp_data`] so the walker can recognise the template
+//! through [`inject_pp_data`] so the mount can recognise the template
 //! root by its `pp-data` attribute without authors having to type one.
 
 use std::cell::RefCell;
@@ -30,7 +30,7 @@ pub fn register_template(name: impl Into<String>, html: impl Into<String>) {
     TEMPLATES.with(|t| t.borrow_mut().insert(name.into(), html.into()));
 }
 
-/// Fetch a registered template. Returns an owned `String` so the walker can
+/// Fetch a registered template. Returns an owned `String` so the mount can
 /// clone into the DOM without locking the registry.
 pub fn template_for(name: &str) -> Option<String> {
     TEMPLATES.with(|t| t.borrow().get(name).cloned())
@@ -172,7 +172,7 @@ pub fn inject_pp_data(raw: &str, name: &str) -> String {
         }
         if bytes[i] != b'<' {
             // Stray text before the root — emit as-is and give up on
-            // rewriting. The walker will fail gracefully when it can't
+            // rewriting. The mount will fail gracefully when it can't
             // find `pp-data`.
             return raw.to_owned();
         }

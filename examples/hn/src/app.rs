@@ -1,4 +1,4 @@
-//! Client entry: wire routes, kick off the walker.
+//! Client entry: wire routes, mount the app.
 
 use pocopine::prelude::*;
 

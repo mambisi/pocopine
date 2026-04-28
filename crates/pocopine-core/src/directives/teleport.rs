@@ -5,7 +5,7 @@
 //! needs to escape `overflow: hidden` clipping, `z-index` stacking,
 //! and `transform`-induced containing blocks. The teleported clone
 //! still binds against the owning component's scope — we pin the
-//! scope onto the clone root so `walker::enclosing_scope` returns the
+//! scope onto the clone root so `mount::enclosing_scope` returns the
 //! intended proxy even after the move.
 //!
 //! Composes with `pp-if`: if the template has both attributes, `pp-if`
@@ -18,7 +18,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
 
-use crate::walker::{self, bind_borrowed_scope_to};
+use crate::mount::{self, bind_borrowed_scope_to};
 
 const TELEPORTED_KEY: &str = "__pp_teleported";
 /// Backpointer stored on the teleported clone → the original
@@ -59,9 +59,9 @@ pub fn host_of(el: &Element) -> Option<Element> {
 ///
 /// Called by `apply_static_plan` for every `StaticTeleportPlan`
 /// entry the classifier emitted. RFC-058 Phase 4.3 — extracted
-/// so the runtime walker dispatch path and the plan applier
+/// so the runtime mount dispatch path and the plan applier
 /// share one mount body. The owning scope still pins onto the
-/// clone via `walker::enclosing_scope` so directives inside the
+/// clone via `mount::enclosing_scope` so directives inside the
 /// teleported subtree resolve the intended proxy after the DOM
 /// move.
 ///
@@ -69,8 +69,8 @@ pub fn host_of(el: &Element) -> Option<Element> {
 /// RFC-058 Phase 4.3c. When `Some`, the clone root is built via
 /// the fragment (which stamps cleaned HTML + installs every
 /// directive against the enclosing scope via the Phase 1
-/// helpers — no `walker::walk` involvement). When `None`, the
-/// legacy `clone_template_body` + `walker::walk` path runs.
+/// helpers — no `mount::walk` involvement). When `None`, the
+/// legacy `clone_template_body` + `mount::walk` path runs.
 pub fn install(
     template: HtmlTemplateElement,
     selector: &str,
@@ -85,11 +85,11 @@ pub fn install(
         return;
     };
 
-    let pinned_scope = walker::enclosing_scope(&template_el);
+    let pinned_scope = mount::enclosing_scope(&template_el);
     // See `if_::install` — slot-content controllers must thread
     // the slot owner's `CTX_PARENT_KEY` through to the body
     // fragment's root for nested inject chain resolution.
-    let inject_parent_id_override = walker::inherited_ctx_parent_of(&template_el);
+    let inject_parent_id_override = mount::inherited_ctx_parent_of(&template_el);
 
     let (clone_root, fragment_built) = match body_fn {
         Some(f) => {
@@ -143,10 +143,10 @@ pub fn install(
         // stripped by the macro, and generated child mounts are
         // guarded by `__pp_mounted`.
         if fragment_built {
-            walker::finalize_compiled_subtree(&clone_root);
+            mount::finalize_compiled_subtree(&clone_root);
         } else {
             // RFC-058 Phase 6.5 — body must come from the macro
-            // fragment now that the runtime walker is gone.
+            // fragment now that the runtime mount is gone.
             crate::templates_plan::record_plan_failure();
         }
         stash_teleported(&template_el, &clone_root);
@@ -165,7 +165,7 @@ pub fn resolve_target(selector: &str) -> Option<Element> {
     doc.query_selector(sel).ok().flatten()
 }
 
-/// Called by `walker::release_subtree` on every released element. If
+/// Called by `mount::release_subtree` on every released element. If
 /// this element is a template host with a teleported clone, remove
 /// the clone and release its subtree deterministically — a root-
 /// MutationObserver may not cover the teleport target (e.g. tests
@@ -179,7 +179,7 @@ pub fn release(el: &Element) {
     if let Some(parent) = clone.parent_node() {
         let _ = parent.remove_child(&clone);
     }
-    walker::release_subtree(clone.as_ref());
+    mount::release_subtree(clone.as_ref());
 }
 
 fn stash_teleported(template: &Element, clone: &Element) {

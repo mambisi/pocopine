@@ -8,6 +8,7 @@ description = "Unstyled, accessible UI components for pocopine — headless prim
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+doctest = false
 
 [dependencies]
 pocopine = { path = "../pocopine" }

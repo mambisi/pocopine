@@ -799,7 +799,7 @@ pub fn is_subtree_leaving(root: &Element) -> bool {
 }
 
 /// Drop any transition state associated with `el`. Called from the
-/// walker's `release_subtree` when an element is unmounted — keeps
+/// mount's `release_subtree` when an element is unmounted — keeps
 /// the thread-local map from growing unboundedly.
 pub fn release(el: &Element) {
     let Some(id) = Reflect::get(el.as_ref(), &TX_ID_KEY.into())

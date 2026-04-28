@@ -269,7 +269,7 @@ impl PineTreeItem {
 
         // Initial writes deferred via `tick::next` — `on_ready`
         // executes under an immutable borrow on `scope.state`
-        // (walker.rs:193), so a synchronous `handle.update` would
+        // (mount.rs:193), so a synchronous `handle.update` would
         // double-borrow. Deferring lets the on_ready frame unwind
         // first.
         let handle_for_init = handle.clone();
@@ -390,7 +390,7 @@ fn compute_parent_visible(ancestor_values: &[String], expanded: &[String]) -> bo
 /// the chevron.
 ///
 /// Needed because the Item's slot content is dispatched in the
-/// CALLER's scope (see `walker::materialize_slot`) — a plain
+/// CALLER's scope (see `mount::materialize_slot`) — a plain
 /// `<button @click="toggle">` inside the slot would look up
 /// `toggle` on the caller, not on the Item. The Toggle
 /// component sidesteps that by being its own scope and

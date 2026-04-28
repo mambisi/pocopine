@@ -263,7 +263,7 @@ pub fn parse(source: &str, file_path: &str) -> (TemplateAst, Vec<ParseError>) {
     // `<td>`, `<tbody>` etc. at the root because those only
     // parse inside a table-ish ancestor.
     //
-    // The pocopine walker calls `set_inner_html` on whatever
+    // The pocopine mount calls `set_inner_html` on whatever
     // custom-element tag the component uses, and the browser
     // picks the right insertion mode from that. We mirror that
     // by detecting the first tag and choosing an equivalent
@@ -575,7 +575,7 @@ fn is_void_element(tag: &str) -> bool {
 /// Tags whose contents are parsed as foreign-namespace content
 /// (SVG / MathML). Inside them, self-closing syntax is valid
 /// for any element per HTML5; we skip self-close checks while
-/// the walker's depth counter says we're inside one.
+/// the mount's depth counter says we're inside one.
 const FOREIGN_CONTENT_ROOTS: &[&str] = &["svg", "math"];
 
 fn is_foreign_content_root(tag: &str) -> bool {
@@ -1164,7 +1164,7 @@ mod tests {
 
     #[test]
     fn byte_range_attribute_with_gt_inside_quotes() {
-        // `title="a > b"` — naïve byte walker would stop at the
+        // `title="a > b"` — naïve byte mount would stop at the
         // inner `>`. The range must still span the real tag end.
         let src = r#"<div title="a > b">x</div>"#;
         let ast = parse_ok(src);

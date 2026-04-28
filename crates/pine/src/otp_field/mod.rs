@@ -242,7 +242,7 @@ impl PineOtpField {
     /// the caret to 0 on most browsers, which turns the next
     /// Backspace into a no-op). `pp-for`'s keyed reconcile used to
     /// blur the focused clone via an unconditional
-    /// `insert_before` every reactive flush — fixed at the walker
+    /// `insert_before` every reactive flush — fixed at the mount
     /// level, so the focus call can run synchronously here instead
     /// of deferring past the flush (issue #4).
     fn focus_slot(&self, target: u32) {

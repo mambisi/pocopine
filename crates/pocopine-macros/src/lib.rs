@@ -1496,7 +1496,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
     // to its plan. When no plan is emitted the runtime takes
-    // the existing generic walker path.
+    // the existing generic mount path.
     let row_plans = template_ast
         .as_ref()
         .map(for_plan::analyze_row_plans)

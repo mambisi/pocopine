@@ -6,15 +6,15 @@ use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::expr::{self, Spanned};
+use crate::mount::track_effect_on;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::track_effect_on;
 
 /// Install a `pp-html` effect on `el` that writes `expr`'s
 /// stringified value into the element's `innerHTML` and re-runs
 /// whenever the expression's reactive dependencies change. The
 /// effect's lifetime is tracked to `el` via
-/// [`crate::walker::track_effect_on`] so it's released when the
+/// [`crate::mount::track_effect_on`] so it's released when the
 /// element's subtree is torn down. Cleanup-safe install entry
 /// point.
 pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {

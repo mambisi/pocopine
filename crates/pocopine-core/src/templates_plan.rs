@@ -2,7 +2,7 @@
 //!
 //! Macro-emitted static descriptor for an entire compiled
 //! template's bindings, listeners, refs, and deferred-init
-//! entries. The runtime fast-path in [`crate::walker::mount_component`]
+//! entries. The runtime fast-path in [`crate::mount::mount_component`]
 //! consumes the plan when one is registered for a component
 //! tag, calling the cleanup-safe install helpers from RFC-058
 //! Phase 1 directly instead of running the per-attribute
@@ -26,14 +26,14 @@
 //!   `pp-show`, `pp-bind:<attr>` (HTML attrs, not child-component
 //!   props), `pp-on:<event>` with the §6.1 supported modifier
 //!   set, `pp-ref`, `pp-init` (deferred).
-//! * Not eligible (attribute-preserved, walker-owned): every
+//! * Not eligible (attribute-preserved, mount-owned): every
 //!   directive on or under a non-HTML-native tag, every
 //!   directive on `pp-for` / `pp-if` / `pp-teleport` / `<slot>`
 //!   subtrees, `pp-model`, `pp-route`, listeners with
 //!   unsupported modifiers.
 //! * Stripped attributes are owned by the plan and **fail fast**
 //!   on framework bugs; attribute-preserved fallbacks degrade
-//!   silently to the runtime walker as today.
+//!   silently to the runtime mount as today.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -76,12 +76,12 @@ pub struct StaticTemplatePlan {
     /// Child-component mount sites the macro discovered in this
     /// template (RFC-058 Phase 3). Each entry names a non-HTML5
     /// tag the runtime applier mounts via
-    /// [`crate::walker::mount_child_component`] before the walker
+    /// [`crate::mount::mount_child_component`] before the mount
     /// recurses. Empty for templates that contain no child
     /// components — the prior Phase 2 envelope.
     pub child_mounts: &'static [StaticChildMount],
     /// `pp-if` controller sites the classifier lifted out of
-    /// the runtime walker's directive-dispatch path (RFC-058
+    /// the runtime mount's directive-dispatch path (RFC-058
     /// Phase 4.1b). The macro strips the `pp-if` attribute from
     /// the cleaned HTML — the applier installs the effect via
     /// [`crate::directives::if_::install`] against the
@@ -108,7 +108,7 @@ pub struct StaticTemplatePlan {
     /// `<slot>` outlet sites in a compiled component template
     /// (RFC-058 Phase 3.5e). These are materialised explicitly
     /// by the plan applier after all other path-resolved entries
-    /// have installed, so the recursive walker no longer has to
+    /// have installed, so the recursive mount no longer has to
     /// discover `<slot>` elements for planned templates.
     pub slot_outlets: &'static [StaticSlotOutlet],
     /// Runtime-only directives the macro lifts via the directive
@@ -122,7 +122,7 @@ pub struct StaticTemplatePlan {
     /// macro's structured directives.
     pub opaque_directives: &'static [StaticOpaqueDirective],
     /// `{{expr}}` text interpolation sites lifted out of the
-    /// runtime walker (RFC-058 Phase 6.2). The macro pre-parses
+    /// runtime mount (RFC-058 Phase 6.2). The macro pre-parses
     /// the segment list at compile time; the applier hands it
     /// to [`crate::directives::interp::install_planned`] to
     /// install effects per dynamic segment. Empty for templates
@@ -130,8 +130,8 @@ pub struct StaticTemplatePlan {
     pub interps: &'static [StaticInterp],
     /// `pp-model[.modifier]="field"` sites on native input /
     /// textarea / select elements. Lifted out of the runtime
-    /// walker so compiled-only apps wire two-way input bindings
-    /// without the runtime walker. Component-target `pp-model`
+    /// mount so compiled-only apps wire two-way input bindings
+    /// without the runtime mount. Component-target `pp-model`
     /// is on `StaticChildMount` instead.
     pub native_models: &'static [StaticNativeModel],
 }
@@ -175,8 +175,7 @@ pub fn template_plan_for(tag: &str) -> Option<&'static StaticTemplatePlan> {
 /// Snapshot every registered component tag. Order is
 /// implementation-defined (HashMap iteration); callers that
 /// need stable ordering should sort. Intended for audit /
-/// survey tooling and the compiled-mount entry's tag scan in
-/// `walker::start_compiled`.
+/// survey tooling and compiled root discovery.
 pub fn registered_template_tags() -> Vec<String> {
     TEMPLATE_PLANS.with(|registry| registry.borrow().keys().cloned().collect())
 }
@@ -201,7 +200,7 @@ pub fn reset_plan_failure_count() {
 }
 
 /// Record one plan-install failure. Called from
-/// [`crate::walker`] / [`apply_static_plan`] when an install
+/// [`crate::mount`] / [`apply_static_plan`] when an install
 /// entry can't deliver. In debug builds this also panics with
 /// a message naming the template + entry; release builds log
 /// to `console.error` and continue (the surrounding mount
@@ -216,14 +215,14 @@ pub fn record_plan_failure() {
 
 /// Apply a registered template plan against the freshly-stamped
 /// subtree rooted at `root`. Called from
-/// [`crate::walker::mount_component`]'s fast-path right after
+/// [`crate::mount::mount_component`]'s fast-path right after
 /// the template HTML is set + the scope is bound.
 ///
 /// Behaviour:
 ///
 /// * For each `StaticInit` — enqueue via
-///   [`crate::walker::defer_init_on`] so the handler fires
-///   post-order alongside any walker-discovered `pp-init`.
+///   [`crate::mount::defer_init_on`] so the handler fires
+///   post-order alongside any mount-discovered `pp-init`.
 /// * For each `StaticRef` — register against the scope's ref
 ///   table via [`crate::refs::register`].
 /// * For each `StaticBinding` — install the matching directive
@@ -267,17 +266,17 @@ pub fn apply_static_plan(
         slot_outlets.push(el);
     }
 
-    // Order matches the walker's pre-/post-order intuition: refs
+    // Order matches the mount's pre-/post-order intuition: refs
     // first (so a planned `pp-ref` is visible to any planned
     // `pp-init` further down), then bindings (effects subscribe
     // before any synchronous trigger), then listeners
     // (delegation surface ready before user interaction), then
     // child mounts (RFC-058 Phase 3 — explicit
-    // `mount_child_component` calls before the walker's
+    // `mount_child_component` calls before the mount's
     // recursive descent reaches each `<custom-tag>`; the
-    // walker's `__pp_mounted` guard makes the discovery a
+    // mount's `__pp_mounted` guard makes the discovery a
     // no-op for tags this loop already mounted), then inits
-    // (enqueued for the walker's post-order drain so the
+    // (enqueued for the mount's post-order drain so the
     // handler observes child mounts as well as planned refs).
     for r in plan.refs {
         let Some(el) = resolve(root, r.node_path) else {
@@ -351,7 +350,7 @@ pub fn apply_static_plan(
             continue;
         };
         if c.slots.is_empty() {
-            crate::walker::mount_child_component(&el, c.tag);
+            crate::mount::mount_child_component(&el, c.tag);
         } else {
             let mut set = SlotSet::new();
             for s in c.slots {
@@ -360,7 +359,7 @@ pub fn apply_static_plan(
                     None => set.named(s.name, s.fragment),
                 };
             }
-            crate::walker::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
+            crate::mount::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
         }
         install_child_host_directives(&el, scope_id, proxy, c, template_name);
     }
@@ -462,19 +461,19 @@ pub fn apply_static_plan(
             fail("init", template_name, i.node_path, Some(i.expr_src));
             continue;
         };
-        crate::walker::defer_init_on(&el, scope_id, i.expr_src);
+        crate::mount::defer_init_on(&el, scope_id, i.expr_src);
     }
     for slot in slot_outlets {
-        crate::walker::materialize_compiled_slot_outlet(&slot);
+        crate::mount::materialize_compiled_slot_outlet(&slot);
     }
     // Install opaque runtime directives last so container
     // behaviours like `pp-roving` see the slot-materialised item
-    // DOM in place (the legacy walker fired them after attribute
+    // DOM in place (the legacy mount fired them after attribute
     // dispatch on each item, which happened post-slot-clone).
     install_opaque_directives(root, scope_id, proxy, plan, template_name);
     // RFC-058 Phase 6.2 — `{{expr}}` text interpolation. The
     // macro pre-parses segments and stamps `data-pp-interp-managed`
-    // on the carrier element so the runtime walker's
+    // on the carrier element so the runtime mount's
     // `interp::scan_children` skips the duplicate scan.
     //
     // Resolve every target text node BEFORE installing any
@@ -504,7 +503,7 @@ pub fn apply_static_plan(
         directives::interp::install_planned_target(el, proxy, target, segments);
     }
     // RFC-058 Phase 6.5 — `pp-model` on native inputs lifted out
-    // of `walker::dispatch`. The macro already parsed the
+    // of `mount::dispatch`. The macro already parsed the
     // modifier list (`.number`, `.lazy`); the applier installs
     // the read-side effect + write-side listener directly.
     for nm in plan.native_models {
@@ -647,7 +646,7 @@ pub fn apply_static_pp_as_plan(
         );
     }
     for i in plan.inits.iter().filter(|i| i.node_path.is_empty()) {
-        crate::walker::defer_init_on(root, scope_id, i.expr_src);
+        crate::mount::defer_init_on(root, scope_id, i.expr_src);
     }
     for d in plan
         .opaque_directives
@@ -736,7 +735,7 @@ fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
 /// `<template>`'s content, extracts the single root element,
 /// then applies the per-body `StaticTemplatePlan` against the
 /// parent scope so every directive in the body installs via
-/// the Phase 1 helpers (no walker `walk` / `bind` /
+/// the Phase 1 helpers (no mount `walk` / `bind` /
 /// `dispatch` involvement). Returns the root element ready
 /// for the `if_::install` caller to pin its borrowed scope on
 /// + insert into the live DOM.
@@ -770,7 +769,7 @@ pub fn stamp_if_body(
         }
     }
     let root = root?;
-    crate::walker::bind_borrowed_scope_to(&root, scope_id, proxy);
+    crate::mount::bind_borrowed_scope_to(&root, scope_id, proxy);
     // CTX_PARENT_KEY drives RFC-027 inject chain resolution for
     // nested custom tags inside this body fragment. Callers pass
     // `ctx_parent_id` distinct from `scope_id` when the controller
@@ -781,7 +780,7 @@ pub fn stamp_if_body(
     // LoopScope id; the loop scope's `parent` is already set to
     // the resolved inject parent at install time, so the chain
     // walks correctly from there.
-    let ctx_key = JsValue::from_str(crate::walker::CTX_PARENT_KEY);
+    let ctx_key = JsValue::from_str(crate::mount::CTX_PARENT_KEY);
     let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
     let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
     apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");

@@ -2,8 +2,8 @@
 //!
 //! Phase 2 ships a macro-emitted `&'static StaticTemplatePlan`
 //! per plan-eligible component plus a runtime fast-path
-//! (`apply_static_plan`) the walker calls before its recursive
-//! descent. The walker test suite already exercises end-to-end
+//! (`apply_static_plan`) the mount calls before its recursive
+//! descent. The mount test suite already exercises end-to-end
 //! behaviour for the components on the plan path; this file
 //! pins the parts of the §6 envelope that are easy to lose
 //! silently.
@@ -17,10 +17,10 @@
 //! `interp::scan_children` away. A planned `pp-init` observes
 //! a planned `pp-ref` from the same template (refs install
 //! before bindings, listeners, and inits in
-//! `apply_static_plan`, so by the time the walker's post-order
+//! `apply_static_plan`, so by the time the mount's post-order
 //! drain fires the deferred init the handler can read the ref
 //! via `refs::get`). A template containing `pp-for` is left
-//! whole-subtree walker-owned — the v1 emitter skips template
+//! whole-subtree mount-owned — the v1 emitter skips template
 //! plans when row plans exist (RFC-058 §6.2 layering trade-off).
 //!
 //! Run with:
@@ -35,7 +35,7 @@ use pocopine_core::templates_plan::{
 use serde::{Deserialize, Serialize};
 
 // Walker-removed helpers — RFC-058 Phase 6.5. The counters used to
-// gate the migration off the runtime walker; the walker is gone, so
+// gate the migration off the runtime mount; the mount is gone, so
 // the counters always read zero. Stubs keep the existing test
 // scaffolding compiling without rewriting every call site.
 fn compiled_fallback_walk_count() -> u32 {
@@ -169,7 +169,7 @@ impl PlanChildLeaf {
 /// Drives the Phase 3.4 evidence — the parent's plan must
 /// carry exactly one `StaticChildMount` entry, and mounting
 /// the parent must mount the leaf without us reaching for the
-/// walker's auto-discovery path.
+/// mount's auto-discovery path.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanChildHost.html")]
 struct PlanChildHost {}
@@ -199,9 +199,9 @@ impl PlanSlotChild {}
 /// parent's plan references that fragment via a
 /// `StaticSlotFragment` entry; the runtime applier passes the
 /// `SlotSet` through `mount_child_component_with_slots`; and
-/// the walker's `materialize_slot` invokes the fragment
+/// the mount's `materialize_slot` invokes the fragment
 /// instead of running the legacy capture/replay path. End-to-
-/// end macro-driven slot rendering with no walker
+/// end macro-driven slot rendering with no mount
 /// auto-discovery for the slot subtree.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanSlotHostStatic.html")]
@@ -239,7 +239,7 @@ impl PlanSlotDynamicHost {
 /// Child used by the compiled-finalize regression test. Its
 /// `on_mount` write proves a lifted fragment containing a child
 /// component can finish lifecycle without falling back to the
-/// recursive walker.
+/// recursive mount.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanLifecycleLeaf.html")]
 struct PlanLifecycleLeaf {
@@ -283,7 +283,7 @@ impl PlanHostDirectiveChild {}
 
 /// Host whose lifted pp-if body contains a custom tag with
 /// parent-scope host directives. Without StaticChildMount host
-/// directive descriptors this shape required walker fallback to
+/// directive descriptors this shape required mount fallback to
 /// install `:label` and `@click` on the custom tag.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanIfHostDirectiveHost.html")]
@@ -376,7 +376,7 @@ impl PlanIfAsDirectiveHost {
 
 /// Host whose lifted pp-if body contains `pp-init`. The init
 /// handler reads a descendant planned ref, proving compiled
-/// finalization preserves the walker's post-order init semantics.
+/// finalization preserves the mount's post-order init semantics.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanIfInitBodyHost.html")]
 struct PlanIfInitBodyHost {
@@ -428,7 +428,7 @@ impl PlanNamedSlotChild {}
 /// `<plan-named-slot-child>`. The macro must emit three slot
 /// fragments (`default`, `header`, `footer`) in the child-mount
 /// entry; the runtime resolves each by name in
-/// `materialize_slot` without falling back to the walker.
+/// `materialize_slot` without falling back to the mount.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanNamedSlotHost.html")]
 struct PlanNamedSlotHost {}
@@ -493,7 +493,7 @@ impl PlanScopedSlotHost {
 /// The classifier lifts the directive into a `StaticIfPlan`,
 /// strips `pp-if` from the cleaned HTML, and the runtime
 /// applier installs the controller via `if_::install`. The
-/// `<template>` body stays on the walker's clone+walk path
+/// `<template>` body stays on the mount's clone+walk path
 /// (Phase 4.1d will lift it).
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanIfHost.html")]
@@ -525,7 +525,7 @@ impl PlanTeleportHost {}
 /// a third sibling with no interp. The macro lifts each
 /// interpolated text node into a `StaticInterp` entry; the
 /// applier installs effects per dynamic segment; the runtime
-/// walker's `interp::scan_children` skips the carrier elements
+/// mount's `interp::scan_children` skips the carrier elements
 /// via `data-pp-interp-managed`.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanInterpHost.html")]
@@ -568,12 +568,9 @@ impl PlanInterpMultiHost {
     }
 }
 
-/// RFC-058 Phase 6.5 — fixture for the `start_compiled` walker-
-/// required branch. `pp-model` on a native input is in the §7
-/// deferred set, so the macro flips `requires_walker = true` on
-/// the plan; the runtime applier installs the lifted plan
-/// entries, then the start path must run a fallback walker pass
-/// to wire up `pp-model`.
+/// RFC-058 Phase 6.5 — fixture for the native `pp-model`
+/// compiled-mount branch. The macro lifts `pp-model` into a
+/// static native model entry, so no fallback mount pass is needed.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "StartCompiledModelHost.html")]
 struct StartCompiledModelHost {
@@ -604,7 +601,7 @@ impl PlanChildHostRefHost {}
 /// runtime-only `pp-roving.both` directive. The macro lifts it
 /// into a `StaticOpaqueDirective` entry instead of preserving it
 /// on the cleaned HTML and flipping `requires_walker`. The
-/// applier dispatches it through the same registry the walker
+/// applier dispatches it through the same registry the mount
 /// uses, after every other plan entry has resolved (so the
 /// container's items are in the DOM when roving installs).
 #[derive(Default, Serialize, Deserialize)]
@@ -617,7 +614,7 @@ impl PlanOpaqueDirectiveHost {}
 /// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed list
 /// with one `pp-text` binding per row. The macro emits a body
 /// fragment fn that installs `pp-text` against the row's
-/// `LoopScope` per iteration — no `walker::walk` on row clones.
+/// `LoopScope` per iteration — no `mount::walk` on row clones.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct PfbhRow {
     label: String,
@@ -654,7 +651,7 @@ impl PlanForBodyHost {
 /// qualifies for fragment lifting (HTML5-native, plan-eligible
 /// directives only), so the macro emits a body fragment fn that
 /// installs both directives via the Phase 1 helpers — no
-/// `walker::walk` involvement on the cloned body.
+/// `mount::walk` involvement on the cloned body.
 #[derive(Default, Serialize, Deserialize)]
 #[component(template = "PlanIfBodyHost.html")]
 struct PlanIfBodyHost {
@@ -729,10 +726,9 @@ fn mount(host_html: &str) -> Element {
     host
 }
 
-/// RFC 061 Phase 3 — replacement for the deleted
-/// `walker::start_compiled` discovery scan. Same shape as the
-/// old start_compiled body: querySelectorAll the union selector
-/// of every registered tag, mount each via the typed
+/// RFC 061 Phase 3 — test-only compiled root discovery.
+/// QuerySelectorAll the union selector of every registered tag,
+/// mount each via the typed
 /// `mount_child_component` path, then run
 /// `finalize_compiled_subtree` to fire mount/ready hooks.
 fn mount_registered_tags(host: &Element) {
@@ -747,9 +743,12 @@ fn mount_registered_tags(host: &Element) {
                 let Ok(el) = node.dyn_into::<Element>() else {
                     continue;
                 };
+                if !host.contains(Some(el.as_ref())) {
+                    continue;
+                }
                 let tag = el.local_name();
-                pocopine_core::walker::mount_child_component(&el, &tag);
-                pocopine_core::walker::finalize_compiled_subtree(&el);
+                pocopine_core::mount::mount_child_component(&el, &tag);
+                pocopine_core::mount::finalize_compiled_subtree(&el);
             }
         }
     }
@@ -837,7 +836,7 @@ async fn planned_pp_text_does_not_reinterpolate_brace_payload() {
 }
 
 /// Refs install before bindings, listeners, and inits in
-/// `apply_static_plan`. The walker's post-order drain fires
+/// `apply_static_plan`. The mount's post-order drain fires
 /// the deferred init last — by then `pp-ref="target"` is in
 /// the scope's ref table so `refs::get("target")` resolves.
 #[wasm_bindgen_test]
@@ -886,10 +885,10 @@ async fn template_with_only_pp_for_emits_for_plan() {
 /// RFC-058 Phase 4.2c — pp-for row body lifting. Unkeyed
 /// list with no row plan; the macro emits a body fragment fn
 /// the runtime invokes per row instead of `clone_template_body`
-/// + `walker::walk`. The fragment installs `pp-text` against
+/// + `mount::walk`. The fragment installs `pp-text` against
 /// the row's `LoopScope` per iteration; appending a new row
 /// drives the effect to mount + bind a fresh `<li>` without
-/// the walker touching the row.
+/// the mount touching the row.
 #[wasm_bindgen_test]
 async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     register_all();
@@ -935,7 +934,7 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "native-only lifted pp-for bodies should not use walker fallback",
+        "native-only lifted pp-for bodies should not use mount fallback",
     );
 
     host.remove();
@@ -992,7 +991,7 @@ async fn macro_emitted_dynamic_slot_fragment_installs_against_parent() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "native-only dynamic slot fragments should not use walker fallback",
+        "native-only dynamic slot fragments should not use mount fallback",
     );
 
     host.remove();
@@ -1061,14 +1060,14 @@ async fn macro_emitted_pp_if_body_fragment_installs_directives() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "native-only lifted pp-if bodies should not use walker fallback",
+        "native-only lifted pp-if bodies should not use mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — a lifted body whose root is a
-/// child component should not need the recursive walker just to
+/// RFC-058 mount-removal slice — a lifted body whose root is a
+/// child component should not need the recursive mount just to
 /// finish post-order lifecycle. The plan mounts the child, then
 /// `finalize_compiled_subtree` fires the child's `on_mount`
 /// without scanning attributes.
@@ -1106,13 +1105,13 @@ async fn lifted_pp_if_child_mount_finalizes_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "planned child mount in lifted pp-if body should not need walker fallback",
+        "planned child mount in lifted pp-if body should not need mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — child-component host
+/// RFC-058 mount-removal slice — child-component host
 /// directives inside lifted bodies are installed from
 /// `StaticChildMount`, after the child scope exists. This keeps
 /// parent prop binds and host listeners out of fallback walk.
@@ -1154,13 +1153,13 @@ async fn lifted_child_host_bind_and_listener_install_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "planned child host directives should not need walker fallback",
+        "planned child host directives should not need mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — child-component `pp-model`
+/// RFC-058 mount-removal slice — child-component `pp-model`
 /// inside a lifted body is installed from `StaticChildMount`
 /// after the child scope exists. Parent -> child and child ->
 /// parent both work without fallback walk.
@@ -1200,7 +1199,7 @@ async fn lifted_child_host_model_installs_without_fallback_walk() {
         .unwrap();
     let child_root = child.first_element_child().unwrap();
     let (child_scope, _) =
-        pocopine_core::walker::scope_of_element(&child_root).expect("child scope");
+        pocopine_core::mount::scope_of_element(&child_root).expect("child scope");
     let args = js_sys::Array::new();
     args.push(&JsValue::from_str("child-model-update"));
     pocopine_core::scope::invoke_handler(child_scope, "set_value", &args);
@@ -1234,13 +1233,13 @@ async fn lifted_child_host_model_installs_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "planned child host pp-model should not need walker fallback",
+        "planned child host pp-model should not need mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — `pp-as` component templates
+/// RFC-058 mount-removal slice — `pp-as` component templates
 /// can bind root-level template attrs/listeners to the hoisted
 /// user element without a recursive fallback walk.
 #[wasm_bindgen_test]
@@ -1294,13 +1293,13 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "compiled pp-as child should not need walker fallback",
+        "compiled pp-as child should not need mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — `pp-init` inside a lifted
+/// RFC-058 mount-removal slice — `pp-init` inside a lifted
 /// `pp-if` body fires during compiled subtree finalization, after
 /// descendant planned refs have registered.
 #[wasm_bindgen_test]
@@ -1330,13 +1329,13 @@ async fn lifted_pp_if_body_init_fires_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "compiled pp-if body init should not need walker fallback",
+        "compiled pp-if body init should not need mount fallback",
     );
 
     host.remove();
 }
 
-/// RFC-058 walker-removal slice — `pp-init` inside a compiled
+/// RFC-058 mount-removal slice — `pp-init` inside a compiled
 /// slot fragment fires after the fragment is inserted and
 /// finalized, without falling back to recursive directive
 /// discovery.
@@ -1358,7 +1357,7 @@ async fn lifted_slot_fragment_init_fires_without_fallback_walk() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "compiled slot fragment init should not need walker fallback",
+        "compiled slot fragment init should not need mount fallback",
     );
 
     host.remove();
@@ -1402,14 +1401,14 @@ async fn macro_emitted_teleport_plan_drives_pp_teleport_controller() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "native-only lifted pp-teleport bodies should not use walker fallback",
+        "native-only lifted pp-teleport bodies should not use mount fallback",
     );
 
     // Manual cleanup so the portal doesn't leak into sibling
     // tests on `body` (the test's mount observer is rooted at
     // `host`, so detaching host doesn't fire release for the
-    // inner template — same semantics as today's walker path).
-    pocopine_core::walker::release_compiled_subtree(&host);
+    // inner template — same semantics as today's mount path).
+    pocopine_core::mount::release_compiled_subtree(&host);
     host.remove();
     portal.remove();
 }
@@ -1523,7 +1522,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     // Hand-built fragment doesn't read parent_proxy — pass dummy
     // (ScopeId(0), JsValue::UNDEFINED). The runtime never derefs
     // them because the static fragment ignores the field.
-    pocopine_core::walker::mount_child_component_with_slots(
+    pocopine_core::mount::mount_child_component_with_slots(
         &child,
         "plan-slot-child",
         slots,
@@ -1555,7 +1554,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
 }
 
 /// RFC-058 Phase 4.1 — the macro lifted `<template pp-if>` out
-/// of the runtime walker's directive-dispatch path into a
+/// of the runtime mount's directive-dispatch path into a
 /// `StaticIfPlan` entry. The applier installs the controller
 /// via `if_::install`, the truthy expression toggles the
 /// branch in/out, and `plan_failure_count` stays at 0.
@@ -1614,10 +1613,10 @@ async fn macro_emitted_if_plan_drives_pp_if_controller() {
 /// slot content into a fragment function and emitted a
 /// `StaticSlotFragment` reference on the child-mount entry.
 /// At mount time the runtime applier flips onto
-/// `mount_child_component_with_slots` and the walker's
+/// `mount_child_component_with_slots` and the mount's
 /// `materialize_slot` invokes the fragment instead of
 /// replaying captured DOM. End-to-end macro-driven slot
-/// rendering with no walker auto-discovery in the slot
+/// rendering with no mount auto-discovery in the slot
 /// subtree.
 #[wasm_bindgen_test]
 async fn macro_emitted_slot_fragment_renders_static_slot_content() {
@@ -1661,7 +1660,7 @@ async fn macro_emitted_slot_fragment_renders_static_slot_content() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "static slot fragment + compiled slot outlet should avoid walker fallback",
+        "static slot fragment + compiled slot outlet should avoid mount fallback",
     );
 
     host.remove();
@@ -1671,10 +1670,10 @@ async fn macro_emitted_slot_fragment_renders_static_slot_content() {
 /// `StaticChildMount` entry per non-HTML5 tag in its
 /// plan-eligible subtree, the runtime applier mounts the leaf
 /// child explicitly via `mount_child_component`, and the
-/// walker's `__pp_mounted` guard turns its subsequent
+/// mount's `__pp_mounted` guard turns its subsequent
 /// auto-discovery into a no-op. Net effect today is parity
-/// with the walker-driven path; the test pins the structural
-/// contract so Phase 6 can drop walker discovery without
+/// with the mount-driven path; the test pins the structural
+/// contract so Phase 6 can drop mount discovery without
 /// regression.
 #[wasm_bindgen_test]
 async fn parent_plan_drives_child_mount_via_static_child_mount() {
@@ -1766,12 +1765,12 @@ async fn macro_emits_named_slot_fragment() {
     );
 
     // Pin: the lifted named slots take the same compiled path as
-    // the default lift — no walker fallback for any slot.
+    // the default lift — no mount fallback for any slot.
     assert_eq!(plan_failure_count(), 0);
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "named slot fragments must take the compiled path, not walker fallback",
+        "named slot fragments must take the compiled path, not mount fallback",
     );
 
     host.remove();
@@ -1783,7 +1782,7 @@ async fn macro_emits_named_slot_fragment() {
 /// child's `<slot :prop="path">` bindings and invokes the
 /// fragment against that scope, so `pp-text="ident.field"`
 /// resolves through SlotScope's RFC-011 routing without falling
-/// back to the legacy walker capture path.
+/// back to the legacy mount capture path.
 #[wasm_bindgen_test]
 async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     register_all();
@@ -1821,7 +1820,7 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
         .unwrap();
     let child_root = child_tag.first_element_child().unwrap();
     let (_id, child_proxy) =
-        pocopine_core::walker::scope_of_element(&child_root).expect("child scope");
+        pocopine_core::mount::scope_of_element(&child_root).expect("child scope");
     let next = serde_wasm_bindgen::to_value(&PsscRow {
         label: "scoped-from-fragment".into(),
     })
@@ -1856,7 +1855,7 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "scoped slot fragments must take the compiled path, not walker fallback",
+        "scoped slot fragments must take the compiled path, not mount fallback",
     );
 
     host.remove();
@@ -1864,7 +1863,7 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
 
 /// RFC-058 Phase 3.5g (review fix) — when the partition can
 /// lift one named slot but the default subtree fails the lift
-/// envelope (here `pp-data` makes the default walker-only).
+/// envelope (here `pp-data` makes the default mount-only).
 /// RFC-058 Phase 6.5 — the requires_walker flip is no longer
 /// modeled; the test is reduced to checking the named slot still
 /// lifts even when the default doesn't.
@@ -1941,7 +1940,7 @@ async fn macro_lifts_opaque_runtime_directive() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "lifting pp-roving must remove the walker fallback that previously drove it",
+        "lifting pp-roving must remove the mount fallback that previously drove it",
     );
 
     host.remove();
@@ -2004,17 +2003,17 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
         .unwrap();
     let host_root = host_tag.first_element_child().unwrap();
     let (host_scope_id, _) =
-        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+        pocopine_core::mount::scope_of_element(&host_root).expect("host scope");
     let leaf_via_ref =
         pocopine::refs::get_on(host_scope_id, "leaf").expect("ref `leaf` must resolve");
     assert_eq!(
         leaf_via_ref.local_name(),
         "plan-child-leaf",
-        "the resolved ref must point at the custom-host element itself, matching the walker semantic",
+        "the resolved ref must point at the custom-host element itself, matching the mount semantic",
     );
     // Fallthrough sanity: the host's `class="pchrh-leaf"` rides
     // through RFC-010 author-class forwarding onto the leaf
-    // template's root `<span>`. Same as the walker path — the
+    // template's root `<span>`. Same as the mount path — the
     // pp-ref lift must not change that semantic.
     let leaf_root = leaf_via_ref
         .first_element_child()
@@ -2033,7 +2032,7 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "lifting pp-ref on a custom host must remove the previous walker fallback",
+        "lifting pp-ref on a custom host must remove the previous mount fallback",
     );
 
     host.remove();
@@ -2042,7 +2041,7 @@ async fn macro_lifts_pp_ref_on_custom_child_host() {
 /// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifts into
 /// `StaticInterp` plan entries. The applier installs effects
 /// per dynamic segment using the same install path the runtime
-/// scanner produced; the walker's `interp::scan_children`
+/// scanner produced; the mount's `interp::scan_children`
 /// honours `data-pp-interp-managed` so the duplicate scan
 /// doesn't double-install.
 #[wasm_bindgen_test]
@@ -2084,8 +2083,7 @@ async fn macro_lifts_text_interpolation() {
     // Reactive update flows through the planned segment.
     let host_tag = host.query_selector("plan-interp-host").unwrap().unwrap();
     let host_root = host_tag.first_element_child().unwrap();
-    let (_id, host_proxy) =
-        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    let (_id, host_proxy) = pocopine_core::mount::scope_of_element(&host_root).expect("host scope");
     js_sys::Reflect::set(&host_proxy, &"label".into(), &"there".into()).unwrap();
     tick().await;
     assert_eq!(read(&host, ".pih-line"), "hello there, you have 3 items");
@@ -2095,7 +2093,7 @@ async fn macro_lifts_text_interpolation() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "lifted interp must take the compiled path with no walker fallback",
+        "lifted interp must take the compiled path with no mount fallback",
     );
 
     host.remove();
@@ -2138,8 +2136,7 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
         .unwrap()
         .unwrap();
     let host_root = host_tag.first_element_child().unwrap();
-    let (_id, host_proxy) =
-        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    let (_id, host_proxy) = pocopine_core::mount::scope_of_element(&host_root).expect("host scope");
 
     js_sys::Reflect::set(&host_proxy, &"x".into(), &"NEW_X".into()).unwrap();
     js_sys::Reflect::set(&host_proxy, &"y".into(), &"NEW_Y".into()).unwrap();
@@ -2155,22 +2152,20 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
     host.remove();
 }
 
-/// RFC-058 Phase 6.5 — `walker::start_compiled` mounts every
-/// registered component tag inside `root` via the compiled
-/// path without binding the wrapper or any non-component
-/// descendant. Where the legacy `walker::start` recursively
-/// dispatches `bind` on every element below `root`,
-/// `start_compiled` resolves the registered tags via a single
+/// RFC-058/RFC-061 — compiled root discovery mounts every
+/// registered component tag inside `root` via the compiled path
+/// without binding the wrapper or any non-component descendant.
+/// The helper resolves registered tags via a single
 /// `query_selector_all`, then routes each through
-/// `mount_component` directly — `bind` itself is never invoked
-/// on the wrapper, the intermediate `<section>`, or the
-/// component tag. The plan applier handles every directive on
-/// every descendant via `apply_static_plan`.
+/// `mount_child_component` directly. `bind` itself is never
+/// invoked on the wrapper, the intermediate `<section>`, or the
+/// component tag. The plan applier handles every directive on every
+/// descendant via `apply_static_plan`.
 ///
 /// Pin the bind-call delta of 0 so any regression that
 /// re-introduces a body-level recursive scan is loud.
 #[wasm_bindgen_test]
-async fn start_compiled_skips_walker_recursion_for_registered_tags() {
+async fn compiled_root_discovery_skips_runtime_recursion_for_registered_tags() {
     register_all();
     reset_bind_call_count();
     reset_plan_failure_count();
@@ -2203,7 +2198,7 @@ async fn start_compiled_skips_walker_recursion_for_registered_tags() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "compiled-only path must not trip walker fallback for a walker-clean plan",
+        "compiled-only path must not trip mount fallback for a mount-clean plan",
     );
 
     host.remove();
@@ -2211,9 +2206,9 @@ async fn start_compiled_skips_walker_recursion_for_registered_tags() {
 
 /// RFC-058 Phase 6.5 — `pp-model` on a native input now lifts
 /// into a [`StaticNativeModel`] entry on the template plan
-/// instead of forcing `requires_walker = true`. `start_compiled`
+/// instead of needing a runtime fallback. The compiled mount path
 /// installs the read-side effect + write-side listener directly
-/// via `directives::model::install_native`; no walker fallback
+/// via `directives::model::install_native`; no mount fallback
 /// runs. Pin `compiled_fallback_walk_count` at 0 + the input's
 /// reactive end-to-end behaviour to lock the lift.
 #[wasm_bindgen_test]
@@ -2241,7 +2236,7 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     assert_eq!(
         compiled_fallback_walk_count(),
         0,
-        "lifted native pp-model must not need walker fallback",
+        "lifted native pp-model must not need mount fallback",
     );
     assert_eq!(plan_failure_count(), 0);
 
@@ -2265,23 +2260,19 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     host.remove();
 }
 
-/// RFC-058 Phase 6.3 — when a registered component plan has
-/// `requires_walker = false`, the walker invokes `bind` once on
-/// the host element, applies the entire plan, then descends via
-/// `finalize_compiled_subtree` (lifecycle-only) instead of
-/// re-binding every descendant. Pin the bind-call delta so any
-/// regression that re-introduces the redundant scan is loud.
+/// RFC-058 Phase 6.3 — the mount applies the entire plan, then
+/// descends via `finalize_compiled_subtree` (lifecycle-only)
+/// instead of re-binding every descendant. Pin the bind-call delta
+/// so any regression that re-introduces the redundant scan is loud.
 ///
-/// `PlanInterpHost` is a non-trivial walker-clean fixture: 1
+/// `PlanInterpHost` is a non-trivial mount-clean fixture: 1
 /// outer test-harness `<div>` (the `mount()` helper's wrapper),
 /// the `<plan-interp-host>` component tag, then a template root
-/// and 3 native children inside. The legacy walk would bind all
-/// 6 elements; Phase 6.3 binds the harness wrapper + the
-/// component tag (which triggers `apply_static_plan` then
-/// `finalize_compiled_subtree`) and skips the rest, so the
-/// post-mount delta is 2.
+/// and 3 native children inside. The compiled entry binds none of
+/// them; it routes through `apply_static_plan` and
+/// `finalize_compiled_subtree`.
 #[wasm_bindgen_test]
-async fn walker_skips_recursion_for_plan_clean_subtrees() {
+async fn compiled_mount_skips_recursion_for_plan_clean_subtrees() {
     register_all();
     reset_bind_call_count();
 
@@ -2291,11 +2282,9 @@ async fn walker_skips_recursion_for_plan_clean_subtrees() {
 
     let after = bind_call_count();
     let delta = after - baseline;
-    // RFC-058 Phase 6.5 — `mount()` now uses `start_compiled`,
-    // which routes through `mount_component` directly without
-    // ever calling `bind`. The previous walker entry (`start`)
-    // bound the harness wrapper + the host element (delta=2);
-    // the compiled entry binds nothing (delta=0).
+    // RFC-058 Phase 6.5 — `mount()` routes through
+    // `mount_child_component` directly without ever calling `bind`.
+    // The compiled entry binds nothing (delta=0).
     assert_eq!(
         delta, 0,
         "compiled entry mounts via apply_static_plan — no `bind` calls expected \
@@ -2309,8 +2298,7 @@ async fn walker_skips_recursion_for_plan_clean_subtrees() {
 
     let host_tag = host.query_selector("plan-interp-host").unwrap().unwrap();
     let host_root = host_tag.first_element_child().unwrap();
-    let (_id, host_proxy) =
-        pocopine_core::walker::scope_of_element(&host_root).expect("host scope");
+    let (_id, host_proxy) = pocopine_core::mount::scope_of_element(&host_root).expect("host scope");
     js_sys::Reflect::set(&host_proxy, &"label".into(), &"phase6".into()).unwrap();
     tick().await;
     assert_eq!(read(&host, ".pih-bare"), "phase6");

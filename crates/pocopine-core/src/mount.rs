@@ -1,6 +1,6 @@
-//! Compiled-view runtime hooks + adopted-DOM compatibility bridge.
+//! Compiled-view mount runtime hooks.
 //!
-//! RFC-058 Phase 6.5 retired the runtime walker. The
+//! RFC-058 Phase 6.5 retired the runtime mount. The
 //! `MutationObserver`, the recursive `pp-*` attribute scan, and
 //! the `start` / `start_on_body` entry points are gone. The
 //! directive registry has shrunk to the five typed-install
@@ -19,8 +19,6 @@
 //!
 //! The surface every macro-emitted template plan calls into:
 //!
-//! - [`start_compiled`] — discover registered component tags
-//!   under a root and mount each via its template plan.
 //! - [`mount_component`], [`mount_child_component`],
 //!   [`mount_child_component_with_slots`] — the per-component
 //!   mount entry called by `apply_static_plan`.
@@ -34,42 +32,10 @@
 //!   subtree teardown can release everything tied to it
 //!   (`track_listener_on`, `track_effect_on`, `release_subtree`).
 //!
-//! ### 2. Adopted-DOM compatibility bridge — explicit, narrow
-//!
-//! A small set of helpers handle the cases where the macro
-//! never saw the DOM tree (user-authored slot content, runtime-
-//! injected partials, app-root mounts whose host is a literal
-//! HTML string). The bridge's contract:
-//!
-//! | Allowed | Disallowed |
-//! |---|---|
-//! | Discover registered custom-component tags + mount them | Bind `pp-*` / `:prop` / `@event` on plain or custom-tag hosts |
-//! | Install `<template pp-for>` / `<template pp-if>` / `<template pp-teleport>` controllers (structural only) | Per-element `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model` / `pp-html` on adopted DOM |
-//! | Materialise runtime-captured slot content (`slots::lookup` consume path) | Anything that requires the deleted directive registry / `dispatch` / `parse_attr` |
-//!
-//! Bridge entry points (each named with a documented narrow
-//! contract): [`mount_adopted_components`],
-//! [`install_adopted_controllers`], [`materialize_adopted_slot`].
-//! The bridge is the *only* code in this module that walks DOM
-//! it didn't compile; it walks for tag-name discovery and
-//! `<template pp-*>` discovery only — never for per-element
-//! attribute scanning.
-//!
-//! Authors who need per-element directive binding on dynamic
-//! content wrap that content in a `#[component]` template (or
-//! the test-only `template_inline` shorthand) — the macro
-//! compiles the directives at expansion time and the bridge is
-//! never reached.
-
-// RFC 061 Phase 3 — `walker.rs` still consumes the deprecated
-// `slots` module for runtime slot-store capture (used when
-// authors write raw-HTML slot content in tests / non-compiled
-// hosts). Full retirement of the slot store needs per-fixture
-// migration to compiled `template_inline` wrappers and is
-// deferred to a follow-on phase. File-level allow keeps the
-// deprecation surface visible to downstream callers without
-// blocking the build inside the bridge.
-#![allow(deprecated)]
+//! Runtime DOM discovery is not part of the compiled-only
+//! contract. Custom tags and slot content must appear inside a
+//! macro-compiled `#[component]` template so the generated plan
+//! can mount children and materialise slots explicitly.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -85,7 +51,6 @@ use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
 use crate::scope::Scope;
 use crate::slot_scope::SlotScope;
-use crate::slots::{self, SlotStore, UserSlot};
 use crate::templates::{is_registered, template_for};
 
 const SCOPE_ID_KEY: &str = "__pp_scope_id";
@@ -113,6 +78,19 @@ const RELEASE_SKIP_KEY: &str = "__pp_release_skip";
 /// scope points.
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
+
+#[derive(Clone)]
+struct CapturedSlot {
+    source: DocumentFragment,
+    ident: String,
+    owner_scope_id: ScopeId,
+    owner_proxy: JsValue,
+}
+
+thread_local! {
+    static LIGHT_DOM_SLOTS: RefCell<HashMap<ScopeId, HashMap<String, CapturedSlot>>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
 /// through it. The element is assumed to **own** this scope — when the
@@ -306,6 +284,10 @@ fn mount_component(
     tag: &str,
     supplied_slots: Option<(crate::slot_fragment::SlotSet, ScopeId, JsValue)>,
 ) {
+    if get_private(el, "__pp_mounted").is_some() {
+        return;
+    }
+
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
     // engages when all the structural constraints hold; otherwise
@@ -357,17 +339,12 @@ fn mount_component(
     let proxy = scope.into_proxy();
     crate::model_runtime::capture_emit_el(scope.id, el);
 
-    // Capture slot content. Named slot templates go into the slot
-    // store keyed by the component's scope id; everything else lands
-    // in the default slot. Pass the just-created scope as the
-    // owner-fallback so user-authored slot content at the
-    // app-root mount (no enclosing component scope) still
-    // resolves directives — `<template pp-for="…">` inside a
-    // `<pine-tags-input-root>` mounted at the app root needs
-    // *some* scope to bind against, and the only sensible one
-    // is the owner.
-    let slot_store = capture_slots(el, scope.id, &proxy);
-    slots::put(scope.id, slot_store);
+    let light_dom_slots = capture_light_dom_slots(el, scope.id, &proxy);
+    if !light_dom_slots.is_empty() {
+        LIGHT_DOM_SLOTS.with(|stores| {
+            stores.borrow_mut().insert(scope.id, light_dom_slots);
+        });
+    }
     if let Some((slots, parent_scope_id, parent_proxy)) = supplied_slots {
         crate::slot_fragment::install(scope.id, slots, parent_scope_id, parent_proxy);
     }
@@ -455,8 +432,8 @@ fn mount_component(
     }
 
     // Mark the tag as mounted so duplicate discovery (e.g. an outer
-    // `start_compiled` query_selector hit after a parent already
-    // mounted it via `child_mounts`) short-circuits.
+    // compiled root discovery after a parent already mounted it
+    // via `child_mounts`) short-circuits.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
 }
 
@@ -586,13 +563,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         crate::templates_plan::apply_static_pp_as_plan(&user_root, scope.id, &proxy, plan, tag);
     }
 
-    slots::put(
-        scope.id,
-        SlotStore {
-            by_name: Default::default(),
-        },
-    );
-
     let _ = el.remove_attribute("pp-as");
     set_private(el, "__pp_mounted", &JsValue::TRUE);
 
@@ -685,77 +655,6 @@ fn setattr_safe_name(name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-/// Collect the component tag's direct children into named slots.
-/// A child `<template pp-slot="name" pp-let="ident">` contributes
-/// its `.content` fragment to the named slot; every other child
-/// (text, elements, nested templates without `pp-slot`) goes into
-/// the default slot.
-fn capture_slots(el: &Element, fallback_scope_id: ScopeId, fallback_proxy: &JsValue) -> SlotStore {
-    let doc = match web_sys::window().and_then(|w| w.document()) {
-        Some(d) => d,
-        None => {
-            return SlotStore {
-                by_name: Default::default(),
-            }
-        }
-    };
-
-    // Prefer the enclosing-scope (true author) when one exists;
-    // fall back to the host's just-created scope so app-root
-    // mounts (no parent component) still resolve directives in
-    // user-authored slot content.
-    let (owner_scope_id, owner_proxy) = match enclosing_scope(el) {
-        Some(s) => s,
-        None => (fallback_scope_id, fallback_proxy.clone()),
-    };
-
-    let mut by_name: std::collections::HashMap<String, UserSlot> = std::collections::HashMap::new();
-    let default_fragment = doc.create_document_fragment();
-
-    let children = el.child_nodes();
-    let mut to_consume: Vec<Node> = Vec::with_capacity(children.length() as usize);
-    for i in 0..children.length() {
-        if let Some(n) = children.item(i) {
-            to_consume.push(n);
-        }
-    }
-    for n in to_consume {
-        if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>() {
-            if let Some(name) = tpl.get_attribute("pp-slot") {
-                let ident = tpl.get_attribute("pp-let").unwrap_or_default();
-                let source = tpl.content();
-                if by_name.contains_key(&name) {
-                    web_sys::console::warn_1(&JsValue::from_str(&format!(
-                        "pocopine: duplicate pp-slot=\"{name}\"; later wins"
-                    )));
-                }
-                by_name.insert(
-                    name,
-                    UserSlot {
-                        source,
-                        ident,
-                        owner_scope_id,
-                        owner_proxy: owner_proxy.clone(),
-                    },
-                );
-                continue;
-            }
-        }
-        let _ = default_fragment.append_child(&n);
-    }
-
-    if default_fragment.child_nodes().length() > 0 {
-        by_name.entry("default".to_string()).or_insert(UserSlot {
-            source: default_fragment,
-            ident: String::new(),
-            owner_scope_id,
-            owner_proxy,
-        });
-    }
-
-    SlotStore { by_name }
 }
 
 fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
@@ -943,31 +842,16 @@ fn materialize_slot(slot_el: &Element) {
     let Some((entry, parent_scope_id, parent_proxy)) =
         crate::slot_fragment::lookup(owner_scope_id, &slot_name)
     else {
-        // No compile-time parent-emitted fragment registered.
-        // Try the runtime-captured slot store next (the
-        // `mount_component` path's `capture_slots` → `slots::put`
-        // bridge — used when a user writes
-        // `<pine-tooltip-root><button>...</button></pine-tooltip-root>`
-        // in a test or non-compiled host where no parent
-        // template exists to emit a Phase-3.5b fragment).
-        if let Some((fragment, ident, author_scope_id, author_proxy)) =
-            crate::slots::lookup(owner_scope_id, &slot_name)
-        {
-            materialize_adopted_slot(
-                slot_el,
-                &parent,
-                fragment,
-                ident,
-                author_scope_id,
-                author_proxy,
-                &bindings,
-                owner_scope_id,
-                &owner_proxy,
-            );
+        if materialize_captured_light_dom_slot(
+            slot_el,
+            &parent,
+            &slot_name,
+            &bindings,
+            owner_scope_id,
+            &owner_proxy,
+        ) {
             return;
         }
-        // Fall back to the slot's default children — `<slot>`
-        // content authored inline in the component template.
         materialize_slot_default(slot_el, &parent, &owner_scope_id, &owner_proxy);
         return;
     };
@@ -1025,52 +909,89 @@ fn materialize_slot(slot_el: &Element) {
     let _ = parent.remove_child(slot_el);
 }
 
-/// **Adopted-DOM bridge — captured slot replay.** Splice
-/// runtime-captured slot content (from `mount_component`'s
-/// `capture_slots` → `slots::put` bridge) in place of the
-/// `<slot>` tag. Pins inserted elements' borrowed scope to the
-/// *author's* scope (not the slot owner's) so directives
-/// inside the slot resolve against the caller per
-/// RFC-011 / Vue convention. When the slot declares `:prop`
-/// bindings AND the user wrote `pp-let`, builds a `SlotScope`
-/// so `ident.field` routes to the slot's bound source while
-/// fall-through reads still hit the author.
-///
-/// After splicing, runs [`mount_adopted_components`] over each
-/// inserted element so custom-component tags inside slot
-/// content (e.g. `<pine-icon-bell />` inside
-/// `<pine-tooltip-trigger>`) get mounted via the compiled
-/// path AND `<template pp-*>` controllers (e.g. a `pp-for`
-/// over chips inside `<pine-tags-input-root>`) get installed.
-///
-/// **Bridge contract**: native HTML elements with `pp-*` /
-/// `:prop` / `@event` etc. attributes inside the captured
-/// fragment are left unbound — those directives only bind
-/// when the macro processes them at compile time inside a
-/// `#[component]` template. See module doc-comment.
-#[allow(clippy::too_many_arguments)]
-fn materialize_adopted_slot(
+fn capture_light_dom_slots(
+    el: &Element,
+    fallback_scope_id: ScopeId,
+    fallback_proxy: &JsValue,
+) -> HashMap<String, CapturedSlot> {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return HashMap::new();
+    };
+    let (owner_scope_id, owner_proxy) = match enclosing_scope(el) {
+        Some(s) => s,
+        None => (fallback_scope_id, fallback_proxy.clone()),
+    };
+
+    let mut by_name: HashMap<String, CapturedSlot> = HashMap::new();
+    let default_fragment = doc.create_document_fragment();
+    let children = el.child_nodes();
+    let mut snapshot: Vec<Node> = Vec::with_capacity(children.length() as usize);
+    for i in 0..children.length() {
+        if let Some(n) = children.item(i) {
+            snapshot.push(n);
+        }
+    }
+    for n in snapshot {
+        if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>() {
+            if let Some(name) = tpl.get_attribute("pp-slot") {
+                by_name.insert(
+                    name,
+                    CapturedSlot {
+                        source: tpl.content(),
+                        ident: tpl.get_attribute("pp-let").unwrap_or_default(),
+                        owner_scope_id,
+                        owner_proxy: owner_proxy.clone(),
+                    },
+                );
+                continue;
+            }
+        }
+        let _ = default_fragment.append_child(&n);
+    }
+    if default_fragment.child_nodes().length() > 0 {
+        by_name
+            .entry("default".to_string())
+            .or_insert(CapturedSlot {
+                source: default_fragment,
+                ident: String::new(),
+                owner_scope_id,
+                owner_proxy,
+            });
+    }
+    by_name
+}
+
+fn materialize_captured_light_dom_slot(
     slot_el: &Element,
     parent: &Node,
-    fragment: web_sys::DocumentFragment,
-    user_ident: String,
-    author_scope_id: ScopeId,
-    author_proxy: JsValue,
+    slot_name: &str,
     bindings: &[(String, String)],
     owner_scope_id: ScopeId,
     owner_proxy: &JsValue,
-) {
-    // Snapshot fragment children before insertion mutates the
-    // fragment's child list.
-    let mut frag_snapshot: Vec<Node> = Vec::with_capacity(fragment.child_nodes().length() as usize);
-    let kids = fragment.child_nodes();
+) -> bool {
+    let captured = LIGHT_DOM_SLOTS.with(|stores| {
+        stores
+            .borrow()
+            .get(&owner_scope_id)
+            .and_then(|slots| slots.get(slot_name).cloned())
+    });
+    let Some(captured) = captured else {
+        return false;
+    };
+
+    let source: Node = captured
+        .source
+        .clone_node_with_deep(true)
+        .unwrap_or_else(|_| captured.source.clone().into());
+    let mut snapshot: Vec<Node> = Vec::with_capacity(source.child_nodes().length() as usize);
+    let kids = source.child_nodes();
     for i in 0..kids.length() {
         if let Some(n) = kids.item(i) {
-            frag_snapshot.push(n);
+            snapshot.push(n);
         }
     }
     let mut inserted: Vec<Element> = Vec::new();
-    for n in frag_snapshot {
+    for n in snapshot {
         let _ = parent.insert_before(&n, Some(slot_el));
         if let Ok(e) = n.dyn_into::<Element>() {
             inserted.push(e);
@@ -1078,16 +999,13 @@ fn materialize_adopted_slot(
     }
     let _ = parent.remove_child(slot_el);
 
-    // Pin scope: SlotScope when the slot has :prop bindings AND
-    // the user wrote pp-let; otherwise pin the author's scope
-    // directly so directives inside resolve against the caller.
-    if !bindings.is_empty() && !user_ident.is_empty() {
+    if !bindings.is_empty() && !captured.ident.is_empty() {
         let slot_state = SlotScope {
-            ident: user_ident,
+            ident: captured.ident,
             bindings: bindings.to_vec(),
             bind_source: owner_proxy.clone(),
-            caller: author_proxy.clone(),
-            caller_scope_id: author_scope_id,
+            caller: captured.owner_proxy.clone(),
+            caller_scope_id: captured.owner_scope_id,
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
         crate::context::set_parent(slot_scope.id, owner_scope_id);
@@ -1097,13 +1015,7 @@ fn materialize_adopted_slot(
         }
     } else {
         for el in &inserted {
-            bind_borrowed_scope_to(el, author_scope_id, &author_proxy);
-            // Stamp explicit inject-chain parent so any
-            // `mount_component` on a custom tag inside slot
-            // content chains to the slot OWNER for RFC-027
-            // inject (matching Pine's compound-context pattern),
-            // not to whatever DOM-ancestor scope happens to be
-            // sitting around.
+            bind_borrowed_scope_to(el, captured.owner_scope_id, &captured.owner_proxy);
             set_private(
                 el,
                 CTX_PARENT_KEY,
@@ -1112,170 +1024,52 @@ fn materialize_adopted_slot(
         }
     }
 
-    // Mount any custom-component tags inside the inserted
-    // subtree + fire lifecycle on every element. The discovery
-    // pass mirrors `start_compiled` — querySelectorAll over the
-    // registered tag set.
     for el in &inserted {
-        mount_adopted_components(el);
+        mount_captured_light_dom_components(el);
     }
     for el in inserted {
         finalize_compiled_subtree(&el);
     }
+    true
 }
 
-/// **Adopted-DOM bridge entry.** Walk a subtree the macro
-/// never compiled and reconcile its structure against the
-/// compiled-mount runtime. Two passes:
-///
-///   1. Install structural controllers
-///      ([`install_adopted_controllers`]) — finds every
-///      `<template pp-for>` / `<template pp-if>` /
-///      `<template pp-teleport>` in `root` and installs the
-///      matching controller at runtime. The controllers run
-///      with `body_fn = None`, so each row/branch goes through
-///      `clone_template_body` + a recursive call back into
-///      this function — enough to wake up custom-tag bodies.
-///   2. Mount registered custom-component tags
-///      ([`templates_plan::registered_template_tags`]) under
-///      the root via [`mount_component`].
-///
-/// **Bridge contract — narrow on purpose**: this function
-/// discovers structure (tag names, structural controller
-/// templates) and nothing else. It does **not** parse or
-/// install per-element `pp-*` / `:prop` / `@event` /
-/// `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model`
-/// directives — those only bind when the macro processes them
-/// at compile time inside a `#[component]` template. Authors
-/// who need per-element directives on dynamic content wrap
-/// that content in a `#[component]` (or the `template_inline`
-/// test shorthand). See module doc-comment for the full
-/// allowed / disallowed table.
-///
-/// Public so directive runtime helpers (notably `pp-for`'s
-/// row install when `body_fn = None`) and the slot
-/// materialiser ([`materialize_adopted_slot`]) can drive
-/// component / controller discovery over freshly-cloned
-/// template bodies.
-pub fn mount_adopted_components(root: &Element) {
-    // Step 1: install runtime controllers on user-authored
-    // `<template pp-*>` elements. Done first because pp-for /
-    // pp-if can produce custom tags that need mounting in step 2.
-    install_adopted_controllers(root);
-
-    // Step 2: mount any registered custom tags discovered in the
-    // subtree (including the root itself).
+fn mount_captured_light_dom_components(root: &Element) {
     let tags = crate::templates::registered_template_names();
     if tags.is_empty() {
         return;
     }
-    let selector = tags.join(",");
-    let Ok(matches) = root.query_selector_all(&selector) else {
+    if tags.iter().any(|t| t == &root.local_name()) {
+        if get_private(root, "__pp_mounted").is_none() {
+            let tag = root.local_name();
+            mount_child_component(root, &tag);
+        }
         return;
-    };
-    let mut roots: Vec<Element> = Vec::with_capacity(matches.length() as usize + 1);
-    if tags.iter().any(|t| t == &root.local_name()) && get_private(root, "__pp_mounted").is_none() {
-        roots.push(root.clone());
     }
-    for i in 0..matches.length() {
-        if let Some(node) = matches.item(i) {
-            if let Ok(el) = node.dyn_into::<Element>() {
-                if get_private(&el, "__pp_mounted").is_none() {
-                    roots.push(el);
-                }
+    let mut roots: Vec<Element> = Vec::new();
+    let selector = tags.join(",");
+    if let Ok(matches) = root.query_selector_all(&selector) {
+        for i in 0..matches.length() {
+            let Some(node) = matches.item(i) else {
+                continue;
+            };
+            let Ok(el) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            if root.contains(Some(el.as_ref())) && get_private(&el, "__pp_mounted").is_none() {
+                roots.push(el);
             }
         }
     }
     for el in roots {
         let tag = el.local_name();
-        mount_component(&el, &tag, None);
+        mount_child_component(&el, &tag);
     }
 }
 
-/// **Adopted-DOM bridge — structural-controller discovery.**
-/// Find every `<template pp-for>` / `<template pp-if>` /
-/// `<template pp-teleport>` in `root`'s subtree (and `root`
-/// itself) and install the matching controller. Used for
-/// adopted-DOM containers the macro never saw: runtime-
-/// captured slot content, `pp-for` row bodies cloned via
-/// `clone_template_body` when `body_fn` was None, and any
-/// other path that injects `<template pp-*>` markup at
-/// runtime.
-///
-/// **Strict subset of walker behaviour**: this only handles
-/// the three structural controllers. Per-element directive
-/// binding (`pp-text`, `pp-bind`, `:prop`, `@event`,
-/// `pp-show`, `pp-init`, `pp-model`, `pp-html`) is **not** in
-/// the bridge contract — those need to be authored inside a
-/// `#[component]` template so the macro processes them at
-/// compile time. See module doc-comment.
-fn install_adopted_controllers(root: &Element) {
-    let Ok(templates) = root.query_selector_all("template") else {
-        return;
-    };
-    let mut candidates: Vec<Element> = Vec::with_capacity(templates.length() as usize + 1);
-    if root.local_name() == "template" {
-        candidates.push(root.clone());
-    }
-    for i in 0..templates.length() {
-        if let Some(node) = templates.item(i) {
-            if let Ok(el) = node.dyn_into::<Element>() {
-                candidates.push(el);
-            }
-        }
-    }
-    for tpl in candidates {
-        let Ok(template) = tpl.clone().dyn_into::<web_sys::HtmlTemplateElement>() else {
-            continue;
-        };
-        // Skip controllers we've already installed (re-discovery
-        // passes hit the same template multiple times).
-        if get_private(&tpl, "__pp_runtime_controller_installed").is_some() {
-            continue;
-        }
-        let Some((scope_id, proxy)) = enclosing_scope(&tpl) else {
-            continue;
-        };
-        if let Some(for_value) = tpl.get_attribute("pp-for") {
-            // pp-for="<item> in <items>"
-            let parts: Vec<&str> = for_value.splitn(2, " in ").collect();
-            if parts.len() != 2 {
-                continue;
-            }
-            let item_name = parts[0].trim().to_string();
-            let items_expr = parts[1].trim().to_string();
-            let key_expr = tpl.get_attribute("pp-key").map(|s| s.trim().to_string());
-            let stagger_ms = tpl
-                .get_attribute("pp-stagger")
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .unwrap_or(0);
-            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
-            crate::directives::for_::install(
-                template, proxy, scope_id, item_name, items_expr, key_expr, stagger_ms, None,
-            );
-            continue;
-        }
-        if let Some(if_value) = tpl.get_attribute("pp-if") {
-            let Ok(ast) = crate::expr::parse_cached(&if_value) else {
-                continue;
-            };
-            let teleport_selector = tpl.get_attribute("pp-teleport");
-            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
-            crate::directives::if_::install(
-                template,
-                proxy,
-                ast,
-                None,
-                teleport_selector.as_deref(),
-            );
-            continue;
-        }
-        if let Some(teleport_selector) = tpl.get_attribute("pp-teleport") {
-            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
-            crate::directives::teleport::install(template, &teleport_selector, None);
-            continue;
-        }
-    }
+pub(crate) fn clear_light_dom_slots(scope_id: ScopeId) {
+    LIGHT_DOM_SLOTS.with(|stores| {
+        stores.borrow_mut().remove(&scope_id);
+    });
 }
 
 /// Splice the slot element's own default children in place of the

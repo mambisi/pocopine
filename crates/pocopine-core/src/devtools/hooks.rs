@@ -1,6 +1,6 @@
 //! Runtime → devtools hook registry.
 //!
-//! Thin tap points the reactive core, scope walker, and router call
+//! Thin tap points the reactive core, scope mount, and router call
 //! into so devtools panels can observe what's happening. The pattern:
 //!
 //!   - This module exposes `fire_*` functions under

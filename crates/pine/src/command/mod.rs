@@ -500,7 +500,7 @@ impl PineCommandItem {
         let label_lc = label.to_lowercase();
         let value_lc = my_value.to_lowercase();
 
-        // Defer label write so the walker's reactive flush that
+        // Defer label write so the mount's reactive flush that
         // mounted us has fully released its state borrows.
         let h_label = handle.clone();
         pocopine::tick::next(move || {

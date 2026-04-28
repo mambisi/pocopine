@@ -115,7 +115,7 @@ pub fn install_opaque(
 /// compound Content parts driving side/align/offset from props.
 ///
 /// Call [`release`] on the floater element when done; the
-/// walker does this automatically on unmount for directive-
+/// mount does this automatically on unmount for directive-
 /// installed anchors.
 pub fn install(
     floater: &HtmlElement,
@@ -229,7 +229,7 @@ pub fn install(
     let _ = Reflect::set(floater.as_ref(), &STATE_KEY.into(), &JsValue::from_f64(ptr));
 }
 
-/// Called by `walker::release_subtree`. Tears down the shared
+/// Called by `mount::release_subtree`. Tears down the shared
 /// closures + listeners.
 pub fn release(el: &Element) {
     let v = match Reflect::get(el.as_ref(), &STATE_KEY.into()) {
@@ -246,7 +246,7 @@ pub fn release(el: &Element) {
     }
     // Safety: this pointer was produced by `Box::into_raw` in `run`
     // and stashed under STATE_KEY. `release` is called at most once
-    // per element (the walker evicts the private slot when the scope
+    // per element (the mount evicts the private slot when the scope
     // tears down — there's no other reader).
     let state = unsafe { Box::from_raw(ptr) };
 

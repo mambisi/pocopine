@@ -23,9 +23,9 @@ thread_local! {
 
 /// Highlight the element whose scope id is `scope_id`. Passing
 /// `None` clears the current highlight. Resolves the scope id to an
-/// element via `walker::find_element_for_scope`.
+/// element via `mount::find_element_for_scope`.
 pub(super) fn set_from_scope(scope_id: Option<ScopeId>) {
-    let next = scope_id.and_then(crate::walker::find_element_for_scope);
+    let next = scope_id.and_then(crate::mount::find_element_for_scope);
     apply(next);
 }
 

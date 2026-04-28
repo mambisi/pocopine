@@ -42,8 +42,8 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use web_sys::{Element, MutationObserver, MutationObserverInit};
 
+use crate::mount::track_effect_on;
 use crate::reactive::{EffectId, ScopeId};
-use crate::walker::track_effect_on;
 
 const FLIP_ID_KEY: &str = "__pp_flip_id";
 
@@ -184,7 +184,7 @@ fn run_check() {
 }
 
 /// Release any pp-flip registry entry attached to `el`. Called
-/// from the walker's `release_subtree` so disconnected elements
+/// from the mount's `release_subtree` so disconnected elements
 /// don't leak.
 pub fn release(el: &Element) {
     let Some(v) = js_sys::Reflect::get(el.as_ref(), &JsValue::from_str(FLIP_ID_KEY))

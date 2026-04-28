@@ -33,10 +33,9 @@ fn mount(host_html: &str) -> Element {
     host
 }
 
-/// RFC 061 Phase 3 — replacement for the deleted
-/// `walker::start_compiled` discovery scan. Same shape as the
-/// old start_compiled body: querySelectorAll the union selector
-/// of every registered tag, mount each via the typed
+/// RFC 061 Phase 3 — test-only compiled root discovery.
+/// QuerySelectorAll the union selector of every registered tag,
+/// mount each via the typed
 /// `mount_child_component` path, then run
 /// `finalize_compiled_subtree` to fire mount/ready hooks. Also
 /// registers `<pp-outlet>` elements with the router so
@@ -53,9 +52,12 @@ fn mount_registered_tags(host: &Element) {
                 let Ok(el) = node.dyn_into::<Element>() else {
                     continue;
                 };
+                if !host.contains(Some(el.as_ref())) {
+                    continue;
+                }
                 let tag = el.local_name();
-                pocopine_core::walker::mount_child_component(&el, &tag);
-                pocopine_core::walker::finalize_compiled_subtree(&el);
+                pocopine_core::mount::mount_child_component(&el, &tag);
+                pocopine_core::mount::finalize_compiled_subtree(&el);
             }
         }
     }
@@ -1039,7 +1041,7 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
         .unwrap();
     // Menu is teleported to <body> (pp-teleport). Don't assert
     // `position: fixed` here — anchor install depends on
-    // `refs::get_on("menu")` catching the ref after the walker
+    // `refs::get_on("menu")` catching the ref after the mount
     // finishes pp-if's recursive walk, which can race with
     // tick::next ordering. Validated separately in the Popover
     // test. Just check the DOM shape is right.
@@ -1872,7 +1874,7 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
     assert_eq!(
         portal_plan.if_plans[0].teleport_selector,
         Some("body"),
-        "pp-if + pp-teleport should be represented in StaticIfPlan, not left to walker discovery",
+        "pp-if + pp-teleport should be represented in StaticIfPlan, not left to mount discovery",
     );
 
     // Click Trigger → open.
@@ -5364,7 +5366,7 @@ async fn pp_flip_registers_and_picks_up_layout_shift() {
 
 /// `setAttribute("@click", …)` throws InvalidCharacterError because
 /// `@` is not a Name-start char per the XML production browsers'
-/// DOM enforces. The walker normalises `@event` → `pp-on:event`
+/// DOM enforces. The mount normalises `@event` → `pp-on:event`
 /// before forwarding via `merge_template_attrs_as`. This regression
 /// test simulates the same path: copying every attr off one
 /// element to another via `set_attribute` should never throw, and
@@ -5381,7 +5383,7 @@ async fn setattr_round_trip_normalises_event_shorthand() {
     for i in 0..attrs.length() {
         let Some(a) = attrs.item(i) else { continue };
         let name = a.name();
-        // Mirror the walker's normalisation rule.
+        // Mirror the mount's normalisation rule.
         let safe = if let Some(rest) = name.strip_prefix('@') {
             format!("pp-on:{rest}")
         } else {
@@ -6127,13 +6129,13 @@ async fn tags_input_per_chip_inject_chain_reaches_root() {
         .query_selector(".tfh-chip-x")
         .unwrap()
         .expect("chip × must mount");
-    let (delete_scope, _) = pocopine_core::walker::scope_of_element(&chip_x).expect("delete scope");
+    let (delete_scope, _) = pocopine_core::mount::scope_of_element(&chip_x).expect("delete scope");
 
     let mut cur = Some(delete_scope);
     let mut chain: Vec<(u64, Option<String>)> = Vec::new();
     let mut found_root = false;
     while let Some(s) = cur {
-        let tag = pocopine_core::walker::find_element_for_scope(s)
+        let tag = pocopine_core::mount::find_element_for_scope(s)
             .and_then(|el| el.parent_element().map(|p| p.tag_name().to_lowercase()));
         chain.push((s.0, tag.clone()));
         if tag.as_deref() == Some("pine-tags-input-root") {
@@ -6199,7 +6201,7 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
         .unwrap()
         .unwrap();
     let inner = root.first_element_child().unwrap();
-    let (_, root_proxy) = pocopine_core::walker::scope_of_element(&inner).expect("root scope");
+    let (_, root_proxy) = pocopine_core::mount::scope_of_element(&inner).expect("root scope");
     // Build the JS array via js_sys (no extra serde dep needed
     // for this test crate — values are plain strings).
     let arr = js_sys::Array::new();

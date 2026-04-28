@@ -1,6 +1,6 @@
 //! Inline `{{expr}}` text interpolation — RFC-025 as revised by RFC-040.
 //!
-//! After the walker finishes binding directives on an element, it
+//! After the mount finishes binding directives on an element, it
 //! invokes [`scan_children`] to split each direct Text child into
 //! static + dynamic segments. Each dynamic segment gets its own
 //! text node bound by a reactive effect, pinned to the enclosing
@@ -21,9 +21,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element, Node, Text};
 
 use crate::expr::{self, Spanned};
+use crate::mount::track_effect_on;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::track_effect_on;
 
 enum Segment {
     Static(String),
@@ -37,7 +37,7 @@ enum Segment {
 /// the resulting segment list into a [`crate::directives::for_plan::StaticInterp`]
 /// entry, and the runtime applier hands it to
 /// [`install_planned`] to drive the same install path the
-/// walker's runtime parser would have produced.
+/// mount's runtime parser would have produced.
 #[doc(hidden)]
 pub enum PlannedSegment {
     Static(&'static str),

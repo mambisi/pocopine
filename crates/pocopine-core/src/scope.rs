@@ -132,7 +132,7 @@ pub trait ComponentState: 'static {
     }
 
     /// True iff the component actually has a user-defined `on_mount`.
-    /// Lets the walker skip the post-mount `trigger_scope` sweep for
+    /// Lets the mount skip the post-mount `trigger_scope` sweep for
     /// components that don't need it — critical for recursive
     /// children, where a blanket sweep would cascade through the
     /// whole subtree.
@@ -155,7 +155,7 @@ pub trait ComponentState: 'static {
 
     /// RFC-038 — enter preset name the component declared at
     /// `#[component(transition = "…")]` (or `transition_in`). The
-    /// walker calls this once post-template-clone to stamp the
+    /// mount calls this once post-template-clone to stamp the
     /// preset's `pp-transition:*` attrs on the rendered root.
     fn transition_in_preset(&self) -> &'static str {
         ""
@@ -167,7 +167,7 @@ pub trait ComponentState: 'static {
     }
 
     /// RFC-038 — keyed-pp-for layout-animation kind (only `"flip"`
-    /// today). The walker's for_.rs hooks check this to decide
+    /// today). The mount's for_.rs hooks check this to decide
     /// whether to FLIP-animate reordered clones.
     fn animate_kind(&self) -> &'static str {
         ""
@@ -183,7 +183,7 @@ pub trait ComponentState: 'static {
 
 /// A live component instance bound to a DOM element.
 ///
-/// Holds both the type-erased `ComponentState` handle the walker uses and
+/// Holds both the type-erased `ComponentState` handle the mount uses and
 /// a typed `Rc<RefCell<T>>` behind an `Any` for handler code that wants
 /// to mutate the underlying Rust struct directly (see
 /// [`crate::this`](crate::handle::this)).
@@ -249,7 +249,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 
     /// The element the current directive is running against. Set by the
-    /// walker immediately around each directive call so `$el` works without
+    /// mount immediately around each directive call so `$el` works without
     /// threading the element through every call site.
     static CURRENT_EL: RefCell<Option<Element>> = const { RefCell::new(None) };
 
@@ -264,7 +264,7 @@ thread_local! {
 
 impl Scope {
     /// Build a scope from a typed `Rc<RefCell<T>>`. Stashes both the
-    /// type-erased and the typed form so later code (walker + handler
+    /// type-erased and the typed form so later code (mount + handler
     /// handles) can choose the right one.
     pub fn new<T: ComponentState + 'static>(state: Rc<RefCell<T>>) -> Self {
         let id = next_scope_id();
@@ -301,11 +301,7 @@ impl Scope {
     pub fn remove(id: ScopeId) {
         SCOPES.with(|s| s.borrow_mut().remove(&id));
         crate::refs::clear_scope(id);
-        // RFC 061 Phase 1 — `slots` module deprecated; cleanup
-        // call removed in Phase 3 with the rest of the runtime
-        // slot store.
-        #[allow(deprecated)]
-        crate::slots::clear(id);
+        crate::mount::clear_light_dom_slots(id);
         crate::slot_fragment::clear(id);
         crate::id::clear_scope(id);
         crate::context::clear_scope(id);

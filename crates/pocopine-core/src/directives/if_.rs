@@ -29,8 +29,8 @@ use web_sys::{console, Element, HtmlTemplateElement, Node};
 use super::teleport;
 use super::transition;
 use crate::expr::{self, Spanned};
+use crate::mount::{self, bind_borrowed_scope_to, track_effect_on};
 use crate::reactive::effect;
-use crate::walker::{self, bind_borrowed_scope_to, track_effect_on};
 
 /// Compiled-path entry point. Skips the `<template>` cast +
 /// expression parse — both already done at compile time by the
@@ -38,13 +38,13 @@ use crate::walker::{self, bind_borrowed_scope_to, track_effect_on};
 ///
 /// Called by `apply_static_plan` for every `StaticIfPlan` entry
 /// the classifier emitted. RFC-058 Phase 4.1a — extracted so the
-/// runtime walker dispatch path and the plan applier share one
+/// runtime mount dispatch path and the plan applier share one
 /// effect-install body instead of growing two parallel
 /// implementations of the truthy-toggle / transition / teleport
 /// orchestration.
 ///
 /// `body_fn` is the macro-emitted body fragment. With the
-/// runtime walker gone (RFC-058 Phase 6.5), every plan-eligible
+/// runtime mount gone (RFC-058 Phase 6.5), every plan-eligible
 /// `pp-if` site must carry a fragment; missing fragments
 /// surface through the fail-fast plan-failure counter and
 /// render an empty subtree.
@@ -68,14 +68,14 @@ pub fn install(
         .and_then(teleport::resolve_target);
     // Pin the owning scope on every pp-if clone regardless of
     // teleport. Without pinning, an inline clone's enclosing
-    // scope is resolved by the walker via DOM ancestry — which
+    // scope is resolved by the mount via DOM ancestry — which
     // skips the `<template>` (the actual scope-carrying element
     // for Pine components whose root directive is pp-if) and
     // lands on whatever component contains the consumer. That
     // breaks `<slot>` materialisation inside the clone (it
     // matches a slot store on the wrong scope) and any
     // directive that reads from the owning scope's proxy.
-    let pinned_scope = walker::enclosing_scope(&template_el);
+    let pinned_scope = mount::enclosing_scope(&template_el);
     // RFC-027 inject chain — when the controller template is
     // authored in slot content, its enclosing scope is the slot
     // AUTHOR (so directives bind against the right proxy) but
@@ -83,7 +83,7 @@ pub fn install(
     // OWNER. The slot materialiser stamps `CTX_PARENT_KEY` on
     // the top-level slot child; walk ancestors so a controller
     // wrapped under that top-level child still finds it.
-    let inject_parent_id_override = walker::inherited_ctx_parent_of(&template_el);
+    let inject_parent_id_override = mount::inherited_ctx_parent_of(&template_el);
 
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 
@@ -98,9 +98,9 @@ pub fn install(
                 // the clone root via that fragment (which calls
                 // `apply_static_plan` against the parent scope
                 // to install every directive without going
-                // through `walker::walk`). Otherwise fall back
+                // through `mount::walk`). Otherwise fall back
                 // to the legacy `clone_template_body` +
-                // `walker::walk` path.
+                // `mount::walk` path.
                 let (clone_root, fragment_built) = match body_fn {
                     Some(f) => {
                         // The fragment installs directives against
@@ -146,7 +146,7 @@ pub fn install(
                 // installed against the parent scope, but the
                 // `bind_borrowed_scope_to` stamp is still needed
                 // so `enclosing_scope` resolves to the parent for
-                // any subsequent walker pass (e.g. devtools).
+                // any subsequent mount pass (e.g. devtools).
                 if let Some((scope_id, proxy)) = pinned_scope.as_ref() {
                     bind_borrowed_scope_to(&clone_root, *scope_id, proxy);
                 }
@@ -186,11 +186,11 @@ pub fn install(
                     // mounts carry `__pp_mounted`, so this does not
                     // duplicate generated installs.
                     if fragment_built {
-                        walker::finalize_compiled_subtree(&clone_root);
+                        mount::finalize_compiled_subtree(&clone_root);
                     } else {
                         // RFC-058 Phase 6.5 — body must come from
                         // the macro fragment now that the runtime
-                        // walker is gone. Surface the
+                        // mount is gone. Surface the
                         // misclassification through the fail-fast
                         // counter so the test harness catches a
                         // plan emitting `pp-if` without a compiled
@@ -242,7 +242,7 @@ pub fn install(
                     // clones inside this one. Direct release fires
                     // scope unmount hooks and cascades teleport::release
                     // on every descendant deterministically.
-                    walker::release_subtree(clone_cap.as_ref());
+                    mount::release_subtree(clone_cap.as_ref());
                     // Only clear the slot if it still points to this
                     // clone — a rapid re-mount could have replaced it.
                     let mut slot = slot_cap.borrow_mut();

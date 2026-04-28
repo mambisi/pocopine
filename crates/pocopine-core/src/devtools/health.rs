@@ -14,9 +14,9 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+use crate::mount;
 use crate::reactive;
 use crate::scope::Scope;
-use crate::walker;
 
 pub(crate) const HISTORY: usize = 60;
 
@@ -39,7 +39,7 @@ thread_local! {
 pub(crate) fn sample_tick() {
     let (effects, deps) = reactive::stats();
     let sample = Sample {
-        listeners: walker::listener_count(),
+        listeners: mount::listener_count(),
         effects,
         scopes: Scope::all().len(),
         deps,

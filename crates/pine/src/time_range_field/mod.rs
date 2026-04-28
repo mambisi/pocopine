@@ -56,7 +56,7 @@ impl PineTimeRangeField {
         };
         let part = target.get_attribute("data-part");
         // Class-only selector — see PineDateRangeField::on_key for
-        // the rationale: the walker strips fallthrough class/style
+        // the rationale: the mount strips fallthrough class/style
         // off the outer custom tag after forwarding, so the
         // `pine-time-range-field-{start,end}` class lives on the
         // inner rendered `<div class="pine-time-field">` rather

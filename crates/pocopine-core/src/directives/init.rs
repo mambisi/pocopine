@@ -8,7 +8,7 @@ use crate::scope::{invoke_handler, with_current_el};
 
 /// Compiled-path entry. Invokes `handler` against `scope_id` with
 /// the element bound as the current `with_current_el`. Used by
-/// `walker::fire_deferred_init` (the post-order drain that runs
+/// `mount::fire_deferred_init` (the post-order drain that runs
 /// stashed `pp-init` values after descendants have bound) and
 /// `apply_static_plan`'s init step.
 pub fn install(el: &Element, scope_id: ScopeId, handler: &str) {

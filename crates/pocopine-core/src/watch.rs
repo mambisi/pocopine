@@ -66,7 +66,7 @@ where
 /// The actual `effect` install is deferred to the next microtask
 /// so the initial read doesn't clash with the caller's active
 /// `&mut self` borrow (the common case — `on_mount(&mut self)`
-/// calling `watch_field` while the walker still holds the mutable
+/// calling `watch_field` while the mount still holds the mutable
 /// borrow on state). The effect's `get`-trap read needs an
 /// *immutable* borrow of state; without the defer, that reentry
 /// trips `RefCell::borrow` and the source silently returns
@@ -139,12 +139,12 @@ where
 ///
 /// Install is deferred a microtask via [`crate::tick::next`] for the
 /// same reason `watch_scope_field_scoped` defers: callers reach
-/// this from `on_mount` / `on_ready`, which run behind the walker's
+/// this from `on_mount` / `on_ready`, which run behind the mount's
 /// active borrow on the scope's state. The watch's first-tick
 /// callback typically calls back into the same handle (e.g.
 /// `handle.update(...)` to mirror the observed value into local
 /// state) — which would trip `RefCell::borrow_mut` against the
-/// walker's still-live borrow. Deferring the install lets the
+/// mount's still-live borrow. Deferring the install lets the
 /// surrounding lifecycle frame unwind first.
 pub fn watch_scoped<T, S, C>(source: S, cb: C)
 where

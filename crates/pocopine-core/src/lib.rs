@@ -31,6 +31,7 @@ pub mod lifecycle;
 pub mod loop_scope;
 pub mod magics;
 pub mod model_runtime;
+pub mod mount;
 pub mod path;
 pub mod profiler;
 pub mod reactive;
@@ -43,10 +44,6 @@ pub mod server;
 pub mod signal;
 pub mod slot_fragment;
 pub mod slot_scope;
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     Slot content flows through `slot_fragment::*` \
-                     compiled fragments; this runtime store retires in Phase 3.")]
-pub mod slots;
 pub mod store;
 pub mod styles;
 pub mod task;
@@ -55,7 +52,6 @@ pub mod templates_plan;
 pub mod text;
 pub mod tick;
 pub mod timers;
-pub mod walker;
 pub mod watch;
 
 pub use app::{App, Component, SubtreeHandle};

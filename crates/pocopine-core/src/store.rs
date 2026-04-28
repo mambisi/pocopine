@@ -67,7 +67,7 @@ pub fn register_store_scope(name: &'static str, scope: Scope) {
     STORE_OBJECT.with(|o| *o.borrow_mut() = None);
 }
 
-/// Look up a store's scope by name. Used by the walker for tests and by
+/// Look up a store's scope by name. Used by the mount for tests and by
 /// `$store` magic for direct proxy access.
 pub fn store_scope(name: &str) -> Option<Scope> {
     STORE_SCOPES.with(|s| s.borrow().get(name).cloned())

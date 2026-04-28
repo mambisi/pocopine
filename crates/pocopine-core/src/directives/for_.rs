@@ -28,10 +28,10 @@ use wasm_bindgen::JsValue;
 use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
 
 use crate::loop_scope::LoopScope;
+use crate::mount::{self, bind_scope_to, track_effect_on};
 use crate::path::resolve_path;
 use crate::reactive::{effect, trigger_scope, ScopeId};
 use crate::scope::Scope;
-use crate::walker::{self, bind_scope_to, track_effect_on};
 
 /// Return the element child whose layout box represents the
 /// custom-element's visible bounds. Custom tags themselves are
@@ -166,7 +166,7 @@ fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &
 
     let scope_ids: Vec<ScopeId> = entries.iter().map(|entry| entry.scope_id).collect();
     // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
-    // marker is gone with the walker. Synchronous bulk teardown
+    // marker is gone with the mount. Synchronous bulk teardown
     // does the work directly below.
     crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
     Scope::remove_compiled_rows(&scope_ids);
@@ -243,7 +243,7 @@ fn restore_leaver_layout(entry: &PrevItem) {
 ///
 /// Called by `apply_static_plan` for every `StaticForPlan`
 /// entry the classifier emitted. RFC-058 Phase 4.2 — extracted
-/// so the runtime walker dispatch path and the plan applier
+/// so the runtime mount dispatch path and the plan applier
 /// share one keyed/naive selection body. Coexists with the
 /// RFC-054 row-plan registry: `lookup_for_template` reads
 /// `data-pp-row-plan` from the template element, which the
@@ -284,7 +284,7 @@ pub fn install(
     // nested `<template>`. Reading just the template would miss
     // the owner stamp and chain to the slot author.
     let inject_parent_id =
-        crate::walker::inherited_ctx_parent_of(&template_el).unwrap_or(parent_scope_id);
+        crate::mount::inherited_ctx_parent_of(&template_el).unwrap_or(parent_scope_id);
     // `pp-stagger="<ms>"` on the template spreads the enter
     // animation of newly-inserted clones across time — `i * stagger`
     // ms delay per clone, in insertion order. Keeps a batch mount
@@ -377,7 +377,7 @@ fn run_naive(
             // through the fragment (which stamps cleaned HTML +
             // installs generated entries against the row's
             // LoopScope via the Phase 1 helpers). We still run
-            // the walker after insertion so preserved fallback
+            // the mount after insertion so preserved fallback
             // directives in nested custom-component templates bind.
             let (clone_root, fragment_built) = match body {
                 Some(f) => match f(scope.id, &proxy, scope.id) {
@@ -406,7 +406,7 @@ fn run_naive(
                 .is_ok()
             {
                 if fragment_built {
-                    walker::finalize_compiled_subtree(&clone_root);
+                    mount::finalize_compiled_subtree(&clone_root);
                 } else {
                     // RFC-058 Phase 6.5 — `body_fn = None` means
                     // the macro couldn't lift this row's body
@@ -421,11 +421,10 @@ fn run_naive(
                     // tag discovery + lifecycle. Native `pp-*`
                     // directives on the clone stay inert — that's
                     // the documented compiled-only contract.
-                    let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                    let ctx_key = wasm_bindgen::JsValue::from_str(mount::CTX_PARENT_KEY);
                     let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
                     let _ = js_sys::Reflect::set(clone_root.as_ref(), &ctx_key, &ctx_val);
-                    walker::mount_adopted_components(&clone_root);
-                    walker::finalize_compiled_subtree(&clone_root);
+                    mount::finalize_compiled_subtree(&clone_root);
                 }
                 fresh.push(clone_root);
             }
@@ -505,7 +504,7 @@ fn run_keyed(
     // the macro flagged as eligible (flat keyed table rows, no
     // nested directives, supported binding/listener envelope) are
     // stamped with `data-pp-row-plan="<id>"`. None ⇒ generic
-    // walker; Some ⇒ skip the per-row attribute scan and patch
+    // mount; Some ⇒ skip the per-row attribute scan and patch
     // dynamic nodes from the plan directly.
     let row_plan: Option<Rc<crate::directives::for_plan::CompiledRowPlan>> =
         crate::directives::for_plan::lookup_for_template(&template_el);
@@ -735,10 +734,10 @@ fn run_keyed(
                 // fragment, build the row via the fragment
                 // (stamps cleaned HTML + installs every
                 // directive against the row's LoopScope via
-                // the Phase 1 helpers — no `walker::walk`
+                // the Phase 1 helpers — no `mount::walk`
                 // involvement). Otherwise clone the template
                 // body and let the install loop run
-                // `walker::walk` / `mount_row_compiled` as
+                // `mount::walk` / `mount_row_compiled` as
                 // before.
                 let clone_root = if row_plan.is_none() {
                     if let Some(body_fn) = body {
@@ -773,7 +772,7 @@ fn run_keyed(
                             break;
                         };
                         if elide_proxy {
-                            walker::bind_scope_id_only(&root, scope.id);
+                            mount::bind_scope_id_only(&root, scope.id);
                         } else {
                             let proxy = scope.into_proxy();
                             bind_scope_to(&root, scope.id, &proxy);
@@ -784,7 +783,7 @@ fn run_keyed(
                         // through this row's scope. Mirrors what
                         // `stamp_if_body` does for the body_fn
                         // path.
-                        let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                        let ctx_key = wasm_bindgen::JsValue::from_str(mount::CTX_PARENT_KEY);
                         let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
                         let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
                         root
@@ -900,7 +899,7 @@ fn run_keyed(
                     // sweep, then clears the marker. One
                     // `Reflect::set` per clear instead of 10K.
                     // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
-                    // marker is gone with the walker. Synchronous bulk teardown
+                    // marker is gone with the mount. Synchronous bulk teardown
                     // does the work directly below.
                     // RFC 054 Lever 5 — bulk teardown. The per-row
                     // unmount path was O(N²) due to
@@ -1138,14 +1137,14 @@ fn run_keyed(
         // directive setup can look up the enclosing scope via parent
         // chain if it needs to.
         //
-        // RFC 054 — the compiled fast path swaps the generic walker
+        // RFC 054 — the compiled fast path swaps the generic mount
         // for a plan-driven mount: clone is already in the DOM with
         // its scope bound, so we resolve the dynamic node paths
         // and install bindings/listeners directly. Eligibility is
         // checked at macro time and the template is stamped with
         // `data-pp-row-plan="<id>"`; `lookup_for_template` returns
         // `None` for any template that didn't qualify, and we fall
-        // back to the generic walker.
+        // back to the generic mount.
         for el in &newly_walked {
             // For compiled rows we already know the scope id (stamped
             // at clone time) and whether to pass a proxy: elision
@@ -1154,11 +1153,11 @@ fn run_keyed(
             // Going through `enclosing_scope` here would defeat the
             // elision by triggering the lazy-mint path immediately.
             if let Some(plan) = &row_plan {
-                if let Some(sid) = walker::scope_id_of_element(el) {
+                if let Some(sid) = mount::scope_id_of_element(el) {
                     let proxy_for_mount = if elide_proxy {
                         None
                     } else {
-                        crate::walker::scope_of_element(el).map(|(_, p)| p)
+                        crate::mount::scope_of_element(el).map(|(_, p)| p)
                     };
                     crate::directives::for_plan::mount_row_compiled(
                         plan,
@@ -1178,8 +1177,7 @@ fn run_keyed(
             // custom tags inside (a no-op for body_fn rows since
             // child mounts already ran during the body fragment's
             // `apply_static_plan`, but cheap).
-            walker::mount_adopted_components(el);
-            walker::finalize_compiled_subtree(el);
+            mount::finalize_compiled_subtree(el);
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /
@@ -1188,7 +1186,7 @@ fn run_keyed(
         // delay instead of all firing at once.
         fire_staggered_enter(&newly_walked, stagger_ms);
 
-        // RFC-038 — FLIP play phase. Runs AFTER the walker stamps
+        // RFC-038 — FLIP play phase. Runs AFTER the mount stamps
         // `data-pp-animate` + inserts, so the elements' new
         // positions are real.
         //

@@ -21,12 +21,12 @@
 //!
 //! * Eligible: native HTML elements only — every directive
 //!   on or under a non-HTML5 tag is whole-subtree
-//!   walker-owned (council pass 3 amendment).
+//!   mount-owned (council pass 3 amendment).
 //! * Eligible directives: `pp-text`, `pp-html`, `pp-show`,
 //!   `pp-bind:<arg>` / `:<arg>`, `pp-on:<event>` / `@event`
 //!   when every modifier is in the supported set, `pp-ref`,
 //!   `pp-init` (deferred).
-//! * Whole-subtree boundaries (walker-owned, classifier
+//! * Whole-subtree boundaries (mount-owned, classifier
 //!   skips the subtree): `pp-for`, `pp-if`, `pp-teleport`,
 //!   `<slot>`, every non-HTML5 tag.
 //! * `pp-model` and `pp-route` are explicitly deferred (§7
@@ -36,7 +36,7 @@
 //!   modifiers, `debounce` + numeric-ms pair.
 //!
 //! Every other attribute survives unchanged on the rewritten
-//! HTML — it's the runtime walker's job to handle them as
+//! HTML — it's the runtime mount's job to handle them as
 //! today (attribute-preserved fallback, RFC-057 §8.1).
 
 use proc_macro2::TokenStream;
@@ -48,7 +48,7 @@ use crate::template_parser::{Element, Node, TemplateAst};
 pub(crate) struct EmittedTemplatePlan {
     /// `Some(quoted &'static StaticTemplatePlan)` when at least
     /// one plan entry was emitted; `None` when the template has
-    /// nothing eligible (every directive is walker-owned or the
+    /// nothing eligible (every directive is mount-owned or the
     /// template has no directives at all). The macro emits
     /// `register_template_plan` only when this is `Some`.
     pub plan_tokens: Option<TokenStream>,
@@ -156,13 +156,13 @@ struct AnalysisCtx {
     /// plan-eligible portion of the template, excluding
     /// `<slot>` / `<template>`-block wrappers / pp-for /
     /// pp-if / pp-teleport subtrees). The runtime applier
-    /// invokes [`crate::walker::mount_child_component`] for
-    /// each before the walker recurses, and the walker's
+    /// invokes [`crate::mount::mount_child_component`] for
+    /// each before the mount recurses, and the mount's
     /// `__pp_mounted` guard makes the discovery a no-op for
     /// any tag the plan already mounted.
     child_mounts: Vec<ChildMountLite>,
     /// RFC-058 Phase 4.1b — `pp-if` controller sites the
-    /// classifier lifted out of the runtime walker's
+    /// classifier lifted out of the runtime mount's
     /// directive-dispatch path. Each entry pins a
     /// `<template>`'s `node_path` + the truthy expression
     /// source; the runtime applier resolves the template,
@@ -170,7 +170,7 @@ struct AnalysisCtx {
     /// [`crate::directives::if_::install`].
     if_plans: Vec<IfPlanLite>,
     /// RFC-058 Phase 4.2 — `pp-for` controller sites the
-    /// classifier lifted out of the runtime walker's
+    /// classifier lifted out of the runtime mount's
     /// directive-dispatch path. The classifier parses
     /// `pp-for="<item> in <items>"` at compile time + reads
     /// `pp-key` / `pp-stagger` siblings into the entry; the
@@ -186,7 +186,7 @@ struct AnalysisCtx {
     /// RFC-058 Phase 3.5e — `<slot>` outlets discovered inside
     /// compiled component templates. The runtime applier
     /// materialises these explicitly instead of relying on the
-    /// recursive walker to discover `<slot>` elements.
+    /// recursive mount to discover `<slot>` elements.
     slot_outlets: Vec<SlotOutletLite>,
     /// RFC-058 Phase 3 hardening — runtime-only directives the
     /// macro can lift into a compile-time entry instead of
@@ -197,14 +197,14 @@ struct AnalysisCtx {
     /// [`crate::directives::lookup`] after slot materialisation.
     opaque_directives: Vec<OpaqueDirectiveLite>,
     /// RFC-058 Phase 6.2 — `{{expr}}` text interpolation lifted
-    /// out of the runtime walker. Each entry pre-parses one
+    /// out of the runtime mount. Each entry pre-parses one
     /// text-node child's segment list at compile time; the
     /// applier installs effects per dynamic segment, and the
-    /// runtime walker's `interp::scan_children` skips the
+    /// runtime mount's `interp::scan_children` skips the
     /// element via the `data-pp-interp-managed` marker.
     interps: Vec<InterpLite>,
     /// RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
-    /// native input/textarea/select. The previously walker-only
+    /// native input/textarea/select. The previously mount-only
     /// directive lifts into a static plan entry the applier
     /// installs via `directives::model::install_native`.
     /// Component-target `pp-model` (registered tag, with or
@@ -221,7 +221,7 @@ struct AnalysisCtx {
     /// RFC-058 Phase 6.2 — node paths whose direct text children
     /// contain `{{expr}}` interpolation the macro lifted into
     /// `interps` entries. The cleaned-HTML serializer stamps
-    /// `data-pp-interp-managed` on each so the runtime walker's
+    /// `data-pp-interp-managed` on each so the runtime mount's
     /// `interp::scan_children` skips the duplicate scan.
     interp_managed_paths: Vec<Vec<u16>>,
     /// RFC-058 §6.2 — `(template_node_path, plan_id)` pairs
@@ -235,10 +235,10 @@ struct AnalysisCtx {
     /// every classifier branch that used to flip the runtime
     /// fallback gate continues to compile without rewriting
     /// every site. The plan literal no longer emits the field;
-    /// the walker is gone, so a "true" here just means the
+    /// the mount is gone, so a "true" here just means the
     /// classifier identified an unliftable subtree (which the
     /// applier surfaces via `record_plan_failure` at install
-    /// time, not by re-discovering through the walker).
+    /// time, not by re-discovering through the mount).
     #[allow(dead_code)]
     requires_walker: bool,
 }
@@ -393,7 +393,7 @@ struct IfPlanLite {
     /// when the body falls outside the v1 envelope (`<slot>`,
     /// `pp-data`, native `pp-model`, `pp-route`, etc.) — the
     /// runtime installer falls back to the legacy
-    /// `clone_template_body` + `walker::walk` path.
+    /// `clone_template_body` + `mount::walk` path.
     body_fn_ident: Option<syn::Ident>,
 }
 
@@ -469,7 +469,7 @@ struct ChildMountLite {
     /// statically-eligible slot the macro lifted into a
     /// fragment function. Empty when the parent left no
     /// children inside the custom tag, or when the children
-    /// contained anything walker-only (any `pp-*` / `@` /
+    /// contained anything mount-only (any `pp-*` / `@` /
     /// `:` directive, any non-HTML5 tag, any `<slot>` / pp-let
     /// / pp-for / pp-if / pp-teleport descendant).
     ///
@@ -766,7 +766,7 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     // macro-emitted `IfBodyFn` when the body subtree qualifies
     // for fragment lifting; v1 ships `None` so every site
     // routes through the legacy `clone_template_body` +
-    // `walker::walk` path the runtime applier already drives.
+    // `mount::walk` path the runtime applier already drives.
     let body_tokens = match &ip.body_fn_ident {
         Some(ident) => quote! { ::core::option::Option::Some(#ident) },
         None => quote! { ::core::option::Option::None },
@@ -970,7 +970,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         // the path-indexing model since the runtime walks
         // authored structure. Skip them entirely — every
         // directive on or under a synthetic node falls back to
-        // the walker.
+        // the mount.
         return;
     }
 
@@ -978,7 +978,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // graduates into a `StaticForPlan` entry. Same eligibility
     // shape as Phase 4.1's pp-if: must be on `<template>`,
     // parseable `<item> in <items>`, no co-occurring
-    // `pp-teleport` (defer that combo to the walker — the
+    // `pp-teleport` (defer that combo to the mount — the
     // applier doesn't capture teleport targets in v1). The
     // `data-pp-row-plan` attribute the §6.2 layering bakes
     // into the cleaned HTML stays alongside the strip so the
@@ -1023,7 +1023,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     if lifted.is_none() {
                         // Body fell outside the lifting envelope —
                         // runtime falls back to `clone_template_body`
-                        // + `walker::walk`. Flag the plan so the
+                        // + `mount::walk`. Flag the plan so the
                         // Pine fallback audit catches it.
                         ctx.requires_walker = true;
                     }
@@ -1050,7 +1050,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     name: "pp-stagger".to_string(),
                 });
                 // Don't recurse — the row body is owned by the
-                // RFC-054 row plan (when present) or the walker
+                // RFC-054 row plan (when present) or the mount
                 // (when absent). Either way the template-plan
                 // classifier doesn't follow `<template>` content.
                 return;
@@ -1058,7 +1058,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         }
         // Ineligible (wrong host, has pp-teleport, or expr
         // doesn't parse) — fall through to block-boundary skip
-        // so today's walker dispatch handles it.
+        // so today's mount dispatch handles it.
         return;
     }
 
@@ -1068,7 +1068,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // the mount cycle in that combo and reads pp-teleport
     // itself), no co-occurring `pp-for` (pp-for graduated above
     // and shouldn't be paired with pp-teleport on the same
-    // element — degenerate case, leave on walker).
+    // element — degenerate case, leave on mount).
     if let Some(selector) = pp_teleport_value(el) {
         let has_if = el.attrs.iter().any(|(n, _)| n == "pp-if");
         let has_for = el.attrs.iter().any(|(n, _)| n == "pp-for");
@@ -1093,7 +1093,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             });
             if body_fn_ident.is_none() {
                 // Body fell outside the lifting envelope — runtime
-                // falls back to `clone_template_body` + `walker::walk`.
+                // falls back to `clone_template_body` + `mount::walk`.
                 // Flag the plan so the Pine fallback audit catches it.
                 ctx.requires_walker = true;
             }
@@ -1109,7 +1109,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             return;
         }
         // Ineligible (wrong host, has pp-if/pp-for, empty
-        // selector) — leave the walker to dispatch.
+        // selector) — leave the mount to dispatch.
         if !has_if {
             return;
         }
@@ -1138,11 +1138,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // graduates into a `StaticIfPlan` entry. The applier
     // resolves the template + parses the expression at compile
     // time; the macro strips the `pp-if` attribute from the
-    // cleaned HTML so the runtime walker's directive-dispatch
+    // cleaned HTML so the runtime mount's directive-dispatch
     // path doesn't double-install the effect. The template
     // body lives in `<template>.content` (a separate
     // `DocumentFragment` that doesn't appear in `el.children`),
-    // so body content stays on the walker — exactly like
+    // so body content stays on the mount — exactly like
     // today's clone+walk path. Phase 4.1c+ will lift the body
     // into a fragment function.
     if let Some(if_expr) = pp_if_value(el) {
@@ -1156,7 +1156,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // RFC-058 Phase 4.1d — try to lift the body
             // subtree into a fragment fn the runtime installer
             // invokes instead of `clone_template_body` +
-            // `walker::walk`. v1 envelope is narrow (HTML5
+            // `mount::walk`. v1 envelope is narrow (HTML5
             // natives + plan-eligible directives only); when
             // the body falls outside, `body_fn_ident` stays
             // `None` and the legacy clone+walk path runs.
@@ -1171,7 +1171,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             });
             if body_fn_ident.is_none() {
                 // Body fell outside the lifting envelope — runtime
-                // falls back to `clone_template_body` + `walker::walk`.
+                // falls back to `clone_template_body` + `mount::walk`.
                 // Flag the plan so the Pine fallback audit catches it.
                 ctx.requires_walker = true;
             }
@@ -1194,18 +1194,18 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             return;
         }
         // Ineligible (wrong host, has pp-teleport, or expr
-        // doesn't parse) — fall through to walker as today.
+        // doesn't parse) — fall through to mount as today.
         return;
     }
 
     // Whole-subtree boundary: non-HTML5 tags (per council pass 3
     // amendment to RFC-058 §6.2). The element's own attributes
-    // and descendants stay walker-owned (slot content is the
+    // and descendants stay mount-owned (slot content is the
     // common case there), but RFC-058 Phase 3 captures the
     // mount site itself: the runtime applier calls
-    // [`crate::walker::mount_child_component`] before the
-    // walker's recursive descent reaches the tag, and the
-    // walker's `__pp_mounted` guard turns the discovery into a
+    // [`crate::mount::mount_child_component`] before the
+    // mount's recursive descent reaches the tag, and the
+    // mount's `__pp_mounted` guard turns the discovery into a
     // no-op afterwards.
     if !is_plan_native(&el.tag) {
         let mut host_bindings = Vec::new();
@@ -1269,7 +1269,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
         // The parent passes the fragments via the static-plan
         // child-mount entry; the runtime `materialize_slot`
         // looks them up by name before falling back to the
-        // legacy walker capture path.
+        // legacy mount capture path.
         //
         // `<template pp-slot="N" pp-let="ident">` (Phase 3.5g)
         // also lifts: we record the `pp-let` identifier on the
@@ -1319,14 +1319,14 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // both lift fragments get pushed; the
                         // runtime `SlotSet::named` HashMap insert
                         // means the LAST one wins, matching the
-                        // walker's "later wins" semantics on
+                        // mount's "later wins" semantics on
                         // duplicate captures.
                         slot_fragments.push((slot_name, emission.ident().clone(), pp_let));
                         emissions.slot_fragments.push(emission);
                     }
                     None => {
                         // Slot body falls outside the lift
-                        // envelope — fall back to walker for
+                        // envelope — fall back to mount for
                         // this name.
                         ctx.requires_walker = true;
                     }
@@ -1359,7 +1359,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                         // requires_walker so the legacy capture
                         // path drives the host instead of leaving
                         // the plan in a "compiled-clean" state
-                        // while walker-owned content still rides
+                        // while mount-owned content still rides
                         // on the cleaned HTML.
                         ctx.requires_walker = true;
                     }
@@ -1415,9 +1415,9 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     let _ = listener_unsupported_modifier; // already handled per-attr
 
     // RFC-058 Phase 6.2 — scan direct text-node children for
-    // `{{expr}}` interpolation. The runtime walker's
+    // `{{expr}}` interpolation. The runtime mount's
     // `interp::scan_children` does the same scan + parse;
-    // lifting it here at compile time means the walker can
+    // lifting it here at compile time means the mount can
     // skip the carrier element via `data-pp-interp-managed`.
     // Skip elements that already use `pp-text` (RFC-025: the
     // directive owns the textContent, interpolation is
@@ -1451,7 +1451,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 }
                 _ => {
                     // Parse error — leave the text untouched so
-                    // the walker's runtime scanner surfaces the
+                    // the mount's runtime scanner surfaces the
                     // same error message at apply time. Don't
                     // mark managed.
                 }
@@ -1466,7 +1466,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
     // Recurse into element children. Path indices are over
     // *element* children only — text / comments don't shift the
     // index (matches `Element.children` in JS DOM and the
-    // for_plan walker's convention).
+    // for_plan mount's convention).
     for (i, child) in el.children.iter().enumerate() {
         if let Node::Element(child_el) = child {
             let idx = el
@@ -1619,7 +1619,7 @@ fn classify_attr(
         if rest == "ref" {
             // `pp-ref` value is a static name, not an expression
             // — empty / whitespace is an author bug; let the
-            // walker surface it.
+            // mount surface it.
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return ClassifyOutcome::Preserved;
@@ -1654,7 +1654,7 @@ fn classify_attr(
         // `pp-anchor`, `pp-flip`) lift into a StaticOpaqueDirective
         // entry so the macro stops flipping requires_walker for
         // them. The applier dispatches each through the same
-        // `directives::lookup` path the walker uses.
+        // `directives::lookup` path the mount uses.
         //
         // Eligibility: the attr name must parse cleanly into
         // `(head, arg, modifiers)` and the head must be in the
@@ -1680,7 +1680,7 @@ fn classify_attr(
         // RFC-058 Phase 6.5 — `pp-model[.modifier]="field"` on a
         // native input/textarea/select. Component-target
         // `pp-model` (registered tag, with or without a `:arg`)
-        // stays on the runtime walker for now and is collected
+        // stays on the runtime mount for now and is collected
         // by `parse_child_host_model` on the parent
         // `ChildMountLite`. Lifting only fires when host is
         // native AND the directive has no `:arg` (the arg form
@@ -1708,7 +1708,7 @@ fn classify_attr(
         // Every other pp-* attribute (pp-data, pp-cloak,
         // pp-route, pp-transition:*, pp-stagger, etc.) —
         // preserved on the cleaned HTML and handled by the
-        // runtime walker as today.
+        // runtime mount as today.
         return ClassifyOutcome::Preserved;
     }
     // Plain HTML attribute — preserved.
@@ -1811,7 +1811,7 @@ fn parse_interp_segments(input: &str) -> Result<Vec<InterpSegment>, String> {
 /// Allowlist of runtime directives that are safe to lift into a
 /// compile-time `StaticOpaqueDirective` entry. Each entry is a
 /// pure DOM-side effect that installs once and self-manages —
-/// no scope-chain quirks, no walker-discovery dependencies, no
+/// no scope-chain quirks, no mount-discovery dependencies, no
 /// install-order constraints beyond "after slot materialisation"
 /// (which the applier honours by running the opaque dispatch
 /// last).
@@ -1886,7 +1886,7 @@ fn classify_listener(
     if !modifiers.iter().all(|m| is_supported_modifier(m)) {
         // RFC-057 §6.1 — unsupported modifier means the whole
         // listener stays attribute-preserved so the runtime
-        // walker picks it up unchanged.
+        // mount picks it up unchanged.
         *unsupported = true;
         return ClassifyOutcome::Preserved;
     }
@@ -1933,7 +1933,7 @@ enum ChildHostAttrOutcome {
     /// `name` in the parent scope's ref table. The macro emits a
     /// regular `RefLite` against the host's node_path so
     /// `apply_static_plan` runs the same `refs::register` call
-    /// the walker would.
+    /// the mount would.
     Ref(String),
     Preserved,
 }
@@ -2080,12 +2080,12 @@ fn is_debounce_ms(m: &str) -> bool {
 /// the `pp-if` body subtree is safe to install via the Phase
 /// 1 helpers + `apply_static_plan`. Anything outside this
 /// envelope falls back to the legacy `clone_template_body` +
-/// `walker::walk` path the controller already drives.
+/// `mount::walk` path the controller already drives.
 ///
 /// RFC-058 Phase 6.5 expansion: `<slot>` elements are now
 /// allowed. The macro records them in the body fragment's
 /// `slot_outlets`; the runtime applier materialises each via
-/// `walker::materialize_compiled_slot_outlet`, which falls
+/// `mount::materialize_compiled_slot_outlet`, which falls
 /// through to the same `slot_fragment::lookup` path the parent
 /// template uses. The body's stamped `CTX_PARENT_KEY` carries
 /// the slot owner scope through to descendants so nested
@@ -2272,7 +2272,7 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
                 return false;
             }
             // Phase 3.5d expansion: non-HTML5 tags = nested
-            // child mounts are now allowed. The walker
+            // child mounts are now allowed. The mount
             // handles them via `analyze_slot_subtree` recursion
             // (which lands at the same `walk()` path that
             // emits child_mount entries + nested slot
@@ -2284,7 +2284,7 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
                 }
                 // RFC-058 Phase 6.5 — `pp-model` lifts in both
                 // forms (native via `NativeModelLite`, component
-                // via `ChildHostModelLite`). No walker needed.
+                // via `ChildHostModelLite`). No mount needed.
             }
             slot_subtree_is_lift_eligible(&el.children)
         }
@@ -2341,7 +2341,7 @@ fn emit_node(node: &Node, ctx: &AnalysisCtx, out: &mut String, path: &mut Vec<u1
 fn emit_element(el: &Element, ctx: &AnalysisCtx, out: &mut String, path: &mut Vec<u16>) {
     if el.synthetic {
         // Don't emit synthetic elements as wrappers — emit only
-        // their children. The runtime walker doesn't see them
+        // their children. The runtime mount doesn't see them
         // either (they're inserted by html5ever's tree builder
         // post-parse).
         for (i, child) in el.children.iter().enumerate() {
@@ -2481,7 +2481,7 @@ mod tests {
         ] {
             assert!(
                 is_supported_modifier(modifier),
-                "{modifier} should compile instead of requiring walker fallback"
+                "{modifier} should compile instead of requiring mount fallback"
             );
         }
     }

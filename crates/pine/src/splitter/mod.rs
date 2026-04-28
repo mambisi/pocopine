@@ -288,7 +288,7 @@ impl PineSplitterResizeHandle {
         let (before_idx, after_idx) = neighbour_indices(&el);
         let initial_value = group.with(|g| g.sizes.get(before_idx).copied().unwrap_or(0.0));
         // `on_ready` runs under an immutable borrow on
-        // `scope.state` (walker.rs:193). Defer the initial
+        // `scope.state` (mount.rs:193). Defer the initial
         // write so the borrow can unwind before handle.update
         // re-borrows mutably.
         let handle_for_init = handle.clone();
