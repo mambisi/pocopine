@@ -25,6 +25,7 @@
 
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
+use web_sys::Element;
 
 use crate::router;
 use crate::store::Store;
@@ -171,14 +172,26 @@ impl App {
         for f in self.before_mount {
             f();
         }
-        if let Some(body) = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.body())
-        {
-            // RFC 061 Phase 1 — `start_compiled` is deprecated;
-            // Phase 2 swaps this for `[pp-app]` discovery.
+        // RFC 061 Phase 2 — discover the [pp-app] root and mount
+        // there. Whole-body mounting is gone; apps that want
+        // multiple roots use `mount_subtree::<C>` instead.
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let pp_app = document.query_selector("[pp-app]").ok().flatten();
+        if let Some(host) = pp_app {
+            // Phase 2 still flows through the bridge's
+            // `start_compiled` (now scoped to the [pp-app]
+            // subtree, not document.body). Phase 3 swaps this
+            // for the typed compiled-mount path.
             #[allow(deprecated)]
-            walker::start_compiled(&body.into());
+            walker::start_compiled(&host);
+        } else {
+            render_missing_pp_app_root();
+            return;
         }
         if !self.routes.is_empty() {
             router::init();
@@ -215,4 +228,81 @@ impl App {
     pub fn registered_routes(&self) -> &[&'static str] {
         &self.routes
     }
+
+    /// RFC 061 Phase 2 — typed escape hatch for mounting a
+    /// `#[component]` into an arbitrary DOM element. Intended
+    /// for tooling: devtools panels, test harnesses,
+    /// Storybook-style component galleries, embedded widgets.
+    /// Default app shape stays [`App::run`] with a `[pp-app]`
+    /// root.
+    ///
+    /// Registers `C` (idempotent via the Tier 1 guard) and
+    /// mounts it onto `host`. Returns a [`SubtreeHandle`] whose
+    /// `unmount()` tears down the scope tree + lifecycle hooks
+    /// + DOM cleanly.
+    pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
+        C::register();
+        // Phase 2 still routes through the deprecated bridge;
+        // Phase 3 swaps for a typed compiled-mount entry.
+        #[allow(deprecated)]
+        walker::mount_child_component(host, C::NAME);
+        SubtreeHandle { host: host.clone() }
+    }
+}
+
+/// RFC 061 Phase 2 — handle returned by [`App::mount_subtree`].
+/// Drop or call [`Self::unmount`] to release the scope tree's
+/// effects, listeners, and DOM children.
+#[must_use = "drop or call `.unmount()` to clean up the subtree"]
+pub struct SubtreeHandle {
+    host: Element,
+}
+
+impl SubtreeHandle {
+    /// Tear down the subtree. Releases the scope tree
+    /// (effects + listeners + DOM refs) and clears the host's
+    /// children. After this the host element remains in the
+    /// DOM but contains nothing pocopine owns.
+    pub fn unmount(self) {
+        walker::release_compiled_subtree(&self.host);
+        self.host.set_inner_html("");
+    }
+}
+
+/// RFC 061 Phase 2 — paint a friendly boot error when
+/// [`App::run`] can't find a `[pp-app]` root. Mirrors
+/// [`crate::registry::render_boot_error`]'s shape: replaces
+/// `<body>` with a fixed-position banner, logs to console.
+fn render_missing_pp_app_root() {
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Some(body) = doc.body() else { return };
+    body.set_inner_html("");
+    let Ok(banner) = doc.create_element("div") else {
+        return;
+    };
+    let _ = banner.set_attribute(
+        "style",
+        "position:fixed;inset:0;background:#1b1b1f;color:#f5f5f7;\
+         font-family:ui-monospace,monospace;padding:24px;overflow:auto;\
+         z-index:2147483647;",
+    );
+    banner.set_inner_html(
+        "<h2 style=\"margin:0 0 12px 0;color:#ff6b6b;\">pocopine: \
+         no <code>[pp-app]</code> root found</h2>\
+         <p style=\"margin:0 0 16px 0;\">\
+         pocopine v2 is compiled-mount-only — `App::run()` looks for \
+         a single element with the <code>pp-app</code> attribute and \
+         mounts the active route there. Add it to your HTML host:</p>\
+         <pre style=\"background:#0d0d10;padding:12px;border-radius:4px;\
+         overflow:auto;\">&lt;body&gt;\n  &lt;div pp-app&gt;&lt;/div&gt;\n&lt;/body&gt;</pre>\
+         <p style=\"margin:16px 0 0 0;color:#a0a0a0;font-size:0.875rem;\">\
+         Apps that need multiple roots use \
+         <code>App::mount_subtree::&lt;C&gt;(host)</code> instead. \
+         See RFC 061 for the migration guide.</p>",
+    );
+    let _ = body.append_child(&banner);
+    web_sys::console::error_1(
+        &"pocopine: App::run() found no [pp-app] root — refusing to mount. See RFC 061.".into(),
+    );
 }

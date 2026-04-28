@@ -25,7 +25,7 @@ pub use pocopine_core::{
     Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
     ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope,
     ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Slots, Store,
-    StoreHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
