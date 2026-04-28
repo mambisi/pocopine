@@ -58,7 +58,7 @@ pub mod timers;
 pub mod walker;
 pub mod watch;
 
-pub use app::{App, Component};
+pub use app::{App, Component, SubtreeHandle};
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
