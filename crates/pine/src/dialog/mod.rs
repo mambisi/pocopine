@@ -279,3 +279,30 @@ impl PineDialogClose {
         }
     }
 }
+
+// ── Bundle marker ─────────────────────────────────────────────────
+
+/// RFC 060 Tier 3 — re-exports every Dialog part as a single
+/// `register()` target. `PineDialog::register()` registers the
+/// eight Dialog primitives (Root, Trigger, Portal, Overlay,
+/// Content, Title, Description, Close) transitively.
+///
+/// Bundle markers are tagless — `PineDialog` itself is never
+/// referenced in templates and does not appear in the runtime
+/// component registry. Authors instantiate the parts directly:
+///
+/// ```html
+/// <pine-dialog-root>…</pine-dialog-root>
+/// ```
+#[derive(Default)]
+#[component(extends = [
+    PineDialogRoot,
+    PineDialogTrigger,
+    PineDialogPortal,
+    PineDialogOverlay,
+    PineDialogContent,
+    PineDialogTitle,
+    PineDialogDescription,
+    PineDialogClose,
+])]
+pub struct PineDialog;

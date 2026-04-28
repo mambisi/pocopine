@@ -64,6 +64,35 @@ impl UsesTable {
     }
 }
 
+/// RFC 060 Tier 3 — parse the `extends = [...]` value of a
+/// bundle's `#[component]` attribute. Bundles re-export a fixed
+/// set of component types; the list is plain type paths only —
+/// no kebab strings, no tag overrides, no resolution table.
+/// Caller validates non-empty + mutual exclusion with
+/// `template` / `template_inline`.
+pub(crate) fn parse_extends_array(value: Expr) -> syn::Result<Vec<Path>> {
+    let Expr::Array(arr) = value else {
+        return Err(syn::Error::new(
+            value.span(),
+            "`extends` expects an array literal — `extends = [PineDialogRoot, PineDialogTrigger]`",
+        ));
+    };
+    let mut out = Vec::with_capacity(arr.elems.len());
+    for elem in arr.elems {
+        match elem {
+            Expr::Path(ExprPath { path, .. }) => out.push(path),
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "`extends` entries must be plain type paths — \
+                     `extends = [TypeA, TypeB]`",
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Parse a `uses = [...]` value — specifically the `[...]`
 /// part — from an `Expr::Array`. Returns the raw entries; use
 /// [`resolve_uses`] to turn them into a `UsesTable`.

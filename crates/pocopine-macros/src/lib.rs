@@ -697,6 +697,12 @@ struct ComponentArgs {
     /// case. Empty table means "declared but zero entries" —
     /// still opted-in for future use but no tags resolve.
     uses: Option<uses::UsesTable>,
+    /// RFC 060 Tier 3 — `extends = [...]` list. Marks this
+    /// component as a bundle: a tag-less type marker that
+    /// re-exports the registration of every type in the list
+    /// via its own `register()`. Mutually exclusive with
+    /// `template` / `template_inline`.
+    extends: Option<Vec<syn::Path>>,
 }
 
 impl Parse for ComponentArgs {
@@ -711,6 +717,10 @@ impl Parse for ComponentArgs {
                 let entries = uses::parse_uses_array(kv.value)?;
                 let table = uses::resolve_uses(entries)?;
                 args.uses = Some(table);
+                continue;
+            }
+            if kv.path.is_ident("extends") {
+                args.extends = Some(uses::parse_extends_array(kv.value)?);
                 continue;
             }
 
@@ -828,6 +838,66 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         )
         .to_compile_error()
         .into();
+    }
+
+    // RFC 060 Tier 3 — bundle mode (`extends = [...]`) is a
+    // tagless re-export marker. It owns no template, no style,
+    // no constructor — all it does is forward `register()` to
+    // each member.
+    let is_bundle = args
+        .extends
+        .as_ref()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false);
+    if is_bundle && (args.template.is_some() || args.template_inline.is_some()) {
+        return syn::Error::new_spanned(
+            &struct_ident,
+            "`extends = [...]` (bundle marker) is mutually exclusive with \
+             `template` / `template_inline` — bundles are tagless re-export \
+             markers and cannot carry their own template.",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    if is_bundle {
+        // RFC 060 Tier 3 — minimal bundle expansion. Skip every
+        // template / state / handler emission; the bundle is
+        // a tagless type marker whose `register()` just forwards
+        // to each `extends` entry. Cycle / dedupe protection
+        // comes from the Tier 1 `mark_registered` guard.
+        let extends_paths = args
+            .extends
+            .as_ref()
+            .expect("is_bundle implies extends.is_some()");
+        let extends_calls = extends_paths.iter().map(|path| {
+            quote! {
+                <#path as ::pocopine::__private::Component>::register();
+            }
+        });
+        let out = quote! {
+            #input
+
+            impl #struct_ident {
+                /// Bundle marker — registers every `extends` entry
+                /// transitively. Idempotent via the runtime
+                /// `mark_registered` guard.
+                pub fn register() {
+                    if !::pocopine::__private::mark_registered::<#struct_ident>() {
+                        return;
+                    }
+                    #(#extends_calls)*
+                }
+            }
+
+            impl ::pocopine::__private::Component for #struct_ident {
+                const NAME: &'static str = #name_str;
+                fn register() {
+                    <#struct_ident>::register();
+                }
+            }
+        };
+        return out.into();
     }
 
     let template_path: Option<LitStr> = if args.template_inline.is_some() {
