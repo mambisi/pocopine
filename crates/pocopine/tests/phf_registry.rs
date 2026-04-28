@@ -122,3 +122,50 @@ fn run_with_registry_walks_vtables_and_transitive_uses() {
         "leaf registered transitively through host's `uses` list (Tier 1 + Tier 4 compose)",
     );
 }
+
+// ─── route_static authority test ────────────────────────────────
+
+/// Component used only by [`route_static_does_not_eagerly_register`].
+/// The test asserts this component is NOT in the runtime registry
+/// after `route_static`, so it must never be registered anywhere
+/// else in the test suite.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "phf-unregistered-by-route-static",
+    template_inline = r#"<div class="phf-unregistered-by-route-static"></div>"#
+)]
+struct PhfUnregisteredByRouteStatic {}
+
+#[handlers]
+impl PhfUnregisteredByRouteStatic {}
+
+/// **High-priority Codex fix.** `App::route_static::<C>` must
+/// record the route without eagerly calling `C::register()`. If
+/// it called `C::register()`, the `app!{}` macro could appear
+/// to work even when a route target is missing from the phf
+/// `components: [...]` list — silently breaking the
+/// authoritative-registry invariant. This test pins the
+/// non-registering behaviour.
+#[wasm_bindgen_test]
+fn route_static_does_not_eagerly_register_component() {
+    // Sanity: the component is NOT registered going in.
+    assert!(
+        !registered_template_names()
+            .iter()
+            .any(|n| n == "phf-unregistered-by-route-static"),
+        "fixture-unique tag must not have leaked from another test",
+    );
+
+    let _app = pocopine::App::new().route_static::<PhfUnregisteredByRouteStatic>("/never-mounted");
+
+    // After `route_static`, the component is STILL not
+    // registered. `run_with_registry` is the only registration
+    // path the macro emits — that path is exercised by the
+    // earlier tests in this file.
+    assert!(
+        !registered_template_names()
+            .iter()
+            .any(|n| n == "phf-unregistered-by-route-static"),
+        "route_static must NOT call C::register() — the static phf map is authoritative",
+    );
+}

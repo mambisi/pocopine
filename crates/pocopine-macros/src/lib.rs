@@ -843,21 +843,53 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // RFC 060 Tier 3 — bundle mode (`extends = [...]`) is a
     // tagless re-export marker. It owns no template, no style,
     // no constructor — all it does is forward `register()` to
-    // each member.
-    let is_bundle = args
-        .extends
-        .as_ref()
-        .map(|p| !p.is_empty())
-        .unwrap_or(false);
-    if is_bundle && (args.template.is_some() || args.template_inline.is_some()) {
-        return syn::Error::new_spanned(
-            &struct_ident,
-            "`extends = [...]` (bundle marker) is mutually exclusive with \
-             `template` / `template_inline` — bundles are tagless re-export \
-             markers and cannot carry their own template.",
-        )
-        .to_compile_error()
-        .into();
+    // each member. An empty `extends = []` is a degenerate
+    // bundle (registers nothing) and is rejected upfront so the
+    // author isn't routed into the non-bundle path with a
+    // missing-template diagnostic.
+    if let Some(paths) = args.extends.as_ref() {
+        if paths.is_empty() {
+            return syn::Error::new_spanned(
+                &struct_ident,
+                "`extends = []` is empty — bundle markers must list at least one member, \
+                 otherwise the type is a no-op. Drop the attribute or list the components.",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+    let is_bundle = args.extends.is_some();
+    if is_bundle {
+        // Reject every component-body-only option in bundle
+        // mode. Silently dropping `style` / `role` / `display`
+        // / `transition*` / `animate` would mislead the author
+        // into thinking the bundle carries them.
+        let bundle_disallowed: &[(&str, bool)] = &[
+            ("template", args.template.is_some()),
+            ("template_inline", args.template_inline.is_some()),
+            ("style", args.style.is_some()),
+            ("role", args.role.is_some()),
+            ("display", args.display.is_some()),
+            ("transition", args.transition.is_some()),
+            ("transition_in", args.transition_in.is_some()),
+            ("transition_out", args.transition_out.is_some()),
+            ("animate", args.animate.is_some()),
+        ];
+        for (name, set) in bundle_disallowed {
+            if *set {
+                return syn::Error::new_spanned(
+                    &struct_ident,
+                    format!(
+                        "`{name} = ...` is not valid on a bundle marker \
+                         (`extends = [...]`) — bundles are tagless re-export \
+                         markers, they own no template, style, role, display, \
+                         transition, or animate metadata."
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
     }
 
     if is_bundle {
@@ -3192,6 +3224,39 @@ fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
 pub fn app(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as AppMacroInput);
 
+    // RFC 060 — every route target must appear in `components:`
+    // for the `&'static phf::Map` to be authoritative. Compare
+    // token strings — the user is expected to write the same
+    // path form in both lists. A `Home` route matched against a
+    // `crate::Home` component is a false negative we accept:
+    // both forms resolve to the same vtable at runtime, so the
+    // diagnostic just asks the user to align the paths.
+    let component_path_keys: std::collections::HashSet<String> = parsed
+        .components
+        .iter()
+        .map(|c| match c {
+            AppComponentEntry::Bare(p) => quote! { #p }.to_string(),
+            AppComponentEntry::Explicit(p, _) => quote! { #p }.to_string(),
+        })
+        .collect();
+    for r in &parsed.routes {
+        let path = &r.component;
+        let key = quote! { #path }.to_string();
+        if !component_path_keys.contains(&key) {
+            return syn::Error::new_spanned(
+                path,
+                format!(
+                    "route target `{key}` is not declared in `components: [...]` \
+                     — the static phf registry must be exhaustive (RFC 060 §4.3). \
+                     Add `{key}` to the `components:` list, or use the same path \
+                     form on both sides if you got an unexpected mismatch."
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+
     // Resolve each component entry to (key, vtable_path).
     let entries = parsed.components.iter().map(|c| match c {
         AppComponentEntry::Bare(path) => {
@@ -3211,10 +3276,13 @@ pub fn app(input: TokenStream) -> TokenStream {
         quote! { #key => #vtable, }
     });
 
+    // Use `route_static` (record-only) so `C::register()` doesn't
+    // fire here — `run_with_registry` is the one and only
+    // registration path, keeping the phf map authoritative.
     let route_calls = parsed.routes.iter().map(|r| {
         let pattern = &r.pattern;
         let component = &r.component;
-        quote! { .route::<#component>(#pattern) }
+        quote! { .route_static::<#component>(#pattern) }
     });
 
     let out = quote! {
