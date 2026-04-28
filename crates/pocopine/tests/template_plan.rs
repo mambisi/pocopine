@@ -27,6 +27,10 @@
 //!   `wasm-pack test --firefox --headless crates/pocopine --test template_plan`
 
 #![cfg(target_arch = "wasm32")]
+// RFC 061 Phase 1 — fixtures call `walker::start_compiled` to
+// mount raw HTML; rewrites land in Phase 3 alongside the
+// bridge deletion.
+#![allow(deprecated)]
 
 use pocopine::prelude::*;
 use pocopine_core::templates_plan::{

@@ -43,6 +43,9 @@ pub mod server;
 pub mod signal;
 pub mod slot_fragment;
 pub mod slot_scope;
+#[deprecated(note = "compiled-mount-only — see RFC 061. \
+                     Slot content flows through `slot_fragment::*` \
+                     compiled fragments; this runtime store retires in Phase 3.")]
 pub mod slots;
 pub mod store;
 pub mod styles;

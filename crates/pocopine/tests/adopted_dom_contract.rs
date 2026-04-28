@@ -35,6 +35,10 @@
 //!   `wasm-pack test --firefox --headless crates/pocopine --test adopted_dom_contract`
 
 #![cfg(target_arch = "wasm32")]
+// RFC 061 Phase 1 — this whole file is the bridge contract;
+// it gets *deleted* in Phase 3. Until then, it tests deprecated
+// surface and so locally allows the deprecation warning.
+#![allow(deprecated)]
 
 use pocopine::prelude::*;
 use pocopine_core::templates::registered_template_names;

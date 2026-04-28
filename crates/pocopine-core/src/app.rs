@@ -175,6 +175,9 @@ impl App {
             .and_then(|w| w.document())
             .and_then(|d| d.body())
         {
+            // RFC 061 Phase 1 — `start_compiled` is deprecated;
+            // Phase 2 swaps this for `[pp-app]` discovery.
+            #[allow(deprecated)]
             walker::start_compiled(&body.into());
         }
         if !self.routes.is_empty() {

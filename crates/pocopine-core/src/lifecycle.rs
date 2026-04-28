@@ -422,7 +422,13 @@ pub struct Slots(pub Vec<String>);
 
 impl<'a> From<LifecycleContext<'a>> for Slots {
     fn from(ctx: LifecycleContext<'a>) -> Self {
-        Slots(crate::slots::names_for(ctx.scope_id))
+        // RFC 061 Phase 1 — `slots::names_for` reads the
+        // deprecated runtime slot store. The `Slots` extractor
+        // is dropped entirely in Phase 3 (zero in-tree
+        // callers); this allow lets Phase 1 ship clean.
+        #[allow(deprecated)]
+        let names = crate::slots::names_for(ctx.scope_id);
+        Slots(names)
     }
 }
 

@@ -18,6 +18,12 @@
 //!   reading `$route.path` / `$route.params.<name>` / `$route.query.<name>`
 //!   re-evaluates when the URL changes.
 
+// RFC 061 Phase 1 — router paints routes via the deprecated
+// `walker::mount_child_component`. Phase 2 swaps that for the
+// typed compiled-mount path; for now silence the deprecation
+// inside the file so downstream callers still see warnings.
+#![allow(deprecated)]
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
