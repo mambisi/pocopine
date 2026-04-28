@@ -68,3 +68,7 @@ Conventions:
 | 057 | [Compile-time template plans](./rfc-057-compile-time-template-plans.md) | Superseded by 058 |
 | 058 | [Compiled views and walker removal](./rfc-058-compiled-views-walker-removal.md) | Phases 1–6.5 implemented; 7–8 deferred |
 | 059 | [Server-side rendering and hydration](./rfc-059-server-side-rendering-and-hydration.md) | Draft (revised post-RFC-058 Phase 6.5) |
+| 060 | [`uses` as the authoritative component registry](./rfc-060-component-uses-registry.md) | Draft |
+| 061 | [Compiled-mount-only architecture](./rfc-061-compiled-mount-only.md) | Draft |
+| 062 | [Per-component mount specialization](./rfc-062-per-component-mount-specialization.md) | Draft |
+| 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
