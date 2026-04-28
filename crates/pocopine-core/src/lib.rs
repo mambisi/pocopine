@@ -88,8 +88,8 @@ pub use reactive::{
 pub use registry::{
     assert_registry_clean, mark_registered, register_component, register_component_as,
     register_component_prefixed, registered_component_names, registry_errors, render_boot_error,
-    verify_registry, ComponentCtor, ComponentEntry, RegisteredComponent, RegistryError,
-    RegistryErrorKind, COMPONENT_ENTRIES,
+    verify_registry, ComponentCtor, ComponentEntry, ComponentVTable, RegisteredComponent,
+    RegistryError, RegistryErrorKind, COMPONENT_ENTRIES,
 };
 pub use router::{navigate, register_route};
 pub use scope::{

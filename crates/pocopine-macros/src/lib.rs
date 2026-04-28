@@ -888,6 +888,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                     #(#extends_calls)*
                 }
+
+                // RFC 060 Tier 4 — bundle vtables exist for
+                // symmetry with non-bundle components (so
+                // `app!{}`'s phf map can hold any type
+                // uniformly). The `name` is informational only —
+                // bundles aren't tag-resolvable.
+                #[doc(hidden)]
+                #[allow(non_upper_case_globals)]
+                pub const __POCO_VTABLE: &'static ::pocopine::__private::ComponentVTable =
+                    &::pocopine::__private::ComponentVTable {
+                        name: #name_str,
+                        register: <#struct_ident>::register,
+                    };
             }
 
             impl ::pocopine::__private::Component for #struct_ident {
@@ -1856,6 +1869,18 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #register_display_stmt
                 #register_uses_stmts
             }
+
+            // RFC 060 Tier 4 — `&'static ComponentVTable` in
+            // `.rodata`. Consumed by the `app!{}` macro's
+            // `phf::Map` literal (vtable per component, keyed
+            // by NAME).
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            pub const __POCO_VTABLE: &'static ::pocopine::__private::ComponentVTable =
+                &::pocopine::__private::ComponentVTable {
+                    name: #name_str,
+                    register: <#struct_ident>::register,
+                };
         }
 
         impl ::pocopine::__private::Component for #struct_ident {
@@ -2954,6 +2979,256 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                     _ => ::core::option::Option::None,
                 }
             }
+        }
+    };
+    out.into()
+}
+
+// ── RFC 060 Tier 4 — `app!{}` macro ───────────────────────────────
+
+/// One entry in the `components: [...]` list.
+enum AppComponentEntry {
+    /// `Home` — kebab-cased ident is the phf key.
+    Bare(syn::Path),
+    /// `(Home, "custom-tag")` — explicit override when the
+    /// component declared `#[component(name = "...")]`.
+    Explicit(syn::Path, LitStr),
+}
+
+/// One entry in the `routes: [...]` list — `("/path", Home)`.
+struct AppRouteEntry {
+    pattern: LitStr,
+    component: syn::Path,
+}
+
+/// Parsed body of the `app!{}` macro: explicit component list +
+/// route list. Per RFC 060 §8 Q1's chosen mechanism (Option b1):
+/// users list every reachable component explicitly so the macro
+/// can emit a `phf::phf_map!` literal at expansion time.
+struct AppMacroInput {
+    components: Vec<AppComponentEntry>,
+    routes: Vec<AppRouteEntry>,
+}
+
+impl Parse for AppMacroInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut components: Option<Vec<AppComponentEntry>> = None;
+        let mut routes: Option<Vec<AppRouteEntry>> = None;
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            let _: Token![:] = input.parse()?;
+            let value: Expr = input.parse()?;
+            // optional trailing comma between sections
+            let _ = input.parse::<Token![,]>();
+
+            match key.to_string().as_str() {
+                "components" => {
+                    if components.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `components:`"));
+                    }
+                    components = Some(parse_components_array(value)?);
+                }
+                "routes" => {
+                    if routes.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `routes:`"));
+                    }
+                    routes = Some(parse_routes_array(value)?);
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown `app!{{}}` section `{other}` — expected `components:` or `routes:`"),
+                    ));
+                }
+            }
+        }
+
+        let components = components.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`app!{}` requires a `components: [...]` section",
+            )
+        })?;
+        let routes = routes.unwrap_or_default();
+
+        Ok(AppMacroInput { components, routes })
+    }
+}
+
+fn parse_components_array(value: Expr) -> syn::Result<Vec<AppComponentEntry>> {
+    let Expr::Array(arr) = value else {
+        return Err(syn::Error::new_spanned(
+            &value,
+            "`components` expects an array literal — \
+             `components: [Home, About, (CustomNamed, \"custom-tag\")]`",
+        ));
+    };
+    let mut out = Vec::with_capacity(arr.elems.len());
+    for elem in arr.elems {
+        match elem {
+            Expr::Path(syn::ExprPath { path, .. }) => out.push(AppComponentEntry::Bare(path)),
+            Expr::Tuple(tup) => {
+                if tup.elems.len() != 2 {
+                    return Err(syn::Error::new_spanned(
+                        &tup,
+                        "tuple `components` entries must be `(TypePath, \"tag\")` — exactly two elements",
+                    ));
+                }
+                let mut iter = tup.elems.into_iter();
+                let path = match iter.next().unwrap() {
+                    Expr::Path(p) => p.path,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "first tuple element must be a type path",
+                        ));
+                    }
+                };
+                let lit = match iter.next().unwrap() {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }) => s,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            other,
+                            "second tuple element must be a string literal tag",
+                        ));
+                    }
+                };
+                out.push(AppComponentEntry::Explicit(path, lit));
+            }
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "components entries are either bare type paths or `(TypePath, \"tag\")` tuples",
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
+    let Expr::Array(arr) = value else {
+        return Err(syn::Error::new_spanned(
+            &value,
+            "`routes` expects an array literal — `routes: [(\"/\", Home), (\"/about\", About)]`",
+        ));
+    };
+    let mut out = Vec::with_capacity(arr.elems.len());
+    for elem in arr.elems {
+        let Expr::Tuple(tup) = elem else {
+            return Err(syn::Error::new_spanned(
+                &elem,
+                "route entries must be `(\"/path\", TypePath)` tuples",
+            ));
+        };
+        if tup.elems.len() != 2 {
+            return Err(syn::Error::new_spanned(
+                &tup,
+                "route entries must be `(\"/path\", TypePath)` — exactly two elements",
+            ));
+        }
+        let mut iter = tup.elems.into_iter();
+        let pattern = match iter.next().unwrap() {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) => s,
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "first route element must be a string literal pattern",
+                ));
+            }
+        };
+        let component = match iter.next().unwrap() {
+            Expr::Path(p) => p.path,
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "second route element must be a component type path",
+                ));
+            }
+        };
+        out.push(AppRouteEntry { pattern, component });
+    }
+    Ok(out)
+}
+
+/// `app!{}` — single-site macro that emits a `&'static
+/// phf::Map<&'static str, &'static ComponentVTable>` from an
+/// explicit `components: [...]` list, then runs an
+/// `App::new()...route::<T>(...).run_with_registry(&REGISTRY)`
+/// chain.
+///
+/// Shape:
+///
+/// ```ignore
+/// fn main() {
+///     pocopine::app! {
+///         components: [
+///             Home,
+///             About,
+///             pine::PineButton,
+///             (CustomNamed, "custom-tag"),  // override for `#[component(name = "...")]`
+///         ],
+///         routes: [
+///             ("/", Home),
+///             ("/about", About),
+///         ],
+///     };
+/// }
+/// ```
+///
+/// Bundles (`#[component(extends = [...])]`) can appear in
+/// `components`, but their members must also be listed
+/// explicitly — proc-macros can't read const slices at
+/// expansion time, so transitive bundle expansion happens at
+/// runtime via `Bundle::register()` rather than statically in
+/// the phf map. Future work (RFC 061 / 062) may relax this if a
+/// type-level introspection mechanism becomes available.
+#[proc_macro]
+pub fn app(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as AppMacroInput);
+
+    // Resolve each component entry to (key, vtable_path).
+    let entries = parsed.components.iter().map(|c| match c {
+        AppComponentEntry::Bare(path) => {
+            let last = path.segments.last().expect("path has at least one segment");
+            let kebab = kebab_case(&last.ident.to_string());
+            let vtable_path = quote! { #path::__POCO_VTABLE };
+            (kebab, vtable_path)
+        }
+        AppComponentEntry::Explicit(path, lit) => {
+            let kebab = lit.value();
+            let vtable_path = quote! { #path::__POCO_VTABLE };
+            (kebab, vtable_path)
+        }
+    });
+
+    let phf_arms = entries.map(|(key, vtable)| {
+        quote! { #key => #vtable, }
+    });
+
+    let route_calls = parsed.routes.iter().map(|r| {
+        let pattern = &r.pattern;
+        let component = &r.component;
+        quote! { .route::<#component>(#pattern) }
+    });
+
+    let out = quote! {
+        {
+            static REGISTRY: ::pocopine::__private::phf::Map<
+                &'static str,
+                &'static ::pocopine::__private::ComponentVTable,
+            > = ::pocopine::__private::phf::phf_map! {
+                #(#phf_arms)*
+            };
+
+            ::pocopine::App::new()
+                #(#route_calls)*
+                .run_with_registry(&REGISTRY);
         }
     };
     out.into()
