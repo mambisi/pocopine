@@ -675,6 +675,67 @@ Compiled `.poco` mounts do not call it.
 Acceptance condition: examples and Pine primitives run with compiled
 views only. Any remaining walker use is explicit and documented.
 
+### Phase 6.5 - Walker deletion + adopted-DOM bridge contract
+
+Phase 6 ended with the runtime walker fully removed, not feature-gated.
+What survives in `pocopine-core::walker` is a deliberately narrow
+**adopted-DOM bridge** — three functions, one entry point, no
+attribute-dispatch loop:
+
+- [`start_compiled`](../crates/pocopine-core/src/walker.rs) — the only
+  mount entry. Discovers registered custom-element tags in the host
+  subtree and calls `mount_component` per tag. Pure compiled-mount
+  driver; no `pp-*` scanning.
+- [`mount_adopted_components`](../crates/pocopine-core/src/walker.rs) —
+  recursive discovery used by the bridge: finds every registered
+  custom tag inside a runtime-injected subtree (e.g. captured slot
+  content, cloned `pp-for` row body) and mounts each.
+- [`install_adopted_controllers`](../crates/pocopine-core/src/walker.rs) —
+  finds `<template pp-for>` / `<template pp-if>` / `<template pp-teleport>`
+  in adopted DOM and installs the matching controller. The three
+  structural directives are the only ones the bridge knows.
+- [`materialize_adopted_slot`](../crates/pocopine-core/src/walker.rs) —
+  splices `slots::lookup`-captured slot content back when
+  `slot_fragment::lookup` (the compile-time emitter path) misses,
+  then runs `mount_adopted_components` over the spliced subtree.
+
+The bridge supports three job classes the macro can never own
+because they only exist at runtime:
+
+| Allowed | Disallowed |
+|---|---|
+| Discover registered custom-component tags + mount them | Bind `pp-*` / `:prop` / `@event` on plain or custom-tag hosts |
+| Install `<template pp-for>` / `<template pp-if>` / `<template pp-teleport>` controllers | Per-element `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model` / `pp-html` on adopted DOM |
+| Materialise runtime-captured slot content (`slots::lookup` consume path) | Anything that requires the deleted directive registry / `dispatch` / `parse_attr` |
+
+**Authoring rule that falls out**: per-element `pp-*` / `:prop` /
+`@event` directives only bind when the macro processes them at
+compile time inside a `#[component]` template. Author-supplied
+adopted DOM gets structural directives + custom-tag mount and
+nothing else. Authors who need per-element directives on dynamic
+content wrap that content in a `#[component]` (or the
+`template_inline = "..."` macro arg, the test shorthand that lifts
+a verbatim string through the same compiler path).
+
+Contract is locked by
+[`crates/pocopine/tests/adopted_dom_contract.rs`](../crates/pocopine/tests/adopted_dom_contract.rs):
+
+1. Custom component tag inside runtime slot content mounts.
+2. `<template pp-for>` inside runtime slot content materialises rows.
+3. `pp-text` / `:prop` / `@event` on plain HTML inside runtime slot
+   content does **not** bind — the literal attributes remain on the
+   element as proof the bridge never processed them.
+4. Same authoring shape inside `#[component(template_inline = ...)]`
+   does bind — the macro-processed escape hatch.
+
+A future regression that reintroduces a runtime directive
+dispatch loop fails case 3.
+
+Acceptance condition (achieved): no `pocopine-core` runtime call
+parses `pp-*` attributes off arbitrary author DOM. The four
+contract tests pass. Counter benchmark: 433KB raw / 179KB gzip
+(down from 599KB / 219KB at the Phase 6 endpoint).
+
 ### Phase 7 - Cluster-decision algorithm (always-on)
 
 Implement §5.10.1 in the macro / compiler: every `#[component]`
@@ -766,7 +827,12 @@ The council should decide:
    or stamp clean HTML and install generated handles by node path as a
    transitional step?
 3. Should non-compiler-owned SSR/adopted DOM remain supported, and if
-   so should it live behind a `legacy-dom` feature?
+   so should it live behind a `legacy-dom` feature? *(Resolved at
+   Phase 6.5: a narrow adopted-DOM bridge stays in core — three
+   functions covering custom-tag discovery, structural-controller
+   install, runtime-captured slot replay. Per-element directive
+   binding on adopted DOM was deleted along with the walker; the
+   `legacy-dom` branch preserves the old surface as a snapshot.)*
 4. Are compiled slot fragments the right public-internal ABI for
    parent-owned slot content?
 5. Should RFC 057 be marked "Deferred to RFC 058" now, or remain as a

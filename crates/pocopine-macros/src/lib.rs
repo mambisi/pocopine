@@ -79,8 +79,17 @@ mod template_plan;
 /// a `#[deprecated]`-attribute trick (RFC 045 §9.4).
 ///
 /// Returns `Ok(None)` when the template is clean.
+/// Source for `validate_template_or_emit_errors` — either a path
+/// to read at expansion time (the `template = "Foo.poco"` shape)
+/// or a pre-loaded HTML string (the `template_inline = "..."`
+/// shape, intended for test fixtures).
+enum TemplateSource<'a> {
+    File(&'a LitStr),
+    Inline { source: String, anchor: &'a LitStr },
+}
+
 fn validate_template_or_emit_errors(
-    template_path: &LitStr,
+    template_source: TemplateSource<'_>,
     component_name: &str,
 ) -> Result<
     (
@@ -90,7 +99,98 @@ fn validate_template_or_emit_errors(
     TokenStream,
 > {
     let lenient = is_lenient_mode();
+    match template_source {
+        TemplateSource::Inline { source, anchor } => {
+            validate_inline_source(&source, anchor, component_name, lenient)
+        }
+        TemplateSource::File(path) => validate_file_template(path, component_name, lenient),
+    }
+}
 
+fn validate_inline_source(
+    source: &str,
+    anchor: &LitStr,
+    component_name: &str,
+    lenient: bool,
+) -> Result<
+    (
+        Option<proc_macro2::TokenStream>,
+        Option<template_parser::TemplateAst>,
+    ),
+    TokenStream,
+> {
+    let display_path = format!("<inline template for {component_name}>");
+    let ast = match template_parser::parse_strict(source, &display_path) {
+        Ok(ast) => ast,
+        Err(parse_errors) => {
+            let mut rendered_blocks: Vec<String> = Vec::new();
+            for err in parse_errors {
+                if err.byte_range.end > err.byte_range.start && err.byte_range.end <= source.len() {
+                    rendered_blocks.push(diagnostics::render_template_error(
+                        source,
+                        &display_path,
+                        err.byte_range,
+                        &format!(
+                            "pocopine: invalid inline template for component `{component_name}` — {}",
+                            err.message
+                        ),
+                        &err.message,
+                    ));
+                } else {
+                    rendered_blocks.push(diagnostics::render_fileless_error(
+                        &display_path,
+                        &format!(
+                            "pocopine: invalid inline template for component `{component_name}`"
+                        ),
+                        &err.message,
+                    ));
+                }
+            }
+            return surface_diagnostic(anchor, &rendered_blocks.join("\n\n"), lenient, None);
+        }
+    };
+    let roots: Vec<_> = ast.element_roots().collect();
+    match roots.len() {
+        1 => Ok((None, Some(ast))),
+        0 => {
+            let msg = diagnostics::render_fileless_error(
+                &display_path,
+                &format!(
+                    "pocopine: inline template for component `{component_name}` has no root element"
+                ),
+                "pocopine templates require exactly one root",
+            );
+            drop(roots);
+            surface_diagnostic(anchor, &msg, lenient, Some(ast))
+        }
+        _ => {
+            let second_range = roots[1].opening_tag_range.clone();
+            let msg = diagnostics::render_template_error(
+                source,
+                &display_path,
+                second_range,
+                &format!(
+                    "pocopine: inline template for component `{component_name}` has more than one root element"
+                ),
+                "additional root — drops at runtime",
+            );
+            drop(roots);
+            surface_diagnostic(anchor, &msg, lenient, Some(ast))
+        }
+    }
+}
+
+fn validate_file_template(
+    template_path: &LitStr,
+    component_name: &str,
+    lenient: bool,
+) -> Result<
+    (
+        Option<proc_macro2::TokenStream>,
+        Option<template_parser::TemplateAst>,
+    ),
+    TokenStream,
+> {
     // Resolve the `.poco` file via a two-tier strategy.
     //
     // Tier 1: `Span::local_file()` on nightly's
@@ -554,6 +654,15 @@ pub(crate) const HTML5_ELEMENTS: &[&str] = &[
 struct ComponentArgs {
     name: Option<LitStr>,
     template: Option<LitStr>,
+    /// Inline-template alternative to `template = "Foo.poco"`.
+    /// When set, the literal is used directly as the template
+    /// HTML source — no file resolution, no `include_str!`
+    /// rebuild dependency. Mutually exclusive with `template`.
+    /// Intended for test-only fixtures where authoring a
+    /// per-test `.html` file is overhead the assertion doesn't
+    /// justify; production components should still use the file
+    /// path so the template lives in its own source-of-truth.
+    template_inline: Option<LitStr>,
     style: Option<LitStr>,
     role: Option<LitStr>,
     /// Force a specific CSS `display` value on the OUTER custom
@@ -617,6 +726,8 @@ impl Parse for ComponentArgs {
                 args.name = Some(lit);
             } else if kv.path.is_ident("template") {
                 args.template = Some(lit);
+            } else if kv.path.is_ident("template_inline") {
+                args.template_inline = Some(lit);
             } else if kv.path.is_ident("style") {
                 args.style = Some(lit);
             } else if kv.path.is_ident("role") {
@@ -634,8 +745,9 @@ impl Parse for ComponentArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
-                    "unknown key — expected one of: name, template, style, role, \
-                     display, transition, transition_in, transition_out, animate, uses",
+                    "unknown key — expected one of: name, template, template_inline, \
+                     style, role, display, transition, transition_in, transition_out, \
+                     animate, uses",
                 ));
             }
         }
@@ -708,9 +820,23 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let template_path: LitStr = match &args.template {
-        Some(s) => s.clone(),
-        None => LitStr::new(&format!("{ident_str}.poco"), struct_ident.span()),
+    if args.template.is_some() && args.template_inline.is_some() {
+        return syn::Error::new_spanned(
+            &struct_ident,
+            "`template = \"...\"` and `template_inline = \"...\"` are mutually \
+             exclusive — pick one source-of-truth for the template.",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let template_path: Option<LitStr> = if args.template_inline.is_some() {
+        None
+    } else {
+        Some(match &args.template {
+            Some(s) => s.clone(),
+            None => LitStr::new(&format!("{ident_str}.poco"), struct_ident.span()),
+        })
     };
 
     // RFC 049 — `#[slot(...)]` helper attributes on the struct.
@@ -1213,8 +1339,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Also keeps the parsed AST in scope for RFC 049's
     // consumer-side slot-contract scan, run below when the
     // consumer declared a `uses = [...]` list.
+    let template_source = match (&args.template_inline, &template_path) {
+        (Some(lit), _) => TemplateSource::Inline {
+            source: lit.value(),
+            anchor: lit,
+        },
+        (None, Some(path)) => TemplateSource::File(path),
+        // Unreachable — `template_path` is `None` only when
+        // `template_inline` is `Some`, but we still want a
+        // safe fallback rather than `unreachable!` so the
+        // expansion is robust to future refactors.
+        (None, None) => TemplateSource::File(template_path.as_ref().unwrap()),
+    };
     let (template_warnings, template_ast) =
-        match validate_template_or_emit_errors(&template_path, &name_str) {
+        match validate_template_or_emit_errors(template_source, &name_str) {
             Ok((warning, ast)) => (warning.unwrap_or_else(proc_macro2::TokenStream::new), ast),
             Err(token_stream) => return token_stream,
         };
@@ -1284,8 +1422,32 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let template_literal_tokens = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
         let lit = proc_macro2::Literal::string(cleaned);
         quote! { #lit }
+    } else if let Some(inline) = args.template_inline.as_ref() {
+        // `template_inline` always carries the source verbatim;
+        // the row-plan stamps and cleaned-HTML serialiser handle
+        // the file-source path above, so reaching this branch
+        // means the macro had nothing to rewrite.
+        let source = template_ast
+            .as_ref()
+            .map(|ast| ast.source.as_str())
+            .unwrap_or_else(|| {
+                // template_ast is empty only when validation
+                // failed in lenient mode — fall back to the raw
+                // string so the registration still emits.
+                ""
+            });
+        let value = if !source.is_empty() {
+            source.to_string()
+        } else {
+            inline.value()
+        };
+        let lit = proc_macro2::Literal::string(&value);
+        quote! { #lit }
     } else if row_plans.stamps.is_empty() {
-        quote! { include_str!(#template_path) }
+        let path = template_path
+            .as_ref()
+            .expect("file-template path resolves when template_inline is absent");
+        quote! { include_str!(#path) }
     } else {
         let source = template_ast
             .as_ref()
@@ -1330,9 +1492,18 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    // The `const _: &str = include_str!(...)` pin tells cargo to
+    // re-run the macro when the `.poco` file changes. Inline
+    // templates have no file to watch, so the pin is omitted —
+    // the literal IS the source-of-truth for those.
+    let template_rebuild_pin_tokens = match (&args.template_inline, &template_path) {
+        (Some(_), _) => quote! {},
+        (None, Some(path)) => quote! { const _: &str = include_str!(#path); },
+        (None, None) => quote! {},
+    };
     let register_template_stmt = quote! {
         #template_warnings
-        const _: &str = include_str!(#template_path);
+        #template_rebuild_pin_tokens
         ::pocopine::__private::register_template(
             #name_str,
             ::pocopine::__private::compile_template(

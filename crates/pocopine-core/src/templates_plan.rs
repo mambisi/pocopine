@@ -39,7 +39,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element};
 
@@ -48,12 +47,10 @@ use crate::directives::for_plan::{
     StaticInterp, StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef,
     StaticSlotOutlet, StaticTeleportPlan,
 };
-use crate::directives::{self, DirectiveCall};
+use crate::directives::{self};
 use crate::expr;
 use crate::reactive::ScopeId;
 use crate::slot_fragment::SlotSet;
-
-const COMPILED_FALLBACK_WALK_KEY: &str = "__pp_compiled_fallback_walk";
 
 // ─── macro-emitted static shape ─────────────────────────────────
 
@@ -132,17 +129,11 @@ pub struct StaticTemplatePlan {
     /// with no interpolation.
     pub interps: &'static [StaticInterp],
     /// `pp-model[.modifier]="field"` sites on native input /
-    /// textarea / select elements (RFC-058 Phase 6.5). Lifted
-    /// out of `walker::dispatch` so compiled-only apps wire
-    /// two-way input bindings without the runtime walker.
-    /// Component-target `pp-model` is on `StaticChildMount`
-    /// instead.
+    /// textarea / select elements. Lifted out of the runtime
+    /// walker so compiled-only apps wire two-way input bindings
+    /// without the runtime walker. Component-target `pp-model`
+    /// is on `StaticChildMount` instead.
     pub native_models: &'static [StaticNativeModel],
-    /// True when the cleaned HTML still contains framework-owned
-    /// attributes that this plan does not install. Compiled
-    /// fragments can skip fallback only when their own plan and
-    /// every planned child component are walker-complete.
-    pub requires_walker: bool,
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -184,10 +175,8 @@ pub fn template_plan_for(tag: &str) -> Option<&'static StaticTemplatePlan> {
 /// Snapshot every registered component tag. Order is
 /// implementation-defined (HashMap iteration); callers that
 /// need stable ordering should sort. Intended for audit /
-/// survey tooling — RFC-058 Phase 3 hardening uses it to
-/// enumerate which compiled plans still trip
-/// [`StaticTemplatePlan::requires_walker`] so the migration to
-/// a walker-free runtime can target the remaining offenders.
+/// survey tooling and the compiled-mount entry's tag scan in
+/// `walker::start_compiled`.
 pub fn registered_template_tags() -> Vec<String> {
     TEMPLATE_PLANS.with(|registry| registry.borrow().keys().cloned().collect())
 }
@@ -544,31 +533,46 @@ fn install_opaque_directives(
             fail("opaque-directive", template_name, d.node_path, Some(d.name));
             continue;
         };
-        let Some(handler) = directives::lookup(d.name) else {
+        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
+        if !dispatch_opaque(d.name, &el, d.arg, &modifiers, d.value, scope_id, proxy) {
             // The macro emitted an entry for a directive the
-            // runtime registry doesn't know about — either a
+            // dispatch table doesn't know about — either a
             // typo'd allowlist entry or a directive that was
-            // removed from the registry. Surface it via the
-            // fail-fast counter so tests catch the drift.
+            // removed. Surface it via the fail-fast counter so
+            // tests catch the drift.
             fail(
                 "opaque-directive-lookup",
                 template_name,
                 d.node_path,
                 Some(d.name),
             );
-            continue;
-        };
-        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
-        let call = DirectiveCall {
-            el: &el,
-            proxy,
-            scope_id,
-            arg: d.arg.map(|s| s.to_string()),
-            modifiers,
-            value: d.value.to_string(),
-        };
-        handler(&call);
+        }
     }
+}
+
+/// Dispatch an opaque directive lift to its typed install entry.
+/// Returns `false` when `name` doesn't match a known opaque
+/// directive — caller treats that as a fail-fast event.
+fn dispatch_opaque(
+    name: &str,
+    el: &Element,
+    arg: Option<&str>,
+    modifiers: &[String],
+    value: &str,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+) -> bool {
+    match name {
+        "resize" => directives::resize::install_opaque(el, arg, modifiers, value, scope_id, proxy),
+        "intersect" => {
+            directives::intersect::install_opaque(el, arg, modifiers, value, scope_id, proxy)
+        }
+        "anchor" => directives::anchor::install_opaque(el, arg, modifiers, value, scope_id, proxy),
+        "roving" => directives::roving::install_opaque(el, arg, modifiers, value, scope_id, proxy),
+        "flip" => directives::flip::install_opaque(el, arg, modifiers, value, scope_id, proxy),
+        _ => return false,
+    }
+    true
 }
 
 /// Apply the root-owned part of a template plan to the user
@@ -650,25 +654,15 @@ pub fn apply_static_pp_as_plan(
         .iter()
         .filter(|d| d.node_path.is_empty())
     {
-        let Some(handler) = directives::lookup(d.name) else {
+        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
+        if !dispatch_opaque(d.name, root, d.arg, &modifiers, d.value, scope_id, proxy) {
             fail(
                 "opaque-directive-lookup",
                 template_name,
                 d.node_path,
                 Some(d.name),
             );
-            continue;
-        };
-        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
-        let call = DirectiveCall {
-            el: root,
-            proxy,
-            scope_id,
-            arg: d.arg.map(|s| s.to_string()),
-            modifiers,
-            value: d.value.to_string(),
-        };
-        handler(&call);
+        }
     }
 }
 
@@ -719,15 +713,8 @@ fn install_child_host_directives(
     }
     for m in child.models {
         let modifiers: Vec<String> = m.modifiers.iter().map(|s| (*s).to_string()).collect();
-        let call = DirectiveCall {
-            el,
-            proxy,
-            scope_id,
-            arg: m.arg.map(str::to_string),
-            modifiers,
-            value: m.expr_src.to_string(),
-        };
-        directives::model::run(&call);
+        let _ = scope_id;
+        directives::model::install_compiled(el, proxy, m.arg, &modifiers, m.expr_src);
     }
 }
 
@@ -798,43 +785,7 @@ pub fn stamp_if_body(
     let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
     let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
     apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
-    if plan_requires_compiled_fallback(plan) {
-        let _ = Reflect::set(
-            root.as_ref(),
-            &JsValue::from_str(COMPILED_FALLBACK_WALK_KEY),
-            &JsValue::TRUE,
-        );
-    }
     Some(root)
-}
-
-/// True when a fragment plan still needs the temporary runtime
-/// discovery bridge after `apply_static_plan` runs. Native-only
-/// bindings/listeners/refs are complete after the plan install;
-/// nested components/controllers still need walker-backed
-/// lifecycle, slot outlet, and preserved-directive handling until
-/// those are compiled explicitly.
-pub(crate) fn plan_requires_compiled_fallback(plan: &StaticTemplatePlan) -> bool {
-    if plan.requires_walker {
-        return true;
-    }
-    plan.child_mounts.iter().any(|c| {
-        template_plan_for(c.tag)
-            .map(plan_requires_compiled_fallback)
-            .unwrap_or(true)
-    })
-}
-
-/// Read the marker set by [`stamp_if_body`] for lifted controller
-/// body fragments.
-pub(crate) fn fragment_requires_compiled_fallback(root: &Element) -> bool {
-    Reflect::get(
-        root.as_ref(),
-        &JsValue::from_str(COMPILED_FALLBACK_WALK_KEY),
-    )
-    .ok()
-    .map(|v| v.is_truthy())
-    .unwrap_or(false)
 }
 
 fn fail(kind: &str, template_name: &str, node_path: &[u16], expr_src: Option<&str>) {

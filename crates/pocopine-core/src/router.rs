@@ -178,7 +178,7 @@ pub fn navigate(url: &str) {
 }
 
 /// Initialise the router: attach a `popstate` listener and paint the
-/// current URL. Called once from `App::run` after the initial walker
+/// current URL. Called once from `App::run` after the initial mount
 /// pass.
 pub fn init() {
     if INITIALISED.with(|b| b.replace(true)) {
@@ -275,7 +275,13 @@ fn mount_current() {
         let _ = el.set_attribute(k, v);
     }
     outlet.replace_children_with_node_1(el.as_ref());
-    walker::walk(&el);
+    // RFC-058 Phase 6.5 — drive the route component's mount through
+    // the compiled-only entry. The walker's recursive directive
+    // scan is gone; route components must be `#[component]` types
+    // so their template plan installs every binding/listener via
+    // the macro-emitted entries.
+    walker::mount_child_component(&el, name);
+    walker::finalize_compiled_subtree(&el);
 }
 
 /// Find the first matching route's component name + params.

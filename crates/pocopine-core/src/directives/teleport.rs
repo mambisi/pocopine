@@ -18,7 +18,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, Element, HtmlTemplateElement, Node};
 
-use super::DirectiveCall;
 use crate::walker::{self, bind_borrowed_scope_to};
 
 const TELEPORTED_KEY: &str = "__pp_teleported";
@@ -52,27 +51,6 @@ pub fn host_of(el: &Element) -> Option<Element> {
         cur = node.parent_element();
     }
     None
-}
-
-pub fn run(call: &DirectiveCall) {
-    // When `pp-if` is also present, that directive owns the mount
-    // cycle and consults [`resolve_target`] directly. Standalone
-    // teleport always mounts.
-    if call.el.has_attribute("pp-if") {
-        return;
-    }
-
-    let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
-        Ok(t) => t,
-        Err(_) => {
-            console::error_1(&JsValue::from_str(
-                "pp-teleport: must be on a <template> element",
-            ));
-            return;
-        }
-    };
-
-    install(template, &call.value, None);
 }
 
 /// Compiled-path entry point. Skips the `<template>` cast +
@@ -165,13 +143,11 @@ pub fn install(
         // stripped by the macro, and generated child mounts are
         // guarded by `__pp_mounted`.
         if fragment_built {
-            if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
-                walker::walk_compiled_fallback(&clone_root);
-            } else {
-                walker::finalize_compiled_subtree(&clone_root);
-            }
+            walker::finalize_compiled_subtree(&clone_root);
         } else {
-            walker::walk(&clone_root);
+            // RFC-058 Phase 6.5 — body must come from the macro
+            // fragment now that the runtime walker is gone.
+            crate::templates_plan::record_plan_failure();
         }
         stash_teleported(&template_el, &clone_root);
     }

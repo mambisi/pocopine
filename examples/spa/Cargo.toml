@@ -9,6 +9,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pocopine = { path = "../../crates/pocopine", features = ["legacy-dom"] }
+pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }

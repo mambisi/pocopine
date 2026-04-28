@@ -21,36 +21,55 @@ use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
-use web_sys::{CustomEvent, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
+use web_sys::{
+    CustomEvent, Element, Event, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement,
+};
 
-use super::DirectiveCall;
 use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 use crate::walker::{child_component_proxy, track_effect_on, track_listener_on};
 
-pub fn run(call: &DirectiveCall) {
-    if let Some(child_proxy) = child_component_proxy(call.el) {
-        run_component(call, child_proxy);
+/// Compiled-path entry used by `apply_static_plan`'s
+/// child-host model dispatch. Routes through the component or
+/// native install depending on whether `el` resolves to a
+/// registered child component tag.
+pub fn install_compiled(
+    el: &Element,
+    proxy: &JsValue,
+    arg: Option<&str>,
+    modifiers: &[String],
+    value: &str,
+) {
+    if let Some(child_proxy) = child_component_proxy(el) {
+        install_component(el, proxy, arg, value, child_proxy);
     } else {
-        run_native(call);
+        let number = modifiers.iter().any(|m| m == "number");
+        let lazy = modifiers.iter().any(|m| m == "lazy");
+        install_native(el, proxy, value.to_string(), number, lazy);
     }
 }
 
 // ─── component-boundary path (RFC-009) ────────────────────────────
 
-fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
-    let parent_proxy = call.proxy.clone();
-    let key = call.value.clone();
-    let el = call.el.clone();
+fn install_component(
+    el: &Element,
+    parent_proxy: &JsValue,
+    arg: Option<&str>,
+    value: &str,
+    child_proxy: JsValue,
+) {
+    let parent_proxy = parent_proxy.clone();
+    let key = value.to_string();
+    let el = el.clone();
     // Directive arg picks the child's target field; defaults to
     // `model` so plain `pp-model="name"` keeps working unchanged.
-    let child_field = call.arg.clone().unwrap_or_else(|| "model".into());
-    let child_field = super::normalize_prop_name(&child_field);
+    let child_field = arg.map(|s| s.to_string()).unwrap_or_else(|| "model".into());
+    let child_field = child_field.replace('-', "_");
 
     // Resolve the child's scope id once — we need it to consult
     // `is_prop` per RFC-031 before every mirror-in write.
-    let child_scope_id = crate::walker::child_component_scope(call.el).map(|(id, _)| id);
+    let child_scope_id = crate::walker::child_component_scope(&el).map(|(id, _)| id);
 
     // Parent → child: mirror proxy[key] into the child's
     // `<child_field>` prop. Same shape as pp-bind's child-prop path,
@@ -85,7 +104,7 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
             let _ = Reflect::set(&child_r, &JsValue::from_str(&child_field_w), &v);
         });
     });
-    track_effect_on(call.el, id);
+    track_effect_on(&el, id);
 
     // Child → parent: named `pp:update:<field>` channel for
     // `pp-model:<field>`, falling back to `pp:update:model` for the
@@ -107,16 +126,10 @@ fn run_component(call: &DirectiveCall, child_proxy: JsValue) {
         let _ = write_path(&parent_w, &key_w, &detail);
     }) as Box<dyn FnMut(Event)>);
     let target: web_sys::EventTarget = el.clone().into();
-    track_listener_on(call.el, target, &update_event, false, listener);
+    track_listener_on(&el, target, &update_event, false, listener);
 }
 
 // ─── native input path ────────────────────────────────────────────
-
-fn run_native(call: &DirectiveCall) {
-    let number = call.modifiers.iter().any(|m| m == "number");
-    let lazy = call.modifiers.iter().any(|m| m == "lazy");
-    install_native(call.el, call.proxy, call.value.clone(), number, lazy);
-}
 
 /// RFC-058 Phase 6.5 — compiled-path entry for `pp-model` on a
 /// native input/textarea/select. Same effect + listener wiring

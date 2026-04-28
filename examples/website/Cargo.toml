@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 pine = { path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
 pine-motion = { path = "../../crates/pine-motion" }
-pocopine = { path = "../../crates/pocopine", features = ["legacy-dom"] }
+pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }

@@ -23,7 +23,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{console, Element, HtmlElement, KeyboardEvent, NodeList};
 
-use super::DirectiveCall;
+use crate::reactive::ScopeId;
 
 const STATE_KEY: &str = "__pp_roving_state";
 
@@ -34,19 +34,28 @@ enum Orientation {
     Both,
 }
 
-pub fn run(call: &DirectiveCall) {
-    let container = call.el.clone();
-    let orientation = parse_orientation(&call.modifiers);
-    let wrap = !call.modifiers.iter().any(|m| m == "nowrap");
-    let virtual_mode = call
-        .modifiers
+/// Compiled-path install entry. Called by `apply_static_plan` for
+/// each `pp-roving[:<listbox-id>][.<modifier>...]` site the macro
+/// lifted into the template plan.
+pub fn install_opaque(
+    el: &Element,
+    arg: Option<&str>,
+    modifiers: &[String],
+    _value: &str,
+    _scope_id: ScopeId,
+    _proxy: &JsValue,
+) {
+    let container = el.clone();
+    let orientation = parse_orientation(modifiers);
+    let wrap = !modifiers.iter().any(|m| m == "nowrap");
+    let virtual_mode = modifiers
         .iter()
         .any(|m| m == "virtual" || m == "activedescendant");
-    let linked_listbox = call.arg.clone();
+    let linked_listbox = arg.map(|s| s.to_string());
 
     if virtual_mode {
         if let Some(listbox_id) = linked_listbox {
-            let items_selector = parse_items_selector_virtual(&call.modifiers);
+            let items_selector = parse_items_selector_virtual(modifiers);
             install_virtual(&container, listbox_id, orientation, wrap, items_selector);
         } else {
             console::warn_1(&JsValue::from_str(
@@ -56,7 +65,7 @@ pub fn run(call: &DirectiveCall) {
     } else if linked_listbox.is_some() {
         install_palette_entry(&container, orientation);
     } else {
-        let items_selector = parse_items_selector(&call.modifiers);
+        let items_selector = parse_items_selector(modifiers);
         install_roving(&container, orientation, wrap, items_selector);
     }
 }

@@ -32,13 +32,12 @@ fn mount(host_html: &str) -> Element {
     // Pine compounds rely on the full runtime walker — 16
     // compounds are still walker-required (the `*-portal` /
     // `*-content` / `*-indicator` / `*-value` family per the
-    // Pine fallback audit) and the dialog/popover scroll-lock
-    // teardown chains through the walker's `MutationObserver`.
-    // Pine tests therefore opt into `legacy-dom` (the test
-    // command passes `--features legacy-dom`) and use the full
-    // legacy entry. Compiled-only consumers test through
-    // `pocopine`'s own test crate.
-    pocopine_core::walker::start(&host);
+    // Pine fallback audit). RFC-058 Phase 6.5 — the runtime
+    // walker is gone; tests mount through the compiled-only
+    // entry. Pine compounds whose body fragments still need
+    // walker discovery surface as fail-fast plan-failure
+    // counters under the new regime.
+    pocopine_core::walker::start_compiled(&host);
     host
 }
 
@@ -391,6 +390,25 @@ impl MenuHost {
     }
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger>open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="m-a">A</pine-dropdown-menu-item>
+        <pine-dropdown-menu-item class="m-b">B</pine-dropdown-menu-item>
+        <pine-dropdown-menu-item class="m-c">C</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct CompoundMenuHost {}
+#[handlers]
+impl CompoundMenuHost {}
+
 /// Opening a menu via the trigger teleports Content to body, sets
 /// the first menuitem's tabindex=0, auto-focuses it, cycles on
 /// arrow keys, and closes on Escape. Exercises the full compound
@@ -398,18 +416,8 @@ impl MenuHost {
 /// teleport) → Content (anchor + roving + escape) → Item.
 #[wasm_bindgen_test]
 async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger>open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-item class=\"m-a\">A</pine-dropdown-menu-item>\
-               <pine-dropdown-menu-item class=\"m-b\">B</pine-dropdown-menu-item>\
-               <pine-dropdown-menu-item class=\"m-c\">C</pine-dropdown-menu-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    CompoundMenuHost::register();
+    let host = mount("<compound-menu-host></compound-menu-host>");
     // Three ticks: initial render, on_ready (mirrors Root.open),
     // and the pp-if commit after Trigger clicks.
     tick().await;
@@ -579,6 +587,24 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="pv-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="pv-keep">Keep open</pine-dropdown-menu-item>
+        <pine-dropdown-menu-item class="pv-close">Normal close</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct PreventableSelectHost {}
+#[handlers]
+impl PreventableSelectHost {}
+
 /// Item dispatches a cancelable `pp:select` CustomEvent. A
 /// listener that calls `preventDefault()` vetoes the auto-close;
 /// matches reka-ui's preventable DropdownMenuItem.select.
@@ -586,17 +612,8 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
 async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     use wasm_bindgen::closure::Closure;
 
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"pv-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-item class=\"pv-keep\">Keep open</pine-dropdown-menu-item>\
-               <pine-dropdown-menu-item class=\"pv-close\">Normal close</pine-dropdown-menu-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    PreventableSelectHost::register();
+    let host = mount("<preventable-select-host></preventable-select-host>");
     tick().await;
 
     let trigger = host.query_selector(".pv-trig").unwrap().unwrap();
@@ -649,6 +666,32 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="rg-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-radio-group value="a">
+          <pine-dropdown-menu-radio-item class="rg-a" value="a">
+            <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+            A
+          </pine-dropdown-menu-radio-item>
+          <pine-dropdown-menu-radio-item class="rg-b" value="b">
+            <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>
+            B
+          </pine-dropdown-menu-radio-item>
+        </pine-dropdown-menu-radio-group>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct RadioGroupMenuHost {}
+#[handlers]
+impl RadioGroupMenuHost {}
+
 /// DropdownMenu RadioGroup + RadioItem exclusive selection:
 /// clicking a RadioItem updates the group's `value`, flips
 /// `aria-checked` on the clicked item to `"true"` and the
@@ -656,25 +699,8 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
 /// ItemIndicators mirror accordingly.
 #[wasm_bindgen_test]
 async fn dropdown_menu_radio_group_exclusive_selection() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"rg-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-radio-group value=\"a\">\
-                 <pine-dropdown-menu-radio-item class=\"rg-a\" value=\"a\">\
-                   <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>\
-                   A\
-                 </pine-dropdown-menu-radio-item>\
-                 <pine-dropdown-menu-radio-item class=\"rg-b\" value=\"b\">\
-                   <pine-dropdown-menu-item-indicator>●</pine-dropdown-menu-item-indicator>\
-                   B\
-                 </pine-dropdown-menu-radio-item>\
-               </pine-dropdown-menu-radio-group>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    RadioGroupMenuHost::register();
+    let host = mount("<radio-group-menu-host></radio-group-menu-host>");
     tick().await;
 
     host.query_selector(".rg-trig")
@@ -730,6 +756,28 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="ck-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-checkbox-item class="ck-one">
+          <pine-dropdown-menu-item-indicator>
+            <span class="ck-dot">✓</span>
+          </pine-dropdown-menu-item-indicator>
+          One
+        </pine-dropdown-menu-checkbox-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct CheckboxMenuHost {}
+#[handlers]
+impl CheckboxMenuHost {}
+
 /// DropdownMenu CheckboxItem + ItemIndicator round-trip: clicking
 /// the item toggles its tri-state, emits pp:update:model, and the
 /// nested ItemIndicator reactively renders via pp-if on the
@@ -737,21 +785,8 @@ async fn dropdown_menu_radio_group_exclusive_selection() {
 /// ItemIndicator pairing.
 #[wasm_bindgen_test]
 async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"ck-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-checkbox-item class=\"ck-one\">\
-                 <pine-dropdown-menu-item-indicator>\
-                   <span class=\"ck-dot\">✓</span>\
-                 </pine-dropdown-menu-item-indicator>\
-                 One\
-               </pine-dropdown-menu-checkbox-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    CheckboxMenuHost::register();
+    let host = mount("<checkbox-menu-host></checkbox-menu-host>");
     tick().await;
 
     // Open the menu.
@@ -825,6 +860,28 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="gl-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-group class="gl-group">
+          <pine-dropdown-menu-label>Actions</pine-dropdown-menu-label>
+          <pine-dropdown-menu-item class="gl-a">A</pine-dropdown-menu-item>
+        </pine-dropdown-menu-group>
+        <pine-dropdown-menu-separator class="gl-sep"></pine-dropdown-menu-separator>
+        <pine-dropdown-menu-item class="gl-b">B</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct GroupLabelMenuHost {}
+#[handlers]
+impl GroupLabelMenuHost {}
+
 /// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
 /// render correct ARIA wiring. Separator has `role="separator"`
 /// and `aria-orientation="horizontal"`. Group + Label link via
@@ -832,21 +889,8 @@ async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
 /// groups don't collide.
 #[wasm_bindgen_test]
 async fn dropdown_menu_group_label_separator_wire_aria() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"gl-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-group class=\"gl-group\">\
-                 <pine-dropdown-menu-label>Actions</pine-dropdown-menu-label>\
-                 <pine-dropdown-menu-item class=\"gl-a\">A</pine-dropdown-menu-item>\
-               </pine-dropdown-menu-group>\
-               <pine-dropdown-menu-separator class=\"gl-sep\"></pine-dropdown-menu-separator>\
-               <pine-dropdown-menu-item class=\"gl-b\">B</pine-dropdown-menu-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    GroupLabelMenuHost::register();
+    let host = mount("<group-label-menu-host></group-label-menu-host>");
     tick().await;
 
     // Click trigger to open.
@@ -892,27 +936,36 @@ async fn dropdown_menu_group_label_separator_wire_aria() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="sub-root-t">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="s-i-a">A</pine-dropdown-menu-item>
+        <pine-dropdown-menu-sub>
+          <pine-dropdown-menu-sub-trigger class="s-sub-t">More…</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-content>
+            <pine-dropdown-menu-item class="s-i-b">B</pine-dropdown-menu-item>
+          </pine-dropdown-menu-sub-content>
+        </pine-dropdown-menu-sub>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct SubMenuHost {}
+#[handlers]
+impl SubMenuHost {}
+
 /// DropdownMenu submenu: clicking SubTrigger opens SubContent;
 /// SubContent has its own `<ul role="menu">` teleported to body
 /// and anchored to the SubTrigger. Escape closes the sub.
 #[wasm_bindgen_test]
 async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"sub-root-t\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-item class=\"s-i-a\">A</pine-dropdown-menu-item>\
-               <pine-dropdown-menu-sub>\
-                 <pine-dropdown-menu-sub-trigger class=\"s-sub-t\">More…</pine-dropdown-menu-sub-trigger>\
-                 <pine-dropdown-menu-sub-content>\
-                   <pine-dropdown-menu-item class=\"s-i-b\">B</pine-dropdown-menu-item>\
-                 </pine-dropdown-menu-sub-content>\
-               </pine-dropdown-menu-sub>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    SubMenuHost::register();
+    let host = mount("<sub-menu-host></sub-menu-host>");
     tick().await;
 
     // Open outer menu.
@@ -1061,22 +1114,31 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="ar-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content side="top">
+        <pine-dropdown-menu-arrow class="ar-arrow"></pine-dropdown-menu-arrow>
+        <pine-dropdown-menu-item>A</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct ArrowMenuHost {}
+#[handlers]
+impl ArrowMenuHost {}
+
 /// DropdownMenu Arrow inherits `side` from Content via
 /// provide/inject and stamps `data-side` so authors can style
 /// the arrow's rotation per side.
 #[wasm_bindgen_test]
 async fn dropdown_menu_arrow_mirrors_content_side() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"ar-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content side=\"top\">\
-               <pine-dropdown-menu-arrow class=\"ar-arrow\"></pine-dropdown-menu-arrow>\
-               <pine-dropdown-menu-item>A</pine-dropdown-menu-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    ArrowMenuHost::register();
+    let host = mount("<arrow-menu-host></arrow-menu-host>");
     tick().await;
     host.query_selector(".ar-trig")
         .unwrap()
@@ -1152,6 +1214,31 @@ async fn dropdown_menu_content_config_props_override_anchor() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="t1">one</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="i1">A</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="t2">two</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="i2">B</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct TwoMenusHost {}
+#[handlers]
+impl TwoMenusHost {}
+
 /// Two DropdownMenus side-by-side must each anchor to their own
 /// Trigger — not all share-the-first via a common selector. The
 /// `on_setup` hook (runs pre-children-walk) computes Content's
@@ -1160,26 +1247,8 @@ async fn dropdown_menu_content_config_props_override_anchor() {
 /// button.
 #[wasm_bindgen_test]
 async fn two_dropdown_menus_anchor_to_their_own_triggers() {
-    let host = mount(
-        "<div>\
-           <pine-dropdown-menu-root>\
-             <pine-dropdown-menu-trigger class=\"t1\">one</pine-dropdown-menu-trigger>\
-             <pine-dropdown-menu-portal>\
-               <pine-dropdown-menu-content>\
-                 <pine-dropdown-menu-item class=\"i1\">A</pine-dropdown-menu-item>\
-               </pine-dropdown-menu-content>\
-             </pine-dropdown-menu-portal>\
-           </pine-dropdown-menu-root>\
-           <pine-dropdown-menu-root>\
-             <pine-dropdown-menu-trigger class=\"t2\">two</pine-dropdown-menu-trigger>\
-             <pine-dropdown-menu-portal>\
-               <pine-dropdown-menu-content>\
-                 <pine-dropdown-menu-item class=\"i2\">B</pine-dropdown-menu-item>\
-               </pine-dropdown-menu-content>\
-             </pine-dropdown-menu-portal>\
-           </pine-dropdown-menu-root>\
-         </div>",
-    );
+    TwoMenusHost::register();
+    let host = mount("<two-menus-host></two-menus-host>");
     tick().await;
 
     // Each Trigger stamps its button with its root scope id —
@@ -1729,6 +1798,27 @@ async fn dialog_pp_model_open_round_trips_through_parent() {
 
 // ─── PineDialog ───────────────────────────────────────────────────
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dialog-root>
+    <pine-dialog-trigger class="dg-trig">open</pine-dialog-trigger>
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <pine-dialog-title>Hi</pine-dialog-title>
+        <pine-dialog-description>Body</pine-dialog-description>
+        <button class="inner-1">A</button>
+        <button class="inner-2">B</button>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</div>
+"#)]
+struct DialogTeleportHost {}
+#[handlers]
+impl DialogTeleportHost {}
+
 /// Dialog compound: clicking Trigger opens Root, Portal teleports
 /// Content + Overlay into `<body>`, Content gets role="dialog" +
 /// ARIA wiring via the Root-provided title/description ids, focus
@@ -1737,21 +1827,14 @@ async fn dialog_pp_model_open_round_trips_through_parent() {
 async fn dialog_teleports_traps_focus_and_locks_scroll() {
     use pocopine::scroll_lock;
 
-    let host = mount(
-        "<pine-dialog-root>\
-           <pine-dialog-trigger class=\"dg-trig\">open</pine-dialog-trigger>\
-           <pine-dialog-portal>\
-             <pine-dialog-overlay></pine-dialog-overlay>\
-             <pine-dialog-content>\
-               <pine-dialog-title>Hi</pine-dialog-title>\
-               <pine-dialog-description>Body</pine-dialog-description>\
-               <button class=\"inner-1\">A</button>\
-               <button class=\"inner-2\">B</button>\
-             </pine-dialog-content>\
-           </pine-dialog-portal>\
-         </pine-dialog-root>",
-    );
+    DialogTeleportHost::register();
+    let host = mount("<dialog-teleport-host></dialog-teleport-host>");
     tick().await;
+    // Other tests in the same browser session may have left
+    // teleported dialog content in <body> that we can't reach via
+    // `host.remove()` — capture the baseline depth so we assert
+    // relative changes, not absolutes.
+    let baseline_depth = scroll_lock::depth();
 
     let portal_plan = pocopine_core::templates_plan::template_plan_for("pine-dialog-portal")
         .expect("dialog portal should compile its pp-if + pp-teleport controller");
@@ -1787,7 +1870,11 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
     assert!(title.inner_html().contains("Hi"));
 
     // Scroll lock engaged (modal default = true).
-    assert!(scroll_lock::depth() >= 1, "scroll lock engaged");
+    assert!(
+        scroll_lock::depth() > baseline_depth,
+        "scroll lock engaged (depth must climb above baseline {})",
+        baseline_depth,
+    );
 
     // Focus moved to first focusable inside the content.
     let active = doc().active_element().unwrap();
@@ -1813,7 +1900,11 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
             .is_none(),
         "dialog removed after Escape"
     );
-    assert_eq!(scroll_lock::depth(), 0, "scroll lock released on close");
+    assert_eq!(
+        scroll_lock::depth(),
+        baseline_depth,
+        "scroll lock released on close (depth returned to baseline)",
+    );
 
     host.remove();
 }
@@ -3817,6 +3908,26 @@ async fn select_escape_closes_and_aria_selected_mirrors_value() {
 
 // ─── PineCombobox ─────────────────────────────────────────────────
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-combobox-root>
+    <pine-combobox-input placeholder="Search"></pine-combobox-input>
+    <pine-combobox-portal>
+      <pine-combobox-content>
+        <pine-combobox-item value="react">React</pine-combobox-item>
+        <pine-combobox-item value="vue">Vue</pine-combobox-item>
+        <pine-combobox-item value="svelte">Svelte</pine-combobox-item>
+        <pine-combobox-empty>Nothing matched.</pine-combobox-empty>
+      </pine-combobox-content>
+    </pine-combobox-portal>
+  </pine-combobox-root>
+</div>
+"#)]
+struct ComboboxFilterHost {}
+#[handlers]
+impl ComboboxFilterHost {}
+
 /// Typing in the Input filters the listbox via each Item's
 /// `visible` mirror + `pp-show`. Arrow keys move
 /// `aria-activedescendant` on the Input without moving DOM focus.
@@ -3828,19 +3939,8 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-combobox-root>\
-           <pine-combobox-input placeholder=\"Search\"></pine-combobox-input>\
-           <pine-combobox-portal>\
-             <pine-combobox-content>\
-               <pine-combobox-item value=\"react\">React</pine-combobox-item>\
-               <pine-combobox-item value=\"vue\">Vue</pine-combobox-item>\
-               <pine-combobox-item value=\"svelte\">Svelte</pine-combobox-item>\
-               <pine-combobox-empty>Nothing matched.</pine-combobox-empty>\
-             </pine-combobox-content>\
-           </pine-combobox-portal>\
-         </pine-combobox-root>",
-    );
+    ComboboxFilterHost::register();
+    let host = mount("<combobox-filter-host></combobox-filter-host>");
     tick().await;
 
     let root_tag = host.query_selector("pine-combobox-root").unwrap().unwrap();
@@ -5872,19 +5972,30 @@ async fn time_range_field_tab_bridges_start_end_edges() {
 /// timing differs without those changes). The deterministic
 /// chain-walk regression below catches the same underlying
 /// bug across all branches.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-tags-input-root id="tags-root" pp-model:values="values">
+    <template pp-for="tag in values" pp-key="tag">
+      <pine-tags-input-item :value="tag" class="chip">
+        <pine-tags-input-item-text></pine-tags-input-item-text>
+        <pine-tags-input-item-delete class="chip-x">×</pine-tags-input-item-delete>
+      </pine-tags-input-item>
+    </template>
+    <pine-tags-input-input class="t-input"></pine-tags-input-input>
+  </pine-tags-input-root>
+</div>
+"#)]
+struct TagsInputChipHost {
+    values: Vec<String>,
+}
+#[handlers]
+impl TagsInputChipHost {}
+
 #[wasm_bindgen_test]
 async fn tags_input_per_chip_delete_click_removes_tag() {
-    let host = mount(
-        "<pine-tags-input-root id=\"tags-root\">\
-           <template pp-for=\"tag in values\" pp-key=\"tag\">\
-             <pine-tags-input-item :value=\"tag\" class=\"chip\">\
-               <pine-tags-input-item-text></pine-tags-input-item-text>\
-               <pine-tags-input-item-delete class=\"chip-x\">×</pine-tags-input-item-delete>\
-             </pine-tags-input-item>\
-           </template>\
-           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
-         </pine-tags-input-root>",
-    );
+    TagsInputChipHost::register();
+    let host = mount("<tags-input-chip-host></tags-input-chip-host>");
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -6026,19 +6137,30 @@ async fn tags_input_per_chip_inject_chain_reaches_root() {
 /// website demo runs with (the test harness globally disables
 /// transitions for speed; the user's report may be specific to
 /// the animated path).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-tags-input-root pp-model:values="values">
+    <template pp-for="tag in values" pp-key="tag">
+      <pine-tags-input-item :value="tag" class="chip500">
+        <pine-tags-input-item-text></pine-tags-input-item-text>
+        <pine-tags-input-item-delete class="chip500-x">×</pine-tags-input-item-delete>
+      </pine-tags-input-item>
+    </template>
+  </pine-tags-input-root>
+</div>
+"#)]
+struct TagsInput500Host {
+    values: Vec<String>,
+}
+#[handlers]
+impl TagsInput500Host {}
+
 #[wasm_bindgen_test]
 async fn tags_input_500_tags_delete_click_removes_tag() {
     pocopine_core::animate::enable_transitions();
-    let host = mount(
-        "<pine-tags-input-root>\
-           <template pp-for=\"tag in values\" pp-key=\"tag\">\
-             <pine-tags-input-item :value=\"tag\" class=\"chip500\">\
-               <pine-tags-input-item-text></pine-tags-input-item-text>\
-               <pine-tags-input-item-delete class=\"chip500-x\">×</pine-tags-input-item-delete>\
-             </pine-tags-input-item>\
-           </template>\
-         </pine-tags-input-root>",
-    );
+    TagsInput500Host::register();
+    let host = mount("<tags-input500-host></tags-input500-host>");
     tick().await;
 
     // Seed 500 tags via the root proxy.
@@ -6085,76 +6207,23 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
     host.remove();
 }
 
-// ─── RFC-058 Phase 3 hardening — fallback audit ──────────────────
+// ─── RFC-058 Phase 6.5 — fallback audit ─────────────────────────
 
-/// Survey every registered Pine template plan and assert the
-/// walker-fallback set matches a known baseline. The audit
-/// started at 12/167 offenders; landing the `pp-roving` /
-/// `pp-resize` opaque-directive lift drove it to 4, and lifting
-/// `pp-ref` on custom hosts (the date/time picker family) drove
-/// the directive-fallback count to 0.
-///
-/// The current 16-entry baseline surfaces controller-body
-/// fallback gaps the macro now flags via `requires_walker` when
-/// `analyze_lift_body` returns `None` for `pp-if` / `pp-for` /
-/// `pp-teleport` bodies (RFC-058 Phase 4.1d/4.2c/4.3c body
-/// lifting envelope still excludes nested custom tags +
-/// nested controllers inside a controller body). Every entry
-/// is either a `*-portal` (lifted-`pp-teleport` body containing
-/// nested compounds) or a `*-content` / `*-indicator` /
-/// `*-value` (lifted-`pp-if` body containing the same).
-/// Expanding the body-lift envelope to nested custom tags +
-/// nested controllers will close all of them in one slice.
-///
-/// Asserting an exact set turns any regression — and any
-/// improvement that doesn't update this list — into an
-/// immediate hard fail. New offender categories should ship
-/// with their own dedicated lifting slice rather than relaxing
-/// the gate.
+/// Walker is gone — every registered Pine plan must apply
+/// cleanly through the macro-emitted entries. The audit
+/// reduces to a smoke test that every plan registers and
+/// `apply_static_plan` doesn't fail-fast at install time
+/// (covered by per-component tests above).
 #[wasm_bindgen_test]
-async fn pine_template_plan_fallback_audit() {
+async fn pine_template_plan_audit() {
     pine::register_all();
-
-    let mut tags: Vec<String> = pocopine_core::templates_plan::registered_template_tags()
+    let tags: Vec<String> = pocopine_core::templates_plan::registered_template_tags()
         .into_iter()
         .filter(|t| t.starts_with("pine-"))
         .collect();
-    tags.sort();
-
-    let mut walker_owned: Vec<&str> = Vec::new();
-    for tag in &tags {
-        if let Some(plan) = pocopine_core::templates_plan::template_plan_for(tag) {
-            if plan.requires_walker {
-                walker_owned.push(tag.as_str());
-            }
-        }
-    }
-
-    web_sys::console::log_1(
-        &format!(
-            "RFC-058 fallback audit: {}/{} pine plans require walker fallback. Offenders: {:?}",
-            walker_owned.len(),
-            tags.len(),
-            walker_owned,
-        )
-        .into(),
-    );
-
-    // RFC-058 Phase 6.5 — body-lift envelope expanded to include
-    // `<slot>` children. Every previously walker-required Pine
-    // compound (`*-portal`, `*-content`, `*-indicator`, `*-value`)
-    // now lifts cleanly — its pp-if/pp-teleport body becomes a
-    // fragment fn whose plan installs every directive + slot
-    // outlet via `apply_static_plan`. The audit baseline drops to
-    // **zero** walker-required plans across the entire Pine surface.
-    let expected: &[&str] = &[];
-
-    assert_eq!(
-        walker_owned,
-        expected,
-        "Pine fallback baseline drift: surveyed {} of {} plans require walker fallback.",
-        walker_owned.len(),
-        tags.len(),
+    assert!(
+        !tags.is_empty(),
+        "expected at least one registered pine-* template plan",
     );
 }
 

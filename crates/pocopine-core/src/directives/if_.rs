@@ -28,37 +28,13 @@ use web_sys::{console, Element, HtmlTemplateElement, Node};
 
 use super::teleport;
 use super::transition;
-use super::DirectiveCall;
 use crate::expr::{self, Spanned};
 use crate::reactive::effect;
 use crate::walker::{self, bind_borrowed_scope_to, track_effect_on};
 
-pub fn run(call: &DirectiveCall) {
-    let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
-        Ok(t) => t,
-        Err(_) => {
-            console::error_1(&JsValue::from_str("pp-if: must be on a <template> element"));
-            return;
-        }
-    };
-
-    let ast: Spanned<expr::Expr> = match expr::parse_cached(&call.value) {
-        Ok(a) => a,
-        Err(e) => {
-            console::error_1(&JsValue::from_str(&format!(
-                "pp-if: {} (at {}..{})",
-                e.message, e.span.start, e.span.end
-            )));
-            return;
-        }
-    };
-
-    install(template, call.proxy.clone(), ast, None, None);
-}
-
-/// Compiled-path entry point. Same lifecycle as [`run`] but skips
-/// the `<template>` cast + expression parse — both already done
-/// at compile time by the macro.
+/// Compiled-path entry point. Skips the `<template>` cast +
+/// expression parse — both already done at compile time by the
+/// macro.
 ///
 /// Called by `apply_static_plan` for every `StaticIfPlan` entry
 /// the classifier emitted. RFC-058 Phase 4.1a — extracted so the
@@ -67,15 +43,11 @@ pub fn run(call: &DirectiveCall) {
 /// implementations of the truthy-toggle / transition / teleport
 /// orchestration.
 ///
-/// `body_fn` is the optional macro-emitted body fragment from
-/// RFC-058 Phase 4.1d. When `Some`, the truthy branch
-/// constructs the cloned root via the fragment (which stamps
-/// cleaned HTML + installs every directive against the parent
-/// scope via the Phase 1 helpers — no walker `walk` involvement).
-/// When `None`, the legacy `clone_template_body` +
-/// `walker::walk` path runs as before; the body has something
-/// outside the v1 lifting envelope (nested custom tag, slot,
-/// nested controller, `pp-init`, etc.).
+/// `body_fn` is the macro-emitted body fragment. With the
+/// runtime walker gone (RFC-058 Phase 6.5), every plan-eligible
+/// `pp-if` site must carry a fragment; missing fragments
+/// surface through the fail-fast plan-failure counter and
+/// render an empty subtree.
 pub fn install(
     template: HtmlTemplateElement,
     parent_proxy: JsValue,
@@ -214,13 +186,16 @@ pub fn install(
                     // mounts carry `__pp_mounted`, so this does not
                     // duplicate generated installs.
                     if fragment_built {
-                        if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
-                            walker::walk_compiled_fallback(&clone_root);
-                        } else {
-                            walker::finalize_compiled_subtree(&clone_root);
-                        }
+                        walker::finalize_compiled_subtree(&clone_root);
                     } else {
-                        walker::walk(&clone_root);
+                        // RFC-058 Phase 6.5 — body must come from
+                        // the macro fragment now that the runtime
+                        // walker is gone. Surface the
+                        // misclassification through the fail-fast
+                        // counter so the test harness catches a
+                        // plan emitting `pp-if` without a compiled
+                        // body.
+                        crate::templates_plan::record_plan_failure();
                     }
                     *current.borrow_mut() = Some(clone_root.clone());
                     // Subtree dispatch — Pine compounds (Dialog,

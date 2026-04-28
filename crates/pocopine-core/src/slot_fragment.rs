@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{DocumentFragment, Element};
+use web_sys::DocumentFragment;
 
 use crate::reactive::ScopeId;
 
@@ -322,20 +322,13 @@ pub fn stamp_dynamic_slot(
     // tags-input chip × bug — `ROOT.inject()` returned `None`
     // for items rendered via a `pp-for` inside the slot).
     let elements = temp.children();
-    let mut element_snapshot: Vec<Element> = Vec::with_capacity(elements.length() as usize);
     for i in 0..elements.length() {
         if let Some(el) = elements.item(i) {
             crate::walker::bind_borrowed_scope_to(&el, parent_scope_id, parent_proxy);
             let _ = js_sys::Reflect::set(el.as_ref(), &key, &val);
-            element_snapshot.push(el);
         }
     }
     crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
-    if crate::templates_plan::plan_requires_compiled_fallback(plan) {
-        for el in &element_snapshot {
-            crate::walker::walk_compiled_fallback(el);
-        }
-    }
 
     let kids = temp.child_nodes();
     let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);

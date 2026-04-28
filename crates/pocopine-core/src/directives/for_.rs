@@ -27,7 +27,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{console, DocumentFragment, Element, HtmlTemplateElement, Node};
 
-use super::DirectiveCall;
 use crate::loop_scope::LoopScope;
 use crate::path::resolve_path;
 use crate::reactive::{effect, trigger_scope, ScopeId};
@@ -166,7 +165,9 @@ fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &
     }
 
     let scope_ids: Vec<ScopeId> = entries.iter().map(|entry| entry.scope_id).collect();
-    crate::walker::mark_bulk_release(parent_el);
+    // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
+    // marker is gone with the walker. Synchronous bulk teardown
+    // does the work directly below.
     crate::directives::for_plan::unmount_rows_bulk(&scope_ids);
     Scope::remove_compiled_rows(&scope_ids);
     parent_el.replace_children_with_node_1(template_el.as_ref());
@@ -234,46 +235,6 @@ fn restore_leaver_layout(entry: &PrevItem) {
     ] {
         let _ = style.remove_property(prop);
     }
-}
-
-pub fn run(call: &DirectiveCall) {
-    let Some((item_name, items_expr)) = parse_expr(&call.value) else {
-        console::error_1(&JsValue::from_str(&format!(
-            "pp-for: expected `<ident> in <path>`, got {:?}",
-            call.value
-        )));
-        return;
-    };
-
-    let template: HtmlTemplateElement = match call.el.clone().dyn_into() {
-        Ok(t) => t,
-        Err(_) => {
-            console::error_1(&JsValue::from_str(
-                "pp-for: must be on a <template> element (see rfc-004)",
-            ));
-            return;
-        }
-    };
-
-    let template_el: Element = call.el.clone();
-    let key_expr = template_el
-        .get_attribute("pp-key")
-        .filter(|k| !k.trim().is_empty());
-    let stagger_ms: u32 = template_el
-        .get_attribute("pp-stagger")
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-
-    install(
-        template,
-        call.proxy.clone(),
-        call.scope_id,
-        item_name,
-        items_expr,
-        key_expr,
-        stagger_ms,
-        None,
-    );
 }
 
 /// Compiled-path entry point. Skips the `<template>` cast +
@@ -445,13 +406,26 @@ fn run_naive(
                 .is_ok()
             {
                 if fragment_built {
-                    if crate::templates_plan::fragment_requires_compiled_fallback(&clone_root) {
-                        walker::walk_compiled_fallback(&clone_root);
-                    } else {
-                        walker::finalize_compiled_subtree(&clone_root);
-                    }
+                    walker::finalize_compiled_subtree(&clone_root);
                 } else {
-                    walker::walk(&clone_root);
+                    // RFC-058 Phase 6.5 — `body_fn = None` means
+                    // the macro couldn't lift this row's body
+                    // (typical of pp-for inside user-authored slot
+                    // content, where the macro doesn't see the
+                    // runtime-captured slot template). Stamp
+                    // `CTX_PARENT_KEY` = the LoopScope so any
+                    // custom tag inside the cloned body chains
+                    // its inject parent through this row's scope
+                    // — matches what `stamp_if_body` does for the
+                    // body_fn = Some path. Then drive registered-
+                    // tag discovery + lifecycle. Native `pp-*`
+                    // directives on the clone stay inert — that's
+                    // the documented compiled-only contract.
+                    let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                    let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
+                    let _ = js_sys::Reflect::set(clone_root.as_ref(), &ctx_key, &ctx_val);
+                    walker::mount_adopted_components(&clone_root);
+                    walker::finalize_compiled_subtree(&clone_root);
                 }
                 fresh.push(clone_root);
             }
@@ -772,11 +746,6 @@ fn run_keyed(
                         match body_fn(scope.id, &proxy, scope.id) {
                             Some(root) => {
                                 bind_scope_to(&root, scope.id, &proxy);
-                                // Mark as walked so the install
-                                // loop's `walker::walk` short-
-                                // circuits (the body fragment
-                                // already installed everything).
-                                walker::mark_walked(&root);
                                 Some(root)
                             }
                             None => {
@@ -809,6 +778,15 @@ fn run_keyed(
                             let proxy = scope.into_proxy();
                             bind_scope_to(&root, scope.id, &proxy);
                         }
+                        // RFC-058 Phase 6.5 — stamp `CTX_PARENT_KEY`
+                        // = LoopScope so any custom tag inside the
+                        // cloned row body chains its inject parent
+                        // through this row's scope. Mirrors what
+                        // `stamp_if_body` does for the body_fn
+                        // path.
+                        let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
+                        let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
+                        let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
                         root
                     }
                 };
@@ -921,7 +899,9 @@ fn run_keyed(
                     // skips the entire batch's `release_subtree`
                     // sweep, then clears the marker. One
                     // `Reflect::set` per clear instead of 10K.
-                    crate::walker::mark_bulk_release(parent_el);
+                    // RFC-058 Phase 6.5 — MutationObserver-driven release-skip
+                    // marker is gone with the walker. Synchronous bulk teardown
+                    // does the work directly below.
                     // RFC 054 Lever 5 — bulk teardown. The per-row
                     // unmount path was O(N²) due to
                     // `LIST_WATCHERS.members.retain(|id| id != sid)`
@@ -1186,12 +1166,20 @@ fn run_keyed(
                         sid,
                         proxy_for_mount.as_ref(),
                     );
-                    walker::mark_walked(el);
                     continue;
                 }
             }
             crate::profiler::mount::record_generic_row_mounted();
-            walker::walk(el);
+            // RFC-058 Phase 6.5 — generic (non-row-plan) rows
+            // either came from `body_fn` (already bound by
+            // `apply_static_plan` inside the body fragment fn) or
+            // from `clone_template_body` (unbound). For both,
+            // fire lifecycle on the row + scan for registered
+            // custom tags inside (a no-op for body_fn rows since
+            // child mounts already ran during the body fragment's
+            // `apply_static_plan`, but cheap).
+            walker::mount_adopted_components(el);
+            walker::finalize_compiled_subtree(el);
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /
@@ -1336,6 +1324,11 @@ fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
 
 /// Parse `"item in items"`. Returns `None` on anything we don't want
 /// to accept in v0 (destructuring, `(i, x) in ...`, empty halves).
+///
+/// Walker removal kept this helper for tests only — the macro now
+/// pre-parses the expression at compile time and feeds the resolved
+/// `(item_name, items_expr)` straight into `install`.
+#[cfg(test)]
 fn parse_expr(s: &str) -> Option<(String, String)> {
     let s = s.trim();
     let (lhs, rhs) = s.split_once(" in ")?;

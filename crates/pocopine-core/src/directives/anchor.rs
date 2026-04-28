@@ -16,7 +16,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{AddEventListenerOptions, Element, Event, EventTarget, HtmlElement, ResizeObserver};
 
-use super::DirectiveCall;
+use crate::reactive::ScopeId;
 use crate::refs;
 
 const STATE_KEY: &str = "__pp_anchor_state";
@@ -81,19 +81,29 @@ impl Placement {
     }
 }
 
-pub fn run(call: &DirectiveCall) {
-    let Some(anchor) = resolve_anchor(call) else {
+/// Compiled-path install entry. Called by `apply_static_plan` for
+/// each `pp-anchor[:<placement>][.<modifier>...]="<anchor>"` site
+/// the macro lifted into the template plan.
+pub fn install_opaque(
+    el: &Element,
+    arg: Option<&str>,
+    modifiers: &[String],
+    value: &str,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+) {
+    let Some(anchor) = resolve_anchor(el, value, scope_id, proxy) else {
         return;
     };
 
-    let floater: HtmlElement = match call.el.clone().dyn_into() {
+    let floater: HtmlElement = match el.clone().dyn_into() {
         Ok(h) => h,
         Err(_) => return,
     };
 
-    let placement = parse_placement(call.arg.as_deref());
-    let offset = parse_offset(&call.modifiers);
-    let flip = call.modifiers.iter().any(|m| m == "flip");
+    let placement = parse_placement(arg);
+    let offset = parse_offset(modifiers);
+    let flip = modifiers.iter().any(|m| m == "flip");
 
     install(&floater, &anchor, placement, offset, flip);
 }
@@ -421,10 +431,13 @@ fn parse_placement(raw: Option<&str>) -> Placement {
 
 /// Parse `.offset.<N>` from the modifier list. Accepts negative
 /// integers (`-4`). Returns `0.0` when absent or unparseable.
-fn parse_offset(modifiers: &[String]) -> f64 {
+fn parse_offset(modifiers: &[impl AsRef<str>]) -> f64 {
     for (i, m) in modifiers.iter().enumerate() {
-        if m == "offset" {
-            if let Some(n) = modifiers.get(i + 1).and_then(|s| s.parse::<f64>().ok()) {
+        if m.as_ref() == "offset" {
+            if let Some(n) = modifiers
+                .get(i + 1)
+                .and_then(|s| s.as_ref().parse::<f64>().ok())
+            {
                 return n;
             }
         }
@@ -442,13 +455,18 @@ fn parse_offset(modifiers: &[String]) -> f64 {
 ///    reference it in the template as `pp-anchor="anchor"` without
 ///    needing the substrate to special-case reactive directive
 ///    values.
-fn resolve_anchor(call: &DirectiveCall) -> Option<Element> {
-    let raw = call.value.trim();
+fn resolve_anchor(
+    _el: &Element,
+    value: &str,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+) -> Option<Element> {
+    let raw = value.trim();
     if raw.is_empty() {
         return None;
     }
     if is_identifier(raw) {
-        if let Some(el) = refs::get_on(call.scope_id, raw) {
+        if let Some(el) = refs::get_on(scope_id, raw) {
             return Some(el);
         }
     }
@@ -460,12 +478,12 @@ fn resolve_anchor(call: &DirectiveCall) -> Option<Element> {
     // current scope's proxy; if it's a non-empty string, try it as
     // a ref / selector.
     if is_identifier(raw) {
-        let v = Reflect::get(call.proxy, &JsValue::from_str(raw)).unwrap_or(JsValue::UNDEFINED);
+        let v = Reflect::get(proxy, &JsValue::from_str(raw)).unwrap_or(JsValue::UNDEFINED);
         if let Some(s) = v.as_string() {
             let s = s.trim();
             if !s.is_empty() {
                 if is_identifier(s) {
-                    if let Some(el) = refs::get_on(call.scope_id, s) {
+                    if let Some(el) = refs::get_on(scope_id, s) {
                         return Some(el);
                     }
                 }

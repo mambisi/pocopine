@@ -9,16 +9,6 @@ description = "Unstyled, accessible UI components for pocopine — headless prim
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-# Forwards `pocopine`'s `legacy-dom` feature so test runs of
-# Pine compounds (16 of which still need walker fallback for
-# their lifted-`pp-if`/`pp-teleport` body content — see the
-# Pine fallback audit) can opt into the runtime walker. Most
-# Pine compounds are walker-clean and don't need this; the
-# audit-tracked subset (portals, `*-content`, `*-indicator`,
-# `*-value`) does until the body-lift envelope expands.
-legacy-dom = ["pocopine/legacy-dom"]
-
 [dependencies]
 pocopine = { path = "../pocopine" }
 pocopine-core = { workspace = true }

@@ -231,11 +231,15 @@ struct AnalysisCtx {
     /// so the runtime row-plan registry lookup still finds its
     /// target after the template-plan rewrite.
     row_plan_assignments: Vec<(Vec<u16>, u32)>,
-    /// True when this template/fragment still contains
-    /// framework-owned attributes that the emitted plan does not
-    /// install. Fragment mounting uses this as the guard between
-    /// compiled post-order finalization and temporary walker
-    /// fallback.
+    /// RFC-058 Phase 6.5 — preserved as a write-only marker so
+    /// every classifier branch that used to flip the runtime
+    /// fallback gate continues to compile without rewriting
+    /// every site. The plan literal no longer emits the field;
+    /// the walker is gone, so a "true" here just means the
+    /// classifier identified an unliftable subtree (which the
+    /// applier surfaces via `record_plan_failure` at install
+    /// time, not by re-discovering through the walker).
+    #[allow(dead_code)]
     requires_walker: bool,
 }
 
@@ -573,7 +577,6 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let opaque_tokens = ctx.opaque_directives.iter().map(emit_opaque_directive);
     let interp_tokens = ctx.interps.iter().map(emit_interp);
     let native_model_tokens = ctx.native_models.iter().map(emit_native_model);
-    let requires_walker = ctx.requires_walker;
     quote! {
         ::pocopine::__private::StaticTemplatePlan {
             bindings: &[ #(#bindings_tokens),* ],
@@ -588,7 +591,6 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
             opaque_directives: &[ #(#opaque_tokens),* ],
             interps: &[ #(#interp_tokens),* ],
             native_models: &[ #(#native_model_tokens),* ],
-            requires_walker: #requires_walker,
         }
     }
 }

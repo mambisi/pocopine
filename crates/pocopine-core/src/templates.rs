@@ -74,6 +74,18 @@ pub fn is_registered(name: &str) -> bool {
     TEMPLATES.with(|t| t.borrow().contains_key(name))
 }
 
+/// Snapshot every registered component template name. Returned in
+/// HashMap iteration order — callers needing stability sort. Used
+/// by the compiled-mount entry + the adopted-DOM bridge to drive
+/// `Element::query_selector_all` against every known custom-element
+/// tag, including components whose templates carry no directives
+/// (those don't show up in `templates_plan::registered_template_tags`
+/// because that registry only holds tags with at least one
+/// plan-eligible entry).
+pub fn registered_template_names() -> Vec<String> {
+    TEMPLATES.with(|t| t.borrow().keys().cloned().collect())
+}
+
 /// Full template compilation entry-point for the macro.
 ///
 /// - `role = None` → just injects `pp-data` (the classic path).

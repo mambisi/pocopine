@@ -22,7 +22,7 @@ path = "src/bin/server.rs"
 required-features = []
 
 [dependencies]
-pocopine = { path = "../../crates/pocopine", features = ["legacy-dom"] }
+pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 

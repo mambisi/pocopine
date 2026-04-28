@@ -1,16 +1,67 @@
-//! DOM walker and `MutationObserver`.
+//! Compiled-view runtime hooks + adopted-DOM compatibility bridge.
 //!
-//! Pre-order walk of a subtree. For each element:
+//! RFC-058 Phase 6.5 retired the runtime walker. The
+//! `MutationObserver`, the recursive `pp-*` attribute scan, and
+//! the `start` / `start_on_body` entry points are gone. The
+//! directive registry has shrunk to the five typed-install
+//! opaque directives the compiled plan applier uses
+//! (`anchor` / `roving` / `intersect` / `resize` / `flip`).
+//! There is no longer any runtime `pp-*` parsing or dispatch
+//! loop. **Authoring `pp-*` / `:prop` / `@event` / `pp-text` /
+//! `pp-bind` / `pp-show` / `pp-init` / `pp-model` directly on
+//! arbitrary runtime HTML is no longer a framework feature** —
+//! such directives only bind when the macro processes them at
+//! compile time inside a `#[component]` template.
 //!
-//! 1. If its tag name matches a registered component, mount the
-//!    component (clone template, apply static props, relocate slot content).
-//! 2. Otherwise, run the existing pp-data / pp-* directive pass so
-//!    server-rendered templates keep working too.
+//! ## What this module ships now
 //!
-//! Effects created by directives are pinned to their owning element so they
-//! can be released on unmount via the `MutationObserver`.
+//! ### 1. Compiled-view mount runtime
+//!
+//! The surface every macro-emitted template plan calls into:
+//!
+//! - [`start_compiled`] — discover registered component tags
+//!   under a root and mount each via its template plan.
+//! - [`mount_component`], [`mount_child_component`],
+//!   [`mount_child_component_with_slots`] — the per-component
+//!   mount entry called by `apply_static_plan`.
+//! - Scope / proxy stamping helpers used by `pp-for` rows,
+//!   `pp-if` bodies, `pp-teleport` portals, and slot fragments.
+//! - Lifecycle dispatch helpers shared between `mount_component`
+//!   and the plan applier (`fire_deferred_init`,
+//!   `fire_mount_post_order`, `fire_ready_next_tick`,
+//!   `finalize_compiled_subtree`).
+//! - Element-scoped listener and effect side tables so a
+//!   subtree teardown can release everything tied to it
+//!   (`track_listener_on`, `track_effect_on`, `release_subtree`).
+//!
+//! ### 2. Adopted-DOM compatibility bridge — explicit, narrow
+//!
+//! A small set of helpers handle the cases where the macro
+//! never saw the DOM tree (user-authored slot content, runtime-
+//! injected partials, app-root mounts whose host is a literal
+//! HTML string). The bridge's contract:
+//!
+//! | Allowed | Disallowed |
+//! |---|---|
+//! | Discover registered custom-component tags + mount them | Bind `pp-*` / `:prop` / `@event` on plain or custom-tag hosts |
+//! | Install `<template pp-for>` / `<template pp-if>` / `<template pp-teleport>` controllers (structural only) | Per-element `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model` / `pp-html` on adopted DOM |
+//! | Materialise runtime-captured slot content (`slots::lookup` consume path) | Anything that requires the deleted directive registry / `dispatch` / `parse_attr` |
+//!
+//! Bridge entry points (each named with a documented narrow
+//! contract): [`mount_adopted_components`],
+//! [`install_adopted_controllers`], [`materialize_adopted_slot`].
+//! The bridge is the *only* code in this module that walks DOM
+//! it didn't compile; it walks for tag-name discovery and
+//! `<template pp-*>` discovery only — never for per-element
+//! attribute scanning.
+//!
+//! Authors who need per-element directive binding on dynamic
+//! content wrap that content in a `#[component]` template (or
+//! the test-only `template_inline` shorthand) — the macro
+//! compiles the directives at expansion time and the bridge is
+//! never reached.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -19,11 +70,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement, Node};
-#[cfg(feature = "legacy-dom")]
-use web_sys::{MutationObserver, MutationObserverInit, MutationRecord, NodeList};
 
-#[cfg(feature = "legacy-dom")]
-use crate::directives::{lookup, parse_attr, DirectiveCall};
 use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
 use crate::scope::Scope;
@@ -43,16 +90,9 @@ const WALKED_KEY: &str = "__pp_walked";
 /// `release_subtree` checks this first and returns immediately,
 /// skipping the per-element side-table sweep that would otherwise
 /// pay ~10 `Reflect::get` calls per element across the row's
-/// subtree on async `MutationObserver` cleanup. For a 10K-row
-/// `clear` this collapses ~390ms of async cleanup into a no-op.
+/// subtree on cleanup. For a 10K-row `clear` this collapses the
+/// async cleanup into a no-op.
 const RELEASE_SKIP_KEY: &str = "__pp_release_skip";
-/// Stamped on the *parent* element by the RFC 054 bulk-clear path.
-/// The `MutationObserver` callback checks this on `rec.target()`
-/// for each batch and skips the entire batch's removed-node
-/// teardown sweep when set, then clears the marker after the
-/// batch processes. One `Reflect::set` per bulk clear instead of
-/// N per row.
-const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 /// Explicit inject-chain parent for RFC-027. Stamped on
 /// slot-materialised elements so their scopes chain to the slot-
 /// *owning* component (the one whose template contains the
@@ -62,117 +102,55 @@ const BULK_RELEASE_KEY: &str = "__pp_bulk_release";
 /// `<Root>`, regardless of where the user's enclosing template
 /// scope points.
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
+const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
 
-/// Convenience used by `#[wasm_bindgen(js_name=start)]`.
+/// Compiled-only mount entry. Discovers registered component tags
+/// in `root`'s subtree via a single
+/// [`Element::query_selector_all`] against the union of every
+/// registered plan tag, then mounts each in document order.
 ///
-/// Gated behind `legacy-dom`: the legacy entry runs the
-/// recursive walker over `<body>` so user-authored `pp-*`
-/// directives outside compiled components get bound. Apps
-/// that bootstrap entirely through compiled views call
-/// [`crate::App::run_compiled`] (which delegates to
-/// [`start_compiled`]) and need neither this entry nor the
-/// `legacy-dom` feature.
-#[cfg(feature = "legacy-dom")]
-pub fn start_on_body() {
-    let Some(win) = web_sys::window() else { return };
-    let Some(doc) = win.document() else { return };
-    let Some(body) = doc.body() else { return };
-    start(&body);
-}
-
-/// Walk `root`, bind directives on it and all descendants, then
-/// install a `MutationObserver` so later DOM mutations are picked
-/// up too.
-///
-/// Gated behind `legacy-dom` (RFC-058 Phase 6.5). The recursive
-/// directive scan + the `MutationObserver` install both depend
-/// on this feature; compiled-only apps mount via
-/// [`start_compiled`] instead.
-#[cfg(feature = "legacy-dom")]
-pub fn start(root: &Element) {
-    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
-    walk(root);
-    install_observer(root);
-}
-
-/// RFC-058 Phase 6.5 — compiled-only mount entry. Skips the
-/// recursive directive scan over `root`'s subtree: only
-/// registered component tags get mounted, and each mount drives
-/// its template plan via [`crate::templates_plan::apply_static_plan`].
-/// Body-level `pp-*` attributes (e.g. `pp-data` on a
-/// server-rendered wrapper) are NOT bound by this entry — apps
-/// that need that path keep [`start`].
-///
-/// Discovers component tags via a single
-/// [`Element::query_selector_all`] call against the union of
-/// every registered plan tag, then mounts in document order.
-/// Inner component tags inside a parent's compiled subtree
-/// will already be mounted by the parent's `apply_static_plan`
+/// Inner component tags inside a parent's compiled subtree will
+/// already be mounted by the parent's `apply_static_plan`
 /// child_mounts pass before the iteration reaches them; the
 /// `__pp_mounted` guard short-circuits the duplicate mount.
 ///
-/// The `MutationObserver` install is intentionally omitted —
-/// dynamically-inserted DOM is out of scope for compiled-only
-/// builds. Apps that need observation-based discovery for
-/// adopted DOM keep [`start`] and the `legacy-dom` feature.
+/// After mounting components, every `<pp-outlet>` element under
+/// `root` is registered with the router so route navigations can
+/// paint into it.
 pub fn start_compiled(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
-    let tags = crate::templates_plan::registered_template_tags();
-    if tags.is_empty() {
-        return;
+    let tags = crate::templates::registered_template_names();
+    if !tags.is_empty() {
+        let selector = tags.join(",");
+        if let Ok(matches) = root.query_selector_all(&selector) {
+            for i in 0..matches.length() {
+                let Some(node) = matches.item(i) else {
+                    continue;
+                };
+                let Ok(el) = node.dyn_into::<Element>() else {
+                    continue;
+                };
+                if get_private(&el, "__pp_mounted").is_some() {
+                    continue;
+                }
+                let tag = el.local_name();
+                mount_component(&el, &tag, None);
+                finalize_compiled_subtree(&el);
+            }
+        }
     }
-    // Build a comma-separated tag selector. Tag names emitted by
-    // the macro are kebab-case ASCII identifiers — no escaping
-    // needed for `query_selector_all`.
-    let selector = tags.join(",");
-    let Ok(matches) = root.query_selector_all(&selector) else {
-        return;
-    };
-    for i in 0..matches.length() {
-        let Some(node) = matches.item(i) else {
-            continue;
-        };
-        let Ok(el) = node.dyn_into::<Element>() else {
-            continue;
-        };
-        if get_private(&el, "__pp_mounted").is_some() {
-            continue;
-        }
-        let tag = el.local_name();
-        let walker_clean = crate::templates_plan::template_plan_for(&tag)
-            .map(|p| !p.requires_walker)
-            .unwrap_or(false);
-        // RFC-058 Phase 6.5 — refuse to mount a walker-required
-        // plan in a compiled-only build. Without `legacy-dom`
-        // the fallback walk that would install the un-lifted
-        // directives is a no-op, so silently mounting would
-        // leave handlers / bindings inert. Hard-fail with a
-        // diagnostic before `mount_component` runs so the
-        // failure points at the plan, not at the missing
-        // behaviour later.
-        #[cfg(not(feature = "legacy-dom"))]
-        if !walker_clean {
-            web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
-                "pocopine: <{tag}>'s plan requires the runtime walker (`pp-*` directives \
-                 outside the compiled lift envelope). Enable the `legacy-dom` feature \
-                 (`pocopine = {{ features = [\"legacy-dom\"] }}`) or remove the offending \
-                 directives from the template. Skipping mount."
-            )));
-            continue;
-        }
-        mount_component(&el, &tag, None);
-        // Drive lifecycle for the freshly mounted subtree. For
-        // walker-clean plans the cheaper `finalize_compiled_subtree`
-        // skips the per-descendant `bind` and only fires
-        // `pp-init` + `on_mount` post-order. For plans that still
-        // need the walker (e.g. `pp-model` on a native input —
-        // RFC-058 §7 deferral), `walk_compiled_fallback` performs
-        // the legacy directive scan over the subtree to install
-        // any un-lifted attributes the macro left in place.
-        if walker_clean {
-            finalize_compiled_subtree(&el);
-        } else {
-            walk_compiled_fallback(&el);
+    // RFC-058 Phase 6.5 — register every `<pp-outlet>` under `root`
+    // with the router. Previously the legacy `bind` step matched the
+    // tag and called `set_outlet`; with the walker gone, the
+    // compiled mount entry takes over.
+    if let Ok(outlets) = root.query_selector_all("pp-outlet") {
+        for i in 0..outlets.length() {
+            let Some(node) = outlets.item(i) else {
+                continue;
+            };
+            if let Ok(el) = node.dyn_into::<Element>() {
+                crate::router::set_outlet(el);
+            }
         }
     }
 }
@@ -219,80 +197,6 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
     set_private(el, SCOPE_BORROWED_KEY, &JsValue::TRUE);
 }
 
-/// Walk a subtree. Non-`pp-init` directives bind pre-order; `pp-init`
-/// fires **post-order** — after every descendant has been walked — so
-/// init handlers see a fully-bound subtree (children's refs, effects,
-/// etc.). Public so the router can walk the custom-element tag it
-/// creates inside an `<pp-outlet>`.
-///
-/// Marks the element with [`WALKED_KEY`] on completion so the
-/// `MutationObserver` knows not to re-walk it when we reparent the
-/// same node later (e.g. keyed `pp-for` reorders, `pp-teleport`).
-///
-/// Intercepts `<slot>` elements — per RFC-011, a slot is replaced
-/// at walk time with either the user's captured content (via the
-/// slot store keyed by the owning component) or the slot's own
-/// default children, then the replacement is walked recursively.
-///
-/// RFC-058 Phase 6.5 — without `legacy-dom` this is a no-op stub.
-/// Compiled apps mount registered tags through `start_compiled` /
-/// `mount_component` and install every directive via
-/// `apply_static_plan`; the runtime walker has nothing to do.
-/// Callers that still funnel a clone through `walk` (pp-if /
-/// pp-for / pp-teleport's `body_fn = None` fallback,
-/// `walk_compiled_fallback`, the router's outlet walk, the
-/// MutationObserver callback) silently lose un-lifted directive
-/// bindings without the feature — the documented contract for
-/// the gate.
-#[cfg(feature = "legacy-dom")]
-pub fn walk(el: &Element) {
-    if el.local_name() == "slot" {
-        materialize_slot(el);
-        return;
-    }
-    // RFC-058 Phase 6.3 — when this element is a registered
-    // component tag whose plan has `requires_walker = false`
-    // (and isn't a pp-as host whose user content needs walker
-    // discovery), `bind` will install the entire plan via
-    // `apply_static_plan`. Every descendant is then either a
-    // walker-clean native element (attrs stripped, interp lifted
-    // via Phase 6.2, slot outlets materialised by the applier)
-    // or a custom tag the applier already mounted via
-    // `child_mounts`. Recursing through `walk` would re-enter
-    // every descendant just to find nothing to bind; route the
-    // post-order through `finalize_compiled_subtree` instead so
-    // we still drive deferred init + on_mount + the walked
-    // marker without the redundant directive scan.
-    let walker_clean_plan = !el.has_attribute("pp-as")
-        && crate::templates_plan::template_plan_for(&el.local_name())
-            .map(|p| !p.requires_walker)
-            .unwrap_or(false);
-    bind(el);
-    if walker_clean_plan {
-        finalize_compiled_subtree(el);
-        return;
-    }
-    // Snapshot children first — directives inside `bind` can mutate
-    // the live `HTMLCollection` (e.g. slot materialisation replaces
-    // a child mid-iteration).
-    let children = el.children();
-    let mut snapshot: Vec<Element> = Vec::with_capacity(children.length() as usize);
-    for i in 0..children.length() {
-        if let Some(c) = children.item(i) {
-            snapshot.push(c);
-        }
-    }
-    for child in snapshot {
-        walk(&child);
-    }
-    fire_deferred_init(el);
-    fire_mount_hook(el);
-    set_private(el, WALKED_KEY, &JsValue::TRUE);
-}
-
-#[cfg(not(feature = "legacy-dom"))]
-pub fn walk(_el: &Element) {}
-
 fn fire_deferred_init(el: &Element) {
     let Some(value) = get_private(el, INIT_PENDING_KEY).and_then(|v| v.as_string()) else {
         return;
@@ -305,20 +209,17 @@ fn fire_deferred_init(el: &Element) {
 }
 
 /// Defer a `pp-init` handler invocation on `el` until the
-/// surrounding subtree's binding pass completes (post-order
-/// drain in `walk` — see `fire_deferred_init`). Public entry
-/// point for both the runtime walker and generated mount code
-/// (RFC-058 Phase 2+); both must funnel through this helper so
-/// the deferred-init pending state stays owned by a single
+/// surrounding subtree's plan install completes (post-order
+/// drain in `finalize_compiled_subtree` — see `fire_deferred_init`).
+/// Public entry point for the macro-emitted plan applier; the
+/// deferred-init pending state stays owned by a single
 /// implementation.
 ///
 /// `scope_id` is accepted for API symmetry with the other
-/// Phase 1 helpers — the actual fire-time dispatch
+/// lifecycle helpers — the actual fire-time dispatch
 /// rediscovers the scope through `enclosing_scope(el)` because
 /// the same element may be re-queued under a fresh scope by
-/// `pp-for` row reuse. Future revisions may switch to stamping
-/// the scope id directly so the rediscovery is skipped; the
-/// public helper signature already accommodates that.
+/// `pp-for` row reuse.
 pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
     let _ = scope_id; // see doc-comment
     set_private(el, INIT_PENDING_KEY, &JsValue::from_str(expr_src));
@@ -326,9 +227,8 @@ pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
 
 /// Fire the component-level `on_mount` lifecycle hook on elements
 /// that own a (non-borrowed) scope. Runs post-order so the handler
-/// sees the fully-bound subtree (refs included). Walker entry —
-/// resolves the scope id from the element and dispatches to the
-/// public phase helpers.
+/// sees the fully-bound subtree (refs included). Resolves the scope
+/// id from the element and dispatches to the public phase helpers.
 ///
 /// `trigger_scope` fires afterwards **only when the component
 /// actually defined `on_mount`** — otherwise the hook is a no-op
@@ -337,6 +237,12 @@ pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
 /// thread), a blanket sweep per mount amplifies to O(depth × nodes)
 /// effect re-runs during initial render.
 fn fire_mount_hook(el: &Element) {
+    if get_private(el, MOUNT_HOOK_FIRED_KEY)
+        .map(|v| v.is_truthy())
+        .unwrap_or(false)
+    {
+        return;
+    }
     let Some(id_num) = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) else {
         return;
     };
@@ -346,6 +252,7 @@ fn fire_mount_hook(el: &Element) {
     if borrowed {
         return;
     }
+    set_private(el, MOUNT_HOOK_FIRED_KEY, &JsValue::TRUE);
     let id = ScopeId(id_num as u64);
     fire_mount_post_order(el, id);
     fire_ready_next_tick(el, id);
@@ -393,7 +300,7 @@ pub fn fire_mount_post_order(el: &Element, scope_id: ScopeId) {
 /// element's private `SCOPE_ID_KEY`.
 ///
 /// RFC-026/029: deferred via `tick::next` so the surrounding
-/// walker frame has unwound and `pp-if` / `pp-teleport` children
+/// frame has unwound and `pp-if` / `pp-teleport` children
 /// have had a chance to commit. The hook fires through an
 /// **immutable** borrow on `state` — proxy reads inside the
 /// callback (`watch_field`, `refs::get_on` touching the proxy,
@@ -426,113 +333,6 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
     });
 }
 
-#[cfg(feature = "legacy-dom")]
-fn bind(el: &Element) {
-    BIND_CALLS.with(|c| c.set(c.get().saturating_add(1)));
-    // Step 0: `<pp-outlet>` is the router's mount point. Hand the
-    // element over; don't try to bind directives or mount anything.
-    let tag = el.local_name();
-    if tag == "pp-outlet" {
-        crate::router::set_outlet(el.clone());
-        return;
-    }
-
-    // Step 1: tag-based mounting. If this element's tag name is a
-    // registered component, clone its template in and wire up the scope
-    // onto the template's root. Directives on the tag itself evaluate in
-    // the parent's scope (handled by the standard pp-* pass below).
-    //
-    // The guard keys only on `__pp_mounted` — NOT `SCOPE_ID_KEY` — because
-    // pp-for pins a `LoopScope` onto the clone root before walking, and
-    // that clone root is often a registered component tag. Keying on
-    // SCOPE_ID_KEY would mistake the loop scope for "already mounted"
-    // and skip the component mount entirely.
-    if is_registered(&tag) && get_private(el, "__pp_mounted").is_none() {
-        mount_component(el, &tag, None);
-    }
-
-    // RFC-058 Phase 6.5 — `pp-*` attribute scan + dispatch is
-    // walker-only. Compiled apps install every directive via
-    // `apply_static_plan`; the per-element scan only matters for
-    // user-authored `pp-*` outside compiled components (the
-    // `legacy-dom` envelope). With the feature off, `bind` ends
-    // here; `walk` still recurses into descendants to discover
-    // inner registered tags.
-    #[cfg(feature = "legacy-dom")]
-    bind_legacy_attrs(el);
-}
-
-#[cfg(feature = "legacy-dom")]
-fn bind_legacy_attrs(el: &Element) {
-    // Snapshot all pp-* attributes — some directives mutate the element
-    // (e.g. `set_attribute`) which would invalidate a live NamedNodeMap.
-    //
-    // Normalise RFC-020 shorthand (`:attr` → `pp-bind:attr`, `@event`
-    // → `pp-on:event`) before the `pp-*` filter so authors can pick
-    // either spelling — same directive dispatch either way.
-    let mut pp_attrs: Vec<(String, String)> = Vec::new();
-    let attrs = el.attributes();
-    for i in 0..attrs.length() {
-        let Some(a) = attrs.item(i) else { continue };
-        let name = normalise_shorthand_attr(&a.name());
-        if name.starts_with("pp-") {
-            pp_attrs.push((name, a.value()));
-        }
-    }
-
-    // Step 2: pp-data — the server-rendered path (the custom-element path
-    // already bound its scope on the cloned template root, so pp-data there
-    // will be absent / stripped).
-    let has_data = pp_attrs.iter().any(|(n, _)| n == "pp-data");
-    if has_data && get_private(el, SCOPE_ID_KEY).is_none() {
-        if let Some((_, value)) = pp_attrs.iter().find(|(n, _)| n == "pp-data") {
-            if let Some(scope) = instantiate(value) {
-                let proxy = scope.into_proxy();
-                set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
-                set_private(el, SCOPE_PROXY_KEY, &proxy);
-            }
-        }
-    }
-
-    // Resolve the enclosing scope for every other directive.
-    let (scope_id, proxy) = match enclosing_scope(el) {
-        Some(p) => p,
-        None => return,
-    };
-
-    // Second pass: everything except pp-data and pp-init. pp-init is
-    // stashed on the element and fired post-order in `walk` — by then
-    // descendants have been bound so init handlers see refs, child
-    // scopes, etc.
-    let mut init_value: Option<String> = None;
-    for (name, value) in &pp_attrs {
-        if name == "pp-data" {
-            continue;
-        }
-        if name == "pp-init" {
-            init_value = Some(value.clone());
-            continue;
-        }
-        dispatch(el, &proxy, scope_id, name, value);
-    }
-    if let Some(v) = init_value {
-        defer_init_on(el, scope_id, &v);
-    }
-    // Silence the unused-`proxy` warning — the deferred init path looks
-    // it up again via `enclosing_scope` at fire time.
-    let _ = scope_id;
-
-    // RFC-025: scan direct text-node children for `{expr}` pairs and
-    // install per-segment effects. Must run after directives bind so
-    // `pp-text`-owned elements are already flagged and skipped.
-    crate::directives::interp::scan_children(el, &proxy);
-
-    // `pp-cloak` only exists to hide the element until binding completes.
-    // Drop it now that directives have run so the global cloak CSS rule
-    // stops matching.
-    let _ = el.remove_attribute("pp-cloak");
-}
-
 /// Mount a registered component on `el`:
 ///  * capture the tag's current children as slot content,
 ///  * instantiate a fresh scope,
@@ -540,7 +340,8 @@ fn bind_legacy_attrs(el: &Element) {
 ///  * clone the registered template into `el`,
 ///  * bind the scope to the template's root and strip its `pp-data`,
 ///  * forward fallthrough attrs onto the template root (RFC-010),
-///  * move captured children into the first `<slot>` within the template.
+///  * apply the registered template plan against the freshly
+///    stamped subtree.
 fn mount_component(
     el: &Element,
     tag: &str,
@@ -580,10 +381,6 @@ fn mount_component(
     // RFC-030: fire `on_setup` — the component's pre-children-walk
     // hook where fields can be initialised from injected context.
     // Runs with CURRENT_SCOPE_ID bound so `inject` / `this` resolve.
-    // The parent chain is already wired up above, and static props
-    // are applied; template hasn't been cloned yet, so anything the
-    // hook writes into the scope is visible on the first directive
-    // bind.
     if scope.state.borrow().has_setup() {
         let setup_ctx = crate::lifecycle::LifecycleContext::__new(
             el,
@@ -603,8 +400,14 @@ fn mount_component(
 
     // Capture slot content. Named slot templates go into the slot
     // store keyed by the component's scope id; everything else lands
-    // in the default slot.
-    let slot_store = capture_slots(el);
+    // in the default slot. Pass the just-created scope as the
+    // owner-fallback so user-authored slot content at the
+    // app-root mount (no enclosing component scope) still
+    // resolves directives — `<template pp-for="…">` inside a
+    // `<pine-tags-input-root>` mounted at the app root needs
+    // *some* scope to bind against, and the only sensible one
+    // is the owner.
+    let slot_store = capture_slots(el, scope.id, &proxy);
     slots::put(scope.id, slot_store);
     if let Some((slots, parent_scope_id, parent_proxy)) = supplied_slots {
         crate::slot_fragment::install(scope.id, slots, parent_scope_id, parent_proxy);
@@ -612,14 +415,9 @@ fn mount_component(
 
     // Clone the registered template in. `set_inner_html` drops the
     // tag's former children, which is the "capture" side of the old
-    // flow.
-    //
-    // RFC-058 Phase 6.4 — prefer `template_clone_for` (parses the
-    // HTML once into a cached `<template>` element, every mount
-    // clones the `.content` `DocumentFragment`) over re-parsing
-    // the HTML string per mount. Falls back to `set_inner_html`
-    // when the cache miss can't repopulate (no document, parse
-    // refused, …) so behaviour stays parity-correct.
+    // flow. Prefer `template_clone_for` (parses the HTML once into a
+    // cached `<template>` element, every mount clones the `.content`
+    // `DocumentFragment`) over re-parsing the HTML string per mount.
     if let Some(fragment) = crate::templates::template_clone_for(tag) {
         el.set_inner_html("");
         let _ = el.append_child(fragment.as_ref());
@@ -630,8 +428,8 @@ fn mount_component(
         el.set_inner_html(&html);
     }
 
-    // Bind scope to the template's root element and strip pp-data so the
-    // recursive walker doesn't try to re-instantiate.
+    // Bind scope to the template's root element and strip pp-data so
+    // nothing later tries to re-instantiate it.
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
@@ -647,21 +445,7 @@ fn mount_component(
         // than the outer custom tag (`el`). The custom tag often
         // carries `display: contents` (tags-input-item, combobox
         // items, command items, etc.), and opacity/transform on a
-        // box-less element don't visually apply — users saw the
-        // classes flip but nothing animated.
-        //
-        // `pp-if` / `pp-show` / `pp-for` all drive transitions via
-        // `transition::enter_subtree` which walks the clone
-        // subtree for elements carrying `pp-transition:*` attrs,
-        // so stamping on `root` still gets picked up from an
-        // enter call on the outer custom tag.
-        //
-        // Author-side attrs on EITHER the outer or the inner win —
-        // apply_preset only fills in what isn't already set on the
-        // inner root (where we're writing). `pp-transition`
-        // shorthand on the tag has already expanded in
-        // `get_or_init` via `expand_preset_shorthand` by the time
-        // this runs.
+        // box-less element don't visually apply.
         let (tr_in, tr_out, ak) = {
             let s = scope.state.borrow();
             (
@@ -702,62 +486,38 @@ fn mount_component(
             let _ = el.set_attribute("data-pp-animate", ak);
         }
 
-        // RFC-058 Phase 2.5 fast-path: if the macro emitted a
-        // template plan for this tag, apply it now. The
-        // recursive walk that runs next still visits the
-        // subtree to handle preserved attributes (pp-for /
-        // pp-if / pp-teleport / slots / pp-model / pp-route /
-        // anything outside the v1 envelope). Stripped
-        // attributes were removed from the cleaned HTML at
-        // macro time so the walker simply doesn't see them.
+        // Apply the macro-emitted template plan against the freshly
+        // stamped subtree. Every directive in the cleaned HTML is
+        // installed via the typed plan helpers; nothing else scans
+        // for `pp-*` attributes.
         if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
             crate::templates_plan::apply_static_plan(&root, scope.id, &proxy, plan, tag);
         }
     }
 
-    // Mark the tag as mounted so the recursive walk doesn't re-enter this
-    // branch if, for some reason, the walker visits it again.
+    // Mark the tag as mounted so duplicate discovery (e.g. an outer
+    // `start_compiled` query_selector hit after a parent already
+    // mounted it via `child_mounts`) short-circuits.
     set_private(el, "__pp_mounted", &JsValue::TRUE);
 }
 
 /// Mount the registered component named `name` onto `host_el`.
-/// Public façade over the runtime walker's existing
-/// `mount_component`. Generated mount code (RFC-058 Phase 2+)
-/// calls this when it encounters a child-component site instead
-/// of leaving the tag for the walker's auto-discovery pass to
-/// find.
-///
-/// Preserves the full ten-step ordering the walker has today:
-/// instantiate scope → set RFC-027 parent context → apply static
-/// props → run `on_setup` → build proxy → capture slot content
-/// → stamp template HTML → bind scope to template root →
-/// fallthrough attrs → transition presets → mark mounted.
-///
-/// v1 façade only — parent-driven dynamic prop writes still
-/// come from the host DOM as the walker has always done.
-/// Generated parents with lifted slot content call the
-/// `*_with_slots` variant below.
+/// Public façade over `mount_component` for the macro-emitted
+/// child-mount path.
 pub fn mount_child_component(host_el: &Element, name: &str) {
     mount_component(host_el, name, None);
 }
 
-/// RFC-058 Phase 3.5a — variant of [`mount_child_component`] that
-/// also registers the parent-supplied [`crate::slot_fragment::SlotSet`]
-/// against the freshly-created child's scope before the child's
-/// template plan runs. That lets compiled `<slot>` outlets pick
-/// up parent-authored slot content from the fragment registry
-/// instead of waiting for the recursive walker to discover the
-/// slot element.
+/// Variant of [`mount_child_component`] that also registers the
+/// parent-supplied [`crate::slot_fragment::SlotSet`] against the
+/// freshly-created child's scope before the child's template plan
+/// runs. That lets compiled `<slot>` outlets pick up parent-authored
+/// slot content from the fragment registry.
 ///
-/// `parent_scope_id` + `parent_proxy` (RFC-058 Phase 3.5c) get
-/// stored alongside the set so dynamic slot content (slot
-/// subtrees with `pp-text` / `@click` / `pp-bind` etc.) can
-/// install bindings against the parent scope when the
-/// fragment fires.
-///
-/// Behaviour matches `mount_child_component` exactly when `slots`
-/// is empty. Generated parent code in Phase 3.5b+ chooses this
-/// variant whenever it has a fragment to pass.
+/// `parent_scope_id` + `parent_proxy` get stored alongside the set
+/// so dynamic slot content (slot subtrees with `pp-text` / `@click`
+/// / `pp-bind` etc.) can install bindings against the parent scope
+/// when the fragment fires.
 pub fn mount_child_component_with_slots(
     host_el: &Element,
     name: &str,
@@ -785,9 +545,6 @@ pub fn mount_child_component_with_slots(
 /// template root isn't a simple `<tag><slot></slot></tag>` wrapper)
 /// — caller falls back to the normal mount path.
 fn try_mount_component_as(el: &Element, tag: &str) -> bool {
-    // 1. Find the user's single element child. Text / comment nodes
-    //    around it are ignored. Named-slot <template> elements are
-    //    dropped.
     let user_root = match find_single_child_element_skipping_slot_templates(el) {
         Some(e) => e,
         None => {
@@ -798,11 +555,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         }
     };
 
-    // 2. Instantiate scope + apply static props from the tag's own
-    //    attributes (same as the normal path). Parent lookup for
-    //    RFC-027 inject prefers `CTX_PARENT_KEY` (slot owner) over
-    //    `SCOPE_ID_KEY` (slot author) — see `enclosing_inject_parent`
-    //    for the rationale.
     let Some(scope) = instantiate(tag) else {
         return false;
     };
@@ -831,8 +583,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     let proxy = scope.into_proxy();
     crate::model_runtime::capture_emit_el(scope.id, el);
 
-    // 3. Clone the template into a throwaway container to extract
-    //    root attrs without touching `el` yet.
     let Some(html) = template_for(tag) else {
         return false;
     };
@@ -849,8 +599,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         None => return false,
     };
 
-    // 4. Verify the template is a trivial wrapper: exactly one
-    //    `<slot>` child and no other element children.
     if !is_trivial_slot_wrapper(&tpl_root) {
         web_sys::console::warn_1(&JsValue::from_str(
             "pocopine: pp-as only supports trivial <slot>-wrapping templates; ignoring",
@@ -858,18 +606,13 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         return false;
     }
 
-    // 5. Replace the tag's children with the user's element.
     el.set_inner_html("");
     if el.append_child(user_root.as_ref()).is_err() {
         return false;
     }
 
-    // 6. Merge template-root attrs onto the user root per §4 of the RFC.
     merge_template_attrs_as(&tpl_root, &user_root);
 
-    // 7. Pin scope on the user root. This is what makes `$el`,
-    //    `pp-ref`, and fallthrough directives all resolve against
-    //    the user's real element.
     set_private(
         &user_root,
         SCOPE_ID_KEY,
@@ -878,20 +621,12 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
     let _ = user_root.remove_attribute("pp-data");
 
-    // 8. Fallthrough from the tag's own attrs (RFC-010).
     apply_fallthrough_attrs(el, &user_root, &scope);
 
-    // RFC-058 pp-as slice: template-root directives stripped from
-    // a compiled `<root pp-as>` plan bind to the hoisted user
-    // element. The pp-as-specific applier intentionally skips slot
-    // outlets because the user element is already the slot content.
     if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
         crate::templates_plan::apply_static_pp_as_plan(&user_root, scope.id, &proxy, plan, tag);
     }
 
-    // 9. No <slot> materialisation under pp-as — the user's element
-    //    IS the content. Install an empty slot store just to keep
-    //    lifecycle symmetry with the normal path.
     slots::put(
         scope.id,
         SlotStore {
@@ -899,9 +634,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         },
     );
 
-    // 10. Drop the marker so the component author's own code in the
-    //     template (if they forwarded `pp-as` onto the user root, say)
-    //     doesn't double-fire. Also mark the tag mounted.
     let _ = el.remove_attribute("pp-as");
     set_private(el, "__pp_mounted", &JsValue::TRUE);
 
@@ -952,17 +684,6 @@ fn is_trivial_slot_wrapper(tpl_root: &Element) -> bool {
 /// `class` / `style` join; everything else writes only when absent
 /// on the user element (user wins on conflict). Internal markers
 /// (`pp-data`, `pp-as`) are dropped.
-///
-/// RFC-020 shorthand attrs (`@event`, `:attr`) are normalised to
-/// their long form (`pp-on:event`, `pp-bind:attr`) before being
-/// stamped on `user_root` — `setAttribute("@click", …)` throws
-/// `InvalidCharacterError` because `@` isn't a Name-start character
-/// per the XML production browsers' DOM enforces. Without this
-/// normalisation, every template-root `@click="handler"` and
-/// every other event-shorthand silently disappeared as soon as
-/// pp-as tried to forward it to the user element. Long-form attrs
-/// take the same dispatch path through `bind` either way, so the
-/// rewrite is invisible to authors.
 fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
     let attrs = tpl_root.attributes();
     for i in 0..attrs.length() {
@@ -995,9 +716,9 @@ fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
 
 /// `setAttribute` rejects names whose first character isn't a
 /// Name-start (per the XML Name production the DOM standard cites).
-/// `:foo` is allowed but `@foo` isn't. Convert RFC-020 shorthands to
-/// the equivalent `pp-bind:` / `pp-on:` long form so the call goes
-/// through cleanly. Other names pass through unchanged.
+/// `:foo` is allowed but `@foo` isn't. Convert RFC-020 `@event`
+/// shorthand to `pp-on:event` long form so the call goes through
+/// cleanly. Other names pass through unchanged.
 fn setattr_safe_name(name: &str) -> String {
     if let Some(rest) = name.strip_prefix('@') {
         if !rest.is_empty() {
@@ -1007,13 +728,12 @@ fn setattr_safe_name(name: &str) -> String {
     name.to_string()
 }
 
-/// Collect the component tag's direct children into named slots,
-/// ready for the walker's slot materialiser to consume. A child
-/// `<template pp-slot="name" pp-let="ident">` contributes its
-/// `.content` fragment to the named slot; every other child (text,
-/// elements, nested templates without `pp-slot`) goes into the
-/// default slot.
-fn capture_slots(el: &Element) -> SlotStore {
+/// Collect the component tag's direct children into named slots.
+/// A child `<template pp-slot="name" pp-let="ident">` contributes
+/// its `.content` fragment to the named slot; every other child
+/// (text, elements, nested templates without `pp-slot`) goes into
+/// the default slot.
+fn capture_slots(el: &Element, fallback_scope_id: ScopeId, fallback_proxy: &JsValue) -> SlotStore {
     let doc = match web_sys::window().and_then(|w| w.document()) {
         Some(d) => d,
         None => {
@@ -1023,14 +743,13 @@ fn capture_slots(el: &Element) -> SlotStore {
         }
     };
 
-    // Resolve the CALLER's scope — the parent template that's
-    // passing content. This scope is what the slot content's
-    // directives (`@click`, `pp-text`, …) should resolve against,
-    // regardless of where the slot is physically materialised
-    // (inside the child's template, possibly inside a teleport).
+    // Prefer the enclosing-scope (true author) when one exists;
+    // fall back to the host's just-created scope so app-root
+    // mounts (no parent component) still resolve directives in
+    // user-authored slot content.
     let (owner_scope_id, owner_proxy) = match enclosing_scope(el) {
         Some(s) => s,
-        None => (ScopeId(0), JsValue::UNDEFINED),
+        None => (fallback_scope_id, fallback_proxy.clone()),
     };
 
     let mut by_name: std::collections::HashMap<String, UserSlot> = std::collections::HashMap::new();
@@ -1044,7 +763,6 @@ fn capture_slots(el: &Element) -> SlotStore {
         }
     }
     for n in to_consume {
-        // Named slot template?
         if let Some(tpl) = n.dyn_ref::<HtmlTemplateElement>() {
             if let Some(name) = tpl.get_attribute("pp-slot") {
                 let ident = tpl.get_attribute("pp-let").unwrap_or_default();
@@ -1066,15 +784,12 @@ fn capture_slots(el: &Element) -> SlotStore {
                 continue;
             }
         }
-        // Default slot.
         let _ = default_fragment.append_child(&n);
     }
 
     if default_fragment.child_nodes().length() > 0 {
         by_name.entry("default".to_string()).or_insert(UserSlot {
             source: default_fragment,
-            // Default slot doesn't support `pp-let` scoping today;
-            // scoped slots always use a named `<template pp-slot>`.
             ident: String::new(),
             owner_scope_id,
             owner_proxy,
@@ -1096,13 +811,6 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
         .collect();
 
     let attrs = tag.attributes();
-    // Track which attrs the walker forwarded off the tag so they
-    // can be stripped after the loop. `class` / `style` are the
-    // only offenders that cause visible CSS "outer + inner" double
-    // matching (same rule painting pills / borders twice). Other
-    // attrs are left on the tag — devtools still sees them there,
-    // and author JS (`document.querySelector('pine-foo[data-id="x"]')`)
-    // keeps working.
     let mut strip_class = false;
     let mut strip_style = false;
     for i in 0..attrs.length() {
@@ -1112,18 +820,13 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
             continue;
         }
         // RFC-020 shorthand (`@event` / `:attr`) is a directive,
-        // not a plain attribute. Fallthrough would clobber the
-        // template's own `@click="my_handler"` and re-bind the
-        // user's handler against the child scope — where the name
-        // never resolves. The handler is already bound on the tag
-        // itself in the parent's scope, which is the intended
-        // "event on the component" semantic. Skip.
+        // not a plain attribute. Skip — the macro lifts these into
+        // the plan; fallthrough would clobber the template's own
+        // listener bound in the parent's scope.
         if name.starts_with('@') || name.starts_with(':') {
             continue;
         }
-        // HTML kebab-case → Rust snake_case; matches the prop path in
-        // `apply_static_props`.
-        let field = crate::directives::normalize_prop_name(&name);
+        let field = normalize_prop_name(&name);
         if declared.contains(&field) {
             continue;
         }
@@ -1146,25 +849,20 @@ fn apply_fallthrough_attrs(tag: &Element, root: &Element, scope: &Scope) {
             }
         }
     }
-    // Strip `class` / `style` from the outer custom-element tag
-    // now that they've been forwarded to the inner rendered root.
-    // Without this, `.my-class { … }` author CSS matches BOTH the
-    // tag and the inner element, double-painting borders /
-    // padding / backgrounds. Stripping aligns pocopine with what
-    // React / Vue / Svelte authors expect: one rule, one match.
-    //
-    // Intentionally unconditional (no debug_assertions gate) —
-    // diverging CSS semantics between dev and release would
-    // itself be the bigger surprise. Tests that relied on
-    // `.<author-class> <descendant-tag>` selectors target the
-    // inner element directly via `.<author-class>` post-strip,
-    // since the inner root now owns the class uniquely.
     if strip_class {
         let _ = tag.remove_attribute("class");
     }
     if strip_style {
         let _ = tag.remove_attribute("style");
     }
+}
+
+/// Local copy of the kebab→snake mapping the directive registry
+/// used to expose. Walker removal eliminated the public helper;
+/// `apply_static_props` and the fallthrough path are the only
+/// remaining callers, so the mapping lives here.
+fn normalize_prop_name(name: &str) -> String {
+    name.replace('-', "_")
 }
 
 fn merge_space(a: &str, b: &str) -> String {
@@ -1191,17 +889,10 @@ fn apply_static_props(el: &Element, scope: &Scope) {
     for i in 0..attrs.length() {
         let Some(a) = attrs.item(i) else { continue };
         let name = a.name();
-        // Skip pp-* (directives) and reserved private keys.
         if name.starts_with("pp-") || name.starts_with("__pp_") {
             continue;
         }
-        // HTML attributes are kebab-case by convention (`post-id`); Rust
-        // fields are snake_case (`post_id`). Map between them so authors
-        // don't have to pick one side's spelling.
-        let field = crate::directives::normalize_prop_name(&name);
-        // RFC-031 — only `#[prop]` fields are writable by parents
-        // via static HTML attributes. `#[state]` fields (the
-        // default) stay opaque to the parent.
+        let field = normalize_prop_name(&name);
         if !scope.state.borrow().is_prop(&field) {
             continue;
         }
@@ -1217,7 +908,7 @@ fn apply_static_props(el: &Element, scope: &Scope) {
 
 fn coerce_attr_value(raw: &str) -> JsValue {
     if raw.is_empty() {
-        return JsValue::TRUE; // bare-presence attribute
+        return JsValue::TRUE;
     }
     if raw == "true" {
         return JsValue::TRUE;
@@ -1243,37 +934,15 @@ fn first_element_child(el: &Element) -> Option<Element> {
     children.item(0)
 }
 
-/// Expand RFC-020 shorthand prefixes. `:foo` → `pp-bind:foo`,
-/// `@foo` → `pp-on:foo`. Anything else — including a bare `:` or
-/// `@` with no tail — is returned unchanged so the normal pp-*
-/// filter can drop it.
-///
-/// Walker-only — RFC-058 Phase 6.5: compiled apps don't scan
-/// `pp-*` attributes at runtime, so the shorthand normaliser is
-/// gated behind `legacy-dom`.
-#[cfg(feature = "legacy-dom")]
-fn normalise_shorthand_attr(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix(':') {
-        if !rest.is_empty() {
-            return format!("pp-bind:{rest}");
-        }
-    }
-    if let Some(rest) = name.strip_prefix('@') {
-        if !rest.is_empty() {
-            return format!("pp-on:{rest}");
-        }
-    }
-    name.to_string()
-}
-
 /// Compiled template-plan entry point for `<slot>` outlets.
 pub(crate) fn materialize_compiled_slot_outlet(slot_el: &Element) {
     materialize_slot(slot_el);
 }
 
 /// Replace a `<slot>` element in a component template with the
-/// matching user-provided content (from the slot store) or the
-/// slot's own default children. Per RFC-011 §5.2.
+/// matching user-provided content (from the parent-supplied
+/// fragment registry) or the slot's own default children. Per
+/// RFC-011 §5.2.
 fn materialize_slot(slot_el: &Element) {
     let Some(parent) = slot_el.parent_node() else {
         return;
@@ -1295,8 +964,7 @@ fn materialize_slot(slot_el: &Element) {
     }
 
     // Resolve the enclosing scope. This is the component (or pp-for
-    // loop) whose template contains the <slot>. Path bindings
-    // resolve against this proxy.
+    // loop) whose template contains the <slot>.
     let (owner_scope_id, owner_proxy) = match enclosing_scope(slot_el) {
         Some(s) => s,
         None => {
@@ -1305,148 +973,144 @@ fn materialize_slot(slot_el: &Element) {
         }
     };
 
-    // RFC-058 Phase 3.5a/3.5g fast-path: if the parent registered
-    // a [`SlotEntry`] for `(owner_scope_id, slot_name)` via
-    // [`mount_child_component_with_slots`], invoke its fragment
-    // instead of running the legacy capture/replay path.
-    //
-    // For plain default + named slots (entry.scoped_let is None)
-    // the fragment runs against the parent proxy directly, which
-    // requires the slot to have no `:prop` bindings (those are a
-    // RFC-011 scoped-slot affordance, only meaningful with
-    // pp-let). For scoped slots (entry.scoped_let is Some(ident),
-    // RFC-058 Phase 3.5g) we build a [`SlotScope`] from the
-    // child's `<slot>` `:prop` bindings and invoke the fragment
-    // against the slot scope's proxy so directives inside resolve
-    // `ident.field` through SlotScope's RFC-011 routing.
-    if let Some((entry, parent_scope_id, parent_proxy)) =
+    // RFC-058 Phase 3.5a/3.5g — parent-supplied fragment lookup.
+    // For plain default + named slots (entry.scoped_let is None) the
+    // fragment runs against the parent proxy directly, which requires
+    // the slot to have no `:prop` bindings (those are an RFC-011
+    // scoped-slot affordance, only meaningful with pp-let). For
+    // scoped slots we build a [`SlotScope`] from the child's `<slot>`
+    // `:prop` bindings and invoke the fragment against the slot
+    // scope's proxy.
+    let Some((entry, parent_scope_id, parent_proxy)) =
         crate::slot_fragment::lookup(owner_scope_id, &slot_name)
-    {
-        let take_fast_path = match entry.scoped_let {
-            None => bindings.is_empty(),
-            Some(_) => true,
-        };
-        if take_fast_path {
-            let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-                return;
-            };
-            // For scoped fragments, construct the SlotScope
-            // upfront so the fragment installs against the slot
-            // scope's proxy. The scope id pinned on every
-            // inserted element matches the proxy used at install
-            // time, keeping reactive subscriptions consistent.
-            let (fragment_parent_scope_id, fragment_parent_proxy, slot_scope_for_pin) =
-                match entry.scoped_let {
-                    Some(let_ident) => {
-                        let slot_state = SlotScope {
-                            ident: let_ident.to_string(),
-                            bindings: bindings.clone(),
-                            // `:prop="path"` evaluates against the
-                            // scope that authored the `<slot>`
-                            // — i.e. the child component whose
-                            // template the `<slot>` lives in.
-                            bind_source: owner_proxy.clone(),
-                            // Fall-through reads land on the
-                            // parent (caller) proxy — that's what
-                            // makes `@click="parent_handler"`
-                            // inside scoped slots work.
-                            caller: parent_proxy.clone(),
-                            caller_scope_id: parent_scope_id,
-                        };
-                        let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
-                        // Inject-chain: the slot scope sits
-                        // inside the slot-owning child template,
-                        // so children chain through the child
-                        // for inject lookups.
-                        crate::context::set_parent(slot_scope.id, owner_scope_id);
-                        let proxy = slot_scope.into_proxy();
-                        (slot_scope.id, proxy, Some(slot_scope.id))
-                    }
-                    None => (parent_scope_id, parent_proxy.clone(), None),
-                };
-            let buffer = doc.create_document_fragment();
-            (entry.fragment)(crate::slot_fragment::SlotMountCtx {
-                host: &buffer,
-                parent_scope_id: fragment_parent_scope_id,
-                parent_proxy: &fragment_parent_proxy,
-                child_scope_id: owner_scope_id,
-            });
-            // Splice buffered children before slot_el, then drop
-            // slot_el. Snapshot first because moves mutate the
-            // live child list.
-            let kids = buffer.child_nodes();
-            let mut snapshot: Vec<Node> = Vec::with_capacity(kids.length() as usize);
-            for i in 0..kids.length() {
-                if let Some(n) = kids.item(i) {
-                    snapshot.push(n);
-                }
-            }
-            for n in snapshot {
-                let _ = parent.insert_before(&n, Some(slot_el));
-                if let Ok(e) = n.dyn_into::<Element>() {
-                    if let Some(slot_scope_id) = slot_scope_for_pin {
-                        bind_borrowed_scope_to(&e, slot_scope_id, &fragment_parent_proxy);
-                    }
-                    finalize_compiled_subtree(&e);
-                }
-            }
-            let _ = parent.remove_child(slot_el);
+    else {
+        // No compile-time parent-emitted fragment registered.
+        // Try the runtime-captured slot store next (the
+        // `mount_component` path's `capture_slots` → `slots::put`
+        // bridge — used when a user writes
+        // `<pine-tooltip-root><button>...</button></pine-tooltip-root>`
+        // in a test or non-compiled host where no parent
+        // template exists to emit a Phase-3.5b fragment).
+        if let Some((fragment, ident, author_scope_id, author_proxy)) =
+            crate::slots::lookup(owner_scope_id, &slot_name)
+        {
+            materialize_adopted_slot(
+                slot_el,
+                &parent,
+                fragment,
+                ident,
+                author_scope_id,
+                author_proxy,
+                &bindings,
+                owner_scope_id,
+                &owner_proxy,
+            );
             return;
         }
+        // Fall back to the slot's default children — `<slot>`
+        // content authored inline in the component template.
+        materialize_slot_default(slot_el, &parent, &owner_scope_id, &owner_proxy);
+        return;
+    };
+    let take_fast_path = match entry.scoped_let {
+        None => bindings.is_empty(),
+        Some(_) => true,
+    };
+    if !take_fast_path {
+        materialize_slot_default(slot_el, &parent, &owner_scope_id, &owner_proxy);
+        return;
     }
-
-    // Walk up the scope chain to find the component that captured
-    // the user's slot content. Starts at the enclosing scope and
-    // climbs parent chains to handle `<slot>` inside a `pp-for`
-    // body (where `enclosing_scope` returns the LoopScope, which
-    // doesn't own the slot store).
-    //
-    // `slot_owner_*` below is the scope that *authored* the slot
-    // content (the caller's template) — distinct from
-    // `owner_scope_id` which is the scope the `<slot>` element
-    // lives inside. Directives in slot content need to resolve
-    // against the *caller* to match Vue/React conventions (and so
-    // `@click="parent_handler"` works from slot content rendered
-    // inside a teleported subtree).
-    let (user_fragment, user_ident, slot_owner_scope, slot_owner_proxy) =
-        match find_slot_with_owner(owner_scope_id, &owner_proxy, &slot_name) {
-            Some((frag, ident, owner_id, owner_p)) => (Some(frag), ident, owner_id, owner_p),
-            None => (None, String::new(), owner_scope_id, owner_proxy.clone()),
-        };
-
-    // Build the DocumentFragment we'll insert. User-provided content
-    // wins; otherwise clone the slot's own default children.
-    let doc = match web_sys::window().and_then(|w| w.document()) {
-        Some(d) => d,
-        None => return,
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
     };
-    let fragment: DocumentFragment = match user_fragment {
-        Some(f) => f,
-        None => {
-            let frag = doc.create_document_fragment();
-            let kids = slot_el.child_nodes();
-            for i in 0..kids.length() {
-                if let Some(n) = kids.item(i) {
-                    if let Ok(clone) = n.clone_node_with_deep(true) {
-                        let _ = frag.append_child(&clone);
-                    }
-                }
+    let (fragment_parent_scope_id, fragment_parent_proxy, slot_scope_for_pin) =
+        match entry.scoped_let {
+            Some(let_ident) => {
+                let slot_state = SlotScope {
+                    ident: let_ident.to_string(),
+                    bindings: bindings.clone(),
+                    bind_source: owner_proxy.clone(),
+                    caller: parent_proxy.clone(),
+                    caller_scope_id: parent_scope_id,
+                };
+                let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
+                crate::context::set_parent(slot_scope.id, owner_scope_id);
+                let proxy = slot_scope.into_proxy();
+                (slot_scope.id, proxy, Some(slot_scope.id))
             }
-            frag
+            None => (parent_scope_id, parent_proxy.clone(), None),
+        };
+    let buffer = doc.create_document_fragment();
+    (entry.fragment)(crate::slot_fragment::SlotMountCtx {
+        host: &buffer,
+        parent_scope_id: fragment_parent_scope_id,
+        parent_proxy: &fragment_parent_proxy,
+        child_scope_id: owner_scope_id,
+    });
+    let kids = buffer.child_nodes();
+    let mut snapshot: Vec<Node> = Vec::with_capacity(kids.length() as usize);
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            snapshot.push(n);
         }
-    };
+    }
+    for n in snapshot {
+        let _ = parent.insert_before(&n, Some(slot_el));
+        if let Ok(e) = n.dyn_into::<Element>() {
+            if let Some(slot_scope_id) = slot_scope_for_pin {
+                bind_borrowed_scope_to(&e, slot_scope_id, &fragment_parent_proxy);
+            }
+            finalize_compiled_subtree(&e);
+        }
+    }
+    let _ = parent.remove_child(slot_el);
+}
 
-    // Move fragment's children into the parent before `slot_el`,
-    // collecting the inserted Elements so we can walk + pin scope.
-    let mut inserted: Vec<Element> = Vec::new();
-    let frag_kids = fragment.child_nodes();
-    // Grab children up front — moving into parent mutates the fragment.
-    let mut frag_snapshot: Vec<Node> = Vec::with_capacity(frag_kids.length() as usize);
-    for i in 0..frag_kids.length() {
-        if let Some(n) = frag_kids.item(i) {
+/// **Adopted-DOM bridge — captured slot replay.** Splice
+/// runtime-captured slot content (from `mount_component`'s
+/// `capture_slots` → `slots::put` bridge) in place of the
+/// `<slot>` tag. Pins inserted elements' borrowed scope to the
+/// *author's* scope (not the slot owner's) so directives
+/// inside the slot resolve against the caller per
+/// RFC-011 / Vue convention. When the slot declares `:prop`
+/// bindings AND the user wrote `pp-let`, builds a `SlotScope`
+/// so `ident.field` routes to the slot's bound source while
+/// fall-through reads still hit the author.
+///
+/// After splicing, runs [`mount_adopted_components`] over each
+/// inserted element so custom-component tags inside slot
+/// content (e.g. `<pine-icon-bell />` inside
+/// `<pine-tooltip-trigger>`) get mounted via the compiled
+/// path AND `<template pp-*>` controllers (e.g. a `pp-for`
+/// over chips inside `<pine-tags-input-root>`) get installed.
+///
+/// **Bridge contract**: native HTML elements with `pp-*` /
+/// `:prop` / `@event` etc. attributes inside the captured
+/// fragment are left unbound — those directives only bind
+/// when the macro processes them at compile time inside a
+/// `#[component]` template. See module doc-comment.
+#[allow(clippy::too_many_arguments)]
+fn materialize_adopted_slot(
+    slot_el: &Element,
+    parent: &Node,
+    fragment: web_sys::DocumentFragment,
+    user_ident: String,
+    author_scope_id: ScopeId,
+    author_proxy: JsValue,
+    bindings: &[(String, String)],
+    owner_scope_id: ScopeId,
+    owner_proxy: &JsValue,
+) {
+    // Snapshot fragment children before insertion mutates the
+    // fragment's child list.
+    let mut frag_snapshot: Vec<Node> = Vec::with_capacity(fragment.child_nodes().length() as usize);
+    let kids = fragment.child_nodes();
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
             frag_snapshot.push(n);
         }
     }
+    let mut inserted: Vec<Element> = Vec::new();
     for n in frag_snapshot {
         let _ = parent.insert_before(&n, Some(slot_el));
         if let Ok(e) = n.dyn_into::<Element>() {
@@ -1455,36 +1119,18 @@ fn materialize_slot(slot_el: &Element) {
     }
     let _ = parent.remove_child(slot_el);
 
-    // If the slot declared any :prop bindings and the user used
-    // pp-let, build a SlotScope whose `owner` is the slot's
-    // authoring scope so `ident.prop` / fall-through both resolve
-    // against the caller. Otherwise pin the caller's scope
-    // directly — without this, content in a teleported slot would
-    // resolve its directives against the nearest DOM-ancestor's
-    // scope (the child component), breaking
-    // `@click="parent_handler"`.
+    // Pin scope: SlotScope when the slot has :prop bindings AND
+    // the user wrote pp-let; otherwise pin the author's scope
+    // directly so directives inside resolve against the caller.
     if !bindings.is_empty() && !user_ident.is_empty() {
         let slot_state = SlotScope {
             ident: user_ident,
-            bindings,
-            // `:prop="path"` binds evaluate in the scope that
-            // *declared* the slot — that's where `path` was
-            // authored, so sibling fields / magics resolve
-            // correctly there.
+            bindings: bindings.to_vec(),
             bind_source: owner_proxy.clone(),
-            // Fall-through reads (anything not matching the
-            // `pp-let` identifier) go to the *caller's* scope, so
-            // `@click="parent_handler"` works from inside the
-            // slot.
-            caller: slot_owner_proxy.clone(),
-            caller_scope_id: slot_owner_scope,
+            caller: author_proxy.clone(),
+            caller_scope_id: author_scope_id,
         };
         let slot_scope = Scope::new(Rc::new(RefCell::new(slot_state)));
-        // RFC-027 inject chain: the slot scope lives inside the
-        // slot-*owning* component's template — children inject
-        // against that component, not the caller. Directive
-        // resolution still uses the caller (above) for RFC-011
-        // semantics.
         crate::context::set_parent(slot_scope.id, owner_scope_id);
         let proxy = slot_scope.into_proxy();
         for el in &inserted {
@@ -1492,11 +1138,13 @@ fn materialize_slot(slot_el: &Element) {
         }
     } else {
         for el in &inserted {
-            bind_borrowed_scope_to(el, slot_owner_scope, &slot_owner_proxy);
-            // Stamp explicit inject-chain parent so a later
-            // mount_component on this element chains to the slot
-            // owner for inject, not to whatever its borrowed-DOM
-            // scope happens to be.
+            bind_borrowed_scope_to(el, author_scope_id, &author_proxy);
+            // Stamp explicit inject-chain parent so any
+            // `mount_component` on a custom tag inside slot
+            // content chains to the slot OWNER for RFC-027
+            // inject (matching Pine's compound-context pattern),
+            // not to whatever DOM-ancestor scope happens to be
+            // sitting around.
             set_private(
                 el,
                 CTX_PARENT_KEY,
@@ -1505,43 +1153,220 @@ fn materialize_slot(slot_el: &Element) {
         }
     }
 
+    // Mount any custom-component tags inside the inserted
+    // subtree + fire lifecycle on every element. The discovery
+    // pass mirrors `start_compiled` — querySelectorAll over the
+    // registered tag set.
+    for el in &inserted {
+        mount_adopted_components(el);
+    }
     for el in inserted {
-        walk(&el);
+        finalize_compiled_subtree(&el);
     }
 }
 
-/// Walk up the scope chain starting at `start_scope_id` to find the
-/// first component that captured a slot named `name`. Returns the
-/// cloned fragment + user's `pp-let` ident + the slot's authoring
-/// (caller's) scope if found.
-fn find_slot_with_owner(
-    start_scope_id: ScopeId,
-    start_proxy: &JsValue,
-    name: &str,
-) -> Option<(DocumentFragment, String, ScopeId, JsValue)> {
-    // First try the enclosing scope directly.
-    if let Some(hit) = slots::lookup(start_scope_id, name) {
-        return Some(hit);
+/// **Adopted-DOM bridge entry.** Walk a subtree the macro
+/// never compiled and reconcile its structure against the
+/// compiled-mount runtime. Two passes:
+///
+///   1. Install structural controllers
+///      ([`install_adopted_controllers`]) — finds every
+///      `<template pp-for>` / `<template pp-if>` /
+///      `<template pp-teleport>` in `root` and installs the
+///      matching controller at runtime. The controllers run
+///      with `body_fn = None`, so each row/branch goes through
+///      `clone_template_body` + a recursive call back into
+///      this function — enough to wake up custom-tag bodies.
+///   2. Mount registered custom-component tags
+///      ([`templates_plan::registered_template_tags`]) under
+///      the root via [`mount_component`].
+///
+/// **Bridge contract — narrow on purpose**: this function
+/// discovers structure (tag names, structural controller
+/// templates) and nothing else. It does **not** parse or
+/// install per-element `pp-*` / `:prop` / `@event` /
+/// `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model`
+/// directives — those only bind when the macro processes them
+/// at compile time inside a `#[component]` template. Authors
+/// who need per-element directives on dynamic content wrap
+/// that content in a `#[component]` (or the `template_inline`
+/// test shorthand). See module doc-comment for the full
+/// allowed / disallowed table.
+///
+/// Public so directive runtime helpers (notably `pp-for`'s
+/// row install when `body_fn = None`) and the slot
+/// materialiser ([`materialize_adopted_slot`]) can drive
+/// component / controller discovery over freshly-cloned
+/// template bodies.
+pub fn mount_adopted_components(root: &Element) {
+    // Step 1: install runtime controllers on user-authored
+    // `<template pp-*>` elements. Done first because pp-for /
+    // pp-if can produce custom tags that need mounting in step 2.
+    install_adopted_controllers(root);
+
+    // Step 2: mount any registered custom tags discovered in the
+    // subtree (including the root itself).
+    let tags = crate::templates::registered_template_names();
+    if tags.is_empty() {
+        return;
     }
-    // Climb LoopScope parents. `LoopScope::parent` is the outer
-    // proxy; we can pull its scope id from its private SCOPE_ID on
-    // the element... but at this point we don't have the element,
-    // we have the proxy. Without a reverse map we walk one-at-a-time
-    // via the LoopScope::parent convention: the proxy is a JS object
-    // whose `$__scope_id__` isn't exposed, so we rely on
-    // `Scope::all()` + ancestry lookup — punt that to a follow-up
-    // RFC. For v0, the owner is always the enclosing scope; if a
-    // `<slot>` appears inside a `pp-for` body, the LoopScope's
-    // parent proxy is the component's proxy, and we try that next.
-    let parent_proxy = Reflect::get(start_proxy, &JsValue::from_str("$__parent__"))
-        .ok()
-        .filter(|v| !v.is_undefined() && !v.is_null());
-    if let Some(_pp) = parent_proxy {
-        // Reserved for when we plumb a scope-id back through the
-        // parent proxy; today we return None and rely on the
-        // `<slot>` being directly inside the component template.
+    let selector = tags.join(",");
+    let Ok(matches) = root.query_selector_all(&selector) else {
+        return;
+    };
+    let mut roots: Vec<Element> = Vec::with_capacity(matches.length() as usize + 1);
+    if tags.iter().any(|t| t == &root.local_name()) && get_private(root, "__pp_mounted").is_none() {
+        roots.push(root.clone());
     }
-    None
+    for i in 0..matches.length() {
+        if let Some(node) = matches.item(i) {
+            if let Ok(el) = node.dyn_into::<Element>() {
+                if get_private(&el, "__pp_mounted").is_none() {
+                    roots.push(el);
+                }
+            }
+        }
+    }
+    for el in roots {
+        let tag = el.local_name();
+        mount_component(&el, &tag, None);
+    }
+}
+
+/// **Adopted-DOM bridge — structural-controller discovery.**
+/// Find every `<template pp-for>` / `<template pp-if>` /
+/// `<template pp-teleport>` in `root`'s subtree (and `root`
+/// itself) and install the matching controller. Used for
+/// adopted-DOM containers the macro never saw: runtime-
+/// captured slot content, `pp-for` row bodies cloned via
+/// `clone_template_body` when `body_fn` was None, and any
+/// other path that injects `<template pp-*>` markup at
+/// runtime.
+///
+/// **Strict subset of walker behaviour**: this only handles
+/// the three structural controllers. Per-element directive
+/// binding (`pp-text`, `pp-bind`, `:prop`, `@event`,
+/// `pp-show`, `pp-init`, `pp-model`, `pp-html`) is **not** in
+/// the bridge contract — those need to be authored inside a
+/// `#[component]` template so the macro processes them at
+/// compile time. See module doc-comment.
+fn install_adopted_controllers(root: &Element) {
+    let Ok(templates) = root.query_selector_all("template") else {
+        return;
+    };
+    let mut candidates: Vec<Element> = Vec::with_capacity(templates.length() as usize + 1);
+    if root.local_name() == "template" {
+        candidates.push(root.clone());
+    }
+    for i in 0..templates.length() {
+        if let Some(node) = templates.item(i) {
+            if let Ok(el) = node.dyn_into::<Element>() {
+                candidates.push(el);
+            }
+        }
+    }
+    for tpl in candidates {
+        let Ok(template) = tpl.clone().dyn_into::<web_sys::HtmlTemplateElement>() else {
+            continue;
+        };
+        // Skip controllers we've already installed (re-discovery
+        // passes hit the same template multiple times).
+        if get_private(&tpl, "__pp_runtime_controller_installed").is_some() {
+            continue;
+        }
+        let Some((scope_id, proxy)) = enclosing_scope(&tpl) else {
+            continue;
+        };
+        if let Some(for_value) = tpl.get_attribute("pp-for") {
+            // pp-for="<item> in <items>"
+            let parts: Vec<&str> = for_value.splitn(2, " in ").collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let item_name = parts[0].trim().to_string();
+            let items_expr = parts[1].trim().to_string();
+            let key_expr = tpl.get_attribute("pp-key").map(|s| s.trim().to_string());
+            let stagger_ms = tpl
+                .get_attribute("pp-stagger")
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
+            crate::directives::for_::install(
+                template, proxy, scope_id, item_name, items_expr, key_expr, stagger_ms, None,
+            );
+            continue;
+        }
+        if let Some(if_value) = tpl.get_attribute("pp-if") {
+            let Ok(ast) = crate::expr::parse_cached(&if_value) else {
+                continue;
+            };
+            let teleport_selector = tpl.get_attribute("pp-teleport");
+            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
+            crate::directives::if_::install(
+                template,
+                proxy,
+                ast,
+                None,
+                teleport_selector.as_deref(),
+            );
+            continue;
+        }
+        if let Some(teleport_selector) = tpl.get_attribute("pp-teleport") {
+            set_private(&tpl, "__pp_runtime_controller_installed", &JsValue::TRUE);
+            crate::directives::teleport::install(template, &teleport_selector, None);
+            continue;
+        }
+    }
+}
+
+/// Splice the slot element's own default children in place of the
+/// `<slot>` tag. Used when no parent-supplied fragment exists for
+/// `slot_el`'s name, or when a scoped slot's binding shape doesn't
+/// match the fragment's expectations.
+fn materialize_slot_default(
+    slot_el: &Element,
+    parent: &Node,
+    owner_scope_id: &ScopeId,
+    owner_proxy: &JsValue,
+) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let frag: DocumentFragment = doc.create_document_fragment();
+    let kids = slot_el.child_nodes();
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            if let Ok(clone) = n.clone_node_with_deep(true) {
+                let _ = frag.append_child(&clone);
+            }
+        }
+    }
+    let frag_kids = frag.child_nodes();
+    let mut snapshot: Vec<Node> = Vec::with_capacity(frag_kids.length() as usize);
+    for i in 0..frag_kids.length() {
+        if let Some(n) = frag_kids.item(i) {
+            snapshot.push(n);
+        }
+    }
+    let mut inserted: Vec<Element> = Vec::new();
+    for n in snapshot {
+        let _ = parent.insert_before(&n, Some(slot_el));
+        if let Ok(e) = n.dyn_into::<Element>() {
+            inserted.push(e);
+        }
+    }
+    let _ = parent.remove_child(slot_el);
+    for el in &inserted {
+        bind_borrowed_scope_to(el, *owner_scope_id, owner_proxy);
+        set_private(
+            el,
+            CTX_PARENT_KEY,
+            &JsValue::from_f64(owner_scope_id.0 as f64),
+        );
+    }
+    for el in inserted {
+        finalize_compiled_subtree(&el);
+    }
 }
 
 /// If `el` is a registered-component tag with its scope mounted on the
@@ -1554,35 +1379,12 @@ pub fn child_component_proxy(el: &Element) -> Option<JsValue> {
 /// RFC-031 — like [`child_component_proxy`] but also returns the
 /// child's scope id, so callers can consult `is_prop` on the
 /// child's `ComponentState` before writing through the proxy.
-/// Writes via `Reflect::set(&proxy, …)` always succeed at the JS
-/// layer; the is_prop gate lives at the directive site, not on
-/// the proxy itself (the proxy also sees the child's OWN internal
-/// writes, which must always land).
 pub fn child_component_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     if !is_registered(&el.local_name()) {
         return None;
     }
     let root = first_element_child(el)?;
     scope_of_element(&root)
-}
-
-#[cfg(feature = "legacy-dom")]
-fn dispatch(el: &Element, proxy: &JsValue, scope_id: ScopeId, name: &str, value: &str) {
-    let Some((dname, arg, modifiers)) = parse_attr(name) else {
-        return;
-    };
-    let Some(handler) = lookup(&dname) else {
-        return;
-    };
-    let call = DirectiveCall {
-        el,
-        proxy,
-        scope_id,
-        arg,
-        modifiers,
-        value: value.to_string(),
-    };
-    handler(&call);
 }
 
 /// Climb the parent chain until we find an element with a bound scope.
@@ -1595,11 +1397,8 @@ pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
                 return Some((scope_id, proxy));
             }
             // RFC 054 — compiled rows stamp only `SCOPE_ID_KEY` when
-            // their plan is FastExpr-only. Any caller that *does*
-            // need a proxy (a non-eligible directive walk, a
-            // listener AST eval, an inject lookup landing on a row
-            // root) lazy-mints here and caches on the element so
-            // repeat reads stay constant-time.
+            // their plan is FastExpr-only. Lazy-mint here so any
+            // caller that does need a proxy gets one.
             if let Some(scope) = Scope::find(scope_id) {
                 let proxy = scope.into_proxy();
                 set_private(&e, SCOPE_PROXY_KEY, &proxy);
@@ -1611,23 +1410,10 @@ pub fn enclosing_scope(el: &Element) -> Option<(ScopeId, JsValue)> {
     None
 }
 
-/// Walk the DOM ancestor chain looking for the nearest scope that
-/// should own `el` for RFC-027 `inject` purposes. Prefers
-/// `CTX_PARENT_KEY` (stamped by slot materialisation to point at the
-/// slot *owner* — the component whose template contains the `<slot>`)
-/// over `SCOPE_ID_KEY` (which slot materialisation binds to the
-/// *author* scope so caller-side directive resolution still works).
-///
-/// Without this preference, a deeply nested tag inside slotted
-/// content — e.g. `<pine-dialog-close>` inside a `<div class="row">`
-/// inside Content's slot — falls through to the nearest ancestor
-/// with `SCOPE_ID_KEY` (the slot author's scope) and misses the
-/// compound's provide/inject chain entirely.
-/// Read the explicit `CTX_PARENT_KEY` stamp off `el` if one was
-/// set (by slot materialisation, body-fragment install, etc.).
-/// Public so directive installers (`pp-for`, `pp-if`,
-/// `pp-teleport`) can route their internal scopes' inject
-/// parents through the same key the walker uses.
+/// Read the explicit `CTX_PARENT_KEY` stamp off `el` if one was set.
+/// Public so directive installers (`pp-for`, `pp-if`, `pp-teleport`)
+/// can route their internal scopes' inject parents through the same
+/// key the slot materialiser uses.
 pub fn ctx_parent_of(el: &Element) -> Option<ScopeId> {
     get_private(el, CTX_PARENT_KEY)
         .and_then(|v| v.as_f64())
@@ -1635,14 +1421,7 @@ pub fn ctx_parent_of(el: &Element) -> Option<ScopeId> {
 }
 
 /// Walk `el` then its element ancestors looking for the nearest
-/// `CTX_PARENT_KEY` stamp. Used by directive installers
-/// (`pp-for`, `pp-if`, `pp-teleport`) when the controller's
-/// `<template>` is wrapped inside slot content — the slot
-/// materialiser only stamps the top-level child of the slot
-/// fragment, so a `<div><template pp-for>` wrapper won't carry
-/// the stamp on the template itself. Walking ancestors lets the
-/// installer recover the slot owner's scope id and chain its
-/// internal scopes' inject parents through it.
+/// `CTX_PARENT_KEY` stamp.
 pub fn inherited_ctx_parent_of(el: &Element) -> Option<ScopeId> {
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(e) = cur {
@@ -1677,7 +1456,6 @@ pub fn scope_of_element(el: &Element) -> Option<(ScopeId, JsValue)> {
     if let Some(proxy) = get_private(el, SCOPE_PROXY_KEY) {
         return Some((scope_id, proxy));
     }
-    // RFC 054 proxy elision — see `enclosing_scope` for the rationale.
     let scope = Scope::find(scope_id)?;
     let proxy = scope.into_proxy();
     set_private(el, SCOPE_PROXY_KEY, &proxy);
@@ -1710,24 +1488,13 @@ fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
     None
 }
 
-/// Stamp `WALKED_KEY` on an element without actually running the
-/// walker. Used by the RFC 054 compiled `pp-for` fast path: the
-/// row root is bound by the plan-driven mount instead of
-/// `walk()`, but we still need the `MutationObserver` to skip
-/// re-walking the subtree when keyed reorder reparents it.
-pub fn mark_walked(el: &Element) {
-    set_private(el, WALKED_KEY, &JsValue::TRUE);
-}
-
 /// Finish a compiled subtree without running directive discovery.
 ///
 /// Generated fragment paths call this after `apply_static_plan`
 /// has installed every known binding/listener/controller. It
-/// preserves the walker's post-order observable work — deferred
-/// `pp-init`, `on_mount`, `on_ready`, and the re-walk guard —
-/// but intentionally does not scan attributes or mount custom
-/// tags. If a subtree still has walker-owned residue, callers
-/// must use [`walk_compiled_fallback`] instead.
+/// preserves the post-order observable work — deferred `pp-init`,
+/// `on_mount`, `on_ready`, and the re-walk guard — but
+/// intentionally does not scan attributes or mount custom tags.
 pub fn finalize_compiled_subtree(el: &Element) {
     if get_private(el, WALKED_KEY)
         .map(|v| v.is_truthy())
@@ -1750,30 +1517,6 @@ pub fn finalize_compiled_subtree(el: &Element) {
     set_private(el, WALKED_KEY, &JsValue::TRUE);
 }
 
-/// Stamp `RELEASE_SKIP_KEY` on an element so `release_subtree`
-/// short-circuits when the `MutationObserver` later fires for
-/// this node. Used by the RFC 054 bulk-clear path which has
-/// already torn the row's scope and `RowInstance` state down
-/// synchronously — running the standard release chain would
-/// just repeat work + pay the Reflect::get tax for nothing.
-pub fn mark_release_skip(el: &Element) {
-    set_private(el, RELEASE_SKIP_KEY, &JsValue::TRUE);
-}
-
-/// Stamp the parent of a bulk-clear so the `MutationObserver`
-/// short-circuits the entire batch of removed-node teardowns
-/// (one stamp instead of N per-row `mark_release_skip` calls).
-/// The observer clears the marker after processing the batch so
-/// future legitimate removals from this parent run normally.
-pub fn mark_bulk_release(el: &Element) {
-    set_private(el, BULK_RELEASE_KEY, &JsValue::TRUE);
-}
-
-#[cfg(feature = "legacy-dom")]
-fn clear_private(el: &Element, key: &str) {
-    let _ = Reflect::delete_property(el.as_ref(), &key.into());
-}
-
 /// Attach an effect id to an element so it can be released on unmount.
 pub fn track_effect_on(el: &Element, id: EffectId) {
     let list = match get_private(el, EFFECTS_KEY) {
@@ -1787,10 +1530,11 @@ pub fn track_effect_on(el: &Element, id: EffectId) {
 
 // ── Element-scoped listener side-table ────────────────────────────
 //
-// `pp-on` / `pp-model` previously called `closure.forget()`, which
-// leaks the Rust `Box<dyn FnMut>` for the listener's lifetime AND —
-// for `.window` / `.document` / `.outside` variants whose target is
-// not the element itself — keeps the listener firing past unmount.
+// `pp-on` / `pp-model` / `pp-route` previously called
+// `closure.forget()`, which leaks the Rust `Box<dyn FnMut>` for the
+// listener's lifetime AND — for `.window` / `.document` / `.outside`
+// variants whose target is not the element itself — keeps the
+// listener firing past unmount.
 //
 // The fix: every listener the runtime registers goes through
 // `track_listener_on`. That stashes the `(target, event, capture,
@@ -1811,63 +1555,11 @@ struct ListenerEntry {
 }
 
 thread_local! {
-    static COMPILED_FALLBACK_WALKS: Cell<u32> = const { Cell::new(0) };
-    /// RFC-058 Phase 6.3 instrumentation — counts `walker::bind`
-    /// invocations since the last reset. Tests use this to pin
-    /// that compiled, walker-clean tags don't trigger bind on
-    /// every descendant (the recursion is replaced by
-    /// `finalize_compiled_subtree` in `walk`).
-    static BIND_CALLS: Cell<u32> = const { Cell::new(0) };
-
     /// Monotonically-increasing id stamped on each element that
-    /// tracks listeners. Same shape as the per-scope id stamp —
-    /// cheap integer in a JS private field, rich state side-tabled.
-    static LISTENER_NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    /// tracks listeners.
+    static LISTENER_NEXT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     static LISTENERS: RefCell<HashMap<u64, Vec<ListenerEntry>>> =
         RefCell::new(HashMap::new());
-}
-
-/// Walker-discovery bridge used only by compiled-view paths that
-/// still have preserved runtime-owned behavior inside a generated
-/// fragment. RFC-058 Phase 6 should drive this counter to zero,
-/// then remove this wrapper and the corresponding call sites.
-///
-/// Without `legacy-dom` this is a no-op (the underlying `walk`
-/// is also gated). The counter still increments so tests can
-/// detect attempted fallbacks even in compiled-only builds.
-pub fn walk_compiled_fallback(el: &Element) {
-    COMPILED_FALLBACK_WALKS.with(|c| c.set(c.get().saturating_add(1)));
-    #[cfg(feature = "legacy-dom")]
-    walk(el);
-    #[cfg(not(feature = "legacy-dom"))]
-    let _ = el;
-}
-
-/// Number of compiled-path fallback walks since the last reset.
-/// Tests use this as the migration guard for RFC-058 walker
-/// removal work.
-pub fn compiled_fallback_walk_count() -> u32 {
-    COMPILED_FALLBACK_WALKS.with(Cell::get)
-}
-
-/// Reset the compiled fallback walk counter.
-pub fn reset_compiled_fallback_walk_count() {
-    COMPILED_FALLBACK_WALKS.with(|c| c.set(0));
-}
-
-/// RFC-058 Phase 6.3 instrumentation — number of `walker::bind`
-/// invocations since the last reset. Tests assert that compiled
-/// walker-clean components don't trip bind on every descendant
-/// (the recursion is replaced by `finalize_compiled_subtree` in
-/// `walk`); a baseline + after-mount delta of 1 means only the
-/// component root was bound, the rest skipped.
-pub fn bind_call_count() -> u32 {
-    BIND_CALLS.with(Cell::get)
-}
-
-/// Reset the bind-call instrumentation counter.
-pub fn reset_bind_call_count() {
-    BIND_CALLS.with(|c| c.set(0));
 }
 
 fn listener_slot_for(el: &Element) -> u64 {
@@ -1887,11 +1579,6 @@ fn listener_slot_for(el: &Element) -> u64 {
 /// and tie its lifetime to `el`. When `el`'s subtree is released,
 /// `remove_event_listener_with_callback` runs and the closure's
 /// `Box<dyn FnMut>` is dropped.
-///
-/// Use this instead of `add_event_listener_with_callback` +
-/// `closure.forget()` anywhere the listener should NOT outlive the
-/// element — which is every listener we register. `target` may be
-/// the element itself, `window`, or `document`.
 pub fn track_listener_on(
     el: &Element,
     target: EventTarget,
@@ -1918,9 +1605,9 @@ pub fn track_listener_on(
 }
 
 /// Same as [`track_listener_on`] but passes through extra
-/// `AddEventListenerOptions` (currently only `once`). Kept separate
-/// so the common path stays simple. A `once` listener still needs
-/// cleanup in case the element unmounts before the event fires.
+/// `AddEventListenerOptions` (currently only `once`). A `once`
+/// listener still needs cleanup in case the element unmounts
+/// before the event fires.
 pub fn track_listener_on_with_opts(
     el: &Element,
     target: EventTarget,
@@ -1928,9 +1615,6 @@ pub fn track_listener_on_with_opts(
     opts: &web_sys::AddEventListenerOptions,
     closure: Closure<dyn FnMut(Event)>,
 ) {
-    // Opts are applied directly on the add — we retain only the
-    // `capture` flag on our side because that's all removal needs
-    // to match.
     let capture = opts.get_capture().unwrap_or(false);
     let _ = target.add_event_listener_with_callback_and_add_event_listener_options(
         event,
@@ -1955,16 +1639,11 @@ fn release_listeners(el: &Element) {
     let entries = LISTENERS.with(|m| m.borrow_mut().remove(&(slot as u64)));
     if let Some(entries) = entries {
         for e in entries {
-            // Removal needs the same (event, callback, capture)
-            // triple that `add` received. Boolean removal form —
-            // `AddEventListenerOptions` has no matching boolean-
-            // returning removal call in web-sys.
             let _ = e.target.remove_event_listener_with_callback_and_bool(
                 &e.event,
                 e.closure.as_ref().unchecked_ref(),
                 e.capture,
             );
-            // `e.closure` drops here, reclaiming the Rust box.
             drop(e);
         }
     }
@@ -1973,18 +1652,13 @@ fn release_listeners(el: &Element) {
 /// Count of listener entries currently retained by the
 /// element-scoped listener table. Used by tests (assert
 /// `release_subtree` reclaims everything) and by the devtools
-/// memory-health panel (leak-over-time sparkline). Gated on
-/// debug builds OR the `devtools` feature so opt-in release
-/// devtools gets real numbers.
+/// memory-health panel (leak-over-time sparkline).
 #[cfg(any(debug_assertions, feature = "devtools"))]
 pub fn listener_count() -> usize {
     LISTENERS.with(|m| m.borrow().values().map(|v| v.len()).sum())
 }
 
 pub(crate) fn release_subtree(node: &Node) {
-    // Outermost-only probe so the recursive descent doesn't
-    // double-count. The inner recursion calls
-    // `release_subtree_inner` directly; nothing else does.
     let unmount_start = crate::profiler::unmount::start();
     release_subtree_inner(node);
     crate::profiler::unmount::record_total(unmount_start);
@@ -1995,26 +1669,18 @@ pub(crate) fn release_subtree(node: &Node) {
 /// mount code (RFC-058 Phase 2+) that owns subtree teardown
 /// directly — `pp-if`'s controller, `pp-for`'s row removal,
 /// route-cluster swap, etc.
-///
-/// Wraps the existing private `release_subtree_inner` walk and
-/// records unmount timing through the profiler. Honours the
-/// RFC-054 `RELEASE_SKIP_KEY` short-circuit for bulk-cleared
-/// rows.
 pub fn release_compiled_subtree(el: &Element) {
     release_subtree(el.as_ref());
 }
 
 fn release_subtree_inner(node: &Node) {
-    // Recurse through children first so leaves are cleaned before roots.
     if let Ok(el) = node.clone().dyn_into::<Element>() {
-        // RFC 054 bulk-clear short-circuit. When the row was
-        // torn down synchronously by `for_::run_keyed`'s bulk
-        // path, the row root carries `RELEASE_SKIP_KEY`. The
-        // entire subtree's state has already been freed; the
-        // standard side-table sweep below would pay 5+
-        // `Reflect::get` calls per descendant element for
-        // nothing. Returning early collapses 11K-row `clear`
-        // teardown from ~390ms to <10ms.
+        // RFC 054 bulk-clear short-circuit. When the row was torn
+        // down synchronously by `for_::run_keyed`'s bulk path, the
+        // row root carries `RELEASE_SKIP_KEY`. The entire subtree's
+        // state has already been freed; the standard side-table
+        // sweep below would pay 5+ `Reflect::get` calls per
+        // descendant element for nothing.
         if get_private(&el, RELEASE_SKIP_KEY).is_some() {
             return;
         }
@@ -2034,15 +1700,11 @@ fn release_subtree_inner(node: &Node) {
             }
         }
         if let Some(id) = get_private(&el, SCOPE_ID_KEY).and_then(|v| v.as_f64()) {
-            // Borrowed scopes belong to some other element — don't
-            // evict them from the registry when a borrower unmounts.
             let borrowed = get_private(&el, SCOPE_BORROWED_KEY)
                 .map(|v| v.is_truthy())
                 .unwrap_or(false);
             if !borrowed {
                 let scope_id = ScopeId(id as u64);
-                // Fire the `on_unmount` lifecycle hook while the scope
-                // and its state are still valid.
                 if let Some(scope) = Scope::find(scope_id) {
                     let unmount_ctx = crate::lifecycle::LifecycleContext::__new(
                         &el,
@@ -2054,8 +1716,6 @@ fn release_subtree_inner(node: &Node) {
                     });
                 }
                 Scope::remove(scope_id);
-                // RFC-032 — drop any MountEpoch entry for this scope
-                // so a recycled scope id doesn't inherit stale values.
                 crate::lifecycle::__clear_mount_epoch(scope_id);
             }
         }
@@ -2068,122 +1728,6 @@ fn release_subtree_inner(node: &Node) {
         crate::directives::flip::release(&el);
         release_listeners(&el);
     }
-}
-
-/// `MutationObserver` install for `legacy-dom` builds. Picks up
-/// DOM nodes inserted after the initial `start()` walk —
-/// router-driven page changes (when the route component itself
-/// isn't a compiled-view child mount), markdown render output,
-/// `set_inner_html` calls in user code, externally adopted DOM.
-///
-/// RFC-058 Phase 6 v1 — gated behind the `legacy-dom` feature.
-/// Compiled-view-only builds (`default-features = false`) drop
-/// the ~200-line callback closure + the observer registration
-/// from the binary entirely.
-#[cfg(feature = "legacy-dom")]
-fn install_observer(root: &Element) {
-    let cb = Closure::wrap(Box::new(move |records: JsValue, _obs: JsValue| {
-        let Ok(arr) = records.dyn_into::<Array>() else {
-            return;
-        };
-        // Re-read every callback — devtools mounts after `start`, so
-        // the panel root isn't present when the observer installs.
-        let panel_root = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("__pp_devtools_root"));
-
-        // RFC 054 — collect parents stamped with `BULK_RELEASE_KEY`
-        // so we can clear the marker after the batch finishes
-        // processing. Accumulate during iteration; clear at the
-        // end so a parent appearing in multiple records still
-        // honors the skip.
-        let mut bulk_release_parents: Vec<Element> = Vec::new();
-
-        for i in 0..arr.length() {
-            let Ok(rec) = arr.get(i).dyn_into::<MutationRecord>() else {
-                continue;
-            };
-
-            // Devtools replaces its own innerHTML on a 200ms poll.
-            // Those records aren't app state — skip the whole record
-            // when its target is the panel (or inside it) so we don't
-            // release_subtree + re-walk the whole panel every tick.
-            if let (Some(panel), Some(target)) = (panel_root.as_ref(), rec.target()) {
-                if panel.contains(Some(&target)) {
-                    continue;
-                }
-            }
-
-            // RFC 054 Lever 5b — bulk-clear short-circuit. When the
-            // synchronous bulk path stamped `BULK_RELEASE_KEY` on
-            // the parent before `replaceChildren()`, every removed
-            // node in this record has already had its scope/effect
-            // state torn down synchronously. Skip the per-node
-            // `release_subtree` walk + recursive `Reflect::get`
-            // sweeps. Saves ~30-50ms on a 10K-row clear.
-            let bulk_skip = rec
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|parent_el| {
-                    if get_private(&parent_el, BULK_RELEASE_KEY).is_some() {
-                        bulk_release_parents.push(parent_el);
-                        Some(())
-                    } else {
-                        None
-                    }
-                });
-
-            // "Removed" records report nodes detached from *this*
-            // parent. When we reparent an element (a keyed `pp-for`
-            // reorder, `pp-teleport`, anything similar), it still ends
-            // up connected to the document — the DOM just reports the
-            // detach-then-attach as separate records. Those must not
-            // tear down the element's scope; only nodes that are
-            // genuinely gone should release.
-            if bulk_skip.is_none() {
-                let removed: NodeList = rec.removed_nodes();
-                for j in 0..removed.length() {
-                    if let Some(n) = removed.get(j) {
-                        if n.is_connected() {
-                            continue;
-                        }
-                        release_subtree(&n);
-                    }
-                }
-            }
-
-            // Symmetric for "added" — anything we already walked
-            // (including the element on the other end of a reparent)
-            // carries WALKED_KEY. Re-walking it would create duplicate
-            // effects subscribed to the same deps.
-            let added: NodeList = rec.added_nodes();
-            for j in 0..added.length() {
-                if let Some(n) = added.get(j) {
-                    if let Ok(e) = n.dyn_into::<Element>() {
-                        if get_private(&e, WALKED_KEY).is_some() {
-                            continue;
-                        }
-                        walk(&e);
-                    }
-                }
-            }
-        }
-        // Clear the bulk-release markers we honored. Done after
-        // the full record loop so multiple records pointing at
-        // the same parent all hit the skip path.
-        for parent_el in &bulk_release_parents {
-            clear_private(parent_el, BULK_RELEASE_KEY);
-        }
-    }) as Box<dyn FnMut(JsValue, JsValue)>);
-
-    let Ok(obs) = MutationObserver::new(cb.as_ref().unchecked_ref()) else {
-        return;
-    };
-    let init = MutationObserverInit::new();
-    init.set_child_list(true);
-    init.set_subtree(true);
-    let _ = obs.observe_with_options(root, &init);
-    cb.forget();
 }
 
 fn set_private(el: &Element, key: &str, value: &JsValue) {
