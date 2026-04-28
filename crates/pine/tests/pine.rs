@@ -2,11 +2,6 @@
 //! `wasm-pack test --firefox --headless crates/pine`.
 
 #![cfg(target_arch = "wasm32")]
-// RFC 061 Phase 1 — the `mount` helper still calls
-// `walker::start_compiled` to mount raw `<pine-x>` HTML.
-// Rewrites land in Phase 3 (~106 fixtures, per the migration
-// plan); Phase 1 just silences the deprecation warning here.
-#![allow(deprecated)]
 
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
@@ -34,16 +29,46 @@ fn mount(host_html: &str) -> Element {
     let host = doc().create_element("div").unwrap();
     host.set_inner_html(host_html);
     body.append_child(&host).unwrap();
-    // Pine compounds rely on the full runtime walker — 16
-    // compounds are still walker-required (the `*-portal` /
-    // `*-content` / `*-indicator` / `*-value` family per the
-    // Pine fallback audit). RFC-058 Phase 6.5 — the runtime
-    // walker is gone; tests mount through the compiled-only
-    // entry. Pine compounds whose body fragments still need
-    // walker discovery surface as fail-fast plan-failure
-    // counters under the new regime.
-    pocopine_core::walker::start_compiled(&host);
+    mount_registered_tags(&host);
     host
+}
+
+/// RFC 061 Phase 3 — replacement for the deleted
+/// `walker::start_compiled` discovery scan. Same shape as the
+/// old start_compiled body: querySelectorAll the union selector
+/// of every registered tag, mount each via the typed
+/// `mount_child_component` path, then run
+/// `finalize_compiled_subtree` to fire mount/ready hooks. Also
+/// registers `<pp-outlet>` elements with the router so
+/// route-driven tests still work.
+fn mount_registered_tags(host: &Element) {
+    let names = pocopine_core::templates::registered_template_names();
+    if !names.is_empty() {
+        let selector = names.join(",");
+        if let Ok(matches) = host.query_selector_all(&selector) {
+            for i in 0..matches.length() {
+                let Some(node) = matches.item(i) else {
+                    continue;
+                };
+                let Ok(el) = node.dyn_into::<Element>() else {
+                    continue;
+                };
+                let tag = el.local_name();
+                pocopine_core::walker::mount_child_component(&el, &tag);
+                pocopine_core::walker::finalize_compiled_subtree(&el);
+            }
+        }
+    }
+    if let Ok(outlets) = host.query_selector_all("pp-outlet") {
+        for i in 0..outlets.length() {
+            let Some(node) = outlets.item(i) else {
+                continue;
+            };
+            if let Ok(el) = node.dyn_into::<Element>() {
+                pocopine_core::router::set_outlet(el);
+            }
+        }
+    }
 }
 
 async fn tick() {

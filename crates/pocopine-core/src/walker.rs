@@ -61,12 +61,14 @@
 //! compiles the directives at expansion time and the bridge is
 //! never reached.
 
-// RFC 061 Phase 1 — this file IS the bridge. Internal calls
-// from one bridge function to another are unavoidable until the
-// whole module retires in Phase 3. File-level allow keeps the
-// public deprecation warnings on the surface (downstream
-// callers still see them) while letting the bridge compile
-// quietly until deletion.
+// RFC 061 Phase 3 — `walker.rs` still consumes the deprecated
+// `slots` module for runtime slot-store capture (used when
+// authors write raw-HTML slot content in tests / non-compiled
+// hosts). Full retirement of the slot store needs per-fixture
+// migration to compiled `template_inline` wrappers and is
+// deferred to a follow-on phase. File-level allow keeps the
+// deprecation surface visible to downstream callers without
+// blocking the build inside the bridge.
 #![allow(deprecated)]
 
 use std::cell::RefCell;
@@ -111,60 +113,6 @@ const RELEASE_SKIP_KEY: &str = "__pp_release_skip";
 /// scope points.
 pub(crate) const CTX_PARENT_KEY: &str = "__pp_ctx_parent";
 const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
-
-/// Compiled-only mount entry. Discovers registered component tags
-/// in `root`'s subtree via a single
-/// [`Element::query_selector_all`] against the union of every
-/// registered plan tag, then mounts each in document order.
-///
-/// Inner component tags inside a parent's compiled subtree will
-/// already be mounted by the parent's `apply_static_plan`
-/// child_mounts pass before the iteration reaches them; the
-/// `__pp_mounted` guard short-circuits the duplicate mount.
-///
-/// After mounting components, every `<pp-outlet>` element under
-/// `root` is registered with the router so route navigations can
-/// paint into it.
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     `App::run()` will discover a [pp-app] root in Phase 2. \
-                     Use `App::mount_subtree::<C>(host)` for tooling subtree mounts.")]
-pub fn start_compiled(root: &Element) {
-    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
-    let tags = crate::templates::registered_template_names();
-    if !tags.is_empty() {
-        let selector = tags.join(",");
-        if let Ok(matches) = root.query_selector_all(&selector) {
-            for i in 0..matches.length() {
-                let Some(node) = matches.item(i) else {
-                    continue;
-                };
-                let Ok(el) = node.dyn_into::<Element>() else {
-                    continue;
-                };
-                if get_private(&el, "__pp_mounted").is_some() {
-                    continue;
-                }
-                let tag = el.local_name();
-                mount_component(&el, &tag, None);
-                finalize_compiled_subtree(&el);
-            }
-        }
-    }
-    // RFC-058 Phase 6.5 — register every `<pp-outlet>` under `root`
-    // with the router. Previously the legacy `bind` step matched the
-    // tag and called `set_outlet`; with the walker gone, the
-    // compiled mount entry takes over.
-    if let Ok(outlets) = root.query_selector_all("pp-outlet") {
-        for i in 0..outlets.length() {
-            let Some(node) = outlets.item(i) else {
-                continue;
-            };
-            if let Ok(el) = node.dyn_into::<Element>() {
-                crate::router::set_outlet(el);
-            }
-        }
-    }
-}
 
 /// Pin a pre-built scope onto an element so [`enclosing_scope`] resolves
 /// through it. The element is assumed to **own** this scope — when the
@@ -231,9 +179,6 @@ fn fire_deferred_init(el: &Element) {
 /// rediscovers the scope through `enclosing_scope(el)` because
 /// the same element may be re-queued under a fresh scope by
 /// `pp-for` row reuse.
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     Init binding moves to compile-time emission; \
-                     this runtime helper is removed in Phase 3.")]
 pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
     let _ = scope_id; // see doc-comment
     set_private(el, INIT_PENDING_KEY, &JsValue::from_str(expr_src));
@@ -518,9 +463,6 @@ fn mount_component(
 /// Mount the registered component named `name` onto `host_el`.
 /// Public façade over `mount_component` for the macro-emitted
 /// child-mount path.
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     Macros will emit typed mount calls in Phase 3; \
-                     this string-keyed entry retires.")]
 pub fn mount_child_component(host_el: &Element, name: &str) {
     mount_component(host_el, name, None);
 }
@@ -535,9 +477,6 @@ pub fn mount_child_component(host_el: &Element, name: &str) {
 /// so dynamic slot content (slot subtrees with `pp-text` / `@click`
 /// / `pp-bind` etc.) can install bindings against the parent scope
 /// when the fragment fires.
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     Macros will emit typed mount calls in Phase 3; \
-                     this string-keyed entry retires.")]
 pub fn mount_child_component_with_slots(
     host_el: &Element,
     name: &str,
@@ -1218,10 +1157,6 @@ fn materialize_adopted_slot(
 /// materialiser ([`materialize_adopted_slot`]) can drive
 /// component / controller discovery over freshly-cloned
 /// template bodies.
-#[deprecated(note = "compiled-mount-only — see RFC 061. \
-                     Adopted-DOM bridge retires; slot content + \
-                     pp-for bodies will flow through compiled fragments \
-                     only in Phase 3.")]
 pub fn mount_adopted_components(root: &Element) {
     // Step 1: install runtime controllers on user-authored
     // `<template pp-*>` elements. Done first because pp-for /

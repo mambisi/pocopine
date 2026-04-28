@@ -413,25 +413,6 @@ pub fn __clear_mount_epoch(scope: ScopeId) {
     });
 }
 
-/// Snapshot of this component's captured slot content — the
-/// fragments the parent passed in named slots, keyed by slot name.
-/// Rarely needed directly; templates already handle slot
-/// materialisation. Exposed for devtools / advanced cases.
-#[derive(Clone)]
-pub struct Slots(pub Vec<String>);
-
-impl<'a> From<LifecycleContext<'a>> for Slots {
-    fn from(ctx: LifecycleContext<'a>) -> Self {
-        // RFC 061 Phase 1 — `slots::names_for` reads the
-        // deprecated runtime slot store. The `Slots` extractor
-        // is dropped entirely in Phase 3 (zero in-tree
-        // callers); this allow lets Phase 1 ship clean.
-        #[allow(deprecated)]
-        let names = crate::slots::names_for(ctx.scope_id);
-        Slots(names)
-    }
-}
-
 /// Millisecond timestamp (via `Date::now()`) at the moment the
 /// extractor ran. Useful for scope-level timing — pair with
 /// `on_unmount` (which takes no ctx) using an author-stored

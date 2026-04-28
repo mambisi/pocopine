@@ -27,10 +27,6 @@
 //!   `wasm-pack test --firefox --headless crates/pocopine --test template_plan`
 
 #![cfg(target_arch = "wasm32")]
-// RFC 061 Phase 1 — fixtures call `walker::start_compiled` to
-// mount raw HTML; rewrites land in Phase 3 alongside the
-// bridge deletion.
-#![allow(deprecated)]
 
 use pocopine::prelude::*;
 use pocopine_core::templates_plan::{
@@ -729,8 +725,44 @@ fn mount(host_html: &str) -> Element {
     let host = doc().create_element("div").unwrap();
     host.set_inner_html(host_html);
     body.append_child(&host).unwrap();
-    pocopine_core::walker::start_compiled(&host);
+    mount_registered_tags(&host);
     host
+}
+
+/// RFC 061 Phase 3 — replacement for the deleted
+/// `walker::start_compiled` discovery scan. Same shape as the
+/// old start_compiled body: querySelectorAll the union selector
+/// of every registered tag, mount each via the typed
+/// `mount_child_component` path, then run
+/// `finalize_compiled_subtree` to fire mount/ready hooks.
+fn mount_registered_tags(host: &Element) {
+    let names = pocopine_core::templates::registered_template_names();
+    if !names.is_empty() {
+        let selector = names.join(",");
+        if let Ok(matches) = host.query_selector_all(&selector) {
+            for i in 0..matches.length() {
+                let Some(node) = matches.item(i) else {
+                    continue;
+                };
+                let Ok(el) = node.dyn_into::<Element>() else {
+                    continue;
+                };
+                let tag = el.local_name();
+                pocopine_core::walker::mount_child_component(&el, &tag);
+                pocopine_core::walker::finalize_compiled_subtree(&el);
+            }
+        }
+    }
+    if let Ok(outlets) = host.query_selector_all("pp-outlet") {
+        for i in 0..outlets.length() {
+            let Some(node) = outlets.item(i) else {
+                continue;
+            };
+            if let Ok(el) = node.dyn_into::<Element>() {
+                pocopine_core::router::set_outlet(el);
+            }
+        }
+    }
 }
 
 async fn tick() {
@@ -1499,7 +1531,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
         &JsValue::UNDEFINED,
     );
 
-    pocopine_core::walker::start_compiled(&host);
+    mount_registered_tags(&host);
     tick().await;
 
     let marker = host
@@ -2154,13 +2186,13 @@ async fn start_compiled_skips_walker_recursion_for_registered_tags() {
     );
     body.append_child(&host).unwrap();
     let baseline = bind_call_count();
-    pocopine_core::walker::start_compiled(&host);
+    mount_registered_tags(&host);
     tick().await;
 
     let post = bind_call_count() - baseline;
     assert_eq!(
         post, 0,
-        "start_compiled mounts via apply_static_plan directly — no bind call on the wrapper, section, or component tag",
+        "compiled-mount path mounts via apply_static_plan directly — no bind call on the wrapper, section, or component tag",
     );
 
     assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
@@ -2202,7 +2234,7 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
     let host = doc().create_element("div").unwrap();
     host.set_inner_html("<start-compiled-model-host></start-compiled-model-host>");
     body.append_child(&host).unwrap();
-    pocopine_core::walker::start_compiled(&host);
+    mount_registered_tags(&host);
     tick().await;
 
     assert_eq!(read(&host, ".scmh-readout"), "seed");
