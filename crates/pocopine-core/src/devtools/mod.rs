@@ -51,7 +51,7 @@ thread_local! {
 
 /// Install the devtools overlay. Idempotent — calling twice is a
 /// no-op. Wires up the `Ctrl+Shift+D` toggle and starts the render
-/// loop. Safe to call before `walker::start` — we lazy-attach the
+/// loop. Safe to call before `mount::start` — we lazy-attach the
 /// panel to `<body>` on the first render.
 pub fn install() {
     if INSTALLED.with(|c| c.get()) {

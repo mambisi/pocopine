@@ -13,12 +13,12 @@
 //! [`crate::expr::parse_cached`] and the resulting AST is shared
 //! across every row instance. Per-row mount then walks the
 //! pre-recorded `node_path`s, evaluates ASTs, and patches DOM —
-//! bypassing the generic walker's per-row attribute scan and
+//! bypassing the generic mount's per-row attribute scan and
 //! directive dispatch.
 //!
 //! v1 fast path covers the RFC §9 example shape: flat keyed table
 //! rows with `pp-text`, `:class` / `pp-bind:class`, and bare `@<event>`
-//! listeners. Anything else falls back to the generic walker
+//! listeners. Anything else falls back to the generic mount
 //! silently — `lookup_for_template` returns `None` when the
 //! template isn't stamped, and `run_keyed` keeps its existing
 //! body.
@@ -70,7 +70,7 @@ pub enum BindingKind {
     /// attr) to the expression, with the
     /// [`crate::directives::bind`] memoisation path.
     /// RFC-058 Phase 2 — child-component prop targets are
-    /// **not** eligible (whole element falls back to walker).
+    /// **not** eligible (whole element falls back to mount).
     Bind { arg: &'static str },
     /// `pp-show="<expr>"` — toggle `display` style by
     /// truthiness; routes through transition presets when
@@ -110,8 +110,8 @@ pub struct StaticListener {
 }
 
 /// Static-lifetime descriptor for a `pp-init="<expr>"` entry.
-/// The expression is enqueued onto the walker's deferred-init
-/// pending list ([`crate::walker::defer_init_on`]) so the
+/// The expression is enqueued onto the mount's deferred-init
+/// pending list ([`crate::mount::defer_init_on`]) so the
 /// handler fires post-order after descendants are bound and
 /// refs are registered. RFC-058 Phase 2 template-plan addition.
 #[doc(hidden)]
@@ -132,12 +132,12 @@ pub struct StaticRef {
 
 /// Static-lifetime descriptor for `pp-model[.modifier]="field"`
 /// on a native input/textarea/select. RFC-058 Phase 6.5 — lifts
-/// the previously walker-only directive into the static plan so
+/// the previously mount-only directive into the static plan so
 /// compiled-only apps wire two-way input bindings without going
-/// through `walker::dispatch`. Component-target `pp-model` (with
+/// through `mount::dispatch`. Component-target `pp-model` (with
 /// or without an arg) is a separate entry on `StaticChildMount`
 /// (see [`StaticChildHostModel`]); this type covers only native
-/// elements, the path that walker dispatch routed via
+/// elements, the path that mount dispatch routed via
 /// `model::run_native`.
 #[doc(hidden)]
 pub struct StaticNativeModel {
@@ -153,21 +153,21 @@ pub struct StaticNativeModel {
 ///
 /// RFC-058 Phase 3 — emitted by the macro for every non-HTML5
 /// tag inside a plan-eligible template, so the runtime applier
-/// can call [`crate::walker::mount_child_component`] explicitly
-/// instead of leaving the tag for the walker's auto-discovery
-/// pass to find. Today the walker still walks the subtree; its
+/// can call [`crate::mount::mount_child_component`] explicitly
+/// instead of leaving the tag for the mount's auto-discovery
+/// pass to find. Today the mount still walks the subtree; its
 /// `__pp_mounted` guard makes the discovery a no-op for any tag
 /// the plan already mounted. Phase 6 (`legacy-dom` quarantine)
-/// drops the walker discovery and the plan-driven path becomes
+/// drops the mount discovery and the plan-driven path becomes
 /// the sole entry.
 ///
 /// `slots` carries the parent-authored slot fragments from
 /// RFC-058 Phase 3.5b. Empty slice means the parent didn't
 /// emit any fragments (either the slot content was dynamic and
-/// the macro left it on the walker's capture path, or the
+/// the macro left it on the mount's capture path, or the
 /// custom tag had no children). Non-empty slice flips the
-/// applier onto [`crate::walker::mount_child_component_with_slots`]
-/// so the walker's `materialize_slot` invokes the parent's
+/// applier onto [`crate::mount::mount_child_component_with_slots`]
+/// so the mount's `materialize_slot` invokes the parent's
 /// fragment instead of replaying captured DOM.
 #[doc(hidden)]
 pub struct StaticChildMount {
@@ -208,7 +208,7 @@ pub struct StaticChildHostModel {
 /// One macro-emitted slot fragment binding within a
 /// [`StaticChildMount`]. RFC-058 Phase 3.5b.
 ///
-/// `name` matches the wire-name the runtime walker uses to
+/// `name` matches the wire-name the runtime mount uses to
 /// look up slot content (`"default"` for the unnamed slot,
 /// otherwise the value of `pp-slot="<name>"` on the parent's
 /// `<template>` wrapper).
@@ -234,14 +234,14 @@ pub struct StaticSlotFragment {
 }
 
 /// Plan entry for `{{expr}}` text interpolation lifted out of
-/// the runtime walker (RFC-058 Phase 6.2).
+/// the runtime mount (RFC-058 Phase 6.2).
 ///
 /// The macro scans an element's direct text-node children at
 /// compile time, parses `{{...}}` segments, and emits one entry
 /// per interpolated text node. The applier uses
 /// [`crate::directives::interp::install_planned`] to bind the
 /// segments to the resolved text node — same install path the
-/// walker would have run, just with the segment list pre-parsed.
+/// mount would have run, just with the segment list pre-parsed.
 ///
 /// `node_path` resolves the parent element via `apply_static_plan`'s
 /// `resolve` helper. `text_index` selects which text-node child
@@ -263,11 +263,11 @@ pub struct StaticInterp {
 /// scope-chain quirks — they're DOM-side effects that install
 /// once and self-manage. Before this entry existed, the macro
 /// preserved them on the cleaned HTML and flipped
-/// `requires_walker = true` so the walker could discover and
+/// `requires_walker = true` so the mount could discover and
 /// dispatch them. Now the macro lifts allowlisted directives
 /// into this entry; the applier invokes
 /// [`crate::directives::lookup`] just like
-/// [`crate::walker::dispatch`] would.
+/// [`crate::mount::dispatch`] would.
 ///
 /// `name` is the directive head (after `pp-` strip), e.g.
 /// `"roving"`. `arg` is the part after the first `:` in the
@@ -292,7 +292,7 @@ pub struct StaticOpaqueDirective {
 /// plan records the outlet path so `apply_static_plan` can
 /// materialise it explicitly after all other path-based plan
 /// entries have resolved. That removes `<slot>` from the
-/// recursive walker's discovery path for planned templates while
+/// recursive mount's discovery path for planned templates while
 /// retaining the legacy materialiser as the scoped/fallback
 /// bridge.
 #[doc(hidden)]
@@ -308,7 +308,7 @@ pub struct StaticSlotOutlet {
 /// inside the cleaned plan root — the macro keeps the element
 /// in the rewritten HTML so `clone_template_body` still has
 /// something to clone (legacy path), but strips the `pp-if`
-/// attribute so the runtime walker's directive-dispatch path
+/// attribute so the runtime mount's directive-dispatch path
 /// doesn't double-install the effect.
 ///
 /// `expr_src` is the original truthy expression. The applier
@@ -317,7 +317,7 @@ pub struct StaticSlotOutlet {
 ///
 /// `teleport_selector` is `Some` for a co-occurring
 /// `pp-if` + `pp-teleport` site. The macro strips both source
-/// attributes so the runtime walker does not double-install
+/// attributes so the runtime mount does not double-install
 /// either directive; the compiled if controller uses this
 /// selector directly when the branch mounts.
 ///
@@ -326,7 +326,7 @@ pub struct StaticSlotOutlet {
 /// installer invokes the fragment to materialise the body
 /// (parses cleaned HTML, runs `apply_static_plan` against the
 /// parent scope) instead of going through the legacy
-/// `clone_template_body` + `walker::walk` path. `None` falls
+/// `clone_template_body` + `mount::walk` path. `None` falls
 /// back to today's clone+walk — the body had something Phase
 /// 4.1d's v1 envelope can't handle (nested custom tag,
 /// `<slot>`, nested controller, `pp-init`, etc.).
@@ -363,12 +363,12 @@ pub type IfBodyFn =
 /// The macro guarantees this entry only graduates when no
 /// `pp-if` is present on the same element — when both are
 /// present, `pp-if`'s install path consults the teleport
-/// attribute directly and pp-teleport stays on the walker.
+/// attribute directly and pp-teleport stays on the mount.
 ///
 /// `body` is the macro-emitted [`TeleportBodyFn`] when the
 /// teleport body subtree qualified for Phase 4.3c lifting.
 /// `None` falls back to today's `clone_template_body` +
-/// `walker::walk` path the runtime installer already drives.
+/// `mount::walk` path the runtime installer already drives.
 #[doc(hidden)]
 pub struct StaticTeleportPlan {
     pub template_node_path: &'static [u16],
@@ -407,7 +407,7 @@ pub type TeleportBodyFn =
 /// path is strictly better than per-row `apply_static_plan`).
 /// Per-row mounts invoke the fragment to materialise + install
 /// directives against the row's `LoopScope` instead of going
-/// through `clone_template_body` + `walker::walk`. `None`
+/// through `clone_template_body` + `mount::walk`. `None`
 /// falls back to today's clone+walk.
 #[doc(hidden)]
 pub struct StaticForPlan {
@@ -513,7 +513,7 @@ thread_local! {
 ///
 /// Idempotent — repeat calls overwrite the prior entry. Parse
 /// failures here would indicate a macro bug; we log and skip the
-/// plan so the runtime falls back to the generic walker.
+/// plan so the runtime falls back to the generic mount.
 pub fn register_row_plans(component_name: &str, plans: &'static [StaticRowPlan]) {
     if plans.is_empty() {
         return;
@@ -859,7 +859,7 @@ fn install_list_delegated_listener(parent_el: Element, event: &'static str) {
             // discard the proxy here. The handler dispatch path
             // (`dispatch_delegated_event` →`instance_proxy`)
             // lazy-mints only if the listener AST actually needs it.
-            if let Some(scope_id) = crate::walker::scope_id_of_element(&el) {
+            if let Some(scope_id) = crate::mount::scope_id_of_element(&el) {
                 dispatch_delegated_event(scope_id, event, &target, &ev);
                 return;
             }
@@ -868,7 +868,7 @@ fn install_list_delegated_listener(parent_el: Element, event: &'static str) {
     }) as Box<dyn FnMut(Event)>);
 
     let target: EventTarget = parent_el.into();
-    crate::walker::track_listener_on(&parent_for_track, target, event, false, closure);
+    crate::mount::track_listener_on(&parent_for_track, target, event, false, closure);
 }
 
 fn dispatch_delegated_event(
@@ -911,7 +911,7 @@ fn dispatch_delegated_event(
 /// Resolve the compiled plan for a `<template pp-for>` element.
 /// Returns `None` when the template isn't stamped (eligibility
 /// rejection at macro time, or the consumer crate's macro version
-/// predates RFC 054) — the caller falls back to the generic walker.
+/// predates RFC 054) — the caller falls back to the generic mount.
 pub fn lookup_for_template(template_el: &Element) -> Option<Rc<CompiledRowPlan>> {
     let plan_id = template_el
         .get_attribute("data-pp-row-plan")
@@ -1085,7 +1085,7 @@ fn resolve_node_path(root: &Element, path: &[u16]) -> Option<Element> {
 /// through [`reuse_row_compiled`] which walks the cache and
 /// patches DOM only on real change. This skips the per-row
 /// effect-machinery + Reflect::get tracking that dominates
-/// `update every 10th` cost in the generic walker.
+/// `update every 10th` cost in the generic mount.
 pub(crate) fn mount_row_compiled(
     plan: &Rc<CompiledRowPlan>,
     row_root: &Element,
@@ -1357,7 +1357,7 @@ fn refresh_parent_bindings(scope_id: ScopeId) {
 ///
 /// Returns `true` if the row was tracked (compiled-path row);
 /// `false` lets the caller fall back to `trigger_scope` for any
-/// row whose mount went through the generic walker.
+/// row whose mount went through the generic mount.
 pub(crate) fn reuse_row_compiled(scope_id: ScopeId) -> bool {
     ROW_INSTANCES.with(|m| {
         let mut map = m.borrow_mut();
@@ -1383,7 +1383,7 @@ pub(crate) fn reuse_row_compiled(scope_id: ScopeId) -> bool {
 }
 
 /// Drop a row's per-instance state. Called from `for_.rs` when
-/// reconcile permanently retires a row. The walker's
+/// reconcile permanently retires a row. The mount's
 /// `release_subtree` already tears down `addEventListener`
 /// registrations via the element-scoped listener side-table; we
 /// drop this row from its list watcher's `members` index here,

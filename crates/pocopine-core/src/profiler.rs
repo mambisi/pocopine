@@ -14,7 +14,7 @@
 //!   build, per-row iter, leaver drain, DOM reorder).
 //! - [`state_sync`] — `Handle::update` / `Scope::invoke` phases
 //!   (closure body, field-cache invalidate, trigger sweep).
-//! - [`unmount`] — `walker::release_subtree` per-subtree teardown
+//! - [`unmount`] — `mount::release_subtree` per-subtree teardown
 //!   (effects release, listener release, scope removal).
 //!
 //! All four share the same enable flag + JSON envelope; one

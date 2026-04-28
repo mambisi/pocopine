@@ -2,7 +2,7 @@
 //!
 //! Port of the shape of pretext's `walkPreparedLinesRaw` simplified
 //! to the v1 segment kinds ([`SegmentKind::Text`] / `Space` /
-//! `ZeroWidthBreak` / `SoftHyphen`). The walker holds one
+//! `ZeroWidthBreak` / `SoftHyphen`). The mount holds one
 //! "pending break" — the most recent position we can retreat to
 //! when the next segment overflows — and falls back to per-grapheme
 //! placement when a single Text segment is itself wider than the

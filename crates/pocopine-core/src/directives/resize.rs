@@ -81,7 +81,7 @@ pub fn install_opaque(
     let _ = Reflect::set(host_el.as_ref(), &OBS_KEY.into(), observer.as_ref());
 }
 
-/// Called by `walker::release_subtree` on every released element.
+/// Called by `mount::release_subtree` on every released element.
 /// Disconnects any ResizeObserver stashed under [`OBS_KEY`].
 pub fn release(el: &Element) {
     let Ok(v) = Reflect::get(el.as_ref(), &OBS_KEY.into()) else {

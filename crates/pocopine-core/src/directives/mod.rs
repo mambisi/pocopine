@@ -1,6 +1,6 @@
 //! Directive install entries.
 //!
-//! RFC-058 Phase 6.5 retired the runtime walker, the
+//! RFC-058 Phase 6.5 retired the runtime mount, the
 //! `DirectiveCall`-based dispatch loop, and the directive registry.
 //! Every directive is now reached through a typed `install` entry
 //! invoked by the macro-emitted `apply_static_plan` path; this

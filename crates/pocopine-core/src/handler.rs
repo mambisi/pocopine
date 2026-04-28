@@ -68,7 +68,7 @@ pub trait HandlerDispatch {
     }
 
     /// True iff the component author actually wrote an `on_mount`
-    /// method. The walker uses this to decide whether to fire a
+    /// method. The mount uses this to decide whether to fire a
     /// `trigger_scope` sweep after [`mount`] — components with no
     /// hook should not pay for a sweep.
     fn has_on_mount(&self) -> bool {
@@ -76,14 +76,14 @@ pub trait HandlerDispatch {
     }
 
     /// True iff the component author actually wrote an `on_ready`
-    /// method. The walker uses this to decide whether to schedule
+    /// method. The mount uses this to decide whether to schedule
     /// the post-mount tick — components without the hook pay nothing.
     fn has_on_ready(&self) -> bool {
         false
     }
 
     /// Symmetric with [`has_on_mount`] for `on_unmount`. Currently
-    /// informational — the walker doesn't sweep on unmount — but kept
+    /// informational — the mount doesn't sweep on unmount — but kept
     /// for parity and so future devtools can show per-component
     /// lifecycle coverage.
     fn has_on_unmount(&self) -> bool {

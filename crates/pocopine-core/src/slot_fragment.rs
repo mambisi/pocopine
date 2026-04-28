@@ -1,17 +1,17 @@
 //! Parent-owned slot fragment ABI (RFC-058 §5.5).
 //!
-//! Today the runtime walker captures slot content from a child
+//! Today the runtime mount captures slot content from a child
 //! component's `light DOM` children, stashes the resulting
 //! `DocumentFragment`s in a thread-local keyed on the child's
-//! `ScopeId`, and replays them when the walker reaches the
-//! child's `<slot>` placeholder. That model puts the walker in
+//! `ScopeId`, and replays them when the mount reaches the
+//! child's `<slot>` placeholder. That model puts the mount in
 //! the middle of every parent/child slot exchange — which is
 //! the exact ownership boundary RFC-058 §5.5 wants to remove.
 //!
 //! The replacement: parents emit slot **fragment functions**
 //! at compile time and pass them to the child's mount call.
 //! When the child reaches `<slot>` it invokes the parent's
-//! fragment function directly, with no walker discovery in
+//! fragment function directly, with no mount discovery in
 //! between. The fragment function runs in the parent's scope
 //! (so `@click="parent_handler"` inside slotted content works
 //! without scope acrobatics) and stamps directly into the
@@ -20,7 +20,7 @@
 //! This module ships the **type surface** the macro-generated
 //! mount code (RFC-058 Phase 3+) will populate. Phase 1 only
 //! defines the shapes — the existing slots / capture path
-//! continues to drive walker-mounted parents unchanged. Phase 3
+//! continues to drive mount-mounted parents unchanged. Phase 3
 //! replaces the runtime capture path for compiled parents with
 //! direct fragment-function passing.
 
@@ -59,8 +59,8 @@ pub type SlotFragment = fn(ctx: SlotMountCtx<'_>);
 ///
 /// Using a `DocumentFragment` rather than the live slot host
 /// keeps the fragment side oblivious to where in the DOM the
-/// content lands — same buffer pattern the legacy walker's
-/// capture/replay path uses (see [`crate::walker::materialize_slot`]).
+/// content lands — same buffer pattern the legacy mount's
+/// capture/replay path uses (see [`crate::mount::materialize_slot`]).
 pub struct SlotMountCtx<'a> {
     pub host: &'a DocumentFragment,
     pub parent_scope_id: ScopeId,
@@ -97,14 +97,14 @@ pub struct SlotSet {
 }
 
 /// Reserved slot name for the default (unnamed) slot. Matches
-/// the wire-name the runtime walker uses for `default` slot
-/// keying so the migration from walker-captured slots to
+/// the wire-name the runtime mount uses for `default` slot
+/// keying so the migration from mount-captured slots to
 /// fragment-function slots can interoperate during Phase 3.
 pub const DEFAULT_SLOT_NAME: &str = "default";
 
 impl SlotSet {
-    /// Empty set — what the runtime walker passes today for
-    /// walker-driven mounts (no parent-emitted fragments yet).
+    /// Empty set — what the runtime mount passes today for
+    /// mount-driven mounts (no parent-emitted fragments yet).
     pub fn new() -> Self {
         Self::default()
     }
@@ -188,9 +188,9 @@ struct InstalledSlots {
 thread_local! {
     /// Fragments the parent passed for each child component
     /// instance, keyed by the child's `ScopeId`. Populated by
-    /// [`crate::walker::mount_child_component_with_slots`] right
-    /// after [`crate::walker::mount_component`] instantiates the
-    /// child, consumed by [`crate::walker::materialize_slot`]
+    /// [`crate::mount::mount_child_component_with_slots`] right
+    /// after [`crate::mount::mount_component`] instantiates the
+    /// child, consumed by [`crate::mount::materialize_slot`]
     /// when the child template's `<slot>` element is reached.
     /// Cleared from [`crate::scope::Scope::remove`] so the map
     /// doesn't outlive the child component.
@@ -200,7 +200,7 @@ thread_local! {
 /// Register the parent-supplied [`SlotSet`] for a child component
 /// instance, capturing the parent's scope id + proxy alongside.
 /// Idempotent — a repeat call replaces the prior set (the
-/// runtime walker remounts the same scope id only after
+/// runtime mount remounts the same scope id only after
 /// teardown, so this only fires for fresh mounts).
 ///
 /// No-op when the set is empty so an opaque mount call (every
@@ -231,7 +231,7 @@ pub fn install(
 /// the parent context the installer captured. `None` when the
 /// parent didn't register a [`SlotSet`] for this child, or
 /// registered one without an entry for `name`. Caller (the
-/// walker's slot materialiser) falls back to the legacy capture
+/// mount's slot materialiser) falls back to the legacy capture
 /// path when this returns `None`.
 pub fn lookup(child_scope_id: ScopeId, name: &str) -> Option<(SlotEntry, ScopeId, JsValue)> {
     FRAGMENTS.with(|m| {
@@ -298,7 +298,7 @@ pub fn stamp_dynamic_slot(
         return;
     };
     temp.set_inner_html(html);
-    crate::walker::bind_borrowed_scope_to(&temp, parent_scope_id, parent_proxy);
+    crate::mount::bind_borrowed_scope_to(&temp, parent_scope_id, parent_proxy);
     // RFC-027 inject chain — stamp `CTX_PARENT_KEY` on the
     // temp host so any nested `mount_child_component` call
     // inside `apply_static_plan` resolves its inject parent
@@ -306,9 +306,9 @@ pub fn stamp_dynamic_slot(
     // contains the `<slot>`), not to the parent caller scope
     // we're installing bindings against. Mirrors what
     // `materialize_slot`'s legacy capture path does for
-    // walker-driven slot content (see `walker.rs` near the
+    // mount-driven slot content (see `mount.rs` near the
     // CTX_PARENT_KEY stamp inside `bind_borrowed_scope_to`).
-    let key = wasm_bindgen::JsValue::from_str(crate::walker::CTX_PARENT_KEY);
+    let key = wasm_bindgen::JsValue::from_str(crate::mount::CTX_PARENT_KEY);
     let val = wasm_bindgen::JsValue::from_f64(child_scope_id.0 as f64);
     let _ = js_sys::Reflect::set(temp.as_ref(), &key, &val);
     // Stamp every top-level child BEFORE `apply_static_plan`
@@ -324,7 +324,7 @@ pub fn stamp_dynamic_slot(
     let elements = temp.children();
     for i in 0..elements.length() {
         if let Some(el) = elements.item(i) {
-            crate::walker::bind_borrowed_scope_to(&el, parent_scope_id, parent_proxy);
+            crate::mount::bind_borrowed_scope_to(&el, parent_scope_id, parent_proxy);
             let _ = js_sys::Reflect::set(el.as_ref(), &key, &val);
         }
     }

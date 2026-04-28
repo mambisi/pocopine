@@ -6,7 +6,7 @@
 //! * `ContextKey` method-style provide/inject parity with the free
 //!   functions (RFC 056 §6.4)
 //! * `Emit` trait — variant→event-name kebab mapping (the
-//!   serde→`JsValue` payload path is exercised by the wasm walker
+//!   serde→`JsValue` payload path is exercised by the wasm browser
 //!   tests; this layer just pins the name table)
 //!
 //! Runs under `wasm-pack test --node` like the rest of the

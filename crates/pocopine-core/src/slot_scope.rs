@@ -82,7 +82,7 @@ impl ComponentState for SlotScope {
         // the component that authored the slot content. The slot
         // scope itself owns no handlers; without this delegation,
         // handler dispatch would silently no-op for every compiled
-        // and walker-driven scoped slot listener.
+        // and mount-driven scoped slot listener.
         crate::scope::invoke_handler(self.caller_scope_id, key, args)
     }
 }

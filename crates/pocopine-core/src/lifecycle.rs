@@ -1,7 +1,7 @@
 //! RFC-032 — `LifecycleContext` carrier + built-in extractors.
 //!
 //! `on_mount` and `on_ready` handlers receive typed projections of
-//! a shared `LifecycleContext` via stdlib `From`. The walker builds
+//! a shared `LifecycleContext` via stdlib `From`. The mount builds
 //! one carrier per hook call; `#[handlers]` inspects the user's
 //! method signature and emits one `.into()` per parameter. Each
 //! extractor is a plain `impl From<LifecycleContext<'a>> for
@@ -21,7 +21,7 @@ use crate::reactive::ScopeId;
 use crate::scope::Scope;
 
 /// Read-only carrier handed to `on_mount` / `on_ready` by the
-/// walker. Authors don't construct it; built-in extractors project
+/// mount. Authors don't construct it; built-in extractors project
 /// from it into typed values (see §4.3 of RFC-032).
 ///
 /// `#[non_exhaustive]` keeps future field additions additive —
@@ -58,13 +58,13 @@ pub struct LifecycleContext<'a> {
     pub el: &'a Element,
     /// This component's scope id.
     pub scope_id: ScopeId,
-    /// Which lifecycle slot the walker fired this hook from.
+    /// Which lifecycle slot the mount fired this hook from.
     /// Element-dependent extractors guard on this.
     pub phase: LifecyclePhase,
 }
 
 impl<'a> LifecycleContext<'a> {
-    /// Internal constructor — walker mints these in `fire_*_hook`;
+    /// Internal constructor — mount mints these in `fire_*_hook`;
     /// not exposed to downstream because the type is
     /// `#[non_exhaustive]`.
     #[doc(hidden)]
@@ -375,7 +375,7 @@ impl<'a> From<LifecycleContext<'a>> for TeleportHost {
 }
 
 thread_local! {
-    /// Monotonic counter bumped by the walker for each scope's
+    /// Monotonic counter bumped by the mount for each scope's
     /// first hook firing. `MountEpoch` exposes it so authors can
     /// tell a re-walk apart from the original mount.
     static MOUNT_EPOCH_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

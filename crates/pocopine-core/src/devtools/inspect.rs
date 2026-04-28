@@ -19,7 +19,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{window, Element, Event, Node};
 
 use super::{event as dev_event, highlight, panel, shell};
-use crate::walker;
+use crate::mount;
 
 type EventClosure = Closure<dyn FnMut(Event)>;
 
@@ -84,7 +84,7 @@ fn attach() {
         ev.prevent_default();
         ev.stop_propagation();
 
-        let maybe_scope = walker::enclosing_scope(&start).map(|(id, _)| id);
+        let maybe_scope = mount::enclosing_scope(&start).map(|(id, _)| id);
         if let Some(scope_id) = maybe_scope {
             // Scope panel is the only consumer for now; we dispatch
             // a synthetic selection directly through its state. Once

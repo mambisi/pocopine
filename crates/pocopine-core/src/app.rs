@@ -27,9 +27,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::Element;
 
+use crate::mount;
 use crate::router;
 use crate::store::Store;
-use crate::walker;
 
 /// Every component participates in the app surface via this trait. The
 /// `#[component]` macro emits the impl automatically.
@@ -237,7 +237,7 @@ impl App {
     /// + DOM cleanly.
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
-        walker::mount_child_component(host, C::NAME);
+        mount::mount_child_component(host, C::NAME);
         SubtreeHandle { host: host.clone() }
     }
 }
@@ -256,14 +256,13 @@ impl SubtreeHandle {
     /// children. After this the host element remains in the
     /// DOM but contains nothing pocopine owns.
     pub fn unmount(self) {
-        walker::release_compiled_subtree(&self.host);
+        mount::release_compiled_subtree(&self.host);
         self.host.set_inner_html("");
     }
 }
 
-/// RFC 061 Phase 3 — replacement for the deleted
-/// `walker::start_compiled` body. Mounts every registered
-/// custom-tag descendant of the `[pp-app]` host via the typed
+/// RFC 061 Phase 3 — compiled root discovery. Mounts every
+/// registered custom-tag descendant of the `[pp-app]` host via the typed
 /// `mount_child_component` path, fires lifecycle hooks via
 /// `finalize_compiled_subtree`, then registers any
 /// `<pp-outlet>` element so the router can paint matched
@@ -282,8 +281,8 @@ fn mount_pp_app_subtree(host: &Element) {
                     continue;
                 };
                 let tag = el.local_name();
-                walker::mount_child_component(&el, &tag);
-                walker::finalize_compiled_subtree(&el);
+                mount::mount_child_component(&el, &tag);
+                mount::finalize_compiled_subtree(&el);
             }
         }
     }

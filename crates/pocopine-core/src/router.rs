@@ -6,12 +6,12 @@
 //!   (see [`register_route`]). Patterns are `/foo/:id` style, with
 //!   `*` as the 404-fallback.
 //! * A single `<pp-outlet>` in the DOM is the mount point
-//!   ([`set_outlet`]). The walker recognises the tag and hands its
+//!   ([`set_outlet`]). The mount recognises the tag and hands its
 //!   element to the router.
 //! * Navigation goes through [`navigate`]. It pushes a new history
 //!   entry, re-matches, unmounts the prior page, and creates a
 //!   `<component-name>` tag with path-params as HTML attributes inside
-//!   the outlet. The existing [`crate::walker::walk`] pipeline picks
+//!   the outlet. The existing [`crate::mount::walk`] pipeline picks
 //!   it up and handles tag resolution + prop coercion.
 //! * A synthetic `RouteState` scope drives the `$route` magic. The
 //!   router calls [`trigger_scope`] on its id so any template binding
@@ -29,9 +29,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
+use crate::mount;
 use crate::reactive::trigger_scope;
 use crate::scope::{ComponentState, Scope};
-use crate::walker;
 
 // ─── route parsing ──────────────────────────────────────────────────
 
@@ -161,7 +161,7 @@ pub fn register_route(pattern: String, component_name: &'static str) {
     });
 }
 
-/// Tell the router where to mount pages. Called from the walker when
+/// Tell the router where to mount pages. Called from the mount when
 /// it sees `<pp-outlet>`.
 pub fn set_outlet(el: Element) {
     OUTLET.with(|o| *o.borrow_mut() = Some(el));
@@ -261,12 +261,12 @@ fn mount_current() {
 
     // Paint into the outlet. `replace_children` removes the previous
     // page's subtree, which the MutationObserver turns into effect +
-    // scope cleanup via `walker::release_subtree`.
+    // scope cleanup via `mount::release_subtree`.
     let outlet = OUTLET.with(|o| o.borrow().clone());
     let Some(outlet) = outlet else { return };
     let Some(doc) = win.document() else { return };
 
-    // Build `<name key="value" ...>`; the walker handles the mount.
+    // Build `<name key="value" ...>`; the mount handles the mount.
     let el = match doc.create_element(name) {
         Ok(e) => e,
         Err(_) => return,
@@ -276,12 +276,12 @@ fn mount_current() {
     }
     outlet.replace_children_with_node_1(el.as_ref());
     // RFC-058 Phase 6.5 — drive the route component's mount through
-    // the compiled-only entry. The walker's recursive directive
+    // the compiled-only entry. The mount's recursive directive
     // scan is gone; route components must be `#[component]` types
     // so their template plan installs every binding/listener via
     // the macro-emitted entries.
-    walker::mount_child_component(&el, name);
-    walker::finalize_compiled_subtree(&el);
+    mount::mount_child_component(&el, name);
+    mount::finalize_compiled_subtree(&el);
 }
 
 /// Find the first matching route's component name + params.

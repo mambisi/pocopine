@@ -77,12 +77,12 @@ pub mod __private {
         apply_static_plan, apply_static_pp_as_plan, plan_failure_count, register_template_plan,
         reset_plan_failure_count, stamp_if_body, template_plan_for, StaticTemplatePlan,
     };
-    // RFC-058 Phase 1: walker lifecycle / cleanup helpers exposed
+    // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
     // call through the umbrella's stable `::pocopine::__private`
     // namespace. Same shape as the existing `register_template` /
     // `register_row_plans` re-exports above.
-    pub use pocopine_core::walker::{
+    pub use pocopine_core::mount::{
         defer_init_on, finalize_compiled_subtree, fire_mount_post_order, fire_ready_next_tick,
         mount_child_component, mount_child_component_with_slots, release_compiled_subtree,
     };

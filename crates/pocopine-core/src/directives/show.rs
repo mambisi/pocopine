@@ -10,9 +10,9 @@ use web_sys::{Element, HtmlElement};
 
 use super::transition;
 use crate::expr::{self, Spanned};
+use crate::mount::track_effect_on;
 use crate::reactive::effect;
 use crate::scope::with_current_el;
-use crate::walker::track_effect_on;
 
 /// Install a `pp-show` effect on `el` that toggles its `display`
 /// style by the truthiness of `expr`. If the element carries any

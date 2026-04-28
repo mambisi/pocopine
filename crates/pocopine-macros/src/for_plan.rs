@@ -9,7 +9,7 @@
 //! - no transition attrs (`pp-transition:*`, `pp-stagger`),
 //! - no registered child component tags (anything with a `-`
 //!   in the local name — custom elements / Pine compounds
-//!   always fall back to the generic walker per RFC 054 §6.3),
+//!   always fall back to the generic mount per RFC 054 §6.3),
 //! - supported bindings: `pp-text`, `:class` /
 //!   `pp-bind:class`,
 //! - supported listeners: bare `@<event>` /
@@ -25,7 +25,7 @@
 //!    resolve the directive call back to its compiled plan).
 //!
 //! Rejected templates emit nothing — the runtime takes the
-//! generic `walker::walk` path silently.
+//! generic `mount::walk` path silently.
 
 use std::ops::Range;
 
@@ -122,7 +122,7 @@ fn walk(el: &Element, ast: &TemplateAst, ctx: &mut AnalysisCtx, path: &mut Vec<u
     if el.synthetic {
         // Synthetic elements (html5ever's auto-inserted `<tbody>`)
         // — skip but recurse. Don't push a path index for the
-        // synthetic wrapper itself; the runtime walker doesn't
+        // synthetic wrapper itself; the runtime mount doesn't
         // see it either.
         for (i, child) in el.children.iter().enumerate() {
             if let Node::Element(child_el) = child {
@@ -234,7 +234,7 @@ fn try_compile_row(template_el: &Element, plan_id: u32) -> Option<(TokenStream, 
     let listeners = walk_ctx.listeners;
     if bindings.is_empty() && listeners.is_empty() {
         // No dynamic surface inside the row — a plan would
-        // duplicate the static clone. Let the generic walker
+        // duplicate the static clone. Let the generic mount
         // handle it; the cost is negligible.
         return None;
     }

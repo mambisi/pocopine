@@ -70,7 +70,7 @@ pub fn install_opaque(
     }
 }
 
-/// Called by `walker::release_subtree` on every released element.
+/// Called by `mount::release_subtree` on every released element.
 pub fn release(el: &Element) {
     let Ok(v) = Reflect::get(el.as_ref(), &STATE_KEY.into()) else {
         return;
@@ -549,7 +549,7 @@ fn active_element() -> Option<HtmlElement> {
 /// entry-transfer closure see the listbox id without capturing
 /// the full `DirectiveCall`.
 fn read_roving_arg(el: &Element) -> Option<String> {
-    // The walker strips the pp-roving attribute after dispatch in
+    // The mount strips the pp-roving attribute after dispatch in
     // `release_subtree` — but at install time it's still here.
     // Scan attributes for `pp-roving:<id>`.
     let attrs = el.attributes();
