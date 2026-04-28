@@ -34,7 +34,21 @@ use serde::{Deserialize, Serialize};
 #[component(
     template = "PineDatePicker.poco",
     role = "interactive",
-    display = "contents"
+    display = "contents",
+    uses = [
+        crate::popover::PinePopoverRoot,
+        crate::popover::PinePopoverTrigger,
+        crate::popover::PinePopoverPortal,
+        crate::popover::PinePopoverContent,
+        crate::calendar::PineCalendarRoot,
+        crate::calendar::PineCalendarHeader,
+        crate::calendar::PineCalendarPrev,
+        crate::calendar::PineCalendarHeading,
+        crate::calendar::PineCalendarNext,
+        crate::calendar::PineCalendarGrid,
+        crate::calendar::PineCalendarGridHead,
+        crate::calendar::PineCalendarGridBody,
+    ],
 )]
 pub struct PineDatePicker {
     #[model]

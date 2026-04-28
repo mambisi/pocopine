@@ -39,6 +39,8 @@
 //!   the trait half is proven. This commit establishes the
 //!   trait half.
 
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Path;
@@ -46,6 +48,7 @@ use syn::Path;
 use crate::slot::SlotName;
 use crate::template_parser::{Element, Node, TemplateAst};
 use crate::uses::UsesTable;
+use crate::HTML5_ELEMENTS;
 
 /// Walk `ast` alongside `uses` and emit slot-contract
 /// assertions for every typed-parent / direct-child pair.
@@ -184,6 +187,75 @@ fn emit_one_assertion(
     out.extend(assertion);
 }
 
+/// RFC 060 Tier 2 — emit `compile_error!` for every
+/// custom-element tag in `ast` not covered by `uses`. A custom
+/// element is any tag containing `-` that isn't an HTML5 native.
+/// Each unique unknown tag fires once (further occurrences in
+/// the same template are deduplicated).
+///
+/// Returns an empty `TokenStream` when every custom tag
+/// resolves. Validation only runs when the consumer declares
+/// `uses = [...]`; components without `uses` continue to
+/// compile unchecked (the brief's incremental rollout).
+pub(crate) fn emit_unknown_tag_diagnostics(ast: &TemplateAst, uses: &UsesTable) -> TokenStream {
+    let mut out = TokenStream::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for node in &ast.roots {
+        if let Node::Element(el) = node {
+            walk_for_unknown_tags(el, uses, &mut out, &mut seen);
+        }
+    }
+    out
+}
+
+fn walk_for_unknown_tags(
+    el: &Element,
+    uses: &UsesTable,
+    out: &mut TokenStream,
+    seen: &mut HashSet<String>,
+) {
+    if !el.synthetic
+        && is_custom_tag(&el.tag)
+        && uses.lookup(&el.tag).is_none()
+        && seen.insert(el.tag.clone())
+    {
+        let hint = pascal_case(&el.tag);
+        let msg = format!(
+            "tag `<{tag}>` is not declared in this component's `uses` list\n  \
+             help: add `uses = [{hint}]` to the #[component(...)] attribute,\n  \
+                   or re-export via a bundle (e.g. `uses = [pine::Dialog]`).",
+            tag = el.tag,
+        );
+        out.extend(quote! { ::core::compile_error!(#msg); });
+    }
+    for child in &el.children {
+        if let Node::Element(child_el) = child {
+            walk_for_unknown_tags(child_el, uses, out, seen);
+        }
+    }
+}
+
+/// `true` for any hyphenated tag that isn't an HTML5 native —
+/// the Custom Elements spec reserves hyphenation for custom
+/// elements, and `HTML5_ELEMENTS` is the canonical native list.
+fn is_custom_tag(tag: &str) -> bool {
+    tag.contains('-') && HTML5_ELEMENTS.binary_search(&tag).is_err()
+}
+
+fn pascal_case(kebab: &str) -> String {
+    kebab
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let mut chars = p.chars();
+            match chars.next() {
+                Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Extract `pp-slot="NAME"` value from an element's
 /// attributes. Returns `None` if the attribute is missing or
 /// has an empty value.
@@ -314,6 +386,73 @@ mod tests {
         let uses = UsesTable::default();
         let tokens = emit_slot_assertions(&ast, &uses);
         assert!(tokens.is_empty());
+    }
+
+    // ── RFC 060 Tier 2 — unknown-tag diagnostics ──────────
+
+    #[test]
+    fn unknown_tag_emits_compile_error_with_help() {
+        let src = r#"<pine-foo><pine-bar></pine-bar></pine-foo>"#;
+        let (ast, _errors) = parse(src, "test.poco");
+        let uses = table(vec![bare("PineFoo")]);
+        let tokens = emit_unknown_tag_diagnostics(&ast, &uses);
+        let s = tokens.to_string();
+        assert!(
+            s.contains("compile_error"),
+            "expected compile_error! macro call, got:\n{s}"
+        );
+        assert!(s.contains("pine-bar"), "expected offending tag in message");
+        assert!(
+            s.contains("PineBar"),
+            "expected pascal-cased type hint, got:\n{s}"
+        );
+        assert!(
+            s.contains("uses ="),
+            "expected `uses = [...]` help text, got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn known_tags_produce_no_diagnostics() {
+        let src = r#"<pine-foo><pine-bar></pine-bar></pine-foo>"#;
+        let (ast, _errors) = parse(src, "test.poco");
+        let uses = table(vec![bare("PineFoo"), bare("PineBar")]);
+        let tokens = emit_unknown_tag_diagnostics(&ast, &uses);
+        assert!(
+            tokens.is_empty(),
+            "every tag is in `uses`, expected empty diagnostics"
+        );
+    }
+
+    #[test]
+    fn html5_native_tags_are_not_flagged() {
+        // `<div>` and `<span>` are HTML5 native — never flagged
+        // even when no `uses` entry exists for them.
+        let src = r#"<div><span><pine-foo></pine-foo></span></div>"#;
+        let (ast, _errors) = parse(src, "test.poco");
+        let uses = table(vec![bare("PineFoo")]);
+        let tokens = emit_unknown_tag_diagnostics(&ast, &uses);
+        assert!(
+            tokens.is_empty(),
+            "HTML5 natives must not trigger validation, got:\n{tokens}"
+        );
+    }
+
+    #[test]
+    fn duplicate_unknown_tag_is_reported_once() {
+        let src = r#"<pine-foo><pine-bar></pine-bar><pine-bar></pine-bar></pine-foo>"#;
+        let (ast, _errors) = parse(src, "test.poco");
+        let uses = table(vec![bare("PineFoo")]);
+        let tokens = emit_unknown_tag_diagnostics(&ast, &uses);
+        let s = tokens.to_string();
+        let occurrences = s.matches("pine-bar").count();
+        // Single message — the `pine-bar` substring appears once
+        // in the format string. (If we ever change the message to
+        // include the tag twice, bump this expectation.)
+        assert_eq!(
+            occurrences, 1,
+            "the same unknown tag should fire one compile_error, got:\n{s}"
+        );
     }
 
     #[test]

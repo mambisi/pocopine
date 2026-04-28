@@ -1,7 +1,7 @@
 use pine::{
     PineAlertDialogAction, PineAlertDialogCancel, PineAlertDialogContent,
     PineAlertDialogDescription, PineAlertDialogOverlay, PineAlertDialogPortal, PineAlertDialogRoot,
-    PineAlertDialogTitle, PineAlertDialogTrigger,
+    PineAlertDialogTitle, PineAlertDialogTrigger, PineButton,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
         PineAlertDialogDescription,
         PineAlertDialogAction,
         PineAlertDialogCancel,
+        PineButton,
     ]
 )]
 pub struct AlertDialogDemo {

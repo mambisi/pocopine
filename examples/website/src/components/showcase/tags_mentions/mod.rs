@@ -1,6 +1,7 @@
 use pine::{
-    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineTagsInputClear, PineTagsInputInput,
-    PineTagsInputItem, PineTagsInputItemDelete, PineTagsInputItemText, PineTagsInputRoot,
+    PineAvatarFallback, PineAvatarImage, PineAvatarRoot, PineButton, PineTagsInputClear,
+    PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete, PineTagsInputItemText,
+    PineTagsInputRoot,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
         PineAvatarRoot,
         PineAvatarImage,
         PineAvatarFallback,
+        PineButton,
     ]
 )]
 pub struct TagsMentionsDemo {

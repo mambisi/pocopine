@@ -1,5 +1,5 @@
 use pine::{
-    PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
+    PineButton, PineTagsInputClear, PineTagsInputInput, PineTagsInputItem, PineTagsInputItemDelete,
     PineTagsInputItemText, PineTagsInputRoot,
 };
 use pocopine::prelude::*;
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
         PineTagsInputItemDelete,
         PineTagsInputInput,
         PineTagsInputClear,
+        PineButton,
     ]
 )]
 pub struct TagsSkillsDemo {
