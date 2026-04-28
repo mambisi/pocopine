@@ -65,12 +65,20 @@ impl AdtChild {}
 /// `materialize_adopted_slot`. Used by tests #1, #2, #3 as the
 /// boundary between "compiled host" and "adopted-DOM slot
 /// content."
+///
+/// `uses = [AdtChild]` (RFC 060 Tier 1) so registering the host
+/// transitively pulls the leaf along — historically a missed
+/// `AdtChild::register()` here silently broke case 1 (the leaf
+/// was invisible to discovery and never mounted).
 #[derive(Default, Serialize, Deserialize)]
-#[component(template_inline = r#"
+#[component(
+    template_inline = r#"
 <div class="adt-host">
   <slot></slot>
 </div>
-"#)]
+"#,
+    uses = [AdtChild],
+)]
 struct AdtHost {
     /// Backing storage for the case-2 `pp-for` items expression.
     /// Declared as a real field so the host's reactive proxy
@@ -118,7 +126,6 @@ fn doc() -> web_sys::Document {
 }
 
 fn register_all() {
-    AdtChild::register();
     AdtHost::register();
     AdtCompiledWrapper::register();
 }

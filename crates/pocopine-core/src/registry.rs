@@ -13,8 +13,9 @@
 //! the first walk and refuse to mount when any are present (see
 //! [`verify_registry`] and [`render_boot_error`]).
 
+use std::any::TypeId;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::scope::Scope;
 
@@ -104,6 +105,26 @@ struct Registry {
 
 thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
+    /// RFC 060 Tier 1 — visited set of component types whose
+    /// `register()` body has already started executing on this thread.
+    /// Used by [`mark_registered`] to short-circuit transitive
+    /// `T::register()` calls emitted from `uses = [...]`.
+    static REGISTERED: RefCell<HashSet<TypeId>> = RefCell::new(HashSet::new());
+}
+
+/// Cycle/dedupe guard for the macro-emitted `Component::register()`
+/// body. Returns `true` the first time `T` is seen on this thread,
+/// `false` on every subsequent call. The `#[component]` macro emits
+/// `if !mark_registered::<Self>() { return; }` as the first statement
+/// of `register()`, so a cyclic `uses` graph (`A.uses=[B]`,
+/// `B.uses=[A]`) terminates and a converging graph short-circuits the
+/// redundant work.
+///
+/// TypeId-keyed (rather than NAME-keyed) so two distinct types sharing
+/// a NAME both reach [`register_component`] and surface
+/// [`RegistryErrorKind::DuplicateCanonicalTag`].
+pub fn mark_registered<T: 'static>() -> bool {
+    REGISTERED.with(|r| r.borrow_mut().insert(TypeId::of::<T>()))
 }
 
 /// Register `canonical` against `ctor`, attributing the entry to
@@ -282,6 +303,7 @@ pub fn __reset_for_test() {
         reg.aliases.clear();
         reg.errors.clear();
     });
+    REGISTERED.with(|r| r.borrow_mut().clear());
 }
 
 /// Render the boot-time error surface. Replaces `<body>` with a
