@@ -1,5 +1,6 @@
 use pine::{
-    PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot, PineTooltipTrigger,
+    PineButton, PineTooltipContent, PineTooltipPortal, PineTooltipProvider, PineTooltipRoot,
+    PineTooltipTrigger,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
         PineTooltipTrigger,
         PineTooltipPortal,
         PineTooltipContent,
+        PineButton,
     ]
 )]
 pub struct TooltipDemo {}

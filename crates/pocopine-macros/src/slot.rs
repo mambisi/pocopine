@@ -258,6 +258,30 @@ pub(crate) fn emit_slot_traits(
     slots: &[SlotDecl],
 ) -> TokenStream {
     let mut out = TokenStream::new();
+
+    // RFC 060 Tier 2 — emit a permissive fallback
+    // `__pocopine_assert_default_slot::<__T>()` on every
+    // component that doesn't declare a strict default slot, so
+    // RFC 049's consumer-side scan can fire on parent / child
+    // pairs where the parent is a leaf primitive (e.g.
+    // `<pine-dialog-trigger><pine-button>...`) that never
+    // opted into typed-slot validation. Strict defaults (when
+    // `#[slot(default, only = [...])]` is declared with a
+    // non-empty list) still emit their own bounded method
+    // below and shadow the fallback.
+    let has_strict_default = slots
+        .iter()
+        .any(|s| matches!(s.name, SlotName::Default) && !s.accepts.is_empty());
+    if !has_strict_default {
+        out.extend(quote! {
+            impl #struct_ident {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub fn __pocopine_assert_default_slot<__T>() {}
+            }
+        });
+    }
+
     for slot in slots {
         if slot.accepts.is_empty() {
             // Slot declared for future typed-yield use; no

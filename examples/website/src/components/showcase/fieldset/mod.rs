@@ -1,4 +1,4 @@
-use pine::{PineFieldsetLegend, PineFieldsetRoot};
+use pine::{PineButton, PineFieldsetLegend, PineFieldsetRoot};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
     uses = [
         PineFieldsetRoot,
         PineFieldsetLegend,
+        PineButton,
     ]
 )]
 pub struct FieldsetDemo {

@@ -1,7 +1,7 @@
 use pine::datetime::DateValue;
 use pine::{
     PineCalendarGrid, PineCalendarGridBody, PineCalendarGridHead, PineCalendarHeader,
-    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot,
+    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot, PineSwitch,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
         PineCalendarGrid,
         PineCalendarGridHead,
         PineCalendarGridBody,
+        PineSwitch,
     ]
 )]
 pub struct CalendarDemo {

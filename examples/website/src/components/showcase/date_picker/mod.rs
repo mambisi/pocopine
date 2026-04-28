@@ -1,8 +1,8 @@
 use pine::datetime::DateValue;
 use pine::{
     PineCalendarGrid, PineCalendarGridBody, PineCalendarGridHead, PineCalendarHeader,
-    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot, PinePopoverContent,
-    PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
+    PineCalendarHeading, PineCalendarNext, PineCalendarPrev, PineCalendarRoot, PineDatePicker,
+    PinePopoverContent, PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
     // own — so it doesn't appear here. Trigger's author
     // content (a custom button) is silently skipped.
     uses = [
+        PineDatePicker,
         PinePopoverRoot,
         PinePopoverTrigger,
         PinePopoverPortal,

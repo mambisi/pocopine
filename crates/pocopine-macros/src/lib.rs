@@ -1366,6 +1366,17 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => proc_macro2::TokenStream::new(),
     };
 
+    // RFC 060 Tier 2 — hard error on any custom-element tag in
+    // the template that isn't covered by the consumer's `uses`
+    // list. Opt-in: validation only runs when `uses = [...]` is
+    // declared.
+    let unknown_tag_diagnostics_tokens = match (&args.uses, &template_ast) {
+        (Some(uses_table), Some(ast)) => {
+            slot_assertions::emit_unknown_tag_diagnostics(ast, uses_table)
+        }
+        _ => proc_macro2::TokenStream::new(),
+    };
+
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
@@ -1641,6 +1652,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // consumer didn't opt in or the template has no
         // recognised typed parents.
         #slot_assertions_tokens
+
+        // RFC 060 Tier 2 — hard `compile_error!` for every
+        // custom-element tag in the template that the consumer's
+        // `uses = [...]` doesn't cover. Opt-in: only fires when
+        // `uses` is declared.
+        #unknown_tag_diagnostics_tokens
 
         #observe_impl
 

@@ -43,7 +43,8 @@ impl PineRangeCalendarGridHead {}
 #[component(
     template = "PineRangeCalendarGridBody.poco",
     role = "list",
-    display = "contents"
+    display = "contents",
+    uses = [crate::range_calendar::cell::PineRangeCalendarCellTrigger],
 )]
 pub struct PineRangeCalendarGridBody {
     #[observe(RANGE_ROOT)]

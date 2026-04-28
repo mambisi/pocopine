@@ -19,7 +19,8 @@ use web_sys::{Element, HtmlElement, KeyboardEvent};
 #[component(
     template = "PineDateRangeField.poco",
     role = "interactive",
-    display = "contents"
+    display = "contents",
+    uses = [crate::date_field::PineDateField],
 )]
 pub struct PineDateRangeField {
     #[model]
