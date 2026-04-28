@@ -92,6 +92,20 @@ impl App {
         self
     }
 
+    /// RFC 060 Tier 4 — record a route without eagerly calling
+    /// `C::register()`. Used by the `app!{}` macro: the static
+    /// `&'static phf::Map` passed to [`Self::run_with_registry`]
+    /// is the authoritative registry, and this method keeps it
+    /// that way. If the macro called [`Self::route`] instead,
+    /// `C::register()` would fire unconditionally and the phf
+    /// map would no longer be the source of truth for which
+    /// components exist.
+    pub fn route_static<C: Component>(mut self, pattern: &'static str) -> Self {
+        router::register_route(pattern.to_string(), C::NAME);
+        self.routes.push(pattern);
+        self
+    }
+
     /// Run `f` before the initial DOM walk.
     pub fn before_mount(mut self, f: impl FnOnce() + 'static) -> Self {
         self.before_mount.push(Box::new(f));
