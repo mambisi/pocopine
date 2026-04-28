@@ -1,24 +1,65 @@
-//! Compiled-view runtime hooks.
+//! Compiled-view runtime hooks + adopted-DOM compatibility bridge.
 //!
-//! RFC-058 Phase 6.5 retired the runtime walker. The MutationObserver,
-//! the recursive `pp-*` attribute scan, and the `start` / `start_on_body`
-//! entry points are gone. What remains here is the surface compiled-view
-//! mounts call into:
+//! RFC-058 Phase 6.5 retired the runtime walker. The
+//! `MutationObserver`, the recursive `pp-*` attribute scan, and
+//! the `start` / `start_on_body` entry points are gone. The
+//! directive registry has shrunk to the five typed-install
+//! opaque directives the compiled plan applier uses
+//! (`anchor` / `roving` / `intersect` / `resize` / `flip`).
+//! There is no longer any runtime `pp-*` parsing or dispatch
+//! loop. **Authoring `pp-*` / `:prop` / `@event` / `pp-text` /
+//! `pp-bind` / `pp-show` / `pp-init` / `pp-model` directly on
+//! arbitrary runtime HTML is no longer a framework feature** —
+//! such directives only bind when the macro processes them at
+//! compile time inside a `#[component]` template.
 //!
-//! 1. [`start_compiled`] — discover registered component tags under a
-//!    root and mount each via the macro-emitted template plan.
-//! 2. Scope/proxy stamping helpers used by `pp-for` rows, `pp-if`
-//!    bodies, `pp-teleport` portals, and slot fragments.
-//! 3. Lifecycle dispatch helpers shared by `mount_component` and the
-//!    plan applier (`fire_deferred_init`, `fire_mount_post_order`,
-//!    `fire_ready_next_tick`, `finalize_compiled_subtree`).
-//! 4. Element-scoped listener and effect side tables so a subtree
-//!    teardown can release everything tied to it
-//!    (`track_listener_on`, `track_effect_on`, `release_subtree`).
+//! ## What this module ships now
 //!
-//! The module name is kept for backwards compatibility within the
-//! crate; nothing here actually walks the DOM looking for directives
-//! anymore.
+//! ### 1. Compiled-view mount runtime
+//!
+//! The surface every macro-emitted template plan calls into:
+//!
+//! - [`start_compiled`] — discover registered component tags
+//!   under a root and mount each via its template plan.
+//! - [`mount_component`], [`mount_child_component`],
+//!   [`mount_child_component_with_slots`] — the per-component
+//!   mount entry called by `apply_static_plan`.
+//! - Scope / proxy stamping helpers used by `pp-for` rows,
+//!   `pp-if` bodies, `pp-teleport` portals, and slot fragments.
+//! - Lifecycle dispatch helpers shared between `mount_component`
+//!   and the plan applier (`fire_deferred_init`,
+//!   `fire_mount_post_order`, `fire_ready_next_tick`,
+//!   `finalize_compiled_subtree`).
+//! - Element-scoped listener and effect side tables so a
+//!   subtree teardown can release everything tied to it
+//!   (`track_listener_on`, `track_effect_on`, `release_subtree`).
+//!
+//! ### 2. Adopted-DOM compatibility bridge — explicit, narrow
+//!
+//! A small set of helpers handle the cases where the macro
+//! never saw the DOM tree (user-authored slot content, runtime-
+//! injected partials, app-root mounts whose host is a literal
+//! HTML string). The bridge's contract:
+//!
+//! | Allowed | Disallowed |
+//! |---|---|
+//! | Discover registered custom-component tags + mount them | Bind `pp-*` / `:prop` / `@event` on plain or custom-tag hosts |
+//! | Install `<template pp-for>` / `<template pp-if>` / `<template pp-teleport>` controllers (structural only) | Per-element `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model` / `pp-html` on adopted DOM |
+//! | Materialise runtime-captured slot content (`slots::lookup` consume path) | Anything that requires the deleted directive registry / `dispatch` / `parse_attr` |
+//!
+//! Bridge entry points (each named with a documented narrow
+//! contract): [`mount_adopted_components`],
+//! [`install_adopted_controllers`], [`materialize_adopted_slot`].
+//! The bridge is the *only* code in this module that walks DOM
+//! it didn't compile; it walks for tag-name discovery and
+//! `<template pp-*>` discovery only — never for per-element
+//! attribute scanning.
+//!
+//! Authors who need per-element directive binding on dynamic
+//! content wrap that content in a `#[component]` template (or
+//! the test-only `template_inline` shorthand) — the macro
+//! compiles the directives at expansion time and the bridge is
+//! never reached.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -78,7 +119,7 @@ const MOUNT_HOOK_FIRED_KEY: &str = "__pp_mount_hook_fired";
 /// paint into it.
 pub fn start_compiled(root: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
-    let tags = crate::templates_plan::registered_template_tags();
+    let tags = crate::templates::registered_template_names();
     if !tags.is_empty() {
         let selector = tags.join(",");
         if let Ok(matches) = root.query_selector_all(&selector) {
@@ -953,7 +994,7 @@ fn materialize_slot(slot_el: &Element) {
         if let Some((fragment, ident, author_scope_id, author_proxy)) =
             crate::slots::lookup(owner_scope_id, &slot_name)
         {
-            materialize_slot_captured(
+            materialize_adopted_slot(
                 slot_el,
                 &parent,
                 fragment,
@@ -1025,26 +1066,31 @@ fn materialize_slot(slot_el: &Element) {
     let _ = parent.remove_child(slot_el);
 }
 
-/// Splice runtime-captured slot content (from
-/// `mount_component`'s `capture_slots` → `slots::put` bridge)
-/// in place of the `<slot>` tag. Pins the inserted elements'
-/// borrowed scope to the *author's* scope (not the slot owner's)
-/// so directives inside the slot resolve against the caller per
+/// **Adopted-DOM bridge — captured slot replay.** Splice
+/// runtime-captured slot content (from `mount_component`'s
+/// `capture_slots` → `slots::put` bridge) in place of the
+/// `<slot>` tag. Pins inserted elements' borrowed scope to the
+/// *author's* scope (not the slot owner's) so directives
+/// inside the slot resolve against the caller per
 /// RFC-011 / Vue convention. When the slot declares `:prop`
 /// bindings AND the user wrote `pp-let`, builds a `SlotScope`
-/// instead so `ident.field` routes to the slot's bound source
-/// while fall-through reads still hit the author.
+/// so `ident.field` routes to the slot's bound source while
+/// fall-through reads still hit the author.
 ///
-/// After splicing, runs `mount_registered_in_subtree` over each
-/// inserted element so any custom-component tags inside
-/// user-authored slot content (e.g. `<pine-icon-bell />` inside
-/// a `<pine-tooltip-trigger>` slot) get mounted via the compiled
-/// path. Native HTML elements are left unbound — the runtime
-/// walker that used to scan them is gone (RFC-058 Phase 6.5);
-/// authors who need `pp-*` directives inside slot content move
-/// those directives into a `#[component]` template.
+/// After splicing, runs [`mount_adopted_components`] over each
+/// inserted element so custom-component tags inside slot
+/// content (e.g. `<pine-icon-bell />` inside
+/// `<pine-tooltip-trigger>`) get mounted via the compiled
+/// path AND `<template pp-*>` controllers (e.g. a `pp-for`
+/// over chips inside `<pine-tags-input-root>`) get installed.
+///
+/// **Bridge contract**: native HTML elements with `pp-*` /
+/// `:prop` / `@event` etc. attributes inside the captured
+/// fragment are left unbound — those directives only bind
+/// when the macro processes them at compile time inside a
+/// `#[component]` template. See module doc-comment.
 #[allow(clippy::too_many_arguments)]
-fn materialize_slot_captured(
+fn materialize_adopted_slot(
     slot_el: &Element,
     parent: &Node,
     fragment: web_sys::DocumentFragment,
@@ -1112,42 +1158,55 @@ fn materialize_slot_captured(
     // pass mirrors `start_compiled` — querySelectorAll over the
     // registered tag set.
     for el in &inserted {
-        mount_registered_in_subtree(el);
+        mount_adopted_components(el);
     }
     for el in inserted {
         finalize_compiled_subtree(&el);
     }
 }
 
-/// Walk a subtree and mount any custom-component tags whose
-/// `__pp_mounted` guard is unset. Matches the discovery
-/// semantics of `start_compiled` so user-authored slot content
-/// containing custom tags gets mounted without needing the
-/// runtime walker.
+/// **Adopted-DOM bridge entry.** Walk a subtree the macro
+/// never compiled and reconcile its structure against the
+/// compiled-mount runtime. Two passes:
 ///
-/// Also discovers user-authored `<template pp-for>` /
-/// `<template pp-if>` / `<template pp-teleport>` and installs
-/// the matching controller at runtime. The controllers run with
-/// `body = None`, so each row/branch goes through
-/// `clone_template_body` + a recursive `mount_registered_in_subtree`
-/// pass — enough to wake up custom-tag bodies. `pp-*` directives
-/// on native elements inside user-authored slot content are NOT
-/// supported by this discovery pass; authors who need them
-/// wrap the content in a `#[component]`.
+///   1. Install structural controllers
+///      ([`install_adopted_controllers`]) — finds every
+///      `<template pp-for>` / `<template pp-if>` /
+///      `<template pp-teleport>` in `root` and installs the
+///      matching controller at runtime. The controllers run
+///      with `body_fn = None`, so each row/branch goes through
+///      `clone_template_body` + a recursive call back into
+///      this function — enough to wake up custom-tag bodies.
+///   2. Mount registered custom-component tags
+///      ([`templates_plan::registered_template_tags`]) under
+///      the root via [`mount_component`].
 ///
-/// Public so directive runtime helpers (notably `pp-for`'s row
-/// install when `body_fn = None`) and the slot materialiser
-/// (`materialize_slot_captured`) can drive custom-tag discovery
-/// over freshly-cloned template bodies.
-pub fn mount_registered_in_subtree(root: &Element) {
+/// **Bridge contract — narrow on purpose**: this function
+/// discovers structure (tag names, structural controller
+/// templates) and nothing else. It does **not** parse or
+/// install per-element `pp-*` / `:prop` / `@event` /
+/// `pp-text` / `pp-bind` / `pp-show` / `pp-init` / `pp-model`
+/// directives — those only bind when the macro processes them
+/// at compile time inside a `#[component]` template. Authors
+/// who need per-element directives on dynamic content wrap
+/// that content in a `#[component]` (or the `template_inline`
+/// test shorthand). See module doc-comment for the full
+/// allowed / disallowed table.
+///
+/// Public so directive runtime helpers (notably `pp-for`'s
+/// row install when `body_fn = None`) and the slot
+/// materialiser ([`materialize_adopted_slot`]) can drive
+/// component / controller discovery over freshly-cloned
+/// template bodies.
+pub fn mount_adopted_components(root: &Element) {
     // Step 1: install runtime controllers on user-authored
     // `<template pp-*>` elements. Done first because pp-for /
     // pp-if can produce custom tags that need mounting in step 2.
-    install_runtime_controllers(root);
+    install_adopted_controllers(root);
 
     // Step 2: mount any registered custom tags discovered in the
     // subtree (including the root itself).
-    let tags = crate::templates_plan::registered_template_tags();
+    let tags = crate::templates::registered_template_names();
     if tags.is_empty() {
         return;
     }
@@ -1174,14 +1233,24 @@ pub fn mount_registered_in_subtree(root: &Element) {
     }
 }
 
+/// **Adopted-DOM bridge — structural-controller discovery.**
 /// Find every `<template pp-for>` / `<template pp-if>` /
 /// `<template pp-teleport>` in `root`'s subtree (and `root`
-/// itself) and install the corresponding controller. Used for
-/// user-authored controllers that the macro didn't see — slot
-/// content captured at runtime via `slots::put`, or pp-for
-/// row bodies cloned via `clone_template_body` when `body_fn`
-/// was None.
-fn install_runtime_controllers(root: &Element) {
+/// itself) and install the matching controller. Used for
+/// adopted-DOM containers the macro never saw: runtime-
+/// captured slot content, `pp-for` row bodies cloned via
+/// `clone_template_body` when `body_fn` was None, and any
+/// other path that injects `<template pp-*>` markup at
+/// runtime.
+///
+/// **Strict subset of walker behaviour**: this only handles
+/// the three structural controllers. Per-element directive
+/// binding (`pp-text`, `pp-bind`, `:prop`, `@event`,
+/// `pp-show`, `pp-init`, `pp-model`, `pp-html`) is **not** in
+/// the bridge contract — those need to be authored inside a
+/// `#[component]` template so the macro processes them at
+/// compile time. See module doc-comment.
+fn install_adopted_controllers(root: &Element) {
     let Ok(templates) = root.query_selector_all("template") else {
         return;
     };

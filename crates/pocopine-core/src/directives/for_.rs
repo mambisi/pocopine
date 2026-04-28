@@ -424,7 +424,7 @@ fn run_naive(
                     let ctx_key = wasm_bindgen::JsValue::from_str(walker::CTX_PARENT_KEY);
                     let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
                     let _ = js_sys::Reflect::set(clone_root.as_ref(), &ctx_key, &ctx_val);
-                    walker::mount_registered_in_subtree(&clone_root);
+                    walker::mount_adopted_components(&clone_root);
                     walker::finalize_compiled_subtree(&clone_root);
                 }
                 fresh.push(clone_root);
@@ -1178,7 +1178,7 @@ fn run_keyed(
             // custom tags inside (a no-op for body_fn rows since
             // child mounts already ran during the body fragment's
             // `apply_static_plan`, but cheap).
-            walker::mount_registered_in_subtree(el);
+            walker::mount_adopted_components(el);
             walker::finalize_compiled_subtree(el);
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
