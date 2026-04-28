@@ -107,8 +107,8 @@ pub use date_picker::PineDatePicker;
 pub use date_range_field::PineDateRangeField;
 pub use date_range_picker::PineDateRangePicker;
 pub use dialog::{
-    PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay, PineDialogPortal,
-    PineDialogRoot, PineDialogTitle, PineDialogTrigger,
+    PineDialog, PineDialogClose, PineDialogContent, PineDialogDescription, PineDialogOverlay,
+    PineDialogPortal, PineDialogRoot, PineDialogTitle, PineDialogTrigger,
 };
 pub use dropdown_menu::{
     PineDropdownMenuArrow, PineDropdownMenuCheckboxItem, PineDropdownMenuContent,
@@ -227,14 +227,9 @@ pub fn register_all() {
     PineContextMenuContent::register();
     PineContextMenuItem::register();
     PineContextMenuSeparator::register();
-    PineDialogRoot::register();
-    PineDialogTrigger::register();
-    PineDialogPortal::register();
-    PineDialogOverlay::register();
-    PineDialogContent::register();
-    PineDialogTitle::register();
-    PineDialogDescription::register();
-    PineDialogClose::register();
+    // RFC 060 Tier 3 — bundle marker. `PineDialog::register()`
+    // transitively registers all eight Dialog parts.
+    PineDialog::register();
     PinePopoverRoot::register();
     PinePopoverTrigger::register();
     PinePopoverPortal::register();
