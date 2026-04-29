@@ -12,6 +12,17 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 // ─── helpers ──────────────────────────────────────────────────────
 
+macro_rules! compiled_fixture {
+    ($name:ident, $template:literal) => {
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        #[component(template_inline = $template)]
+        struct $name {}
+
+        #[handlers]
+        impl $name {}
+    };
+}
+
 fn doc() -> web_sys::Document {
     window().unwrap().document().unwrap()
 }
@@ -33,13 +44,26 @@ fn mount(host_html: &str) -> Element {
     host
 }
 
-/// RFC 061 Phase 3 — test-only compiled root discovery.
-/// QuerySelectorAll the union selector of every registered tag,
-/// mount each via the typed
-/// `mount_child_component` path, then run
-/// `finalize_compiled_subtree` to fire mount/ready hooks. Also
-/// registers `<pp-outlet>` elements with the router so
-/// route-driven tests still work.
+fn mount_fixture<C: pocopine::__private::Component>() -> Element {
+    pine::register_all();
+    pocopine_core::animate::disable_transitions();
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    let root = doc().create_element(C::NAME).unwrap();
+    host.append_child(&root).unwrap();
+    body.append_child(&host).unwrap();
+    let _mounted = pocopine::App::mount_subtree::<C>(&root);
+    pocopine_core::mount::finalize_compiled_subtree(&root);
+    host
+}
+
+// RFC 061 Phase 3 — test-only compiled root discovery.
+// QuerySelectorAll the union selector of every registered tag,
+// mount each via the typed
+// `mount_child_component` path, then run
+// `finalize_compiled_subtree` to fire mount/ready hooks. Also
+// registers `<pp-outlet>` elements with the router so
+// route-driven tests still work.
 fn mount_registered_tags(host: &Element) {
     let names = pocopine_core::templates::registered_template_names();
     if !names.is_empty() {
@@ -80,9 +104,9 @@ async fn tick() {
     }
 }
 
-/// Yield to the browser's task queue (not just the microtask
-/// queue) for `ms` milliseconds. Needed to let `setTimeout`-based
-/// deferrals like HoverCard's open/close timers run.
+// Yield to the browser's task queue (not just the microtask
+// queue) for `ms` milliseconds. Needed to let `setTimeout`-based
+// deferrals like HoverCard's open/close timers run.
 async fn sleep_ms(ms: i32) {
     let p = js_sys::Promise::new(&mut |resolve: js_sys::Function, _reject| {
         let w = web_sys::window().unwrap();
@@ -94,12 +118,16 @@ async fn sleep_ms(ms: i32) {
 
 // ─── PineButton ───────────────────────────────────────────────────
 
-/// Variants and size props flow onto `data-*` attributes; the
-/// native `disabled` attribute lands on the inner `<button>`.
+compiled_fixture!(
+    ButtonRenderFixture,
+    r#"<div><pine-button variant="primary" size="sm" disabled="true">Save</pine-button></div>"#
+);
+
+// Variants and size props flow onto `data-*` attributes; the
+// native `disabled` attribute lands on the inner `<button>`.
 #[wasm_bindgen_test]
 async fn button_renders_data_attrs_and_disabled() {
-    let host =
-        mount("<pine-button variant=\"primary\" size=\"sm\" disabled=\"true\">Save</pine-button>");
+    let host = mount_fixture::<ButtonRenderFixture>();
     tick().await;
 
     let btn = host.query_selector("button.pine-btn").unwrap().unwrap();
@@ -126,13 +154,16 @@ async fn button_renders_data_attrs_and_disabled() {
     host.remove();
 }
 
-/// `pp-as` on the component tag replaces the template's `<button>`
-/// with the author's single child element — merging class attrs.
+compiled_fixture!(
+    ButtonAsFixture,
+    r##"<div><pine-button pp-as variant="ghost"><a href="#" class="mine">Docs</a></pine-button></div>"##
+);
+
+// `pp-as` on the component tag replaces the template's `<button>`
+// with the author's single child element — merging class attrs.
 #[wasm_bindgen_test]
 async fn button_pp_as_hoists_author_element() {
-    let host = mount(
-        "<pine-button pp-as variant=\"ghost\"><a href=\"#\" class=\"mine\">Docs</a></pine-button>",
-    );
+    let host = mount_fixture::<ButtonAsFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-button").unwrap().unwrap();
@@ -154,22 +185,29 @@ async fn button_pp_as_hoists_author_element() {
 
 // ─── PineTabs (compound) ──────────────────────────────────────────
 
-/// Compound Tabs: clicking a Trigger flips Root.value;
-/// sibling Trigger/Content pairs mirror `selected` reactively.
-/// Aria-selected + data-state follow, Content's pp-show gates
-/// on the match, aria-labelledby points at the matching Trigger.
+compiled_fixture!(
+    TabsCompoundFixture,
+    r#"
+<div>
+  <pine-tabs-root value="a">
+    <pine-tabs-list>
+      <pine-tabs-trigger value="a" class="tc-a">A</pine-tabs-trigger>
+      <pine-tabs-trigger value="b" class="tc-b">B</pine-tabs-trigger>
+    </pine-tabs-list>
+    <pine-tabs-content value="a" class="tc-panel-a">Panel A</pine-tabs-content>
+    <pine-tabs-content value="b" class="tc-panel-b">Panel B</pine-tabs-content>
+  </pine-tabs-root>
+</div>
+"#
+);
+
+// Compound Tabs: clicking a Trigger flips Root.value;
+// sibling Trigger/Content pairs mirror `selected` reactively.
+// Aria-selected + data-state follow, Content's pp-show gates
+// on the match, aria-labelledby points at the matching Trigger.
 #[wasm_bindgen_test]
 async fn tabs_compound_select_via_trigger_mirrors_siblings() {
-    let host = mount(
-        "<pine-tabs-root value=\"a\">\
-           <pine-tabs-list>\
-             <pine-tabs-trigger value=\"a\" class=\"tc-a\">A</pine-tabs-trigger>\
-             <pine-tabs-trigger value=\"b\" class=\"tc-b\">B</pine-tabs-trigger>\
-           </pine-tabs-list>\
-           <pine-tabs-content value=\"a\" class=\"tc-panel-a\">Panel A</pine-tabs-content>\
-           <pine-tabs-content value=\"b\" class=\"tc-panel-b\">Panel B</pine-tabs-content>\
-         </pine-tabs-root>",
-    );
+    let host = mount_fixture::<TabsCompoundFixture>();
     tick().await;
     tick().await;
 
@@ -257,18 +295,25 @@ async fn tabs_compound_select_via_trigger_mirrors_siblings() {
 
 // ─── PineTooltip ──────────────────────────────────────────────────
 
-/// Focusing the trigger shows the tooltip immediately (no delay
-/// for keyboard users per WAI-ARIA); blurring hides it.
+compiled_fixture!(
+    TooltipFocusFixture,
+    r#"
+<div>
+  <pine-tooltip-root>
+    <pine-tooltip-trigger><button id="tt-c-trig">hover me</button></pine-tooltip-trigger>
+    <pine-tooltip-portal>
+      <pine-tooltip-content>Helpful tip.</pine-tooltip-content>
+    </pine-tooltip-portal>
+  </pine-tooltip-root>
+</div>
+"#
+);
+
+// Focusing the trigger shows the tooltip immediately (no delay
+// for keyboard users per WAI-ARIA); blurring hides it.
 #[wasm_bindgen_test]
 async fn tooltip_compound_shows_on_focus_and_hides_on_blur() {
-    let host = mount(
-        "<pine-tooltip-root>\
-           <pine-tooltip-trigger><button id=\"tt-c-trig\">hover me</button></pine-tooltip-trigger>\
-           <pine-tooltip-portal>\
-             <pine-tooltip-content>Helpful tip.</pine-tooltip-content>\
-           </pine-tooltip-portal>\
-         </pine-tooltip-root>",
-    );
+    let host = mount_fixture::<TooltipFocusFixture>();
     tick().await;
     tick().await;
 
@@ -317,6 +362,11 @@ async fn tooltip_compound_shows_on_focus_and_hides_on_blur() {
 
 // ─── PineSwitch ───────────────────────────────────────────────────
 
+compiled_fixture!(
+    SwitchFixture,
+    r#"<div><pine-switch checked="false"></pine-switch></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn switch_toggles_aria_and_emits_model_event() {
     use std::cell::Cell;
@@ -324,7 +374,7 @@ async fn switch_toggles_aria_and_emits_model_event() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount("<pine-switch checked=\"false\"></pine-switch>");
+    let host = mount_fixture::<SwitchFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-switch").unwrap().unwrap();
@@ -365,9 +415,14 @@ async fn switch_toggles_aria_and_emits_model_event() {
 
 // ─── PineCheckbox ─────────────────────────────────────────────────
 
+compiled_fixture!(
+    CheckboxFixture,
+    r#"<div><pine-checkbox state="indeterminate"></pine-checkbox></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn checkbox_tri_state_maps_aria_checked_correctly() {
-    let host = mount("<pine-checkbox state=\"indeterminate\"></pine-checkbox>");
+    let host = mount_fixture::<CheckboxFixture>();
     tick().await;
 
     let btn = host
@@ -441,15 +496,14 @@ struct CompoundMenuHost {}
 #[handlers]
 impl CompoundMenuHost {}
 
-/// Opening a menu via the trigger teleports Content to body, sets
-/// the first menuitem's tabindex=0, auto-focuses it, cycles on
-/// arrow keys, and closes on Escape. Exercises the full compound
-/// chain: Root (state) → Trigger (toggle) → Portal (pp-if +
-/// teleport) → Content (anchor + roving + escape) → Item.
+// Opening a menu via the trigger teleports Content to body, sets
+// the first menuitem's tabindex=0, auto-focuses it, cycles on
+// arrow keys, and closes on Escape. Exercises the full compound
+// chain: Root (state) → Trigger (toggle) → Portal (pp-if +
+// teleport) → Content (anchor + roving + escape) → Item.
 #[wasm_bindgen_test]
 async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
-    CompoundMenuHost::register();
-    let host = mount("<compound-menu-host></compound-menu-host>");
+    let host = mount_fixture::<CompoundMenuHost>();
     // Three ticks: initial render, on_ready (mirrors Root.open),
     // and the pp-if commit after Trigger clicks.
     tick().await;
@@ -532,17 +586,16 @@ async fn compound_menu_opens_via_trigger_cycles_and_closes_on_escape() {
     host.remove();
 }
 
-/// Regression: the compound menu is usually nested inside a user
-/// component (PineDemoApp in the demo, MenuHost here), not mounted
-/// bare at the document root. That changes the slot-materialisation
-/// path — Trigger / Portal / Content get a non-null caller scope as
-/// their DOM-borrowed scope, so the RFC-027 inject chain has to
-/// walk to Root via the slot *owner*, not the caller. This test
-/// fails the chain if that plumbing regresses.
+// Regression: the compound menu is usually nested inside a user
+// component (PineDemoApp in the demo, MenuHost here), not mounted
+// bare at the document root. That changes the slot-materialisation
+// path — Trigger / Portal / Content get a non-null caller scope as
+// their DOM-borrowed scope, so the RFC-027 inject chain has to
+// walk to Root via the slot *owner*, not the caller. This test
+// fails the chain if that plumbing regresses.
 #[wasm_bindgen_test]
 async fn compound_menu_injects_through_slot_owner_when_nested() {
-    MenuHost::register();
-    let host = mount("<menu-host></menu-host>");
+    let host = mount_fixture::<MenuHost>();
     tick().await;
 
     let trigger = host
@@ -637,15 +690,14 @@ struct PreventableSelectHost {}
 #[handlers]
 impl PreventableSelectHost {}
 
-/// Item dispatches a cancelable `pp:select` CustomEvent. A
-/// listener that calls `preventDefault()` vetoes the auto-close;
-/// matches reka-ui's preventable DropdownMenuItem.select.
+// Item dispatches a cancelable `pp:select` CustomEvent. A
+// listener that calls `preventDefault()` vetoes the auto-close;
+// matches reka-ui's preventable DropdownMenuItem.select.
 #[wasm_bindgen_test]
 async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
     use wasm_bindgen::closure::Closure;
 
-    PreventableSelectHost::register();
-    let host = mount("<preventable-select-host></preventable-select-host>");
+    let host = mount_fixture::<PreventableSelectHost>();
     tick().await;
 
     let trigger = host.query_selector(".pv-trig").unwrap().unwrap();
@@ -724,15 +776,14 @@ struct RadioGroupMenuHost {}
 #[handlers]
 impl RadioGroupMenuHost {}
 
-/// DropdownMenu RadioGroup + RadioItem exclusive selection:
-/// clicking a RadioItem updates the group's `value`, flips
-/// `aria-checked` on the clicked item to `"true"` and the
-/// previously-selected one to `"false"`, and nested
-/// ItemIndicators mirror accordingly.
+// DropdownMenu RadioGroup + RadioItem exclusive selection:
+// clicking a RadioItem updates the group's `value`, flips
+// `aria-checked` on the clicked item to `"true"` and the
+// previously-selected one to `"false"`, and nested
+// ItemIndicators mirror accordingly.
 #[wasm_bindgen_test]
 async fn dropdown_menu_radio_group_exclusive_selection() {
-    RadioGroupMenuHost::register();
-    let host = mount("<radio-group-menu-host></radio-group-menu-host>");
+    let host = mount_fixture::<RadioGroupMenuHost>();
     tick().await;
 
     host.query_selector(".rg-trig")
@@ -810,15 +861,14 @@ struct CheckboxMenuHost {}
 #[handlers]
 impl CheckboxMenuHost {}
 
-/// DropdownMenu CheckboxItem + ItemIndicator round-trip: clicking
-/// the item toggles its tri-state, emits pp:update:model, and the
-/// nested ItemIndicator reactively renders via pp-if on the
-/// mirrored `checked` bool. Matches reka-ui's CheckboxItem +
-/// ItemIndicator pairing.
+// DropdownMenu CheckboxItem + ItemIndicator round-trip: clicking
+// the item toggles its tri-state, emits pp:update:model, and the
+// nested ItemIndicator reactively renders via pp-if on the
+// mirrored `checked` bool. Matches reka-ui's CheckboxItem +
+// ItemIndicator pairing.
 #[wasm_bindgen_test]
 async fn dropdown_menu_checkbox_item_toggles_and_indicator_mirrors() {
-    CheckboxMenuHost::register();
-    let host = mount("<checkbox-menu-host></checkbox-menu-host>");
+    let host = mount_fixture::<CheckboxMenuHost>();
     tick().await;
 
     // Open the menu.
@@ -914,15 +964,14 @@ struct GroupLabelMenuHost {}
 #[handlers]
 impl GroupLabelMenuHost {}
 
-/// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
-/// render correct ARIA wiring. Separator has `role="separator"`
-/// and `aria-orientation="horizontal"`. Group + Label link via
-/// `aria-labelledby` → `id` with a unique per-Group id so multiple
-/// groups don't collide.
+// DropdownMenu's visual-only sub-parts — Separator, Group, Label —
+// render correct ARIA wiring. Separator has `role="separator"`
+// and `aria-orientation="horizontal"`. Group + Label link via
+// `aria-labelledby` → `id` with a unique per-Group id so multiple
+// groups don't collide.
 #[wasm_bindgen_test]
 async fn dropdown_menu_group_label_separator_wire_aria() {
-    GroupLabelMenuHost::register();
-    let host = mount("<group-label-menu-host></group-label-menu-host>");
+    let host = mount_fixture::<GroupLabelMenuHost>();
     tick().await;
 
     // Click trigger to open.
@@ -991,13 +1040,12 @@ struct SubMenuHost {}
 #[handlers]
 impl SubMenuHost {}
 
-/// DropdownMenu submenu: clicking SubTrigger opens SubContent;
-/// SubContent has its own `<ul role="menu">` teleported to body
-/// and anchored to the SubTrigger. Escape closes the sub.
+// DropdownMenu submenu: clicking SubTrigger opens SubContent;
+// SubContent has its own `<ul role="menu">` teleported to body
+// and anchored to the SubTrigger. Escape closes the sub.
 #[wasm_bindgen_test]
 async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
-    SubMenuHost::register();
-    let host = mount("<sub-menu-host></sub-menu-host>");
+    let host = mount_fixture::<SubMenuHost>();
     tick().await;
 
     // Open outer menu.
@@ -1087,29 +1135,36 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
     host.remove();
 }
 
-/// Closing the outer menu while a sub is open must NOT leak its
-/// teleported portal in `<body>`. Prior bug: Sub's DOM was
-/// inside the outer portal, so outer close destroyed Sub's
-/// scope without SubContent's pp-if running its removal — the
-/// sub's teleported clone stayed in body and accumulated per
-/// cycle.
+// Closing the outer menu while a sub is open must NOT leak its
+// teleported portal in `<body>`. Prior bug: Sub's DOM was
+// inside the outer portal, so outer close destroyed Sub's
+// scope without SubContent's pp-if running its removal — the
+// sub's teleported clone stayed in body and accumulated per
+// cycle.
+compiled_fixture!(
+    DropdownSubCleanupFixture,
+    r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="sc-root-t">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-sub>
+          <pine-dropdown-menu-sub-trigger class="sc-sub-t">More...</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-content>
+            <pine-dropdown-menu-item>X</pine-dropdown-menu-item>
+          </pine-dropdown-menu-sub-content>
+        </pine-dropdown-menu-sub>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn dropdown_menu_sub_cleanup_on_outer_close() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"sc-root-t\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content>\
-               <pine-dropdown-menu-sub>\
-                 <pine-dropdown-menu-sub-trigger class=\"sc-sub-t\">More…</pine-dropdown-menu-sub-trigger>\
-                 <pine-dropdown-menu-sub-content>\
-                   <pine-dropdown-menu-item>X</pine-dropdown-menu-item>\
-                 </pine-dropdown-menu-sub-content>\
-               </pine-dropdown-menu-sub>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    let host = mount_fixture::<DropdownSubCleanupFixture>();
     tick().await;
 
     // Open outer, open sub, close outer. Repeat — without the
@@ -1164,13 +1219,12 @@ struct ArrowMenuHost {}
 #[handlers]
 impl ArrowMenuHost {}
 
-/// DropdownMenu Arrow inherits `side` from Content via
-/// provide/inject and stamps `data-side` so authors can style
-/// the arrow's rotation per side.
+// DropdownMenu Arrow inherits `side` from Content via
+// provide/inject and stamps `data-side` so authors can style
+// the arrow's rotation per side.
 #[wasm_bindgen_test]
 async fn dropdown_menu_arrow_mirrors_content_side() {
-    ArrowMenuHost::register();
-    let host = mount("<arrow-menu-host></arrow-menu-host>");
+    let host = mount_fixture::<ArrowMenuHost>();
     tick().await;
     host.query_selector(".ar-trig")
         .unwrap()
@@ -1199,22 +1253,29 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
     host.remove();
 }
 
-/// DropdownMenu Content accepts `side` / `align` / `side_offset`
-/// props that drive the programmatic pp-anchor install. Validates
-/// that non-default values actually reach the positioning state
-/// machine — overrides from `bottom-start+4` to `top-end+12`.
+// DropdownMenu Content accepts `side` / `align` / `side_offset`
+// props that drive the programmatic pp-anchor install. Validates
+// that non-default values actually reach the positioning state
+// machine — overrides from `bottom-start+4` to `top-end+12`.
+compiled_fixture!(
+    DropdownContentConfigFixture,
+    r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="cfg-trig">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content side="top" align="end" side_offset="12">
+        <pine-dropdown-menu-item class="cfg-i">A</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn dropdown_menu_content_config_props_override_anchor() {
-    let host = mount(
-        "<pine-dropdown-menu-root>\
-           <pine-dropdown-menu-trigger class=\"cfg-trig\">open</pine-dropdown-menu-trigger>\
-           <pine-dropdown-menu-portal>\
-             <pine-dropdown-menu-content side=\"top\" align=\"end\" side_offset=\"12\">\
-               <pine-dropdown-menu-item class=\"cfg-i\">A</pine-dropdown-menu-item>\
-             </pine-dropdown-menu-content>\
-           </pine-dropdown-menu-portal>\
-         </pine-dropdown-menu-root>",
-    );
+    let host = mount_fixture::<DropdownContentConfigFixture>();
     tick().await;
     host.query_selector(".cfg-trig")
         .unwrap()
@@ -1271,16 +1332,15 @@ struct TwoMenusHost {}
 #[handlers]
 impl TwoMenusHost {}
 
-/// Two DropdownMenus side-by-side must each anchor to their own
-/// Trigger — not all share-the-first via a common selector. The
-/// `on_setup` hook (runs pre-children-walk) computes Content's
-/// `anchor` selector from the injected root's scope id, so every
-/// menu instance's `pp-anchor` resolves to a distinct trigger
-/// button.
+// Two DropdownMenus side-by-side must each anchor to their own
+// Trigger — not all share-the-first via a common selector. The
+// `on_setup` hook (runs pre-children-walk) computes Content's
+// `anchor` selector from the injected root's scope id, so every
+// menu instance's `pp-anchor` resolves to a distinct trigger
+// button.
 #[wasm_bindgen_test]
 async fn two_dropdown_menus_anchor_to_their_own_triggers() {
-    TwoMenusHost::register();
-    let host = mount("<two-menus-host></two-menus-host>");
+    let host = mount_fixture::<TwoMenusHost>();
     tick().await;
 
     // Each Trigger stamps its button with its root scope id —
@@ -1326,15 +1386,25 @@ async fn two_dropdown_menus_anchor_to_their_own_triggers() {
 
 // ─── PineAvatar ───────────────────────────────────────────────────
 
-/// Avatar starts with Fallback visible (Root.loaded=false). When
-/// the browser fires `load` on the `<img>`, Image.on_load flips
-/// Root.loaded=true → Fallback's `pp-show="!loaded"` hides it.
-/// Uses a tiny 1x1 `data:` URL so the load fires deterministically.
+// Avatar starts with Fallback visible (Root.loaded=false). When
+// the browser fires `load` on the `<img>`, Image.on_load flips
+// Root.loaded=true → Fallback's `pp-show="!loaded"` hides it.
+// Uses a tiny 1x1 `data:` URL so the load fires deterministically.
+compiled_fixture!(
+    AvatarImageLoadFixture,
+    r#"
+<div>
+  <pine-avatar-root>
+    <pine-avatar-image src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=" alt="tiny"></pine-avatar-image>
+    <pine-avatar-fallback><span class="av-fb">AB</span></pine-avatar-fallback>
+  </pine-avatar-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn avatar_fallback_hides_after_image_loads() {
-    let host = mount(
-        "<pine-avatar-root><pine-avatar-image src=\"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=\" alt=\"tiny\"></pine-avatar-image><pine-avatar-fallback><span class=\"av-fb\">AB</span></pine-avatar-fallback></pine-avatar-root>",
-    );
+    let host = mount_fixture::<AvatarImageLoadFixture>();
     tick().await;
 
     let fallback: HtmlElement = host
@@ -1388,14 +1458,23 @@ async fn avatar_fallback_hides_after_image_loads() {
 
 // ─── RFC-033 primitive roles ──────────────────────────────────────
 
-/// Role-annotated components render with the role's default tag and
-/// carry `data-pine-role="<role>"` on the root. Avatar Root/Fallback
-/// are both `role = "visual"` → `<span data-pine-role="visual">`.
+// Role-annotated components render with the role's default tag and
+// carry `data-pine-role="<role>"` on the root. Avatar Root/Fallback
+// are both `role = "visual"` → `<span data-pine-role="visual">`.
+compiled_fixture!(
+    AvatarRoleFixture,
+    r#"
+<div>
+  <pine-avatar-root>
+    <pine-avatar-fallback><span class="fb">AB</span></pine-avatar-fallback>
+  </pine-avatar-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn avatar_root_carries_data_pine_role_visual() {
-    let host = mount(
-        "<pine-avatar-root><pine-avatar-fallback><span class=\"fb\">AB</span></pine-avatar-fallback></pine-avatar-root>",
-    );
+    let host = mount_fixture::<AvatarRoleFixture>();
     tick().await;
 
     let root = host
@@ -1427,23 +1506,30 @@ async fn avatar_root_carries_data_pine_role_visual() {
 
 // ─── PineAccordion ────────────────────────────────────────────────
 
-/// Accordion type="single" + collapsible: clicking an Item's
-/// Trigger opens it; clicking the open one closes it. Opening
-/// one closes any other.
+// Accordion type="single" + collapsible: clicking an Item's
+// Trigger opens it; clicking the open one closes it. Opening
+// one closes any other.
+compiled_fixture!(
+    AccordionFixture,
+    r#"
+<div>
+  <pine-accordion-root type="single" collapsible="true">
+    <pine-accordion-item value="a">
+      <pine-accordion-trigger class="ac-t-a">A</pine-accordion-trigger>
+      <pine-accordion-content><p class="ac-body-a">Body A</p></pine-accordion-content>
+    </pine-accordion-item>
+    <pine-accordion-item value="b">
+      <pine-accordion-trigger class="ac-t-b">B</pine-accordion-trigger>
+      <pine-accordion-content><p class="ac-body-b">Body B</p></pine-accordion-content>
+    </pine-accordion-item>
+  </pine-accordion-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn accordion_single_collapsible_exclusive_toggle() {
-    let host = mount(
-        "<pine-accordion-root type=\"single\" collapsible=\"true\">\
-           <pine-accordion-item value=\"a\">\
-             <pine-accordion-trigger class=\"ac-t-a\">A</pine-accordion-trigger>\
-             <pine-accordion-content><p class=\"ac-body-a\">Body A</p></pine-accordion-content>\
-           </pine-accordion-item>\
-           <pine-accordion-item value=\"b\">\
-             <pine-accordion-trigger class=\"ac-t-b\">B</pine-accordion-trigger>\
-             <pine-accordion-content><p class=\"ac-body-b\">Body B</p></pine-accordion-content>\
-           </pine-accordion-item>\
-         </pine-accordion-root>",
-    );
+    let host = mount_fixture::<AccordionFixture>();
     tick().await;
 
     let trig_a = host.query_selector(".ac-t-a").unwrap().unwrap();
@@ -1499,20 +1585,27 @@ async fn accordion_single_collapsible_exclusive_toggle() {
 
 // ─── PineCollapsible ──────────────────────────────────────────────
 
-/// Collapsible's Trigger toggles Root.open; Content is gated on
-/// the same value via pp-if. Validates the second compound
-/// pattern end-to-end (DropdownMenu was the first) — proves the
-/// substrate scales beyond menus.
+// Collapsible's Trigger toggles Root.open; Content is gated on
+// the same value via pp-if. Validates the second compound
+// pattern end-to-end (DropdownMenu was the first) — proves the
+// substrate scales beyond menus.
+compiled_fixture!(
+    CollapsibleFixture,
+    r#"
+<div>
+  <pine-collapsible-root>
+    <pine-collapsible-trigger class="cp-trig">Toggle</pine-collapsible-trigger>
+    <pine-collapsible-content>
+      <p class="cp-body">Revealed.</p>
+    </pine-collapsible-content>
+  </pine-collapsible-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn collapsible_trigger_toggles_and_content_mounts() {
-    let host = mount(
-        "<pine-collapsible-root>\
-           <pine-collapsible-trigger class=\"cp-trig\">Toggle</pine-collapsible-trigger>\
-           <pine-collapsible-content>\
-             <p class=\"cp-body\">Revealed.</p>\
-           </pine-collapsible-content>\
-         </pine-collapsible-root>",
-    );
+    let host = mount_fixture::<CollapsibleFixture>();
     tick().await;
 
     let trigger = host.query_selector(".cp-trig").unwrap().unwrap();
@@ -1557,21 +1650,28 @@ async fn collapsible_trigger_toggles_and_content_mounts() {
 
 // ─── PinePopover ──────────────────────────────────────────────────
 
-/// Popover compound: clicking Trigger toggles Root.open, Portal
-/// teleports, Content auto-anchors to the Trigger via the
-/// `data-pine-popover-trigger` stamp, Escape closes.
+// Popover compound: clicking Trigger toggles Root.open, Portal
+// teleports, Content auto-anchors to the Trigger via the
+// `data-pine-popover-trigger` stamp, Escape closes.
+compiled_fixture!(
+    PopoverOpenFixture,
+    r#"
+<div>
+  <pine-popover-root>
+    <pine-popover-trigger class="pt-trig">open</pine-popover-trigger>
+    <pine-popover-portal>
+      <pine-popover-content>
+        <button class="popover-btn">OK</button>
+      </pine-popover-content>
+    </pine-popover-portal>
+  </pine-popover-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn popover_opens_anchors_and_closes_on_escape() {
-    let host = mount(
-        "<pine-popover-root>\
-           <pine-popover-trigger class=\"pt-trig\">open</pine-popover-trigger>\
-           <pine-popover-portal>\
-             <pine-popover-content>\
-               <button class=\"popover-btn\">OK</button>\
-             </pine-popover-content>\
-           </pine-popover-portal>\
-         </pine-popover-root>",
-    );
+    let host = mount_fixture::<PopoverOpenFixture>();
     tick().await;
 
     // Click Trigger → Root.open=true → Portal mirror fires → teleport.
@@ -1634,8 +1734,7 @@ impl PopoverHost {
 
 #[wasm_bindgen_test]
 async fn popover_pp_model_open_round_trips_through_parent() {
-    PopoverHost::register();
-    let host = mount("<popover-host></popover-host>");
+    let host = mount_fixture::<PopoverHost>();
     tick().await;
 
     let state_text = |host: &Element| -> String {
@@ -1686,10 +1785,14 @@ async fn popover_pp_model_open_round_trips_through_parent() {
     host.remove();
 }
 
+compiled_fixture!(
+    DateRangePickerFixture,
+    r#"<div><pine-date-range-picker placeholder="2024-06-15"></pine-date-range-picker></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn date_range_picker_closes_only_after_end_selection() {
-    let host =
-        mount("<pine-date-range-picker placeholder=\"2024-06-15\"></pine-date-range-picker>");
+    let host = mount_fixture::<DateRangePickerFixture>();
     tick().await;
 
     let trigger = host
@@ -1754,14 +1857,13 @@ impl DialogHost {
     }
 }
 
-/// pp-model:open="dialog_open" flows the parent's field into the
-/// dialog's `open` prop; Escape inside the dialog fires
-/// pp:update:model which writes back to the parent, so the parent's
-/// state reflects the internal close.
+// pp-model:open="dialog_open" flows the parent's field into the
+// dialog's `open` prop; Escape inside the dialog fires
+// pp:update:model which writes back to the parent, so the parent's
+// state reflects the internal close.
 #[wasm_bindgen_test]
 async fn dialog_pp_model_open_round_trips_through_parent() {
-    DialogHost::register();
-    let host = mount("<dialog-host></dialog-host>");
+    let host = mount_fixture::<DialogHost>();
     tick().await;
 
     let state_text = |host: &Element| -> String {
@@ -1851,16 +1953,15 @@ struct DialogTeleportHost {}
 #[handlers]
 impl DialogTeleportHost {}
 
-/// Dialog compound: clicking Trigger opens Root, Portal teleports
-/// Content + Overlay into `<body>`, Content gets role="dialog" +
-/// ARIA wiring via the Root-provided title/description ids, focus
-/// moves inside, scroll lock engages. Escape closes.
+// Dialog compound: clicking Trigger opens Root, Portal teleports
+// Content + Overlay into `<body>`, Content gets role="dialog" +
+// ARIA wiring via the Root-provided title/description ids, focus
+// moves inside, scroll lock engages. Escape closes.
 #[wasm_bindgen_test]
 async fn dialog_teleports_traps_focus_and_locks_scroll() {
     use pocopine::scroll_lock;
 
-    DialogTeleportHost::register();
-    let host = mount("<dialog-teleport-host></dialog-teleport-host>");
+    let host = mount_fixture::<DialogTeleportHost>();
     tick().await;
     // Other tests in the same browser session may have left
     // teleported dialog content in <body> that we can't reach via
@@ -1941,26 +2042,33 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
     host.remove();
 }
 
-/// `<pine-dialog-trigger pp-as>` hoists the author's `<button>` as
-/// the rendered root. The template's `@click="toggle"` must still
-/// fire on the hoisted element — otherwise the dialog never opens.
+// `<pine-dialog-trigger pp-as>` hoists the author's `<button>` as
+// the rendered root. The template's `@click="toggle"` must still
+// fire on the hoisted element — otherwise the dialog never opens.
+compiled_fixture!(
+    DialogTriggerAsFixture,
+    r#"
+<div>
+  <pine-dialog-root>
+    <pine-dialog-trigger pp-as>
+      <button class="user-trig">Go</button>
+    </pine-dialog-trigger>
+    <pine-dialog-portal>
+      <pine-dialog-content>
+        <pine-dialog-title>Hi</pine-dialog-title>
+        <pine-dialog-close pp-as>
+          <button class="user-close">Close</button>
+        </pine-dialog-close>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn dialog_trigger_pp_as_click_opens_dialog() {
-    let host = mount(
-        "<pine-dialog-root>\
-           <pine-dialog-trigger pp-as>\
-             <button class=\"user-trig\">Go</button>\
-           </pine-dialog-trigger>\
-           <pine-dialog-portal>\
-             <pine-dialog-content>\
-               <pine-dialog-title>Hi</pine-dialog-title>\
-               <pine-dialog-close pp-as>\
-                 <button class=\"user-close\">Close</button>\
-               </pine-dialog-close>\
-             </pine-dialog-content>\
-           </pine-dialog-portal>\
-         </pine-dialog-root>",
-    );
+    let host = mount_fixture::<DialogTriggerAsFixture>();
     tick().await;
 
     let trigger = host
@@ -2008,40 +2116,47 @@ async fn dialog_trigger_pp_as_click_opens_dialog() {
     host.remove();
 }
 
-/// Close buttons wrapped in a non-component element (e.g. a
-/// `<div class="row">` layout helper) inside Content's slot must
-/// still find the compound Root via `inject`. The bug this
-/// guards: slot materialisation pins `SCOPE_ID_KEY` to the slot
-/// *author* (e.g. the app root) and `CTX_PARENT_KEY` to the slot
-/// *owner* (Content) on direct slot children only. A nested
-/// `<pine-dialog-close>` that falls through to an ancestor's
-/// `SCOPE_ID_KEY` wired its inject parent to the app root,
-/// skipping the dialog compound entirely — Close.click got
-/// `inject<Root>() = None` and the dialog stayed open.
+// Close buttons wrapped in a non-component element (e.g. a
+// `<div class="row">` layout helper) inside Content's slot must
+// still find the compound Root via `inject`. The bug this
+// guards: slot materialisation pins `SCOPE_ID_KEY` to the slot
+// *author* (e.g. the app root) and `CTX_PARENT_KEY` to the slot
+// *owner* (Content) on direct slot children only. A nested
+// `<pine-dialog-close>` that falls through to an ancestor's
+// `SCOPE_ID_KEY` wired its inject parent to the app root,
+// skipping the dialog compound entirely — Close.click got
+// `inject<Root>() = None` and the dialog stayed open.
+compiled_fixture!(
+    DialogCloseSiblingsFixture,
+    r#"
+<div>
+  <pine-dialog-root pp-model:open="dialog_open">
+    <pine-dialog-trigger pp-as>
+      <button class="tw-trig pine-btn" data-variant="destructive">Delete file</button>
+    </pine-dialog-trigger>
+    <pine-dialog-portal>
+      <pine-dialog-overlay></pine-dialog-overlay>
+      <pine-dialog-content>
+        <pine-dialog-title>Delete file?</pine-dialog-title>
+        <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
+        <div class="row">
+          <pine-dialog-close pp-as>
+            <button class="tw-cancel pine-btn" data-variant="ghost">Cancel</button>
+          </pine-dialog-close>
+          <pine-dialog-close pp-as>
+            <button class="tw-delete pine-btn" data-variant="destructive">Delete</button>
+          </pine-dialog-close>
+        </div>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn dialog_pp_as_close_siblings_both_fire() {
-    let host = mount(
-        "<pine-dialog-root pp-model:open=\"dialog_open\">\
-           <pine-dialog-trigger pp-as>\
-             <button class=\"tw-trig pine-btn\" data-variant=\"destructive\">Delete file</button>\
-           </pine-dialog-trigger>\
-           <pine-dialog-portal>\
-             <pine-dialog-overlay></pine-dialog-overlay>\
-             <pine-dialog-content>\
-               <pine-dialog-title>Delete file?</pine-dialog-title>\
-               <pine-dialog-description>This action cannot be undone.</pine-dialog-description>\
-               <div class=\"row\">\
-                 <pine-dialog-close pp-as>\
-                   <button class=\"tw-cancel pine-btn\" data-variant=\"ghost\">Cancel</button>\
-                 </pine-dialog-close>\
-                 <pine-dialog-close pp-as>\
-                   <button class=\"tw-delete pine-btn\" data-variant=\"destructive\">Delete</button>\
-                 </pine-dialog-close>\
-               </div>\
-             </pine-dialog-content>\
-           </pine-dialog-portal>\
-         </pine-dialog-root>",
-    );
+    let host = mount_fixture::<DialogCloseSiblingsFixture>();
     tick().await;
 
     host.query_selector(".tw-trig")
@@ -2108,28 +2223,35 @@ async fn dialog_pp_as_close_siblings_both_fire() {
     host.remove();
 }
 
-/// `<pine-dialog-trigger pp-as><pine-button>...</pine-button></...>`
-/// — the compound variant that composes Pine's Button primitive as
-/// the rendered root instead of a raw `<button class="pine-btn">`.
-/// Click on the inner native button bubbles through `<pine-button>`
-/// which the merged `@click="toggle"` then catches.
+// `<pine-dialog-trigger pp-as><pine-button>...</pine-button></...>`
+// — the compound variant that composes Pine's Button primitive as
+// the rendered root instead of a raw `<button class="pine-btn">`.
+// Click on the inner native button bubbles through `<pine-button>`
+// which the merged `@click="toggle"` then catches.
+compiled_fixture!(
+    DialogComposedButtonFixture,
+    r#"
+<div>
+  <pine-dialog-root>
+    <pine-dialog-trigger pp-as>
+      <pine-button variant="destructive" class="user-trig">Open</pine-button>
+    </pine-dialog-trigger>
+    <pine-dialog-portal>
+      <pine-dialog-content>
+        <pine-dialog-title>Hi</pine-dialog-title>
+        <pine-dialog-close pp-as>
+          <pine-button variant="ghost" class="user-close">Cancel</pine-button>
+        </pine-dialog-close>
+      </pine-dialog-content>
+    </pine-dialog-portal>
+  </pine-dialog-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn dialog_trigger_composes_pine_button() {
-    let host = mount(
-        "<pine-dialog-root>\
-           <pine-dialog-trigger pp-as>\
-             <pine-button variant=\"destructive\" class=\"user-trig\">Open</pine-button>\
-           </pine-dialog-trigger>\
-           <pine-dialog-portal>\
-             <pine-dialog-content>\
-               <pine-dialog-title>Hi</pine-dialog-title>\
-               <pine-dialog-close pp-as>\
-                 <pine-button variant=\"ghost\" class=\"user-close\">Cancel</pine-button>\
-               </pine-dialog-close>\
-             </pine-dialog-content>\
-           </pine-dialog-portal>\
-         </pine-dialog-root>",
-    );
+    let host = mount_fixture::<DialogComposedButtonFixture>();
     tick().await;
 
     // Click the INNER rendered button — Pine's Button template
@@ -2173,24 +2295,31 @@ async fn dialog_trigger_composes_pine_button() {
 
 // ─── PineTooltipProvider ──────────────────────────────────────────
 
-/// Provider enforces singleton: opening the second tooltip closes
-/// the first. Both live under one Provider with a 0-ms delay; we
-/// hover A, wait for the timer to fire, then hover B and assert
-/// that A's Content disappears when B's mounts.
+// Provider enforces singleton: opening the second tooltip closes
+// the first. Both live under one Provider with a 0-ms delay; we
+// hover A, wait for the timer to fire, then hover B and assert
+// that A's Content disappears when B's mounts.
+compiled_fixture!(
+    TooltipProviderFixture,
+    r#"
+<div>
+  <pine-tooltip-provider delay_duration="0">
+    <pine-tooltip-root>
+      <pine-tooltip-trigger class="tp-a-trig"><button>A</button></pine-tooltip-trigger>
+      <pine-tooltip-portal><pine-tooltip-content class="tp-a-content">A body</pine-tooltip-content></pine-tooltip-portal>
+    </pine-tooltip-root>
+    <pine-tooltip-root>
+      <pine-tooltip-trigger class="tp-b-trig"><button>B</button></pine-tooltip-trigger>
+      <pine-tooltip-portal><pine-tooltip-content class="tp-b-content">B body</pine-tooltip-content></pine-tooltip-portal>
+    </pine-tooltip-root>
+  </pine-tooltip-provider>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn tooltip_provider_singleton_evicts_previous() {
-    let host = mount(
-        "<pine-tooltip-provider delay_duration=\"0\">\
-           <pine-tooltip-root>\
-             <pine-tooltip-trigger class=\"tp-a-trig\"><button>A</button></pine-tooltip-trigger>\
-             <pine-tooltip-portal><pine-tooltip-content class=\"tp-a-content\">A body</pine-tooltip-content></pine-tooltip-portal>\
-           </pine-tooltip-root>\
-           <pine-tooltip-root>\
-             <pine-tooltip-trigger class=\"tp-b-trig\"><button>B</button></pine-tooltip-trigger>\
-             <pine-tooltip-portal><pine-tooltip-content class=\"tp-b-content\">B body</pine-tooltip-content></pine-tooltip-portal>\
-           </pine-tooltip-root>\
-         </pine-tooltip-provider>",
-    );
+    let host = mount_fixture::<TooltipProviderFixture>();
     tick().await;
 
     // Hover A — `pp-ref="trigger"` points at the Trigger template's
@@ -2248,25 +2377,32 @@ async fn tooltip_provider_singleton_evicts_previous() {
 
 // ─── PineContextMenu ──────────────────────────────────────────────
 
-/// A `contextmenu` event on the Trigger captures pointer coords,
-/// opens the menu, and positions Content at those coords. Clicking
-/// an Item closes the menu.
+// A `contextmenu` event on the Trigger captures pointer coords,
+// opens the menu, and positions Content at those coords. Clicking
+// an Item closes the menu.
+compiled_fixture!(
+    ContextMenuFixture,
+    r#"
+<div>
+  <pine-context-menu-root>
+    <pine-context-menu-trigger>
+      <div class="cm-surface" style="width:200px;height:100px">right-click me</div>
+    </pine-context-menu-trigger>
+    <pine-context-menu-portal>
+      <pine-context-menu-content>
+        <pine-context-menu-item class="cm-copy">Copy</pine-context-menu-item>
+        <pine-context-menu-separator></pine-context-menu-separator>
+        <pine-context-menu-item class="cm-del">Delete</pine-context-menu-item>
+      </pine-context-menu-content>
+    </pine-context-menu-portal>
+  </pine-context-menu-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn context_menu_right_click_opens_and_item_closes() {
-    let host = mount(
-        "<pine-context-menu-root>\
-           <pine-context-menu-trigger>\
-             <div class=\"cm-surface\" style=\"width:200px;height:100px\">right-click me</div>\
-           </pine-context-menu-trigger>\
-           <pine-context-menu-portal>\
-             <pine-context-menu-content>\
-               <pine-context-menu-item class=\"cm-copy\">Copy</pine-context-menu-item>\
-               <pine-context-menu-separator></pine-context-menu-separator>\
-               <pine-context-menu-item class=\"cm-del\">Delete</pine-context-menu-item>\
-             </pine-context-menu-content>\
-           </pine-context-menu-portal>\
-         </pine-context-menu-root>",
-    );
+    let host = mount_fixture::<ContextMenuFixture>();
     tick().await;
 
     // Build a `contextmenu` MouseEvent with explicit client
@@ -2325,14 +2461,21 @@ async fn context_menu_right_click_opens_and_item_closes() {
 
 // ─── PineLabel ────────────────────────────────────────────────────
 
-/// `<pine-label for="foo">` renders a `<label for="foo">` so
-/// native click-through to the paired input Just Works.
+// `<pine-label for="foo">` renders a `<label for="foo">` so
+// native click-through to the paired input Just Works.
+compiled_fixture!(
+    LabelFixture,
+    r#"
+<div>
+  <pine-label target="the-input">Email</pine-label>
+  <input id="the-input" type="text">
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn label_renders_native_label_with_for_attr() {
-    let host = mount(
-        "<pine-label target=\"the-input\">Email</pine-label>\
-         <input id=\"the-input\" type=\"text\">",
-    );
+    let host = mount_fixture::<LabelFixture>();
     tick().await;
 
     let label = host.query_selector("label.pine-label").unwrap().unwrap();
@@ -2344,15 +2487,22 @@ async fn label_renders_native_label_with_for_attr() {
 
 // ─── PineSeparator ────────────────────────────────────────────────
 
-/// Default separator renders `role="separator"` +
-/// `aria-orientation="horizontal"`; `decorative` drops them.
+// Default separator renders `role="separator"` +
+// `aria-orientation="horizontal"`; `decorative` drops them.
+compiled_fixture!(
+    SeparatorFixture,
+    r#"
+<div>
+  <pine-separator class="s-one"></pine-separator>
+  <pine-separator class="s-two" orientation="vertical"></pine-separator>
+  <pine-separator class="s-three" decorative="true"></pine-separator>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn separator_role_and_orientation_flags() {
-    let host = mount(
-        "<pine-separator class=\"s-one\"></pine-separator>\
-         <pine-separator class=\"s-two\" orientation=\"vertical\"></pine-separator>\
-         <pine-separator class=\"s-three\" decorative=\"true\"></pine-separator>",
-    );
+    let host = mount_fixture::<SeparatorFixture>();
     tick().await;
 
     let s1 = host.query_selector(".s-one").unwrap().unwrap();
@@ -2377,15 +2527,33 @@ async fn separator_role_and_orientation_flags() {
 
 // ─── PineProgress ─────────────────────────────────────────────────
 
-/// Root exposes `role="progressbar"` with valid ARIA; indicator
-/// mirrors `data-value` / `data-max` / `data-state` reactively.
+// Root exposes `role="progressbar"` with valid ARIA; indicator
+// mirrors `data-value` / `data-max` / `data-state` reactively.
+compiled_fixture!(
+    ProgressDeterminateFixture,
+    r#"
+<div>
+  <pine-progress-root value="42" max="100">
+    <pine-progress-indicator></pine-progress-indicator>
+  </pine-progress-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    ProgressIndeterminateFixture,
+    r#"
+<div>
+  <pine-progress-root value="-1">
+    <pine-progress-indicator class="ind2"></pine-progress-indicator>
+  </pine-progress-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn progress_determinate_and_indeterminate_states() {
-    let host = mount(
-        "<pine-progress-root value=\"42\" max=\"100\">\
-           <pine-progress-indicator></pine-progress-indicator>\
-         </pine-progress-root>",
-    );
+    let host = mount_fixture::<ProgressDeterminateFixture>();
     tick().await;
 
     let root = host
@@ -2405,11 +2573,7 @@ async fn progress_determinate_and_indeterminate_states() {
     host.remove();
 
     // Indeterminate — negative value drops aria-valuenow + data-value.
-    let host = mount(
-        "<pine-progress-root value=\"-1\">\
-           <pine-progress-indicator class=\"ind2\"></pine-progress-indicator>\
-         </pine-progress-root>",
-    );
+    let host = mount_fixture::<ProgressIndeterminateFixture>();
     tick().await;
     let root = host
         .query_selector("[role=\"progressbar\"]")
@@ -2431,10 +2595,15 @@ async fn progress_determinate_and_indeterminate_states() {
 
 // ─── PineAspectRatio ──────────────────────────────────────────────
 
-/// `ratio` prop flows into inline `style="aspect-ratio: …"`.
+// `ratio` prop flows into inline `style="aspect-ratio: …"`.
+compiled_fixture!(
+    AspectRatioFixture,
+    r#"<div><pine-aspect-ratio ratio="1.777"></pine-aspect-ratio></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn aspect_ratio_sets_css_aspect_ratio() {
-    let host = mount("<pine-aspect-ratio ratio=\"1.777\"></pine-aspect-ratio>");
+    let host = mount_fixture::<AspectRatioFixture>();
     tick().await;
 
     let el = host.query_selector(".pine-aspect-ratio").unwrap().unwrap();
@@ -2449,17 +2618,24 @@ async fn aspect_ratio_sets_css_aspect_ratio() {
 
 // ─── PineToolbar ──────────────────────────────────────────────────
 
-/// Toolbar root carries `role="toolbar"` + `aria-orientation`,
-/// and Separator inside picks up the inverted orientation.
+// Toolbar root carries `role="toolbar"` + `aria-orientation`,
+// and Separator inside picks up the inverted orientation.
+compiled_fixture!(
+    ToolbarFixture,
+    r#"
+<div>
+  <pine-toolbar-root orientation="horizontal">
+    <pine-toolbar-button>A</pine-toolbar-button>
+    <pine-toolbar-separator class="tb-sep"></pine-toolbar-separator>
+    <pine-toolbar-button>B</pine-toolbar-button>
+  </pine-toolbar-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn toolbar_orientation_flows_to_separator() {
-    let host = mount(
-        "<pine-toolbar-root orientation=\"horizontal\">\
-           <pine-toolbar-button>A</pine-toolbar-button>\
-           <pine-toolbar-separator class=\"tb-sep\"></pine-toolbar-separator>\
-           <pine-toolbar-button>B</pine-toolbar-button>\
-         </pine-toolbar-root>",
-    );
+    let host = mount_fixture::<ToolbarFixture>();
     tick().await;
 
     let tb = host.query_selector("[role=\"toolbar\"]").unwrap().unwrap();
@@ -2480,23 +2656,30 @@ async fn toolbar_orientation_flows_to_separator() {
 
 // ─── PineHoverCard ────────────────────────────────────────────────
 
-/// Hover on the Trigger with a zero open-delay opens the card;
-/// leaving and letting the close-delay elapse closes it. We drop
-/// the delays to 0 so the test doesn't need to wait real time.
+// Hover on the Trigger with a zero open-delay opens the card;
+// leaving and letting the close-delay elapse closes it. We drop
+// the delays to 0 so the test doesn't need to wait real time.
+compiled_fixture!(
+    HoverCardFixture,
+    r##"
+<div>
+  <pine-hover-card-root open_delay="0" close_delay="0">
+    <pine-hover-card-trigger>
+      <a class="hc-a" href="#">@ada</a>
+    </pine-hover-card-trigger>
+    <pine-hover-card-portal>
+      <pine-hover-card-content>
+        Ada Lovelace
+      </pine-hover-card-content>
+    </pine-hover-card-portal>
+  </pine-hover-card-root>
+</div>
+"##
+);
+
 #[wasm_bindgen_test]
 async fn hover_card_hover_opens_and_leave_closes() {
-    let host = mount(
-        "<pine-hover-card-root open_delay=\"0\" close_delay=\"0\">\
-           <pine-hover-card-trigger>\
-             <a class=\"hc-a\" href=\"#\">@ada</a>\
-           </pine-hover-card-trigger>\
-           <pine-hover-card-portal>\
-             <pine-hover-card-content>\
-               Ada Lovelace\
-             </pine-hover-card-content>\
-           </pine-hover-card-portal>\
-         </pine-hover-card-root>",
-    );
+    let host = mount_fixture::<HoverCardFixture>();
     tick().await;
 
     // mouseenter doesn't bubble per spec, so dispatch directly on
@@ -2539,15 +2722,20 @@ async fn hover_card_hover_opens_and_leave_closes() {
 
 // ─── PineToggle (standalone) ──────────────────────────────────────
 
-/// Clicking the toggle flips `aria-pressed` + `data-state`, and
-/// emits `pp:update:pressed` for two-way `pp-model:pressed` binding.
+// Clicking the toggle flips `aria-pressed` + `data-state`, and
+// emits `pp:update:pressed` for two-way `pp-model:pressed` binding.
+compiled_fixture!(
+    ToggleFixture,
+    r#"<div><pine-toggle class="tg">B</pine-toggle></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn toggle_click_flips_state_and_emits() {
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::closure::Closure;
 
-    let host = mount("<pine-toggle class=\"tg\">B</pine-toggle>");
+    let host = mount_fixture::<ToggleFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-toggle").unwrap().unwrap();
@@ -2582,18 +2770,25 @@ async fn toggle_click_flips_state_and_emits() {
 
 // ─── PineToggleGroup ──────────────────────────────────────────────
 
-/// `type="single"` — clicking an Item presses it and unpresses
-/// the previously-pressed one. Re-clicking the pressed Item clears
-/// the selection (value = "").
+// `type="single"` — clicking an Item presses it and unpresses
+// the previously-pressed one. Re-clicking the pressed Item clears
+// the selection (value = "").
+compiled_fixture!(
+    ToggleGroupSingleFixture,
+    r#"
+<div>
+  <pine-toggle-group-root>
+    <pine-toggle-group-item value="a" class="tgi-a">A</pine-toggle-group-item>
+    <pine-toggle-group-item value="b" class="tgi-b">B</pine-toggle-group-item>
+    <pine-toggle-group-item value="c" class="tgi-c">C</pine-toggle-group-item>
+  </pine-toggle-group-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn toggle_group_single_mode_exclusive_selection() {
-    let host = mount(
-        "<pine-toggle-group-root>\
-           <pine-toggle-group-item value=\"a\" class=\"tgi-a\">A</pine-toggle-group-item>\
-           <pine-toggle-group-item value=\"b\" class=\"tgi-b\">B</pine-toggle-group-item>\
-           <pine-toggle-group-item value=\"c\" class=\"tgi-c\">C</pine-toggle-group-item>\
-         </pine-toggle-group-root>",
-    );
+    let host = mount_fixture::<ToggleGroupSingleFixture>();
     tick().await;
 
     host.query_selector(".tgi-b")
@@ -2637,17 +2832,24 @@ async fn toggle_group_single_mode_exclusive_selection() {
     host.remove();
 }
 
-/// `type="multiple"` — each click flips the clicked Item
-/// independently; other items keep their state.
+// `type="multiple"` — each click flips the clicked Item
+// independently; other items keep their state.
+compiled_fixture!(
+    ToggleGroupMultipleFixture,
+    r#"
+<div>
+  <pine-toggle-group-root type="multiple">
+    <pine-toggle-group-item value="bold" class="tgm-b">B</pine-toggle-group-item>
+    <pine-toggle-group-item value="italic" class="tgm-i">I</pine-toggle-group-item>
+    <pine-toggle-group-item value="underline" class="tgm-u">U</pine-toggle-group-item>
+  </pine-toggle-group-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn toggle_group_multiple_mode_independent_selection() {
-    let host = mount(
-        "<pine-toggle-group-root type=\"multiple\">\
-           <pine-toggle-group-item value=\"bold\" class=\"tgm-b\">B</pine-toggle-group-item>\
-           <pine-toggle-group-item value=\"italic\" class=\"tgm-i\">I</pine-toggle-group-item>\
-           <pine-toggle-group-item value=\"underline\" class=\"tgm-u\">U</pine-toggle-group-item>\
-         </pine-toggle-group-root>",
-    );
+    let host = mount_fixture::<ToggleGroupMultipleFixture>();
     tick().await;
 
     host.query_selector(".tgm-b")
@@ -2688,22 +2890,29 @@ async fn toggle_group_multiple_mode_independent_selection() {
 
 // ─── PineRadioGroup ───────────────────────────────────────────────
 
-/// Clicking an Item writes its `value` into Root (Items become
-/// checked / unchecked correctly) and fires `pp:update:model` from
-/// Root's element so `pp-model:value` can two-way bind.
+// Clicking an Item writes its `value` into Root (Items become
+// checked / unchecked correctly) and fires `pp:update:model` from
+// Root's element so `pp-model:value` can two-way bind.
+compiled_fixture!(
+    RadioGroupClickFixture,
+    r#"
+<div>
+  <pine-radio-group-root>
+    <pine-radio-group-item value="a" class="rg-a">A</pine-radio-group-item>
+    <pine-radio-group-item value="b" class="rg-b">B</pine-radio-group-item>
+    <pine-radio-group-item value="c" class="rg-c">C</pine-radio-group-item>
+  </pine-radio-group-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn radio_group_click_selects_and_emits() {
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::closure::Closure;
 
-    let host = mount(
-        "<pine-radio-group-root>\
-           <pine-radio-group-item value=\"a\" class=\"rg-a\">A</pine-radio-group-item>\
-           <pine-radio-group-item value=\"b\" class=\"rg-b\">B</pine-radio-group-item>\
-           <pine-radio-group-item value=\"c\" class=\"rg-c\">C</pine-radio-group-item>\
-         </pine-radio-group-root>",
-    );
+    let host = mount_fixture::<RadioGroupClickFixture>();
     tick().await;
 
     let root = host
@@ -2763,15 +2972,22 @@ async fn radio_group_click_selects_and_emits() {
     host.remove();
 }
 
-/// Disabled Item ignores clicks; disabled Root disables all items.
+// Disabled Item ignores clicks; disabled Root disables all items.
+compiled_fixture!(
+    RadioGroupDisabledFixture,
+    r#"
+<div>
+  <pine-radio-group-root value="a">
+    <pine-radio-group-item value="a" class="rg2-a">A</pine-radio-group-item>
+    <pine-radio-group-item value="b" disabled="true" class="rg2-b">B</pine-radio-group-item>
+  </pine-radio-group-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn radio_group_respects_disabled() {
-    let host = mount(
-        "<pine-radio-group-root value=\"a\">\
-           <pine-radio-group-item value=\"a\" class=\"rg2-a\">A</pine-radio-group-item>\
-           <pine-radio-group-item value=\"b\" disabled=\"true\" class=\"rg2-b\">B</pine-radio-group-item>\
-         </pine-radio-group-root>",
-    );
+    let host = mount_fixture::<RadioGroupDisabledFixture>();
     tick().await;
 
     // Disabled item click doesn't select.
@@ -2791,23 +3007,30 @@ async fn radio_group_respects_disabled() {
     host.remove();
 }
 
-/// Indicator only renders visible markup when its enclosing Item
-/// is checked. Gated via `pp-show="checked"`; watched through
-/// `inject<ScopeId>(CHECKED_OWNER_KEY)` + `watch_scope_field`.
+// Indicator only renders visible markup when its enclosing Item
+// is checked. Gated via `pp-show="checked"`; watched through
+// `inject<ScopeId>(CHECKED_OWNER_KEY)` + `watch_scope_field`.
+compiled_fixture!(
+    RadioGroupIndicatorFixture,
+    r#"
+<div>
+  <pine-radio-group-root>
+    <pine-radio-group-item value="a" class="rg3-a">
+      <pine-radio-group-indicator class="rg3-a-ind">*</pine-radio-group-indicator>
+      A
+    </pine-radio-group-item>
+    <pine-radio-group-item value="b" class="rg3-b">
+      <pine-radio-group-indicator class="rg3-b-ind">*</pine-radio-group-indicator>
+      B
+    </pine-radio-group-item>
+  </pine-radio-group-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn radio_group_indicator_mirrors_item_checked() {
-    let host = mount(
-        "<pine-radio-group-root>\
-           <pine-radio-group-item value=\"a\" class=\"rg3-a\">\
-             <pine-radio-group-indicator class=\"rg3-a-ind\">●</pine-radio-group-indicator>\
-             A\
-           </pine-radio-group-item>\
-           <pine-radio-group-item value=\"b\" class=\"rg3-b\">\
-             <pine-radio-group-indicator class=\"rg3-b-ind\">●</pine-radio-group-indicator>\
-             B\
-           </pine-radio-group-item>\
-         </pine-radio-group-root>",
-    );
+    let host = mount_fixture::<RadioGroupIndicatorFixture>();
     tick().await;
 
     // Select the INNER span (template root that pp-show toggles) —
@@ -2871,25 +3094,32 @@ async fn radio_group_indicator_mirrors_item_checked() {
 
 // ─── PineAlertDialog ──────────────────────────────────────────────
 
-/// AlertDialog opens the same way as Dialog, but Content renders
-/// `role="alertdialog"` and overlay-click is a no-op by default
-/// (alerts require an explicit Action or Cancel choice).
+// AlertDialog opens the same way as Dialog, but Content renders
+// `role="alertdialog"` and overlay-click is a no-op by default
+// (alerts require an explicit Action or Cancel choice).
+compiled_fixture!(
+    AlertDialogRoleFixture,
+    r#"
+<div>
+  <pine-alert-dialog-root>
+    <pine-alert-dialog-trigger class="ad-trig">open</pine-alert-dialog-trigger>
+    <pine-alert-dialog-portal>
+      <pine-alert-dialog-overlay></pine-alert-dialog-overlay>
+      <pine-alert-dialog-content>
+        <pine-alert-dialog-title>Delete?</pine-alert-dialog-title>
+        <pine-alert-dialog-description>Irreversible.</pine-alert-dialog-description>
+        <pine-alert-dialog-cancel class="ad-cancel">Cancel</pine-alert-dialog-cancel>
+        <pine-alert-dialog-action class="ad-action">Delete</pine-alert-dialog-action>
+      </pine-alert-dialog-content>
+    </pine-alert-dialog-portal>
+  </pine-alert-dialog-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
-    let host = mount(
-        "<pine-alert-dialog-root>\
-           <pine-alert-dialog-trigger class=\"ad-trig\">open</pine-alert-dialog-trigger>\
-           <pine-alert-dialog-portal>\
-             <pine-alert-dialog-overlay></pine-alert-dialog-overlay>\
-             <pine-alert-dialog-content>\
-               <pine-alert-dialog-title>Delete?</pine-alert-dialog-title>\
-               <pine-alert-dialog-description>Irreversible.</pine-alert-dialog-description>\
-               <pine-alert-dialog-cancel class=\"ad-cancel\">Cancel</pine-alert-dialog-cancel>\
-               <pine-alert-dialog-action class=\"ad-action\">Delete</pine-alert-dialog-action>\
-             </pine-alert-dialog-content>\
-           </pine-alert-dialog-portal>\
-         </pine-alert-dialog-root>",
-    );
+    let host = mount_fixture::<AlertDialogRoleFixture>();
     tick().await;
 
     host.query_selector(".ad-trig")
@@ -2941,21 +3171,28 @@ async fn alert_dialog_renders_alertdialog_role_and_ignores_overlay_click() {
     host.remove();
 }
 
-/// Action and Cancel both close the alert dialog.
+// Action and Cancel both close the alert dialog.
+compiled_fixture!(
+    AlertDialogActionFixture,
+    r#"
+<div>
+  <pine-alert-dialog-root>
+    <pine-alert-dialog-trigger class="ad2-trig">open</pine-alert-dialog-trigger>
+    <pine-alert-dialog-portal>
+      <pine-alert-dialog-content>
+        <pine-alert-dialog-title>Hi</pine-alert-dialog-title>
+        <pine-alert-dialog-cancel class="ad2-cancel">Cancel</pine-alert-dialog-cancel>
+        <pine-alert-dialog-action class="ad2-action">OK</pine-alert-dialog-action>
+      </pine-alert-dialog-content>
+    </pine-alert-dialog-portal>
+  </pine-alert-dialog-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn alert_dialog_action_and_cancel_close() {
-    let host = mount(
-        "<pine-alert-dialog-root>\
-           <pine-alert-dialog-trigger class=\"ad2-trig\">open</pine-alert-dialog-trigger>\
-           <pine-alert-dialog-portal>\
-             <pine-alert-dialog-content>\
-               <pine-alert-dialog-title>Hi</pine-alert-dialog-title>\
-               <pine-alert-dialog-cancel class=\"ad2-cancel\">Cancel</pine-alert-dialog-cancel>\
-               <pine-alert-dialog-action class=\"ad2-action\">OK</pine-alert-dialog-action>\
-             </pine-alert-dialog-content>\
-           </pine-alert-dialog-portal>\
-         </pine-alert-dialog-root>",
-    );
+    let host = mount_fixture::<AlertDialogActionFixture>();
     tick().await;
 
     let trig = host.query_selector(".ad2-trig").unwrap().unwrap();
@@ -3005,11 +3242,16 @@ async fn alert_dialog_action_and_cancel_close() {
     host.remove();
 }
 
-/// Clicks on the inner `<button>` bubble up through the
-/// `<pine-button>` custom element tag — so `@click` (or any
-/// directly-attached listener) on the tag catches them. This is
-/// what lets authors write `<pine-button @click="save">` without
-/// any prop-drilling.
+// Clicks on the inner `<button>` bubble up through the
+// `<pine-button>` custom element tag — so `@click` (or any
+// directly-attached listener) on the tag catches them. This is
+// what lets authors write `<pine-button @click="save">` without
+// any prop-drilling.
+compiled_fixture!(
+    ButtonBubbleFixture,
+    r#"<div><pine-button>Hit me</pine-button></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn button_clicks_bubble_through_pine_button_tag() {
     use std::cell::Cell;
@@ -3017,7 +3259,7 @@ async fn button_clicks_bubble_through_pine_button_tag() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount("<pine-button>Hit me</pine-button>");
+    let host = mount_fixture::<ButtonBubbleFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-button").unwrap().unwrap();
@@ -3045,21 +3287,28 @@ async fn button_clicks_bubble_through_pine_button_tag() {
 
 // ─── PinePasswordToggleField ──────────────────────────────────────
 
-/// Toggle flips Root.visible, which imperatively rewrites the
-/// inner `<input>`'s `type` attribute between "password" and
-/// "text" without disturbing author-supplied attributes.
+// Toggle flips Root.visible, which imperatively rewrites the
+// inner `<input>`'s `type` attribute between "password" and
+// "text" without disturbing author-supplied attributes.
+compiled_fixture!(
+    PasswordToggleFixture,
+    r#"
+<div>
+  <pine-password-toggle-field-root>
+    <pine-password-toggle-field-input>
+      <input name="pwd" placeholder="Password" required>
+    </pine-password-toggle-field-input>
+    <pine-password-toggle-field-toggle>
+      <span>eye</span>
+    </pine-password-toggle-field-toggle>
+  </pine-password-toggle-field-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn password_toggle_field_toggle_flips_input_type() {
-    let host = mount(
-        r#"<pine-password-toggle-field-root>
-             <pine-password-toggle-field-input>
-               <input name="pwd" placeholder="Password" required>
-             </pine-password-toggle-field-input>
-             <pine-password-toggle-field-toggle>
-               <span>eye</span>
-             </pine-password-toggle-field-toggle>
-           </pine-password-toggle-field-root>"#,
-    );
+    let host = mount_fixture::<PasswordToggleFixture>();
     tick().await;
 
     let input = host.query_selector("input").unwrap().unwrap();
@@ -3112,9 +3361,24 @@ async fn password_toggle_field_toggle_flips_input_type() {
 
 // ─── PineOtpField ─────────────────────────────────────────────────
 
-/// OTP Field renders N slots matching `length`, types advance
-/// focus, and the accumulated value fires `pp:update:model` on
-/// each keystroke. Numeric filter drops non-digit input.
+// OTP Field renders N slots matching `length`, types advance
+// focus, and the accumulated value fires `pp:update:model` on
+// each keystroke. Numeric filter drops non-digit input.
+compiled_fixture!(
+    OtpField4NumericFixture,
+    r#"<div><pine-otp-field length="4" type="numeric"></pine-otp-field></div>"#
+);
+
+compiled_fixture!(
+    OtpField4Fixture,
+    r#"<div><pine-otp-field length="4"></pine-otp-field></div>"#
+);
+
+compiled_fixture!(
+    OtpField3Fixture,
+    r#"<div><pine-otp-field length="3"></pine-otp-field></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn otp_field_types_digits_and_emits_value_updates() {
     use std::cell::RefCell;
@@ -3122,7 +3386,7 @@ async fn otp_field_types_digits_and_emits_value_updates() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount("<pine-otp-field length=\"4\" type=\"numeric\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField4NumericFixture>();
     tick().await;
 
     // Four slots rendered.
@@ -3186,12 +3450,12 @@ async fn otp_field_types_digits_and_emits_value_updates() {
     host.remove();
 }
 
-/// After typing a character, focus auto-advances to the next
-/// slot. Regression test for a bug where tick-time reconciliation
-/// of the slot list stole focus back to `<body>`.
+// After typing a character, focus auto-advances to the next
+// slot. Regression test for a bug where tick-time reconciliation
+// of the slot list stole focus back to `<body>`.
 #[wasm_bindgen_test]
 async fn otp_field_typing_advances_focus_to_next_slot() {
-    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField4Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3227,12 +3491,12 @@ async fn otp_field_typing_advances_focus_to_next_slot() {
     host.remove();
 }
 
-/// Deleting content from a filled, focused slot via the Delete
-/// key (browser fires `input` with newValue "") keeps focus
-/// on that same slot rather than dumping it to `<body>`.
+// Deleting content from a filled, focused slot via the Delete
+// key (browser fires `input` with newValue "") keeps focus
+// on that same slot rather than dumping it to `<body>`.
 #[wasm_bindgen_test]
 async fn otp_field_delete_on_filled_slot_keeps_focus() {
-    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField4Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3284,12 +3548,12 @@ async fn otp_field_delete_on_filled_slot_keeps_focus() {
     host.remove();
 }
 
-/// Backspace on an empty slot moves focus *to* the previous
-/// (now-cleared) slot, not to `<body>`. Regression test for
-/// the same reactive-flush race that stole focus on type.
+// Backspace on an empty slot moves focus *to* the previous
+// (now-cleared) slot, not to `<body>`. Regression test for
+// the same reactive-flush race that stole focus on type.
 #[wasm_bindgen_test]
 async fn otp_field_backspace_lands_focus_on_previous_slot() {
-    let host = mount("<pine-otp-field length=\"4\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField4Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3339,18 +3603,18 @@ async fn otp_field_backspace_lands_focus_on_previous_slot() {
     host.remove();
 }
 
-/// The last slot regression the user reported in the demo: type
-/// `123`, then press Backspace on the focused last slot. The
-/// browser's default action consumes Backspace to delete the
-/// character under the caret — *if* the caret is at position 1.
-/// Our post-handler `.focus()` resetting the caret to 0 would
-/// neutralise the default action and leave slot 2 holding "3"
-/// forever. This test simulates the browser-initiated input event
-/// that follows a successful backspace, then asserts that
-/// pressing backspace again (now on an empty slot) walks back.
+// The last slot regression the user reported in the demo: type
+// `123`, then press Backspace on the focused last slot. The
+// browser's default action consumes Backspace to delete the
+// character under the caret — *if* the caret is at position 1.
+// Our post-handler `.focus()` resetting the caret to 0 would
+// neutralise the default action and leave slot 2 holding "3"
+// forever. This test simulates the browser-initiated input event
+// that follows a successful backspace, then asserts that
+// pressing backspace again (now on an empty slot) walks back.
 #[wasm_bindgen_test]
 async fn otp_field_backspace_on_last_slot_after_fill_still_walks_back() {
-    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField3Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3421,15 +3685,15 @@ async fn otp_field_backspace_on_last_slot_after_fill_still_walks_back() {
     host.remove();
 }
 
-/// After the code is fully entered focus stays on the last slot,
-/// which now holds a digit. Pressing Delete (the browser clears
-/// the content and fires `input` with `""`) must clear the last
-/// slot and leave focus there so the user can retype. Regression
-/// test: a short-lived variant returned early from the handler
-/// when the field was full and left the last digit intact.
+// After the code is fully entered focus stays on the last slot,
+// which now holds a digit. Pressing Delete (the browser clears
+// the content and fires `input` with `""`) must clear the last
+// slot and leave focus there so the user can retype. Regression
+// test: a short-lived variant returned early from the handler
+// when the field was full and left the last digit intact.
 #[wasm_bindgen_test]
 async fn otp_field_delete_on_last_slot_clears_and_keeps_focus() {
-    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField3Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3480,12 +3744,12 @@ async fn otp_field_delete_on_last_slot_clears_and_keeps_focus() {
     host.remove();
 }
 
-/// Backspace on an empty slot walks focus back and clears the
-/// previously-filled slot. Auto-advance means a completed-then-
-/// backspaced field leaves focus in the correct place.
+// Backspace on an empty slot walks focus back and clears the
+// previously-filled slot. Auto-advance means a completed-then-
+// backspaced field leaves focus in the correct place.
 #[wasm_bindgen_test]
 async fn otp_field_backspace_walks_back_and_clears() {
-    let host = mount("<pine-otp-field length=\"3\"></pine-otp-field>");
+    let host = mount_fixture::<OtpField3Fixture>();
     tick().await;
 
     let tag = host.query_selector("pine-otp-field").unwrap().unwrap();
@@ -3532,9 +3796,33 @@ async fn otp_field_backspace_walks_back_and_clears() {
 
 // ─── PineSlider ───────────────────────────────────────────────────
 
-/// Keyboard on the thumb steps the value by Root.step; Home / End
-/// snap to min / max; the emitted `pp:update:model` detail carries
-/// the new numeric value.
+// Keyboard on the thumb steps the value by Root.step; Home / End
+// snap to min / max; the emitted `pp:update:model` detail carries
+// the new numeric value.
+compiled_fixture!(
+    SliderKeyboardFixture,
+    r#"
+<div>
+  <pine-slider-root min="0" max="100" step="10" value="50">
+    <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>
+    <pine-slider-thumb></pine-slider-thumb>
+  </pine-slider-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    SliderPointerFixture,
+    r#"
+<div>
+  <pine-slider-root min="0" max="100" step="10" value="0">
+    <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>
+    <pine-slider-thumb></pine-slider-thumb>
+  </pine-slider-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn slider_keyboard_steps_and_emits_value() {
     use std::cell::RefCell;
@@ -3542,12 +3830,7 @@ async fn slider_keyboard_steps_and_emits_value() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"50\">\
-           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
-           <pine-slider-thumb></pine-slider-thumb>\
-         </pine-slider-root>",
-    );
+    let host = mount_fixture::<SliderKeyboardFixture>();
     tick().await;
 
     let root = host.query_selector("pine-slider-root").unwrap().unwrap();
@@ -3613,10 +3896,10 @@ async fn slider_keyboard_steps_and_emits_value() {
     host.remove();
 }
 
-/// Pointer down on the slider (anywhere inside it — track, range,
-/// or thumb) snaps the value to the click position. Regression:
-/// an earlier pass installed the listener on the Track only, but
-/// clicks on the Thumb don't bubble to Track (sibling in the DOM).
+// Pointer down on the slider (anywhere inside it — track, range,
+// or thumb) snaps the value to the click position. Regression:
+// an earlier pass installed the listener on the Track only, but
+// clicks on the Thumb don't bubble to Track (sibling in the DOM).
 #[wasm_bindgen_test]
 async fn slider_pointerdown_snaps_value_to_click_position() {
     use std::cell::RefCell;
@@ -3624,12 +3907,7 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"0\">\
-           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
-           <pine-slider-thumb></pine-slider-thumb>\
-         </pine-slider-root>",
-    );
+    let host = mount_fixture::<SliderPointerFixture>();
     // Inject a stylesheet so the track has a measurable width —
     // without it, `getBoundingClientRect()` returns 0-wide and
     // pointer-to-value maps to the min.
@@ -3685,10 +3963,10 @@ async fn slider_pointerdown_snaps_value_to_click_position() {
     host.remove();
 }
 
-/// Pointerdown-then-pointermove (drag) updates value during
-/// motion — not just on the initial press. Regression: pointer
-/// capture must route `pointermove` to the root so the listener
-/// fires even when the cursor moves outside the root's box.
+// Pointerdown-then-pointermove (drag) updates value during
+// motion — not just on the initial press. Regression: pointer
+// capture must route `pointermove` to the root so the listener
+// fires even when the cursor moves outside the root's box.
 #[wasm_bindgen_test]
 async fn slider_drag_updates_value_continuously() {
     use std::cell::RefCell;
@@ -3696,12 +3974,7 @@ async fn slider_drag_updates_value_continuously() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-slider-root min=\"0\" max=\"100\" step=\"10\" value=\"0\">\
-           <pine-slider-track><pine-slider-range></pine-slider-range></pine-slider-track>\
-           <pine-slider-thumb></pine-slider-thumb>\
-         </pine-slider-root>",
-    );
+    let host = mount_fixture::<SliderPointerFixture>();
     let style = doc().create_element("style").unwrap();
     style.set_text_content(Some(
         ".pine-slider-root, .pine-slider-track { display: block; width: 200px; height: 4px; position: relative; }",
@@ -3779,10 +4052,47 @@ async fn slider_drag_updates_value_continuously() {
 
 // ─── PineSelect ───────────────────────────────────────────────────
 
-/// Clicking the Trigger opens the listbox, clicking an Item
-/// selects it + closes the listbox, and the emitted
-/// `pp:update:model` carries the Item's value so a parent
-/// `pp-model:value` binding round-trips.
+// Clicking the Trigger opens the listbox, clicking an Item
+// selects it + closes the listbox, and the emitted
+// `pp:update:model` carries the Item's value so a parent
+// `pp-model:value` binding round-trips.
+compiled_fixture!(
+    SelectClickFixture,
+    r#"
+<div>
+  <pine-select-root>
+    <pine-select-trigger>
+      <pine-select-value>Pick one</pine-select-value>
+    </pine-select-trigger>
+    <pine-select-portal>
+      <pine-select-content>
+        <pine-select-item value="a">Apple</pine-select-item>
+        <pine-select-item value="b">Banana</pine-select-item>
+        <pine-select-item value="c" disabled>Carrot</pine-select-item>
+      </pine-select-content>
+    </pine-select-portal>
+  </pine-select-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    SelectEscapeFixture,
+    r#"
+<div>
+  <pine-select-root value="b">
+    <pine-select-trigger><pine-select-value>-</pine-select-value></pine-select-trigger>
+    <pine-select-portal>
+      <pine-select-content>
+        <pine-select-item value="a">Apple</pine-select-item>
+        <pine-select-item value="b">Banana</pine-select-item>
+      </pine-select-content>
+    </pine-select-portal>
+  </pine-select-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn select_click_item_emits_value_and_closes() {
     use std::cell::RefCell;
@@ -3790,20 +4100,7 @@ async fn select_click_item_emits_value_and_closes() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-select-root>\
-           <pine-select-trigger>\
-             <pine-select-value>Pick one</pine-select-value>\
-           </pine-select-trigger>\
-           <pine-select-portal>\
-             <pine-select-content>\
-               <pine-select-item value=\"a\">Apple</pine-select-item>\
-               <pine-select-item value=\"b\">Banana</pine-select-item>\
-               <pine-select-item value=\"c\" disabled>Carrot</pine-select-item>\
-             </pine-select-content>\
-           </pine-select-portal>\
-         </pine-select-root>",
-    );
+    let host = mount_fixture::<SelectClickFixture>();
     tick().await;
 
     let root_tag = host.query_selector("pine-select-root").unwrap().unwrap();
@@ -3876,22 +4173,12 @@ async fn select_click_item_emits_value_and_closes() {
     host.remove();
 }
 
-/// Escape closes the listbox without changing the current value.
-/// aria-selected on Items mirrors the Root's value so a freshly
-/// opened listbox paints the current selection.
+// Escape closes the listbox without changing the current value.
+// aria-selected on Items mirrors the Root's value so a freshly
+// opened listbox paints the current selection.
 #[wasm_bindgen_test]
 async fn select_escape_closes_and_aria_selected_mirrors_value() {
-    let host = mount(
-        "<pine-select-root value=\"b\">\
-           <pine-select-trigger><pine-select-value>-</pine-select-value></pine-select-trigger>\
-           <pine-select-portal>\
-             <pine-select-content>\
-               <pine-select-item value=\"a\">Apple</pine-select-item>\
-               <pine-select-item value=\"b\">Banana</pine-select-item>\
-             </pine-select-content>\
-           </pine-select-portal>\
-         </pine-select-root>",
-    );
+    let host = mount_fixture::<SelectEscapeFixture>();
     tick().await;
 
     let trigger: HtmlElement = host
@@ -3960,10 +4247,10 @@ struct ComboboxFilterHost {}
 #[handlers]
 impl ComboboxFilterHost {}
 
-/// Typing in the Input filters the listbox via each Item's
-/// `visible` mirror + `pp-show`. Arrow keys move
-/// `aria-activedescendant` on the Input without moving DOM focus.
-/// Enter activates the currently-highlighted item.
+// Typing in the Input filters the listbox via each Item's
+// `visible` mirror + `pp-show`. Arrow keys move
+// `aria-activedescendant` on the Input without moving DOM focus.
+// Enter activates the currently-highlighted item.
 #[wasm_bindgen_test]
 async fn combobox_filter_arrow_nav_and_enter_selects() {
     use std::cell::RefCell;
@@ -3971,8 +4258,7 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    ComboboxFilterHost::register();
-    let host = mount("<combobox-filter-host></combobox-filter-host>");
+    let host = mount_fixture::<ComboboxFilterHost>();
     tick().await;
 
     let root_tag = host.query_selector("pine-combobox-root").unwrap().unwrap();
@@ -4100,9 +4386,30 @@ async fn combobox_filter_arrow_nav_and_enter_selects() {
 
 // ─── PineCommand ──────────────────────────────────────────────────
 
-/// Mod+K toggles the palette open. Typing filters Items. Clicking
-/// an Item fires `pp:command:select` with the item's `value`
-/// and closes the palette.
+// Mod+K toggles the palette open. Typing filters Items. Clicking
+// an Item fires `pp:command:select` with the item's `value`
+// and closes the palette.
+compiled_fixture!(
+    CommandFixture,
+    r#"
+<div>
+  <pine-command-root>
+    <pine-command-portal>
+      <pine-command-overlay></pine-command-overlay>
+      <pine-command-content>
+        <pine-command-input placeholder="Type a command"></pine-command-input>
+        <pine-command-list>
+          <pine-command-item value="new">New File</pine-command-item>
+          <pine-command-item value="open">Open File</pine-command-item>
+          <pine-command-empty>No match.</pine-command-empty>
+        </pine-command-list>
+      </pine-command-content>
+    </pine-command-portal>
+  </pine-command-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn command_mod_k_opens_click_fires_select_and_closes() {
     use std::cell::RefCell;
@@ -4110,21 +4417,7 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-command-root>\
-           <pine-command-portal>\
-             <pine-command-overlay></pine-command-overlay>\
-             <pine-command-content>\
-               <pine-command-input placeholder=\"Type a command\"></pine-command-input>\
-               <pine-command-list>\
-                 <pine-command-item value=\"new\">New File</pine-command-item>\
-                 <pine-command-item value=\"open\">Open File</pine-command-item>\
-                 <pine-command-empty>No match.</pine-command-empty>\
-               </pine-command-list>\
-             </pine-command-content>\
-           </pine-command-portal>\
-         </pine-command-root>",
-    );
+    let host = mount_fixture::<CommandFixture>();
     tick().await;
     sleep_ms(5).await;
 
@@ -4197,21 +4490,45 @@ async fn command_mod_k_opens_click_fires_select_and_closes() {
     host.remove();
 }
 
-/// Regression: mousedown on the input must NOT be treated as
-/// "outside" and close the listbox. The outside-dismiss listener
-/// treats the associated Input as inside via a data-attr bridge.
+// Regression: mousedown on the input must NOT be treated as
+// "outside" and close the listbox. The outside-dismiss listener
+// treats the associated Input as inside via a data-attr bridge.
+compiled_fixture!(
+    ComboboxMouseFixture,
+    r#"
+<div>
+  <pine-combobox-root>
+    <pine-combobox-input></pine-combobox-input>
+    <pine-combobox-portal>
+      <pine-combobox-content>
+        <pine-combobox-item value="a">Apple</pine-combobox-item>
+      </pine-combobox-content>
+    </pine-combobox-portal>
+  </pine-combobox-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    ComboboxTypingFixture,
+    r#"
+<div>
+  <pine-combobox-root>
+    <pine-combobox-input placeholder=""></pine-combobox-input>
+    <pine-combobox-portal>
+      <pine-combobox-content>
+        <pine-combobox-item value="a">Apple</pine-combobox-item>
+        <pine-combobox-item value="b">Banana</pine-combobox-item>
+      </pine-combobox-content>
+    </pine-combobox-portal>
+  </pine-combobox-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn combobox_mousedown_on_input_does_not_close() {
-    let host = mount(
-        "<pine-combobox-root>\
-           <pine-combobox-input></pine-combobox-input>\
-           <pine-combobox-portal>\
-             <pine-combobox-content>\
-               <pine-combobox-item value=\"a\">Apple</pine-combobox-item>\
-             </pine-combobox-content>\
-           </pine-combobox-portal>\
-         </pine-combobox-root>",
-    );
+    let host = mount_fixture::<ComboboxMouseFixture>();
     tick().await;
 
     let input: HtmlInputElement = host
@@ -4283,21 +4600,11 @@ async fn combobox_mousedown_on_input_does_not_close() {
     host.remove();
 }
 
-/// DIAGNOSTIC: simulate keystroke-by-keystroke typing and verify
-/// the input's `.value` accumulates AND `root.query` tracks it.
+// DIAGNOSTIC: simulate keystroke-by-keystroke typing and verify
+// the input's `.value` accumulates AND `root.query` tracks it.
 #[wasm_bindgen_test]
 async fn combobox_accumulates_typed_characters_in_input_value() {
-    let host = mount(
-        "<pine-combobox-root>\
-           <pine-combobox-input placeholder=\"\"></pine-combobox-input>\
-           <pine-combobox-portal>\
-             <pine-combobox-content>\
-               <pine-combobox-item value=\"a\">Apple</pine-combobox-item>\
-               <pine-combobox-item value=\"b\">Banana</pine-combobox-item>\
-             </pine-combobox-content>\
-           </pine-combobox-portal>\
-         </pine-combobox-root>",
-    );
+    let host = mount_fixture::<ComboboxTypingFixture>();
     tick().await;
 
     let input: HtmlInputElement = host
@@ -4339,27 +4646,75 @@ async fn combobox_accumulates_typed_characters_in_input_value() {
 
 // ─── PineTree (compound) ──────────────────────────────────────────
 
-/// Top-level Items get aria-level=1, nested ones 2, deeper 3, etc.
-/// Before RFC: `collect_ancestor_values` started walking from the
-/// Item's rendered inner div — whose immediate parent is the Item's
-/// own `<pine-tree-item>` custom tag. That counted SELF as an
-/// ancestor, so every Item's level was off-by-one (top-level=2,
-/// nested=3). Fixed by starting the walk one level above own tag.
+// Top-level Items get aria-level=1, nested ones 2, deeper 3, etc.
+// Before RFC: `collect_ancestor_values` started walking from the
+// Item's rendered inner div — whose immediate parent is the Item's
+// own `<pine-tree-item>` custom tag. That counted SELF as an
+// ancestor, so every Item's level was off-by-one (top-level=2,
+// nested=3). Fixed by starting the walk one level above own tag.
+compiled_fixture!(
+    TreeLevelsFixture,
+    r#"
+<div>
+  <pine-tree-root type="single">
+    <pine-tree-item value="a" class="t-a">
+      <pine-tree-item-toggle>toggle</pine-tree-item-toggle>
+      <span>a</span>
+      <pine-tree-item value="a/b" class="t-b">
+        <pine-tree-item-toggle>toggle</pine-tree-item-toggle>
+        <span>b</span>
+        <pine-tree-item value="a/b/c" class="t-c">c</pine-tree-item>
+      </pine-tree-item>
+    </pine-tree-item>
+  </pine-tree-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    TreeTopLevelFixture,
+    r#"
+<div>
+  <pine-tree-root type="single">
+    <pine-tree-item value="a" class="t-a">a</pine-tree-item>
+    <pine-tree-item value="b" class="t-b">b</pine-tree-item>
+  </pine-tree-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    TreeToggleFixture,
+    r#"
+<div>
+  <pine-tree-root type="single">
+    <pine-tree-item value="a" class="t-a">
+      <pine-tree-item-toggle class="t-a-toggle">toggle</pine-tree-item-toggle>
+      <span>a</span>
+      <pine-tree-item value="a/b" class="t-b">b</pine-tree-item>
+    </pine-tree-item>
+  </pine-tree-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    TreeLeafFixture,
+    r#"
+<div>
+  <pine-tree-root type="single">
+    <pine-tree-item value="leaf" class="t-leaf">
+      <pine-tree-item-toggle class="t-leaf-toggle">toggle</pine-tree-item-toggle>
+      <span>leaf</span>
+    </pine-tree-item>
+  </pine-tree-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn tree_aria_level_counts_real_ancestors_only() {
-    let host = mount(
-        "<pine-tree-root type=\"single\">\
-           <pine-tree-item value=\"a\" class=\"t-a\">\
-             <pine-tree-item-toggle>▸</pine-tree-item-toggle>\
-             <span>a</span>\
-             <pine-tree-item value=\"a/b\" class=\"t-b\">\
-               <pine-tree-item-toggle>▸</pine-tree-item-toggle>\
-               <span>b</span>\
-               <pine-tree-item value=\"a/b/c\" class=\"t-c\">c</pine-tree-item>\
-             </pine-tree-item>\
-           </pine-tree-item>\
-         </pine-tree-root>",
-    );
+    let host = mount_fixture::<TreeLevelsFixture>();
     tick().await;
     tick().await;
 
@@ -4373,20 +4728,15 @@ async fn tree_aria_level_counts_real_ancestors_only() {
     host.remove();
 }
 
-/// A top-level Item is always visible (its ancestor chain is empty,
-/// so `parent_visible` is trivially true). Regression guard for the
-/// same self-as-ancestor bug — when the Item saw SELF as an
-/// ancestor, compute_parent_visible checked if `self.value` was in
-/// the empty `expanded` set → false → aria-hidden="true" on
-/// top-level items → the entire tree disappeared.
+// A top-level Item is always visible (its ancestor chain is empty,
+// so `parent_visible` is trivially true). Regression guard for the
+// same self-as-ancestor bug — when the Item saw SELF as an
+// ancestor, compute_parent_visible checked if `self.value` was in
+// the empty `expanded` set → false → aria-hidden="true" on
+// top-level items → the entire tree disappeared.
 #[wasm_bindgen_test]
 async fn tree_top_level_items_are_never_hidden() {
-    let host = mount(
-        "<pine-tree-root type=\"single\">\
-           <pine-tree-item value=\"a\" class=\"t-a\">a</pine-tree-item>\
-           <pine-tree-item value=\"b\" class=\"t-b\">b</pine-tree-item>\
-         </pine-tree-root>",
-    );
+    let host = mount_fixture::<TreeTopLevelFixture>();
     tick().await;
     tick().await;
 
@@ -4402,20 +4752,12 @@ async fn tree_top_level_items_are_never_hidden() {
     host.remove();
 }
 
-/// Nested items are aria-hidden until their parent is expanded.
-/// Clicking the toggle expands the parent, the child's
-/// `parent_visible` flips via the expanded-watch, aria-hidden clears.
+// Nested items are aria-hidden until their parent is expanded.
+// Clicking the toggle expands the parent, the child's
+// `parent_visible` flips via the expanded-watch, aria-hidden clears.
 #[wasm_bindgen_test]
 async fn tree_toggle_click_expands_and_shows_children() {
-    let host = mount(
-        "<pine-tree-root type=\"single\">\
-           <pine-tree-item value=\"a\" class=\"t-a\">\
-             <pine-tree-item-toggle class=\"t-a-toggle\">▸</pine-tree-item-toggle>\
-             <span>a</span>\
-             <pine-tree-item value=\"a/b\" class=\"t-b\">b</pine-tree-item>\
-           </pine-tree-item>\
-         </pine-tree-root>",
-    );
+    let host = mount_fixture::<TreeToggleFixture>();
     tick().await;
     // `has_children` is written in `tick::after_flush`
     // (setTimeout(0)), so a microtask `tick()` alone doesn't
@@ -4457,20 +4799,13 @@ async fn tree_toggle_click_expands_and_shows_children() {
     host.remove();
 }
 
-/// Toggle's `pp-show="has_children"` hides the chevron on leaves.
-/// Leaf items have no descendant `<pine-tree-item>`, so the Item's
-/// `has_children` after_flush check leaves it false, which flows
-/// through the Toggle's watch to collapse the chevron's display.
+// Toggle's `pp-show="has_children"` hides the chevron on leaves.
+// Leaf items have no descendant `<pine-tree-item>`, so the Item's
+// `has_children` after_flush check leaves it false, which flows
+// through the Toggle's watch to collapse the chevron's display.
 #[wasm_bindgen_test]
 async fn tree_leaf_toggle_is_hidden() {
-    let host = mount(
-        "<pine-tree-root type=\"single\">\
-           <pine-tree-item value=\"leaf\" class=\"t-leaf\">\
-             <pine-tree-item-toggle class=\"t-leaf-toggle\">▸</pine-tree-item-toggle>\
-             <span>leaf</span>\
-           </pine-tree-item>\
-         </pine-tree-root>",
-    );
+    let host = mount_fixture::<TreeLeafFixture>();
     tick().await;
     tick().await;
 
@@ -4496,16 +4831,11 @@ async fn tree_leaf_toggle_is_hidden() {
     host.remove();
 }
 
-/// Clicking an Item row in type="single" mode sets Root.value and
-/// emits pp:update:model. The item's own `aria-selected` flips true.
+// Clicking an Item row in type="single" mode sets Root.value and
+// emits pp:update:model. The item's own `aria-selected` flips true.
 #[wasm_bindgen_test]
 async fn tree_click_item_selects_in_single_mode() {
-    let host = mount(
-        "<pine-tree-root type=\"single\">\
-           <pine-tree-item value=\"a\" class=\"t-a\">a</pine-tree-item>\
-           <pine-tree-item value=\"b\" class=\"t-b\">b</pine-tree-item>\
-         </pine-tree-root>",
-    );
+    let host = mount_fixture::<TreeTopLevelFixture>();
     tick().await;
     tick().await;
 
@@ -4529,21 +4859,58 @@ async fn tree_click_item_selects_in_single_mode() {
 
 // ─── PineSplitter (compound) ──────────────────────────────────────
 
-/// Three panels with default-size 25 / 50 / 25 (summing to 100)
-/// render at exactly those flex-basis percentages. Regression
-/// guard for the old register_panel / normalize_sizes that rescaled
-/// partial sums during registration.
+// Three panels with default-size 25 / 50 / 25 (summing to 100)
+// render at exactly those flex-basis percentages. Regression
+// guard for the old register_panel / normalize_sizes that rescaled
+// partial sums during registration.
+compiled_fixture!(
+    SplitterInitialFixture,
+    r#"
+<div>
+  <pine-splitter-group direction="horizontal">
+    <pine-splitter-panel default-size="25" min-size="10" class="sp-a"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h1"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="50" class="sp-b"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h2"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="25" min-size="10" class="sp-c"></pine-splitter-panel>
+  </pine-splitter-group>
+</div>
+"#
+);
+
+compiled_fixture!(
+    SplitterAriaFixture,
+    r#"
+<div>
+  <pine-splitter-group direction="horizontal">
+    <pine-splitter-panel default-size="20"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h1"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="60"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h2"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="20"></pine-splitter-panel>
+  </pine-splitter-group>
+</div>
+"#
+);
+
+compiled_fixture!(
+    SplitterKeyboardFixture,
+    r#"
+<div>
+  <pine-splitter-group direction="horizontal">
+    <pine-splitter-panel default-size="30" class="sp-a"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h1"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="40" class="sp-b"></pine-splitter-panel>
+    <pine-splitter-resize-handle class="sp-h2"></pine-splitter-resize-handle>
+    <pine-splitter-panel default-size="30" class="sp-c"></pine-splitter-panel>
+  </pine-splitter-group>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn splitter_initial_sizes_match_panel_defaults() {
-    let host = mount(
-        "<pine-splitter-group direction=\"horizontal\">\
-           <pine-splitter-panel default-size=\"25\" min-size=\"10\" class=\"sp-a\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"50\" class=\"sp-b\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"25\" min-size=\"10\" class=\"sp-c\"></pine-splitter-panel>\
-         </pine-splitter-group>",
-    );
+    let host = mount_fixture::<SplitterInitialFixture>();
     tick().await;
     tick().await;
 
@@ -4569,23 +4936,15 @@ async fn splitter_initial_sizes_match_panel_defaults() {
     host.remove();
 }
 
-/// Handle 1 sits between Panel 0 and Panel 1; handle 2 between
-/// Panel 1 and Panel 2. aria-valuenow reflects the BEFORE-panel's
-/// current size, so handle 1's aria-valuenow == sizes[0] and
-/// handle 2's == sizes[1]. Regression guard for neighbour_indices
-/// returning (0, 0) for every handle (which made aria-valuenow
-/// identical across handles and resizes no-op).
+// Handle 1 sits between Panel 0 and Panel 1; handle 2 between
+// Panel 1 and Panel 2. aria-valuenow reflects the BEFORE-panel's
+// current size, so handle 1's aria-valuenow == sizes[0] and
+// handle 2's == sizes[1]. Regression guard for neighbour_indices
+// returning (0, 0) for every handle (which made aria-valuenow
+// identical across handles and resizes no-op).
 #[wasm_bindgen_test]
 async fn splitter_handle_aria_valuenow_tracks_before_panel() {
-    let host = mount(
-        "<pine-splitter-group direction=\"horizontal\">\
-           <pine-splitter-panel default-size=\"20\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"60\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"20\"></pine-splitter-panel>\
-         </pine-splitter-group>",
-    );
+    let host = mount_fixture::<SplitterAriaFixture>();
     tick().await;
     tick().await;
 
@@ -4605,22 +4964,14 @@ async fn splitter_handle_aria_valuenow_tracks_before_panel() {
     host.remove();
 }
 
-/// step_inc on handle 2 (ArrowRight / ArrowDown) shifts 1% from
-/// Panel 2 into Panel 1 — NOT into Panel 0. Before the fix,
-/// neighbour_indices returned (0, 0) for every handle, so keyboard
-/// resize shuffled Panel 0 against itself and nothing observably
-/// changed.
+// step_inc on handle 2 (ArrowRight / ArrowDown) shifts 1% from
+// Panel 2 into Panel 1 — NOT into Panel 0. Before the fix,
+// neighbour_indices returned (0, 0) for every handle, so keyboard
+// resize shuffled Panel 0 against itself and nothing observably
+// changed.
 #[wasm_bindgen_test]
 async fn splitter_handle_2_keyboard_resizes_neighbours_only() {
-    let host = mount(
-        "<pine-splitter-group direction=\"horizontal\">\
-           <pine-splitter-panel default-size=\"30\" class=\"sp-a\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h1\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"40\" class=\"sp-b\"></pine-splitter-panel>\
-           <pine-splitter-resize-handle class=\"sp-h2\"></pine-splitter-resize-handle>\
-           <pine-splitter-panel default-size=\"30\" class=\"sp-c\"></pine-splitter-panel>\
-         </pine-splitter-group>",
-    );
+    let host = mount_fixture::<SplitterKeyboardFixture>();
     tick().await;
     tick().await;
 
@@ -4687,21 +5038,39 @@ fn tags_root_values(host: &Element) -> Vec<String> {
     pocopine::__private::serde_wasm_bindgen::from_value(js).unwrap_or_default()
 }
 
-/// Authored Items render their label lazily from the injected
-/// Item scope so reactive `:value` bindings that fire *after* the
-/// Item's own `on_setup` still land in the text.
+// Authored Items render their label lazily from the injected
+// Item scope so reactive `:value` bindings that fire *after* the
+// Item's own `on_setup` still land in the text.
+compiled_fixture!(
+    TagsInitialFixture,
+    r#"
+<div>
+  <pine-tags-input-root class="t-root">
+    <pine-tags-input-item value="alpha" class="t-a">
+      <pine-tags-input-item-text></pine-tags-input-item-text>
+    </pine-tags-input-item>
+    <pine-tags-input-item value="beta" class="t-b">
+      <pine-tags-input-item-text></pine-tags-input-item-text>
+    </pine-tags-input-item>
+  </pine-tags-input-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    TagsInputOnlyFixture,
+    r#"
+<div>
+  <pine-tags-input-root>
+    <pine-tags-input-input class="t-input"></pine-tags-input-input>
+  </pine-tags-input-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn tags_input_initial_tags_render_with_labels() {
-    let host = mount(
-        "<pine-tags-input-root class=\"t-root\">\
-           <pine-tags-input-item value=\"alpha\" class=\"t-a\">\
-             <pine-tags-input-item-text></pine-tags-input-item-text>\
-           </pine-tags-input-item>\
-           <pine-tags-input-item value=\"beta\" class=\"t-b\">\
-             <pine-tags-input-item-text></pine-tags-input-item-text>\
-           </pine-tags-input-item>\
-         </pine-tags-input-root>",
-    );
+    let host = mount_fixture::<TagsInitialFixture>();
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -4724,20 +5093,16 @@ async fn tags_input_initial_tags_render_with_labels() {
     host.remove();
 }
 
-/// Clicking an Item's Delete button removes that tag from
-/// `Root.values`. Guards the lazy-lookup in Delete.click — it
-/// has to resolve the Item's value from the scope *at click
-/// time*, not from a snapshot taken at Delete's own on_setup.
-/// Typing into the Input and pressing Enter appends the
-/// trimmed value to `Root.values`, and clears the field.
-/// Duplicate adds are silently rejected (default `duplicate=false`).
+// Clicking an Item's Delete button removes that tag from
+// `Root.values`. Guards the lazy-lookup in Delete.click — it
+// has to resolve the Item's value from the scope *at click
+// time*, not from a snapshot taken at Delete's own on_setup.
+// Typing into the Input and pressing Enter appends the
+// trimmed value to `Root.values`, and clears the field.
+// Duplicate adds are silently rejected (default `duplicate=false`).
 #[wasm_bindgen_test]
 async fn tags_input_enter_adds_and_duplicate_rejects() {
-    let host = mount(
-        "<pine-tags-input-root>\
-           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
-         </pine-tags-input-root>",
-    );
+    let host = mount_fixture::<TagsInputOnlyFixture>();
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -4806,16 +5171,12 @@ async fn tags_input_enter_adds_and_duplicate_rejects() {
     host.remove();
 }
 
-/// Backspace on an empty Input pops the last tag from Root.values.
-/// Backspace on a non-empty Input is a no-op at the component
-/// level (native text editing handles it).
+// Backspace on an empty Input pops the last tag from Root.values.
+// Backspace on a non-empty Input is a no-op at the component
+// level (native text editing handles it).
 #[wasm_bindgen_test]
 async fn tags_input_backspace_on_empty_pops_last_tag() {
-    let host = mount(
-        "<pine-tags-input-root>\
-           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
-         </pine-tags-input-root>",
-    );
+    let host = mount_fixture::<TagsInputOnlyFixture>();
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -4867,15 +5228,22 @@ async fn tags_input_backspace_on_empty_pops_last_tag() {
     host.remove();
 }
 
-/// Clicking the Clear button empties Root.values.
+// Clicking the Clear button empties Root.values.
+compiled_fixture!(
+    TagsClearFixture,
+    r#"
+<div>
+  <pine-tags-input-root>
+    <pine-tags-input-input class="t-input"></pine-tags-input-input>
+    <pine-tags-input-clear class="t-clear">Clear</pine-tags-input-clear>
+  </pine-tags-input-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn tags_input_clear_empties_values() {
-    let host = mount(
-        "<pine-tags-input-root>\
-           <pine-tags-input-input class=\"t-input\"></pine-tags-input-input>\
-           <pine-tags-input-clear class=\"t-clear\">Clear</pine-tags-input-clear>\
-         </pine-tags-input-root>",
-    );
+    let host = mount_fixture::<TagsClearFixture>();
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -4918,10 +5286,10 @@ async fn tags_input_clear_empties_values() {
 
 // ─── pp-transition preset shorthand (RFC-038) ─────────────────────
 
-/// `apply_preset("fade", "fade")` stamps the six `pp-transition:*`
-/// class attrs on the target element — this is the primitive
-/// behind both the `pp-transition="fade"` shorthand and the
-/// `#[component(transition = "fade")]` macro path.
+// `apply_preset("fade", "fade")` stamps the six `pp-transition:*`
+// class attrs on the target element — this is the primitive
+// behind both the `pp-transition="fade"` shorthand and the
+// `#[component(transition = "fade")]` macro path.
 #[wasm_bindgen_test]
 async fn animate_preset_fade_stamps_six_class_attrs() {
     pocopine_core::animate::install();
@@ -4952,8 +5320,8 @@ async fn animate_preset_fade_stamps_six_class_attrs() {
     host.remove();
 }
 
-/// Asymmetric split — enter name and leave name differ, each drives
-/// its own phase's classes. Mirrors Svelte's `in:` / `out:` split.
+// Asymmetric split — enter name and leave name differ, each drives
+// its own phase's classes. Mirrors Svelte's `in:` / `out:` split.
 #[wasm_bindgen_test]
 async fn animate_preset_split_in_out_picks_each_side() {
     pocopine_core::animate::install();
@@ -4979,8 +5347,8 @@ async fn animate_preset_split_in_out_picks_each_side() {
     host.remove();
 }
 
-/// `apply_preset("none", "none")` clears any existing preset attrs
-/// — the runtime no-op / opt-out path.
+// `apply_preset("none", "none")` clears any existing preset attrs
+// — the runtime no-op / opt-out path.
 #[wasm_bindgen_test]
 async fn animate_preset_none_clears_attrs() {
     pocopine_core::animate::install();
@@ -4998,8 +5366,8 @@ async fn animate_preset_none_clears_attrs() {
     host.remove();
 }
 
-/// `register_preset` adds a new named preset; `lookup` finds it;
-/// `apply_preset` stamps its atoms.
+// `register_preset` adds a new named preset; `lookup` finds it;
+// `apply_preset` stamps its atoms.
 #[wasm_bindgen_test]
 async fn animate_register_preset_custom() {
     pocopine_core::animate::install();
@@ -5027,10 +5395,10 @@ async fn animate_register_preset_custom() {
     host.remove();
 }
 
-/// FLIP: an element whose old rect was 100px above its new rect gets
-/// a `transform: translate(…, -100px)` at the start of the animation
-/// and `translate(0, 0)` at the end. We verify by checking the mid-
-/// animation inline style.
+// FLIP: an element whose old rect was 100px above its new rect gets
+// a `transform: translate(…, -100px)` at the start of the animation
+// and `translate(0, 0)` at the end. We verify by checking the mid-
+// animation inline style.
 #[wasm_bindgen_test]
 async fn animate_flip_applies_inverse_translate() {
     pocopine_core::animate::install();
@@ -5096,20 +5464,19 @@ struct AnimateFadeHost {
 #[handlers]
 impl AnimateFadeHost {}
 
-/// `#[component(transition = "fade")]` stamps the six pp-transition:*
-/// class attrs on the INNER rendered root — not the outer custom
-/// tag. Pine compounds often carry `display: contents` on their
-/// custom tag, which has no layout box; opacity / transform on a
-/// box-less element don't visually render, so the classes only
-/// matter on the inner root that actually has a box.
-/// `transition::enter_subtree` walks descendants and picks the
-/// attrs up regardless, so pp-if/pp-show/pp-for still drive the
-/// enter/leave sequence from the outer tag.
+// `#[component(transition = "fade")]` stamps the six pp-transition:*
+// class attrs on the INNER rendered root — not the outer custom
+// tag. Pine compounds often carry `display: contents` on their
+// custom tag, which has no layout box; opacity / transform on a
+// box-less element don't visually render, so the classes only
+// matter on the inner root that actually has a box.
+// `transition::enter_subtree` walks descendants and picks the
+// attrs up regardless, so pp-if/pp-show/pp-for still drive the
+// enter/leave sequence from the outer tag.
 #[wasm_bindgen_test]
 async fn animate_macro_transition_stamps_preset_on_root() {
     pocopine_core::animate::install();
-    AnimateFadeHost::register();
-    let host = mount("<animate-fade-host></animate-fade-host>");
+    let host = mount_fixture::<AnimateFadeHost>();
     tick().await;
     tick().await;
     let outer = host
@@ -5149,14 +5516,13 @@ struct AnimateFlipHost {
 #[handlers]
 impl AnimateFlipHost {}
 
-/// `#[component(animate = "flip")]` stamps `data-pp-animate="flip"`
-/// on the custom element tag so pp-for's keyed reconcile can
-/// cheap-check it when deciding whether to FLIP.
+// `#[component(animate = "flip")]` stamps `data-pp-animate="flip"`
+// on the custom element tag so pp-for's keyed reconcile can
+// cheap-check it when deciding whether to FLIP.
 #[wasm_bindgen_test]
 async fn animate_macro_animate_kind_stamps_data_attr() {
     pocopine_core::animate::install();
-    AnimateFlipHost::register();
-    let host = mount("<animate-flip-host></animate-flip-host>");
+    let host = mount_fixture::<AnimateFlipHost>();
     tick().await;
     tick().await;
     let tag = host
@@ -5172,9 +5538,9 @@ async fn animate_macro_animate_kind_stamps_data_attr() {
 
 // ─── RFC-039 §1: motion preference + element override ────────────
 
-/// Per-element `data-pp-motion="reduce"` opt-in pretends the user
-/// prefers reduced motion for this subtree. `effective_for` walks
-/// the ancestor chain and picks up the closest override.
+// Per-element `data-pp-motion="reduce"` opt-in pretends the user
+// prefers reduced motion for this subtree. `effective_for` walks
+// the ancestor chain and picks up the closest override.
 #[wasm_bindgen_test]
 async fn motion_element_override_picks_subtree_reduce() {
     let host = mount("<div data-pp-motion=\"reduce\"><span class=\"target\">x</span></div>");
@@ -5187,8 +5553,8 @@ async fn motion_element_override_picks_subtree_reduce() {
     host.remove();
 }
 
-/// `data-pp-motion="always"` overrides reduced-motion subtrees so
-/// motion-as-data UI (progress, drag feedback) keeps animating.
+// `data-pp-motion="always"` overrides reduced-motion subtrees so
+// motion-as-data UI (progress, drag feedback) keeps animating.
 #[wasm_bindgen_test]
 async fn motion_element_override_always_beats_reduce_ancestor() {
     let host = mount(
@@ -5207,9 +5573,9 @@ async fn motion_element_override_always_beats_reduce_ancestor() {
 
 // ─── RFC-039 §1: WAAPI duration clamp under reduced motion ──────
 
-/// `data-pp-motion="reduce"` makes `animate()` collapse the
-/// `duration_ms` so a 5s animation finishes essentially
-/// instantaneously. `respect_motion_preference: false` opts out.
+// `data-pp-motion="reduce"` makes `animate()` collapse the
+// `duration_ms` so a 5s animation finishes essentially
+// instantaneously. `respect_motion_preference: false` opts out.
 #[wasm_bindgen_test]
 async fn motion_reduced_clamps_waapi_duration_to_one_ms() {
     use pocopine_core::animate::{animate, AnimateOptions, Keyframe};
@@ -5233,9 +5599,9 @@ async fn motion_reduced_clamps_waapi_duration_to_one_ms() {
 
 // ─── RFC-039 §5: AnimationHandle.finished() Future ───────────────
 
-/// `finished().await` resolves once the underlying Animation
-/// completes — exercised here with a tiny duration so the test
-/// finishes promptly.
+// `finished().await` resolves once the underlying Animation
+// completes — exercised here with a tiny duration so the test
+// finishes promptly.
 #[wasm_bindgen_test]
 async fn animation_handle_finished_future_resolves() {
     use pocopine_core::animate::{animate, AnimateOptions, Keyframe};
@@ -5259,12 +5625,12 @@ async fn animation_handle_finished_future_resolves() {
 
 // ─── RFC-039 §4: parse_duration unit (max not first) ────────────
 
-/// `parse_duration` is private — exercised via a public helper if
-/// one becomes available. This is a placeholder that documents the
-/// expected behaviour for posterity; the bug-fix effect is observed
-/// end-to-end via Pine primitives whose presets ship uniform
-/// durations today (so no production caller currently triggers the
-/// bug, but new asymmetric presets will).
+// `parse_duration` is private — exercised via a public helper if
+// one becomes available. This is a placeholder that documents the
+// expected behaviour for posterity; the bug-fix effect is observed
+// end-to-end via Pine primitives whose presets ship uniform
+// durations today (so no production caller currently triggers the
+// bug, but new asymmetric presets will).
 #[wasm_bindgen_test]
 async fn parse_duration_takes_max_smoke() {
     // No-op smoke. The internal `parse_duration` change is verified
@@ -5275,13 +5641,13 @@ async fn parse_duration_takes_max_smoke() {
 
 // ─── RFC-039 §6: stagger ─────────────────────────────────────────
 
-/// `enter_subtree_staggered` dispatches enter to each animated
-/// descendant. The dispatch is observable end-to-end via the
-/// caller's `on_done` callback firing after the last enter
-/// completes. Under disabled-transition test mode, on_done fires
-/// per-item synchronously, so the counter ticks up to N once all
-/// staggered timers fire — the test verifies the COUNT, not the
-/// timing-spread.
+// `enter_subtree_staggered` dispatches enter to each animated
+// descendant. The dispatch is observable end-to-end via the
+// caller's `on_done` callback firing after the last enter
+// completes. Under disabled-transition test mode, on_done fires
+// per-item synchronously, so the counter ticks up to N once all
+// staggered timers fire — the test verifies the COUNT, not the
+// timing-spread.
 #[wasm_bindgen_test]
 async fn stagger_enter_subtree_dispatches_to_every_animated_descendant() {
     use std::cell::Cell;
@@ -5313,10 +5679,10 @@ async fn stagger_enter_subtree_dispatches_to_every_animated_descendant() {
 
 // ─── RFC-039 §7: pp-flip directive ───────────────────────────────
 
-/// `pp-flip` registers an element so layout shifts caused by DOM
-/// mutations animate via FLIP. Stamp the element, mutate a
-/// preceding sibling that pushes the pp-flip element down, and
-/// assert the registry picks up the move and stages an animation.
+// `pp-flip` registers an element so layout shifts caused by DOM
+// mutations animate via FLIP. Stamp the element, mutate a
+// preceding sibling that pushes the pp-flip element down, and
+// assert the registry picks up the move and stages an animation.
 #[wasm_bindgen_test]
 async fn pp_flip_registers_and_picks_up_layout_shift() {
     let host = mount(
@@ -5364,13 +5730,13 @@ async fn pp_flip_registers_and_picks_up_layout_shift() {
 
 // ─── RFC-039: setattr_safe_name fuzz (silent-drop regression) ────
 
-/// `setAttribute("@click", …)` throws InvalidCharacterError because
-/// `@` is not a Name-start char per the XML production browsers'
-/// DOM enforces. The mount normalises `@event` → `pp-on:event`
-/// before forwarding via `merge_template_attrs_as`. This regression
-/// test simulates the same path: copying every attr off one
-/// element to another via `set_attribute` should never throw, and
-/// shorthand handlers should round-trip into their long form.
+// `setAttribute("@click", …)` throws InvalidCharacterError because
+// `@` is not a Name-start char per the XML production browsers'
+// DOM enforces. The mount normalises `@event` → `pp-on:event`
+// before forwarding via `merge_template_attrs_as`. This regression
+// test simulates the same path: copying every attr off one
+// element to another via `set_attribute` should never throw, and
+// shorthand handlers should round-trip into their long form.
 #[wasm_bindgen_test]
 async fn setattr_round_trip_normalises_event_shorthand() {
     let host = mount(
@@ -5411,12 +5777,24 @@ async fn setattr_round_trip_normalises_event_shorthand() {
 
 // ─── PineForm ─────────────────────────────────────────────────────
 
-/// Form intercepts native submit with `preventDefault()` and
-/// re-emits it as a Pine-native `pp:submit` event so parents can
-/// bind `@submit="handler"` without fighting the browser's default
-/// navigation. The cancelable `submit` event is observed for
-/// `defaultPrevented`; the `pp:submit` re-emit is observed for
-/// delivery.
+// Form intercepts native submit with `preventDefault()` and
+// re-emits it as a Pine-native `pp:submit` event so parents can
+// bind `@submit="handler"` without fighting the browser's default
+// navigation. The cancelable `submit` event is observed for
+// `defaultPrevented`; the `pp:submit` re-emit is observed for
+// delivery.
+compiled_fixture!(
+    FormFixture,
+    r#"
+<div>
+  <pine-form-root>
+    <input name="x">
+    <button type="submit" class="fm-submit">Save</button>
+  </pine-form-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn form_prevents_default_and_emits_pp_submit() {
     use std::cell::Cell;
@@ -5424,12 +5802,7 @@ async fn form_prevents_default_and_emits_pp_submit() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount(
-        "<pine-form-root>\
-           <input name=\"x\">\
-           <button type=\"submit\" class=\"fm-submit\">Save</button>\
-         </pine-form-root>",
-    );
+    let host = mount_fixture::<FormFixture>();
     tick().await;
 
     let form = host.query_selector("form.pine-form").unwrap().unwrap();
@@ -5462,23 +5835,81 @@ async fn form_prevents_default_and_emits_pp_submit() {
 
 // ─── PineField ────────────────────────────────────────────────────
 
-/// Root generates a unique `control_id`; Label's `for` targets it
-/// and Control stamps it onto the inner `<input>` — so the native
-/// label/control pairing works without any author-side id
-/// plumbing. `aria-describedby` references the Description + Error
-/// ids; `aria-errormessage` references just the Error id.
+// Root generates a unique `control_id`; Label's `for` targets it
+// and Control stamps it onto the inner `<input>` — so the native
+// label/control pairing works without any author-side id
+// plumbing. `aria-describedby` references the Description + Error
+// ids; `aria-errormessage` references just the Error id.
+compiled_fixture!(
+    FieldWiringFixture,
+    r#"
+<div>
+  <pine-field-root name="fullname">
+    <pine-field-label>Name</pine-field-label>
+    <pine-field-control>
+      <input type="text" placeholder="Required" required>
+    </pine-field-control>
+    <pine-field-description>Visible on your profile.</pine-field-description>
+    <pine-field-error>Please enter your name.</pine-field-error>
+  </pine-field-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    FieldStateFixture,
+    r#"
+<div>
+  <pine-field-root name="email">
+    <pine-field-label>Email</pine-field-label>
+    <pine-field-control>
+      <input type="text">
+    </pine-field-control>
+  </pine-field-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    FieldInvalidFixture,
+    r#"
+<div>
+  <pine-field-root name="x" invalid="true">
+    <pine-field-label>X</pine-field-label>
+    <pine-field-control>
+      <input type="text">
+    </pine-field-control>
+    <pine-field-error class="fd-err">Bad.</pine-field-error>
+  </pine-field-root>
+</div>
+"#
+);
+
+compiled_fixture!(
+    FieldFormErrorsFixture,
+    r#"
+<div>
+  <pine-form-root errors='{"email":"Required"}'>
+    <pine-field-root name="email">
+      <pine-field-label>Email</pine-field-label>
+      <pine-field-control>
+        <input type="email">
+      </pine-field-control>
+    </pine-field-root>
+    <pine-field-root name="password">
+      <pine-field-label>Password</pine-field-label>
+      <pine-field-control>
+        <input type="password">
+      </pine-field-control>
+    </pine-field-root>
+  </pine-form-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn field_wires_label_for_control_id_and_describedby() {
-    let host = mount(
-        "<pine-field-root name=\"fullname\">\
-           <pine-field-label>Name</pine-field-label>\
-           <pine-field-control>\
-             <input type=\"text\" placeholder=\"Required\" required>\
-           </pine-field-control>\
-           <pine-field-description>Visible on your profile.</pine-field-description>\
-           <pine-field-error>Please enter your name.</pine-field-error>\
-         </pine-field-root>",
-    );
+    let host = mount_fixture::<FieldWiringFixture>();
     tick().await;
 
     let label = host
@@ -5518,21 +5949,14 @@ async fn field_wires_label_for_control_id_and_describedby() {
     host.remove();
 }
 
-/// Focus / blur / input on the inner `<input>` flip Root's
-/// `focused` / `touched` / `dirty` / `filled` flags, which land
-/// on the inner `<div class="pine-field-root">` as `data-*`
-/// attributes. Boolean bindings follow Pine's present-or-absent
-/// convention so each flag is absent from the DOM when false.
+// Focus / blur / input on the inner `<input>` flip Root's
+// `focused` / `touched` / `dirty` / `filled` flags, which land
+// on the inner `<div class="pine-field-root">` as `data-*`
+// attributes. Boolean bindings follow Pine's present-or-absent
+// convention so each flag is absent from the DOM when false.
 #[wasm_bindgen_test]
 async fn field_state_flags_track_focus_blur_input() {
-    let host = mount(
-        "<pine-field-root name=\"email\">\
-           <pine-field-label>Email</pine-field-label>\
-           <pine-field-control>\
-             <input type=\"text\">\
-           </pine-field-control>\
-         </pine-field-root>",
-    );
+    let host = mount_fixture::<FieldStateFixture>();
     tick().await;
 
     let root_div = host.query_selector("div.pine-field-root").unwrap().unwrap();
@@ -5578,21 +6002,13 @@ async fn field_state_flags_track_focus_blur_input() {
     host.remove();
 }
 
-/// `invalid="true"` on the Root flows onto the inner input's
-/// `aria-invalid` and flips the Error part from hidden (pp-show
-/// on `invalid`) to visible. Mirrors the server-validation story:
-/// set Root.invalid, the UI updates.
+// `invalid="true"` on the Root flows onto the inner input's
+// `aria-invalid` and flips the Error part from hidden (pp-show
+// on `invalid`) to visible. Mirrors the server-validation story:
+// set Root.invalid, the UI updates.
 #[wasm_bindgen_test]
 async fn field_invalid_prop_shows_error_and_sets_aria_invalid() {
-    let host = mount(
-        "<pine-field-root name=\"x\" invalid=\"true\">\
-           <pine-field-label>X</pine-field-label>\
-           <pine-field-control>\
-             <input type=\"text\">\
-           </pine-field-control>\
-           <pine-field-error class=\"fd-err\">Bad.</pine-field-error>\
-         </pine-field-root>",
-    );
+    let host = mount_fixture::<FieldInvalidFixture>();
     tick().await;
 
     let input = host.query_selector("input").unwrap().unwrap();
@@ -5615,30 +6031,15 @@ async fn field_invalid_prop_shows_error_and_sets_aria_invalid() {
     host.remove();
 }
 
-/// Field + Form integration: an `errors` map on the form whose key
-/// matches a Field's `name` flips that Field to `invalid=true`.
-/// Base UI's Form ships this as the server-validation surface —
-/// Pine wires it via `inject`/`watch_scope_field` so a plain
-/// `<pine-field-root>` inside a `<pine-form-root>` picks up the
-/// feedback automatically.
+// Field + Form integration: an `errors` map on the form whose key
+// matches a Field's `name` flips that Field to `invalid=true`.
+// Base UI's Form ships this as the server-validation surface —
+// Pine wires it via `inject`/`watch_scope_field` so a plain
+// `<pine-field-root>` inside a `<pine-form-root>` picks up the
+// feedback automatically.
 #[wasm_bindgen_test]
 async fn field_picks_up_form_errors_by_name() {
-    let host = mount(
-        "<pine-form-root errors='{\"email\":\"Required\"}'>\
-           <pine-field-root name=\"email\">\
-             <pine-field-label>Email</pine-field-label>\
-             <pine-field-control>\
-               <input type=\"email\">\
-             </pine-field-control>\
-           </pine-field-root>\
-           <pine-field-root name=\"password\">\
-             <pine-field-label>Password</pine-field-label>\
-             <pine-field-control>\
-               <input type=\"password\">\
-             </pine-field-control>\
-           </pine-field-root>\
-         </pine-form-root>",
-    );
+    let host = mount_fixture::<FieldFormErrorsFixture>();
     tick().await;
 
     let email_input = host
@@ -5665,20 +6066,27 @@ async fn field_picks_up_form_errors_by_name() {
 
 // ─── PineFieldset ─────────────────────────────────────────────────
 
-/// Root renders a native `<fieldset>`; `disabled` forwards onto
-/// the attribute (which auto-disables every descendant control).
-/// Legend renders as a `<div>` carrying the shared id; the Root
-/// references it via `aria-labelledby` so the fieldset is labelled
-/// even though the Legend isn't a native `<legend>`.
+// Root renders a native `<fieldset>`; `disabled` forwards onto
+// the attribute (which auto-disables every descendant control).
+// Legend renders as a `<div>` carrying the shared id; the Root
+// references it via `aria-labelledby` so the fieldset is labelled
+// even though the Legend isn't a native `<legend>`.
+compiled_fixture!(
+    FieldsetFixture,
+    r#"
+<div>
+  <pine-fieldset-root disabled="true">
+    <pine-fieldset-legend>Account</pine-fieldset-legend>
+    <input type="text" class="fs-first">
+    <input type="text" class="fs-last">
+  </pine-fieldset-root>
+</div>
+"#
+);
+
 #[wasm_bindgen_test]
 async fn fieldset_wires_legend_id_and_disables_descendants() {
-    let host = mount(
-        "<pine-fieldset-root disabled=\"true\">\
-           <pine-fieldset-legend>Account</pine-fieldset-legend>\
-           <input type=\"text\" class=\"fs-first\">\
-           <input type=\"text\" class=\"fs-last\">\
-         </pine-fieldset-root>",
-    );
+    let host = mount_fixture::<FieldsetFixture>();
     tick().await;
 
     let fs = host
@@ -5715,10 +6123,37 @@ async fn fieldset_wires_legend_id_and_disables_descendants() {
 
 // ─── PineInput ────────────────────────────────────────────────────
 
-/// Initial `value` prop seeds the DOM input's `.value` property
-/// (so `pp-bind:value` on the tag round-trips on mount), and
-/// typing emits `pp:update:model` so `pp-model:value="field"`
-/// writes back to the parent.
+// Initial `value` prop seeds the DOM input's `.value` property
+// (so `pp-bind:value` on the tag round-trips on mount), and
+// typing emits `pp:update:model` so `pp-model:value="field"`
+// writes back to the parent.
+compiled_fixture!(
+    InputSeedFixture,
+    r#"<div><pine-input value="hello" placeholder="Name"></pine-input></div>"#
+);
+
+compiled_fixture!(InputEmptyFixture, r#"<div><pine-input></pine-input></div>"#);
+
+compiled_fixture!(
+    DateFieldFixture,
+    r#"<div><pine-date-field value="2024-01-15"></pine-date-field></div>"#
+);
+
+compiled_fixture!(
+    TimeFieldFixture,
+    r#"<div><pine-time-field value="01:30"></pine-time-field></div>"#
+);
+
+compiled_fixture!(
+    DateRangeFieldFixture,
+    r#"<div><pine-date-range-field></pine-date-range-field></div>"#
+);
+
+compiled_fixture!(
+    TimeRangeFieldFixture,
+    r#"<div><pine-time-range-field step="60"></pine-time-range-field></div>"#
+);
+
 #[wasm_bindgen_test]
 async fn input_seeds_value_and_emits_model_on_type() {
     use std::cell::RefCell;
@@ -5726,7 +6161,7 @@ async fn input_seeds_value_and_emits_model_on_type() {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
 
-    let host = mount("<pine-input value=\"hello\" placeholder=\"Name\"></pine-input>");
+    let host = mount_fixture::<InputSeedFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-input").unwrap().unwrap();
@@ -5772,13 +6207,13 @@ async fn input_seeds_value_and_emits_model_on_type() {
     host.remove();
 }
 
-/// Focus / blur / input flip `data-focused` / `data-touched` /
-/// `data-dirty` / `data-filled` on the rendered `<input>` — same
-/// state vocabulary Field uses, so styling works identically in
-/// both contexts.
+// Focus / blur / input flip `data-focused` / `data-touched` /
+// `data-dirty` / `data-filled` on the rendered `<input>` — same
+// state vocabulary Field uses, so styling works identically in
+// both contexts.
 #[wasm_bindgen_test]
 async fn input_tracks_focused_touched_dirty_filled() {
-    let host = mount("<pine-input></pine-input>");
+    let host = mount_fixture::<InputEmptyFixture>();
     tick().await;
 
     let input = host
@@ -5825,13 +6260,13 @@ async fn input_tracks_focused_touched_dirty_filled() {
     host.remove();
 }
 
-/// Focusing a date segment selects the whole segment. The first
-/// typed digit must replace the existing value, not append to it.
-/// Regression: `01` + type `2` used to become `12` because the
-/// handler reused the committed segment digits as an edit prefix.
+// Focusing a date segment selects the whole segment. The first
+// typed digit must replace the existing value, not append to it.
+// Regression: `01` + type `2` used to become `12` because the
+// handler reused the committed segment digits as an edit prefix.
 #[wasm_bindgen_test]
 async fn date_field_first_digit_replaces_selected_segment() {
-    let host = mount("<pine-date-field value=\"2024-01-15\"></pine-date-field>");
+    let host = mount_fixture::<DateFieldFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-date-field").unwrap().unwrap();
@@ -5855,12 +6290,12 @@ async fn date_field_first_digit_replaces_selected_segment() {
     host.remove();
 }
 
-/// Same selected-segment replacement semantics for time fields.
-/// Regression: `01:30` + type `2` on the selected hour used to
-/// become `12` instead of `02`.
+// Same selected-segment replacement semantics for time fields.
+// Regression: `01:30` + type `2` on the selected hour used to
+// become `12` instead of `02`.
 #[wasm_bindgen_test]
 async fn time_field_first_digit_replaces_selected_segment() {
-    let host = mount("<pine-time-field value=\"01:30\"></pine-time-field>");
+    let host = mount_fixture::<TimeFieldFixture>();
     tick().await;
 
     let tag = host.query_selector("pine-time-field").unwrap().unwrap();
@@ -5886,7 +6321,7 @@ async fn time_field_first_digit_replaces_selected_segment() {
 
 #[wasm_bindgen_test]
 async fn date_range_field_tab_bridges_start_end_edges() {
-    let host = mount("<pine-date-range-field></pine-date-range-field>");
+    let host = mount_fixture::<DateRangeFieldFixture>();
     tick().await;
 
     let tag = host
@@ -5939,7 +6374,7 @@ async fn date_range_field_tab_bridges_start_end_edges() {
 
 #[wasm_bindgen_test]
 async fn time_range_field_tab_bridges_start_end_edges() {
-    let host = mount("<pine-time-range-field step=\"60\"></pine-time-range-field>");
+    let host = mount_fixture::<TimeRangeFieldFixture>();
     tick().await;
 
     let tag = host
@@ -5990,20 +6425,20 @@ async fn time_range_field_tab_bridges_start_end_edges() {
     host.remove();
 }
 
-/// Reproducer for the user-reported regression: tags rendered
-/// via `pp-for` don't respond to clicks on the per-item delete
-/// button. Mounts a `<pine-tags-input-root>` whose chip layout
-/// mirrors the website demo (each tag iterates a
-/// `<pine-tags-input-item>` with a `<pine-tags-input-item-delete>`
-/// inside), seeds three tags, then dispatches a click on the
-/// middle delete button and verifies the corresponding value
-/// drops out of the root's `values`.
-///
-/// Note: this test relies on Phase 6.x mount-path state that
-/// only exists on `wip/rfc/58-phase6` (the click dispatch
-/// timing differs without those changes). The deterministic
-/// chain-walk regression below catches the same underlying
-/// bug across all branches.
+// Reproducer for the user-reported regression: tags rendered
+// via `pp-for` don't respond to clicks on the per-item delete
+// button. Mounts a `<pine-tags-input-root>` whose chip layout
+// mirrors the website demo (each tag iterates a
+// `<pine-tags-input-item>` with a `<pine-tags-input-item-delete>`
+// inside), seeds three tags, then dispatches a click on the
+// middle delete button and verifies the corresponding value
+// drops out of the root's `values`.
+//
+// Note: this test relies on Phase 6.x mount-path state that
+// only exists on `wip/rfc/58-phase6` (the click dispatch
+// timing differs without those changes). The deterministic
+// chain-walk regression below catches the same underlying
+// bug across all branches.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -6026,8 +6461,7 @@ impl TagsInputChipHost {}
 
 #[wasm_bindgen_test]
 async fn tags_input_per_chip_delete_click_removes_tag() {
-    TagsInputChipHost::register();
-    let host = mount("<tags-input-chip-host></tags-input-chip-host>");
+    let host = mount_fixture::<TagsInputChipHost>();
     tick().await;
     sleep_ms(5).await;
     tick().await;
@@ -6081,11 +6515,11 @@ async fn tags_input_per_chip_delete_click_removes_tag() {
     host.remove();
 }
 
-/// Outer authoring component for the inject-chain regression —
-/// owns the `tags` array that pp-for iterates. The slot
-/// AUTHOR (this scope) and slot OWNER (`pine-tags-input-root`)
-/// are intentionally distinct so the chain test exercises the
-/// real-world structure that broke the chip-delete bug.
+// Outer authoring component for the inject-chain regression —
+// owns the `tags` array that pp-for iterates. The slot
+// AUTHOR (this scope) and slot OWNER (`pine-tags-input-root`)
+// are intentionally distinct so the chain test exercises the
+// real-world structure that broke the chip-delete bug.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template = "TagsForHost.html")]
 struct TagsForHost {
@@ -6099,28 +6533,27 @@ impl TagsForHost {
     }
 }
 
-/// Deterministic structural regression for the chip-delete bug —
-/// independent of event-dispatch ordering, which differs across
-/// headless Firefox / Chromium and was why the click-based test
-/// above passed in CI while real-browser delete-clicks failed.
-///
-/// Mounts a fixture that mirrors the website demo's structure:
-/// `<tags-for-host>` (an authoring component) wraps
-/// `<pine-tags-input-root>` (the slot owner) whose default slot
-/// contains a `<template pp-for>` over the host's `tags`. The
-/// slot AUTHOR and slot OWNER are distinct scopes — exactly the
-/// shape that broke when `pp-for::install` ignored the
-/// `CTX_PARENT_KEY` set by the slot materialiser.
-///
-/// Walks the inject parent chain from the chip × button's scope
-/// upward and asserts that the chain reaches a scope whose
-/// element has the `pine-tags-input-root` tag. Without that hop,
-/// `<pine-tags-input-item-delete>::ROOT.inject()` returns
-/// `None` and the chip × becomes inert.
+// Deterministic structural regression for the chip-delete bug —
+// independent of event-dispatch ordering, which differs across
+// headless Firefox / Chromium and was why the click-based test
+// above passed in CI while real-browser delete-clicks failed.
+//
+// Mounts a fixture that mirrors the website demo's structure:
+// `<tags-for-host>` (an authoring component) wraps
+// `<pine-tags-input-root>` (the slot owner) whose default slot
+// contains a `<template pp-for>` over the host's `tags`. The
+// slot AUTHOR and slot OWNER are distinct scopes — exactly the
+// shape that broke when `pp-for::install` ignored the
+// `CTX_PARENT_KEY` set by the slot materialiser.
+//
+// Walks the inject parent chain from the chip × button's scope
+// upward and asserts that the chain reaches a scope whose
+// element has the `pine-tags-input-root` tag. Without that hop,
+// `<pine-tags-input-item-delete>::ROOT.inject()` returns
+// `None` and the chip × becomes inert.
 #[wasm_bindgen_test]
 async fn tags_input_per_chip_inject_chain_reaches_root() {
-    TagsForHost::register();
-    let host = mount("<tags-for-host></tags-for-host>");
+    let host = mount_fixture::<TagsForHost>();
     tick().await;
     sleep_ms(10).await;
     tick().await;
@@ -6161,14 +6594,14 @@ async fn tags_input_per_chip_inject_chain_reaches_root() {
     host.remove();
 }
 
-/// Reproducer at scale — same shape as the per-chip click test
-/// above but with 500 tags seeded directly via the root scope's
-/// `values` field. Stresses pp-for batching + the per-item
-/// delete listener attachment. Re-enables transitions so the
-/// `animate = "flip"` on `PineTagsInputItem` matches what the
-/// website demo runs with (the test harness globally disables
-/// transitions for speed; the user's report may be specific to
-/// the animated path).
+// Reproducer at scale — same shape as the per-chip click test
+// above but with 500 tags seeded directly via the root scope's
+// `values` field. Stresses pp-for batching + the per-item
+// delete listener attachment. Re-enables transitions so the
+// `animate = "flip"` on `PineTagsInputItem` matches what the
+// website demo runs with (the test harness globally disables
+// transitions for speed; the user's report may be specific to
+// the animated path).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -6191,8 +6624,7 @@ impl TagsInput500Host {}
 #[wasm_bindgen_test]
 async fn tags_input_500_tags_delete_click_removes_tag() {
     pocopine_core::animate::enable_transitions();
-    TagsInput500Host::register();
-    let host = mount("<tags-input500-host></tags-input500-host>");
+    let host = mount_fixture::<TagsInput500Host>();
     tick().await;
 
     // Seed 500 tags via the root proxy.
@@ -6241,11 +6673,11 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
 
 // ─── RFC-058 Phase 6.5 — fallback audit ─────────────────────────
 
-/// Walker is gone — every registered Pine plan must apply
-/// cleanly through the macro-emitted entries. The audit
-/// reduces to a smoke test that every plan registers and
-/// `apply_static_plan` doesn't fail-fast at install time
-/// (covered by per-component tests above).
+// Walker is gone — every registered Pine plan must apply
+// cleanly through the macro-emitted entries. The audit
+// reduces to a smoke test that every plan registers and
+// `apply_static_plan` doesn't fail-fast at install time
+// (covered by per-component tests above).
 #[wasm_bindgen_test]
 async fn pine_template_plan_audit() {
     pine::register_all();
