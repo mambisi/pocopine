@@ -77,8 +77,12 @@ pub mod __private {
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     pub use pocopine_core::templates_plan::{
-        apply_static_plan, apply_static_pp_as_plan, plan_failure_count, register_template_plan,
-        reset_plan_failure_count, stamp_if_body, template_plan_for, StaticTemplatePlan,
+        apply_static_plan, apply_static_plan_count, apply_static_pp_as_plan,
+        install_static_binding, install_static_child_mount, install_static_for_plan,
+        install_static_if_plan, install_static_init, install_static_listener, install_static_ref,
+        install_static_teleport_plan, plan_failure_count, register_template_plan,
+        reset_apply_static_plan_count, reset_plan_failure_count, stamp_if_body, template_plan_for,
+        StaticTemplatePlan,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to

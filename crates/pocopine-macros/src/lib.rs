@@ -651,6 +651,14 @@ pub(crate) const HTML5_ELEMENTS: &[&str] = &[
 ];
 
 #[derive(Default)]
+enum SpecializeMode {
+    Force,
+    Off,
+    #[default]
+    Auto,
+}
+
+#[derive(Default)]
 struct ComponentArgs {
     name: Option<LitStr>,
     template: Option<LitStr>,
@@ -703,6 +711,10 @@ struct ComponentArgs {
     /// via its own `register()`. Mutually exclusive with
     /// `template` / `template_inline`.
     extends: Option<Vec<syn::Path>>,
+    /// RFC 062 — per-component mount specialization override.
+    /// `Auto` specializes plans at or below the default
+    /// threshold when the plan shape has a specialized ABI.
+    specialize: SpecializeMode,
 }
 
 impl Parse for ComponentArgs {
@@ -752,12 +764,26 @@ impl Parse for ComponentArgs {
                 args.transition_out = Some(lit);
             } else if kv.path.is_ident("animate") {
                 args.animate = Some(lit);
+            } else if kv.path.is_ident("specialize") {
+                args.specialize = match lit.value().as_str() {
+                    "force" => SpecializeMode::Force,
+                    "off" => SpecializeMode::Off,
+                    "auto" => SpecializeMode::Auto,
+                    other => {
+                        return Err(syn::Error::new_spanned(
+                            lit,
+                            format!(
+                                "unknown specialize mode `{other}` — expected \"force\", \"off\", or \"auto\""
+                            ),
+                        ));
+                    }
+                };
             } else {
                 return Err(syn::Error::new_spanned(
                     kv.path,
                     "unknown key — expected one of: name, template, template_inline, \
                      style, role, display, transition, transition_in, transition_out, \
-                     animate, uses",
+                     animate, uses, extends, specialize",
                 ));
             }
         }
@@ -1674,6 +1700,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             cleaned_html: None,
             slot_fragment_fns: proc_macro2::TokenStream::new(),
             if_body_fns: proc_macro2::TokenStream::new(),
+            specialized_mount_body: None,
+            entry_count: 0,
         });
 
     // Build the literal to feed into `compile_template`:
@@ -1776,6 +1804,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let template_plan_module_ident = format_ident!("__poc_plan_{}", struct_ident);
     let template_plan_tokens_for_vtable = template_plan.plan_tokens.clone();
+    let specialized_mount_body = template_plan.specialized_mount_body.clone();
+    let template_plan_entry_count = template_plan.entry_count;
     let template_plan_item_tokens = match template_plan.plan_tokens.clone() {
         Some(plan_tokens) => {
             let slot_fns = template_plan.slot_fragment_fns;
@@ -1871,8 +1901,25 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ),
             None => (quote! {}, quote! { None }),
         };
-    let mount_template_body_tokens = if has_template_plan {
-        quote! {
+    const DEFAULT_SPECIALIZE_THRESHOLD: usize = 32;
+    let should_specialize_mount = match &args.specialize {
+        SpecializeMode::Force => specialized_mount_body.is_some(),
+        SpecializeMode::Off => false,
+        SpecializeMode::Auto => {
+            template_plan_entry_count <= DEFAULT_SPECIALIZE_THRESHOLD
+                && specialized_mount_body.is_some()
+        }
+    };
+    let mount_template_body_tokens = match (has_template_plan, should_specialize_mount) {
+        (true, true) => {
+            let specialized = specialized_mount_body
+                .expect("should_specialize_mount only true when a body was emitted");
+            quote! {
+                let __poc_template_name = #name_str;
+                #specialized
+            }
+        }
+        (true, false) => quote! {
             ::pocopine::__private::apply_static_plan(
                 root,
                 scope_id,
@@ -1880,9 +1927,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 <#struct_ident>::__POC_TEMPLATE_PLAN,
                 #name_str,
             );
-        }
-    } else {
-        quote! {}
+        },
+        (false, _) => quote! {},
     };
 
     // RFC 060 Tier 1 — emit a transitive `T::register()` call per
