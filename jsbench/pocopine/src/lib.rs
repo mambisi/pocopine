@@ -97,9 +97,9 @@ impl JsBenchApp {
     pub fn prepend(&mut self) {
         self.measure("prepend(1000)", |s| {
             let mut more = s.make_rows(1_000);
+            pocopine::prepend_list_inline("rows", &more);
             more.append(&mut s.rows);
             s.rows = more;
-            pocopine::replace_field_inline("rows", &s.rows);
         });
     }
 

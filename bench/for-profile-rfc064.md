@@ -116,3 +116,63 @@ Next Phase 4 implementation step: add a Vue-style head/tail
 reconcile fast path for append/prepend/stable-prefix cases before
 considering LIS. Keep full-reorder LIS as a follow-up only if a
 non-reverse reorder profile shows DOM movement dominates.
+
+## Phase 4 Checkpoint — Head/Tail Fast Path
+
+Implemented after the profile:
+
+- append fast path: when old row JS object identities still match
+  the new array prefix, update existing loop metadata, create only
+  the appended suffix, and batch one fragment insert before the
+  controller template;
+- prepend fast path: when old row JS object identities still match
+  the new array suffix, create only the prepended prefix and insert
+  it before the old first row;
+- `prepend_list_inline`: targeted cache helper used by the
+  diagnostic harness so prepend preserves existing tail object
+  identities instead of reserializing the whole array;
+- compiled-row bulk teardown cleanup now skips empty side tables
+  and clears mount epochs in one thread-local borrow.
+
+Counter size after this checkpoint:
+
+| Measurement | RFC 062 baseline | Phase 3 | Phase 4 checkpoint |
+|---|---:|---:|---:|
+| Raw wasm bytes | 347,684 | 346,617 | 346,617 |
+| Gzip wasm bytes | 147,045 | 146,821 | 146,828 |
+
+Standard non-profile Firefox pocopine run:
+
+```text
+run(1000)                205.28
+update every 10th        156.68
+select                   129.22
+swapRows                 196.79
+remove                   214.11
+clear                    202.77
+runLots(10000)           873.03
+add(1000)                263.24
+geomean                  231.19
+```
+
+Profiled Firefox diagnostic run after the checkpoint:
+
+| Operation | Before mean ms | After mean ms | Notes |
+|---|---:|---:|---|
+| create 1,000 | 204.81 | 207.71 | essentially unchanged |
+| update every 10th | 155.18 | 156.59 | unchanged |
+| swap | 196.34 | 194.57 | small win |
+| remove | 216.00 | 210.75 | small win, still variable |
+| clear | 216.47 | 213.65 | side-table cleanup did not move leaver_drain materially |
+| append 1,000 | 267.82 | 264.34 | small win |
+| prepend 1,000 | 287.36 | 270.93 | meaningful win once identity-preserving prepend is used |
+| full reorder | 331.96 | 350.97 | worse; still not an LIS target from this reverse-only profile |
+| create 10,000 | 894.87 | 899.92 | unchanged within run noise |
+
+Decision after checkpoint: keep the append/prepend identity fast
+path because it restores the standard Firefox jsbench geomean to
+the RFC 062 baseline range and materially improves the targeted
+prepend diagnostic. Do not add LIS yet: the profile still shows
+reverse-order reorder as a DOM-movement case with little stable
+subsequence to preserve, and the standard jsbench path is already
+back at baseline.

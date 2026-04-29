@@ -413,6 +413,25 @@ pub fn __clear_mount_epoch(scope: ScopeId) {
     });
 }
 
+/// Bulk cleanup for compiled-row teardown. Avoids one
+/// `thread_local::with` borrow per row during large keyed-list
+/// clears.
+#[doc(hidden)]
+pub fn __clear_mount_epochs(scopes: &[ScopeId]) {
+    if scopes.is_empty() {
+        return;
+    }
+    MOUNT_EPOCHS.with(|m| {
+        let mut map = m.borrow_mut();
+        if map.is_empty() {
+            return;
+        }
+        for scope in scopes {
+            map.remove(scope);
+        }
+    });
+}
+
 /// Millisecond timestamp (via `Date::now()`) at the moment the
 /// extractor ran. Useful for scope-level timing — pair with
 /// `on_unmount` (which takes no ctx) using an author-stored

@@ -459,6 +459,86 @@ struct PrevItem {
     leaving: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn create_keyed_prev_item(
+    item_name: &Rc<str>,
+    item: JsValue,
+    item_sig: String,
+    index: usize,
+    total: usize,
+    parent_proxy: &JsValue,
+    parent_scope_id: ScopeId,
+    inject_parent_id: ScopeId,
+    template: &HtmlTemplateElement,
+    key: Rc<str>,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    elide_proxy: bool,
+) -> Option<PrevItem> {
+    let loop_rc = Rc::new(RefCell::new(LoopScope {
+        item_name: Rc::clone(item_name),
+        item: item.clone(),
+        index,
+        total,
+        parent: parent_proxy.clone(),
+        parent_scope_id,
+    }));
+    let scope = Scope::new(loop_rc.clone());
+    crate::context::set_parent(scope.id, inject_parent_id);
+
+    let clone_start = crate::profiler::mount::start();
+    let clone_root = if let Some(body_fn) = body {
+        let proxy = scope.into_proxy();
+        match body_fn(scope.id, &proxy, scope.id) {
+            Some(root) => {
+                bind_scope_to(&root, scope.id, &proxy);
+                Some(root)
+            }
+            None => {
+                console::error_1(&JsValue::from_str(
+                    "pp-for: row body fragment failed to materialise root",
+                ));
+                Scope::remove(scope.id);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let clone_root = match clone_root {
+        Some(root) => root,
+        None => {
+            let Some(root) = clone_template_body(template) else {
+                console::error_1(&JsValue::from_str(
+                    "pp-for: <template> body must contain exactly one element",
+                ));
+                Scope::remove(scope.id);
+                return None;
+            };
+            if elide_proxy {
+                mount::bind_scope_id_only(&root, scope.id);
+            } else {
+                let proxy = scope.into_proxy();
+                bind_scope_to(&root, scope.id, &proxy);
+            }
+            let ctx_key = wasm_bindgen::JsValue::from_str(mount::CTX_PARENT_KEY);
+            let ctx_val = wasm_bindgen::JsValue::from_f64(scope.id.0 as f64);
+            let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
+            root
+        }
+    };
+    crate::profiler::mount::record_clone_template_body(clone_start);
+
+    Some(PrevItem {
+        element: clone_root,
+        scope_id: scope.id,
+        loop_state: loop_rc,
+        key,
+        item_value: item,
+        item_sig,
+        leaving: false,
+    })
+}
+
 fn item_signature(v: &JsValue) -> String {
     if v.is_undefined() {
         return "u:".into();
@@ -480,6 +560,289 @@ fn item_signature(v: &JsValue) -> String {
         .and_then(|s| s.as_string())
         .map(|s| format!("j:{s}"))
         .unwrap_or_default()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_append_fast_path(
+    arr: &Array,
+    total: usize,
+    mut old_prior: Vec<PrevItem>,
+    seen_cell: &Rc<RefCell<HashSet<Rc<str>>>>,
+    key_resolver: &KeyResolver,
+    item_name: &Rc<str>,
+    parent_proxy: &JsValue,
+    parent_scope_id: ScopeId,
+    inject_parent_id: ScopeId,
+    template: &HtmlTemplateElement,
+    template_el: &Element,
+    parent_node: &Node,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    elide_proxy: bool,
+    row_plan: Option<&Rc<crate::directives::for_plan::CompiledRowPlan>>,
+    compiled_bindings_depend_on_position: bool,
+    stagger_ms: u32,
+) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
+    let old_len = old_prior.len();
+    if old_len == 0 || total <= old_len {
+        return Err(old_prior);
+    }
+    for (i, entry) in old_prior.iter().enumerate() {
+        if entry.leaving || !Object::is(&entry.item_value, &arr.get(i as u32)) {
+            return Err(old_prior);
+        }
+    }
+
+    let row_iter_start = crate::profiler::reconcile::start();
+    if compiled_bindings_depend_on_position {
+        for entry in &old_prior {
+            {
+                let mut st = entry.loop_state.borrow_mut();
+                st.total = total;
+            }
+            if !crate::directives::for_plan::reuse_row_compiled(entry.scope_id) {
+                trigger_scope(entry.scope_id);
+            }
+        }
+    } else {
+        for entry in &old_prior {
+            entry.loop_state.borrow_mut().total = total;
+        }
+    }
+
+    let mut seen = seen_cell.borrow_mut();
+    seen.clear();
+    let seen_cap = seen.capacity();
+    if seen_cap < total {
+        seen.reserve(total - seen_cap);
+    }
+    for entry in &old_prior {
+        seen.insert(entry.key.clone());
+    }
+
+    let mut appended: Vec<PrevItem> = Vec::with_capacity(total - old_len);
+    let create_body = if row_plan.is_none() { body } else { None };
+    for i in old_len..total {
+        let item = arr.get(i as u32);
+        let key_val = key_resolver.resolve(&item, i, parent_proxy);
+        let raw_key: Rc<str> = stringify_key(&key_val).into();
+        let key = if seen.insert(raw_key.clone()) {
+            raw_key
+        } else {
+            console::warn_1(&JsValue::from_str(&format!(
+                "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
+                &*raw_key
+            )));
+            let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
+            seen.insert(dup.clone());
+            dup
+        };
+        let Some(entry) = create_keyed_prev_item(
+            item_name,
+            item,
+            String::new(),
+            i,
+            total,
+            parent_proxy,
+            parent_scope_id,
+            inject_parent_id,
+            template,
+            key,
+            create_body,
+            elide_proxy,
+        ) else {
+            return Err(old_prior);
+        };
+        appended.push(entry);
+    }
+    drop(seen);
+    crate::profiler::reconcile::record_row_iter(row_iter_start);
+
+    let reorder_start = crate::profiler::reconcile::start();
+    let doc = template_el
+        .owner_document()
+        .expect("template element should belong to a document");
+    let fragment: DocumentFragment = doc.create_document_fragment();
+    let dom_insert_start = crate::profiler::mount::start();
+    for entry in &appended {
+        let _ = fragment.append_child(entry.element.as_ref());
+    }
+    let _ = parent_node.insert_before(fragment.as_ref(), Some(template_el.as_ref()));
+    crate::profiler::mount::record_dom_insertion(dom_insert_start);
+
+    for entry in &appended {
+        if let Some(plan) = row_plan {
+            if let Some(sid) = mount::scope_id_of_element(&entry.element) {
+                let proxy_for_mount = if elide_proxy {
+                    None
+                } else {
+                    crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
+                };
+                crate::directives::for_plan::mount_row_compiled(
+                    plan,
+                    &entry.element,
+                    sid,
+                    proxy_for_mount.as_ref(),
+                );
+                continue;
+            }
+        }
+        crate::profiler::mount::record_generic_row_mounted();
+        mount::finalize_compiled_subtree(&entry.element);
+    }
+    let entered = appended
+        .iter()
+        .map(|entry| entry.element.clone())
+        .collect::<Vec<_>>();
+    fire_staggered_enter(&entered, stagger_ms);
+    crate::profiler::reconcile::record_reorder(reorder_start);
+
+    old_prior.extend(appended);
+    Ok(old_prior)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_prepend_fast_path(
+    arr: &Array,
+    total: usize,
+    old_prior: Vec<PrevItem>,
+    seen_cell: &Rc<RefCell<HashSet<Rc<str>>>>,
+    key_resolver: &KeyResolver,
+    item_name: &Rc<str>,
+    parent_proxy: &JsValue,
+    parent_scope_id: ScopeId,
+    inject_parent_id: ScopeId,
+    template: &HtmlTemplateElement,
+    parent_node: &Node,
+    body: Option<crate::directives::for_plan::ForBodyFn>,
+    elide_proxy: bool,
+    row_plan: Option<&Rc<crate::directives::for_plan::CompiledRowPlan>>,
+    compiled_bindings_depend_on_position: bool,
+    stagger_ms: u32,
+) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
+    let old_len = old_prior.len();
+    if old_len == 0 || total <= old_len {
+        return Err(old_prior);
+    }
+    let added = total - old_len;
+    for (i, entry) in old_prior.iter().enumerate() {
+        if entry.leaving || !Object::is(&entry.item_value, &arr.get((i + added) as u32)) {
+            return Err(old_prior);
+        }
+    }
+
+    let row_iter_start = crate::profiler::reconcile::start();
+    if compiled_bindings_depend_on_position {
+        for (i, entry) in old_prior.iter().enumerate() {
+            {
+                let mut st = entry.loop_state.borrow_mut();
+                st.index = i + added;
+                st.total = total;
+            }
+            if !crate::directives::for_plan::reuse_row_compiled(entry.scope_id) {
+                trigger_scope(entry.scope_id);
+            }
+        }
+    } else {
+        for (i, entry) in old_prior.iter().enumerate() {
+            let mut st = entry.loop_state.borrow_mut();
+            st.index = i + added;
+            st.total = total;
+        }
+    }
+
+    let mut seen = seen_cell.borrow_mut();
+    seen.clear();
+    let seen_cap = seen.capacity();
+    if seen_cap < total {
+        seen.reserve(total - seen_cap);
+    }
+    for entry in &old_prior {
+        seen.insert(entry.key.clone());
+    }
+
+    let create_body = if row_plan.is_none() { body } else { None };
+    let mut prepended: Vec<PrevItem> = Vec::with_capacity(added);
+    for i in 0..added {
+        let item = arr.get(i as u32);
+        let key_val = key_resolver.resolve(&item, i, parent_proxy);
+        let raw_key: Rc<str> = stringify_key(&key_val).into();
+        let key = if seen.insert(raw_key.clone()) {
+            raw_key
+        } else {
+            console::warn_1(&JsValue::from_str(&format!(
+                "pp-for: duplicate pp-key {:?} at index {i}; treating as new",
+                &*raw_key
+            )));
+            let dup: Rc<str> = format!("{}__dup_{i}", &*raw_key).into();
+            seen.insert(dup.clone());
+            dup
+        };
+        let Some(entry) = create_keyed_prev_item(
+            item_name,
+            item,
+            String::new(),
+            i,
+            total,
+            parent_proxy,
+            parent_scope_id,
+            inject_parent_id,
+            template,
+            key,
+            create_body,
+            elide_proxy,
+        ) else {
+            return Err(old_prior);
+        };
+        prepended.push(entry);
+    }
+    drop(seen);
+    crate::profiler::reconcile::record_row_iter(row_iter_start);
+
+    let reorder_start = crate::profiler::reconcile::start();
+    let doc = old_prior
+        .first()
+        .and_then(|entry| entry.element.owner_document())
+        .expect("existing row should belong to a document");
+    let fragment: DocumentFragment = doc.create_document_fragment();
+    let dom_insert_start = crate::profiler::mount::start();
+    for entry in &prepended {
+        let _ = fragment.append_child(entry.element.as_ref());
+    }
+    let anchor = old_prior
+        .first()
+        .map(|entry| entry.element.as_ref() as &Node);
+    let _ = parent_node.insert_before(fragment.as_ref(), anchor);
+    crate::profiler::mount::record_dom_insertion(dom_insert_start);
+
+    for entry in &prepended {
+        if let Some(plan) = row_plan {
+            if let Some(sid) = mount::scope_id_of_element(&entry.element) {
+                let proxy_for_mount = if elide_proxy {
+                    None
+                } else {
+                    crate::mount::scope_of_element(&entry.element).map(|(_, p)| p)
+                };
+                crate::directives::for_plan::mount_row_compiled(
+                    plan,
+                    &entry.element,
+                    sid,
+                    proxy_for_mount.as_ref(),
+                );
+                continue;
+            }
+        }
+        crate::profiler::mount::record_generic_row_mounted();
+        mount::finalize_compiled_subtree(&entry.element);
+    }
+    let entered = prepended
+        .iter()
+        .map(|entry| entry.element.clone())
+        .collect::<Vec<_>>();
+    fire_staggered_enter(&entered, stagger_ms);
+    crate::profiler::reconcile::record_reorder(reorder_start);
+
+    prepended.extend(old_prior);
+    Ok(prepended)
 }
 
 /// Keyed iteration. Reuses clones whose keys still appear, fires
@@ -558,6 +921,62 @@ fn run_keyed(
             );
         }
 
+        let old_prior: Vec<PrevItem> = {
+            let mut b = prior.borrow_mut();
+            std::mem::take(&mut *b)
+        };
+        let old_prior = match try_append_fast_path(
+            &arr,
+            total,
+            old_prior,
+            &seen_cell,
+            &key_resolver,
+            &item_name,
+            &parent_proxy,
+            parent_scope_id,
+            inject_parent_id,
+            &template,
+            &template_el,
+            parent_node_ref,
+            body,
+            elide_proxy,
+            row_plan.as_ref(),
+            compiled_bindings_depend_on_position,
+            stagger_ms,
+        ) {
+            Ok(next_prior) => {
+                *prior.borrow_mut() = next_prior;
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
+            }
+            Err(old_prior) => old_prior,
+        };
+        let old_prior = match try_prepend_fast_path(
+            &arr,
+            total,
+            old_prior,
+            &seen_cell,
+            &key_resolver,
+            &item_name,
+            &parent_proxy,
+            parent_scope_id,
+            inject_parent_id,
+            &template,
+            parent_node_ref,
+            body,
+            elide_proxy,
+            row_plan.as_ref(),
+            compiled_bindings_depend_on_position,
+            stagger_ms,
+        ) {
+            Ok(next_prior) => {
+                *prior.borrow_mut() = next_prior;
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
+            }
+            Err(old_prior) => old_prior,
+        };
+
         // Drain prior into a key → entry map so we can look up reuse
         // candidates in O(1).
         let pool_build_start = crate::profiler::reconcile::start();
@@ -567,10 +986,6 @@ fn run_keyed(
         if pool_cap < total {
             pool.reserve(total - pool_cap);
         }
-        let old_prior: Vec<PrevItem> = {
-            let mut b = prior.borrow_mut();
-            std::mem::take(&mut *b)
-        };
         // Clearing a compiled list does not need keyed lookup at all:
         // every prior row is leaving. Try the same safe bulk teardown
         // before hashing 10K keys into `pool`; fall back to the normal
