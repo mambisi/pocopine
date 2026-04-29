@@ -152,6 +152,7 @@ pub fn clear_active_phf_registry_for_test() {
     ACTIVE_PHF_REGISTRY.with(|active| {
         *active.borrow_mut() = None;
     });
+    crate::templates::clear_template_element_cache_for_test();
 }
 
 pub fn active_component_vtable(name: &str) -> Option<&'static ComponentVTable> {

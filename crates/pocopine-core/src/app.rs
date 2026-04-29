@@ -239,7 +239,10 @@ impl App {
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
         mount::mount_child_component(host, C::NAME);
-        SubtreeHandle { host: host.clone() }
+        SubtreeHandle {
+            host: host.clone(),
+            active: true,
+        }
     }
 }
 
@@ -249,25 +252,40 @@ impl App {
 #[must_use = "drop or call `.unmount()` to clean up the subtree"]
 pub struct SubtreeHandle {
     host: Element,
+    active: bool,
 }
 
 impl SubtreeHandle {
+    fn release(&mut self) {
+        if !self.active {
+            return;
+        }
+        mount::release_compiled_subtree(&self.host);
+        self.host.set_inner_html("");
+        self.active = false;
+    }
+
     /// Tear down the subtree. Releases the scope tree
     /// (effects + listeners + DOM refs) and clears the host's
     /// children. After this the host element remains in the
     /// DOM but contains nothing pocopine owns.
-    pub fn unmount(self) {
-        mount::release_compiled_subtree(&self.host);
-        self.host.set_inner_html("");
+    pub fn unmount(mut self) {
+        self.release();
     }
 }
 
-/// RFC 061 Phase 3 — compiled root discovery. Mounts every
-/// registered custom-tag descendant of the `[pp-app]` host via the typed
-/// `mount_child_component` path, fires lifecycle hooks via
-/// `finalize_compiled_subtree`, then registers any
-/// `<pp-outlet>` element so the router can paint matched
-/// routes.
+impl Drop for SubtreeHandle {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// RFC 061 Phase 3 — compiled root discovery for `[pp-app]`.
+/// This is the app-root sibling of [`App::mount_subtree`]:
+/// both paths call `mount_child_component` for known component
+/// tags, then finalize the compiled subtree. The app root differs
+/// only by discovering route-authored descendants from the static
+/// registry instead of receiving a typed `C`.
 fn mount_pp_app_subtree(host: &Element) {
     crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     let names = crate::templates::registered_template_names();
@@ -300,17 +318,21 @@ fn mount_pp_app_subtree(host: &Element) {
 }
 
 /// RFC 061 Phase 2 — paint a friendly boot error when
-/// [`App::run`] can't find a `[pp-app]` root. Mirrors
-/// [`crate::registry::render_boot_error`]'s shape: replaces
-/// `<body>` with a fixed-position banner, logs to console.
+/// [`App::run`] can't find a `[pp-app]` root. Renders a fixed
+/// overlay without clearing `<body>`, so test harnesses and
+/// host-page diagnostics survive the fatal boot error.
 fn render_missing_pp_app_root() {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
     let Some(body) = doc.body() else { return };
-    body.set_inner_html("");
+    if let Ok(Some(existing)) = body.query_selector("[data-pocopine-boot-error=\"missing-pp-app\"]")
+    {
+        existing.remove();
+    }
     let Ok(banner) = doc.create_element("div") else {
         return;
     };
+    let _ = banner.set_attribute("data-pocopine-boot-error", "missing-pp-app");
     let _ = banner.set_attribute(
         "style",
         "position:fixed;inset:0;background:#1b1b1f;color:#f5f5f7;\
