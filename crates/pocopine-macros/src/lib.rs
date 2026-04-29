@@ -789,6 +789,142 @@ fn role_to_tag(role: &str) -> Option<&'static str> {
     }
 }
 
+fn compile_template_static(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
+    let Some((tag, role_name)) = role else {
+        return inject_pp_data_static(raw, name);
+    };
+    let mut prefix = format!(r#"data-pine-role="{role_name}""#);
+    if tag == "button" && !root_placeholder_has_attr_static(raw, "type") {
+        prefix.push_str(r#" type="button""#);
+    }
+    let renamed = rewrite_root_placeholder_static(raw, tag, &prefix);
+    inject_pp_data_static(&renamed, name)
+}
+
+fn rewrite_root_placeholder_static(raw: &str, tag: &str, prefix_attrs: &str) -> String {
+    let attrs = prefix_attrs.trim();
+    let step1 = raw.replace("<root>", &format!("<{tag} {attrs}>"));
+    let step2 = step1.replace("<root ", &format!("<{tag} {attrs} "));
+    let step3 = step2.replace("<root/>", &format!("<{tag} {attrs}/>"));
+    step3.replace("</root>", &format!("</{tag}>"))
+}
+
+fn root_placeholder_has_attr_static(raw: &str, needle: &str) -> bool {
+    let Some(pos) = raw.find("<root") else {
+        return false;
+    };
+    let after = pos + "<root".len();
+    let boundary = raw.as_bytes().get(after).copied();
+    if !matches!(
+        boundary,
+        Some(b' ') | Some(b'>') | Some(b'/') | Some(b'\n') | Some(b'\t') | Some(b'\r')
+    ) {
+        return false;
+    }
+    let bytes = raw.as_bytes();
+    let Some(close) = find_tag_end_static(bytes, pos) else {
+        return false;
+    };
+    let tag_slice = &raw[pos + 1..close];
+    for chunk in tag_slice.split_ascii_whitespace().skip(1) {
+        let name_end = chunk.find('=').unwrap_or(chunk.len());
+        if chunk[..name_end].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn inject_pp_data_static(raw: &str, name: &str) -> String {
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len {
+            break;
+        }
+        if bytes[i] != b'<' {
+            return raw.to_owned();
+        }
+        if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
+            if let Some(end) = find_seq_static(bytes, i + 4, b"-->") {
+                i = end + 3;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        if i + 2 <= len && bytes[i + 1] == b'!' {
+            if let Some(end) = find_byte_static(bytes, i, b'>') {
+                i = end + 1;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        if i + 2 <= len && bytes[i + 1] == b'?' {
+            if let Some(end) = find_seq_static(bytes, i + 2, b"?>") {
+                i = end + 2;
+                continue;
+            }
+            return raw.to_owned();
+        }
+        let Some(close) = find_tag_end_static(bytes, i) else {
+            return raw.to_owned();
+        };
+        let self_closing = close > 0 && bytes[close - 1] == b'/';
+        let insert_at = if self_closing { close - 1 } else { close };
+        let attr = format!(" pp-data=\"{name}\"");
+        let mut out = String::with_capacity(raw.len() + attr.len());
+        out.push_str(&raw[..insert_at]);
+        if !out.ends_with(char::is_whitespace) {
+            out.push(' ');
+        }
+        out.push_str(attr.trim_start());
+        out.push_str(&raw[insert_at..]);
+        return out;
+    }
+    raw.to_owned()
+}
+
+fn find_byte_static(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
+    bytes[start..]
+        .iter()
+        .position(|&b| b == needle)
+        .map(|p| start + p)
+}
+
+fn find_seq_static(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || start + needle.len() > bytes.len() {
+        return None;
+    }
+    (start..=bytes.len() - needle.len()).find(|&i| &bytes[i..i + needle.len()] == needle)
+}
+
+fn find_tag_end_static(bytes: &[u8], tag_start: usize) -> Option<usize> {
+    let len = bytes.len();
+    let mut i = tag_start + 1;
+    let mut quote: Option<u8> = None;
+    while i < len {
+        let b = bytes[i];
+        match quote {
+            Some(q) => {
+                if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' => quote = Some(b),
+                b'>' => return Some(i),
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Kebab-case an ident: `TodoItem` → `todo-item`.
 pub(crate) fn kebab_case(ident: &str) -> String {
     let mut out = String::with_capacity(ident.len() + 2);
@@ -932,6 +1068,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     &::pocopine::__private::ComponentVTable {
                         name: #name_str,
                         register: <#struct_ident>::register,
+                        template_html: None,
+                        plan: None,
                     };
             }
 
@@ -1414,6 +1552,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         None => quote! { None },
     };
+    let role_for_static_template: Option<(&'static str, String)> =
+        args.role.as_ref().and_then(|lit| {
+            let role_name = lit.value();
+            role_to_tag(&role_name).map(|tag| (tag, role_name))
+        });
 
     // RFC-038 transition / animate args → string literals the
     // generated `ComponentState` impl returns. Precedence:
@@ -1545,6 +1688,40 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // We keep the `const _: &str = include_str!(...)` dependency
     // pin in `register_template_stmt` so cargo still rebuilds
     // when the `.poco` changes.
+    let template_source_for_compile = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
+        cleaned.to_string()
+    } else if let Some(inline) = args.template_inline.as_ref() {
+        let source = template_ast
+            .as_ref()
+            .map(|ast| ast.source.as_str())
+            .unwrap_or("");
+        if !source.is_empty() {
+            source.to_string()
+        } else {
+            inline.value()
+        }
+    } else if row_plans.stamps.is_empty() {
+        template_ast
+            .as_ref()
+            .map(|ast| ast.source.as_str().to_string())
+            .unwrap_or_default()
+    } else {
+        let source = template_ast
+            .as_ref()
+            .map(|ast| ast.source.as_str())
+            .unwrap_or("");
+        for_plan::apply_stamps(source, &row_plans.stamps)
+    };
+
+    let compiled_template_html = compile_template_static(
+        &template_source_for_compile,
+        &name_str,
+        role_for_static_template
+            .as_ref()
+            .map(|(tag, role_name)| (*tag, role_name.as_str())),
+    );
+    let compiled_template_html_lit = proc_macro2::Literal::string(&compiled_template_html);
+
     let template_literal_tokens = if let Some(cleaned) = template_plan.cleaned_html.as_deref() {
         let lit = proc_macro2::Literal::string(cleaned);
         quote! { #lit }
@@ -1596,25 +1773,35 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let register_template_plan_stmt = match template_plan.plan_tokens {
+    let template_plan_module_ident = format_ident!("__poc_plan_{}", struct_ident);
+    let template_plan_tokens_for_vtable = template_plan.plan_tokens.clone();
+    let template_plan_item_tokens = match template_plan.plan_tokens.clone() {
         Some(plan_tokens) => {
-            // RFC-058 Phase 3.5b + 4.1d — fragment `fn` items
-            // (slot + pp-if body) go before the
-            // `const __POC_TEMPLATE_PLAN` so the plan literal
-            // can reference them by ident. Empty token streams
-            // when the analyser didn't lift anything.
             let slot_fns = template_plan.slot_fragment_fns;
             let if_body_fns = template_plan.if_body_fns;
             quote! {
-                #slot_fns
-                #if_body_fns
-                const __POC_TEMPLATE_PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
-                ::pocopine::__private::register_template_plan(
-                    #name_str,
-                    &__POC_TEMPLATE_PLAN,
-                );
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                mod #template_plan_module_ident {
+                    use super::*;
+
+                    #slot_fns
+                    #if_body_fns
+
+                    pub const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_tokens;
+                }
             }
         }
+        None => quote! {},
+    };
+
+    let register_template_plan_stmt = match template_plan.plan_tokens {
+        Some(_) => quote! {
+            ::pocopine::__private::register_template_plan(
+                #name_str,
+                &#template_plan_module_ident::PLAN,
+            );
+        },
         None => quote! {},
     };
 
@@ -1669,6 +1856,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         None => quote! {},
     };
+
+    let (template_plan_assoc_const_tokens, vtable_plan_tokens) =
+        match template_plan_tokens_for_vtable {
+            Some(_) => (
+                quote! {
+                    #[doc(hidden)]
+                    pub const __POC_TEMPLATE_PLAN: &'static ::pocopine::__private::StaticTemplatePlan =
+                        &#template_plan_module_ident::PLAN;
+                },
+                quote! { Some(<#struct_ident>::__POC_TEMPLATE_PLAN) },
+            ),
+            None => (quote! {}, quote! { None }),
+        };
 
     // RFC 060 Tier 1 — emit a transitive `T::register()` call per
     // `uses = [...]` entry so the consumer's registration brings
@@ -1753,6 +1953,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let out = quote! {
         #input
+        #template_plan_item_tokens
 
         // RFC 049 — marker traits + blanket impls for each
         // #[slot(accepts=...)] / #[slot(only=...)] declared on
@@ -1878,6 +2079,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #struct_ident {
+            #template_plan_assoc_const_tokens
+
             /// Register this component (template, stylesheet, constructor)
             /// with the pocopine runtime. Idempotent. Call directly or via
             /// [`pocopine::App::register`].
@@ -1912,6 +2115,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &::pocopine::__private::ComponentVTable {
                     name: #name_str,
                     register: <#struct_ident>::register,
+                    template_html: Some(#compiled_template_html_lit),
+                    plan: #vtable_plan_tokens,
                 };
         }
 

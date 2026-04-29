@@ -146,6 +146,7 @@ impl App {
         self,
         registry: &'static phf::Map<&'static str, &'static crate::registry::ComponentVTable>,
     ) {
+        crate::registry::set_active_phf_registry(registry);
         for vtable in registry.values() {
             (vtable.register)();
         }
