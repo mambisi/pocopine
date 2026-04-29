@@ -1084,133 +1084,137 @@ pub(crate) fn mount_row_compiled(
     scope_id: ScopeId,
     proxy: Option<&JsValue>,
 ) {
-    // Resolve every binding/listener node path up front. A miss
-    // is a macro emission bug — log and bail; the row still has
-    // its scope bound so the runtime won't double-bind on retry.
-    let mut binding_nodes: Vec<Element> = Vec::with_capacity(plan.bindings.len());
+    mount_rows_compiled(plan, &[(row_root.clone(), scope_id, proxy.cloned())]);
+}
+
+/// Batch variant of [`mount_row_compiled`] for `pp-for` reconciles
+/// that insert many fresh compiled rows at once. It keeps the same
+/// per-row semantics, but amortizes row-instance table borrows,
+/// list-watcher setup, and parent-binding refresh across the whole
+/// inserted batch.
+pub(crate) fn mount_rows_compiled(
+    plan: &Rc<CompiledRowPlan>,
+    rows: &[(Element, ScopeId, Option<JsValue>)],
+) {
+    if rows.is_empty() {
+        return;
+    }
+
+    let mut instances: Vec<(ScopeId, RowInstance)> = Vec::with_capacity(rows.len());
+    let mut watched_members: Vec<ScopeId> = Vec::new();
+    let mut watcher: Option<(ListWatcherKey, JsValue)> = None;
+
     let node_path_start = crate::profiler::mount::start();
-    for b in &plan.bindings {
-        let Some(node) = resolve_node_path(row_root, b.node_path) else {
-            console::warn_1(&JsValue::from_str(&format!(
-                "rfc-054: row binding node_path {:?} did not resolve",
-                b.node_path,
-            )));
-            return;
-        };
-        binding_nodes.push(node);
+    let mut resolved_binding_nodes: Vec<Box<[Element]>> = Vec::with_capacity(rows.len());
+    for (row_root, _, _) in rows {
+        let mut binding_nodes: Vec<Element> = Vec::with_capacity(plan.bindings.len());
+        for b in &plan.bindings {
+            let Some(node) = resolve_node_path(row_root, b.node_path) else {
+                console::warn_1(&JsValue::from_str(&format!(
+                    "rfc-054: row binding node_path {:?} did not resolve",
+                    b.node_path,
+                )));
+                return;
+            };
+            binding_nodes.push(node);
+        }
+        resolved_binding_nodes.push(binding_nodes.into_boxed_slice());
     }
     crate::profiler::mount::record_node_path_resolution(node_path_start);
 
-    // Initial evaluate + DOM patch + prime cache. Purely loop-
-    // local bindings get evaluated synchronously here; parent-
-    // touching bindings are deferred to the per-binding effect
-    // installed below so their first run subscribes via the
-    // parent proxy's `get` trap. Slots for deferred bindings
-    // start as `None` and the effect's first immediate run fills
-    // them in.
-    //
-    // FastExpr-only plans take the `proxy.is_none()` path — none
-    // of their bindings consult `proxy` (the slow-path
-    // `expr::evaluate(&binding.ast, proxy)` branch is unreachable
-    // when every `b.fast.is_some()`). For mixed plans, the caller
-    // already minted a proxy and passed it in.
-    let loop_state = Scope::find(scope_id).and_then(|scope| scope.typed::<LoopScope>());
     let binding_start = crate::profiler::mount::start();
-    let binding_cache = {
+    let mut binding_caches: Vec<Vec<Option<Rc<str>>>> = Vec::with_capacity(rows.len());
+    let mut loop_states: Vec<Option<Rc<RefCell<LoopScope>>>> = Vec::with_capacity(rows.len());
+    let mut parent_links: Vec<Option<(ScopeId, JsValue)>> = Vec::with_capacity(rows.len());
+    for ((_, scope_id, proxy), binding_nodes) in rows.iter().zip(resolved_binding_nodes.iter()) {
+        let loop_state = Scope::find(*scope_id).and_then(|scope| scope.typed::<LoopScope>());
+        let parent_link = loop_state.as_ref().map(|state| {
+            let borrow = state.borrow();
+            (borrow.parent_scope_id, borrow.parent.clone())
+        });
         let mut binding_cache: Vec<Option<Rc<str>>> = vec![None; plan.bindings.len()];
-        let loop_borrow = loop_state.as_ref().map(|state| state.borrow());
-        let loop_ref = loop_borrow.as_deref();
-        let placeholder_proxy = JsValue::UNDEFINED;
-        let proxy_for_eval = proxy.unwrap_or(&placeholder_proxy);
-        for (i, b) in plan.bindings.iter().enumerate() {
-            if !b.parent_field_paths.is_empty() {
-                continue;
+        {
+            let loop_borrow = loop_state.as_ref().map(|state| state.borrow());
+            let loop_ref = loop_borrow.as_deref();
+            let placeholder_proxy = JsValue::UNDEFINED;
+            let proxy_for_eval = proxy.as_ref().unwrap_or(&placeholder_proxy);
+            for (i, b) in plan.bindings.iter().enumerate() {
+                if !b.parent_field_paths.is_empty() {
+                    continue;
+                }
+                let v = evaluate_binding(b, proxy_for_eval, loop_ref);
+                binding_cache[i] = apply_binding(&binding_nodes[i], b.kind, &v, None);
             }
-            let v = evaluate_binding(b, proxy_for_eval, loop_ref);
-            binding_cache[i] = apply_binding(&binding_nodes[i], b.kind, &v, None);
         }
-        binding_cache
-    };
+        binding_caches.push(binding_cache);
+        loop_states.push(loop_state);
+        parent_links.push(parent_link);
+    }
     crate::profiler::mount::record_initial_binding_apply(binding_start);
 
-    // Listener nodes resolve once and route through one delegated
-    // listener per event on the list container.
     let listener_start = crate::profiler::mount::start();
-    let listener_routes = resolve_listener_routes(plan, row_root);
+    let mut listener_routes: Vec<Box<[RowListenerRoute]>> = Vec::with_capacity(rows.len());
+    for (row_root, _, _) in rows {
+        listener_routes.push(resolve_listener_routes(plan, row_root));
+        crate::profiler::mount::record_compiled_row_mounted();
+    }
     crate::profiler::mount::record_listener_installation(listener_start);
-    crate::profiler::mount::record_compiled_row_mounted();
 
-    let initial_proxy: RefCell<Option<JsValue>> = RefCell::new(proxy.cloned());
+    for (
+        (((((_, scope_id, proxy), binding_nodes), binding_cache), listener_routes), loop_state),
+        parent_link,
+    ) in rows
+        .iter()
+        .zip(resolved_binding_nodes.into_iter())
+        .zip(binding_caches.into_iter())
+        .zip(listener_routes.into_iter())
+        .zip(loop_states.into_iter())
+        .zip(parent_links.into_iter())
+    {
+        let initial_proxy: RefCell<Option<JsValue>> = RefCell::new(proxy.clone());
 
-    // Determine the row's parent scope id + proxy (needed for
-    // both the list_key and the watcher install path).
-    let (parent_scope_id, parent_proxy) = match loop_state_parent(scope_id) {
-        Some(pair) => pair,
-        None => {
-            ROW_INSTANCES.with(|m| {
-                m.borrow_mut().insert(
-                    scope_id,
-                    RowInstance {
-                        plan: plan.clone(),
-                        binding_nodes: binding_nodes.into_boxed_slice(),
-                        binding_cache,
-                        proxy: initial_proxy,
-                        loop_state,
-                        listener_routes,
-                        list_key: ListWatcherKey::new(ScopeId(0), plan),
-                    },
-                );
-            });
-            return;
-        }
-    };
-    let list_key = ListWatcherKey::new(parent_scope_id, plan);
-    ROW_INSTANCES.with(|m| {
-        m.borrow_mut().insert(
-            scope_id,
+        let list_key = match parent_link {
+            Some((parent_scope_id, parent_proxy)) => {
+                let list_key = ListWatcherKey::new(parent_scope_id, plan);
+                if watcher.is_none() {
+                    watcher = Some((list_key, parent_proxy));
+                }
+                watched_members.push(*scope_id);
+                list_key
+            }
+            None => ListWatcherKey::new(ScopeId(0), plan),
+        };
+
+        instances.push((
+            *scope_id,
             RowInstance {
                 plan: plan.clone(),
-                binding_nodes: binding_nodes.into_boxed_slice(),
+                binding_nodes,
                 binding_cache,
                 proxy: initial_proxy,
                 loop_state,
                 listener_routes,
                 list_key,
             },
-        );
-    });
+        ));
+    }
 
-    // Hook up to the list-level parent-state watcher.
-    // `ensure_list_watcher` installs one effect per
-    // (parent_scope_id, plan) pair on first row mount; later
-    // rows just append themselves to its `members` list. The
-    // effect, when fired, iterates `members` and re-evaluates
-    // every parent-touching binding on each row. One closure
-    // allocation per list instead of per row.
-    ensure_list_watcher(plan, list_key, parent_proxy);
-    LIST_WATCHERS.with(|m| {
-        if let Some(watcher) = m.borrow_mut().get_mut(&list_key) {
-            watcher.members.push(scope_id);
+    ROW_INSTANCES.with(|m| {
+        let mut map = m.borrow_mut();
+        for (scope_id, instance) in instances {
+            map.insert(scope_id, instance);
         }
     });
-    // The list watcher's first run (during install) iterated an
-    // empty `members` list, so this row's parent-touching
-    // bindings haven't been evaluated yet. Do it now —
-    // synchronously, against the just-inserted instance — so
-    // the row's first-mount DOM is correct without waiting
-    // for a `Handle::update` to drive the watcher.
-    refresh_parent_bindings(scope_id);
-}
 
-/// Recover `(parent_scope_id, parent_proxy)` for a row scope.
-/// `LoopScope` carries both the parent proxy (for fall-through
-/// reads via JS Reflect) and the parent scope id (so handler
-/// invocations route correctly).
-fn loop_state_parent(scope_id: ScopeId) -> Option<(ScopeId, JsValue)> {
-    let scope = Scope::find(scope_id)?;
-    let loop_state = scope.typed::<LoopScope>()?;
-    let borrow = loop_state.borrow();
-    Some((borrow.parent_scope_id, borrow.parent.clone()))
+    if let Some((list_key, parent_proxy)) = watcher {
+        ensure_list_watcher(plan, list_key, parent_proxy);
+        LIST_WATCHERS.with(|m| {
+            if let Some(watcher) = m.borrow_mut().get_mut(&list_key) {
+                watcher.members.extend(watched_members.iter().copied());
+            }
+        });
+        refresh_parent_bindings_many(&watched_members);
+    }
 }
 
 /// Install (idempotently) the list-level watcher for a
@@ -1314,28 +1318,34 @@ fn ensure_list_watcher(
 /// watcher's effect body and by `reuse_row_compiled`'s
 /// fallback path. No-op if the row was already unmounted.
 fn refresh_parent_bindings(scope_id: ScopeId) {
+    refresh_parent_bindings_many(&[scope_id]);
+}
+
+fn refresh_parent_bindings_many(scope_ids: &[ScopeId]) {
     ROW_INSTANCES.with(|m| {
         let mut map = m.borrow_mut();
-        let Some(instance) = map.get_mut(&scope_id) else {
-            return;
-        };
-        let plan = instance.plan.clone();
-        // Slow-path eval (non-FastExpr) needs a real proxy. For
-        // FastExpr-only plans the placeholder is never consulted —
-        // every `evaluate_binding` short-circuits via `fast.is_some()`.
-        let proxy_value = instance.proxy.borrow().clone();
-        let placeholder = JsValue::UNDEFINED;
-        let proxy_ref = proxy_value.as_ref().unwrap_or(&placeholder);
-        let loop_borrow = instance.loop_state.as_ref().map(|state| state.borrow());
-        let loop_ref = loop_borrow.as_deref();
-        for (i, binding) in plan.bindings.iter().enumerate() {
-            if binding.parent_field_paths.is_empty() {
+        for scope_id in scope_ids {
+            let Some(instance) = map.get_mut(scope_id) else {
                 continue;
+            };
+            let plan = instance.plan.clone();
+            // Slow-path eval (non-FastExpr) needs a real proxy. For
+            // FastExpr-only plans the placeholder is never consulted —
+            // every `evaluate_binding` short-circuits via `fast.is_some()`.
+            let proxy_value = instance.proxy.borrow().clone();
+            let placeholder = JsValue::UNDEFINED;
+            let proxy_ref = proxy_value.as_ref().unwrap_or(&placeholder);
+            let loop_borrow = instance.loop_state.as_ref().map(|state| state.borrow());
+            let loop_ref = loop_borrow.as_deref();
+            for (i, binding) in plan.bindings.iter().enumerate() {
+                if binding.parent_field_paths.is_empty() {
+                    continue;
+                }
+                let v = evaluate_binding(binding, proxy_ref, loop_ref);
+                let prev = instance.binding_cache[i].as_deref();
+                instance.binding_cache[i] =
+                    apply_binding(&instance.binding_nodes[i], binding.kind, &v, prev);
             }
-            let v = evaluate_binding(binding, proxy_ref, loop_ref);
-            let prev = instance.binding_cache[i].as_deref();
-            instance.binding_cache[i] =
-                apply_binding(&instance.binding_nodes[i], binding.kind, &v, prev);
         }
     });
 }

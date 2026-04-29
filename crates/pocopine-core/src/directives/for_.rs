@@ -82,18 +82,6 @@ fn remove_or_leave(root: &Element) {
     });
 }
 
-/// Cheap predicate over the leave pool — true if any entry
-/// has a transition in its subtree. The bulk-clear fast path
-/// in `run_keyed` falls back to the per-row leave loop when
-/// this returns true, so transition keyframes still play.
-fn has_leavers_with_transition_entries<'a>(
-    entries: impl IntoIterator<Item = &'a PrevItem>,
-) -> bool {
-    entries
-        .into_iter()
-        .any(|entry| crate::directives::transition::has_transition_in_subtree(&entry.element))
-}
-
 /// Predicate for the bulk-clear path. `replace_children_with_node_1`
 /// removes every child of `parent_el` (text + comment included)
 /// before reinstating `template_el`. We only take the fast path
@@ -157,10 +145,11 @@ fn bulk_clear_safe<'a>(
 
 fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &Element) -> bool {
     let pool_count = entries.len();
-    if pool_count == 0
-        || has_leavers_with_transition_entries(entries.iter())
-        || !bulk_clear_safe(parent_el, entries.iter(), template_el, pool_count)
-    {
+    // Compiled row plans are emitted only for the macro envelope
+    // that rejects transition attributes. Re-scanning every row
+    // subtree here made 10K-row clear pay O(N) querySelector work
+    // before the actual bulk clear.
+    if pool_count == 0 || !bulk_clear_safe(parent_el, entries.iter(), template_el, pool_count) {
         return false;
     }
 
@@ -1461,11 +1450,7 @@ fn run_keyed(
         // not to register any of those side-tables; generic rows
         // can. Routing generic rows here would leak every one of
         // those tables for the entire torn-down list.
-        if total == 0
-            && !pool.is_empty()
-            && row_plan.is_some()
-            && !has_leavers_with_transition_entries(pool.values())
-        {
+        if total == 0 && !pool.is_empty() && row_plan.is_some() {
             if let Some(parent_el) = parent_node.dyn_ref::<Element>() {
                 let pool_count = pool.len();
                 // Strict guard: `parent_node` owns *exactly* the
@@ -1748,39 +1733,48 @@ fn run_keyed(
         // `data-pp-row-plan="<id>"`; `lookup_for_template` returns
         // `None` for any template that didn't qualify, and we fall
         // back to the generic mount.
-        for el in &newly_walked {
-            // For compiled rows we already know the scope id (stamped
-            // at clone time) and whether to pass a proxy: elision
-            // means none was minted, so we pass `None` and
-            // `mount_row_compiled` lazy-mints on first listener fire.
-            // Going through `enclosing_scope` here would defeat the
-            // elision by triggering the lazy-mint path immediately.
-            if let Some(plan) = &row_plan {
+        if let Some(plan) = &row_plan {
+            let mut compiled_rows: Vec<(Element, ScopeId, Option<JsValue>)> =
+                Vec::with_capacity(newly_walked.len());
+            let mut generic_rows: Vec<Element> = Vec::new();
+            for el in &newly_walked {
+                // For compiled rows we already know the scope id
+                // (stamped at clone time) and whether to pass a
+                // proxy: elision means none was minted, so we pass
+                // `None` and the row listener path lazy-mints on
+                // first listener fire. Going through
+                // `enclosing_scope` here would defeat elision by
+                // triggering the lazy-mint path immediately.
                 if let Some(sid) = mount::scope_id_of_element(el) {
                     let proxy_for_mount = if elide_proxy {
                         None
                     } else {
                         crate::mount::scope_of_element(el).map(|(_, p)| p)
                     };
-                    crate::directives::for_plan::mount_row_compiled(
-                        plan,
-                        el,
-                        sid,
-                        proxy_for_mount.as_ref(),
-                    );
-                    continue;
+                    compiled_rows.push((el.clone(), sid, proxy_for_mount));
+                } else {
+                    generic_rows.push(el.clone());
                 }
             }
-            crate::profiler::mount::record_generic_row_mounted();
-            // RFC-058 Phase 6.5 — generic (non-row-plan) rows
-            // either came from `body_fn` (already bound by
-            // `apply_static_plan` inside the body fragment fn) or
-            // from `clone_template_body` (unbound). For both,
-            // fire lifecycle on the row + scan for registered
-            // custom tags inside (a no-op for body_fn rows since
-            // child mounts already ran during the body fragment's
-            // `apply_static_plan`, but cheap).
-            mount::finalize_compiled_subtree(el);
+            crate::directives::for_plan::mount_rows_compiled(plan, &compiled_rows);
+            for el in &generic_rows {
+                crate::profiler::mount::record_generic_row_mounted();
+                mount::finalize_compiled_subtree(el);
+            }
+        } else {
+            for el in &newly_walked {
+                crate::profiler::mount::record_generic_row_mounted();
+                // RFC-058 Phase 6.5 — generic (non-row-plan)
+                // rows either came from `body_fn` (already bound by
+                // `apply_static_plan` inside the body fragment fn)
+                // or from `clone_template_body` (unbound). For
+                // both, fire lifecycle on the row + scan for
+                // registered custom tags inside (a no-op for
+                // body_fn rows since child mounts already ran
+                // during the body fragment's `apply_static_plan`,
+                // but cheap).
+                mount::finalize_compiled_subtree(el);
+            }
         }
         // RFC-038 — fire enter on each newly-walked clone subtree
         // so a freshly-added TagsInput chip / DropdownMenu Item /
@@ -1840,9 +1834,13 @@ fn run_keyed(
 enum KeyResolver {
     Index,
     Item,
-    /// `item.a.b.c` — pre-split `[a, b, c]` so we walk
-    /// `Reflect::get` per segment without re-splitting per item.
-    ItemPath(Vec<String>),
+    /// `item.id` — common keyed-table shape; avoid the generic
+    /// segment vector and fold in the per-row hot path.
+    ItemField(JsValue),
+    /// `item.a.b.c` — pre-split JS property keys so we walk
+    /// `Reflect::get` per segment without re-splitting or
+    /// re-allocating a `JsValue` per item.
+    ItemPath(Vec<JsValue>),
     /// Any other expression — falls through to `resolve_path`
     /// against the parent proxy (e.g. `$store.selected_id`).
     External(String),
@@ -1863,10 +1861,13 @@ impl KeyResolver {
             && trimmed.as_bytes().get(item_name.len()) == Some(&b'.')
         {
             let rest = &trimmed[prefix_len..];
+            if !rest.contains('.') && !rest.is_empty() {
+                return Self::ItemField(JsValue::from_str(rest));
+            }
             return Self::ItemPath(
                 rest.split('.')
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
+                    .map(JsValue::from_str)
                     .collect(),
             );
         }
@@ -1877,8 +1878,9 @@ impl KeyResolver {
         match self {
             Self::Index => JsValue::from_f64(index as f64),
             Self::Item => item.clone(),
+            Self::ItemField(field) => Reflect::get(item, field).unwrap_or(JsValue::UNDEFINED),
             Self::ItemPath(segments) => segments.iter().fold(item.clone(), |acc, segment| {
-                Reflect::get(&acc, &JsValue::from_str(segment)).unwrap_or(JsValue::UNDEFINED)
+                Reflect::get(&acc, segment).unwrap_or(JsValue::UNDEFINED)
             }),
             Self::External(path) => resolve_path(parent_proxy, path),
         }
@@ -1911,16 +1913,13 @@ fn stringify_key(v: &JsValue) -> String {
 /// child of the resulting fragment. Returns `None` when the body is
 /// empty or has only non-element nodes.
 fn clone_template_body(template: &HtmlTemplateElement) -> Option<Element> {
-    let fragment: Node = template.content().clone_node_with_deep(true).ok()?;
-    let children = fragment.child_nodes();
-    for i in 0..children.length() {
-        if let Some(n) = children.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
-                return Some(el);
-            }
-        }
-    }
-    None
+    template
+        .content()
+        .first_element_child()?
+        .clone_node_with_deep(true)
+        .ok()?
+        .dyn_into::<Element>()
+        .ok()
 }
 
 /// Parse `"item in items"`. Returns `None` on anything we don't want
