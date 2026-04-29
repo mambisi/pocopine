@@ -14,12 +14,7 @@
 //! literal braces does not get re-interpolated by the
 //! surrounding text scanner — the `data-pp-text-managed`
 //! marker the macro stamps on the stripped element keeps
-//! `interp::scan_children` away. A planned `pp-init` observes
-//! a planned `pp-ref` from the same template (refs install
-//! before bindings, listeners, and inits in
-//! `apply_static_plan`, so by the time the mount's post-order
-//! drain fires the deferred init the handler can read the ref
-//! via `refs::get`). A template containing `pp-for` is left
+//! `interp::scan_children` away. A template containing `pp-for` is left
 //! whole-subtree mount-owned — the v1 emitter skips template
 //! plans when row plans exist (RFC-058 §6.2 layering trade-off).
 //!
@@ -1298,7 +1293,6 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
     host.remove();
 }
 
-/// RFC-058 mount-removal slice — `pp-init` inside a lifted
 /// RFC-058 Phase 4.3 — pp-teleport on `<template>` graduates
 /// into a `StaticTeleportPlan`. The applier resolves the
 /// target selector and clones the template body to it; the

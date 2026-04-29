@@ -7,7 +7,7 @@
 //! 1. A `&'static StaticTemplatePlan` literal describing every
 //!    plan-eligible directive in the template — `pp-text`,
 //!    `pp-html`, `pp-show`, `pp-bind:<attr>`, `pp-on:<event>`,
-//!    `pp-ref`, deferred `pp-init`. Indexed by `node_path:
+//!    `pp-ref`. Indexed by `node_path:
 //!    &'static [u16]` over the cloned-template DOM, matching
 //!    the convention RFC-054 row plans already use.
 //! 2. A "cleaned HTML" string — the template re-serialised
@@ -24,8 +24,7 @@
 //!   mount-owned (council pass 3 amendment).
 //! * Eligible directives: `pp-text`, `pp-html`, `pp-show`,
 //!   `pp-bind:<arg>` / `:<arg>`, `pp-on:<event>` / `@event`
-//!   when every modifier is in the supported set, `pp-ref`,
-//!   `pp-init` (deferred).
+//!   when every modifier is in the supported set, `pp-ref`.
 //! * Whole-subtree boundaries (mount-owned, classifier
 //!   skips the subtree): `pp-for`, `pp-if`, `pp-teleport`,
 //!   `<slot>`, every non-HTML5 tag.

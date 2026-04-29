@@ -25,7 +25,7 @@
 //! * Eligible: native HTML elements only; `pp-text`, `pp-html`,
 //!   `pp-show`, `pp-bind:<attr>` (HTML attrs, not child-component
 //!   props), `pp-on:<event>` with the §6.1 supported modifier
-//!   set, `pp-ref`, `pp-init` (deferred).
+//!   set, `pp-ref`.
 //! * Not eligible (attribute-preserved, mount-owned): every
 //!   directive on or under a non-HTML-native tag, every
 //!   directive on `pp-for` / `pp-if` / `pp-teleport` / `<slot>`
@@ -251,9 +251,6 @@ pub fn record_plan_failure() {
 ///
 /// Behaviour:
 ///
-/// * For each `StaticInit` — enqueue via
-///   [`crate::mount::defer_init_on`] so the handler fires
-///   post-order alongside any mount-discovered `pp-init`.
 /// * For each `StaticRef` — register against the scope's ref
 ///   table via [`crate::refs::register`].
 /// * For each `StaticBinding` — install the matching directive
@@ -298,17 +295,14 @@ pub fn apply_static_plan(
     }
 
     // Order matches the mount's pre-/post-order intuition: refs
-    // first (so a planned `pp-ref` is visible to any planned
-    // `pp-init` further down), then bindings (effects subscribe
-    // before any synchronous trigger), then listeners
-    // (delegation surface ready before user interaction), then
-    // child mounts (RFC-058 Phase 3 — explicit
-    // `mount_child_component` calls before the mount's
+    // first (so any later effect can read the ref table), then
+    // bindings (effects subscribe before any synchronous
+    // trigger), then listeners (delegation surface ready before
+    // user interaction), then child mounts (RFC-058 Phase 3 —
+    // explicit `mount_child_component` calls before the mount's
     // recursive descent reaches each `<custom-tag>`; the
-    // mount's `__pp_mounted` guard makes the discovery a
-    // no-op for tags this loop already mounted), then inits
-    // (enqueued for the mount's post-order drain so the
-    // handler observes child mounts as well as planned refs).
+    // mount's `__pp_mounted` guard makes the discovery a no-op
+    // for tags this loop already mounted).
     for r in plan.refs {
         let Some(el) = resolve(root, r.node_path) else {
             fail("ref", template_name, r.node_path, None);

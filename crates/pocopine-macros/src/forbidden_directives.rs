@@ -104,3 +104,123 @@ fn walk(el: &Element, out: &mut TokenStream, seen: &mut HashSet<&'static str>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::template_parser::parse_strict;
+
+    /// Runs `emit_diagnostics` against `source` and returns the
+    /// raw token-stream string for substring assertions. The
+    /// stringified `compile_error!(...)` carries the diagnostic
+    /// message as a literal, so substring checks are stable
+    /// across `proc_macro2` formatting changes.
+    fn run(source: &str) -> String {
+        let ast = parse_strict(source, "<test>").expect("test source parses");
+        emit_diagnostics(&ast).to_string()
+    }
+
+    #[test]
+    fn pp_cloak_emits_compile_error_with_migration_text() {
+        let out = run(r#"<div pp-cloak>x</div>"#);
+        assert!(
+            out.contains("compile_error"),
+            "pp-cloak must surface a compile_error invocation: {out}"
+        );
+        assert!(
+            out.contains("pp-cloak"),
+            "diagnostic must name the directive so authors find the call site"
+        );
+        assert!(
+            out.contains("RFC 063"),
+            "diagnostic must cite RFC 063 so authors find the migration spec"
+        );
+        assert!(
+            out.contains("synchronous"),
+            "diagnostic must explain why the directive is gone (synchronous mount)"
+        );
+    }
+
+    #[test]
+    fn pp_init_emits_compile_error_with_on_setup_replacement() {
+        let out = run(r#"<div pp-init="seed">x</div>"#);
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("pp-init"));
+        assert!(out.contains("RFC 063"));
+        assert!(
+            out.contains("on_setup"),
+            "diagnostic must point authors at the on_setup lifecycle hook replacement"
+        );
+        assert!(
+            out.contains("handlers"),
+            "diagnostic must reference the #[handlers] block where on_setup lives"
+        );
+    }
+
+    #[test]
+    fn pp_data_emits_compile_error_explaining_auto_stamp() {
+        let out = run(r#"<div pp-data="counter">x</div>"#);
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("pp-data"));
+        assert!(out.contains("RFC 063"));
+        assert!(
+            out.contains("auto-stamps"),
+            "diagnostic must explain that the marker is auto-injected so authors don't try to manually add it back"
+        );
+    }
+
+    #[test]
+    fn pp_html_is_not_forbidden() {
+        // RFC 063 §1: pp-html stays. Surveyed every other modern
+        // web framework — all ship an HTML-string injection
+        // primitive. This test pins that decision: a future
+        // careless edit that adds pp-html to FORBIDDEN fails
+        // here.
+        let out = run(r#"<div pp-html="markdown">x</div>"#);
+        assert!(
+            !out.contains("compile_error"),
+            "pp-html must not be forbidden — every modern web framework \
+             ships an HTML-string injection primitive (Vue v-html, React \
+             dangerouslySetInnerHTML, Svelte @html, Solid innerHTML, Yew \
+             Html::from_html_unchecked). RFC 063 §1 + §4.4."
+        );
+    }
+
+    #[test]
+    fn nested_forbidden_attr_emits_compile_error() {
+        let out = run(r#"<section><span pp-cloak>x</span></section>"#);
+        assert!(
+            out.contains("compile_error"),
+            "scanner must descend into children, not only check root attrs"
+        );
+    }
+
+    #[test]
+    fn duplicate_forbidden_attr_emits_one_diagnostic() {
+        // The `seen` set dedupes by directive name across the
+        // whole template — useful when a template has many sites
+        // of the same forbidden attr and the author shouldn't
+        // get spammed with N copies of the same migration text.
+        let out = run(r#"<div><span pp-cloak>a</span><span pp-cloak>b</span></div>"#);
+        let count = out.matches("compile_error").count();
+        assert_eq!(
+            count, 1,
+            "duplicate forbidden attrs must emit one diagnostic, got {count}"
+        );
+    }
+
+    #[test]
+    fn unrelated_pp_attrs_pass_through() {
+        // Sanity: only the three forbidden directives should
+        // trigger. pp-text / pp-bind / pp-on / pp-html / pp-show
+        // / pp-model / pp-ref / pp-as / pp-for / pp-if /
+        // pp-teleport / pp-slot all stay.
+        let out = run(r#"<div pp-text="x" pp-show="open" :title="t" @click="bump">
+                <span pp-html="md"></span>
+            </div>"#);
+        assert!(
+            !out.contains("compile_error"),
+            "the kept directives must pass through the forbidden scanner cleanly: {out}"
+        );
+    }
+}
