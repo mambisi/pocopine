@@ -304,7 +304,6 @@ impl Drop for SubtreeHandle {
 /// only by discovering route-authored descendants from the static
 /// registry instead of receiving a typed `C`.
 fn mount_pp_app_subtree(host: &Element) {
-    crate::styles::inject_style("__pp_cloak", "[pp-cloak] { display: none !important; }");
     let names = crate::templates::registered_template_names();
     if !names.is_empty() {
         let selector = names.join(",");
