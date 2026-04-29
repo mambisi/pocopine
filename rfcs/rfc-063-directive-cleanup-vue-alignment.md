@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Draft (revised 2026-04-29 — `pp-html` removed from delete bucket) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-28 |
 | **Supersedes** | — (deletes/converges directives from RFC 001, RFC 007, RFC 011) |
@@ -15,10 +15,21 @@ Three-bucket cleanup of the `pp-*` directive surface to align with
 Vue 3 idiom and remove Alpine-era artifacts the post-RFC-061
 architecture obsoletes:
 
-- **Delete** (4 directives): `pp-init`, `pp-cloak`, `pp-data`,
-  `pp-html`. These are pre-`#[handlers]` Alpine patterns or
+- **Delete** (3 directives): `pp-init`, `pp-cloak`, `pp-data`.
+  These are pre-`#[handlers]` Alpine patterns or
   runtime-walker-era workarounds; the new architecture has typed
   replacements.
+- **Keep `pp-html`** (revised 2026-04-29). Every modern web
+  framework ships an HTML-string injection primitive (Vue 3
+  `v-html`, React `dangerouslySetInnerHTML`, Svelte `{@html}`,
+  Solid `innerHTML`, Yew `Html::from_html_unchecked`). The use
+  cases that need it (sanitized markdown output, server-rendered
+  fragments, CMS embeds) are rare-but-load-bearing; removing
+  the primitive puts pocopine at parity with no one. See §4.4
+  for the load-bearing icon rewrite that retires the only
+  current `pp-html` consumer (`pine-icons`'s SVG-string
+  approach), leaving `pp-html` in the framework for the
+  legitimate runtime cases only.
 - **Converge** (3 directives): `pp-let` → folded into
   `pp-slot:name="binding"`; `pp-key` (on `<template>`) → `:key`
   on the row root; `pp-stagger` → `pp-for` modifier. Spelling
@@ -54,13 +65,22 @@ directives addressed are gone:
   documented surface as a public-looking attribute. Renaming
   the internal stamp to `data-pp-scope-id` removes one entry from
   the directive table.
-- **`pp-html`** is `innerHTML` binding. Vue 3 keeps `v-html` but
-  flags it as dangerous. Pocopine has no compelling use case
-  the `#[handlers]` pattern doesn't cover (mount a child
-  component, return a sanitized string from `pp-text`, etc.).
+- **`pp-html` stays** (revised). Surveyed every other modern web
+  framework — all ship an HTML-string injection primitive
+  (Vue `v-html`, React `dangerouslySetInnerHTML`, Svelte
+  `{@html}`, Solid `innerHTML`, Yew `Html::from_html_unchecked`).
+  The use cases (sanitized markdown, server fragments, CMS
+  embeds) are rare-but-real; removing puts pocopine at parity
+  with no one. The only current consumer (PineIcon's SVG-string
+  injection) is itself a legacy pattern — modern icon libraries
+  ship one component per icon (Lucide / Heroicons / Tabler /
+  Phosphor all converged on this). §4.4 specs the PineIcon
+  rewrite that retires this consumer; `pp-html` then exists in
+  the framework for the legitimate runtime cases only.
 
-Each one is ~50-150 lines of macro + applier code. Deletion is
-free wasm-size win on top of RFC 061's bridge removal.
+The other three (`pp-init`, `pp-cloak`, `pp-data`) are
+~50-150 lines of macro + applier code each. Deletion is free
+wasm-size win on top of RFC 061's bridge removal.
 
 ### 2.2 The convergence three are spelled differently from Vue
 
@@ -156,13 +176,6 @@ JS `Reflect::set` rather than as a DOM attribute) stays as the
 performance-path identifier; `data-pp-scope-id` is debug-only
 (emitted in dev builds for devtools, stripped in release).
 
-#### 4.1.4 `pp-html`
-
-**Replacement**: see §4.1.4 migration table — wrap the dynamic
-HTML in a child component, or use `pp-text` with sanitized output.
-
-Compile error with the recommended replacements listed inline.
-
 ### 4.2 Convergences
 
 #### 4.2.1 `pp-let` → `pp-slot:name="binding"`
@@ -255,6 +268,88 @@ Or, if `<pp-app>` lands as `[pp-app]` attribute (RFC 061 Q3),
 `pp-outlet` stays as an attribute for consistency. **Decision
 depends on RFC 061 Q3.**
 
+### 4.4 Retire `pine-icons`'s SVG-string pattern (the only `pp-html` consumer)
+
+`pp-html` stays in the framework (§1, §2.1), but `pine-icons`
+today uses it for SVG injection — a legacy pattern modern icon
+libraries (Lucide, Heroicons, Tabler, Phosphor) abandoned in
+favor of one-component-per-icon. This subsection specs the
+rewrite that brings `pine-icons` to the modern pattern. After
+it lands, `pp-html` has zero workspace consumers — exactly the
+right shape for a primitive that exists only for legitimate
+runtime-trusted-HTML edge cases.
+
+#### 4.4.1 The current shape
+
+```rust
+// crates/pine-icons/src/PineIcon.poco
+<root class="pine-icon" aria-hidden="true" pp-html="svg" :style="size_style"></root>
+```
+
+`PineIcon` takes an SVG string field (`svg`) from a runtime
+icon registry and injects it into its root via `pp-html`. The
+registry is a `HashMap<&str, &str>` populated at app boot;
+icon name lookups happen at render time.
+
+Problems:
+
+- No tree-shaking: an app using 5 icons ships the entire
+  registry (potentially 500+ icons).
+- No type checking: `<pine-icon name="bel" />` (typo) fails
+  silently at runtime.
+- Per-icon parse cost: each render parses the SVG string into
+  DOM via `innerHTML`.
+- Locks `pp-html` as load-bearing instead of an edge-case
+  primitive.
+
+#### 4.4.2 The replacement
+
+One typed `#[component]` per icon, generated at build time
+from a Lucide-format manifest:
+
+```rust
+// generated by `pine-icons` build script, one per icon:
+#[component(template_inline = r#"
+<root class="pine-icon" aria-hidden="true" :style="size_style">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+  </svg>
+</root>
+"#)]
+pub struct PineIconBell { /* size, color, etc. */ }
+```
+
+Authors write `<pine-icon-bell/>` — typed, tree-shakeable,
+no `pp-html`. Same DX as `lucide-react`'s `<Bell />`.
+
+For dynamic icon names (string from CMS), a thin
+`<pine-icon-dynamic name="bell" />` registry component does
+runtime dispatch via `Component::MOUNT_FN` lookup. Still no
+`pp-html`.
+
+#### 4.4.3 Implementation surface
+
+- New `pine-icons/build.rs` — reads
+  `pine-icons/icons/manifest.json` (Lucide format), emits
+  one `#[component]` per icon into a generated module.
+- Delete `pine-icons/src/PineIcon.poco`.
+- Migrate the runtime registry into a typed `PHF_ICONS:
+  &'static phf::Map<&'static str, fn() -> Component>` for
+  the dynamic-name path.
+- Delete the `pp-html` use site.
+
+#### 4.4.4 Acceptance
+
+- `cargo check` succeeds across the workspace with the new
+  per-icon components.
+- Counter / website examples render the same icons as before.
+- Tree-shaking demo: an app using 3 icons produces a smaller
+  binary than today's full-registry-shipping baseline.
+- Workspace `grep 'pp-html'` returns zero hits in `pine-*`
+  source.
+
 ## 5. Migration
 
 ### 5.1 Phase 1 — deprecation warnings (one minor release)
@@ -277,10 +372,13 @@ Ship `cargo pocopine migrate-063` that:
 - rewrites `pp-let` → `pp-slot:name="binding"` (mechanical);
 - rewrites `pp-key` template attribute → `:key` on row root
   (mechanical);
-- rewrites `pp-stagger` to whichever spelling §7 Q1 picks;
-- flags `pp-html` usages with a per-site judgement call (no
-  automatic conversion possible — usually a child component
-  refactor).
+- rewrites `pp-stagger` to whichever spelling §7 Q1 picks.
+
+`pp-html` is **not** rewritten by the codemod — it stays in
+the framework. Authors who were using it (rare; only
+`pine-icons`'s legacy SVG injection) get redirected to §4.4's
+typed-component icon pattern via separate tooling, not the
+syntax codemod.
 
 The codemod runs idempotently and is safe to re-run after
 manual edits.
@@ -314,10 +412,11 @@ The RFC is not implemented until tests cover:
 2. **`pp-outlet` promotion gating** — should it definitely
    promote to `<pp-outlet>` regardless of RFC 061 Q3, or
    stay an attribute if RFC 061 Q3 picks `[pp-app]` attribute?
-3. **`pp-html` last-mile audit** — is there a use case we're
-   missing? Examples scan: zero `pp-html` usages in the
-   workspace today. Library users may have some. Worth a
-   cargo-greppable pre-flight survey before deletion.
+3. **`pp-html` rename to `pp-html-unsafe`** — purely aesthetic;
+   would mirror React's `dangerouslySetInnerHTML` pattern. Same
+   runtime, more accurate name. Not in scope for this RFC; flag
+   for a future syntax-cleanup if the council values the
+   visibility-at-call-site pattern.
 4. **`pp-data`'s debug-build `data-pp-scope-id`** — keep it
    in dev only, or always-emit for devtools simplicity?
    Always-emit is ~1 byte per element of bloat; dev-only is
