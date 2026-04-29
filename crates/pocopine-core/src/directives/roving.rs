@@ -34,7 +34,7 @@ enum Orientation {
     Both,
 }
 
-/// Compiled-path install entry. Called by `apply_static_plan` for
+/// Compiled-path install entry. Called by the compiled plan installer for
 /// each `pp-roving[:<listbox-id>][.<modifier>...]` site the macro
 /// lifted into the template plan.
 pub fn install_opaque(

@@ -283,3 +283,58 @@ The standard Firefox geomean is now inside the requested 211-215 ms
 band and remains between Vue and Yew in the same-session framework
 matrix. The runLots sample is still noisy, so the next performance
 step should be a narrower create/runLots profile before adding LIS.
+
+## Review refresh — 2026-04-30
+
+After the review-prep cleanup and the `pp-as` composed-component fix,
+the counter release build is:
+
+| Measurement | Phase 4 batched mount/clear | Review refresh |
+|---|---:|---:|
+| Raw wasm bytes | 346,617 | 346,766 |
+| Gzip wasm bytes | 146,828 | 147,662 |
+
+Commands:
+
+```text
+wasm-pack build --release --target web examples/counter
+wc -c examples/counter/pkg/counter_bg.wasm
+gzip -c examples/counter/pkg/counter_bg.wasm | wc -c
+```
+
+Firefox same-session all-harness refresh:
+
+| Framework | Geomean ms |
+|---|---:|
+| Vue | 202.17 |
+| pocopine | 216.99 |
+| Yew | 225.07 |
+| Leptos | 281.45 |
+
+The helper's `--all` set does not include vanilla, so vanilla was
+rerun separately and then pocopine was rerun immediately afterward
+without rebuilding:
+
+| Framework | Geomean ms | vs vanilla |
+|---|---:|---:|
+| vanilla | 186.97 | 1.00x |
+| pocopine | 212.04 | 1.13x |
+
+Pocopine action means from the tight rerun:
+
+```text
+run(1000)                202.21
+update every 10th        157.01
+select                   122.47
+swapRows                 153.96
+remove                   164.94
+clear                    186.68
+runLots(10000)           846.74
+add(1000)                261.83
+geomean                  212.04
+```
+
+Review conclusion: the final same-session control rerun remains in
+the requested 211-215 ms band. The broader all-harness refresh still
+places pocopine between Vue and Yew, with the expected browser noise
+showing mostly in `clear` and `runLots`.

@@ -3,7 +3,7 @@
 //! RFC-058 Phase 6.5 retired the runtime mount, the
 //! `DirectiveCall`-based dispatch loop, and the directive registry.
 //! Every directive is now reached through a typed `install` entry
-//! invoked by the macro-emitted `apply_static_plan` path; this
+//! invoked by macro-emitted compiled install entries; this
 //! module is just the namespace that groups those entries together.
 
 pub mod anchor;

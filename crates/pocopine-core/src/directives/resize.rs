@@ -20,7 +20,7 @@ use crate::scope::invoke_handler;
 /// [`release`].
 const OBS_KEY: &str = "__pp_resize_obs";
 
-/// Compiled-path install entry. Called by `apply_static_plan` for
+/// Compiled-path install entry. Called by the compiled plan installer for
 /// each `pp-resize="handler"` site the macro lifted into the
 /// template plan.
 pub fn install_opaque(

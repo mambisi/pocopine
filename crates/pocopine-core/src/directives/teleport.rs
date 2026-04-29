@@ -57,7 +57,7 @@ pub fn host_of(el: &Element) -> Option<Element> {
 /// the `pp-if` co-occurrence check (the macro only graduates
 /// pp-teleport sites that pass that check at compile time).
 ///
-/// Called by `apply_static_plan` for every `StaticTeleportPlan`
+/// Called by the compiled plan installer for every `StaticTeleportPlan`
 /// entry the classifier emitted. RFC-058 Phase 4.3 — extracted
 /// so the runtime mount dispatch path and the plan applier
 /// share one mount body. The owning scope still pins onto the

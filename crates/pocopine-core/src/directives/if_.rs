@@ -36,7 +36,7 @@ use crate::reactive::effect;
 /// expression parse — both already done at compile time by the
 /// macro.
 ///
-/// Called by `apply_static_plan` for every `StaticIfPlan` entry
+/// Called by the compiled plan installer for every `StaticIfPlan` entry
 /// the classifier emitted. RFC-058 Phase 4.1a — extracted so the
 /// runtime mount dispatch path and the plan applier share one
 /// effect-install body instead of growing two parallel
@@ -113,7 +113,7 @@ pub fn install_eval(
                 // RFC-058 Phase 4.1d body fragment fast-path —
                 // when the macro emitted a body fragment, build
                 // the clone root via that fragment (which calls
-                // `apply_static_plan` against the parent scope
+                // generated fragment install against the parent scope
                 // to install every directive without going
                 // through `mount::walk`). Otherwise fall back
                 // to the legacy `clone_template_body` +

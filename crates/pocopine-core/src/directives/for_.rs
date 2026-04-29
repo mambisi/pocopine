@@ -230,7 +230,7 @@ fn restore_leaver_layout(entry: &PrevItem) {
 /// `pp-for` parse + `pp-key` / `pp-stagger` attribute reads —
 /// the macro provides everything pre-resolved.
 ///
-/// Called by `apply_static_plan` for every `StaticForPlan`
+/// Called by the compiled plan installer for every `StaticForPlan`
 /// entry the classifier emitted. RFC-058 Phase 4.2 — extracted
 /// so the runtime mount dispatch path and the plan applier
 /// share one keyed/naive selection body. Coexists with the
@@ -1766,12 +1766,12 @@ fn run_keyed(
                 crate::profiler::mount::record_generic_row_mounted();
                 // RFC-058 Phase 6.5 — generic (non-row-plan)
                 // rows either came from `body_fn` (already bound by
-                // `apply_static_plan` inside the body fragment fn)
+                // generated installs inside the body fragment fn)
                 // or from `clone_template_body` (unbound). For
                 // both, fire lifecycle on the row + scan for
                 // registered custom tags inside (a no-op for
                 // body_fn rows since child mounts already ran
-                // during the body fragment's `apply_static_plan`,
+                // during the body fragment's generated install,
                 // but cheap).
                 mount::finalize_compiled_subtree(el);
             }

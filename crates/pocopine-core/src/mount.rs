@@ -21,7 +21,7 @@
 //!
 //! - [`mount_component`], [`mount_child_component`],
 //!   [`mount_child_component_with_slots`] — the per-component
-//!   mount entry called by `apply_static_plan`.
+//!   mount entry called by macro-emitted child-mount entries.
 //! - Scope / proxy stamping helpers used by `pp-for` rows,
 //!   `pp-if` bodies, `pp-teleport` portals, and slot fragments.
 //! - Lifecycle dispatch helpers shared between `mount_component`
@@ -1225,7 +1225,7 @@ fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
 
 /// Finish a compiled subtree without running directive discovery.
 ///
-/// Generated fragment paths call this after `apply_static_plan`
+/// Generated fragment paths call this after generated plan code
 /// has installed every known binding/listener/controller. It
 /// preserves the post-order observable work — `on_mount`,
 /// `on_ready`, and the re-walk guard — but intentionally does
