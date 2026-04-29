@@ -689,6 +689,37 @@ pub fn swap_list_indices_inline(field: &str, a: usize, b: usize) {
     crate::reactive::trigger(sid, field);
 }
 
+/// Remove one element from a cached JS Array for a Vec-like field,
+/// preserving object identity for every surviving row. Call from
+/// inside a handler after removing the same index from the Rust Vec.
+pub fn remove_list_at_inline(field: &str, idx: usize) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            let array = js_sys::Array::from(&arr);
+            let len = array.length();
+            let idx = idx as u32;
+            if idx < len {
+                if let Ok(splice) = Reflect::get(&arr, &JsValue::from_str("splice")).and_then(|v| {
+                    v.dyn_into::<Function>()
+                        .map_err(|_| JsValue::from_str("Array.splice is not callable"))
+                }) {
+                    let _ = splice.call2(
+                        &arr,
+                        &JsValue::from_f64(idx as f64),
+                        &JsValue::from_f64(1.0),
+                    );
+                }
+            }
+        }
+        keep_field_fresh(sid, field);
+    }
+    crate::reactive::trigger(sid, field);
+}
+
 /// Append serialized rows into a cached JS Array for a Vec-like field.
 /// Call from inside a handler after extending the Rust Vec. Existing
 /// JS row objects remain in place; only the appended range is

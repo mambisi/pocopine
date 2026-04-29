@@ -614,6 +614,61 @@ impl PlanForBodyHost {
     }
 }
 
+/// RFC-064 Phase 4 — keyed compiled row fixture that exercises
+/// the specialized single-remove and two-swap reconcile paths.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Rfc064KeyedRow {
+    id: u32,
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rfc064-keyed-fast-host",
+    template_inline = r#"<div class="r64k-root">
+        <button class="r64k-swap" pp-on:click="swap_rows">swap</button>
+        <button class="r64k-remove" pp-on:click="remove_second">remove</button>
+        <ul>
+          <template pp-for="row in rows" pp-key="row.id">
+            <li class="r64k-row" pp-text="row.label"></li>
+          </template>
+        </ul>
+    </div>"#
+)]
+struct Rfc064KeyedFastHost {
+    rows: Vec<Rfc064KeyedRow>,
+}
+
+#[handlers]
+impl Rfc064KeyedFastHost {
+    pub fn on_setup(&mut self) {
+        self.rows = vec![
+            Rfc064KeyedRow {
+                id: 1,
+                label: "one".into(),
+            },
+            Rfc064KeyedRow {
+                id: 2,
+                label: "two".into(),
+            },
+            Rfc064KeyedRow {
+                id: 3,
+                label: "three".into(),
+            },
+        ];
+    }
+
+    pub fn swap_rows(&mut self) {
+        self.rows.swap(0, 2);
+        pocopine::swap_list_indices_inline("rows", 0, 2);
+    }
+
+    pub fn remove_second(&mut self) {
+        self.rows.remove(1);
+        pocopine::remove_list_at_inline("rows", 1);
+    }
+}
+
 /// RFC-058 Phase 4.1d — pp-if with a body that carries `pp-text`
 /// + `@click` against the parent scope. The body subtree
 /// qualifies for fragment lifting (HTML5-native, plan-eligible
@@ -715,6 +770,7 @@ fn register_all() {
     PlanTeleportHost::register();
     PlanIfBodyHost::register();
     PlanForBodyHost::register();
+    Rfc064KeyedFastHost::register();
     PlanSlotDynamicHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
@@ -1016,6 +1072,55 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
         "native-only lifted pp-for bodies should not use mount fallback",
     );
 
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn rfc064_keyed_remove_and_swap_reuse_dom_nodes() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+
+    let initial = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(initial.length(), 3);
+    let one = initial.item(0).unwrap();
+    let two = initial.item(1).unwrap();
+    let three = initial.item(2).unwrap();
+
+    let swap = host.query_selector(".r64k-swap").unwrap().unwrap();
+    swap.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let swapped = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(swapped.length(), 3);
+    assert!(swapped.item(0).unwrap().is_same_node(Some(&three)));
+    assert!(swapped.item(1).unwrap().is_same_node(Some(&two)));
+    assert!(swapped.item(2).unwrap().is_same_node(Some(&one)));
+    assert_eq!(
+        swapped.item(0).unwrap().text_content().as_deref(),
+        Some("three"),
+    );
+
+    let remove = host.query_selector(".r64k-remove").unwrap().unwrap();
+    remove.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let removed = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(removed.length(), 2);
+    assert!(removed.item(0).unwrap().is_same_node(Some(&three)));
+    assert!(removed.item(1).unwrap().is_same_node(Some(&one)));
+    assert_eq!(
+        removed.item(0).unwrap().text_content().as_deref(),
+        Some("three"),
+    );
+    assert_eq!(
+        removed.item(1).unwrap().text_content().as_deref(),
+        Some("one"),
+    );
+
+    assert_eq!(plan_failure_count(), 0);
     host.remove();
 }
 

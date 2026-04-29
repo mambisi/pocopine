@@ -176,3 +176,56 @@ prepend diagnostic. Do not add LIS yet: the profile still shows
 reverse-order reorder as a DOM-movement case with little stable
 subsequence to preserve, and the standard jsbench path is already
 back at baseline.
+
+## Phase 4 Checkpoint — Remove/Swap Fast Paths
+
+Implemented after the head/tail checkpoint:
+
+- `remove_list_at_inline`: targeted cache helper used by the
+  jsbench harness after Rust-side `Vec::remove`, preserving JS row
+  object identity for surviving rows with native `Array.splice`;
+- single-remove fast path: when the new array is exactly the prior
+  keyed array with one identity missing, update surviving loop
+  metadata, remove the old DOM row, and skip keyed-map rebuild;
+- two-swap fast path: when exactly two row identities exchanged
+  positions, update those two loop states and issue the two DOM
+  inserts directly, skipping the generic keyed-map/reorder path;
+- both reconcile fast paths are limited to compiled row plans and
+  bail out for leaving rows or transition subtrees.
+
+Counter size remains unchanged from the head/tail checkpoint:
+
+| Measurement | RFC 062 baseline | Phase 3 | Phase 4 remove/swap |
+|---|---:|---:|---:|
+| Raw wasm bytes | 347,684 | 346,617 | 346,617 |
+| Gzip wasm bytes | 147,045 | 146,821 | 146,828 |
+
+Same-session Firefox standard jsbench, with vanilla rerun as the
+control baseline:
+
+| Framework | Geomean ms | vs vanilla |
+|---|---:|---:|
+| vanilla | 185.78 | 1.00x |
+| Vue | 206.46 | 1.11x |
+| pocopine | 222.43 | 1.20x |
+| Yew | 228.44 | 1.23x |
+
+Pocopine action means from that run:
+
+```text
+run(1000)                204.78
+update every 10th        153.81
+select                   129.22
+swapRows                 191.40
+remove                   170.33
+clear                    199.43
+runLots(10000)           841.01
+add(1000)                269.28
+geomean                  222.43
+```
+
+Decision after checkpoint: keep the specialized remove/swap paths.
+They move the standard Firefox geomean below the same-session Yew
+result without adding LIS complexity. Remove remains noisy and still
+above vanilla/Vue/Yew in this sample, so the next optimization should
+profile remove substeps rather than add a broad reorder algorithm.

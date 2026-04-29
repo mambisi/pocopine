@@ -164,6 +164,7 @@ impl JsBenchApp {
         self.measure("remove", |s| {
             if let Some(idx) = s.rows.iter().position(|row| row.id == id) {
                 s.rows.remove(idx);
+                pocopine::remove_list_at_inline("rows", idx);
             }
             if s.selected_id == Some(id) {
                 s.selected_id = None;
