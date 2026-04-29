@@ -17,6 +17,10 @@ use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use wasm_bindgen::JsValue;
+use web_sys::Element;
+
+use crate::reactive::ScopeId;
 use crate::scope::Scope;
 use crate::templates_plan::StaticTemplatePlan;
 
@@ -25,11 +29,18 @@ use crate::templates_plan::StaticTemplatePlan;
 /// erased and typed forms), and returns the scope.
 pub type ComponentCtor = fn() -> Scope;
 
+/// RFC 062 Phase 1 — per-component template mount entry.
+/// Initially every macro-emitted component points this at the
+/// default [`crate::app::Component::mount_template`] shim. Later
+/// phases replace it with an unrolled specialized function.
+pub type ComponentMountFn = fn(&Element, ScopeId, &JsValue);
+
 /// Kept as a public type so users with their own registration path have
 /// something to hand back to the runtime.
 pub struct ComponentEntry {
     pub name: &'static str,
     pub ctor: ComponentCtor,
+    pub mount_template: Option<ComponentMountFn>,
 }
 
 /// Snapshot of a registered canonical entry. Aliases resolve to the
@@ -39,6 +50,7 @@ pub struct RegisteredComponent {
     pub canonical: &'static str,
     pub owner: &'static str,
     pub ctor: ComponentCtor,
+    pub mount_template: Option<ComponentMountFn>,
 }
 
 /// Why a registration call failed. The variants distinguish *what* the
@@ -131,6 +143,7 @@ pub struct ComponentVTable {
     pub register: fn(),
     pub template_html: Option<&'static str>,
     pub plan: Option<&'static StaticTemplatePlan>,
+    pub mount_template: Option<ComponentMountFn>,
 }
 
 /// Install the active static registry for phf-first runtime
@@ -205,6 +218,15 @@ pub fn mark_registered<T: 'static>() -> bool {
 /// `owner` is the macro-generated provenance label — typically
 /// `concat!(module_path!(), "::", stringify!(StructIdent))`.
 pub fn register_component(canonical: &'static str, owner: &'static str, ctor: ComponentCtor) {
+    register_component_with_mount(canonical, owner, ctor, None);
+}
+
+pub fn register_component_with_mount(
+    canonical: &'static str,
+    owner: &'static str,
+    ctor: ComponentCtor,
+    mount_template: Option<ComponentMountFn>,
+) {
     REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         // alias-by-this-name owned by someone else first wins
@@ -238,6 +260,7 @@ pub fn register_component(canonical: &'static str, owner: &'static str, ctor: Co
                 canonical,
                 owner,
                 ctor,
+                mount_template,
             },
         );
     });
@@ -313,6 +336,21 @@ pub fn instantiate(name: &str) -> Option<Scope> {
         if let Some(&(canon, _)) = reg.aliases.get(name) {
             if let Some(entry) = reg.canonical.get(canon) {
                 return Some((entry.ctor)());
+            }
+        }
+        None
+    })
+}
+
+pub fn mount_template_for(name: &str) -> Option<ComponentMountFn> {
+    REGISTRY.with(|r| {
+        let reg = r.borrow();
+        if let Some(entry) = reg.canonical.get(name) {
+            return entry.mount_template;
+        }
+        if let Some(&(canon, _)) = reg.aliases.get(name) {
+            if let Some(entry) = reg.canonical.get(canon) {
+                return entry.mount_template;
             }
         }
         None
