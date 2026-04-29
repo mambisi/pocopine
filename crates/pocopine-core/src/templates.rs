@@ -5,8 +5,9 @@
 //! through [`inject_pp_data`] so the mount can recognise the template
 //! root by its `pp-data` attribute without authors having to type one.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wasm_bindgen::JsCast;
 use web_sys::{DocumentFragment, HtmlTemplateElement};
@@ -30,14 +31,16 @@ pub fn register_template(name: impl Into<String>, html: impl Into<String>) {
     TEMPLATES.with(|t| t.borrow_mut().insert(name.into(), html.into()));
 }
 
-/// Fetch a registered template. Returns an owned `String` so the mount can
-/// clone into the DOM without locking the registry.
-pub fn template_for(name: &str) -> Option<String> {
+/// Fetch a registered template. Static app registries return a
+/// borrowed template; thread-local fallback registrations return
+/// an owned clone so callers never hold the registry borrow while
+/// touching the DOM.
+pub fn template_for(name: &str) -> Option<Cow<'static, str>> {
     if let Some(html) = crate::registry::active_component_vtable(name).and_then(|v| v.template_html)
     {
-        return Some(html.to_string());
+        return Some(Cow::Borrowed(html));
     }
-    TEMPLATES.with(|t| t.borrow().get(name).cloned())
+    TEMPLATES.with(|t| t.borrow().get(name).cloned().map(Cow::Owned))
 }
 
 /// RFC-058 Phase 6.4 — clone a registered template's content into
@@ -80,10 +83,7 @@ pub fn clear_template_element_cache_for_test() {
 }
 
 pub fn is_registered(name: &str) -> bool {
-    if crate::registry::active_component_vtable(name)
-        .and_then(|v| v.template_html)
-        .is_some()
-    {
+    if crate::registry::active_has_template(name) {
         return true;
     }
     TEMPLATES.with(|t| t.borrow().contains_key(name))
@@ -100,16 +100,13 @@ pub fn is_registered(name: &str) -> bool {
 pub fn registered_template_names() -> Vec<String> {
     let mut names: Vec<String> = crate::registry::active_component_names()
         .into_iter()
-        .filter(|name| {
-            crate::registry::active_component_vtable(name)
-                .and_then(|v| v.template_html)
-                .is_some()
-        })
+        .filter(|name| crate::registry::active_has_template(name))
         .map(str::to_string)
         .collect();
+    let mut seen: HashSet<String> = names.iter().cloned().collect();
     TEMPLATES.with(|t| {
         for name in t.borrow().keys() {
-            if !names.iter().any(|existing| existing == name) {
+            if seen.insert(name.clone()) {
                 names.push(name.clone());
             }
         }
