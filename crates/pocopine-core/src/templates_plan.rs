@@ -47,6 +47,7 @@ use crate::directives::for_plan::{
     StaticInterp, StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef,
     StaticSlotOutlet, StaticTeleportPlan,
 };
+use crate::directives::interp::PlannedSegment;
 use crate::directives::{self};
 use crate::expr;
 use crate::reactive::ScopeId;
@@ -134,6 +135,17 @@ pub struct StaticTemplatePlan {
     /// without the runtime mount. Component-target `pp-model`
     /// is on `StaticChildMount` instead.
     pub native_models: &'static [StaticNativeModel],
+}
+
+/// Captured interpolation target for RFC 062 specialized mount
+/// bodies. The macro resolves every target first, then installs
+/// them as a second pass to preserve the generic applier's text
+/// index stability guarantee.
+#[doc(hidden)]
+pub struct StaticInterpTarget {
+    pub parent: Element,
+    pub text: web_sys::Text,
+    pub segments: &'static [PlannedSegment],
 }
 
 // ─── registry ────────────────────────────────────────────────────
@@ -771,6 +783,109 @@ pub fn install_static_if_plan(
 #[doc(hidden)]
 pub fn install_static_init(el: &Element, scope_id: ScopeId, entry: &'static StaticInit) {
     crate::mount::defer_init_on(el, scope_id, entry.expr_src);
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies to snapshot `<slot>` outlets before later
+/// materialisation mutates element-child positions.
+#[doc(hidden)]
+pub fn capture_static_slot_outlet(
+    el: &Element,
+    entry: &'static StaticSlotOutlet,
+    template_name: &str,
+) -> Option<Element> {
+    if el.local_name() != "slot" {
+        fail(
+            "slot-outlet-tag",
+            template_name,
+            entry.node_path,
+            Some(entry.name),
+        );
+        return None;
+    }
+    Some(el.clone())
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies after every path-based entry has resolved.
+#[doc(hidden)]
+pub fn materialize_static_slot_outlet(el: &Element) {
+    crate::mount::materialize_compiled_slot_outlet(el);
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies for allowlisted runtime-only DOM directives.
+#[doc(hidden)]
+pub fn install_static_opaque_directive(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticOpaqueDirective,
+    template_name: &str,
+) {
+    let modifiers: Vec<String> = entry.modifiers.iter().map(|s| (*s).to_string()).collect();
+    if !dispatch_opaque(
+        entry.name,
+        el,
+        entry.arg,
+        &modifiers,
+        entry.value,
+        scope_id,
+        proxy,
+    ) {
+        fail(
+            "opaque-directive-lookup",
+            template_name,
+            entry.node_path,
+            Some(entry.name),
+        );
+    }
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies to snapshot interpolation text nodes before any
+/// planned target mutates sibling text-node indexes.
+#[doc(hidden)]
+pub fn capture_static_interp_target(
+    el: &Element,
+    entry: &'static StaticInterp,
+    _template_name: &str,
+) -> Option<StaticInterpTarget> {
+    let target = directives::interp::resolve_text_target(el, entry.text_index as usize)?;
+    Some(StaticInterpTarget {
+        parent: el.clone(),
+        text: target,
+        segments: entry.segments,
+    })
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies after every interpolation target has been captured.
+#[doc(hidden)]
+pub fn install_static_interp_target(target: &StaticInterpTarget, proxy: &JsValue) {
+    directives::interp::install_planned_target(
+        &target.parent,
+        proxy,
+        &target.text,
+        target.segments,
+    );
+}
+
+/// RFC 062 Phase 3 helper used by macro-specialized mount
+/// bodies for native `pp-model`.
+#[doc(hidden)]
+pub fn install_static_native_model(
+    el: &Element,
+    proxy: &JsValue,
+    entry: &'static StaticNativeModel,
+) {
+    directives::model::install_native(
+        el,
+        proxy,
+        entry.expr_src.to_string(),
+        entry.number,
+        entry.lazy,
+    );
 }
 
 fn install_opaque_directives(

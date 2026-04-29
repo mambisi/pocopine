@@ -994,6 +994,29 @@ async fn rfc062_threshold_and_force_modes_choose_expected_path() {
     forced.remove();
 }
 
+#[wasm_bindgen_test]
+async fn rfc062_specializes_slot_interp_opaque_and_native_model_entries() {
+    register_all();
+    let fixtures = [
+        "<plan-slot-host-static></plan-slot-host-static>",
+        "<plan-interp-host></plan-interp-host>",
+        "<plan-opaque-directive-host></plan-opaque-directive-host>",
+        "<start-compiled-model-host></start-compiled-model-host>",
+    ];
+
+    for html in fixtures {
+        pocopine::__private::reset_apply_static_plan_count();
+        let host = mount(html);
+        tick().await;
+        assert_eq!(
+            pocopine::__private::apply_static_plan_count(),
+            0,
+            "{html} should use the RFC 062 specialized mount path",
+        );
+        host.remove();
+    }
+}
+
 /// A planned `pp-text` whose bound value contains literal
 /// `{ ... }` braces must render the braces as-is. The macro
 /// stamps `data-pp-text-managed` on the carrier element so the
