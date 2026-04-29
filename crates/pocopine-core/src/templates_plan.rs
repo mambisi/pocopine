@@ -803,7 +803,24 @@ pub fn stamp_if_body(
     let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
     let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
     apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
-    Some(root)
+    if root.parent_node().is_some() {
+        return Some(root);
+    }
+
+    // A body rooted at `<slot>` is transparent: slot
+    // materialisation replaces the root element while the body is
+    // still detached. Return the materialised replacement so
+    // `pp-if` inserts and later removes the live branch root,
+    // not the stale slot element that has already been consumed.
+    let kids = content.child_nodes();
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            if let Ok(el) = n.dyn_into::<Element>() {
+                return Some(el);
+            }
+        }
+    }
+    None
 }
 
 fn fail(kind: &str, template_name: &str, node_path: &[u16], expr_src: Option<&str>) {
