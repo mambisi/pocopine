@@ -535,6 +535,7 @@ impl AnalysisCtx {
             || !self.slot_outlets.is_empty()
             || !self.opaque_directives.is_empty()
             || !self.interps.is_empty()
+            || !self.native_models.is_empty()
     }
 
     fn entry_count(&self) -> usize {
@@ -553,18 +554,13 @@ impl AnalysisCtx {
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
-        // Phase 2 specializes path-local entries. Entries that
-        // depend on grouped ordering or post-slot DOM shape stay
-        // on the generic applier until the generated ABI covers
-        // those cases explicitly.
-        if !self.slot_outlets.is_empty()
-            || !self.opaque_directives.is_empty()
-            || !self.interps.is_empty()
-            || !self.native_models.is_empty()
-        {
-            return None;
-        }
-
+        let slot_capacity = self.slot_outlets.len();
+        let interp_capacity = self.interps.len();
+        let slot_outlets = self
+            .slot_outlets
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_slot_outlet(idx, &entry.node_path));
         let refs = self
             .refs
             .iter()
@@ -605,9 +601,44 @@ impl AnalysisCtx {
             .iter()
             .enumerate()
             .map(|(idx, entry)| emit_specialized_init(idx, &entry.node_path));
+        let materialize_slots = (0..self.slot_outlets.len()).map(|idx| {
+            let idx = syn::Index::from(idx);
+            quote! {
+                ::pocopine::__private::materialize_static_slot_outlet(&__poc_slot_outlets[#idx]);
+            }
+        });
+        let opaque_directives = self
+            .opaque_directives
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_opaque_directive(idx, &entry.node_path));
+        let interps = self
+            .interps
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_interp(idx, &entry.node_path));
+        let install_interps = (0..self.interps.len()).map(|idx| {
+            let idx = syn::Index::from(idx);
+            quote! {
+                ::pocopine::__private::install_static_interp_target(
+                    &__poc_interp_targets[#idx],
+                    proxy,
+                );
+            }
+        });
+        let native_models = self
+            .native_models
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_native_model(idx, &entry.node_path));
 
         Some(quote! {
             let __poc_plan = <Self>::__POC_TEMPLATE_PLAN;
+            let mut __poc_slot_outlets: ::std::vec::Vec<::pocopine::__private::web_sys::Element> =
+                ::std::vec::Vec::with_capacity(#slot_capacity);
+            let mut __poc_interp_targets: ::std::vec::Vec<::pocopine::__private::StaticInterpTarget> =
+                ::std::vec::Vec::with_capacity(#interp_capacity);
+            #(#slot_outlets)*
             #(#refs)*
             #(#bindings)*
             #(#listeners)*
@@ -616,6 +647,11 @@ impl AnalysisCtx {
             #(#teleport_plans)*
             #(#if_plans)*
             #(#inits)*
+            #(#materialize_slots)*
+            #(#opaque_directives)*
+            #(#interps)*
+            #(#install_interps)*
+            #(#native_models)*
         })
     }
 
@@ -926,6 +962,68 @@ fn emit_specialized_init(idx: usize, path: &[u16]) -> TokenStream {
             &__poc_el,
             scope_id,
             &__poc_plan.inits[#idx],
+        );
+    }
+}
+
+fn emit_specialized_slot_outlet(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        if let ::core::option::Option::Some(__poc_slot) =
+            ::pocopine::__private::capture_static_slot_outlet(
+                &__poc_el,
+                &__poc_plan.slot_outlets[#idx],
+                __poc_template_name,
+            )
+        {
+            __poc_slot_outlets.push(__poc_slot);
+        }
+    }
+}
+
+fn emit_specialized_opaque_directive(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_opaque_directive(
+            &__poc_el,
+            scope_id,
+            proxy,
+            &__poc_plan.opaque_directives[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_interp(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        if let ::core::option::Option::Some(__poc_target) =
+            ::pocopine::__private::capture_static_interp_target(
+                &__poc_el,
+                &__poc_plan.interps[#idx],
+                __poc_template_name,
+            )
+        {
+            __poc_interp_targets.push(__poc_target);
+        }
+    }
+}
+
+fn emit_specialized_native_model(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_native_model(
+            &__poc_el,
+            proxy,
+            &__poc_plan.native_models[#idx],
         );
     }
 }
