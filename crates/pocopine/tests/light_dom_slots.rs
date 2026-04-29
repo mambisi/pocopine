@@ -10,7 +10,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::{window, Element};
+use web_sys::{window, Element, HtmlElement};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -69,6 +69,34 @@ struct LdsDoubleHost {}
 
 #[handlers]
 impl LdsDoubleHost {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "lds-if-slot-host",
+    template_inline = r#"
+<section class="lds-if-slot-host">
+  <button class="lds-toggle" @click="toggle">toggle</button>
+  <template pp-if="open">
+    <slot></slot>
+  </template>
+</section>
+"#,
+    uses = [LdsChild],
+)]
+struct LdsIfSlotHost {
+    open: bool,
+}
+
+#[handlers]
+impl LdsIfSlotHost {
+    pub fn on_setup(&mut self) {
+        self.open = true;
+    }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+}
 
 fn doc() -> web_sys::Document {
     window().unwrap().document().unwrap()
@@ -168,6 +196,45 @@ async fn captured_light_dom_slot_is_cloned_for_each_matching_outlet() {
             .unwrap()
             .is_some(),
         "second default outlet received a mounted child",
+    );
+
+    handle.unmount();
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn captured_light_dom_slot_inside_pp_if_replays_initially_and_after_reopen() {
+    pocopine::__private::reset_plan_failure_count();
+    let (host, _root, handle) = mount_with_light_dom::<LdsIfSlotHost>("<lds-child></lds-child>");
+    tick().await;
+
+    assert!(
+        host.query_selector(".lds-child[data-mounted=\"yes\"]")
+            .unwrap()
+            .is_some(),
+        "captured default slot inside an initially true pp-if body should materialize",
+    );
+
+    let toggle = host.query_selector(".lds-toggle").unwrap().unwrap();
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(
+        host.query_selector(".lds-child").unwrap().is_none(),
+        "captured default slot should unmount when pp-if closes",
+    );
+
+    toggle.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(
+        host.query_selector(".lds-child[data-mounted=\"yes\"]")
+            .unwrap()
+            .is_some(),
+        "captured default slot should replay when pp-if reopens",
+    );
+    assert_eq!(
+        pocopine::__private::plan_failure_count(),
+        0,
+        "root slot in a lifted pp-if body must resolve through the body plan",
     );
 
     handle.unmount();

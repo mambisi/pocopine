@@ -328,8 +328,7 @@ pub struct StaticSlotOutlet {
 /// parent scope) instead of going through the legacy
 /// `clone_template_body` + `mount::walk` path. `None` falls
 /// back to today's clone+walk — the body had something Phase
-/// 4.1d's v1 envelope can't handle (nested custom tag,
-/// `<slot>`, nested controller, `pp-init`, etc.).
+/// 4.1d's v1 envelope can't handle.
 #[doc(hidden)]
 pub struct StaticIfPlan {
     pub template_node_path: &'static [u16],
