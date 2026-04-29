@@ -146,9 +146,9 @@ fn bulk_clear_safe<'a>(
 fn bulk_clear_compiled(parent_el: &Element, entries: &[PrevItem], template_el: &Element) -> bool {
     let pool_count = entries.len();
     // Compiled row plans are emitted only for the macro envelope
-    // that rejects transition attributes. Re-scanning every row
-    // subtree here made 10K-row clear pay O(N) querySelector work
-    // before the actual bulk clear.
+    // that rejects transition attributes. That makes a per-row
+    // transition scan redundant here; generic rows still use the
+    // transition-aware removal path.
     if pool_count == 0 || !bulk_clear_safe(parent_el, entries.iter(), template_el, pool_count) {
         return false;
     }
