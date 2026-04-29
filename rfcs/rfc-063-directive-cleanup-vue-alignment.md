@@ -421,3 +421,39 @@ The RFC is not implemented until tests cover:
    in dev only, or always-emit for devtools simplicity?
    Always-emit is ~1 byte per element of bloat; dev-only is
    one more conditional in the codegen path.
+
+## 8. Implementation status
+
+Tier 1 deletes shipped on `wip/rfc-062` (eligible for the next
+PR cut against `main`):
+
+| Directive | Commit | Status |
+|---|---|---|
+| `pp-cloak` | 9d4b733 | ✅ Runtime style deleted; macro errors on author use |
+| `pp-init` | e117589 | ✅ Directive module + plan IR + 3 fixtures + macro emit deleted; macro errors on author use |
+| `pp-data` | 7e08eee | ✅ Author-facing surface forbidden; macro auto-stamp continues; internal rename to `data-pp-scope-id` is a follow-up cleanup PR |
+
+Mechanism: a new `forbidden_directives` macro module walks
+each template AST at expansion time and emits `compile_error!`
+for entries in a `FORBIDDEN: &[(&str, &str)]` table. Adding a
+new directive is the entire migration step — the walker
+handles diagnostic emission. Module-level docs cite RFC 063
+as the spec source.
+
+`pp-html` is **explicitly excluded** from the FORBIDDEN
+table (documented in the module-level doc-comment) — every
+modern web framework ships an HTML-string injection primitive
+(Vue `v-html`, React `dangerouslySetInnerHTML`, Svelte
+`{@html}`, Solid `innerHTML`, Yew `Html::from_html_unchecked`).
+See §1 + §4.4.
+
+### Deferred to follow-up PRs
+
+| Item | Reason |
+|---|---|
+| `pp-data` → `data-pp-scope-id` internal rename | Pure internal cleanup; touches `inject_pp_data` + runtime read site + `phf_lookup.rs` test assertion + macro-internal comments. Not a user-facing change so doesn't need to ship with the Tier 1 deletes |
+| `pp-let` → `pp-slot:name="binding"` (§4.2.1) | Macro parser change + Pine fixture migration (`PlanScopedSlotHost.html` + Pine compounds). Needs codemod first |
+| `pp-key` → `:key` on row root (§4.2.2) | Same — macro parser change + sweep of every Pine `pp-for pp-key` site |
+| `pp-stagger` spelling (§4.2.3) | Blocks on §7 Q1 council decision |
+| `pp-outlet` → `<pp-outlet>` (§4.3.1) | Blocks on RFC 061 Q3 council decision |
+| `pine-icons` rewrite (§4.4) | Needs Lucide-format manifest + build.rs scaffolding; independent Pine improvement |
