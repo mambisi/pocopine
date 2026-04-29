@@ -20,12 +20,12 @@ pub use pocopine_core::{
     run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store,
     swap_list_indices_inline, this, trigger_scope, verify_registry, watch, watch_field,
     watch_field_scoped, watch_scope_field, watch_scope_field_now, watch_scope_field_scoped,
-    watch_scoped, App, Body, Component, ComponentState, ComponentVTable, Computed, ContextKey,
-    ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl,
-    Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
-    ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope,
-    ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle,
-    SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    watch_scoped, App, Body, Component, ComponentMountFn, ComponentState, ComponentVTable,
+    Computed, ContextKey, ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed,
+    Emit, Handle, HostEl, Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch,
+    NearestParent, Parent, ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind,
+    RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId,
+    Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -57,12 +57,12 @@ pub mod __private {
     };
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
-        inject_style, mark_registered, register_component, register_row_plans,
+        inject_style, mark_registered, register_component_with_mount, register_row_plans,
         register_store_scope, register_template, spawn as runtime_spawn,
         spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
-        task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentState,
-        ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope,
-        StaticBinding, StaticListener, StaticRowPlan, Store, WriteOrigin,
+        task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentMountFn,
+        ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext,
+        Scope, StaticBinding, StaticListener, StaticRowPlan, Store, WriteOrigin,
     };
     // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
     pub use phf;

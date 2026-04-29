@@ -1070,6 +1070,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                         register: <#struct_ident>::register,
                         template_html: None,
                         plan: None,
+                        mount_template: None,
                     };
             }
 
@@ -1857,6 +1858,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    let has_template_plan = template_plan_tokens_for_vtable.is_some();
     let (template_plan_assoc_const_tokens, vtable_plan_tokens) =
         match template_plan_tokens_for_vtable {
             Some(_) => (
@@ -1869,6 +1871,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ),
             None => (quote! {}, quote! { None }),
         };
+    let mount_template_body_tokens = if has_template_plan {
+        quote! {
+            ::pocopine::__private::apply_static_plan(
+                root,
+                scope_id,
+                proxy,
+                <#struct_ident>::__POC_TEMPLATE_PLAN,
+                #name_str,
+            );
+        }
+    } else {
+        quote! {}
+    };
 
     // RFC 060 Tier 1 — emit a transitive `T::register()` call per
     // `uses = [...]` entry so the consumer's registration brings
@@ -2081,6 +2096,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #struct_ident {
             #template_plan_assoc_const_tokens
 
+            /// RFC 062 Phase 1 — generated mount-specialization
+            /// entry. This first-phase body is the generic plan
+            /// applier shim; later phases replace it with unrolled
+            /// per-component DOM operations.
+            #[doc(hidden)]
+            pub fn __pocopine_mount_template(
+                root: &::pocopine::__private::web_sys::Element,
+                scope_id: ::pocopine::ScopeId,
+                proxy: &::pocopine::__private::JsValue,
+            ) {
+                #mount_template_body_tokens
+            }
+
             /// Register this component (template, stylesheet, constructor)
             /// with the pocopine runtime. Idempotent. Call directly or via
             /// [`pocopine::App::register`].
@@ -2088,7 +2116,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 if !::pocopine::__private::mark_registered::<#struct_ident>() {
                     return;
                 }
-                ::pocopine::__private::register_component(
+                ::pocopine::__private::register_component_with_mount(
                     #name_str,
                     concat!(module_path!(), "::", stringify!(#struct_ident)),
                     || {
@@ -2098,6 +2126,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ));
                         ::pocopine::__private::Scope::new(instance)
                     },
+                    ::core::option::Option::Some(
+                        <#struct_ident as ::pocopine::__private::Component>::mount_template,
+                    ),
                 );
                 #register_template_stmt
                 #register_style_stmt
@@ -2117,6 +2148,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     register: <#struct_ident>::register,
                     template_html: Some(#compiled_template_html_lit),
                     plan: #vtable_plan_tokens,
+                    mount_template: ::core::option::Option::Some(
+                        <#struct_ident as ::pocopine::__private::Component>::mount_template,
+                    ),
                 };
         }
 
@@ -2124,6 +2158,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             const NAME: &'static str = #name_str;
             fn register() {
                 <#struct_ident>::register();
+            }
+            fn mount_template(
+                root: &::pocopine::__private::web_sys::Element,
+                scope_id: ::pocopine::ScopeId,
+                proxy: &::pocopine::__private::JsValue,
+            ) {
+                <#struct_ident>::__pocopine_mount_template(root, scope_id, proxy);
             }
         }
     };

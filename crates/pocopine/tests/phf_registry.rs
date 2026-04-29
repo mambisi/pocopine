@@ -66,12 +66,16 @@ impl PhfHost {}
 // ─── tests ──────────────────────────────────────────────────────
 
 /// Each `#[component]` emits a `__POCO_VTABLE` const in
-/// `.rodata`. Confirm the static carries the right name + a
-/// callable `register` fn.
+/// `.rodata`. Confirm the static carries the right name, a
+/// callable `register` fn, and the RFC 062 mount-dispatch slot.
 #[wasm_bindgen_test]
 fn vtable_const_carries_name_and_register() {
     let v: &'static ComponentVTable = PhfHome::__POCO_VTABLE;
     assert_eq!(v.name, "phf-home");
+    assert!(
+        v.mount_template.is_some(),
+        "component vtable must expose the RFC 062 mount ABI slot",
+    );
     (v.register)();
     assert!(
         registered_template_names().iter().any(|n| n == "phf-home"),
