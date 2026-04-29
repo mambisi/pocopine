@@ -54,8 +54,8 @@ pub type SlotFragment = fn(ctx: SlotMountCtx<'_>);
 /// captured at slot-set install time (RFC-058 Phase 3.5c).
 /// Dynamic slot fragments — content with `pp-text` / `@click`
 /// / `pp-bind` etc. that reads or writes parent state — pass
-/// it to `apply_static_plan` when stamping bindings against
-/// the parent scope. Static fragments ignore it.
+/// it to the generated install closure when stamping bindings
+/// against the parent scope. Static fragments ignore it.
 ///
 /// Using a `DocumentFragment` rather than the live slot host
 /// keeps the fragment side oblivious to where in the DOM the
@@ -286,12 +286,11 @@ pub fn clear(child_scope_id: ScopeId) {
 /// DOM; listeners attach to detached elements and fire normally
 /// once the children land in the document.
 ///
-/// The closure boundary eliminates the runtime
-/// [`crate::templates_plan::apply_static_plan`] iteration for
-/// dynamic slot fragments (RFC 064 §5.1 Phase 1.B). Top-level
-/// children are scope-stamped before the install runs so any
-/// nested controller resolves its `CTX_PARENT_KEY` against the
-/// slot owner.
+/// The closure boundary eliminates generic runtime plan
+/// iteration for dynamic slot fragments (RFC 064 §5.1 Phase
+/// 1.B). Top-level children are scope-stamped before the
+/// install runs so any nested controller resolves its
+/// `CTX_PARENT_KEY` against the slot owner.
 pub fn stamp_dynamic_slot_with(
     host: &DocumentFragment,
     html: &str,

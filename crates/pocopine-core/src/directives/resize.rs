@@ -26,15 +26,15 @@ const OBS_KEY: &str = "__pp_resize_obs";
 pub fn install_opaque(
     el: &Element,
     _arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &[&str],
     value: &str,
     scope_id: ScopeId,
     _proxy: &JsValue,
 ) {
     let handler = value.to_string();
     let host_el = el.clone();
-    let on_document = modifiers.iter().any(|m| m == "document");
-    let border_box = modifiers.iter().any(|m| m == "border-box");
+    let on_document = modifiers.contains(&"document");
+    let border_box = modifiers.contains(&"border-box");
 
     let target: Element = if on_document {
         match web_sys::window()

@@ -64,7 +64,7 @@ thread_local! {
 pub fn install_opaque(
     el: &Element,
     _arg: Option<&str>,
-    _modifiers: &[String],
+    _modifiers: &[&str],
     _value: &str,
     _scope_id: ScopeId,
     _proxy: &JsValue,

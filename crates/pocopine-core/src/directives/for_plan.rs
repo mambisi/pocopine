@@ -232,9 +232,9 @@ pub struct StaticSlotFragment {
 /// segments to the resolved text node — same install path the
 /// mount would have run, just with the segment list pre-parsed.
 ///
-/// `node_path` resolves the parent element via `apply_static_plan`'s
-/// `resolve` helper. `text_index` selects which text-node child
-/// of the parent (counting only Text nodes — element / comment
+/// `node_path` resolves the parent element in the generated
+/// install pass. `text_index` selects which text-node child of
+/// the parent (counting only Text nodes — element / comment
 /// children don't shift the index).
 #[doc(hidden)]
 pub struct StaticInterp {
@@ -278,7 +278,7 @@ pub struct StaticOpaqueDirective {
 /// The macro leaves the `<slot>` element in the cleaned HTML
 /// so named slots, default fallback children, and scoped-slot
 /// `:prop` attributes keep the same runtime shape. The template
-/// plan records the outlet path so `apply_static_plan` can
+/// plan records the outlet path so generated mount code can
 /// materialise it explicitly after all other path-based plan
 /// entries have resolved. That removes `<slot>` from the
 /// recursive mount's discovery path for planned templates while
@@ -313,8 +313,8 @@ pub struct StaticSlotOutlet {
 /// `body` is the macro-emitted [`IfBodyFn`] when the body
 /// subtree qualified for Phase 4.1d lifting. The runtime
 /// installer invokes the fragment to materialise the body
-/// (parses cleaned HTML, runs `apply_static_plan` against the
-/// parent scope) instead of going through the legacy
+/// (parses cleaned HTML, runs the macro-emitted specialized
+/// install closure against the parent scope) instead of going through the legacy
 /// `clone_template_body` + `mount::walk` path. `None` falls
 /// back to today's clone+walk — the body had something Phase
 /// 4.1d's v1 envelope can't handle.
@@ -366,8 +366,8 @@ pub struct StaticTeleportPlan {
 
 /// Macro-emitted constructor for a `pp-teleport` body. Same
 /// shape as [`IfBodyFn`] / [`ForBodyFn`] — stamps cleaned HTML
-/// then runs `apply_static_plan` against the enclosing scope
-/// passed in by the installer.
+/// then runs the macro-emitted specialized install closure
+/// against the enclosing scope passed in by the installer.
 pub type TeleportBodyFn =
     fn(scope_id: ScopeId, proxy: &JsValue, ctx_parent_id: ScopeId) -> Option<web_sys::Element>;
 
@@ -392,7 +392,7 @@ pub type TeleportBodyFn =
 /// `body` is the macro-emitted [`ForBodyFn`] when the row
 /// body subtree qualified for Phase 4.2c lifting AND no
 /// RFC-054 row plan claimed the same site (the row-plan fast
-/// path is strictly better than per-row `apply_static_plan`).
+/// path is strictly better than per-row body closures).
 /// Per-row mounts invoke the fragment to materialise + install
 /// directives against the row's `LoopScope` instead of going
 /// through `clone_template_body` + `mount::walk`. `None`
@@ -411,7 +411,8 @@ pub struct StaticForPlan {
 /// per row mount with the row's `LoopScope` id + proxy.
 ///
 /// Same signature as [`IfBodyFn`] — both stamp cleaned HTML
-/// then run `apply_static_plan` against the passed scope.
+/// then run the macro-emitted specialized install closure
+/// against the passed scope.
 /// Distinct types so call sites stay legible: pp-if body
 /// installs against the parent scope once per mount cycle;
 /// pp-for body installs against a fresh `LoopScope` per row
