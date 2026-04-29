@@ -1,125 +1,92 @@
 # jsbench results
 
-Cross-framework benchmarks of the same `pp-for`-style keyed table
-under four runtimes — pocopine, leptos, yew, and a vanilla Vue
-harness — driven by Playwright over a temporary HTTP server.
+Cross-framework benchmarks of the same keyed table workload, driven
+by Playwright over a temporary local HTTP server.
 
-Last measured: **2026-04-25** at commit
-`0ed2ad5 perf(rfc-054): revert Lever 6 — V8 attach penalty makes
-it net negative`.
+Last measured: **2026-04-30** on `wip/rfc-064-phase-1ab`.
 
 ## Methodology
 
-- **Driver.** `./benchmark.sh [<harness>] [--browser <name>]`.
-  Wraps `python3 measure.py`, which serves the chosen
-  `jsbench/<harness>/` over a loopback HTTP server and steers a
-  Playwright page at it.
-- **Plan per run.** 2 warmups + 5 measured passes through this
-  action sequence: `run · clear · run · update · swaprows · clear ·
-  runlots · update · add · clear`. Settle delays per action are
-  fixed (50–250ms) so DOM mutations are quiesced before the next
-  click.
-- **Timing.** Wall-clock between click dispatch and the post-
-  settle snapshot. Reported as mean / p50 / p95 / max across the
-  five measured passes; tables below show **mean ms**.
-- **Browsers.** Headless Firefox (Spidermonkey) and headless
-  Chromium (V8). One bench run per engine per harness — no
-  warm-Browser sharing across harnesses.
-- **Hardware/OS.** Linux 6.17, single-machine local run. No
-  thermal throttling controls — relative ordering is what
-  matters; absolute numbers will drift on other hardware.
-- **Build flags.** `wasm-pack build --release --target web` for
-  every Rust harness. The pocopine `--profile-*` modes
-  additionally enable the `pocopine-core/mount-profiler` cargo
-  feature (skip when only timing).
+- Driver: `./jsbench/benchmark.sh [<harness>] --browser firefox`.
+- Plan: 2 warmups and 5 measured passes through the standard keyed
+  table action sequence.
+- Timing: wall-clock from click dispatch to the post-settle snapshot.
+- Browser: headless Firefox.
+- Rust harnesses: `wasm-pack build --release --target web`.
+- Baseline rule: vanilla is always measured as the control because
+  browser timing is noisy even for framework-free DOM code.
 
-Reproduce a single engine end-to-end:
+## Review Refresh
 
-```bash
+The broad all-harness run was:
+
+```text
 ./jsbench/benchmark.sh --all --browser firefox
-./jsbench/benchmark.sh --all --browser chromium
 ```
 
-The two acceptance gates for the pocopine fast-path work are
-**runLots(10000)** and **update every 10th**; everything else is
-context.
+`--all` currently covers `pocopine`, `leptos`, `yew`, and `vue`.
+It does not include `vanilla`, so vanilla was measured separately
+and pocopine was rerun immediately afterward without rebuilding:
 
-## Results
-
-### Firefox (Spidermonkey, headless)
-
-| action                | pocopine | vanilla |  vue  | leptos |  yew  |
-|-----------------------|---------:|--------:|------:|-------:|------:|
-| run(1000)             |      209 |     173 |   195 |    208 |   198 |
-| **runLots(10000)**    |  **849** |     594 |   708 |    905 |   806 |
-| add(1000)             |      501 |     300 |   360 |    341 |   434 |
-| **update every 10th** |      291 |     208 |   231 |    186 |   255 |
-| swapRows              |      217 |     143 |   146 |    143 |   154 |
-| clear                 |      208 |     159 |   164 |    193 |   220 |
-
-`runLots(10000)` ordering vs vanilla (594 ms = 1.00×):
-
-```mermaid
-gantt
-  title runLots(10000) — Firefox (ms vs vanilla baseline)
-  dateFormat X
-  axisFormat %s
-  section vanilla
-  baseline 594ms       :v,         0,   594
-  section vue
-  shared with vanilla  :done,  a1, 0,   594
-  +114ms overhead      :crit,  b1, 594, 114
-  section yew
-  shared with vanilla  :done,  a2, 0,   594
-  +212ms overhead      :crit,  b2, 594, 212
-  section pocopine
-  shared with vanilla  :done,  a3, 0,   594
-  +255ms overhead      :crit,  b3, 594, 255
-  section leptos
-  shared with vanilla  :done,  a4, 0,   594
-  +311ms overhead      :crit,  b4, 594, 311
+```text
+python3 jsbench/measure.py --browser firefox jsbench/vanilla
+./jsbench/benchmark.sh pocopine --browser firefox --no-build
 ```
 
-### Chromium (V8, headless)
+## Geomean
 
-| action                | pocopine | vanilla |  vue  | leptos |  yew  |
-|-----------------------|---------:|--------:|------:|-------:|------:|
-| run(1000)             |      166 |     153 |   153 |    167 |   163 |
-| **runLots(10000)**    |  **747** |     628 |   674 |    739 |   740 |
-| add(1000)             |      524 |     377 |   389 |    401 |   437 |
-| **update every 10th** |      278 |     237 |   240 |    213 |   245 |
-| swapRows              |      163 |     133 |   136 |    131 |   134 |
-| clear                 |      160 |     133 |   144 |    149 |   148 |
+| Framework | Geomean ms | Notes |
+|---|---:|---|
+| vanilla | 186.97 | tight control rerun |
+| Vue | 202.17 | all-harness refresh |
+| pocopine | 212.04 | tight rerun vs vanilla |
+| pocopine | 216.99 | all-harness refresh |
+| Yew | 225.07 | all-harness refresh |
+| Leptos | 281.45 | all-harness refresh |
 
-`runLots(10000)` ordering vs vanilla (628 ms = 1.00×):
+Pocopine remains in the requested **211-215 ms** band in the tight
+vanilla-controlled rerun and remains between Vue and Yew in the
+all-harness refresh.
 
-```mermaid
-gantt
-  title runLots(10000) — Chromium (ms vs vanilla baseline)
-  dateFormat X
-  axisFormat %s
-  section vanilla
-  baseline 628ms       :v,         0,   628
-  section vue
-  shared with vanilla  :done,  a1, 0,   628
-  +46ms overhead       :crit,  b1, 628,  46
-  section leptos
-  shared with vanilla  :done,  a2, 0,   628
-  +111ms overhead      :crit,  b2, 628, 111
-  section yew
-  shared with vanilla  :done,  a3, 0,   628
-  +112ms overhead      :crit,  b3, 628, 112
-  section pocopine
-  shared with vanilla  :done,  a4, 0,   628
-  +119ms overhead      :crit,  b4, 628, 119
+## Tight Control Rerun
+
+| action | vanilla mean ms | pocopine mean ms |
+|---|---:|---:|
+| run(1000) | 170.10 | 202.21 |
+| update every 10th | 143.23 | 157.01 |
+| select | 107.54 | 122.47 |
+| swapRows | 153.19 | 153.96 |
+| remove | 169.46 | 164.94 |
+| clear | 164.16 | 186.68 |
+| runLots(10000) | 600.35 | 846.74 |
+| add(1000) | 222.81 | 261.83 |
+| geomean | 186.97 | 212.04 |
+
+## All-Harness Refresh
+
+| action | pocopine | Vue | Yew | Leptos |
+|---|---:|---:|---:|---:|
+| run(1000) | 209.53 | 184.89 | 209.01 | 219.66 |
+| update every 10th | 168.87 | 153.45 | 160.04 | 142.79 |
+| select | 126.02 | 136.22 | 125.51 | 1003.07 |
+| swapRows | 149.24 | 145.43 | 162.84 | 149.40 |
+| remove | 171.89 | 164.04 | 179.09 | 165.83 |
+| clear | 196.32 | 174.56 | 227.56 | 207.38 |
+| runLots(10000) | 825.95 | 717.78 | 872.38 | 901.43 |
+| add(1000) | 264.98 | 241.62 | 270.87 | 270.25 |
+| geomean | 216.99 | 202.17 | 225.07 | 281.45 |
+
+## Bundle Size
+
+Counter release build after the RFC 064 review refresh:
+
+```text
+wasm-pack build --release --target web examples/counter
+wc -c examples/counter/pkg/counter_bg.wasm
+gzip -c examples/counter/pkg/counter_bg.wasm | wc -c
 ```
 
-## Notes
-
-- On Chromium, pocopine ties leptos and yew on `runLots(10000)`
-  (747 vs 739, 740) within run-to-run variance, trailing vue by
-  73 ms. `clear` (160 ms) and `run(1000)` (166 ms) are within a
-  few ms of every other WASM framework on the chart.
-- On Firefox, every WASM framework pays a uniform ~50 ms tax over
-  vanilla / vue from Spidermonkey's wasm↔JS bridge. pocopine sits
-  between yew (806 ms) and leptos (905 ms) on `runLots(10000)`.
+| artifact | bytes |
+|---|---:|
+| raw wasm | 346,766 |
+| gzip wasm | 147,662 |
