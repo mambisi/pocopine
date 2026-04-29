@@ -23,6 +23,11 @@ use crate::scope::with_current_el;
 /// runtime mount, future generated views) parse and validate
 /// `expr` first; this function does the install only.
 pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
+    install_eval(el, proxy, Rc::new(move |scope| expr::evaluate(&ast, scope)));
+}
+
+#[doc(hidden)]
+pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue) -> JsValue>) {
     let el_owned = el.clone();
     let proxy_owned = proxy.clone();
     let prev: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
@@ -30,7 +35,7 @@ pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
         let el_for_magic = el_owned.clone();
         let prev = prev.clone();
         with_current_el(&el_for_magic, || {
-            let v = expr::evaluate(&ast, &proxy_owned);
+            let v = evaluator(&proxy_owned);
             let next = js_to_string(&v);
             {
                 let p = prev.borrow();

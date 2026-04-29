@@ -20,6 +20,94 @@ use wasm_bindgen::{JsCast, JsValue};
 
 pub use pocopine_expr::{parse, BinOp, Expr, Literal, ParseError, Span, Spanned};
 
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum StaticLiteral {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(&'static str),
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum StaticBinOp {
+    And,
+    Or,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum StaticExpr {
+    Literal(StaticLiteral),
+    Path(&'static [&'static str]),
+    Not(&'static StaticExpr),
+    BinOp {
+        op: StaticBinOp,
+        lhs: &'static StaticExpr,
+        rhs: &'static StaticExpr,
+    },
+}
+
+impl StaticExpr {
+    #[doc(hidden)]
+    pub fn evaluate(&'static self, scope: &JsValue) -> JsValue {
+        match self {
+            StaticExpr::Literal(lit) => static_lit_to_js(lit),
+            StaticExpr::Path(segments) => resolve_static_segments(scope, segments),
+            StaticExpr::Not(inner) => JsValue::from_bool(inner.evaluate(scope).is_falsy()),
+            StaticExpr::BinOp { op, lhs, rhs } => match op {
+                StaticBinOp::And => {
+                    let l = lhs.evaluate(scope);
+                    if l.is_falsy() {
+                        l
+                    } else {
+                        rhs.evaluate(scope)
+                    }
+                }
+                StaticBinOp::Or => {
+                    let l = lhs.evaluate(scope);
+                    if !l.is_falsy() {
+                        l
+                    } else {
+                        rhs.evaluate(scope)
+                    }
+                }
+                StaticBinOp::Eq | StaticBinOp::Ne => {
+                    let l = lhs.evaluate(scope);
+                    let r = rhs.evaluate(scope);
+                    let eq = js_strict_eq(&l, &r);
+                    JsValue::from_bool(if matches!(op, StaticBinOp::Eq) {
+                        eq
+                    } else {
+                        !eq
+                    })
+                }
+                StaticBinOp::Lt | StaticBinOp::Le | StaticBinOp::Gt | StaticBinOp::Ge => {
+                    let l = lhs.evaluate(scope);
+                    let r = rhs.evaluate(scope);
+                    match (l.as_f64(), r.as_f64()) {
+                        (Some(a), Some(b)) => JsValue::from_bool(match op {
+                            StaticBinOp::Lt => a < b,
+                            StaticBinOp::Le => a <= b,
+                            StaticBinOp::Gt => a > b,
+                            StaticBinOp::Ge => a >= b,
+                            _ => unreachable!(),
+                        }),
+                        _ => JsValue::from_bool(false),
+                    }
+                }
+            },
+        }
+    }
+}
+
 thread_local! {
     static PARSE_CACHE: RefCell<HashMap<String, Result<Spanned<Expr>, ParseError>>> =
         RefCell::new(HashMap::new());
@@ -199,7 +287,24 @@ fn lit_to_js(l: &Literal) -> JsValue {
     }
 }
 
+fn static_lit_to_js(l: &StaticLiteral) -> JsValue {
+    match l {
+        StaticLiteral::Null => JsValue::NULL,
+        StaticLiteral::Bool(b) => JsValue::from_bool(*b),
+        StaticLiteral::Number(n) => JsValue::from_f64(*n),
+        StaticLiteral::String(s) => JsValue::from_str(s),
+    }
+}
+
 fn resolve_segments(root: &JsValue, segments: &[String]) -> JsValue {
+    let mut cur = root.clone();
+    for seg in segments {
+        cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);
+    }
+    cur
+}
+
+fn resolve_static_segments(root: &JsValue, segments: &[&'static str]) -> JsValue {
     let mut cur = root.clone();
     for seg in segments {
         cur = Reflect::get(&cur, &JsValue::from_str(seg)).unwrap_or(JsValue::UNDEFINED);

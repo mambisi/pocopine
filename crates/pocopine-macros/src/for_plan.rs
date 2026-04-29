@@ -268,6 +268,7 @@ fn try_compile_row(template_el: &Element, plan_id: u32) -> Option<(TokenStream, 
                 node_path: &[ #(#path_elems),* ],
                 kind: #kind_tokens,
                 expr_src: #expr_lit,
+                compiled: ::core::option::Option::None,
             }
         }
     });

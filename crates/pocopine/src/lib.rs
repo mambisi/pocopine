@@ -62,7 +62,8 @@ pub mod __private {
         spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
         task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentMountFn,
         ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext,
-        Scope, StaticBinding, StaticListener, StaticRowPlan, Store, WriteOrigin,
+        Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener, StaticLiteral,
+        StaticRowPlan, Store, WriteOrigin,
     };
     // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
     pub use phf;
