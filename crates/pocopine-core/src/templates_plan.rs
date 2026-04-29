@@ -149,6 +149,11 @@ thread_local! {
     /// for templates the macro stripped attributes from. Public
     /// reader: [`plan_failure_count`].
     static PLAN_FAILURES: Cell<u32> = const { Cell::new(0) };
+
+    /// RFC 062 Phase 2 evidence counter. Specialized mount
+    /// bodies bypass [`apply_static_plan`]; fallback bodies still
+    /// increment this counter so tests can distinguish the paths.
+    static APPLY_STATIC_PLAN_COUNT: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Register a template plan against a component tag. Called by
@@ -219,6 +224,19 @@ pub fn reset_plan_failure_count() {
     PLAN_FAILURES.with(|c| c.set(0));
 }
 
+/// Cumulative count of generic template-plan applications since
+/// process start. Intended for RFC 062 tests and diagnostics.
+#[doc(hidden)]
+pub fn apply_static_plan_count() -> u32 {
+    APPLY_STATIC_PLAN_COUNT.with(|c| c.get())
+}
+
+/// Reset the generic template-plan application counter.
+#[doc(hidden)]
+pub fn reset_apply_static_plan_count() {
+    APPLY_STATIC_PLAN_COUNT.with(|c| c.set(0));
+}
+
 /// Record one plan-install failure. Called from
 /// [`crate::mount`] / [`apply_static_plan`] when an install
 /// entry can't deliver. In debug builds this also panics with
@@ -269,6 +287,7 @@ pub fn apply_static_plan(
     plan: &'static StaticTemplatePlan,
     template_name: &str,
 ) {
+    APPLY_STATIC_PLAN_COUNT.with(|c| c.set(c.get().saturating_add(1)));
     // Slot materialisation mutates the element-child list by
     // replacing `<slot>` with author/default content. Snapshot
     // the outlet elements up front, then materialise them only
@@ -538,6 +557,220 @@ pub fn apply_static_plan(
         };
         directives::model::install_native(&el, proxy, nm.expr_src.to_string(), nm.number, nm.lazy);
     }
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies. It preserves the generic applier's ref semantics
+/// after the macro has resolved the target element directly.
+#[doc(hidden)]
+pub fn install_static_ref(
+    el: &Element,
+    scope_id: ScopeId,
+    entry: &'static StaticRef,
+    _template_name: &str,
+) {
+    crate::refs::register(scope_id, entry.name, el);
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies. Parsing and fail-fast behaviour intentionally match
+/// the generic applier.
+#[doc(hidden)]
+pub fn install_static_binding(
+    el: &Element,
+    proxy: &JsValue,
+    entry: &'static StaticBinding,
+    template_name: &str,
+) {
+    let ast = match expr::parse_cached(entry.expr_src) {
+        Ok(a) => a,
+        Err(_) => {
+            fail(
+                "binding-parse",
+                template_name,
+                entry.node_path,
+                Some(entry.expr_src),
+            );
+            return;
+        }
+    };
+    match entry.kind {
+        BindingKind::Text => directives::text::install(el, proxy, ast),
+        BindingKind::Html => directives::html::install(el, proxy, ast),
+        BindingKind::Show => directives::show::install(el, proxy, ast),
+        BindingKind::Bind { arg } => directives::bind::install(el, proxy, arg, ast),
+        BindingKind::Class => fail(
+            "binding-kind",
+            template_name,
+            entry.node_path,
+            Some(entry.expr_src),
+        ),
+    }
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies. Parsing, modifier allocation, and legacy-call
+/// backfill stay shared with the generic applier.
+#[doc(hidden)]
+pub fn install_static_listener(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticListener,
+    template_name: &str,
+) {
+    let ast = match expr::parse_cached(entry.expr_src) {
+        Ok(a) => a,
+        Err(_) => {
+            fail(
+                "listener-parse",
+                template_name,
+                entry.node_path,
+                Some(entry.expr_src),
+            );
+            return;
+        }
+    };
+    let modifiers: Vec<String> = entry.modifiers.iter().map(|s| (*s).to_string()).collect();
+    directives::on::install(
+        el,
+        scope_id,
+        proxy,
+        entry.event,
+        &modifiers,
+        Rc::new(directives::on::backfill_legacy_call(ast)),
+    );
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies for child-component hosts.
+#[doc(hidden)]
+pub fn install_static_child_mount(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticChildMount,
+    template_name: &str,
+) {
+    if entry.slots.is_empty() {
+        crate::mount::mount_child_component(el, entry.tag);
+    } else {
+        let mut set = SlotSet::new();
+        for s in entry.slots {
+            set = match s.scoped_let {
+                Some(let_ident) => set.scoped(s.name, s.fragment, let_ident),
+                None => set.named(s.name, s.fragment),
+            };
+        }
+        crate::mount::mount_child_component_with_slots(el, entry.tag, set, scope_id, proxy);
+    }
+    install_child_host_directives(el, scope_id, proxy, entry, template_name);
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies for `pp-for` controller templates.
+#[doc(hidden)]
+pub fn install_static_for_plan(
+    el: &Element,
+    scope_id: ScopeId,
+    proxy: &JsValue,
+    entry: &'static StaticForPlan,
+    template_name: &str,
+) {
+    let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
+        Ok(t) => t,
+        Err(_) => {
+            fail(
+                "for-plan-template",
+                template_name,
+                entry.template_node_path,
+                Some(entry.items_expr),
+            );
+            return;
+        }
+    };
+    directives::for_::install(
+        template,
+        proxy.clone(),
+        scope_id,
+        entry.item_name.to_string(),
+        entry.items_expr.to_string(),
+        entry.key_expr.map(|s| s.to_string()),
+        entry.stagger_ms,
+        entry.body,
+    );
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies for standalone `pp-teleport` controller templates.
+#[doc(hidden)]
+pub fn install_static_teleport_plan(
+    el: &Element,
+    entry: &'static StaticTeleportPlan,
+    template_name: &str,
+) {
+    let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
+        Ok(t) => t,
+        Err(_) => {
+            fail(
+                "teleport-plan-template",
+                template_name,
+                entry.template_node_path,
+                Some(entry.selector),
+            );
+            return;
+        }
+    };
+    directives::teleport::install(template, entry.selector, entry.body);
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies for `pp-if` controller templates.
+#[doc(hidden)]
+pub fn install_static_if_plan(
+    el: &Element,
+    proxy: &JsValue,
+    entry: &'static StaticIfPlan,
+    template_name: &str,
+) {
+    let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
+        Ok(t) => t,
+        Err(_) => {
+            fail(
+                "if-plan-template",
+                template_name,
+                entry.template_node_path,
+                Some(entry.expr_src),
+            );
+            return;
+        }
+    };
+    let ast = match expr::parse_cached(entry.expr_src) {
+        Ok(a) => a,
+        Err(_) => {
+            fail(
+                "if-plan-parse",
+                template_name,
+                entry.template_node_path,
+                Some(entry.expr_src),
+            );
+            return;
+        }
+    };
+    directives::if_::install(
+        template,
+        proxy.clone(),
+        ast,
+        entry.body,
+        entry.teleport_selector,
+    );
+}
+
+/// RFC 062 Phase 2 helper used by macro-specialized mount
+/// bodies for deferred `pp-init`.
+#[doc(hidden)]
+pub fn install_static_init(el: &Element, scope_id: ScopeId, entry: &'static StaticInit) {
+    crate::mount::defer_init_on(el, scope_id, entry.expr_src);
 }
 
 fn install_opaque_directives(

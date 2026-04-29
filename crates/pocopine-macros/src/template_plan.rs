@@ -72,6 +72,15 @@ pub(crate) struct EmittedTemplatePlan {
     /// reference them by ident. Empty token stream when the
     /// classifier didn't lift any pp-if body into a fragment.
     pub if_body_fns: TokenStream,
+    /// RFC 062 Phase 2 — unrolled mount body for plans whose
+    /// entry kinds can use the current specialized runtime ABI.
+    /// The caller decides whether the component's
+    /// `specialize = ...` setting and threshold should use this
+    /// body or keep the generic applier shim.
+    pub specialized_mount_body: Option<TokenStream>,
+    /// Total number of top-level plan entries. Used by the
+    /// component macro's RFC 062 threshold heuristic.
+    pub entry_count: usize,
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -114,6 +123,8 @@ pub(crate) fn analyze_template_plan(
             cleaned_html: None,
             slot_fragment_fns: TokenStream::new(),
             if_body_fns: TokenStream::new(),
+            specialized_mount_body: None,
+            entry_count: 0,
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
@@ -128,11 +139,15 @@ pub(crate) fn analyze_template_plan(
     } else {
         None
     };
+    let entry_count = ctx.entry_count();
+    let specialized_mount_body = ctx.emit_specialized_mount_body();
     EmittedTemplatePlan {
         plan_tokens,
         cleaned_html: Some(cleaned_html),
         slot_fragment_fns,
         if_body_fns,
+        specialized_mount_body,
+        entry_count,
     }
 }
 
@@ -522,6 +537,88 @@ impl AnalysisCtx {
             || !self.interps.is_empty()
     }
 
+    fn entry_count(&self) -> usize {
+        self.bindings.len()
+            + self.listeners.len()
+            + self.inits.len()
+            + self.refs.len()
+            + self.child_mounts.len()
+            + self.if_plans.len()
+            + self.for_plans.len()
+            + self.teleport_plans.len()
+            + self.slot_outlets.len()
+            + self.opaque_directives.len()
+            + self.interps.len()
+            + self.native_models.len()
+    }
+
+    fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
+        // Phase 2 specializes path-local entries. Entries that
+        // depend on grouped ordering or post-slot DOM shape stay
+        // on the generic applier until the generated ABI covers
+        // those cases explicitly.
+        if !self.slot_outlets.is_empty()
+            || !self.opaque_directives.is_empty()
+            || !self.interps.is_empty()
+            || !self.native_models.is_empty()
+        {
+            return None;
+        }
+
+        let refs = self
+            .refs
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_ref(idx, &entry.node_path));
+        let bindings = self
+            .bindings
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_binding(idx, &entry.node_path));
+        let listeners = self
+            .listeners
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_listener(idx, &entry.node_path));
+        let child_mounts = self
+            .child_mounts
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_child_mount(idx, &entry.node_path));
+        let for_plans = self
+            .for_plans
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_for_plan(idx, &entry.template_node_path));
+        let teleport_plans = self
+            .teleport_plans
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_teleport_plan(idx, &entry.template_node_path));
+        let if_plans = self
+            .if_plans
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_if_plan(idx, &entry.template_node_path));
+        let inits = self
+            .inits
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| emit_specialized_init(idx, &entry.node_path));
+
+        Some(quote! {
+            let __poc_plan = <Self>::__POC_TEMPLATE_PLAN;
+            #(#refs)*
+            #(#bindings)*
+            #(#listeners)*
+            #(#child_mounts)*
+            #(#for_plans)*
+            #(#teleport_plans)*
+            #(#if_plans)*
+            #(#inits)*
+        })
+    }
+
     fn is_stripped(&self, node_path: &[u16], attr_name: &str) -> bool {
         self.stripped
             .iter()
@@ -689,6 +786,148 @@ fn emit_node_path(path: &[u16]) -> TokenStream {
         quote! { #lit }
     });
     quote! { &[ #(#elems),* ] }
+}
+
+fn emit_specialized_resolve(path: &[u16]) -> TokenStream {
+    let steps = path.iter().map(|idx| {
+        let siblings = (0..*idx).map(|_| {
+            quote! {
+                let Some(__poc_next) = __poc_child.next_element_sibling() else {
+                    ::pocopine::__private::apply_static_plan(root, scope_id, proxy, __poc_plan, __poc_template_name);
+                    return;
+                };
+                __poc_child = __poc_next;
+            }
+        });
+        quote! {
+            let Some(mut __poc_child) = __poc_current.first_element_child() else {
+                ::pocopine::__private::apply_static_plan(root, scope_id, proxy, __poc_plan, __poc_template_name);
+                return;
+            };
+            #(#siblings)*
+            __poc_current = __poc_child;
+        }
+    });
+    quote! {
+        let __poc_el = {
+            let mut __poc_current = ::core::clone::Clone::clone(root);
+            #(#steps)*
+            __poc_current
+        };
+    }
+}
+
+fn emit_specialized_ref(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_ref(
+            &__poc_el,
+            scope_id,
+            &__poc_plan.refs[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_binding(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_binding(
+            &__poc_el,
+            proxy,
+            &__poc_plan.bindings[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_listener(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_listener(
+            &__poc_el,
+            scope_id,
+            proxy,
+            &__poc_plan.listeners[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_child_mount(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_child_mount(
+            &__poc_el,
+            scope_id,
+            proxy,
+            &__poc_plan.child_mounts[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_for_plan(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_for_plan(
+            &__poc_el,
+            scope_id,
+            proxy,
+            &__poc_plan.for_plans[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_teleport_plan(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_teleport_plan(
+            &__poc_el,
+            &__poc_plan.teleport_plans[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_if_plan(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_if_plan(
+            &__poc_el,
+            proxy,
+            &__poc_plan.if_plans[#idx],
+            __poc_template_name,
+        );
+    }
+}
+
+fn emit_specialized_init(idx: usize, path: &[u16]) -> TokenStream {
+    let idx = syn::Index::from(idx);
+    let resolve = emit_specialized_resolve(path);
+    quote! {
+        #resolve
+        ::pocopine::__private::install_static_init(
+            &__poc_el,
+            scope_id,
+            &__poc_plan.inits[#idx],
+        );
+    }
 }
 
 fn emit_binding(b: &BindingLite) -> TokenStream {
