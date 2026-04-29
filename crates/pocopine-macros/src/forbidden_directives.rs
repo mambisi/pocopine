@@ -16,6 +16,11 @@
 //! - `pp-init` — `directives::init` module + `StaticInit` plan
 //!   IR + macro emit pass deleted. RFC 063 §4.1.1. Replacement:
 //!   `#[handlers] impl Foo { fn on_setup(&mut self) { ... } }`.
+//! - `pp-data` — author-facing surface deleted. RFC 063 §4.1.3.
+//!   The macro auto-stamps the scope marker on every component
+//!   root automatically; authors never needed to type it. The
+//!   internal marker rename to `data-pp-scope-id` is a separate
+//!   follow-up cleanup PR.
 //!
 //! **Explicitly excluded** (kept by design):
 //!
@@ -27,9 +32,8 @@
 //!   spec the pine-icons rewrite that retires the only current
 //!   workspace consumer.
 //!
-//! Pending follow-up commits will add `pp-data` (rename to
-//! private marker) and the convergence directives `pp-let` /
-//! `pp-key` / `pp-stagger`.
+//! Pending follow-up commits will add the convergence
+//! directives `pp-let` / `pp-key` / `pp-stagger`.
 //!
 //! The scan walks the parsed AST once per `#[component]`
 //! invocation; cost is per-attribute string compare on a
@@ -62,6 +66,15 @@ const FORBIDDEN: &[(&str, &str)] = &[
                  // your init code here\n      \
              }\n  \
          }",
+    ),
+    (
+        "pp-data",
+        "`pp-data` is no longer an author-facing attribute (RFC \
+         063 §4.1.3). The macro auto-stamps the scope marker on \
+         every component root; you never needed to type it. \
+         Drop the attribute. If you were using it as an \
+         unliftable-subtree signal, that authoring pattern was \
+         walker-era and no longer exists.",
     ),
 ];
 
