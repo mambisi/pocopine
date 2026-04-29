@@ -22,6 +22,7 @@
 use pocopine::prelude::*;
 use pocopine::{App, SubtreeHandle};
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::window;
 
@@ -48,6 +49,14 @@ struct PapSubtree {}
 
 #[handlers]
 impl PapSubtree {}
+
+struct ManualNoopComponent;
+
+impl Component for ManualNoopComponent {
+    const NAME: &'static str = "manual-noop-component";
+
+    fn register() {}
+}
 
 // ─── helpers ────────────────────────────────────────────────────
 
@@ -185,4 +194,20 @@ fn mount_subtree_handle_drop_releases_scope() {
     assert_eq!(host.inner_html(), "");
 
     host.remove();
+}
+
+/// Manual `Component` impls do not have macro-emitted template
+/// plans, so the default RFC 062 mount entry is intentionally a
+/// no-op rather than a hidden static-plan fallback.
+#[wasm_bindgen_test]
+fn manual_component_default_mount_template_is_noop() {
+    let host = doc().create_element("div").unwrap();
+
+    <ManualNoopComponent as Component>::mount_template(&host, ScopeId(0), &JsValue::NULL);
+
+    assert_eq!(
+        host.inner_html(),
+        "",
+        "default Component::mount_template must leave manual component DOM untouched",
+    );
 }

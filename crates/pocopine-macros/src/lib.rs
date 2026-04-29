@@ -1882,7 +1882,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
             None => quote! {
-                ::pocopine::__private::record_plan_failure();
+                ::core::compile_error!(
+                    "pocopine internal error: template plan was emitted without a generated component mount body"
+                );
             },
         }
     } else {
