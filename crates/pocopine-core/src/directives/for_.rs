@@ -845,6 +845,165 @@ fn try_prepend_fast_path(
     Ok(prepended)
 }
 
+fn update_reused_entry(
+    entry: &mut PrevItem,
+    index: usize,
+    total: usize,
+    compiled_bindings_depend_on_position: bool,
+) {
+    let position_changed = {
+        let st = entry.loop_state.borrow();
+        st.index != index || st.total != total
+    };
+    if !position_changed {
+        return;
+    }
+    {
+        let mut st = entry.loop_state.borrow_mut();
+        st.index = index;
+        st.total = total;
+    }
+    if compiled_bindings_depend_on_position
+        && !crate::directives::for_plan::reuse_row_compiled(entry.scope_id)
+    {
+        trigger_scope(entry.scope_id);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_single_remove_fast_path(
+    arr: &Array,
+    total: usize,
+    old_prior: Vec<PrevItem>,
+    row_plan: Option<&Rc<crate::directives::for_plan::CompiledRowPlan>>,
+    compiled_bindings_depend_on_position: bool,
+) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
+    let old_len = old_prior.len();
+    if old_len == 0 || old_len != total + 1 || row_plan.is_none() {
+        return Err(old_prior);
+    }
+
+    let mut removed_idx: Option<usize> = None;
+    let mut new_i = 0usize;
+    for old_i in 0..old_len {
+        if new_i < total && Object::is(&old_prior[old_i].item_value, &arr.get(new_i as u32)) {
+            new_i += 1;
+            continue;
+        }
+        if removed_idx.is_some() {
+            return Err(old_prior);
+        }
+        removed_idx = Some(old_i);
+    }
+    if new_i != total {
+        return Err(old_prior);
+    }
+    let Some(removed_idx) = removed_idx else {
+        return Err(old_prior);
+    };
+    if old_prior[removed_idx].leaving
+        || crate::directives::transition::has_transition_in_subtree(&old_prior[removed_idx].element)
+    {
+        return Err(old_prior);
+    }
+
+    let row_iter_start = crate::profiler::reconcile::start();
+    let mut fresh = Vec::with_capacity(total);
+    let mut removed: Option<PrevItem> = None;
+    for (old_i, mut entry) in old_prior.into_iter().enumerate() {
+        if old_i == removed_idx {
+            removed = Some(entry);
+            continue;
+        }
+        let index = fresh.len();
+        update_reused_entry(
+            &mut entry,
+            index,
+            total,
+            compiled_bindings_depend_on_position,
+        );
+        fresh.push(entry);
+    }
+    crate::profiler::reconcile::record_row_iter(row_iter_start);
+
+    let leaver_drain_start = crate::profiler::reconcile::start();
+    if let Some(entry) = removed {
+        if !entry.leaving {
+            if let Some(parent) = entry.element.parent_node() {
+                let _ = parent.remove_child(&entry.element);
+            }
+            crate::directives::for_plan::unmount_row_compiled(entry.scope_id);
+        }
+    }
+    crate::profiler::reconcile::record_leaver_drain(leaver_drain_start);
+
+    Ok(fresh)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_two_swap_fast_path(
+    arr: &Array,
+    total: usize,
+    mut old_prior: Vec<PrevItem>,
+    parent_node: &Node,
+    row_plan: Option<&Rc<crate::directives::for_plan::CompiledRowPlan>>,
+    compiled_bindings_depend_on_position: bool,
+) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
+    if total < 2 || old_prior.len() != total || row_plan.is_none() {
+        return Err(old_prior);
+    }
+    if old_prior.iter().any(|entry| entry.leaving) {
+        return Err(old_prior);
+    }
+    let mut mismatches: Vec<usize> = Vec::with_capacity(2);
+    for i in 0..total {
+        if !Object::is(&old_prior[i].item_value, &arr.get(i as u32)) {
+            mismatches.push(i);
+            if mismatches.len() > 2 {
+                return Err(old_prior);
+            }
+        }
+    }
+    if mismatches.len() != 2 {
+        return Err(old_prior);
+    }
+    let a = mismatches[0];
+    let b = mismatches[1];
+    if !Object::is(&old_prior[a].item_value, &arr.get(b as u32))
+        || !Object::is(&old_prior[b].item_value, &arr.get(a as u32))
+    {
+        return Err(old_prior);
+    }
+
+    let row_iter_start = crate::profiler::reconcile::start();
+    old_prior.swap(a, b);
+    update_reused_entry(
+        &mut old_prior[a],
+        a,
+        total,
+        compiled_bindings_depend_on_position,
+    );
+    update_reused_entry(
+        &mut old_prior[b],
+        b,
+        total,
+        compiled_bindings_depend_on_position,
+    );
+    crate::profiler::reconcile::record_row_iter(row_iter_start);
+
+    let reorder_start = crate::profiler::reconcile::start();
+    let dom_insert_start = crate::profiler::mount::start();
+    let moved_to_front = old_prior[a].element.clone();
+    let moved_to_back = old_prior[b].element.clone();
+    let back_next = moved_to_front.next_sibling();
+    let _ = parent_node.insert_before(moved_to_front.as_ref(), Some(moved_to_back.as_ref()));
+    let _ = parent_node.insert_before(moved_to_back.as_ref(), back_next.as_ref());
+    crate::profiler::mount::record_dom_insertion(dom_insert_start);
+    crate::profiler::reconcile::record_reorder(reorder_start);
+
+    Ok(old_prior)
+}
+
 /// Keyed iteration. Reuses clones whose keys still appear, fires
 /// `trigger_scope` so their bindings re-evaluate against the updated
 /// `LoopScope`, and reorders the DOM to match the new order.
@@ -968,6 +1127,35 @@ fn run_keyed(
             row_plan.as_ref(),
             compiled_bindings_depend_on_position,
             stagger_ms,
+        ) {
+            Ok(next_prior) => {
+                *prior.borrow_mut() = next_prior;
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
+            }
+            Err(old_prior) => old_prior,
+        };
+        let old_prior = match try_single_remove_fast_path(
+            &arr,
+            total,
+            old_prior,
+            row_plan.as_ref(),
+            compiled_bindings_depend_on_position,
+        ) {
+            Ok(next_prior) => {
+                *prior.borrow_mut() = next_prior;
+                crate::profiler::reconcile::record_total(reconcile_total_start);
+                return;
+            }
+            Err(old_prior) => old_prior,
+        };
+        let old_prior = match try_two_swap_fast_path(
+            &arr,
+            total,
+            old_prior,
+            parent_node_ref,
+            row_plan.as_ref(),
+            compiled_bindings_depend_on_position,
         ) {
             Ok(next_prior) => {
                 *prior.borrow_mut() = next_prior;

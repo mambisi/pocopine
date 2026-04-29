@@ -16,17 +16,17 @@ pub use pocopine_core::{
     emit_model_field, emit_raw, emit_raw_from, fetch, flush_sync, inject, invalidate_field,
     invalidate_field_cache, mount_profile_enabled, on_cleanup, on_scope_unmount,
     patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, provide,
-    registered_component_names, registry_errors, release, replace_field_inline,
-    report_mount_profile, reset_mount_profile, run_now, rw_signal, set_auto_flush, signal, spawn,
-    spawn_latest, spawn_scoped, store, swap_list_indices_inline, this, trigger_scope,
-    verify_registry, watch, watch_field, watch_field_scoped, watch_scope_field,
-    watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, Body, Component,
-    ComponentMountFn, ComponentState, ComponentVTable, Computed, ContextKey, ContextMarker, Doc,
-    DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl, Inject, IsTeleported,
-    LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Refs,
-    RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath,
-    ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle,
-    TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    registered_component_names, registry_errors, release, remove_list_at_inline,
+    replace_field_inline, report_mount_profile, reset_mount_profile, run_now, rw_signal,
+    set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store, swap_list_indices_inline,
+    this, trigger_scope, verify_registry, watch, watch_field, watch_field_scoped,
+    watch_scope_field, watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, Body,
+    Component, ComponentMountFn, ComponentState, ComponentVTable, Computed, ContextKey,
+    ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl,
+    Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
+    ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope,
+    ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle,
+    SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -41,10 +41,10 @@ pub mod prelude {
         batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
         emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, handlers,
-        inject_key, on, on_cleanup, on_emit, prepend_list_inline, rw_signal, signal, spawn,
-        spawn_latest, spawn_scoped, store, this, watch, App, Component, ComponentState, Computed,
-        ContextKey, ContextMarker, Emit, Handle, Inject, NearestParent, Parent, RwSignal, Scope,
-        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        inject_key, on, on_cleanup, on_emit, prepend_list_inline, remove_list_at_inline, rw_signal,
+        signal, spawn, spawn_latest, spawn_scoped, store, this, watch, App, Component,
+        ComponentState, Computed, ContextKey, ContextMarker, Emit, Handle, Inject, NearestParent,
+        Parent, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
