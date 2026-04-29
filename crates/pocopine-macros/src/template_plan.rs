@@ -72,15 +72,10 @@ pub(crate) struct EmittedTemplatePlan {
     /// reference them by ident. Empty token stream when the
     /// classifier didn't lift any pp-if body into a fragment.
     pub if_body_fns: TokenStream,
-    /// RFC 062 Phase 2 — unrolled mount body for plans whose
-    /// entry kinds can use the current specialized runtime ABI.
-    /// The caller decides whether the component's
-    /// `specialize = ...` setting and threshold should use this
-    /// body or keep the generic applier shim.
+    /// RFC 062 — unrolled component mount body. Component
+    /// mounts use this generated body directly; the generic
+    /// plan applier remains for lifted fragment internals only.
     pub specialized_mount_body: Option<TokenStream>,
-    /// Total number of top-level plan entries. Used by the
-    /// component macro's RFC 062 threshold heuristic.
-    pub entry_count: usize,
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -124,7 +119,6 @@ pub(crate) fn analyze_template_plan(
             slot_fragment_fns: TokenStream::new(),
             if_body_fns: TokenStream::new(),
             specialized_mount_body: None,
-            entry_count: 0,
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
@@ -139,7 +133,6 @@ pub(crate) fn analyze_template_plan(
     } else {
         None
     };
-    let entry_count = ctx.entry_count();
     let specialized_mount_body = ctx.emit_specialized_mount_body();
     EmittedTemplatePlan {
         plan_tokens,
@@ -147,7 +140,6 @@ pub(crate) fn analyze_template_plan(
         slot_fragment_fns,
         if_body_fns,
         specialized_mount_body,
-        entry_count,
     }
 }
 
@@ -538,21 +530,6 @@ impl AnalysisCtx {
             || !self.native_models.is_empty()
     }
 
-    fn entry_count(&self) -> usize {
-        self.bindings.len()
-            + self.listeners.len()
-            + self.inits.len()
-            + self.refs.len()
-            + self.child_mounts.len()
-            + self.if_plans.len()
-            + self.for_plans.len()
-            + self.teleport_plans.len()
-            + self.slot_outlets.len()
-            + self.opaque_directives.len()
-            + self.interps.len()
-            + self.native_models.len()
-    }
-
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
         let slot_capacity = self.slot_outlets.len();
         let interp_capacity = self.interps.len();
@@ -829,7 +806,7 @@ fn emit_specialized_resolve(path: &[u16]) -> TokenStream {
         let siblings = (0..*idx).map(|_| {
             quote! {
                 let Some(__poc_next) = __poc_child.next_element_sibling() else {
-                    ::pocopine::__private::apply_static_plan(root, scope_id, proxy, __poc_plan, __poc_template_name);
+                    ::pocopine::__private::record_plan_failure();
                     return;
                 };
                 __poc_child = __poc_next;
@@ -837,7 +814,7 @@ fn emit_specialized_resolve(path: &[u16]) -> TokenStream {
         });
         quote! {
             let Some(mut __poc_child) = __poc_current.first_element_child() else {
-                ::pocopine::__private::apply_static_plan(root, scope_id, proxy, __poc_plan, __poc_template_name);
+                ::pocopine::__private::record_plan_failure();
                 return;
             };
             #(#siblings)*

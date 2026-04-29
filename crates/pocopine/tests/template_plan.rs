@@ -674,48 +674,29 @@ impl PlanIfBodyHost {
     }
 }
 
-/// RFC 062 Phase 2 — small plans default to the macro-emitted
-/// specialized mount body, bypassing the generic plan iterator.
+/// RFC 062 — component mounts use the macro-emitted body as the
+/// normal path.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
-    name = "plan-specialize-auto",
+    name = "plan-specialized",
     template_inline = r#"<div><span class="psa-value" pp-text="message"></span></div>"#
 )]
-struct PlanSpecializeAuto {
+struct PlanSpecialized {
     message: String,
 }
 
 #[handlers]
-impl PlanSpecializeAuto {
+impl PlanSpecialized {
     pub fn on_setup(&mut self) {
-        self.message = "auto-specialized".into();
+        self.message = "specialized".into();
     }
 }
 
-/// RFC 062 Phase 2 — per-component opt-out keeps the generic
-/// applier path available for parity and size-sensitive code.
+/// RFC 062 — larger templates still use the same generated mount
+/// path. There is no author-facing static-plan fallback knob.
 #[derive(Default, Serialize, Deserialize)]
 #[component(
-    name = "plan-specialize-off",
-    template_inline = r#"<div><span class="pso-value" pp-text="message"></span></div>"#,
-    specialize = "off"
-)]
-struct PlanSpecializeOff {
-    message: String,
-}
-
-#[handlers]
-impl PlanSpecializeOff {
-    pub fn on_setup(&mut self) {
-        self.message = "off-fallback".into();
-    }
-}
-
-/// RFC 062 Phase 2 — the auto threshold falls back above 32
-/// entries.
-#[derive(Default, Serialize, Deserialize)]
-#[component(
-    name = "plan-specialize-big-auto",
+    name = "plan-specialized-big",
     template_inline = r#"<div>
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
@@ -733,53 +714,17 @@ impl PlanSpecializeOff {
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
         <span pp-text="message"></span><span pp-text="message"></span>
-        <span class="psba-last" pp-text="message"></span>
+        <span class="psb-last" pp-text="message"></span>
     </div>"#
 )]
-struct PlanSpecializeBigAuto {
+struct PlanSpecializedBig {
     message: String,
 }
 
 #[handlers]
-impl PlanSpecializeBigAuto {
+impl PlanSpecializedBig {
     pub fn on_setup(&mut self) {
-        self.message = "big-auto-fallback".into();
-    }
-}
-
-/// RFC 062 Phase 2 — force overrides the threshold upward.
-#[derive(Default, Serialize, Deserialize)]
-#[component(
-    name = "plan-specialize-big-force",
-    template_inline = r#"<div>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span pp-text="message"></span><span pp-text="message"></span>
-        <span class="psbf-last" pp-text="message"></span>
-    </div>"#,
-    specialize = "force"
-)]
-struct PlanSpecializeBigForce {
-    message: String,
-}
-
-#[handlers]
-impl PlanSpecializeBigForce {
-    pub fn on_setup(&mut self) {
-        self.message = "big-force-specialized".into();
+        self.message = "big-specialized".into();
     }
 }
 
@@ -823,10 +768,8 @@ fn register_all() {
     PlanInterpHost::register();
     PlanInterpMultiHost::register();
     StartCompiledModelHost::register();
-    PlanSpecializeAuto::register();
-    PlanSpecializeOff::register();
-    PlanSpecializeBigAuto::register();
-    PlanSpecializeBigForce::register();
+    PlanSpecialized::register();
+    PlanSpecializedBig::register();
 }
 
 fn mount(host_html: &str) -> Element {
@@ -932,71 +875,21 @@ async fn plan_eligible_template_registers_and_does_not_fail() {
 }
 
 #[wasm_bindgen_test]
-async fn rfc062_auto_specializes_small_plan() {
-    register_all();
-    pocopine::__private::reset_apply_static_plan_count();
-
-    let host = mount("<plan-specialize-auto></plan-specialize-auto>");
+async fn rfc062_generated_mount_handles_small_and_large_components() {
+    let small = mount("<plan-specialized></plan-specialized>");
     tick().await;
+    assert_eq!(read(&small, ".psa-value"), "specialized");
+    small.remove();
 
-    assert_eq!(read(&host, ".psa-value"), "auto-specialized");
-    assert_eq!(
-        pocopine::__private::apply_static_plan_count(),
-        0,
-        "small supported plans should bypass the generic plan applier",
-    );
-
-    host.remove();
+    let big = mount("<plan-specialized-big></plan-specialized-big>");
+    tick().await;
+    assert_eq!(read(&big, ".psb-last"), "big-specialized");
+    big.remove();
 }
 
 #[wasm_bindgen_test]
-async fn rfc062_specialize_off_uses_generic_applier() {
-    register_all();
-    pocopine::__private::reset_apply_static_plan_count();
-
-    let host = mount("<plan-specialize-off></plan-specialize-off>");
-    tick().await;
-
-    assert_eq!(read(&host, ".pso-value"), "off-fallback");
-    assert_eq!(
-        pocopine::__private::apply_static_plan_count(),
-        1,
-        "`specialize = \"off\"` should keep the generic plan applier path",
-    );
-
-    host.remove();
-}
-
-#[wasm_bindgen_test]
-async fn rfc062_threshold_and_force_modes_choose_expected_path() {
-    register_all();
-
-    pocopine::__private::reset_apply_static_plan_count();
-    let auto = mount("<plan-specialize-big-auto></plan-specialize-big-auto>");
-    tick().await;
-    assert_eq!(read(&auto, ".psba-last"), "big-auto-fallback");
-    assert_eq!(
-        pocopine::__private::apply_static_plan_count(),
-        1,
-        "auto mode should fall back above the 32-entry threshold",
-    );
-    auto.remove();
-
-    pocopine::__private::reset_apply_static_plan_count();
-    let forced = mount("<plan-specialize-big-force></plan-specialize-big-force>");
-    tick().await;
-    assert_eq!(read(&forced, ".psbf-last"), "big-force-specialized");
-    assert_eq!(
-        pocopine::__private::apply_static_plan_count(),
-        0,
-        "`specialize = \"force\"` should override the threshold when the plan shape is supported",
-    );
-    forced.remove();
-}
-
-#[wasm_bindgen_test]
-async fn rfc062_specializes_slot_interp_opaque_and_native_model_entries() {
-    register_all();
+async fn rfc062_generated_mount_covers_slot_interp_opaque_and_native_model_entries() {
+    reset_plan_failure_count();
     let fixtures = [
         "<plan-slot-host-static></plan-slot-host-static>",
         "<plan-interp-host></plan-interp-host>",
@@ -1005,14 +898,9 @@ async fn rfc062_specializes_slot_interp_opaque_and_native_model_entries() {
     ];
 
     for html in fixtures {
-        pocopine::__private::reset_apply_static_plan_count();
         let host = mount(html);
         tick().await;
-        assert_eq!(
-            pocopine::__private::apply_static_plan_count(),
-            0,
-            "{html} should use the RFC 062 specialized mount path",
-        );
+        assert_eq!(plan_failure_count(), 0, "{html} should mount cleanly");
         host.remove();
     }
 }

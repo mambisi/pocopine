@@ -78,10 +78,11 @@ indirection, no plan struct in the binary at all.
 
 ## 3. Non-goals
 
-- **Not deleting `StaticTemplatePlan`.** The plan stays as the
-  intermediate representation the macro produces. The fallback
-  generic applier (§4.3) consumes it for components that aren't
-  worth specializing.
+- **Not deleting every internal plan literal in this RFC.**
+  Lifted slot / `pp-if` / row fragments may still use
+  `StaticTemplatePlan` as a macro/runtime IR until they get
+  their own fragment-level specialization. Component mount must
+  not use the generic applier as a parallel runtime path.
 - **Not changing template syntax** or the `#[component]` macro
   surface authors see.
 - **Not rewriting reactivity.** Per-binding install helpers
@@ -157,22 +158,19 @@ share the walk to `[0, 1]` and only diverge for the last index.
 Same trick Solid does with `_el$ = ..., _el$2 = _el$.firstChild,
 _el$3 = _el$2.nextSibling`.
 
-### 4.3 Fallback for "too big" plans
+### 4.3 No component-mount fallback lane
 
-Specialization trades binary size for runtime speed. For very
-large plans (e.g. a generated 500-row table component) the
-unrolled function would dominate the wasm binary. The macro
-applies a heuristic:
+RFC 062 is a cleanup, not a second runtime. Component mount has
+one compiled path: the macro-emitted mount body. There is no
+author-facing `specialize` knob, no size threshold that flips
+large components back to `apply_static_plan`, and no default
+`Component::mount_template` shim that consults the static-plan
+registry.
 
-- **Specialize** when `plan.entries().count() ≤ 32` (covers
-  ~95% of components in the existing pocopine + pine codebase).
-- **Fall back to `apply_static_plan`** otherwise. The plan stays
-  registered; only the per-component mount function is the
-  generic-applier shim.
-
-The 32-entry threshold is configurable via a `pocopine.toml`
-build setting and overridable per-component via
-`#[component(specialize = "force" | "off")]`.
+The generic applier may remain temporarily for lifted fragments
+that still use `StaticTemplatePlan` as an internal IR, but it is
+not part of component mounting. Once fragment-level codegen
+exists, that remaining applier can be removed too.
 
 ### 4.4 Build size impact
 
@@ -213,42 +211,39 @@ Why this is more powerful in Rust than in JS codegen:
 
 ## 5. Migration
 
-### 5.1 Phase 1 — emit specialized fns alongside the existing applier
+### 5.1 Phase 1 — add the mount dispatch ABI
 
-Macro emits `__pocopine_mount` per component. `apply_static_plan`
-keeps working. New `Component::MOUNT_FN` defaults to a closure
-that calls `apply_static_plan(...)` for backwards compatibility.
-Components that opt in via `#[component(specialize)]` get the
-specialized fn pointer.
+The runtime registry carries one compiled mount function pointer
+per component. Macro-emitted components populate it; manual
+components get a no-op default because there is no static-plan
+component fallback.
 
-### 5.2 Phase 2 — flip default to specialize
+### 5.2 Phase 2 — generate component mount bodies
 
-`#[component]` defaults to `specialize` when the plan ≤32 entries.
-Authors can opt out via `#[component(specialize = "off")]`.
-Cross-validation runs every existing test against both paths
-during the rollout.
+`#[component]` emits an unrolled `__pocopine_mount_template`
+body for every planned component. The generated body resolves
+node paths via `first_element_child` / `next_element_sibling`
+and calls typed install helpers directly.
 
-### 5.3 Phase 3 — delete `apply_static_plan` body
+### 5.3 Phase 3 — quarantine and retire fragment static plans
 
-The generic applier becomes a dispatcher to a single per-arity
-implementation if anyone needs it; otherwise it's deleted along
-with `StaticTemplatePlan` if no in-tree component still consumes
-it. Plans stay as the macro's intermediate representation; they
-just don't ship in the wasm binary anymore.
+Any remaining `apply_static_plan` use is limited to lifted
+fragment internals (`pp-if`, dynamic slot fragments, row bodies)
+where the fragment ABI still passes a plan literal. Those uses
+are tracked as follow-up cleanup, not a component-mount fallback
+or author-visible mode.
 
 ## 6. Testing requirements
 
-- Specialized `__pocopine_mount` produces byte-identical DOM to
-  the generic applier path for every test fixture (cross-validation
-  during Phase 2).
-- `Component::MOUNT_FN` resolves to the specialized fn (not the
-  shim) when the component opts in.
-- Heuristic boundary: a synthetic component with exactly 32
-  entries gets specialized; 33 entries falls back. Both
-  configurations produce correct output.
-- `pocopine.toml` threshold override works.
-- `#[component(specialize = "force")]` overrides the heuristic
-  upward; `"off"` overrides it downward.
+- Generated `__pocopine_mount_template` produces the same DOM and
+  lifecycle behaviour as the prior compiled mount fixtures.
+- Small and large planned components both mount through the same
+  generated component path; there is no threshold fallback.
+- Slot outlets, interpolation, opaque runtime directives, native
+  `pp-model`, child mounts, and structural controllers are covered
+  by generated component mount tests.
+- Remaining fragment-level `apply_static_plan` use is documented
+  and has focused coverage until fragment specialization removes it.
 
 ## 7. Performance target
 

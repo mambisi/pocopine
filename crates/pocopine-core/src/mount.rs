@@ -401,15 +401,12 @@ fn mount_component(
             let _ = el.set_attribute("data-pp-animate", ak);
         }
 
-        // RFC 062 Phase 1 — dispatch through the per-component
-        // mount ABI when the macro registered one. Today that
-        // function is the default generic shim; later phases can
-        // replace it with an unrolled specialized mount body
-        // without changing this runtime call site.
+        // RFC 062 — dispatch through the per-component compiled
+        // mount body. StaticTemplatePlan is no longer a component
+        // mount fallback; it remains only as macro/runtime IR for
+        // lifted fragments.
         if let Some(mount_template) = crate::registry::mount_template_for(tag) {
             mount_template(&root, scope.id, &proxy);
-        } else if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
-            crate::templates_plan::apply_static_plan(&root, scope.id, &proxy, plan, tag);
         }
     }
 

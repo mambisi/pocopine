@@ -162,10 +162,6 @@ thread_local! {
     /// reader: [`plan_failure_count`].
     static PLAN_FAILURES: Cell<u32> = const { Cell::new(0) };
 
-    /// RFC 062 Phase 2 evidence counter. Specialized mount
-    /// bodies bypass [`apply_static_plan`]; fallback bodies still
-    /// increment this counter so tests can distinguish the paths.
-    static APPLY_STATIC_PLAN_COUNT: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Register a template plan against a component tag. Called by
@@ -236,19 +232,6 @@ pub fn reset_plan_failure_count() {
     PLAN_FAILURES.with(|c| c.set(0));
 }
 
-/// Cumulative count of generic template-plan applications since
-/// process start. Intended for RFC 062 tests and diagnostics.
-#[doc(hidden)]
-pub fn apply_static_plan_count() -> u32 {
-    APPLY_STATIC_PLAN_COUNT.with(|c| c.get())
-}
-
-/// Reset the generic template-plan application counter.
-#[doc(hidden)]
-pub fn reset_apply_static_plan_count() {
-    APPLY_STATIC_PLAN_COUNT.with(|c| c.set(0));
-}
-
 /// Record one plan-install failure. Called from
 /// [`crate::mount`] / [`apply_static_plan`] when an install
 /// entry can't deliver. In debug builds this also panics with
@@ -299,7 +282,6 @@ pub fn apply_static_plan(
     plan: &'static StaticTemplatePlan,
     template_name: &str,
 ) {
-    APPLY_STATIC_PLAN_COUNT.with(|c| c.set(c.get().saturating_add(1)));
     // Slot materialisation mutates the element-child list by
     // replacing `<slot>` with author/default content. Snapshot
     // the outlet elements up front, then materialise them only
