@@ -352,25 +352,29 @@ impl Scope {
         // Still cheaper than 10K thread_local::with calls.
         PROXY_CLOSURES.with(|m| {
             let mut map = m.borrow_mut();
-            for id in ids {
-                map.remove(id);
+            if !map.is_empty() {
+                for id in ids {
+                    map.remove(id);
+                }
             }
         });
         FIELD_CACHE.with(|c| {
             let mut map = c.borrow_mut();
-            for id in ids {
-                map.remove(id);
+            if !map.is_empty() {
+                for id in ids {
+                    map.remove(id);
+                }
             }
         });
         FRESH_FIELDS.with(|f| {
             let mut map = f.borrow_mut();
-            for id in ids {
-                map.remove(id);
+            if !map.is_empty() {
+                for id in ids {
+                    map.remove(id);
+                }
             }
         });
-        for id in ids {
-            crate::lifecycle::__clear_mount_epoch(*id);
-        }
+        crate::lifecycle::__clear_mount_epochs(ids);
     }
 
     /// Recover the typed inner `Rc<RefCell<T>>`, if `T` matches the struct
@@ -699,6 +703,35 @@ pub fn append_list_inline<T: serde::Serialize>(field: &str, start_idx: usize, ro
             for (offset, row) in rows.iter().enumerate() {
                 if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
                     let _ = Reflect::set(&arr, &((start_idx + offset) as u32).into(), &new_js);
+                }
+            }
+        }
+        keep_field_fresh(sid, field);
+    }
+    crate::reactive::trigger(sid, field);
+}
+
+/// Prepend serialized rows into a cached JS Array for a Vec-like
+/// field while preserving existing JS row object identities in the
+/// shifted tail. Call from inside a handler after prepending the
+/// Rust Vec.
+pub fn prepend_list_inline<T: serde::Serialize>(field: &str, rows: &[T]) {
+    let Some(sid) = current_scope_id() else {
+        return;
+    };
+    let cached = FIELD_CACHE.with(|c| c.borrow().get(&sid).and_then(|m| m.get(field).cloned()));
+    if let Some(arr) = cached {
+        if arr.is_object() {
+            let array = js_sys::Array::from(&arr);
+            let added = rows.len() as u32;
+            let old_len = array.length();
+            for idx in (0..old_len).rev() {
+                let value = Reflect::get(&arr, &idx.into()).unwrap_or(JsValue::UNDEFINED);
+                let _ = Reflect::set(&arr, &(idx + added).into(), &value);
+            }
+            for (idx, row) in rows.iter().enumerate() {
+                if let Ok(new_js) = serde_wasm_bindgen::to_value(row) {
+                    let _ = Reflect::set(&arr, &(idx as u32).into(), &new_js);
                 }
             }
         }
