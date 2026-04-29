@@ -1058,27 +1058,34 @@ fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
     Some(current)
 }
 
-/// RFC-058 Phase 4.1d — `pp-if` body fragment runtime helper.
+/// RFC-058 Phase 4.1d / RFC 064 §5.1 — `pp-if` body fragment
+/// runtime helper.
 ///
 /// Parses `html` (the macro-cleaned body markup) into a fresh
 /// `<template>`'s content, extracts the single root element,
-/// then applies the per-body `StaticTemplatePlan` against the
-/// parent scope so every directive in the body installs via
-/// the Phase 1 helpers (no mount `walk` / `bind` /
-/// `dispatch` involvement). Returns the root element ready
-/// for the `if_::install` caller to pin its borrowed scope on
-/// + insert into the live DOM.
+/// scope-binds it, stamps `CTX_PARENT_KEY`, then hands the
+/// install pass off to `install_plan` — the macro-emitted
+/// per-fragment closure that has the plan body unrolled
+/// inline. Returns the root element ready for the
+/// `if_::install` caller to pin its borrowed scope on + insert
+/// into the live DOM.
 ///
 /// `None` return signals the body HTML didn't parse to a
 /// single root element — same shape as the legacy
 /// `clone_template_body` miss; the caller surfaces a console
 /// error and bails the mount.
-pub fn stamp_if_body(
+///
+/// The closure boundary eliminates the runtime
+/// [`apply_static_plan`] iteration for `pp-if` body fragments
+/// (RFC 064 §5.1 Phase 1.A). The closure receives the prepared
+/// body root with `bind_borrowed_scope_to` + `CTX_PARENT_KEY`
+/// already stamped.
+pub fn stamp_if_body_with(
     html: &str,
-    plan: &'static StaticTemplatePlan,
     scope_id: ScopeId,
     proxy: &JsValue,
     ctx_parent_id: ScopeId,
+    install_plan: impl FnOnce(&Element, ScopeId, &JsValue),
 ) -> Option<Element> {
     let doc = web_sys::window().and_then(|w| w.document())?;
     let template_el = doc.create_element("template").ok()?;
@@ -1099,29 +1106,14 @@ pub fn stamp_if_body(
     }
     let root = root?;
     crate::mount::bind_borrowed_scope_to(&root, scope_id, proxy);
-    // CTX_PARENT_KEY drives RFC-027 inject chain resolution for
-    // nested custom tags inside this body fragment. Callers pass
-    // `ctx_parent_id` distinct from `scope_id` when the controller
-    // template was authored in slot content — `scope_id` is the
-    // slot AUTHOR's scope (so directives bind against the right
-    // proxy) but the inject parent must chain through the slot
-    // OWNER. For pp-for body fragments `ctx_parent_id` equals the
-    // LoopScope id; the loop scope's `parent` is already set to
-    // the resolved inject parent at install time, so the chain
-    // walks correctly from there.
     let ctx_key = JsValue::from_str(crate::mount::CTX_PARENT_KEY);
     let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
     let _ = js_sys::Reflect::set(root.as_ref(), &ctx_key, &ctx_val);
-    apply_static_plan(&root, scope_id, proxy, plan, "<pp-if body>");
+    install_plan(&root, scope_id, proxy);
     if root.parent_node().is_some() {
         return Some(root);
     }
-
-    // A body rooted at `<slot>` is transparent: slot
-    // materialisation replaces the root element while the body is
-    // still detached. Return the materialised replacement so
-    // `pp-if` inserts and later removes the live branch root,
-    // not the stale slot element that has already been consumed.
+    // Slot-transparent recovery (see `stamp_if_body` doc).
     let kids = content.child_nodes();
     for i in 0..kids.length() {
         if let Some(n) = kids.item(i) {

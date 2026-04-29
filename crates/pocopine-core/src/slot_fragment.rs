@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::DocumentFragment;
+use web_sys::{DocumentFragment, Element};
 
 use crate::reactive::ScopeId;
 
@@ -267,15 +267,17 @@ pub fn clear(child_scope_id: ScopeId) {
 /// `<table>`, `<li>` outside `<ul>`) the same way the
 /// browser would for any author-written markup.
 /// Stamp slot HTML with directives + apply a static plan against
-/// the parent scope. RFC-058 Phase 3.5c — emitted by the macro
-/// for slot subtrees that carry plan-eligible directives
-/// (`pp-text`, `pp-bind`, `@click`, etc.).
+/// the parent scope. RFC-058 Phase 3.5c / RFC 064 §5.1 —
+/// emitted by the macro for slot subtrees that carry plan-
+/// eligible directives (`pp-text`, `pp-bind`, `@click`, etc.).
 ///
-/// Goes through a temporary `<div>` host so `apply_static_plan`
-/// can resolve `node_path`s against a single root element. The
-/// plan installs every directive against the parent scope using
-/// the Phase 1 helpers (effects subscribe to the parent proxy,
-/// listeners delegate via the parent's scope), and the
+/// Goes through a temporary `<div>` host so the install pass
+/// can resolve `node_path`s against a single root element.
+/// `install_plan` is the macro-emitted per-fragment closure
+/// that has the plan body unrolled inline; it installs every
+/// directive against the parent scope using the Phase 1
+/// helpers (effects subscribe to the parent proxy, listeners
+/// delegate via the parent's scope). After install, the
 /// just-installed children move into the slot fragment buffer
 /// the runtime then splices before the live `<slot>` element.
 ///
@@ -283,13 +285,20 @@ pub fn clear(child_scope_id: ScopeId) {
 /// effects run synchronously at install and write to detached
 /// DOM; listeners attach to detached elements and fire normally
 /// once the children land in the document.
-pub fn stamp_dynamic_slot(
+///
+/// The closure boundary eliminates the runtime
+/// [`crate::templates_plan::apply_static_plan`] iteration for
+/// dynamic slot fragments (RFC 064 §5.1 Phase 1.B). Top-level
+/// children are scope-stamped before the install runs so any
+/// nested controller resolves its `CTX_PARENT_KEY` against the
+/// slot owner.
+pub fn stamp_dynamic_slot_with(
     host: &DocumentFragment,
     html: &str,
-    plan: &'static crate::templates_plan::StaticTemplatePlan,
     parent_scope_id: ScopeId,
     parent_proxy: &JsValue,
     child_scope_id: ScopeId,
+    install_plan: impl FnOnce(&Element, ScopeId, &JsValue),
 ) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
@@ -299,28 +308,9 @@ pub fn stamp_dynamic_slot(
     };
     temp.set_inner_html(html);
     crate::mount::bind_borrowed_scope_to(&temp, parent_scope_id, parent_proxy);
-    // RFC-027 inject chain — stamp `CTX_PARENT_KEY` on the
-    // temp host so any nested `mount_child_component` call
-    // inside `apply_static_plan` resolves its inject parent
-    // to the slot owner (the child component whose template
-    // contains the `<slot>`), not to the parent caller scope
-    // we're installing bindings against. Mirrors what
-    // `materialize_slot`'s legacy capture path does for
-    // mount-driven slot content (see `mount.rs` near the
-    // CTX_PARENT_KEY stamp inside `bind_borrowed_scope_to`).
     let key = wasm_bindgen::JsValue::from_str(crate::mount::CTX_PARENT_KEY);
     let val = wasm_bindgen::JsValue::from_f64(child_scope_id.0 as f64);
     let _ = js_sys::Reflect::set(temp.as_ref(), &key, &val);
-    // Stamp every top-level child BEFORE `apply_static_plan`
-    // runs — controllers like `pp-for` resolve their template
-    // element's `CTX_PARENT_KEY` at install time to seed the
-    // LoopScope's inject chain through the slot owner. If we
-    // stamped after `apply_static_plan`, the install would see
-    // `None` and fall back to the install scope, which is the
-    // SLOT AUTHOR (caller) — wrong direction; descendants then
-    // can't `inject()` providers from the slot owner (the
-    // tags-input chip × bug — `ROOT.inject()` returned `None`
-    // for items rendered via a `pp-for` inside the slot).
     let elements = temp.children();
     for i in 0..elements.length() {
         if let Some(el) = elements.item(i) {
@@ -328,7 +318,7 @@ pub fn stamp_dynamic_slot(
             let _ = js_sys::Reflect::set(el.as_ref(), &key, &val);
         }
     }
-    crate::templates_plan::apply_static_plan(&temp, parent_scope_id, parent_proxy, plan, "<slot>");
+    install_plan(&temp, parent_scope_id, parent_proxy);
 
     let kids = temp.child_nodes();
     let mut snapshot: Vec<web_sys::Node> = Vec::with_capacity(kids.length() as usize);
