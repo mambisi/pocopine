@@ -94,6 +94,40 @@ fn phf_overrides_thread_local_template_entry() {
 }
 
 #[wasm_bindgen_test]
+fn clear_active_phf_registry_clears_template_clone_cache() {
+    static REGISTRY: pocopine::__private::phf::Map<&'static str, &'static ComponentVTable> = pocopine::__private::phf::phf_map! {
+        "phf-lookup-home" => PhfLookupHome::__POCO_VTABLE,
+    };
+
+    pocopine::__private::clear_active_phf_registry_for_test();
+    pocopine_core::templates::register_template(
+        "phf-lookup-home",
+        r#"<div class="cached-thread-local-wrong"></div>"#,
+    );
+    let wrong = pocopine_core::templates::template_clone_for("phf-lookup-home")
+        .expect("thread-local template clone cached");
+    assert_eq!(
+        wrong
+            .first_element_child()
+            .and_then(|el| el.get_attribute("class"))
+            .as_deref(),
+        Some("cached-thread-local-wrong"),
+    );
+
+    pocopine::__private::clear_active_phf_registry_for_test();
+    pocopine::__private::set_active_phf_registry(&REGISTRY);
+    let cloned = pocopine_core::templates::template_clone_for("phf-lookup-home")
+        .expect("phf template clone should not reuse stale thread-local cache");
+    assert_eq!(
+        cloned
+            .first_element_child()
+            .and_then(|el| el.get_attribute("class"))
+            .as_deref(),
+        Some("phf-lookup-home"),
+    );
+}
+
+#[wasm_bindgen_test]
 fn phf_template_plan_for_returns_static_plan() {
     static REGISTRY: pocopine::__private::phf::Map<&'static str, &'static ComponentVTable> = pocopine::__private::phf::phf_map! {
         "phf-lookup-planned" => PhfLookupPlanned::__POCO_VTABLE,

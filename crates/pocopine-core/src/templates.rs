@@ -74,6 +74,11 @@ pub fn template_clone_for(name: &str) -> Option<DocumentFragment> {
     cloned_node.dyn_into::<DocumentFragment>().ok()
 }
 
+#[doc(hidden)]
+pub fn clear_template_element_cache_for_test() {
+    TEMPLATE_ELEMENTS.with(|cache| cache.borrow_mut().clear());
+}
+
 pub fn is_registered(name: &str) -> bool {
     if crate::registry::active_component_vtable(name)
         .and_then(|v| v.template_html)
