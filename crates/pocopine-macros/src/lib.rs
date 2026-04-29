@@ -60,6 +60,7 @@ mod slot_assertions;
 // and emits a `&[StaticRowPlan]` literal alongside template
 // stamps the caller injects into the source.
 mod for_plan;
+mod forbidden_directives;
 mod template_plan;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
@@ -1636,6 +1637,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => proc_macro2::TokenStream::new(),
     };
 
+    // RFC 063 — hard error on any directive RFC 063 §4.1
+    // deletes. Always-on (no opt-in). See
+    // `forbidden_directives::FORBIDDEN` for the current entries.
+    let forbidden_directive_diagnostics_tokens = match &template_ast {
+        Some(ast) => forbidden_directives::emit_diagnostics(ast),
+        None => proc_macro2::TokenStream::new(),
+    };
+
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
@@ -1995,6 +2004,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // `uses = [...]` doesn't cover. Opt-in: only fires when
         // `uses` is declared.
         #unknown_tag_diagnostics_tokens
+
+        // RFC 063 — hard `compile_error!` for every directive
+        // RFC 063 §4.1 deletes (`pp-cloak` today; more in
+        // follow-up commits).
+        #forbidden_directive_diagnostics_tokens
 
         #observe_impl
 
