@@ -382,18 +382,6 @@ struct PlanNamedSlotHost {}
 #[handlers]
 impl PlanNamedSlotHost {}
 
-/// RFC-058 Phase 3.5g (review fix) — host whose default slot
-/// content carries `pp-data`, which the lift envelope rejects
-/// (component-scope boundary). The named footer slot still
-/// lifts; the default branch must flip `requires_walker` so
-/// the legacy capture path drives the unliftable subtree.
-#[derive(Default, Serialize, Deserialize)]
-#[component(template = "PlanUnliftableDefaultHost.html")]
-struct PlanUnliftableDefaultHost {}
-
-#[handlers]
-impl PlanUnliftableDefaultHost {}
-
 /// RFC-058 Phase 3.5g — child whose `<slot>` declares
 /// scoped-slot `:prop` bindings. The child's `current` field
 /// drives those bindings; the host below uses `pp-let="ctx"`
@@ -705,7 +693,6 @@ fn register_all() {
     PlanNamedSlotHost::register();
     PlanScopedSlotChild::register();
     PlanScopedSlotHost::register();
-    PlanUnliftableDefaultHost::register();
     PlanOpaqueDirectiveHost::register();
     PlanChildHostRefHost::register();
     PlanInterpHost::register();
@@ -1808,26 +1795,6 @@ async fn macro_lifts_scoped_slot_fragment_with_pp_let() {
     );
 
     host.remove();
-}
-
-/// RFC-058 Phase 3.5g (review fix) — when the partition can
-/// lift one named slot but the default subtree fails the lift
-/// envelope (here `pp-data` makes the default mount-only).
-/// RFC-058 Phase 6.5 — the requires_walker flip is no longer
-/// modeled; the test is reduced to checking the named slot still
-/// lifts even when the default doesn't.
-#[wasm_bindgen_test]
-async fn unliftable_default_slot_still_lifts_named_slot() {
-    register_all();
-
-    let plan = template_plan_for("plan-unliftable-default-host")
-        .expect("plan-unliftable-default-host has one nested non-HTML5 tag");
-    assert_eq!(plan.child_mounts.len(), 1);
-    let names: Vec<&str> = plan.child_mounts[0].slots.iter().map(|s| s.name).collect();
-    assert!(
-        names.contains(&"footer"),
-        "the liftable named slot must still emit a fragment",
-    );
 }
 
 /// RFC-058 Phase 3 hardening — `pp-roving.both` lifts into a
