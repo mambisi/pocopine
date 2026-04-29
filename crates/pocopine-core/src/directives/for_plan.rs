@@ -924,14 +924,14 @@ fn instance_proxy(instance: &RowInstance, scope_id: ScopeId) -> Option<JsValue> 
 }
 
 /// Walk up from `el` looking for the nearest ancestor (inclusive)
-/// stamped with `pp-data="<name>"` — that's the host component.
-/// Used at directive-bind time to find which component's plan
-/// table to consult; runs once per `<template pp-for>`, not per
-/// row.
+/// stamped with `data-pp-scope-id="<name>"` — that's the host
+/// component. Used at directive-bind time to find which
+/// component's plan table to consult; runs once per
+/// `<template pp-for>`, not per row.
 fn nearest_component_name(el: &Element) -> Option<String> {
     let mut cur: Option<Element> = Some(el.clone());
     while let Some(e) = cur {
-        if let Some(name) = e.get_attribute("pp-data") {
+        if let Some(name) = e.get_attribute("data-pp-scope-id") {
             return Some(name);
         }
         let tag = e.tag_name().to_ascii_lowercase();

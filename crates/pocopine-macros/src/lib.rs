@@ -876,7 +876,7 @@ fn inject_pp_data_static(raw: &str, name: &str) -> String {
         };
         let self_closing = close > 0 && bytes[close - 1] == b'/';
         let insert_at = if self_closing { close - 1 } else { close };
-        let attr = format!(" pp-data=\"{name}\"");
+        let attr = format!(" data-pp-scope-id=\"{name}\"");
         let mut out = String::with_capacity(raw.len() + attr.len());
         out.push_str(&raw[..insert_at]);
         if !out.ends_with(char::is_whitespace) {

@@ -69,7 +69,7 @@ fn phf_template_for_returns_static_html() {
         .expect("template comes from active phf registry");
     assert!(html.contains(r#"class="phf-lookup-home""#));
     assert!(
-        html.contains(r#"pp-data="phf-lookup-home""#),
+        html.contains(r#"data-pp-scope-id="phf-lookup-home""#),
         "phf template is the compiled HTML, not the raw template source",
     );
 }

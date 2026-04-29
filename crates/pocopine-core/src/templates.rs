@@ -3,7 +3,7 @@
 //! The `#[component]` macro emits a call to [`register_template`] with the
 //! component's compiled HTML. The macro pipes the raw `.poco` contents
 //! through [`inject_pp_data`] so the mount can recognise the template
-//! root by its `pp-data` attribute without authors having to type one.
+//! root by its `data-pp-scope-id` attribute without authors having to type one.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -116,7 +116,7 @@ pub fn registered_template_names() -> Vec<String> {
 
 /// Full template compilation entry-point for the macro.
 ///
-/// - `role = None` → just injects `pp-data` (the classic path).
+/// - `role = None` → just injects `data-pp-scope-id` (the classic path).
 /// - `role = Some((tag, role_name))` → treats the template root as a
 ///   `<root>` placeholder (see [RFC-033](../../rfcs/rfc-033-primitive-roles.md)).
 ///   Rewrites `<root>` / `</root>` to `<tag>` / `</tag>`, splicing
@@ -124,7 +124,7 @@ pub fn registered_template_names() -> Vec<String> {
 ///   (so the role attribute lands on the primitive's real root even
 ///   when it's wrapped in `<template pp-if="...">`). For `tag == "button"`
 ///   and no existing `type` attribute, also injects `type="button"`.
-///   Finally runs [`inject_pp_data`] so `pp-data` lands on the outermost
+///   Finally runs [`inject_pp_data`] so `data-pp-scope-id` lands on the outermost
 ///   opening tag as usual.
 pub fn compile_template(raw: &str, name: &str, role: Option<(&str, &str)>) -> String {
     let Some((tag, role_name)) = role else {
@@ -178,7 +178,7 @@ fn root_placeholder_has_attr(raw: &str, needle: &str) -> bool {
     false
 }
 
-/// Insert `pp-data="<name>"` into the first element's opening tag of
+/// Insert `data-pp-scope-id="<name>"` into the first element's opening tag of
 /// `raw`. The caller guarantees the template has a real element root;
 /// comments, doctypes, and leading whitespace are skipped.
 ///
@@ -201,7 +201,7 @@ pub fn inject_pp_data(raw: &str, name: &str) -> String {
         if bytes[i] != b'<' {
             // Stray text before the root — emit as-is and give up on
             // rewriting. The mount will fail gracefully when it can't
-            // find `pp-data`.
+            // find `data-pp-scope-id`.
             return raw.to_owned();
         }
         // `<!--` comment
@@ -233,11 +233,12 @@ pub fn inject_pp_data(raw: &str, name: &str) -> String {
         let Some(close) = find_tag_end(bytes, i) else {
             return raw.to_owned();
         };
-        // Splice ` pp-data="<name>"` before the closing char(s).
-        // If the tag is self-closing (`<foo />`), keep the `/>`.
+        // Splice ` data-pp-scope-id="<name>"` before the closing
+        // char(s). If the tag is self-closing (`<foo />`), keep
+        // the `/>`.
         let self_closing = close > 0 && bytes[close - 1] == b'/';
         let insert_at = if self_closing { close - 1 } else { close };
-        let attr = format!(" pp-data=\"{name}\"");
+        let attr = format!(" data-pp-scope-id=\"{name}\"");
         let mut out = String::with_capacity(raw.len() + attr.len());
         out.push_str(&raw[..insert_at]);
         // Ensure exactly one space before the attribute.
@@ -298,7 +299,7 @@ mod tests {
     #[test]
     fn basic_root_gets_attr() {
         let out = inject_pp_data("<div>hi</div>", "counter");
-        assert_eq!(out, r#"<div pp-data="counter">hi</div>"#);
+        assert_eq!(out, r#"<div data-pp-scope-id="counter">hi</div>"#);
     }
 
     #[test]
@@ -306,26 +307,26 @@ mod tests {
         let out = inject_pp_data("<div class=\"x\" pp-text=\"label\">hi</div>", "counter");
         assert_eq!(
             out,
-            r#"<div class="x" pp-text="label" pp-data="counter">hi</div>"#
+            r#"<div class="x" pp-text="label" data-pp-scope-id="counter">hi</div>"#
         );
     }
 
     #[test]
     fn handles_self_closing_root() {
         let out = inject_pp_data("<input type=\"text\" />", "foo");
-        assert_eq!(out, r#"<input type="text" pp-data="foo"/>"#);
+        assert_eq!(out, r#"<input type="text" data-pp-scope-id="foo"/>"#);
     }
 
     #[test]
     fn skips_leading_comments() {
         let out = inject_pp_data("<!-- hello --><div>x</div>", "x");
-        assert_eq!(out, r#"<!-- hello --><div pp-data="x">x</div>"#);
+        assert_eq!(out, r#"<!-- hello --><div data-pp-scope-id="x">x</div>"#);
     }
 
     #[test]
     fn tolerates_gt_in_attr_value() {
         let out = inject_pp_data("<div title=\"a > b\">x</div>", "n");
-        assert_eq!(out, r#"<div title="a > b" pp-data="n">x</div>"#);
+        assert_eq!(out, r#"<div title="a > b" data-pp-scope-id="n">x</div>"#);
     }
 
     // ── compile_template + role rewriting ─────────────────────────
@@ -333,7 +334,7 @@ mod tests {
     #[test]
     fn compile_template_no_role_matches_inject_pp_data() {
         let out = compile_template("<div>hi</div>", "c", None);
-        assert_eq!(out, r#"<div pp-data="c">hi</div>"#);
+        assert_eq!(out, r#"<div data-pp-scope-id="c">hi</div>"#);
     }
 
     #[test]
@@ -345,7 +346,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            r#"<span data-pine-role="visual" class="pine-avatar-root" pp-data="pine-avatar-root"><slot></slot></span>"#
+            r#"<span data-pine-role="visual" class="pine-avatar-root" data-pp-scope-id="pine-avatar-root"><slot></slot></span>"#
         );
     }
 
@@ -379,7 +380,7 @@ mod tests {
         let out = compile_template("<root><slot/></root>", "p", Some(("div", "panel")));
         assert_eq!(
             out,
-            r#"<div data-pine-role="panel" pp-data="p"><slot/></div>"#
+            r#"<div data-pine-role="panel" data-pp-scope-id="p"><slot/></div>"#
         );
     }
 
@@ -392,7 +393,7 @@ mod tests {
             Some(("img", "media")),
         );
         assert!(out.contains(r#"data-pine-role="media""#));
-        assert!(out.contains(r#"pp-data="pine-avatar-image""#));
+        assert!(out.contains(r#"data-pp-scope-id="pine-avatar-image""#));
         assert!(out.ends_with("/>"));
     }
 }
