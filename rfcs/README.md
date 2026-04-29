@@ -73,3 +73,4 @@ Conventions:
 | 062 | [Per-component mount specialization](./rfc-062-per-component-mount-specialization.md) | Draft |
 | 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
 | 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
+| 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
