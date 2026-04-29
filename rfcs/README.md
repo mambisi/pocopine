@@ -72,3 +72,4 @@ Conventions:
 | 061 | [Compiled-mount-only architecture](./rfc-061-compiled-mount-only.md) | Draft |
 | 062 | [Per-component mount specialization](./rfc-062-per-component-mount-specialization.md) | Draft |
 | 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
+| 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
