@@ -16,6 +16,12 @@
             <button id="add" type="button" @click="add">Append 1,000 rows</button>
           </div>
           <div class="col-sm-6 smallpad">
+            <button id="prepend" type="button" @click="prepend">Prepend 1,000 rows</button>
+          </div>
+          <div class="col-sm-6 smallpad">
+            <button id="reorder" type="button" @click="reorder_all">Reverse rows</button>
+          </div>
+          <div class="col-sm-6 smallpad">
             <button id="update" type="button" @click="update_every_tenth">Update every 10th row</button>
           </div>
           <div class="col-sm-6 smallpad">

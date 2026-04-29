@@ -94,6 +94,22 @@ impl JsBenchApp {
         });
     }
 
+    pub fn prepend(&mut self) {
+        self.measure("prepend(1000)", |s| {
+            let mut more = s.make_rows(1_000);
+            more.append(&mut s.rows);
+            s.rows = more;
+            pocopine::replace_field_inline("rows", &s.rows);
+        });
+    }
+
+    pub fn reorder_all(&mut self) {
+        self.measure("reorder all", |s| {
+            s.rows.reverse();
+            pocopine::replace_field_inline("rows", &s.rows);
+        });
+    }
+
     pub fn update_every_tenth(&mut self) {
         self.measure("update every 10th", |s| {
             for idx in (0..s.rows.len()).step_by(10) {

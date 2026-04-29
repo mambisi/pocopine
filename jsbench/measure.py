@@ -198,6 +198,28 @@ def standard_plan() -> list[tuple[str, int]]:
     ]
 
 
+def profile_plan() -> list[tuple[str, int]]:
+    # Pocopine-only diagnostic plan. It keeps the standard
+    # create/update/swap/remove/clear/append shape, then adds
+    # structural prepend and full-reorder actions for RFC 064
+    # Phase 4 profiling. The normal cross-framework bench plan
+    # intentionally stays unchanged.
+    return [
+        ("run", 100),
+        ("update", 100),
+        ("swaprows", 100),
+        ("remove", 100),
+        ("clear", 80),
+        ("run", 100),
+        ("add", 150),
+        ("prepend", 150),
+        ("reorder", 150),
+        ("clear", 80),
+        ("runlots", 250),
+        ("clear", 80),
+    ]
+
+
 def launch_browser(p, name: str):
     """Pick a Playwright browser by name. Defaults to firefox to
     preserve the historical bench numbers; --browser chromium runs
@@ -274,7 +296,7 @@ def profile_bench(root: Path, browser_name: str) -> int:
         page.goto(base_url)
         page.wait_for_selector("#run", timeout=15_000)
 
-        plan = standard_plan()
+        plan = profile_plan()
         # Walls per action; profiles per action (parallel ordering).
         walls: dict[str, list[float]] = {}
         profiles: dict[str, list[dict]] = {}
