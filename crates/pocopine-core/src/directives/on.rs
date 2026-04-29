@@ -265,7 +265,7 @@ pub fn install(
 /// rewrite happens at parse time inside `run` today; the
 /// public install helper accepts an already-parsed AST, so the
 /// Phase 2.4 plan applier needs the same rewrite available.
-/// Public so [`crate::templates_plan::apply_static_plan`] can
+/// Public so the compiled plan installer can
 /// call it before handing the AST to [`install`].
 #[doc(hidden)]
 pub fn backfill_legacy_call(ast: Spanned<Expr>) -> Spanned<Expr> {

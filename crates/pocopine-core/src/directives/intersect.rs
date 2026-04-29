@@ -26,7 +26,7 @@ enum Edge {
     Leave,
 }
 
-/// Compiled-path install entry. Called by `apply_static_plan` for
+/// Compiled-path install entry. Called by the compiled plan installer for
 /// each `pp-intersect[:enter|:leave]="handler"` site the macro
 /// lifted into the template plan.
 pub fn install_opaque(

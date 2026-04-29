@@ -6708,7 +6708,7 @@ async fn tags_input_500_tags_delete_click_removes_tag() {
 // Walker is gone — every registered Pine plan must apply
 // cleanly through the macro-emitted entries. The audit
 // reduces to a smoke test that every plan registers and
-// `apply_static_plan` doesn't fail-fast at install time
+// compiled plan install does not fail-fast at install time
 // (covered by per-component tests above).
 #[wasm_bindgen_test]
 async fn pine_template_plan_audit() {

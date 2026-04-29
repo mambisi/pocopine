@@ -30,7 +30,7 @@ use crate::path::{resolve_path, write_path};
 use crate::reactive::effect;
 use crate::scope::with_current_el;
 
-/// Compiled-path entry used by `apply_static_plan`'s
+/// Compiled-path entry used by compiled child-host
 /// child-host model dispatch. Routes through the component or
 /// native install depending on whether `el` resolves to a
 /// registered child component tag.
@@ -134,7 +134,7 @@ fn install_component(
 /// RFC-058 Phase 6.5 — compiled-path entry for `pp-model` on a
 /// native input/textarea/select. Same effect + listener wiring
 /// as the runtime mount dispatch (`run_native`); extracted so
-/// `apply_static_plan` can install it directly without going
+/// compiled plan code can install it directly without going
 /// through the directive registry. The macro emits one
 /// [`crate::directives::for_plan::StaticNativeModel`] per
 /// `<input pp-model="field">` site and the runtime applier

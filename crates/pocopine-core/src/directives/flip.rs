@@ -59,7 +59,7 @@ thread_local! {
     static SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Compiled-path install entry. Called by `apply_static_plan` for
+/// Compiled-path install entry. Called by the compiled plan installer for
 /// each `pp-flip` site the macro lifted into the template plan.
 pub fn install_opaque(
     el: &Element,

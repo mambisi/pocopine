@@ -2,8 +2,8 @@
 //!
 //! Phase 2 ships a macro-emitted `&'static StaticTemplatePlan`
 //! per plan-eligible component plus a runtime fast-path
-//! (`apply_static_plan`) the mount calls before its recursive
-//! descent. The mount test suite already exercises end-to-end
+//! (specialized install entries) the mount calls without a recursive
+//! directive walk. The mount test suite already exercises end-to-end
 //! behaviour for the components on the plan path; this file
 //! pins the parts of the §6 envelope that are easy to lose
 //! silently.
@@ -518,7 +518,7 @@ impl PlanInterpHost {
 /// element child (`a {{x}}<em>middle</em>b {{y}}`). The macro
 /// emits two `StaticInterp` entries both targeting the same
 /// parent, with `text_index` 0 and 1 keyed against the original
-/// DOM. `apply_static_plan` must keep those indices valid even
+/// DOM. compiled interp install must keep those indices valid even
 /// though installing index 0 mutates the live text-node list
 /// (inserts new siblings, removes the placeholder).
 #[derive(Default, Serialize, Deserialize)]
@@ -1127,7 +1127,7 @@ async fn rfc064_keyed_remove_and_swap_reuse_dom_nodes() {
 /// RFC-058 Phase 3.5c — dynamic slot fragment lifting. The
 /// macro emits a fragment fn whose body installs `pp-text` and
 /// `@click` against the parent scope via `stamp_dynamic_slot`
-/// + `apply_static_plan`. The slot content reads parent state
+/// and compiled fragment install. The slot content reads parent state
 /// (`title`) and writes to it (`bump`) — proving the
 /// parent_proxy thread captures the right scope at install
 /// time and the bindings/listeners install correctly inside
@@ -1619,7 +1619,7 @@ async fn slot_fragment_runtime_hook_replaces_capture_path() {
     assert_eq!(
         child_plan.slot_outlets.len(),
         1,
-        "the child's <slot> is materialised by apply_static_plan",
+        "the child's <slot> is materialised by compiled slot-outlet install",
     );
     assert_eq!(child_plan.slot_outlets[0].name, "default");
 
@@ -2060,7 +2060,7 @@ async fn macro_lifts_opaque_runtime_directive() {
 /// `is_lift_eligible_opaque` in
 /// `crates/pocopine-macros/src/template_plan.rs`, mirror the
 /// change here. RFC-058 Phase 6.5 — the directive registry is
-/// gone; `apply_static_plan`'s `dispatch_opaque` is the typed
+/// gone; the compiled plan dispatcher is the typed
 /// match that replaces it. We can no longer probe lookup, so
 /// just keep the allowlist as documentation.
 #[wasm_bindgen_test]
@@ -2202,7 +2202,7 @@ async fn macro_lifts_text_interpolation() {
 /// RFC-058 Phase 6.2 regression — when a single parent carries
 /// two `{{expr}}` text nodes separated by an element, the
 /// macro emits both entries with `text_index` keyed against
-/// the original DOM (0 and 1). `apply_static_plan` walks the
+/// the original DOM (0 and 1). compiled interp install walks the
 /// entries in order, but each `install_planned` mutates the
 /// parent's live text-node list — inserting static + dynamic
 /// siblings before the placeholder, then removing the
@@ -2260,7 +2260,7 @@ async fn planned_interp_keeps_text_indexes_valid_across_mutations() {
 /// `mount_child_component` directly. `bind` itself is never
 /// invoked on the wrapper, the intermediate `<section>`, or the
 /// component tag. The plan applier handles every directive on every
-/// descendant via `apply_static_plan`.
+/// descendant via compiled plan entries.
 ///
 /// Pin the bind-call delta of 0 so any regression that
 /// re-introduces a body-level recursive scan is loud.
@@ -2287,7 +2287,7 @@ async fn compiled_root_discovery_skips_runtime_recursion_for_registered_tags() {
     let post = bind_call_count() - baseline;
     assert_eq!(
         post, 0,
-        "compiled-mount path mounts via apply_static_plan directly — no bind call on the wrapper, section, or component tag",
+        "compiled-mount path mounts via compiled entries directly — no bind call on the wrapper, section, or component tag",
     );
 
     assert_eq!(read(&host, ".pih-line"), "hello world, you have 3 items");
@@ -2369,7 +2369,7 @@ async fn pp_model_on_native_input_lifts_without_walker_fallback() {
 /// outer test-harness `<div>` (the `mount()` helper's wrapper),
 /// the `<plan-interp-host>` component tag, then a template root
 /// and 3 native children inside. The compiled entry binds none of
-/// them; it routes through `apply_static_plan` and
+/// them; it routes through compiled plan entries and
 /// `finalize_compiled_subtree`.
 #[wasm_bindgen_test]
 async fn compiled_mount_skips_recursion_for_plan_clean_subtrees() {
@@ -2387,7 +2387,7 @@ async fn compiled_mount_skips_recursion_for_plan_clean_subtrees() {
     // The compiled entry binds nothing (delta=0).
     assert_eq!(
         delta, 0,
-        "compiled entry mounts via apply_static_plan — no `bind` calls expected \
+        "compiled entry mounts via compiled entries — no `bind` calls expected \
          ({delta} bind calls observed)",
     );
 
