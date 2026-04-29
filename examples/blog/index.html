@@ -11,12 +11,14 @@
   </style>
 </head>
 <body>
-  <h1>pocopine blog</h1>
+  <div pp-app>
+    <h1>pocopine blog</h1>
 
-  <blog-post post-id="1"></blog-post>
+    <blog-post post-id="1"></blog-post>
 
-  <h2 style="margin-top:2rem">A missing post (server-returned error)</h2>
-  <blog-post post-id="999"></blog-post>
+    <h2 style="margin-top:2rem">A missing post (server-returned error)</h2>
+    <blog-post post-id="999"></blog-post>
+  </div>
 
   <script type="module">
     import init from "/pkg/blog.js";
