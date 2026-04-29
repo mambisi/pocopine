@@ -229,3 +229,57 @@ They move the standard Firefox geomean below the same-session Yew
 result without adding LIS complexity. Remove remains noisy and still
 above vanilla/Vue/Yew in this sample, so the next optimization should
 profile remove substeps rather than add a broad reorder algorithm.
+
+## Phase 4 Checkpoint — Batched Mount/Clear Cleanup
+
+Implemented after the remove/swap checkpoint:
+
+- compiled row mounts now batch `RowInstance` insertion,
+  list-watcher membership updates, and parent-binding first refresh
+  for newly inserted rows;
+- keyed path resolution now interns `item.path` property keys as
+  `JsValue`s at install time and uses a single-field fast path for
+  common keys like `row.id`;
+- `clone_template_body` clones the template's first element child
+  directly instead of cloning the whole `DocumentFragment` and then
+  searching for an element;
+- compiled-row bulk clear skips the per-row transition scan. The
+  macro's row-plan envelope already rejects transition attributes,
+  so scanning 10,000 compiled rows before a bulk clear was redundant.
+
+Counter size remains unchanged from the remove/swap checkpoint:
+
+| Measurement | RFC 062 baseline | Phase 3 | Phase 4 batched mount/clear |
+|---|---:|---:|---:|
+| Raw wasm bytes | 347,684 | 346,617 | 346,617 |
+| Gzip wasm bytes | 147,045 | 146,821 | 146,828 |
+
+Same-session Firefox standard jsbench, with vanilla rerun as the
+control baseline:
+
+| Framework | Geomean ms | vs vanilla |
+|---|---:|---:|
+| vanilla | 183.85 | 1.00x |
+| Vue | 205.98 | 1.12x |
+| pocopine | 211.52 | 1.15x |
+| Yew | 225.99 | 1.23x |
+
+Pocopine action means from that run:
+
+```text
+run(1000)                201.60
+update every 10th        156.01
+select                   119.55
+swapRows                 149.80
+remove                   170.85
+clear                    183.56
+runLots(10000)           857.80
+add(1000)                264.40
+geomean                  211.52
+```
+
+Decision after checkpoint: keep the batched mount and clear cleanup.
+The standard Firefox geomean is now inside the requested 211-215 ms
+band and remains between Vue and Yew in the same-session framework
+matrix. The runLots sample is still noisy, so the next performance
+step should be a narrower create/runLots profile before adding LIS.
