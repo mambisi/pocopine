@@ -55,6 +55,23 @@ pub fn install(
     body_fn: Option<crate::directives::for_plan::IfBodyFn>,
     teleport_selector: Option<&str>,
 ) {
+    install_eval(
+        template,
+        parent_proxy,
+        Rc::new(move |scope| expr::evaluate(&ast, scope)),
+        body_fn,
+        teleport_selector,
+    );
+}
+
+#[doc(hidden)]
+pub fn install_eval(
+    template: HtmlTemplateElement,
+    parent_proxy: JsValue,
+    evaluator: Rc<dyn Fn(&JsValue) -> JsValue>,
+    body_fn: Option<crate::directives::for_plan::IfBodyFn>,
+    teleport_selector: Option<&str>,
+) {
     let template_el: Element = template.clone().into();
     let track_anchor = template_el.clone();
 
@@ -88,7 +105,7 @@ pub fn install(
     let current: Rc<RefCell<Option<Element>>> = Rc::new(RefCell::new(None));
 
     let effect_id = effect(move || {
-        let truthy = expr::evaluate_truthy(&ast, &parent_proxy);
+        let truthy = !evaluator(&parent_proxy).is_falsy();
 
         let existing = current.borrow().clone();
         match (truthy, existing) {

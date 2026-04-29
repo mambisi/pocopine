@@ -69,6 +69,45 @@ impl PlanTextEcho {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Rfc064ExprNested {
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rfc064-expr-host",
+    template_inline = r#"<div>
+        <span class="r64-ident" pp-text="label"></span>
+        <span class="r64-field" pp-text="nested.label"></span>
+        <span class="r64-literal" pp-text="'literal'"></span>
+        <span class="r64-not" pp-text="!hidden"></span>
+        <span class="r64-compare" pp-text="count > 2"></span>
+        <span class="r64-bool" pp-text="ready && count > 2"></span>
+        <span class="r64-fallback" pp-text="count > 2 ? 'yes' : 'no'"></span>
+    </div>"#
+)]
+struct Rfc064ExprHost {
+    label: String,
+    nested: Rfc064ExprNested,
+    hidden: bool,
+    count: u32,
+    ready: bool,
+}
+
+#[handlers]
+impl Rfc064ExprHost {
+    pub fn on_setup(&mut self) {
+        self.label = "identifier".into();
+        self.nested = Rfc064ExprNested {
+            label: "field".into(),
+        };
+        self.hidden = false;
+        self.count = 3;
+        self.ready = true;
+    }
+}
+
 /// Template whose only plan-relevant content is a
 /// `<template pp-for>` row. With §6.2 layering, the row-plan
 /// analyser still owns the row body, but the template-plan
@@ -665,6 +704,7 @@ fn doc() -> web_sys::Document {
 
 fn register_all() {
     PlanTextEcho::register();
+    Rfc064ExprHost::register();
     PlanForLoop::register();
     PlanChildLeaf::register();
     PlanChildHost::register();
@@ -828,6 +868,51 @@ async fn rfc062_generated_mount_covers_slot_interp_opaque_and_native_model_entri
         assert_eq!(plan_failure_count(), 0, "{html} should mount cleanly");
         host.remove();
     }
+}
+
+#[wasm_bindgen_test]
+async fn rfc064_compiles_safe_expression_envelope_and_preserves_fallback() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("rfc064-expr-host").expect("rfc064 expression fixture has a plan");
+    assert_eq!(plan.bindings.len(), 7);
+
+    let compiled_by_expr = |expr: &str| {
+        plan.bindings
+            .iter()
+            .find(|binding| binding.expr_src == expr)
+            .map(|binding| binding.compiled.is_some())
+            .unwrap_or(false)
+    };
+    for expr in [
+        "label",
+        "nested.label",
+        "'literal'",
+        "!hidden",
+        "count > 2",
+        "ready && count > 2",
+    ] {
+        assert!(compiled_by_expr(expr), "{expr} should use StaticExpr");
+    }
+    assert!(
+        !compiled_by_expr("count > 2 ? 'yes' : 'no'"),
+        "ternary should stay on the runtime evaluator fallback",
+    );
+
+    let host = mount("<rfc064-expr-host></rfc064-expr-host>");
+    tick().await;
+
+    assert_eq!(read(&host, ".r64-ident"), "identifier");
+    assert_eq!(read(&host, ".r64-field"), "field");
+    assert_eq!(read(&host, ".r64-literal"), "literal");
+    assert_eq!(read(&host, ".r64-not"), "true");
+    assert_eq!(read(&host, ".r64-compare"), "true");
+    assert_eq!(read(&host, ".r64-bool"), "true");
+    assert_eq!(read(&host, ".r64-fallback"), "yes");
+    assert_eq!(plan_failure_count(), 0);
+
+    host.remove();
 }
 
 /// A planned `pp-text` whose bound value contains literal

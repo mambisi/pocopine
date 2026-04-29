@@ -48,6 +48,21 @@ fn normalize_prop_name(name: &str) -> String {
 ///
 /// Cleanup-safe install entry point.
 pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<expr::Expr>) {
+    install_eval(
+        el,
+        parent_proxy,
+        attr,
+        Rc::new(move |scope| expr::evaluate(&ast, scope)),
+    );
+}
+
+#[doc(hidden)]
+pub fn install_eval(
+    el: &Element,
+    parent_proxy: &JsValue,
+    attr: &str,
+    evaluator: Rc<dyn Fn(&JsValue) -> JsValue>,
+) {
     let el_owned = el.clone();
     let parent_proxy_owned = parent_proxy.clone();
     let attr_owned = attr.to_string();
@@ -66,7 +81,7 @@ pub fn install(el: &Element, parent_proxy: &JsValue, attr: &str, ast: Spanned<ex
 
     let id = effect(move || {
         with_current_el(&el_owned.clone(), || {
-            let v = expr::evaluate(&ast, &parent_proxy_owned);
+            let v = evaluator(&parent_proxy_owned);
             match &child_target {
                 Some((child_scope_id, cp)) => {
                     let target_field =

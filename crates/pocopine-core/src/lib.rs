@@ -67,6 +67,7 @@ pub use emit::{
     emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, Emit,
 };
 pub use events::{on_scope_unmount, DomEventName, ListenerHandle};
+pub use expr::{StaticBinOp, StaticExpr, StaticLiteral};
 pub use extractors::{Inject, NearestParent, Parent};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};

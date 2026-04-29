@@ -1031,6 +1031,7 @@ fn emit_specialized_native_model(idx: usize, path: &[u16]) -> TokenStream {
 fn emit_binding(b: &BindingLite) -> TokenStream {
     let path = emit_node_path(&b.node_path);
     let expr = proc_macro2::Literal::string(&b.expr_src);
+    let compiled = emit_compiled_expr_option(&b.expr_src);
     let kind = match &b.kind {
         BindingKindLite::Text => quote! { ::pocopine::__private::BindingKind::Text },
         BindingKindLite::Html => quote! { ::pocopine::__private::BindingKind::Html },
@@ -1045,6 +1046,7 @@ fn emit_binding(b: &BindingLite) -> TokenStream {
             node_path: #path,
             kind: #kind,
             expr_src: #expr,
+            compiled: #compiled,
         }
     }
 }
@@ -1078,9 +1080,79 @@ fn emit_ref(r: &RefLite) -> TokenStream {
     }
 }
 
+fn emit_compiled_expr_option(src: &str) -> TokenStream {
+    match pocopine_expr::parse(src)
+        .ok()
+        .and_then(|expr| emit_compiled_expr(&expr))
+    {
+        Some(expr) => quote! { ::core::option::Option::Some(#expr) },
+        None => quote! { ::core::option::Option::None },
+    }
+}
+
+fn emit_compiled_expr(expr: &pocopine_expr::Spanned<pocopine_expr::Expr>) -> Option<TokenStream> {
+    use pocopine_expr::{BinOp, Expr, Literal};
+
+    match &expr.value {
+        Expr::Literal(literal) => {
+            let lit = match literal {
+                Literal::Null => quote! { ::pocopine::__private::StaticLiteral::Null },
+                Literal::Bool(value) => {
+                    quote! { ::pocopine::__private::StaticLiteral::Bool(#value) }
+                }
+                Literal::Number(value) => {
+                    let value = proc_macro2::Literal::f64_unsuffixed(*value);
+                    quote! { ::pocopine::__private::StaticLiteral::Number(#value) }
+                }
+                Literal::String(value) => {
+                    let value = proc_macro2::Literal::string(value);
+                    quote! { ::pocopine::__private::StaticLiteral::String(#value) }
+                }
+            };
+            Some(quote! { &::pocopine::__private::StaticExpr::Literal(#lit) })
+        }
+        Expr::Path(segments) if (1..=2).contains(&segments.len()) => {
+            let segments = segments.iter().map(|segment| {
+                let segment = proc_macro2::Literal::string(segment);
+                quote! { #segment }
+            });
+            Some(quote! { &::pocopine::__private::StaticExpr::Path(&[ #(#segments),* ]) })
+        }
+        Expr::Not(inner) => {
+            let inner = emit_compiled_expr(inner)?;
+            Some(quote! { &::pocopine::__private::StaticExpr::Not(#inner) })
+        }
+        Expr::BinOp(op, lhs, rhs) => {
+            let op = match op {
+                BinOp::And => quote! { ::pocopine::__private::StaticBinOp::And },
+                BinOp::Or => quote! { ::pocopine::__private::StaticBinOp::Or },
+                BinOp::Eq => quote! { ::pocopine::__private::StaticBinOp::Eq },
+                BinOp::Ne => quote! { ::pocopine::__private::StaticBinOp::Ne },
+                BinOp::Lt => quote! { ::pocopine::__private::StaticBinOp::Lt },
+                BinOp::Le => quote! { ::pocopine::__private::StaticBinOp::Le },
+                BinOp::Gt => quote! { ::pocopine::__private::StaticBinOp::Gt },
+                BinOp::Ge => quote! { ::pocopine::__private::StaticBinOp::Ge },
+                BinOp::Plus => return None,
+            };
+            let lhs = emit_compiled_expr(lhs)?;
+            let rhs = emit_compiled_expr(rhs)?;
+            Some(quote! {
+                &::pocopine::__private::StaticExpr::BinOp {
+                    op: #op,
+                    lhs: #lhs,
+                    rhs: #rhs,
+                }
+            })
+        }
+        Expr::Ternary(_, _, _) | Expr::Call(_, _) | Expr::Assign(_, _) | Expr::Seq(_) => None,
+        Expr::Path(_) => None,
+    }
+}
+
 fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
     let path = emit_node_path(&ip.template_node_path);
     let expr = proc_macro2::Literal::string(&ip.expr_src);
+    let compiled = emit_compiled_expr_option(&ip.expr_src);
     let teleport_selector_tokens = match ip.teleport_selector.as_deref() {
         Some(selector) => {
             let selector = proc_macro2::Literal::string(selector);
@@ -1101,6 +1173,7 @@ fn emit_if_plan(ip: &IfPlanLite) -> TokenStream {
         ::pocopine::__private::StaticIfPlan {
             template_node_path: #path,
             expr_src: #expr,
+            compiled: #compiled,
             teleport_selector: #teleport_selector_tokens,
             body: #body_tokens,
         }
@@ -1233,10 +1306,12 @@ fn emit_child_mount(c: &ChildMountLite) -> TokenStream {
     let binding_tokens = c.host_bindings.iter().map(|b| {
         let arg = proc_macro2::Literal::string(&b.arg);
         let expr = proc_macro2::Literal::string(&b.expr_src);
+        let compiled = emit_compiled_expr_option(&b.expr_src);
         quote! {
             ::pocopine::__private::StaticChildHostBinding {
                 arg: #arg,
                 expr_src: #expr,
+                compiled: #compiled,
             }
         }
     });

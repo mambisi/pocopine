@@ -2,6 +2,7 @@
 //! (RFC-012). As with Alpine's `x-html`, no sanitisation — authors
 //! who drop untrusted strings in here own the consequences.
 
+use std::rc::Rc;
 use wasm_bindgen::JsValue;
 use web_sys::Element;
 
@@ -18,11 +19,16 @@ use crate::scope::with_current_el;
 /// element's subtree is torn down. Cleanup-safe install entry
 /// point.
 pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
+    install_eval(el, proxy, Rc::new(move |scope| expr::evaluate(&ast, scope)));
+}
+
+#[doc(hidden)]
+pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue) -> JsValue>) {
     let el_owned = el.clone();
     let proxy_owned = proxy.clone();
     let id = effect(move || {
         with_current_el(&el_owned.clone(), || {
-            let v = expr::evaluate(&ast, &proxy_owned);
+            let v = evaluator(&proxy_owned);
             let s = v.as_string().unwrap_or_default();
             el_owned.set_inner_html(&s);
         });

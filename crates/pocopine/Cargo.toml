@@ -10,9 +10,10 @@ description = "Rust/WASM framework with an Alpine.js-style client runtime."
 # RFC-058 Phase 6.5 — pure compiled-views runtime. Consumers
 # opt into `devtools` (in-browser scope inspector) and
 # `mount-profiler` (per-mount timing instrumentation).
-default = []
+default = ["runtime-expr-fallback"]
 devtools = ["pocopine-core/devtools"]
 mount-profiler = ["pocopine-core/mount-profiler"]
+runtime-expr-fallback = ["pocopine-core/runtime-expr-fallback"]
 
 [dependencies]
 pocopine-core = { workspace = true, default-features = false }

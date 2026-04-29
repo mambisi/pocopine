@@ -5,6 +5,7 @@
 //! enter / leave class sequence runs at the right moment; the
 //! `display: none` is deferred until the leave animation completes.
 
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, HtmlElement};
 
@@ -25,6 +26,11 @@ use crate::scope::with_current_el;
 /// element flavour with a `style` accessor). Cleanup-safe install
 /// entry point.
 pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
+    install_eval(el, proxy, Rc::new(move |scope| expr::evaluate(&ast, scope)));
+}
+
+#[doc(hidden)]
+pub fn install_eval(el: &Element, proxy: &JsValue, evaluator: Rc<dyn Fn(&JsValue) -> JsValue>) {
     let Ok(html_el): Result<HtmlElement, _> = el.clone().dyn_into() else {
         return;
     };
@@ -32,7 +38,7 @@ pub fn install(el: &Element, proxy: &JsValue, ast: Spanned<expr::Expr>) {
     let proxy_owned = proxy.clone();
     let id = effect(move || {
         with_current_el(&el_for_track.clone(), || {
-            let truthy = expr::evaluate_truthy(&ast, &proxy_owned);
+            let truthy = !evaluator(&proxy_owned).is_falsy();
             let style = html_el.style();
             if truthy {
                 let _ = style.remove_property("display");

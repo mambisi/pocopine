@@ -50,6 +50,7 @@ use crate::directives::for_plan::{
 use crate::directives::interp::PlannedSegment;
 use crate::directives::{self};
 use crate::expr;
+use crate::expr::StaticExpr;
 use crate::reactive::ScopeId;
 use crate::slot_fragment::SlotSet;
 
@@ -264,23 +265,20 @@ pub fn install_static_binding(
     entry: &'static StaticBinding,
     template_name: &str,
 ) {
-    let ast = match expr::parse_cached(entry.expr_src) {
-        Ok(a) => a,
-        Err(_) => {
-            fail(
-                "binding-parse",
-                template_name,
-                entry.node_path,
-                Some(entry.expr_src),
-            );
-            return;
-        }
+    let Some(evaluator) = static_evaluator(entry.compiled, entry.expr_src) else {
+        fail(
+            "binding-parse",
+            template_name,
+            entry.node_path,
+            Some(entry.expr_src),
+        );
+        return;
     };
     match entry.kind {
-        BindingKind::Text => directives::text::install(el, proxy, ast),
-        BindingKind::Html => directives::html::install(el, proxy, ast),
-        BindingKind::Show => directives::show::install(el, proxy, ast),
-        BindingKind::Bind { arg } => directives::bind::install(el, proxy, arg, ast),
+        BindingKind::Text => directives::text::install_eval(el, proxy, evaluator),
+        BindingKind::Html => directives::html::install_eval(el, proxy, evaluator),
+        BindingKind::Show => directives::show::install_eval(el, proxy, evaluator),
+        BindingKind::Bind { arg } => directives::bind::install_eval(el, proxy, arg, evaluator),
         BindingKind::Class => fail(
             "binding-kind",
             template_name,
@@ -426,22 +424,19 @@ pub fn install_static_if_plan(
             return;
         }
     };
-    let ast = match expr::parse_cached(entry.expr_src) {
-        Ok(a) => a,
-        Err(_) => {
-            fail(
-                "if-plan-parse",
-                template_name,
-                entry.template_node_path,
-                Some(entry.expr_src),
-            );
-            return;
-        }
+    let Some(evaluator) = static_evaluator(entry.compiled, entry.expr_src) else {
+        fail(
+            "if-plan-parse",
+            template_name,
+            entry.template_node_path,
+            Some(entry.expr_src),
+        );
+        return;
     };
-    directives::if_::install(
+    directives::if_::install_eval(
         template,
         proxy.clone(),
-        ast,
+        evaluator,
         entry.body,
         entry.teleport_selector,
     );
@@ -595,23 +590,22 @@ pub fn apply_static_pp_as_plan(
         crate::refs::register(scope_id, r.name, root);
     }
     for b in plan.bindings.iter().filter(|b| b.node_path.is_empty()) {
-        let ast = match expr::parse_cached(b.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "pp-as-binding-parse",
-                    template_name,
-                    b.node_path,
-                    Some(b.expr_src),
-                );
-                continue;
-            }
+        let Some(evaluator) = static_evaluator(b.compiled, b.expr_src) else {
+            fail(
+                "pp-as-binding-parse",
+                template_name,
+                b.node_path,
+                Some(b.expr_src),
+            );
+            continue;
         };
         match b.kind {
-            BindingKind::Text => directives::text::install(root, proxy, ast),
-            BindingKind::Html => directives::html::install(root, proxy, ast),
-            BindingKind::Show => directives::show::install(root, proxy, ast),
-            BindingKind::Bind { arg } => directives::bind::install(root, proxy, arg, ast),
+            BindingKind::Text => directives::text::install_eval(root, proxy, evaluator),
+            BindingKind::Html => directives::html::install_eval(root, proxy, evaluator),
+            BindingKind::Show => directives::show::install_eval(root, proxy, evaluator),
+            BindingKind::Bind { arg } => {
+                directives::bind::install_eval(root, proxy, arg, evaluator)
+            }
             BindingKind::Class => {
                 fail(
                     "pp-as-binding-kind",
@@ -668,19 +662,16 @@ fn install_child_host_directives(
     template_name: &str,
 ) {
     for b in child.bindings {
-        let ast = match expr::parse_cached(b.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "child-host-binding-parse",
-                    template_name,
-                    child.node_path,
-                    Some(b.expr_src),
-                );
-                continue;
-            }
+        let Some(evaluator) = static_evaluator(b.compiled, b.expr_src) else {
+            fail(
+                "child-host-binding-parse",
+                template_name,
+                child.node_path,
+                Some(b.expr_src),
+            );
+            continue;
         };
-        directives::bind::install(el, proxy, b.arg, ast);
+        directives::bind::install_eval(el, proxy, b.arg, evaluator);
     }
     for l in child.listeners {
         let ast = match expr::parse_cached(l.expr_src) {
@@ -773,6 +764,29 @@ pub fn stamp_if_body_with(
             }
         }
     }
+    None
+}
+
+type StaticEvaluator = Rc<dyn Fn(&JsValue) -> JsValue>;
+
+fn static_evaluator(
+    compiled: Option<&'static StaticExpr>,
+    expr_src: &'static str,
+) -> Option<StaticEvaluator> {
+    if let Some(compiled) = compiled {
+        return Some(Rc::new(move |scope| compiled.evaluate(scope)));
+    }
+    runtime_evaluator(expr_src)
+}
+
+#[cfg(feature = "runtime-expr-fallback")]
+fn runtime_evaluator(expr_src: &'static str) -> Option<StaticEvaluator> {
+    let ast = expr::parse_cached(expr_src).ok()?;
+    Some(Rc::new(move |scope| expr::evaluate(&ast, scope)))
+}
+
+#[cfg(not(feature = "runtime-expr-fallback"))]
+fn runtime_evaluator(_expr_src: &'static str) -> Option<StaticEvaluator> {
     None
 }
 

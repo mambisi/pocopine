@@ -86,6 +86,7 @@ pub struct StaticBinding {
     pub node_path: &'static [u16],
     pub kind: BindingKind,
     pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
 }
 
 /// Static-lifetime listener descriptor.
@@ -176,6 +177,7 @@ pub struct StaticChildMount {
 pub struct StaticChildHostBinding {
     pub arg: &'static str,
     pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
 }
 
 /// Parent-scope event listener planned on a child-component host.
@@ -322,6 +324,7 @@ pub struct StaticSlotOutlet {
 pub struct StaticIfPlan {
     pub template_node_path: &'static [u16],
     pub expr_src: &'static str,
+    pub compiled: Option<&'static expr::StaticExpr>,
     pub teleport_selector: Option<&'static str>,
     pub body: Option<IfBodyFn>,
 }

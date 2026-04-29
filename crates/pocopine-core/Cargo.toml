@@ -15,9 +15,10 @@ crate-type = ["cdylib", "rlib"]
 # components. Consumers opt into `devtools` for the in-browser
 # scope inspector and `mount-profiler` for the per-mount
 # instrumentation; both are pure binary-size cost when unused.
-default = []
+default = ["runtime-expr-fallback"]
 devtools = []
 mount-profiler = []
+runtime-expr-fallback = []
 
 [dependencies]
 pocopine-expr = { workspace = true }
