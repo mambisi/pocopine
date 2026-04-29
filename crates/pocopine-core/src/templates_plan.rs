@@ -169,6 +169,9 @@ pub fn register_template_plan(tag: &str, plan: &'static StaticTemplatePlan) {
 /// pre-RFC-058 components compiled before the plan emitter
 /// existed).
 pub fn template_plan_for(tag: &str) -> Option<&'static StaticTemplatePlan> {
+    if let Some(plan) = crate::registry::active_component_vtable(tag).and_then(|v| v.plan) {
+        return Some(plan);
+    }
     TEMPLATE_PLANS.with(|registry| registry.borrow().get(tag).copied())
 }
 
@@ -177,7 +180,23 @@ pub fn template_plan_for(tag: &str) -> Option<&'static StaticTemplatePlan> {
 /// need stable ordering should sort. Intended for audit /
 /// survey tooling and compiled root discovery.
 pub fn registered_template_tags() -> Vec<String> {
-    TEMPLATE_PLANS.with(|registry| registry.borrow().keys().cloned().collect())
+    let mut tags: Vec<String> = crate::registry::active_component_names()
+        .into_iter()
+        .filter(|name| {
+            crate::registry::active_component_vtable(name)
+                .and_then(|v| v.plan)
+                .is_some()
+        })
+        .map(str::to_string)
+        .collect();
+    TEMPLATE_PLANS.with(|registry| {
+        for tag in registry.borrow().keys() {
+            if !tags.iter().any(|existing| existing == tag) {
+                tags.push(tag.clone());
+            }
+        }
+    });
+    tags
 }
 
 /// Cumulative count of plan-install failures observed since

@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::scope::Scope;
+use crate::templates_plan::StaticTemplatePlan;
 
 /// Constructor returned by the `#[component]` macro. Builds a fresh typed
 /// `Rc<RefCell<Self>>`, wraps it in a [`Scope`] (which stashes both the
@@ -105,6 +106,8 @@ struct Registry {
 
 thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
+    static ACTIVE_PHF_REGISTRY: RefCell<Option<&'static phf::Map<&'static str, &'static ComponentVTable>>> =
+        const { RefCell::new(None) };
     /// RFC 060 Tier 1 — visited set of component types whose
     /// `register()` body has already started executing on this thread.
     /// Used by [`mark_registered`] to short-circuit transitive
@@ -119,14 +122,53 @@ thread_local! {
 /// addition to) the legacy thread-local `HashMap`. Each entry
 /// lives in `.rodata` — no allocation, no init order.
 ///
-/// The `plan` slot is reserved for the future hookup to
-/// `templates_plan::StaticTemplatePlan`; V1 leaves it `None`
-/// because the existing `register_template_plan` flow still
-/// owns plan lookup. RFC 061 / 062 will tighten this when the
-/// compiled-mount flow assumes the registry is exhaustive.
+/// RFC 061 Phase 4 adds the compiled template payloads so
+/// runtime lookups can consult the `app!{}` phf map before the
+/// thread-local registration maps. Bundles use `None` for
+/// template-bearing fields because they are registration-only.
 pub struct ComponentVTable {
     pub name: &'static str,
     pub register: fn(),
+    pub template_html: Option<&'static str>,
+    pub plan: Option<&'static StaticTemplatePlan>,
+}
+
+/// Install the active static registry for phf-first runtime
+/// lookups. `App::run_with_registry` calls this before invoking
+/// each vtable's `register()` function so template and plan
+/// lookup can use the static table directly.
+pub fn set_active_phf_registry(
+    registry: &'static phf::Map<&'static str, &'static ComponentVTable>,
+) {
+    ACTIVE_PHF_REGISTRY.with(|active| {
+        *active.borrow_mut() = Some(registry);
+    });
+}
+
+/// Test-only reset for suites that need to assert fallback
+/// behavior independent of a previously installed app registry.
+#[doc(hidden)]
+pub fn clear_active_phf_registry_for_test() {
+    ACTIVE_PHF_REGISTRY.with(|active| {
+        *active.borrow_mut() = None;
+    });
+}
+
+pub fn active_component_vtable(name: &str) -> Option<&'static ComponentVTable> {
+    ACTIVE_PHF_REGISTRY.with(|active| {
+        active
+            .borrow()
+            .and_then(|registry| registry.get(name).copied())
+    })
+}
+
+pub fn active_component_names() -> Vec<&'static str> {
+    ACTIVE_PHF_REGISTRY.with(|active| {
+        active
+            .borrow()
+            .map(|registry| registry.keys().copied().collect())
+            .unwrap_or_default()
+    })
 }
 
 /// Cycle/dedupe guard for the macro-emitted `Component::register()`

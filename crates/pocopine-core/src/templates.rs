@@ -33,6 +33,10 @@ pub fn register_template(name: impl Into<String>, html: impl Into<String>) {
 /// Fetch a registered template. Returns an owned `String` so the mount can
 /// clone into the DOM without locking the registry.
 pub fn template_for(name: &str) -> Option<String> {
+    if let Some(html) = crate::registry::active_component_vtable(name).and_then(|v| v.template_html)
+    {
+        return Some(html.to_string());
+    }
     TEMPLATES.with(|t| t.borrow().get(name).cloned())
 }
 
@@ -71,6 +75,12 @@ pub fn template_clone_for(name: &str) -> Option<DocumentFragment> {
 }
 
 pub fn is_registered(name: &str) -> bool {
+    if crate::registry::active_component_vtable(name)
+        .and_then(|v| v.template_html)
+        .is_some()
+    {
+        return true;
+    }
     TEMPLATES.with(|t| t.borrow().contains_key(name))
 }
 
@@ -83,7 +93,23 @@ pub fn is_registered(name: &str) -> bool {
 /// because that registry only holds tags with at least one
 /// plan-eligible entry).
 pub fn registered_template_names() -> Vec<String> {
-    TEMPLATES.with(|t| t.borrow().keys().cloned().collect())
+    let mut names: Vec<String> = crate::registry::active_component_names()
+        .into_iter()
+        .filter(|name| {
+            crate::registry::active_component_vtable(name)
+                .and_then(|v| v.template_html)
+                .is_some()
+        })
+        .map(str::to_string)
+        .collect();
+    TEMPLATES.with(|t| {
+        for name in t.borrow().keys() {
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.clone());
+            }
+        }
+    });
+    names
 }
 
 /// Full template compilation entry-point for the macro.

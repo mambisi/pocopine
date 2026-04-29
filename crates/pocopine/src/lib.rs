@@ -52,6 +52,9 @@ pub mod prelude {
 pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
+    pub use pocopine_core::registry::{
+        clear_active_phf_registry_for_test, set_active_phf_registry,
+    };
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
         inject_style, mark_registered, register_component, register_row_plans,
