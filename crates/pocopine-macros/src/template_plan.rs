@@ -156,7 +156,6 @@ pub(crate) fn analyze_template_plan(
 struct AnalysisCtx {
     bindings: Vec<BindingLite>,
     listeners: Vec<ListenerLite>,
-    inits: Vec<InitLite>,
     refs: Vec<RefLite>,
     /// RFC-058 Phase 3.3 — child-component mount sites the
     /// classifier discovered (every non-HTML5 tag inside the
@@ -330,11 +329,6 @@ struct ListenerLite {
     node_path: Vec<u16>,
     event: String,
     modifiers: Vec<String>,
-    expr_src: String,
-}
-
-struct InitLite {
-    node_path: Vec<u16>,
     expr_src: String,
 }
 
@@ -518,7 +512,6 @@ impl AnalysisCtx {
     fn has_any_entry(&self) -> bool {
         !self.bindings.is_empty()
             || !self.listeners.is_empty()
-            || !self.inits.is_empty()
             || !self.refs.is_empty()
             || !self.child_mounts.is_empty()
             || !self.if_plans.is_empty()
@@ -573,11 +566,6 @@ impl AnalysisCtx {
             .iter()
             .enumerate()
             .map(|(idx, entry)| emit_specialized_if_plan(idx, &entry.template_node_path));
-        let inits = self
-            .inits
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| emit_specialized_init(idx, &entry.node_path));
         let materialize_slots = (0..self.slot_outlets.len()).map(|idx| {
             let idx = syn::Index::from(idx);
             quote! {
@@ -623,7 +611,6 @@ impl AnalysisCtx {
             #(#for_plans)*
             #(#teleport_plans)*
             #(#if_plans)*
-            #(#inits)*
             #(#materialize_slots)*
             #(#opaque_directives)*
             #(#interps)*
@@ -677,7 +664,6 @@ impl AnalysisCtx {
 fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
     let bindings_tokens = ctx.bindings.iter().map(emit_binding);
     let listeners_tokens = ctx.listeners.iter().map(emit_listener);
-    let inits_tokens = ctx.inits.iter().map(emit_init);
     let refs_tokens = ctx.refs.iter().map(emit_ref);
     let child_mounts_tokens = ctx.child_mounts.iter().map(emit_child_mount);
     let if_plans_tokens = ctx.if_plans.iter().map(emit_if_plan);
@@ -691,7 +677,6 @@ fn emit_static_template_plan_literal(ctx: &AnalysisCtx) -> TokenStream {
         ::pocopine::__private::StaticTemplatePlan {
             bindings: &[ #(#bindings_tokens),* ],
             listeners: &[ #(#listeners_tokens),* ],
-            inits: &[ #(#inits_tokens),* ],
             refs: &[ #(#refs_tokens),* ],
             child_mounts: &[ #(#child_mounts_tokens),* ],
             if_plans: &[ #(#if_plans_tokens),* ],
@@ -930,19 +915,6 @@ fn emit_specialized_if_plan(idx: usize, path: &[u16]) -> TokenStream {
     }
 }
 
-fn emit_specialized_init(idx: usize, path: &[u16]) -> TokenStream {
-    let idx = syn::Index::from(idx);
-    let resolve = emit_specialized_resolve(path);
-    quote! {
-        #resolve
-        ::pocopine::__private::install_static_init(
-            &__poc_el,
-            scope_id,
-            &__poc_plan.inits[#idx],
-        );
-    }
-}
-
 fn emit_specialized_slot_outlet(idx: usize, path: &[u16]) -> TokenStream {
     let idx = syn::Index::from(idx);
     let resolve = emit_specialized_resolve(path);
@@ -1040,17 +1012,6 @@ fn emit_listener(l: &ListenerLite) -> TokenStream {
             event: #event_lit,
             modifiers: &[ #(#modifier_tokens),* ],
             expr_src: #expr_lit,
-        }
-    }
-}
-
-fn emit_init(i: &InitLite) -> TokenStream {
-    let path = emit_node_path(&i.node_path);
-    let expr = proc_macro2::Literal::string(&i.expr_src);
-    quote! {
-        ::pocopine::__private::StaticInit {
-            node_path: #path,
-            expr_src: #expr,
         }
     }
 }
@@ -1941,21 +1902,6 @@ fn classify_attr(
             ctx.refs.push(RefLite {
                 node_path: path.to_vec(),
                 name: trimmed.to_string(),
-            });
-            ctx.stripped.push(StrippedAttr {
-                node_path: path.to_vec(),
-                name: name.to_string(),
-            });
-            return ClassifyOutcome::Stripped { is_text: false };
-        }
-        // pp-init="<expr>"
-        if rest == "init" {
-            if pocopine_expr::parse(value).is_err() {
-                return ClassifyOutcome::Preserved;
-            }
-            ctx.inits.push(InitLite {
-                node_path: path.to_vec(),
-                expr_src: value.to_string(),
             });
             ctx.stripped.push(StrippedAttr {
                 node_path: path.to_vec(),

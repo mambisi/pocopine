@@ -58,7 +58,6 @@ const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
-const INIT_PENDING_KEY: &str = "__pp_init_pending";
 const WALKED_KEY: &str = "__pp_walked";
 /// Stamped on row clones whose scope + row-instance state has
 /// been torn down synchronously by the RFC 054 bulk-clear path.
@@ -132,34 +131,6 @@ pub fn bind_borrowed_scope_to(el: &Element, scope_id: ScopeId, proxy: &JsValue) 
     set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope_id.0 as f64));
     set_private(el, SCOPE_PROXY_KEY, proxy);
     set_private(el, SCOPE_BORROWED_KEY, &JsValue::TRUE);
-}
-
-fn fire_deferred_init(el: &Element) {
-    let Some(value) = get_private(el, INIT_PENDING_KEY).and_then(|v| v.as_string()) else {
-        return;
-    };
-    let _ = Reflect::delete_property(el.as_ref(), &INIT_PENDING_KEY.into());
-    let Some((scope_id, _proxy)) = enclosing_scope(el) else {
-        return;
-    };
-    crate::directives::init::install(el, scope_id, &value);
-}
-
-/// Defer a `pp-init` handler invocation on `el` until the
-/// surrounding subtree's plan install completes (post-order
-/// drain in `finalize_compiled_subtree` — see `fire_deferred_init`).
-/// Public entry point for the macro-emitted plan applier; the
-/// deferred-init pending state stays owned by a single
-/// implementation.
-///
-/// `scope_id` is accepted for API symmetry with the other
-/// lifecycle helpers — the actual fire-time dispatch
-/// rediscovers the scope through `enclosing_scope(el)` because
-/// the same element may be re-queued under a fresh scope by
-/// `pp-for` row reuse.
-pub fn defer_init_on(el: &Element, scope_id: ScopeId, expr_src: &str) {
-    let _ = scope_id; // see doc-comment
-    set_private(el, INIT_PENDING_KEY, &JsValue::from_str(expr_src));
 }
 
 /// Fire the component-level `on_mount` lifecycle hook on elements
@@ -1264,7 +1235,6 @@ pub fn finalize_compiled_subtree(el: &Element) {
     for child in snapshot {
         finalize_compiled_subtree(&child);
     }
-    fire_deferred_init(el);
     fire_mount_hook(el);
     set_private(el, WALKED_KEY, &JsValue::TRUE);
 }

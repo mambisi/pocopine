@@ -74,23 +74,6 @@ impl PlanTextEcho {
     }
 }
 
-/// Plan-eligible component pairing a planned `pp-ref` with a
-/// planned `pp-init`. Drives test #3 — the init handler reads
-/// the ref via `refs::get_on(scope_id, "target")` and writes a
-/// sentinel `textContent` so the test can observe ordering.
-#[derive(Default, Serialize, Deserialize)]
-#[component(template = "PlanRefInit.html")]
-struct PlanRefInit {}
-
-#[handlers]
-impl PlanRefInit {
-    pub fn seed_target(&mut self) {
-        if let Some(el) = pocopine::refs::get("target") {
-            el.set_text_content(Some("seeded"));
-        }
-    }
-}
-
 /// Template whose only plan-relevant content is a
 /// `<template pp-for>` row. With §6.2 layering, the row-plan
 /// analyser still owns the row body, but the template-plan
@@ -371,43 +354,6 @@ struct PlanIfAsDirectiveHost {
 impl PlanIfAsDirectiveHost {
     pub fn toggle(&mut self) {
         self.open = !self.open;
-    }
-}
-
-/// Host whose lifted pp-if body contains `pp-init`. The init
-/// handler reads a descendant planned ref, proving compiled
-/// finalization preserves the mount's post-order init semantics.
-#[derive(Default, Serialize, Deserialize)]
-#[component(template = "PlanIfInitBodyHost.html")]
-struct PlanIfInitBodyHost {
-    open: bool,
-}
-
-#[handlers]
-impl PlanIfInitBodyHost {
-    pub fn toggle(&mut self) {
-        self.open = !self.open;
-    }
-    pub fn seed_body(&mut self) {
-        if let Some(el) = pocopine::refs::get("target") {
-            el.set_text_content(Some("body-init-fired"));
-        }
-    }
-}
-
-/// Host whose compiled slot fragment contains `pp-init`. The slot
-/// materializer finalizes inserted fragment roots after splicing,
-/// so the init should fire without fallback walk.
-#[derive(Default, Serialize, Deserialize)]
-#[component(template = "PlanSlotInitHost.html")]
-struct PlanSlotInitHost {}
-
-#[handlers]
-impl PlanSlotInitHost {
-    pub fn seed_slot(&mut self) {
-        if let Some(el) = pocopine::refs::get("slot_target") {
-            el.set_text_content(Some("slot-init-fired"));
-        }
     }
 }
 
@@ -736,7 +682,6 @@ fn doc() -> web_sys::Document {
 
 fn register_all() {
     PlanTextEcho::register();
-    PlanRefInit::register();
     PlanForLoop::register();
     PlanChildLeaf::register();
     PlanChildHost::register();
@@ -756,8 +701,6 @@ fn register_all() {
     PlanIfModelDirectiveHost::register();
     PlanAsDirectiveChild::register();
     PlanIfAsDirectiveHost::register();
-    PlanIfInitBodyHost::register();
-    PlanSlotInitHost::register();
     PlanNamedSlotChild::register();
     PlanNamedSlotHost::register();
     PlanScopedSlotChild::register();
@@ -918,24 +861,6 @@ async fn planned_pp_text_does_not_reinterpolate_brace_payload() {
     tick().await;
 
     assert_eq!(read(&host, ".ple-msg"), "value: {count} ok");
-
-    host.remove();
-}
-
-/// Refs install before bindings, listeners, and inits in
-/// `apply_static_plan`. The mount's post-order drain fires
-/// the deferred init last — by then `pp-ref="target"` is in
-/// the scope's ref table so `refs::get("target")` resolves.
-#[wasm_bindgen_test]
-async fn planned_pp_init_observes_planned_pp_ref() {
-    let host = mount("<plan-ref-init></plan-ref-init>");
-    tick().await;
-
-    assert_eq!(
-        read(&host, ".pri-target"),
-        "seeded",
-        "planned pp-init must see the planned pp-ref it shares a template with",
-    );
 
     host.remove();
 }
@@ -1387,69 +1312,6 @@ async fn lifted_pp_as_child_installs_root_plan_without_fallback_walk() {
 }
 
 /// RFC-058 mount-removal slice — `pp-init` inside a lifted
-/// `pp-if` body fires during compiled subtree finalization, after
-/// descendant planned refs have registered.
-#[wasm_bindgen_test]
-async fn lifted_pp_if_body_init_fires_without_fallback_walk() {
-    register_all();
-    reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
-
-    let plan = template_plan_for("plan-if-init-body-host")
-        .expect("plan-if-init-body-host registers a template plan");
-    let body = plan.if_plans[0].body.expect("pp-init body should lift");
-    let _ = body;
-
-    let host = mount("<plan-if-init-body-host></plan-if-init-body-host>");
-    tick().await;
-
-    let toggle = host.query_selector(".piibh-toggle").unwrap().unwrap();
-    toggle.dyn_ref::<HtmlElement>().unwrap().click();
-    tick().await;
-
-    let target = host
-        .query_selector(".piibh-target")
-        .unwrap()
-        .expect("body init target should mount");
-    assert_eq!(target.text_content().as_deref(), Some("body-init-fired"));
-    assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "compiled pp-if body init should not need mount fallback",
-    );
-
-    host.remove();
-}
-
-/// RFC-058 mount-removal slice — `pp-init` inside a compiled
-/// slot fragment fires after the fragment is inserted and
-/// finalized, without falling back to recursive directive
-/// discovery.
-#[wasm_bindgen_test]
-async fn lifted_slot_fragment_init_fires_without_fallback_walk() {
-    register_all();
-    reset_plan_failure_count();
-    reset_compiled_fallback_walk_count();
-
-    let host = mount("<plan-slot-init-host></plan-slot-init-host>");
-    tick().await;
-
-    let target = host
-        .query_selector(".psih-target")
-        .unwrap()
-        .expect("slot init target should mount");
-    assert_eq!(target.text_content().as_deref(), Some("slot-init-fired"));
-    assert_eq!(plan_failure_count(), 0);
-    assert_eq!(
-        compiled_fallback_walk_count(),
-        0,
-        "compiled slot fragment init should not need mount fallback",
-    );
-
-    host.remove();
-}
-
 /// RFC-058 Phase 4.3 — pp-teleport on `<template>` graduates
 /// into a `StaticTeleportPlan`. The applier resolves the
 /// target selector and clones the template body to it; the

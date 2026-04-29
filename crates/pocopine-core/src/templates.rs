@@ -303,10 +303,10 @@ mod tests {
 
     #[test]
     fn preserves_existing_attrs() {
-        let out = inject_pp_data("<div class=\"x\" pp-init=\"init\">hi</div>", "counter");
+        let out = inject_pp_data("<div class=\"x\" pp-text=\"label\">hi</div>", "counter");
         assert_eq!(
             out,
-            r#"<div class="x" pp-init="init" pp-data="counter">hi</div>"#
+            r#"<div class="x" pp-text="label" pp-data="counter">hi</div>"#
         );
     }
 

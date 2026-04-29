@@ -13,7 +13,6 @@ pub mod for_;
 pub mod for_plan;
 pub mod html;
 pub mod if_;
-pub mod init;
 pub mod interp;
 pub mod intersect;
 pub mod model;

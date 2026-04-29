@@ -13,11 +13,23 @@
 //! - `pp-cloak` — runtime style was deleted (mount is
 //!   synchronous post-RFC-061; FOUC no longer exists). RFC 063
 //!   §4.1.2.
+//! - `pp-init` — `directives::init` module + `StaticInit` plan
+//!   IR + macro emit pass deleted. RFC 063 §4.1.1. Replacement:
+//!   `#[handlers] impl Foo { fn on_setup(&mut self) { ... } }`.
 //!
-//! Pending follow-up commits will add `pp-init`, `pp-html`
-//! (after `pine-icons` migrates), `pp-data` (rename to private
-//! marker), and the convergence directives `pp-let` / `pp-key`
-//! / `pp-stagger`.
+//! **Explicitly excluded** (kept by design):
+//!
+//! - `pp-html` — every modern web framework ships an HTML-string
+//!   injection primitive (Vue `v-html`, React
+//!   `dangerouslySetInnerHTML`, Svelte `{@html}`, Solid
+//!   `innerHTML`, Yew `Html::from_html_unchecked`). Removing
+//!   puts pocopine at parity with no one. RFC 063 §1 + §4.4
+//!   spec the pine-icons rewrite that retires the only current
+//!   workspace consumer.
+//!
+//! Pending follow-up commits will add `pp-data` (rename to
+//! private marker) and the convergence directives `pp-let` /
+//! `pp-key` / `pp-stagger`.
 //!
 //! The scan walks the parsed AST once per `#[component]`
 //! invocation; cost is per-attribute string compare on a
@@ -33,12 +45,25 @@ use crate::template_parser::{Element, Node, TemplateAst};
 /// Each entry: `(attr_name, message)`. Adding a new directive to
 /// the table is the entire migration step — the walker handles
 /// the rest.
-const FORBIDDEN: &[(&str, &str)] = &[(
-    "pp-cloak",
-    "`pp-cloak` was removed in v2 (RFC 063 §4.1.2). Mount is \
-     synchronous post-RFC-061; the FOUC the directive guarded \
-     against no longer happens. Drop the attribute.",
-)];
+const FORBIDDEN: &[(&str, &str)] = &[
+    (
+        "pp-cloak",
+        "`pp-cloak` was removed in v2 (RFC 063 §4.1.2). Mount is \
+         synchronous post-RFC-061; the FOUC the directive guarded \
+         against no longer happens. Drop the attribute.",
+    ),
+    (
+        "pp-init",
+        "`pp-init` was removed in v2 (RFC 063 §4.1.1). Use the \
+         `on_setup` lifecycle hook instead:\n\n  \
+         #[handlers]\n  \
+         impl MyComponent {\n      \
+             fn on_setup(&mut self) {\n          \
+                 // your init code here\n      \
+             }\n  \
+         }",
+    ),
+];
 
 pub(crate) fn emit_diagnostics(ast: &TemplateAst) -> TokenStream {
     let mut out = TokenStream::new();

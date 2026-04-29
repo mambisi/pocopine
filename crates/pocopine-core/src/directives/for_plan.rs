@@ -109,17 +109,6 @@ pub struct StaticListener {
     pub expr_src: &'static str,
 }
 
-/// Static-lifetime descriptor for a `pp-init="<expr>"` entry.
-/// The expression is enqueued onto the mount's deferred-init
-/// pending list ([`crate::mount::defer_init_on`]) so the
-/// handler fires post-order after descendants are bound and
-/// refs are registered. RFC-058 Phase 2 template-plan addition.
-#[doc(hidden)]
-pub struct StaticInit {
-    pub node_path: &'static [u16],
-    pub expr_src: &'static str,
-}
-
 /// Static-lifetime descriptor for a `pp-ref="<name>"` entry.
 /// Resolves the named ref against the current scope at mount
 /// time via [`crate::refs::register`]. RFC-058 Phase 2 template-
