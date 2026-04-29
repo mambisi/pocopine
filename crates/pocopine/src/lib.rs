@@ -83,7 +83,7 @@ pub mod __private {
         install_static_listener, install_static_native_model, install_static_opaque_directive,
         install_static_ref, install_static_teleport_plan, materialize_static_slot_outlet,
         plan_failure_count, record_plan_failure, register_template_plan, reset_plan_failure_count,
-        stamp_if_body, template_plan_for, StaticInterpTarget, StaticTemplatePlan,
+        stamp_if_body_with, template_plan_for, StaticInterpTarget, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
@@ -97,7 +97,7 @@ pub mod __private {
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1
     // ships the type surface; Phase 3 wires consumers.
     pub use pocopine_core::slot_fragment::{
-        stamp_dynamic_slot, stamp_static_html, SlotFragment, SlotMountCtx, SlotSet,
+        stamp_dynamic_slot_with, stamp_static_html, SlotFragment, SlotMountCtx, SlotSet,
         DEFAULT_SLOT_NAME,
     };
     // RFC-058 Phase 1.1 / 1.7 — cleanup-safe directive install

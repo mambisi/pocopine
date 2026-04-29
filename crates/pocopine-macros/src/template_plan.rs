@@ -523,6 +523,17 @@ impl AnalysisCtx {
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
+        self.emit_specialized_install_pass(quote! {
+            let __poc_plan = <Self>::__POC_TEMPLATE_PLAN;
+        })
+    }
+
+    /// Emit the unrolled install pass given a `prelude` that
+    /// binds `__poc_plan` to a `&'static StaticTemplatePlan`.
+    /// Component mounts use `Self::__POC_TEMPLATE_PLAN`; per-
+    /// fragment closures (RFC 064 §5.1) bind a per-fragment
+    /// `const PLAN`. Both share the same install body.
+    fn emit_specialized_install_pass(&self, prelude: TokenStream) -> Option<TokenStream> {
         let slot_capacity = self.slot_outlets.len();
         let interp_capacity = self.interps.len();
         let slot_outlets = self
@@ -597,7 +608,7 @@ impl AnalysisCtx {
             .map(|(idx, entry)| emit_specialized_native_model(idx, &entry.node_path));
 
         Some(quote! {
-            let __poc_plan = <Self>::__POC_TEMPLATE_PLAN;
+            #prelude
             let mut __poc_slot_outlets: ::std::vec::Vec<::pocopine::__private::web_sys::Element> =
                 ::std::vec::Vec::with_capacity(#slot_capacity);
             let mut __poc_interp_targets: ::std::vec::Vec<::pocopine::__private::StaticInterpTarget> =
@@ -718,19 +729,47 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
         let ident = &emission.ident;
         let html_lit = proc_macro2::Literal::string(&emission.html);
         let plan_literal = emit_static_template_plan_literal(&emission.plan);
+        // RFC 064 §5.1 (Phase 1.A) — inline the unrolled install
+        // pass into a closure handed to `stamp_if_body_with`. The
+        // generic `apply_static_plan` walker no longer runs for
+        // pp-if body fragments; the per-fragment closure uses
+        // `emit_specialized_install_pass` (the same code path
+        // RFC 062 component mount specialization uses) against a
+        // local `const PLAN`. The plan literal still ships per
+        // fragment as its install-data carrier; eliminating it
+        // entirely is the rest of Phase 1's `install_static_*`
+        // API redesign.
+        let install_pass = emission
+            .plan
+            .emit_specialized_install_pass(quote! {
+                const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
+                let __poc_plan = &PLAN;
+                let __poc_template_name = "<pp-if body>";
+            })
+            .unwrap_or_else(|| {
+                // The body has no plan-eligible entries — emit a
+                // no-op closure body so the `stamp_if_body_with`
+                // call still type-checks. Same shape as the
+                // empty-plan case in RFC 062.
+                quote! {}
+            });
         quote! {
             fn #ident(
                 scope_id: ::pocopine::ScopeId,
                 proxy: &::pocopine::__private::JsValue,
                 ctx_parent_id: ::pocopine::ScopeId,
             ) -> ::core::option::Option<::pocopine::__private::web_sys::Element> {
-                const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
-                ::pocopine::__private::stamp_if_body(
+                ::pocopine::__private::stamp_if_body_with(
                     #html_lit,
-                    &PLAN,
                     scope_id,
                     proxy,
                     ctx_parent_id,
+                    |root, scope_id, proxy| {
+                        let _ = root;
+                        let _ = scope_id;
+                        let _ = proxy;
+                        #install_pass
+                    },
                 )
             }
         }
@@ -759,16 +798,32 @@ fn emit_slot_fragment_fns(emissions: &Emissions) -> TokenStream {
             SlotFragmentEmission::Dynamic { ident, html, plan } => {
                 let html_lit = proc_macro2::Literal::string(html);
                 let plan_literal = emit_static_template_plan_literal(plan);
+                // RFC 064 §5.1 (Phase 1.B) — inline the unrolled
+                // install pass into a closure handed to
+                // `stamp_dynamic_slot_with`, mirroring the if-body
+                // shape from Phase 1.A. `apply_static_plan` no
+                // longer runs for dynamic slot fragments.
+                let install_pass = plan
+                    .emit_specialized_install_pass(quote! {
+                        const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
+                        let __poc_plan = &PLAN;
+                        let __poc_template_name = "<slot>";
+                    })
+                    .unwrap_or_else(|| quote! {});
                 quote! {
                     fn #ident(ctx: ::pocopine::__private::SlotMountCtx<'_>) {
-                        const PLAN: ::pocopine::__private::StaticTemplatePlan = #plan_literal;
-                        ::pocopine::__private::stamp_dynamic_slot(
+                        ::pocopine::__private::stamp_dynamic_slot_with(
                             ctx.host,
                             #html_lit,
-                            &PLAN,
                             ctx.parent_scope_id,
                             ctx.parent_proxy,
                             ctx.child_scope_id,
+                            |root, scope_id, proxy| {
+                                let _ = root;
+                                let _ = scope_id;
+                                let _ = proxy;
+                                #install_pass
+                            },
                         );
                     }
                 }
