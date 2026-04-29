@@ -44,21 +44,15 @@ pub trait Component {
     /// [`crate::RegistryError`] instead of silently overwriting.
     fn register();
 
-    /// RFC 062 Phase 1 — per-component mount-specialization ABI.
-    ///
-    /// The default shim preserves RFC 061 behavior by applying the
-    /// registered static template plan. Later RFC 062 phases can
-    /// override this method with a macro-emitted unrolled mount body
-    /// while the runtime keeps dispatching through the same slot.
+    /// RFC 062 — per-component compiled mount ABI. Macro-emitted
+    /// components override this with a generated mount body; manual
+    /// components have no template plan to apply here.
     #[doc(hidden)]
     fn mount_template(
-        root: &Element,
-        scope_id: crate::reactive::ScopeId,
-        proxy: &wasm_bindgen::JsValue,
+        _root: &Element,
+        _scope_id: crate::reactive::ScopeId,
+        _proxy: &wasm_bindgen::JsValue,
     ) {
-        if let Some(plan) = crate::templates_plan::template_plan_for(Self::NAME) {
-            crate::templates_plan::apply_static_plan(root, scope_id, proxy, plan, Self::NAME);
-        }
     }
 }
 

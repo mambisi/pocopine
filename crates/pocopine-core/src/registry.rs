@@ -29,10 +29,10 @@ use crate::templates_plan::StaticTemplatePlan;
 /// erased and typed forms), and returns the scope.
 pub type ComponentCtor = fn() -> Scope;
 
-/// RFC 062 Phase 1 — per-component template mount entry.
-/// Initially every macro-emitted component points this at the
-/// default [`crate::app::Component::mount_template`] shim. Later
-/// phases replace it with an unrolled specialized function.
+/// RFC 062 — per-component compiled template mount entry.
+/// Macro-emitted components point this at their generated mount
+/// body. It is intentionally the component mount path, not a
+/// static-plan fallback hook.
 pub type ComponentMountFn = fn(&Element, ScopeId, &JsValue);
 
 /// Kept as a public type so users with their own registration path have
