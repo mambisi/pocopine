@@ -496,8 +496,6 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         return false;
     }
 
-    merge_template_attrs_as(&tpl_root, &user_root);
-
     set_private(
         &user_root,
         SCOPE_ID_KEY,
@@ -506,16 +504,31 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
     let _ = user_root.remove_attribute("data-pp-scope-id");
 
-    apply_fallthrough_attrs(el, &user_root, &scope);
+    let plan_root = pp_as_render_root(&user_root);
+
+    merge_template_attrs_as(&tpl_root, &plan_root);
+
+    apply_fallthrough_attrs(el, &plan_root, &scope);
 
     if let Some(plan) = crate::templates_plan::template_plan_for(tag) {
-        crate::templates_plan::apply_static_pp_as_plan(&user_root, scope.id, &proxy, plan, tag);
+        crate::templates_plan::apply_static_pp_as_plan(&plan_root, scope.id, &proxy, plan, tag);
     }
 
     let _ = el.remove_attribute("pp-as");
     set_private(el, "__pp_mounted", &JsValue::TRUE);
 
     true
+}
+
+fn pp_as_render_root(user_root: &Element) -> Element {
+    let tag = user_root.local_name();
+    if is_registered(&tag) {
+        mount_component(user_root, &tag, None);
+        if let Some(rendered_root) = first_element_child(user_root) {
+            return rendered_root;
+        }
+    }
+    user_root.clone()
 }
 
 /// Walk the tag's direct children. Return `Some(el)` when exactly

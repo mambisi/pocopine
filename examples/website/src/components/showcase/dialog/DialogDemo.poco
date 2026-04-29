@@ -3,7 +3,7 @@
   <section class="row">
     <pine-dialog-root pp-model:open="open">
       <pine-dialog-trigger pp-as>
-        <button class="pine-btn" data-variant="destructive">Delete file</button>
+        <pine-button variant="destructive">Delete file</pine-button>
       </pine-dialog-trigger>
       <pine-dialog-portal>
         <pine-dialog-overlay></pine-dialog-overlay>
@@ -15,10 +15,10 @@
           <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
           <div class="row" style="margin-top:1rem;justify-content:flex-end">
             <pine-dialog-close pp-as>
-              <button class="pine-btn" data-variant="ghost">Cancel</button>
+              <pine-button variant="ghost">Cancel</pine-button>
             </pine-dialog-close>
             <pine-dialog-close pp-as>
-              <button class="pine-btn" data-variant="destructive">Delete</button>
+              <pine-button variant="destructive">Delete</pine-button>
             </pine-dialog-close>
           </div>
         </pine-dialog-content>
