@@ -5,7 +5,7 @@
 //!
 //! - exactly one element root inside the row body,
 //! - no nested `pp-for`, `pp-if`, `pp-show`, `pp-teleport`,
-//!   `pp-model`, `pp-init`, `pp-slot`, `pp-as`,
+//!   `pp-model`, `pp-slot`, `pp-as`,
 //! - no transition attrs (`pp-transition:*`, `pp-stagger`),
 //! - no registered child component tags (anything with a `-`
 //!   in the local name — custom elements / Pine compounds

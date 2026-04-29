@@ -8,9 +8,9 @@
 //! (`anchor` / `roving` / `intersect` / `resize` / `flip`).
 //! There is no longer any runtime `pp-*` parsing or dispatch
 //! loop. **Authoring `pp-*` / `:prop` / `@event` / `pp-text` /
-//! `pp-bind` / `pp-show` / `pp-init` / `pp-model` directly on
-//! arbitrary runtime HTML is no longer a framework feature** —
-//! such directives only bind when the macro processes them at
+//! `pp-bind` / `pp-show` / `pp-model` directly on arbitrary
+//! runtime HTML is no longer a framework feature** — such
+//! directives only bind when the macro processes them at
 //! compile time inside a `#[component]` template.
 //!
 //! ## What this module ships now
@@ -25,9 +25,8 @@
 //! - Scope / proxy stamping helpers used by `pp-for` rows,
 //!   `pp-if` bodies, `pp-teleport` portals, and slot fragments.
 //! - Lifecycle dispatch helpers shared between `mount_component`
-//!   and the plan applier (`fire_deferred_init`,
-//!   `fire_mount_post_order`, `fire_ready_next_tick`,
-//!   `finalize_compiled_subtree`).
+//!   and the plan applier (`fire_mount_post_order`,
+//!   `fire_ready_next_tick`, `finalize_compiled_subtree`).
 //! - Element-scoped listener and effect side tables so a
 //!   subtree teardown can release everything tied to it
 //!   (`track_listener_on`, `track_effect_on`, `release_subtree`).
@@ -1215,9 +1214,9 @@ fn find_in_subtree(root: &Element, scope_id: ScopeId) -> Option<Element> {
 ///
 /// Generated fragment paths call this after `apply_static_plan`
 /// has installed every known binding/listener/controller. It
-/// preserves the post-order observable work — deferred `pp-init`,
-/// `on_mount`, `on_ready`, and the re-walk guard — but
-/// intentionally does not scan attributes or mount custom tags.
+/// preserves the post-order observable work — `on_mount`,
+/// `on_ready`, and the re-walk guard — but intentionally does
+/// not scan attributes or mount custom tags.
 pub fn finalize_compiled_subtree(el: &Element) {
     if get_private(el, WALKED_KEY)
         .map(|v| v.is_truthy())
