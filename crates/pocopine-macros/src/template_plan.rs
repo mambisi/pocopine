@@ -392,7 +392,7 @@ struct IfPlanLite {
     /// lift-eligible and the macro emitted a body fragment fn
     /// the `StaticIfPlan` literal should reference. `None`
     /// when the body falls outside the v1 envelope (`<slot>`,
-    /// `pp-data`, native `pp-model`, `pp-route`, etc.) — the
+    /// `pp-route`, native `pp-model`, etc.) — the
     /// runtime installer falls back to the legacy
     /// `clone_template_body` + `mount::walk` path.
     body_fn_ident: Option<syn::Ident>,
@@ -1918,7 +1918,7 @@ fn classify_attr(
         //
         // Eligibility: the attr name must parse cleanly into
         // `(head, arg, modifiers)` and the head must be in the
-        // allowlist. Anything else (pp-data / pp-route / pp-cloak
+        // allowlist. Anything else (pp-route / pp-cloak
         // / pp-stagger / pp-transition / unknown) stays preserved
         // and forces requires_walker.
         if let Some((head, arg, modifiers)) = parse_pp_directive_name(rest) {
@@ -1965,7 +1965,7 @@ fn classify_attr(
             });
             return ClassifyOutcome::Stripped { is_text: false };
         }
-        // Every other pp-* attribute (pp-data, pp-cloak,
+        // Every other pp-* attribute (pp-cloak,
         // pp-route, pp-transition:*, pp-stagger, etc.) —
         // preserved on the cleaned HTML and handled by the
         // runtime mount as today.
@@ -2352,7 +2352,7 @@ fn is_debounce_ms(m: &str) -> bool {
 /// inject chains resolve correctly.
 ///
 /// Excludes:
-///   * `pp-data` / `pp-model` / `pp-route` (component scope
+///   * `pp-route` / `pp-model` (component scope
 ///     boundaries — the body fragment installs against the
 ///     enclosing scope only).
 fn if_body_subtree_is_eligible(el: &Element) -> bool {
@@ -2373,7 +2373,7 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     // directives inside the mounted child template.
     let _ = is_plan_native(&el.tag); // kept for symmetry with slot eligibility
     for (name, _) in &el.attrs {
-        if name == "pp-data" || name == "pp-route" {
+        if name == "pp-route" {
             return false;
         }
         // RFC-058 Phase 6.5 — both branches of `pp-model` are
@@ -2452,7 +2452,7 @@ fn apply_role_substitution(html: &str, tag: &str, attrs: &str) -> String {
 /// RFC-058 Phase 3.5b + 3.5c — analyse a `<custom-tag>`'s
 /// children for slot fragment lifting. Returns `None` when
 /// anything in the subtree falls outside the v1 envelope (`<slot>`,
-/// `pp-data` / `pp-model` / `pp-route`). Otherwise returns
+/// `pp-route` / `pp-model`). Otherwise returns
 /// `Some(SlotFragmentEmission)` — `Static` when the subtree
 /// has no plan-eligible directive (3.5b path), `Dynamic` when
 /// it does (3.5c path: stamps cleaned HTML + applies a
@@ -2516,7 +2516,7 @@ fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<Slo
 /// `pp-teleport` — same scope semantics they already have at
 /// template level but inside a parent-scope fragment), and
 /// the directives whose semantics the fragment can't honour
-/// (`pp-data` / `pp-model` / `pp-route` are component scope
+/// (`pp-route` / `pp-model` are component scope
 /// boundaries).
 fn slot_subtree_is_lift_eligible(nodes: &[Node]) -> bool {
     nodes.iter().all(slot_node_is_lift_eligible)
@@ -2539,7 +2539,7 @@ fn slot_node_is_lift_eligible(node: &Node) -> bool {
             // fragments into the shared `Emissions` queue).
             let _ = is_plan_native(&el.tag); // kept for parity with body eligibility
             for (name, _) in &el.attrs {
-                if name == "pp-data" || name == "pp-route" {
+                if name == "pp-route" {
                     return false;
                 }
                 // RFC-058 Phase 6.5 — `pp-model` lifts in both

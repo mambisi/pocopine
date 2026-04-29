@@ -246,7 +246,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
 ///  * instantiate a fresh scope,
 ///  * apply static attribute props to the scope,
 ///  * clone the registered template into `el`,
-///  * bind the scope to the template's root and strip its `pp-data`,
+///  * bind the scope to the template's root and strip its `data-pp-scope-id` marker,
 ///  * forward fallthrough attrs onto the template root (RFC-010),
 ///  * apply the registered template plan against the freshly
 ///    stamped subtree.
@@ -331,12 +331,12 @@ fn mount_component(
     el.set_inner_html("");
     let _ = el.append_child(fragment.as_ref());
 
-    // Bind scope to the template's root element and strip pp-data so
-    // nothing later tries to re-instantiate it.
+    // Bind scope to the template's root element and strip
+    // data-pp-scope-id so nothing later tries to re-instantiate it.
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
-        let _ = root.remove_attribute("pp-data");
+        let _ = root.remove_attribute("data-pp-scope-id");
 
         // Fallthrough (RFC-010).
         apply_fallthrough_attrs(el, &root, &scope);
@@ -505,7 +505,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         &JsValue::from_f64(scope.id.0 as f64),
     );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
-    let _ = user_root.remove_attribute("pp-data");
+    let _ = user_root.remove_attribute("data-pp-scope-id");
 
     apply_fallthrough_attrs(el, &user_root, &scope);
 
@@ -562,13 +562,13 @@ fn is_trivial_slot_wrapper(tpl_root: &Element) -> bool {
 /// Copy attrs from `tpl_root` onto `user_root` per RFC-019 §4.
 /// `class` / `style` join; everything else writes only when absent
 /// on the user element (user wins on conflict). Internal markers
-/// (`pp-data`, `pp-as`) are dropped.
+/// (`data-pp-scope-id`, `pp-as`) are dropped.
 fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
     let attrs = tpl_root.attributes();
     for i in 0..attrs.length() {
         let Some(a) = attrs.item(i) else { continue };
         let name = a.name();
-        if name == "pp-data" || name == "pp-as" {
+        if name == "data-pp-scope-id" || name == "pp-as" {
             continue;
         }
         let val = a.value();
