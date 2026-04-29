@@ -272,6 +272,12 @@ impl SubtreeHandle {
     pub fn unmount(mut self) {
         self.release();
     }
+
+    /// Detach this handle from automatic cleanup. The caller takes
+    /// responsibility for removing the host subtree later.
+    pub fn leak(mut self) {
+        self.active = false;
+    }
 }
 
 impl Drop for SubtreeHandle {

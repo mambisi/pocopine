@@ -56,7 +56,7 @@ fn mount_fixture<C: pocopine::__private::Component>() -> Element {
     pocopine_core::mount::finalize_compiled_subtree(&root);
     // The fixture host is removed directly by each test; keep the
     // typed subtree alive after this helper returns.
-    std::mem::forget(mounted);
+    mounted.leak();
     host
 }
 

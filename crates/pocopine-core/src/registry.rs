@@ -163,6 +163,16 @@ pub fn active_component_vtable(name: &str) -> Option<&'static ComponentVTable> {
     })
 }
 
+pub fn active_has_template(name: &str) -> bool {
+    ACTIVE_PHF_REGISTRY.with(|active| {
+        active
+            .borrow()
+            .and_then(|registry| registry.get(name))
+            .and_then(|v| v.template_html)
+            .is_some()
+    })
+}
+
 pub fn active_component_names() -> Vec<&'static str> {
     ACTIVE_PHF_REGISTRY.with(|active| {
         active

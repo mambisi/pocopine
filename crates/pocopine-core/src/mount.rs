@@ -354,15 +354,11 @@ fn mount_component(
     // flow. Prefer `template_clone_for` (parses the HTML once into a
     // cached `<template>` element, every mount clones the `.content`
     // `DocumentFragment`) over re-parsing the HTML string per mount.
-    if let Some(fragment) = crate::templates::template_clone_for(tag) {
-        el.set_inner_html("");
-        let _ = el.append_child(fragment.as_ref());
-    } else {
-        let Some(html) = template_for(tag) else {
-            return;
-        };
-        el.set_inner_html(&html);
-    }
+    let Some(fragment) = crate::templates::template_clone_for(tag) else {
+        return;
+    };
+    el.set_inner_html("");
+    let _ = el.append_child(fragment.as_ref());
 
     // Bind scope to the template's root element and strip pp-data so
     // nothing later tries to re-instantiate it.
@@ -393,24 +389,7 @@ fn mount_component(
         if !tr_in.is_empty() || !tr_out.is_empty() {
             let effective_in = if tr_in.is_empty() { "none" } else { tr_in };
             let effective_out = if tr_out.is_empty() { "none" } else { tr_out };
-            let already_set = root.has_attribute("pp-transition:enter")
-                || root.has_attribute("pp-transition:enter-start")
-                || root.has_attribute("pp-transition:enter-end")
-                || root.has_attribute("pp-transition:leave")
-                || root.has_attribute("pp-transition:leave-start")
-                || root.has_attribute("pp-transition:leave-end")
-                || root.has_attribute("pp-transition")
-                || root.has_attribute("pp-transition:in")
-                || root.has_attribute("pp-transition:out")
-                || el.has_attribute("pp-transition:enter")
-                || el.has_attribute("pp-transition:enter-start")
-                || el.has_attribute("pp-transition:enter-end")
-                || el.has_attribute("pp-transition:leave")
-                || el.has_attribute("pp-transition:leave-start")
-                || el.has_attribute("pp-transition:leave-end")
-                || el.has_attribute("pp-transition")
-                || el.has_attribute("pp-transition:in")
-                || el.has_attribute("pp-transition:out");
+            let already_set = has_user_transition_attr(&root) || has_user_transition_attr(el);
             if !already_set {
                 crate::animate::apply_preset(&root, effective_in, effective_out);
             }
@@ -641,6 +620,26 @@ fn merge_template_attrs_as(tpl_root: &Element, user_root: &Element) {
             }
         }
     }
+}
+
+fn has_user_transition_attr(el: &Element) -> bool {
+    let attrs = el.attributes();
+    for i in 0..attrs.length() {
+        let Some(attr) = attrs.item(i) else { continue };
+        match attr.name().as_str() {
+            "pp-transition"
+            | "pp-transition:enter"
+            | "pp-transition:enter-start"
+            | "pp-transition:enter-end"
+            | "pp-transition:leave"
+            | "pp-transition:leave-start"
+            | "pp-transition:leave-end"
+            | "pp-transition:in"
+            | "pp-transition:out" => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `setAttribute` rejects names whose first character isn't a

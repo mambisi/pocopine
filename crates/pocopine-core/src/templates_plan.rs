@@ -36,7 +36,7 @@
 //!   silently to the runtime mount as today.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
@@ -189,9 +189,10 @@ pub fn registered_template_tags() -> Vec<String> {
         })
         .map(str::to_string)
         .collect();
+    let mut seen: HashSet<String> = tags.iter().cloned().collect();
     TEMPLATE_PLANS.with(|registry| {
         for tag in registry.borrow().keys() {
-            if !tags.iter().any(|existing| existing == tag) {
+            if seen.insert(tag.clone()) {
                 tags.push(tag.clone());
             }
         }
@@ -743,7 +744,11 @@ fn install_child_host_directives(
 fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
     let mut current: Element = root.clone();
     for &idx in node_path {
-        current = current.children().item(idx as u32)?;
+        let mut child = current.first_element_child()?;
+        for _ in 0..idx {
+            child = child.next_element_sibling()?;
+        }
+        current = child;
     }
     Some(current)
 }
