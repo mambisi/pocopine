@@ -2257,15 +2257,27 @@ async fn dialog_trigger_composes_pine_button() {
     let host = mount_fixture::<DialogComposedButtonFixture>();
     tick().await;
 
-    // Click the INNER rendered button — Pine's Button template
-    // renders `<button class=\"pine-btn\">` inside the pine-button
-    // custom element.
-    host.query_selector(".user-trig")
+    let trigger = host
+        .query_selector("button.pine-btn.user-trig.pine-dialog-trigger")
         .unwrap()
-        .expect("pine-button rendered native button")
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+        .expect("pine-button rendered native trigger button");
+    assert_eq!(
+        trigger.get_attribute("data-variant").as_deref(),
+        Some("destructive"),
+        "pine-button variant remains on the rendered button"
+    );
+    assert_eq!(
+        trigger.get_attribute("data-state").as_deref(),
+        Some("closed"),
+        "dialog trigger state lands on the rendered button"
+    );
+    assert_eq!(
+        trigger.get_attribute("aria-expanded").as_deref(),
+        Some("false"),
+        "dialog trigger aria lands on the rendered button"
+    );
+
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert!(
@@ -2275,14 +2287,31 @@ async fn dialog_trigger_composes_pine_button() {
             .is_some(),
         "dialog opened via composed pine-button trigger"
     );
+    let open_trigger = host
+        .query_selector("button.pine-btn.user-trig.pine-dialog-trigger")
+        .unwrap()
+        .expect("rendered trigger remains mounted");
+    assert_eq!(
+        open_trigger.get_attribute("data-state").as_deref(),
+        Some("open"),
+        "dialog trigger state updates on the rendered button"
+    );
+    assert_eq!(
+        open_trigger.get_attribute("aria-expanded").as_deref(),
+        Some("true"),
+        "dialog trigger aria updates on the rendered button"
+    );
 
-    doc()
-        .query_selector(".user-close")
+    let close = doc()
+        .query_selector("button.pine-btn.user-close.pine-dialog-close")
         .unwrap()
-        .expect("close pine-button rendered")
-        .dyn_into::<HtmlElement>()
-        .unwrap()
-        .click();
+        .expect("close pine-button rendered native button");
+    assert_eq!(
+        close.get_attribute("data-variant").as_deref(),
+        Some("ghost"),
+        "close button keeps its PineButton variant"
+    );
+    close.dyn_into::<HtmlElement>().unwrap().click();
     tick().await;
     tick().await;
     assert!(
