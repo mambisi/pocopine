@@ -46,21 +46,21 @@ pub fn install(
     scope_id: ScopeId,
     proxy: &JsValue,
     event: &str,
-    modifiers: &[String],
+    modifiers: &'static [&'static str],
     ast: Rc<Spanned<Expr>>,
 ) {
     let event = event.to_string();
     let el = el.clone();
     let proxy = proxy.clone();
 
-    let prevent = modifiers.iter().any(|m| m == "prevent");
-    let stop = modifiers.iter().any(|m| m == "stop");
-    let self_only = modifiers.iter().any(|m| m == "self");
-    let once = modifiers.iter().any(|m| m == "once");
-    let on_window = modifiers.iter().any(|m| m == "window");
-    let on_document = modifiers.iter().any(|m| m == "document");
-    let outside = modifiers.iter().any(|m| m == "outside");
-    let capture = modifiers.iter().any(|m| m == "capture");
+    let prevent = modifiers.contains(&"prevent");
+    let stop = modifiers.contains(&"stop");
+    let self_only = modifiers.contains(&"self");
+    let once = modifiers.contains(&"once");
+    let on_window = modifiers.contains(&"window");
+    let on_document = modifiers.contains(&"document");
+    let outside = modifiers.contains(&"outside");
+    let capture = modifiers.contains(&"capture");
     let debounce_ms: Option<u32> = parse_debounce(modifiers);
 
     // Persistent closure used by `setTimeout` in the debounce branch.
@@ -289,9 +289,9 @@ pub fn backfill_legacy_call(ast: Spanned<Expr>) -> Spanned<Expr> {
 /// Scan the modifier list for `debounce` and the optional numeric
 /// modifier that follows it (`pp-on:input.debounce.500="foo"` →
 /// 500ms; bare `debounce` → 300ms default).
-fn parse_debounce(modifiers: &[String]) -> Option<u32> {
+fn parse_debounce(modifiers: &[&str]) -> Option<u32> {
     for (i, m) in modifiers.iter().enumerate() {
-        if m == "debounce" {
+        if *m == "debounce" {
             let ms = modifiers
                 .get(i + 1)
                 .and_then(|s| s.parse::<u32>().ok())
@@ -302,7 +302,7 @@ fn parse_debounce(modifiers: &[String]) -> Option<u32> {
     None
 }
 
-fn collect_key_modifiers(modifiers: &[String]) -> Vec<String> {
+fn collect_key_modifiers(modifiers: &[&'static str]) -> Vec<&'static str> {
     modifiers
         .iter()
         .enumerate()
@@ -310,7 +310,7 @@ fn collect_key_modifiers(modifiers: &[String]) -> Vec<String> {
             if i > 0 && modifiers[i - 1] == "debounce" && m.parse::<u32>().is_ok() {
                 return None;
             }
-            is_key_modifier(m).then(|| m.clone())
+            is_key_modifier(m).then_some(*m)
         })
         .collect()
 }
@@ -373,13 +373,13 @@ fn is_word_key(m: &str) -> bool {
 
 /// Return true iff the event passes every key modifier. Non-keyboard
 /// events fail any key modifier check.
-fn key_filter_matches(ev: &Event, modifiers: &[String]) -> bool {
+fn key_filter_matches(ev: &Event, modifiers: &[&str]) -> bool {
     let Ok(ke) = ev.clone().dyn_into::<KeyboardEvent>() else {
         return false;
     };
     let key = ke.key().to_lowercase();
     for m in modifiers {
-        match m.as_str() {
+        match *m {
             "ctrl" if !ke.ctrl_key() => return false,
             "shift" if !ke.shift_key() => return false,
             "alt" if !ke.alt_key() => return false,
@@ -400,10 +400,6 @@ fn key_filter_matches(ev: &Event, modifiers: &[String]) -> bool {
 mod tests {
     use super::{collect_key_modifiers, is_key_modifier};
 
-    fn strings(items: &[&str]) -> Vec<String> {
-        items.iter().map(|item| (*item).to_string()).collect()
-    }
-
     #[test]
     fn capture_is_not_a_key_filter() {
         assert!(!is_key_modifier("capture"));
@@ -412,13 +408,13 @@ mod tests {
     #[test]
     fn debounce_delay_is_not_a_key_filter() {
         assert_eq!(
-            collect_key_modifiers(&strings(&["debounce", "500"])),
-            Vec::<String>::new()
+            collect_key_modifiers(&["debounce", "500"]),
+            Vec::<&'static str>::new()
         );
     }
 
     #[test]
     fn numeric_key_shortcuts_still_filter_when_not_debounce_delay() {
-        assert_eq!(collect_key_modifiers(&strings(&["1"])), strings(&["1"]));
+        assert_eq!(collect_key_modifiers(&["1"]), vec!["1"]);
     }
 }

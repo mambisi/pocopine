@@ -40,17 +40,17 @@ enum Orientation {
 pub fn install_opaque(
     el: &Element,
     arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &[&str],
     _value: &str,
     _scope_id: ScopeId,
     _proxy: &JsValue,
 ) {
     let container = el.clone();
     let orientation = parse_orientation(modifiers);
-    let wrap = !modifiers.iter().any(|m| m == "nowrap");
+    let wrap = !modifiers.contains(&"nowrap");
     let virtual_mode = modifiers
         .iter()
-        .any(|m| m == "virtual" || m == "activedescendant");
+        .any(|m| *m == "virtual" || *m == "activedescendant");
     let linked_listbox = arg.map(|s| s.to_string());
 
     if virtual_mode {
@@ -286,11 +286,11 @@ fn classify_key(key: &str, orientation: Orientation) -> Option<KeyAction> {
     }
 }
 
-fn parse_orientation(modifiers: &[String]) -> Orientation {
-    if modifiers.iter().any(|m| m == "horizontal") {
+fn parse_orientation(modifiers: &[impl AsRef<str>]) -> Orientation {
+    if modifiers.iter().any(|m| m.as_ref() == "horizontal") {
         return Orientation::Horizontal;
     }
-    if modifiers.iter().any(|m| m == "both") {
+    if modifiers.iter().any(|m| m.as_ref() == "both") {
         return Orientation::Both;
     }
     Orientation::Vertical
@@ -298,11 +298,11 @@ fn parse_orientation(modifiers: &[String]) -> Orientation {
 
 /// `items.<selector>` in the modifier chain overrides the default
 /// selector. Missing → default.
-fn parse_items_selector(modifiers: &[String]) -> String {
+fn parse_items_selector(modifiers: &[&str]) -> String {
     for (i, m) in modifiers.iter().enumerate() {
-        if m == "items" {
+        if *m == "items" {
             if let Some(s) = modifiers.get(i + 1) {
-                return s.clone();
+                return (*s).to_string();
             }
         }
     }
@@ -320,11 +320,11 @@ fn default_items_selector() -> String {
 /// Virtual-mode items default to `[role="option"]` (WAI-ARIA
 /// combobox/listbox pattern), still overridable via the
 /// `items.<selector>` modifier from RFC-022.
-fn parse_items_selector_virtual(modifiers: &[String]) -> String {
+fn parse_items_selector_virtual(modifiers: &[&str]) -> String {
     for (i, m) in modifiers.iter().enumerate() {
-        if m == "items" {
+        if *m == "items" {
             if let Some(s) = modifiers.get(i + 1) {
-                return s.clone();
+                return (*s).to_string();
             }
         }
     }

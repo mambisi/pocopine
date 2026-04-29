@@ -38,14 +38,14 @@ pub fn install_compiled(
     el: &Element,
     proxy: &JsValue,
     arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &[&str],
     value: &str,
 ) {
     if let Some(child_proxy) = child_component_proxy(el) {
         install_component(el, proxy, arg, value, child_proxy);
     } else {
-        let number = modifiers.iter().any(|m| m == "number");
-        let lazy = modifiers.iter().any(|m| m == "lazy");
+        let number = modifiers.contains(&"number");
+        let lazy = modifiers.contains(&"lazy");
         install_native(el, proxy, value.to_string(), number, lazy);
     }
 }

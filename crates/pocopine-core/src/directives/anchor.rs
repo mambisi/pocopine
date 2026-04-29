@@ -87,7 +87,7 @@ impl Placement {
 pub fn install_opaque(
     el: &Element,
     arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &[&str],
     value: &str,
     scope_id: ScopeId,
     proxy: &JsValue,
@@ -103,7 +103,7 @@ pub fn install_opaque(
 
     let placement = parse_placement(arg);
     let offset = parse_offset(modifiers);
-    let flip = modifiers.iter().any(|m| m == "flip");
+    let flip = modifiers.contains(&"flip");
 
     install(&floater, &anchor, placement, offset, flip);
 }

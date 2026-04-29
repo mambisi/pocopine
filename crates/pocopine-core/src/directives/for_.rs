@@ -254,9 +254,9 @@ pub fn install(
     template: HtmlTemplateElement,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
-    item_name: String,
-    items_expr: String,
-    key_expr: Option<String>,
+    item_name: &'static str,
+    items_expr: &'static str,
+    key_expr: Option<&'static str>,
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
 ) {
@@ -323,8 +323,8 @@ pub fn install(
 /// RFC-004 semantics.
 #[allow(clippy::too_many_arguments)]
 fn run_naive(
-    item_name: String,
-    items_expr: String,
+    item_name: &'static str,
+    items_expr: &'static str,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
@@ -337,7 +337,7 @@ fn run_naive(
     let prior: Rc<RefCell<Vec<Element>>> = Rc::new(RefCell::new(Vec::new()));
 
     effect(move || {
-        let items_js = resolve_path(&parent_proxy, &items_expr);
+        let items_js = resolve_path(&parent_proxy, items_expr);
         let arr: Array = items_js
             .dyn_into::<Array>()
             .unwrap_or_else(|_| Array::new());
@@ -487,9 +487,9 @@ fn item_signature(v: &JsValue) -> String {
 /// `LoopScope`, and reorders the DOM to match the new order.
 #[allow(clippy::too_many_arguments)]
 fn run_keyed(
-    item_name: String,
-    items_expr: String,
-    key_expr: String,
+    item_name: &'static str,
+    items_expr: &'static str,
+    key_expr: &'static str,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
@@ -498,7 +498,7 @@ fn run_keyed(
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
 ) -> crate::reactive::EffectId {
-    let key_resolver = KeyResolver::parse(&item_name, &key_expr);
+    let key_resolver = KeyResolver::parse(item_name, key_expr);
     // RFC 054 — opportunistic compiled-row-plan fast path. Looked
     // up once per `pp-for` directive bind (NOT per row). Templates
     // the macro flagged as eligible (flat keyed table rows, no
@@ -537,7 +537,7 @@ fn run_keyed(
 
     effect(move || {
         let reconcile_total_start = crate::profiler::reconcile::start();
-        let items_js = resolve_path(&parent_proxy, &items_expr);
+        let items_js = resolve_path(&parent_proxy, items_expr);
         let arr: Array = items_js
             .dyn_into::<Array>()
             .unwrap_or_else(|_| Array::new());

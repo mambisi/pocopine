@@ -149,11 +149,11 @@ pub struct StaticInterpTarget {
 // ─── registry ────────────────────────────────────────────────────
 
 thread_local! {
-    static TEMPLATE_PLANS: RefCell<HashMap<String, &'static StaticTemplatePlan>> =
+    static TEMPLATE_PLANS: RefCell<HashMap<&'static str, &'static StaticTemplatePlan>> =
         RefCell::new(HashMap::new());
 
     /// Counter for fail-fast-but-recover events in release builds
-    /// — incremented when an `apply_static_plan` install fails
+    /// — incremented when a generated install helper fails
     /// (`node_path` doesn't resolve, `expr_src` doesn't parse).
     /// Tests assert this stays zero across mount/unmount cycles
     /// for templates the macro stripped attributes from. Public
@@ -168,9 +168,9 @@ thread_local! {
 /// plan-eligible directive (RFC-058 Phase 2 §6 envelope).
 ///
 /// Idempotent — repeat calls overwrite the prior entry.
-pub fn register_template_plan(tag: &str, plan: &'static StaticTemplatePlan) {
+pub fn register_template_plan(tag: &'static str, plan: &'static StaticTemplatePlan) {
     TEMPLATE_PLANS.with(|registry| {
-        registry.borrow_mut().insert(tag.to_string(), plan);
+        registry.borrow_mut().insert(tag, plan);
     });
 }
 
@@ -203,8 +203,8 @@ pub fn registered_template_tags() -> Vec<String> {
     let mut seen: HashSet<String> = tags.iter().cloned().collect();
     TEMPLATE_PLANS.with(|registry| {
         for tag in registry.borrow().keys() {
-            if seen.insert(tag.clone()) {
-                tags.push(tag.clone());
+            if seen.insert((*tag).to_string()) {
+                tags.push((*tag).to_string());
             }
         }
     });
@@ -212,8 +212,8 @@ pub fn registered_template_tags() -> Vec<String> {
 }
 
 /// Cumulative count of plan-install failures observed since
-/// process start. Increments via [`record_plan_failure`] when an
-/// `apply_static_plan` entry's `node_path` doesn't resolve to a
+/// process start. Increments via [`record_plan_failure`] when a
+/// generated install entry's `node_path` doesn't resolve to a
 /// live DOM node, or its `expr_src` doesn't parse — both are
 /// framework bugs (the macro stripped a directive whose plan
 /// entry can't deliver). Tests can assert this stays zero
@@ -230,312 +230,15 @@ pub fn reset_plan_failure_count() {
     PLAN_FAILURES.with(|c| c.set(0));
 }
 
-/// Record one plan-install failure. Called from
-/// [`crate::mount`] / [`apply_static_plan`] when an install
-/// entry can't deliver. In debug builds this also panics with
-/// a message naming the template + entry; release builds log
-/// to `console.error` and continue (the surrounding mount
-/// keeps going so a single misclassification doesn't take
-/// down the page).
+/// Record one plan-install failure. Called from generated mount
+/// helpers when an install entry can't deliver. In debug builds
+/// this also panics with a message naming the template + entry;
+/// release builds log to `console.error` and continue (the
+/// surrounding mount keeps going so a single misclassification
+/// doesn't take down the page).
 #[doc(hidden)]
 pub fn record_plan_failure() {
     PLAN_FAILURES.with(|c| c.set(c.get().saturating_add(1)));
-}
-
-// ─── runtime apply ───────────────────────────────────────────────
-
-/// Apply a registered template plan against the freshly-stamped
-/// subtree rooted at `root`. Called from
-/// [`crate::mount::mount_component`]'s fast-path right after
-/// the template HTML is set + the scope is bound.
-///
-/// Behaviour:
-///
-/// * For each `StaticRef` — register against the scope's ref
-///   table via [`crate::refs::register`].
-/// * For each `StaticBinding` — install the matching directive
-///   helper (`text` / `html` / `bind` / `show`) using the
-///   parsed expression AST.
-/// * For each `StaticListener` — install via
-///   [`crate::directives::on::install`] with the parsed AST
-///   wrapped in `Rc`.
-///
-/// Fail-fast policy (RFC-057 §5.6 council pass 3):
-/// stripped attributes are owned by the plan. If a `node_path`
-/// doesn't resolve to a live DOM node or an `expr_src` doesn't
-/// parse — both are framework bugs (the macro stripped a
-/// directive whose plan entry can't deliver). Debug builds
-/// panic with a message naming the template + entry; release
-/// builds log to `console.error`, increment the
-/// [`plan_failure_count`] counter, and abandon the install for
-/// that single entry. The surrounding mount continues so a
-/// single misclassification doesn't take the whole app down.
-pub fn apply_static_plan(
-    root: &Element,
-    scope_id: ScopeId,
-    proxy: &JsValue,
-    plan: &'static StaticTemplatePlan,
-    template_name: &str,
-) {
-    // Slot materialisation mutates the element-child list by
-    // replacing `<slot>` with author/default content. Snapshot
-    // the outlet elements up front, then materialise them only
-    // after every other plan entry has resolved its path.
-    let mut slot_outlets: Vec<Element> = Vec::with_capacity(plan.slot_outlets.len());
-    for s in plan.slot_outlets {
-        let Some(el) = resolve(root, s.node_path) else {
-            fail("slot-outlet", template_name, s.node_path, Some(s.name));
-            continue;
-        };
-        if el.local_name() != "slot" {
-            fail("slot-outlet-tag", template_name, s.node_path, Some(s.name));
-            continue;
-        }
-        slot_outlets.push(el);
-    }
-
-    // Order matches the mount's pre-/post-order intuition: refs
-    // first (so any later effect can read the ref table), then
-    // bindings (effects subscribe before any synchronous
-    // trigger), then listeners (delegation surface ready before
-    // user interaction), then child mounts (RFC-058 Phase 3 —
-    // explicit `mount_child_component` calls before the mount's
-    // recursive descent reaches each `<custom-tag>`; the
-    // mount's `__pp_mounted` guard makes the discovery a no-op
-    // for tags this loop already mounted).
-    for r in plan.refs {
-        let Some(el) = resolve(root, r.node_path) else {
-            fail("ref", template_name, r.node_path, None);
-            continue;
-        };
-        crate::refs::register(scope_id, r.name, &el);
-    }
-    for b in plan.bindings {
-        let Some(el) = resolve(root, b.node_path) else {
-            fail("binding", template_name, b.node_path, Some(b.expr_src));
-            continue;
-        };
-        let ast = match expr::parse_cached(b.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "binding-parse",
-                    template_name,
-                    b.node_path,
-                    Some(b.expr_src),
-                );
-                continue;
-            }
-        };
-        match b.kind {
-            BindingKind::Text => directives::text::install(&el, proxy, ast),
-            BindingKind::Html => directives::html::install(&el, proxy, ast),
-            BindingKind::Show => directives::show::install(&el, proxy, ast),
-            BindingKind::Bind { arg } => directives::bind::install(&el, proxy, arg, ast),
-            BindingKind::Class => {
-                // RFC-054 row plans use `Class`; template plans
-                // emit `Bind { arg: "class" }`. Reaching this
-                // branch via an apply_static_plan call means a
-                // macro bug let a row-only kind into the
-                // template plan. Treat as fail-fast.
-                fail("binding-kind", template_name, b.node_path, Some(b.expr_src));
-            }
-        }
-    }
-    for l in plan.listeners {
-        let Some(el) = resolve(root, l.node_path) else {
-            fail("listener", template_name, l.node_path, Some(l.expr_src));
-            continue;
-        };
-        let ast = match expr::parse_cached(l.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "listener-parse",
-                    template_name,
-                    l.node_path,
-                    Some(l.expr_src),
-                );
-                continue;
-            }
-        };
-        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
-        directives::on::install(
-            &el,
-            scope_id,
-            proxy,
-            l.event,
-            &modifiers,
-            Rc::new(directives::on::backfill_legacy_call(ast)),
-        );
-    }
-    for c in plan.child_mounts {
-        let Some(el) = resolve(root, c.node_path) else {
-            fail("child-mount", template_name, c.node_path, Some(c.tag));
-            continue;
-        };
-        if c.slots.is_empty() {
-            crate::mount::mount_child_component(&el, c.tag);
-        } else {
-            let mut set = SlotSet::new();
-            for s in c.slots {
-                set = match s.scoped_let {
-                    Some(let_ident) => set.scoped(s.name, s.fragment, let_ident),
-                    None => set.named(s.name, s.fragment),
-                };
-            }
-            crate::mount::mount_child_component_with_slots(&el, c.tag, set, scope_id, proxy);
-        }
-        install_child_host_directives(&el, scope_id, proxy, c, template_name);
-    }
-    for fp in plan.for_plans {
-        let Some(el) = resolve(root, fp.template_node_path) else {
-            fail(
-                "for-plan",
-                template_name,
-                fp.template_node_path,
-                Some(fp.items_expr),
-            );
-            continue;
-        };
-        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
-            Ok(t) => t,
-            Err(_) => {
-                fail(
-                    "for-plan-template",
-                    template_name,
-                    fp.template_node_path,
-                    Some(fp.items_expr),
-                );
-                continue;
-            }
-        };
-        directives::for_::install(
-            template,
-            proxy.clone(),
-            scope_id,
-            fp.item_name.to_string(),
-            fp.items_expr.to_string(),
-            fp.key_expr.map(|s| s.to_string()),
-            fp.stagger_ms,
-            fp.body,
-        );
-    }
-    for tp in plan.teleport_plans {
-        let Some(el) = resolve(root, tp.template_node_path) else {
-            fail(
-                "teleport-plan",
-                template_name,
-                tp.template_node_path,
-                Some(tp.selector),
-            );
-            continue;
-        };
-        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
-            Ok(t) => t,
-            Err(_) => {
-                fail(
-                    "teleport-plan-template",
-                    template_name,
-                    tp.template_node_path,
-                    Some(tp.selector),
-                );
-                continue;
-            }
-        };
-        directives::teleport::install(template, tp.selector, tp.body);
-    }
-    for ip in plan.if_plans {
-        let Some(el) = resolve(root, ip.template_node_path) else {
-            fail(
-                "if-plan",
-                template_name,
-                ip.template_node_path,
-                Some(ip.expr_src),
-            );
-            continue;
-        };
-        let template = match el.dyn_into::<web_sys::HtmlTemplateElement>() {
-            Ok(t) => t,
-            Err(_) => {
-                fail(
-                    "if-plan-template",
-                    template_name,
-                    ip.template_node_path,
-                    Some(ip.expr_src),
-                );
-                continue;
-            }
-        };
-        let ast = match expr::parse_cached(ip.expr_src) {
-            Ok(a) => a,
-            Err(_) => {
-                fail(
-                    "if-plan-parse",
-                    template_name,
-                    ip.template_node_path,
-                    Some(ip.expr_src),
-                );
-                continue;
-            }
-        };
-        directives::if_::install(template, proxy.clone(), ast, ip.body, ip.teleport_selector);
-    }
-    for slot in slot_outlets {
-        crate::mount::materialize_compiled_slot_outlet(&slot);
-    }
-    // Install opaque runtime directives last so container
-    // behaviours like `pp-roving` see the slot-materialised item
-    // DOM in place (the legacy mount fired them after attribute
-    // dispatch on each item, which happened post-slot-clone).
-    install_opaque_directives(root, scope_id, proxy, plan, template_name);
-    // RFC-058 Phase 6.2 — `{{expr}}` text interpolation. The
-    // macro pre-parses segments and stamps `data-pp-interp-managed`
-    // on the carrier element so the runtime mount's
-    // `interp::scan_children` skips the duplicate scan.
-    //
-    // Resolve every target text node BEFORE installing any
-    // segment list. Each `install_planned_target` inserts new
-    // text-node siblings before the placeholder and then removes
-    // the placeholder — reading `text_index` against the live
-    // list after a sibling install lands on the wrong node when
-    // multiple entries share a parent (e.g. a single carrier
-    // with `a {{x}}<em></em>b {{y}}` emits two entries against
-    // the same parent with text_index 0 and 1, but after the
-    // first install the dynamic node injected for `x` occupies
-    // text_index 1 in the live list).
-    let mut interp_targets: Vec<(Element, web_sys::Text, &'static [_])> =
-        Vec::with_capacity(plan.interps.len());
-    for ip in plan.interps {
-        let Some(el) = resolve(root, ip.node_path) else {
-            fail("interp", template_name, ip.node_path, None);
-            continue;
-        };
-        let Some(target) = directives::interp::resolve_text_target(&el, ip.text_index as usize)
-        else {
-            continue;
-        };
-        interp_targets.push((el, target, ip.segments));
-    }
-    for (el, target, segments) in &interp_targets {
-        directives::interp::install_planned_target(el, proxy, target, segments);
-    }
-    // RFC-058 Phase 6.5 — `pp-model` on native inputs lifted out
-    // of `mount::dispatch`. The macro already parsed the
-    // modifier list (`.number`, `.lazy`); the applier installs
-    // the read-side effect + write-side listener directly.
-    for nm in plan.native_models {
-        let Some(el) = resolve(root, nm.node_path) else {
-            fail(
-                "native pp-model",
-                template_name,
-                nm.node_path,
-                Some(nm.expr_src),
-            );
-            continue;
-        };
-        directives::model::install_native(&el, proxy, nm.expr_src.to_string(), nm.number, nm.lazy);
-    }
 }
 
 /// RFC 062 Phase 2 helper used by macro-specialized mount
@@ -588,8 +291,8 @@ pub fn install_static_binding(
 }
 
 /// RFC 062 Phase 2 helper used by macro-specialized mount
-/// bodies. Parsing, modifier allocation, and legacy-call
-/// backfill stay shared with the generic applier.
+/// bodies. Parsing and legacy-call backfill stay shared with
+/// the generic applier.
 #[doc(hidden)]
 pub fn install_static_listener(
     el: &Element,
@@ -610,13 +313,12 @@ pub fn install_static_listener(
             return;
         }
     };
-    let modifiers: Vec<String> = entry.modifiers.iter().map(|s| (*s).to_string()).collect();
     directives::on::install(
         el,
         scope_id,
         proxy,
         entry.event,
-        &modifiers,
+        entry.modifiers,
         Rc::new(directives::on::backfill_legacy_call(ast)),
     );
 }
@@ -672,9 +374,9 @@ pub fn install_static_for_plan(
         template,
         proxy.clone(),
         scope_id,
-        entry.item_name.to_string(),
-        entry.items_expr.to_string(),
-        entry.key_expr.map(|s| s.to_string()),
+        entry.item_name,
+        entry.items_expr,
+        entry.key_expr,
         entry.stagger_ms,
         entry.body,
     );
@@ -783,12 +485,11 @@ pub fn install_static_opaque_directive(
     entry: &'static StaticOpaqueDirective,
     template_name: &str,
 ) {
-    let modifiers: Vec<String> = entry.modifiers.iter().map(|s| (*s).to_string()).collect();
     if !dispatch_opaque(
         entry.name,
         el,
         entry.arg,
-        &modifiers,
+        entry.modifiers,
         entry.value,
         scope_id,
         proxy,
@@ -848,35 +549,6 @@ pub fn install_static_native_model(
     );
 }
 
-fn install_opaque_directives(
-    root: &Element,
-    scope_id: ScopeId,
-    proxy: &JsValue,
-    plan: &'static StaticTemplatePlan,
-    template_name: &str,
-) {
-    for d in plan.opaque_directives {
-        let Some(el) = resolve(root, d.node_path) else {
-            fail("opaque-directive", template_name, d.node_path, Some(d.name));
-            continue;
-        };
-        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
-        if !dispatch_opaque(d.name, &el, d.arg, &modifiers, d.value, scope_id, proxy) {
-            // The macro emitted an entry for a directive the
-            // dispatch table doesn't know about — either a
-            // typo'd allowlist entry or a directive that was
-            // removed. Surface it via the fail-fast counter so
-            // tests catch the drift.
-            fail(
-                "opaque-directive-lookup",
-                template_name,
-                d.node_path,
-                Some(d.name),
-            );
-        }
-    }
-}
-
 /// Dispatch an opaque directive lift to its typed install entry.
 /// Returns `false` when `name` doesn't match a known opaque
 /// directive — caller treats that as a fail-fast event.
@@ -884,7 +556,7 @@ fn dispatch_opaque(
     name: &str,
     el: &Element,
     arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &'static [&'static str],
     value: &str,
     scope_id: ScopeId,
     proxy: &JsValue,
@@ -963,13 +635,12 @@ pub fn apply_static_pp_as_plan(
                 continue;
             }
         };
-        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
         directives::on::install(
             root,
             scope_id,
             proxy,
             l.event,
-            &modifiers,
+            l.modifiers,
             Rc::new(directives::on::backfill_legacy_call(ast)),
         );
     }
@@ -978,8 +649,7 @@ pub fn apply_static_pp_as_plan(
         .iter()
         .filter(|d| d.node_path.is_empty())
     {
-        let modifiers: Vec<String> = d.modifiers.iter().map(|s| (*s).to_string()).collect();
-        if !dispatch_opaque(d.name, root, d.arg, &modifiers, d.value, scope_id, proxy) {
+        if !dispatch_opaque(d.name, root, d.arg, d.modifiers, d.value, scope_id, proxy) {
             fail(
                 "opaque-directive-lookup",
                 template_name,
@@ -1025,37 +695,19 @@ fn install_child_host_directives(
                 continue;
             }
         };
-        let modifiers: Vec<String> = l.modifiers.iter().map(|s| (*s).to_string()).collect();
         directives::on::install(
             el,
             scope_id,
             proxy,
             l.event,
-            &modifiers,
+            l.modifiers,
             Rc::new(directives::on::backfill_legacy_call(ast)),
         );
     }
     for m in child.models {
-        let modifiers: Vec<String> = m.modifiers.iter().map(|s| (*s).to_string()).collect();
         let _ = scope_id;
-        directives::model::install_compiled(el, proxy, m.arg, &modifiers, m.expr_src);
+        directives::model::install_compiled(el, proxy, m.arg, m.modifiers, m.expr_src);
     }
-}
-
-/// Walk `node_path` from `root` by element-child indices to
-/// reach the live DOM node the plan entry targets. Returns
-/// `None` when any index is out-of-bounds — caller treats that
-/// as a fail-fast event.
-fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
-    let mut current: Element = root.clone();
-    for &idx in node_path {
-        let mut child = current.first_element_child()?;
-        for _ in 0..idx {
-            child = child.next_element_sibling()?;
-        }
-        current = child;
-    }
-    Some(current)
 }
 
 /// RFC-058 Phase 4.1d / RFC 064 §5.1 — `pp-if` body fragment
@@ -1075,11 +727,10 @@ fn resolve(root: &Element, node_path: &[u16]) -> Option<Element> {
 /// `clone_template_body` miss; the caller surfaces a console
 /// error and bails the mount.
 ///
-/// The closure boundary eliminates the runtime
-/// [`apply_static_plan`] iteration for `pp-if` body fragments
-/// (RFC 064 §5.1 Phase 1.A). The closure receives the prepared
-/// body root with `bind_borrowed_scope_to` + `CTX_PARENT_KEY`
-/// already stamped.
+/// The closure boundary eliminates generic runtime plan
+/// iteration for lifted body fragments (RFC 064 §5.1 Phase 1).
+/// The closure receives the prepared body root with
+/// `bind_borrowed_scope_to` + `CTX_PARENT_KEY` already stamped.
 pub fn stamp_if_body_with(
     html: &str,
     scope_id: ScopeId,

@@ -32,14 +32,14 @@ enum Edge {
 pub fn install_opaque(
     el: &Element,
     arg: Option<&str>,
-    modifiers: &[String],
+    modifiers: &[&str],
     value: &str,
     scope_id: ScopeId,
     _proxy: &JsValue,
 ) {
     let handler = value.to_string();
     let el = el.clone();
-    let once = modifiers.iter().any(|m| m == "once");
+    let once = modifiers.contains(&"once");
 
     let edge = match arg {
         Some("leave") => Edge::Leave,
@@ -142,7 +142,7 @@ pub fn release(el: &Element) {
 /// Resolve the effective threshold from the modifier list. Explicit
 /// `.threshold.N` wins over `.half` / `.full` shortcuts; missing
 /// thresholds default to `0.0`. Numeric args are clamped to `[0, 1]`.
-fn resolve_threshold(modifiers: &[String]) -> f64 {
+fn resolve_threshold(modifiers: &[&str]) -> f64 {
     let mut explicit: Option<f64> = None;
     let mut i = 0;
     while i < modifiers.len() {
@@ -158,10 +158,10 @@ fn resolve_threshold(modifiers: &[String]) -> f64 {
     if let Some(n) = explicit {
         return n;
     }
-    if modifiers.iter().any(|m| m == "full") {
+    if modifiers.contains(&"full") {
         return 0.99;
     }
-    if modifiers.iter().any(|m| m == "half") {
+    if modifiers.contains(&"half") {
         return 0.5;
     }
     0.0
@@ -170,8 +170,8 @@ fn resolve_threshold(modifiers: &[String]) -> f64 {
 /// Resolve `rootMargin` from a `.margin.<v1>[.<v2>[.<v3>.<v4>]]`
 /// modifier chain. Returns `None` when no `.margin` modifier exists
 /// (so we can skip setting it and inherit the observer default).
-fn resolve_root_margin(modifiers: &[String]) -> Option<String> {
-    let idx = modifiers.iter().position(|m| m == "margin")?;
+fn resolve_root_margin(modifiers: &[&str]) -> Option<String> {
+    let idx = modifiers.iter().position(|m| *m == "margin")?;
     let mut values: Vec<String> = Vec::with_capacity(4);
     for m in &modifiers[idx + 1..] {
         if values.len() == 4 {
@@ -213,42 +213,42 @@ fn parse_margin_value(raw: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn mods(xs: &[&str]) -> Vec<String> {
-        xs.iter().map(|s| s.to_string()).collect()
+    fn mods(xs: &'static [&'static str]) -> &'static [&'static str] {
+        xs
     }
 
     #[test]
     fn threshold_defaults_to_zero() {
-        assert_eq!(resolve_threshold(&mods(&[])), 0.0);
+        assert_eq!(resolve_threshold(mods(&[])), 0.0);
     }
 
     #[test]
     fn threshold_half_and_full_shortcuts() {
-        assert_eq!(resolve_threshold(&mods(&["half"])), 0.5);
-        assert_eq!(resolve_threshold(&mods(&["full"])), 0.99);
+        assert_eq!(resolve_threshold(mods(&["half"])), 0.5);
+        assert_eq!(resolve_threshold(mods(&["full"])), 0.99);
     }
 
     #[test]
     fn threshold_numeric_overrides_shortcuts() {
-        assert_eq!(resolve_threshold(&mods(&["half", "threshold", "25"])), 0.25);
-        assert_eq!(resolve_threshold(&mods(&["threshold", "50", "full"])), 0.5);
+        assert_eq!(resolve_threshold(mods(&["half", "threshold", "25"])), 0.25);
+        assert_eq!(resolve_threshold(mods(&["threshold", "50", "full"])), 0.5);
     }
 
     #[test]
     fn threshold_clamps_out_of_range() {
-        assert_eq!(resolve_threshold(&mods(&["threshold", "200"])), 1.0);
-        assert_eq!(resolve_threshold(&mods(&["threshold", "-5"])), 0.0);
+        assert_eq!(resolve_threshold(mods(&["threshold", "200"])), 1.0);
+        assert_eq!(resolve_threshold(mods(&["threshold", "-5"])), 0.0);
     }
 
     #[test]
     fn margin_missing_returns_none() {
-        assert_eq!(resolve_root_margin(&mods(&["once"])), None);
+        assert_eq!(resolve_root_margin(mods(&["once"])), None);
     }
 
     #[test]
     fn margin_single_value_applies_to_all_sides() {
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "200px"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "200px"])).as_deref(),
             Some("200px")
         );
     }
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn margin_bare_number_becomes_px() {
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "200"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "200"])).as_deref(),
             Some("200px")
         );
     }
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn margin_two_values() {
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "10%", "25px"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "10%", "25px"])).as_deref(),
             Some("10% 25px")
         );
     }
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn margin_four_values() {
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "10%", "25px", "25", "25px"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "10%", "25px", "25", "25px"])).as_deref(),
             Some("10% 25px 25px 25px")
         );
     }
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn margin_allows_negative() {
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "-100px"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "-100px"])).as_deref(),
             Some("-100px")
         );
     }
@@ -290,7 +290,7 @@ mod tests {
         // `once` after `margin` terminates parsing — the sides set
         // before it is what we keep.
         assert_eq!(
-            resolve_root_margin(&mods(&["margin", "50px", "once"])).as_deref(),
+            resolve_root_margin(mods(&["margin", "50px", "once"])).as_deref(),
             Some("50px")
         );
     }

@@ -729,16 +729,13 @@ fn emit_if_body_fns(emissions: &Emissions) -> TokenStream {
         let ident = &emission.ident;
         let html_lit = proc_macro2::Literal::string(&emission.html);
         let plan_literal = emit_static_template_plan_literal(&emission.plan);
-        // RFC 064 §5.1 (Phase 1.A) — inline the unrolled install
+        // RFC 064 §5.1 (Phase 1) — inline the unrolled install
         // pass into a closure handed to `stamp_if_body_with`. The
-        // generic `apply_static_plan` walker no longer runs for
-        // pp-if body fragments; the per-fragment closure uses
-        // `emit_specialized_install_pass` (the same code path
-        // RFC 062 component mount specialization uses) against a
-        // local `const PLAN`. The plan literal still ships per
-        // fragment as its install-data carrier; eliminating it
-        // entirely is the rest of Phase 1's `install_static_*`
-        // API redesign.
+        // generic fragment applier no longer runs for pp-if,
+        // pp-for, or pp-teleport body fragments; the
+        // per-fragment closure uses `emit_specialized_install_pass`
+        // (the same code path RFC 062 component mount
+        // specialization uses) against a local `const PLAN`.
         let install_pass = emission
             .plan
             .emit_specialized_install_pass(quote! {
@@ -800,8 +797,8 @@ fn emit_slot_fragment_fns(emissions: &Emissions) -> TokenStream {
                 let plan_literal = emit_static_template_plan_literal(plan);
                 // RFC 064 §5.1 (Phase 1.B) — inline the unrolled
                 // install pass into a closure handed to
-                // `stamp_dynamic_slot_with`, mirroring the if-body
-                // shape from Phase 1.A. `apply_static_plan` no
+                // `stamp_dynamic_slot_with`, mirroring the body
+                // fragment shape. The generic fragment applier no
                 // longer runs for dynamic slot fragments.
                 let install_pass = plan
                     .emit_specialized_install_pass(quote! {
@@ -1330,8 +1327,8 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                 // RFC-058 Phase 4.2c — try to lift the row body
                 // into a fragment fn. Skip when an RFC-054 row
                 // plan claims this site (the row-plan fast path
-                // is strictly better than per-row
-                // `apply_static_plan` — proxy elision, no
+                // is strictly better than per-row body closures:
+                // proxy elision, no
                 // per-row effect creation, etc.).
                 let row_plan_claims_site = ctx
                     .row_plan_assignments
@@ -2245,9 +2242,9 @@ enum ChildHostAttrOutcome {
     /// custom-host element. The runtime semantic matches the
     /// native-element case: register the host DOM element under
     /// `name` in the parent scope's ref table. The macro emits a
-    /// regular `RefLite` against the host's node_path so
-    /// `apply_static_plan` runs the same `refs::register` call
-    /// the mount would.
+    /// regular `RefLite` against the host's node_path so the
+    /// generated install pass runs the same `refs::register`
+    /// call the mount would.
     Ref(String),
     Preserved,
 }
@@ -2391,8 +2388,8 @@ fn is_debounce_ms(m: &str) -> bool {
 // ─── pp-if body lift eligibility + analysis ──────────────────────
 
 /// RFC-058 Phase 4.1d v1 envelope — `true` when every node in
-/// the `pp-if` body subtree is safe to install via the Phase
-/// 1 helpers + `apply_static_plan`. Anything outside this
+/// the lifted body subtree is safe to install via the Phase 1
+/// helpers and the generated specialized install closure. Anything outside this
 /// envelope falls back to the legacy `clone_template_body` +
 /// `mount::walk` path the controller already drives.
 ///
@@ -2509,14 +2506,14 @@ fn apply_role_substitution(html: &str, tag: &str, attrs: &str) -> String {
 /// `pp-route` / `pp-model`). Otherwise returns
 /// `Some(SlotFragmentEmission)` — `Static` when the subtree
 /// has no plan-eligible directive (3.5b path), `Dynamic` when
-/// it does (3.5c path: stamps cleaned HTML + applies a
-/// per-fragment static plan against the parent scope).
+/// it does (3.5c path: stamps cleaned HTML + runs a
+/// per-fragment specialized install closure against the parent scope).
 ///
 /// Multi-root subtrees are fine — the macro emits one fragment
 /// fn per slot site, not per element. The runtime
-/// `stamp_dynamic_slot` helper wraps the children in a
-/// temporary `<div>` so `apply_static_plan` can resolve
-/// `node_path`s against a single element root.
+/// `stamp_dynamic_slot_with` helper wraps the children in a
+/// temporary `<div>` so generated path resolution has a single
+/// element root.
 fn analyze_slot_subtree(nodes: &[Node], emissions: &mut Emissions) -> Option<SlotFragmentEmission> {
     if !slot_subtree_is_lift_eligible(nodes) {
         return None;
