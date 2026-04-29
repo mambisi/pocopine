@@ -72,19 +72,18 @@ pub mod __private {
     // existing `register_template` call.
     pub use pocopine_core::directives::for_plan::{
         IfBodyFn, StaticChildHostBinding, StaticChildHostListener, StaticChildHostModel,
-        StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit, StaticInterp, StaticNativeModel,
+        StaticChildMount, StaticForPlan, StaticIfPlan, StaticInterp, StaticNativeModel,
         StaticOpaqueDirective, StaticRef, StaticSlotFragment, StaticSlotOutlet, StaticTeleportPlan,
     };
     pub use pocopine_core::directives::interp::PlannedSegment;
     pub use pocopine_core::templates_plan::{
         apply_static_plan, apply_static_pp_as_plan, capture_static_interp_target,
         capture_static_slot_outlet, install_static_binding, install_static_child_mount,
-        install_static_for_plan, install_static_if_plan, install_static_init,
-        install_static_interp_target, install_static_listener, install_static_native_model,
-        install_static_opaque_directive, install_static_ref, install_static_teleport_plan,
-        materialize_static_slot_outlet, plan_failure_count, record_plan_failure,
-        register_template_plan, reset_plan_failure_count, stamp_if_body, template_plan_for,
-        StaticInterpTarget, StaticTemplatePlan,
+        install_static_for_plan, install_static_if_plan, install_static_interp_target,
+        install_static_listener, install_static_native_model, install_static_opaque_directive,
+        install_static_ref, install_static_teleport_plan, materialize_static_slot_outlet,
+        plan_failure_count, record_plan_failure, register_template_plan, reset_plan_failure_count,
+        stamp_if_body, template_plan_for, StaticInterpTarget, StaticTemplatePlan,
     };
     // RFC-058 Phase 1: mount lifecycle / cleanup helpers exposed
     // for the future generated mount/hydrate code (Phase 2+) to
@@ -92,7 +91,7 @@ pub mod __private {
     // namespace. Same shape as the existing `register_template` /
     // `register_row_plans` re-exports above.
     pub use pocopine_core::mount::{
-        defer_init_on, finalize_compiled_subtree, fire_mount_post_order, fire_ready_next_tick,
+        finalize_compiled_subtree, fire_mount_post_order, fire_ready_next_tick,
         mount_child_component, mount_child_component_with_slots, release_compiled_subtree,
     };
     // RFC-058 §5.5 — parent-owned slot fragment ABI. Phase 1

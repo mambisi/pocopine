@@ -43,9 +43,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{console, Element};
 
 use crate::directives::for_plan::{
-    BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInit,
-    StaticInterp, StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef,
-    StaticSlotOutlet, StaticTeleportPlan,
+    BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInterp,
+    StaticListener, StaticNativeModel, StaticOpaqueDirective, StaticRef, StaticSlotOutlet,
+    StaticTeleportPlan,
 };
 use crate::directives::interp::PlannedSegment;
 use crate::directives::{self};
@@ -64,7 +64,6 @@ use crate::slot_fragment::SlotSet;
 ///     StaticTemplatePlan {
 ///         bindings: &[ /* … */ ],
 ///         listeners: &[ /* … */ ],
-///         inits: &[ /* … */ ],
 ///         refs: &[ /* … */ ],
 ///     };
 /// ```
@@ -72,7 +71,6 @@ use crate::slot_fragment::SlotSet;
 pub struct StaticTemplatePlan {
     pub bindings: &'static [StaticBinding],
     pub listeners: &'static [StaticListener],
-    pub inits: &'static [StaticInit],
     pub refs: &'static [StaticRef],
     /// Child-component mount sites the macro discovered in this
     /// template (RFC-058 Phase 3). Each entry names a non-HTML5
@@ -489,13 +487,6 @@ pub fn apply_static_plan(
         };
         directives::if_::install(template, proxy.clone(), ast, ip.body, ip.teleport_selector);
     }
-    for i in plan.inits {
-        let Some(el) = resolve(root, i.node_path) else {
-            fail("init", template_name, i.node_path, Some(i.expr_src));
-            continue;
-        };
-        crate::mount::defer_init_on(&el, scope_id, i.expr_src);
-    }
     for slot in slot_outlets {
         crate::mount::materialize_compiled_slot_outlet(&slot);
     }
@@ -760,13 +751,6 @@ pub fn install_static_if_plan(
     );
 }
 
-/// RFC 062 Phase 2 helper used by macro-specialized mount
-/// bodies for deferred `pp-init`.
-#[doc(hidden)]
-pub fn install_static_init(el: &Element, scope_id: ScopeId, entry: &'static StaticInit) {
-    crate::mount::defer_init_on(el, scope_id, entry.expr_src);
-}
-
 /// RFC 062 Phase 3 helper used by macro-specialized mount
 /// bodies to snapshot `<slot>` outlets before later
 /// materialisation mutates element-child positions.
@@ -994,9 +978,6 @@ pub fn apply_static_pp_as_plan(
             &modifiers,
             Rc::new(directives::on::backfill_legacy_call(ast)),
         );
-    }
-    for i in plan.inits.iter().filter(|i| i.node_path.is_empty()) {
-        crate::mount::defer_init_on(root, scope_id, i.expr_src);
     }
     for d in plan
         .opaque_directives
