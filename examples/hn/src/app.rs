@@ -6,12 +6,13 @@ use crate::components::{AppShell, HnComment, NotFound, StoryDetail, StoryList};
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    App::new()
-        .register::<AppShell>()
-        .register::<HnComment>()
-        .route::<StoryList>("/")
-        .route::<StoryDetail>("/item/:id")
-        .route::<NotFound>("*")
-        .with_devtools()
-        .run();
+    pocopine::app! {
+        components: [AppShell, StoryList, StoryDetail, HnComment, NotFound],
+        routes: [
+            ("/", StoryList),
+            ("/item/:id", StoryDetail),
+            ("*", NotFound),
+        ],
+        devtools: true,
+    };
 }

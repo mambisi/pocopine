@@ -3332,16 +3332,18 @@ struct AppRouteEntry {
 /// Parsed body of the `app!{}` macro: explicit component list +
 /// route list. Per RFC 060 §8 Q1's chosen mechanism (Option b1):
 /// users list every reachable component explicitly so the macro
-/// can emit a `phf::phf_map!` literal at expansion time.
+/// can emit a static registry at expansion time.
 struct AppMacroInput {
     components: Vec<AppComponentEntry>,
     routes: Vec<AppRouteEntry>,
+    devtools: bool,
 }
 
 impl Parse for AppMacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut components: Option<Vec<AppComponentEntry>> = None;
         let mut routes: Option<Vec<AppRouteEntry>> = None;
+        let mut devtools: Option<bool> = None;
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -3363,10 +3365,19 @@ impl Parse for AppMacroInput {
                     }
                     routes = Some(parse_routes_array(value)?);
                 }
+                "devtools" => {
+                    if devtools.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `devtools:`"));
+                    }
+                    devtools = Some(parse_bool_literal(
+                        value,
+                        "`devtools` expects `true` or `false`",
+                    )?);
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown `app!{{}}` section `{other}` — expected `components:` or `routes:`"),
+                        format!("unknown `app!{{}}` section `{other}` — expected `components:`, `routes:`, or `devtools:`"),
                     ));
                 }
             }
@@ -3380,7 +3391,21 @@ impl Parse for AppMacroInput {
         })?;
         let routes = routes.unwrap_or_default();
 
-        Ok(AppMacroInput { components, routes })
+        Ok(AppMacroInput {
+            components,
+            routes,
+            devtools: devtools.unwrap_or(false),
+        })
+    }
+}
+
+fn parse_bool_literal(value: Expr, msg: &'static str) -> syn::Result<bool> {
+    match value {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(value),
+            ..
+        }) => Ok(value.value),
+        other => Err(syn::Error::new_spanned(other, msg)),
     }
 }
 
@@ -3597,6 +3622,7 @@ pub fn app(input: TokenStream) -> TokenStream {
     } else {
         quote! { .run_with_cluster_manifest(REGISTRY, &CLUSTER_MANIFEST); }
     };
+    let devtools_call = parsed.devtools.then(|| quote! { .with_devtools() });
 
     let out = quote! {
         {
@@ -3620,6 +3646,7 @@ pub fn app(input: TokenStream) -> TokenStream {
 
             ::pocopine::App::new()
                 #(#route_calls)*
+                #devtools_call
                 #run_call
         }
     };

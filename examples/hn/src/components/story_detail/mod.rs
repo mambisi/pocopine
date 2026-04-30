@@ -4,12 +4,12 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::Comment;
+use crate::components::{Comment, HnComment};
 use crate::shared::ItemNode;
 use crate::{extract_domain, get_item_tree, humanize_age, performance_now};
 
 #[derive(Default, Serialize, Deserialize)]
-#[component(style = "story_detail.css")]
+#[component(style = "story_detail.css", uses = [HnComment])]
 pub struct StoryDetail {
     #[prop]
     pub id: u32,

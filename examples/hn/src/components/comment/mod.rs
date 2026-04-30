@@ -19,7 +19,7 @@ pub struct Comment {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-#[component]
+#[component(uses = [HnComment])]
 pub struct HnComment {
     #[prop]
     pub comment: Comment,
