@@ -4,8 +4,9 @@
   <p class="lead" style="margin-bottom:0.5rem">Unstyled, accessible UI primitives for pocopine.</p>
   <p style="font-size:0.875rem;margin-bottom:2rem">
     Every primitive below animates by default — Dialog fades, menus
-    slide, TagsInput chips FLIP on reorder, Collapsibles grow. No
-    handler code, no CSS to copy.
+    slide, TagsInput chips FLIP on reorder, Collapsibles grow.
+    Templates mount through pocopine's compiled plan path, while
+    dynamic list bodies and slots keep the same author-facing HTML.
   </p>
 
   <basics></basics>

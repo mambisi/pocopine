@@ -5,7 +5,8 @@ use wasm_bindgen::JsCast;
 /// How many items get added per simulated-load batch, and how much
 /// real time to wait between batches. Tuned so a 500-item fixture
 /// loads in roughly one second with enough space between frames to
-/// exercise the incremental-insert path of keyed pp-for.
+/// exercise the compiled append/prepend paths and keyed pp-for
+/// reconcile.
 const SIM_BATCH_SIZE: usize = 10;
 const SIM_BATCH_DELAY_MS: i32 = 20;
 const SIM_TOTAL_ITEMS: usize = 500;

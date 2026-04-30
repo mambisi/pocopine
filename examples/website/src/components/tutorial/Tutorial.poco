@@ -13,7 +13,7 @@
       <span class="step-num">2</span>
       <div class="step-body">
         <h3>Scaffold an app</h3>
-        <p>A pocopine app is a regular Rust library crate. Add <code>pocopine</code> (runtime) and <code>pine</code> (optional UI primitives).</p>
+        <p>A pocopine app is a regular Rust library crate. Add <code>pocopine</code> for the compiled template runtime and <code>pine</code> for optional UI primitives.</p>
 <pre class="code-block"><code><span class="c-cmd">cargo</span> <span class="c-arg">new --lib hello-pine</span>
 <span class="c-cmd">cd</span> <span class="c-arg">hello-pine</span>
 <span class="c-cmd">cargo</span> <span class="c-arg">add pocopine pine</span></code></pre>

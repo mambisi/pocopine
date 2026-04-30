@@ -2,9 +2,9 @@
   <img class="hero-mascot" src="/mascot.svg" alt="pocopine mascot">
   <h1><span class="brand">poco</span>pine</h1>
   <p class="tagline">
-    A tiny, reactive Rust/WASM UI framework with a full
-    primitive library — ships server-rendered HTML, animates
-    by default, under 50&nbsp;KB.
+    A reactive Rust/WASM UI framework with compiled HTML
+    templates, in-place DOM updates, and a full primitive
+    library that animates by default.
   </p>
   <div class="hero-actions"
        pp-intersect:enter.margin.-72="hide_header_github"

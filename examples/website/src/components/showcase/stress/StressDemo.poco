@@ -17,8 +17,8 @@
       Fisher-Yates-shuffles the whole list (every item moves). The
       last two report wall-clock time across the full reconcile
       (handler start → after reactive flush). Use these to spot
-      regressions in the RFC-039 dispatch path or the pp-for
-      reconcile.
+      regressions in the compiled <code>pp-for</code> fast paths,
+      keyed reconcile, or animation handoff.
     </p>
     <div class="row" style="margin-bottom:0.75rem">
       <pine-button @click="mount_fixture">

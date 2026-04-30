@@ -13,9 +13,12 @@
 ---
 
 pocopine is a directive-driven Rust/WASM UI framework: a Vue-3-style
-reactive core (real `Proxy` traps, auto dep-tracking) wired into an
-Alpine-style `pp-*` directive walker, with tag-based components, a
-type-safe server-function bridge, and a built-in SPA router.
+reactive core (real `Proxy` traps, auto dep-tracking) wired into
+compiled `.poco` template plans, with tag-based components, a
+type-safe server-function bridge, and a built-in SPA router. Runtime
+directive handling still exists for dynamic/adopted DOM boundaries,
+but normal component templates mount through macro-generated install
+code.
 Templates live in plain HTML files (`.poco`), styles in plain CSS
 files, logic in plain Rust files. No mixed-language SFCs, no virtual
 DOM, no JavaScript toolchain.
@@ -70,6 +73,9 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Directives:** `pp-text`, `pp-html`, `pp-bind:<attr>`, `pp-on:<event>`,
   `pp-show`, `pp-model`, `pp-init`, `pp-for`, `pp-if`, `pp-cloak`,
   `pp-transition:*`, `pp-teleport`, `pp-ref`, `pp-route`.
+* **Compiled templates.** Component templates, lifted `pp-if` /
+  `pp-for` / `pp-teleport` bodies, and dynamic slot fragments install
+  through generated closures instead of a generic fragment applier.
 * **Tag-based components.** Declare a struct, drop `<my-thing>` in
   HTML, done. Props bind by attribute name (kebab → snake), slots via
   `<slot>`.
@@ -99,32 +105,32 @@ That's the whole counter. No virtual DOM, no build step beyond
 ## Performance
 
 The `js-framework-benchmark` keyed-table action plan, run locally
-under headless Chromium against pinned Rust/WASM and JS competitors.
+under headless Firefox against pinned Rust/WASM and JS competitors.
 Numbers are wall-clock geometric means (lower is better) across:
 `run(1000)`, `update every 10th`, `select`, `swapRows`, `remove`,
-`clear`, `runLots(10000)`, `add(1000)`.
+`clear`, `runLots(10000)`, `add(1000)`. Vanilla is always measured as
+the control because browser timing can drift between runs.
 
 | framework  | geomean (ms) | vs vanilla |
 |------------|-------------:|-----------:|
-| vanilla JS |       165.10 |       1.00× |
-| Vue 3      |       169.08 |       1.02× |
-| **pocopine** |   **185.92** |   **1.13×** |
-| Yew        |       185.35 |       1.12× |
-| Leptos     |       195.40 |       1.18× |
+| vanilla JS |       185.41 |       1.00× |
+| Vue 3      |       202.17 |       1.09× |
+| **pocopine** |   **215.92** |   **1.16×** |
+| Yew        |       225.07 |       1.21× |
+| Leptos     |       281.45 |       1.52× |
 
-pocopine sits inside the band of mature reactive frameworks — on par
-with Yew, edge over Leptos, ~13% behind hand-tuned vanilla DOM. No
-virtual-DOM diff in the hot path; the directive walker mutates DOM
-nodes in place, fed by fine-grained `Proxy` reactivity.
+pocopine now sits between Vue and Yew in the Firefox harness after
+RFC 064's compiled fragment installs, static string surfaces,
+compiled expression envelope, and keyed `pp-for` fast paths. No
+virtual-DOM diff runs in the hot path; generated template code and
+fine-grained `Proxy` reactivity mutate real DOM nodes in place.
 
 Reproduce locally:
 
 ```bash
-./jsbench/benchmark.sh pocopine --browser chromium
-./jsbench/benchmark.sh leptos   --browser chromium
-./jsbench/benchmark.sh yew      --browser chromium
-./jsbench/benchmark.sh vue      --browser chromium
-./jsbench/benchmark.sh vanilla  --browser chromium
+python3 jsbench/measure.py --browser firefox jsbench/vanilla
+./jsbench/benchmark.sh pocopine --browser firefox --no-build
+./jsbench/benchmark.sh --all --browser firefox
 ```
 
 The harness pins each competitor to a fixed version and runs the
@@ -214,7 +220,7 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 
 ```
 crates/
-├── pocopine-core/     reactive core, walker, directives, router
+├── pocopine-core/     reactive core, compiled plans, directives, router
 ├── pocopine-macros/   #[component], #[handlers], #[store], #[server]
 ├── pocopine-server/   host-side: axum + tower-http glue for #[server]
 ├── pocopine-cli/      `pocopine build | run | dev`
@@ -228,12 +234,13 @@ examples/              runnable apps demonstrating each feature
 
 Three layers you can reach for independently:
 
-1. **Runtime** — directive walker, reactive engine, component scopes.
-   No virtual DOM; mutations happen in place against the real DOM,
-   the same shape Alpine.js popularised in the JS world.
+1. **Runtime** — reactive engine, component scopes, directives, and
+   the adopted-DOM bridge for dynamic HTML. No virtual DOM; mutations
+   happen in place against the real DOM.
 2. **Templates** — `.poco` files are pure HTML with `pp-*` directives.
-   The `#[component]` macro wires them to Rust structs at compile
-   time via `include_str!`.
+   The `#[component]` macro wires them to Rust structs, emits static
+   template metadata, and specializes eligible binding/listener
+   installs at compile time.
 3. **Server functions** — `#[server] async fn` on the backend; client
    gets a typed stub that POSTs to `/_pocopine/<fn_name>` and
    deserializes the response. Works with any serde-compatible type.
