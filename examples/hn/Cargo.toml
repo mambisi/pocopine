@@ -9,6 +9,13 @@ publish = false
 bin = "server"
 port = 3001
 
+[features]
+default = ["shell"]
+shell = ["pocopine/devtools"]
+route-list = []
+route-detail = []
+route-not-found = []
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -17,10 +24,10 @@ name = "server"
 path = "src/bin/server.rs"
 
 [dependencies]
-pocopine = { path = "../../crates/pocopine", features = ["devtools"] }
+pocopine = { path = "../../crates/pocopine" }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
-web-sys = { version = "0.3", features = ["Window", "Performance"] }
+web-sys = { version = "0.3", features = ["Document", "Element", "Window", "Performance"] }
 js-sys = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
