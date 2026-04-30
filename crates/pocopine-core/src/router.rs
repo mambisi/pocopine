@@ -258,6 +258,17 @@ fn mount_current() {
     crate::devtools::hooks::fire_route_change(&path, &params);
 
     let Some(name) = component_name else { return };
+    if let Err(err) = crate::clusters::ensure_route_component_ready(name) {
+        match err {
+            crate::clusters::ClusterLoadError::NoManifest => {}
+            other => {
+                web_sys::console::error_1(
+                    &format!("pocopine route cluster failed to load: {other:?}").into(),
+                );
+                return;
+            }
+        }
+    }
 
     // Paint into the outlet. `replace_children` removes the previous
     // page's subtree, which the MutationObserver turns into effect +

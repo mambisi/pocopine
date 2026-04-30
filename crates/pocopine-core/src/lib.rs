@@ -11,6 +11,7 @@
 
 pub mod animate;
 pub mod app;
+pub mod clusters;
 pub mod component_computed;
 pub mod computed;
 pub mod context;
@@ -55,6 +56,11 @@ pub mod timers;
 pub mod watch;
 
 pub use app::{App, Component, SubtreeHandle};
+pub use clusters::{
+    ensure_clusters, ensure_clusters_ready, install_cluster_manifest, install_shell,
+    prefetch_clusters, Cluster, ClusterLoadError, ClusterManifest, RouteClusterPlan,
+    RouteClusterRoot,
+};
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;

@@ -76,6 +76,10 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Compiled templates.** Component templates, lifted `pp-if` /
   `pp-for` / `pp-teleport` bodies, and dynamic slot fragments install
   through generated closures instead of a generic fragment applier.
+* **Route-cluster metadata.** `pocopine::app! { components: [...],
+  routes: [...] }` computes shell, route, and shared cluster ownership
+  for routed apps. RFC 065 Phase 1 keeps a single wasm binary; actual
+  per-route wasm artifacts are a Phase 2 follow-up.
 * **Tag-based components.** Declare a struct, drop `<my-thing>` in
   HTML, done. Props bind by attribute name (kebab → snake), slots via
   `<slot>`.
@@ -181,6 +185,10 @@ pub fn main() {
     App::new().register::<Counter>().run();
 }
 ```
+
+Routed apps can use `pocopine::app!` to declare the full component
+surface and routes in one place. That enables route-cluster metadata
+today while still producing one wasm binary in RFC 065 Phase 1.
 
 ```html
 <!-- src/Counter.poco -->

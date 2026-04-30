@@ -120,6 +120,8 @@ thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
     static ACTIVE_PHF_REGISTRY: RefCell<Option<&'static phf::Map<&'static str, &'static ComponentVTable>>> =
         const { RefCell::new(None) };
+    static ACTIVE_STATIC_REGISTRY: RefCell<Option<&'static [(&'static str, &'static ComponentVTable)]>> =
+        const { RefCell::new(None) };
     /// RFC 060 Tier 1 — visited set of component types whose
     /// `register()` body has already started executing on this thread.
     /// Used by [`mark_registered`] to short-circuit transitive
@@ -129,10 +131,9 @@ thread_local! {
 
 /// RFC 060 Tier 4 — static vtable per `#[component]` type. The
 /// `app!{}` macro collects an explicit `components: [...]` list
-/// and emits a `&'static phf::Map<&'static str, &'static
-/// ComponentVTable>` that the runtime queries instead of (or in
-/// addition to) the legacy thread-local `HashMap`. Each entry
-/// lives in `.rodata` — no allocation, no init order.
+/// and emits a static registry that the runtime queries instead
+/// of (or in addition to) the legacy thread-local `HashMap`. Each
+/// entry lives in `.rodata` — no allocation, no init order.
 ///
 /// RFC 061 Phase 4 adds the compiled template payloads so
 /// runtime lookups can consult the `app!{}` phf map before the
@@ -141,6 +142,11 @@ thread_local! {
 pub struct ComponentVTable {
     pub name: &'static str,
     pub register: fn(),
+    /// Direct component dependencies. A function pointer avoids
+    /// rustc const-eval cycles for intentionally cyclic `uses` or
+    /// `extends` graphs; the runtime closure walker still dedupes.
+    pub uses: fn() -> &'static [&'static ComponentVTable],
+    pub is_bundle: bool,
     pub template_html: Option<&'static str>,
     pub plan: Option<&'static StaticTemplatePlan>,
     pub mount_template: Option<ComponentMountFn>,
@@ -158,6 +164,12 @@ pub fn set_active_phf_registry(
     });
 }
 
+pub fn set_active_static_registry(registry: &'static [(&'static str, &'static ComponentVTable)]) {
+    ACTIVE_STATIC_REGISTRY.with(|active| {
+        *active.borrow_mut() = Some(registry);
+    });
+}
+
 /// Test-only reset for suites that need to assert fallback
 /// behavior independent of a previously installed app registry.
 #[doc(hidden)]
@@ -165,33 +177,48 @@ pub fn clear_active_phf_registry_for_test() {
     ACTIVE_PHF_REGISTRY.with(|active| {
         *active.borrow_mut() = None;
     });
+    ACTIVE_STATIC_REGISTRY.with(|active| {
+        *active.borrow_mut() = None;
+    });
     crate::templates::clear_template_element_cache_for_test();
 }
 
 pub fn active_component_vtable(name: &str) -> Option<&'static ComponentVTable> {
-    ACTIVE_PHF_REGISTRY.with(|active| {
+    let from_phf = ACTIVE_PHF_REGISTRY.with(|active| {
         active
             .borrow()
             .and_then(|registry| registry.get(name).copied())
+    });
+    from_phf.or_else(|| {
+        ACTIVE_STATIC_REGISTRY.with(|active| {
+            active.borrow().and_then(|registry| {
+                registry
+                    .iter()
+                    .find_map(|(key, vtable)| (*key == name).then_some(*vtable))
+            })
+        })
     })
 }
 
 pub fn active_has_template(name: &str) -> bool {
-    ACTIVE_PHF_REGISTRY.with(|active| {
-        active
-            .borrow()
-            .and_then(|registry| registry.get(name))
-            .and_then(|v| v.template_html)
-            .is_some()
-    })
+    active_component_vtable(name)
+        .and_then(|v| v.template_html)
+        .is_some()
 }
 
 pub fn active_component_names() -> Vec<&'static str> {
-    ACTIVE_PHF_REGISTRY.with(|active| {
+    let from_phf = ACTIVE_PHF_REGISTRY.with(|active| {
         active
             .borrow()
             .map(|registry| registry.keys().copied().collect())
-            .unwrap_or_default()
+    });
+    from_phf.unwrap_or_else(|| {
+        ACTIVE_STATIC_REGISTRY.with(|active| {
+            active
+                .borrow()
+                .map(|registry| registry.iter().map(|(key, _)| *key).collect())
+                .unwrap_or_default()
+        })
     })
 }
 

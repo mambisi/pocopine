@@ -164,6 +164,41 @@ impl App {
         self.run();
     }
 
+    /// Static-slice variant used by `app!{}` so downstream apps do
+    /// not need to depend on `phf` just because the macro expands.
+    #[doc(hidden)]
+    pub fn run_with_static_registry(
+        self,
+        registry: &'static [(&'static str, &'static crate::registry::ComponentVTable)],
+    ) {
+        crate::registry::set_active_static_registry(registry);
+        for (_, vtable) in registry {
+            (vtable.register)();
+        }
+        self.run();
+    }
+
+    /// RFC 065 Phase 1 — static-registry run path with
+    /// route-cluster metadata. This remains a single wasm binary:
+    /// the manifest partitions already-linked vtables into shell,
+    /// route, and shared clusters, then the synchronous loader
+    /// registers each cluster on demand.
+    #[doc(hidden)]
+    pub fn run_with_cluster_manifest(
+        self,
+        registry: &'static [(&'static str, &'static crate::registry::ComponentVTable)],
+        manifest: &'static crate::clusters::ClusterManifest,
+    ) {
+        crate::registry::set_active_static_registry(registry);
+        if let Err(err) = crate::clusters::install_cluster_manifest(manifest) {
+            web_sys::console::error_1(
+                &format!("pocopine cluster manifest failed to install: {err:?}").into(),
+            );
+            return;
+        }
+        self.run();
+    }
+
     /// Fire pre-mount hooks, mount registered components on the body,
     /// initialise the router (if any routes were registered), then
     /// fire post-mount hooks.

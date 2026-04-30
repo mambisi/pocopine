@@ -13,20 +13,22 @@ pub use pocopine_core::{
     append_list_inline, assert_registry_clean, batch, computed, current_effect, current_scope_id,
     dispatch_event, effect, effect_scoped, effect_with, emit, emit_cancelable,
     emit_cancelable_from, emit_event, emit_event_from, emit_from, emit_from_host, emit_model,
-    emit_model_field, emit_raw, emit_raw_from, fetch, flush_sync, inject, invalidate_field,
-    invalidate_field_cache, mount_profile_enabled, on_cleanup, on_scope_unmount,
-    patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, provide,
-    registered_component_names, registry_errors, release, remove_list_at_inline,
-    replace_field_inline, report_mount_profile, reset_mount_profile, run_now, rw_signal,
-    set_auto_flush, signal, spawn, spawn_latest, spawn_scoped, store, swap_list_indices_inline,
-    this, trigger_scope, verify_registry, watch, watch_field, watch_field_scoped,
-    watch_scope_field, watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, Body,
+    emit_model_field, emit_raw, emit_raw_from, ensure_clusters, ensure_clusters_ready, fetch,
+    flush_sync, inject, invalidate_field, invalidate_field_cache, mount_profile_enabled,
+    on_cleanup, on_scope_unmount, patch_list_at_inline, patch_list_indices_inline,
+    prefetch_clusters, prepend_list_inline, provide, registered_component_names, registry_errors,
+    release, remove_list_at_inline, replace_field_inline, report_mount_profile,
+    reset_mount_profile, run_now, rw_signal, set_auto_flush, signal, spawn, spawn_latest,
+    spawn_scoped, store, swap_list_indices_inline, this, trigger_scope, verify_registry, watch,
+    watch_field, watch_field_scoped, watch_scope_field, watch_scope_field_now,
+    watch_scope_field_scoped, watch_scoped, App, Body, Cluster, ClusterLoadError, ClusterManifest,
     Component, ComponentMountFn, ComponentState, ComponentVTable, Computed, ContextKey,
     ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl,
     Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
-    ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope,
-    ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle,
-    SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RouteClusterPlan,
+    RouteClusterRoot, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
+    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
+    TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -54,19 +56,20 @@ pub mod __private {
     //! Internals used by macro-generated code. Not a stable API.
     pub use js_sys;
     pub use pocopine_core::registry::{
-        clear_active_phf_registry_for_test, set_active_phf_registry,
+        clear_active_phf_registry_for_test, set_active_phf_registry, set_active_static_registry,
     };
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
         inject_style, mark_registered, register_component_with_mount, register_row_plans,
         register_store_scope, register_template, spawn as runtime_spawn,
         spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
-        task::TaskHandle, track, with_write_origin, BindingKind, Component, ComponentMountFn,
-        ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext,
-        Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener, StaticLiteral,
-        StaticRowPlan, Store, WriteOrigin,
+        task::TaskHandle, track, with_write_origin, BindingKind, ClusterManifest, Component,
+        ComponentMountFn, ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch,
+        LifecycleContext, RouteClusterRoot, Scope, StaticBinOp, StaticBinding, StaticExpr,
+        StaticListener, StaticLiteral, StaticRowPlan, Store, WriteOrigin,
     };
-    // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
+    // RFC 060 Tier 4 compatibility — static phf registries remain
+    // supported even though `app!{}` now emits a plain slice.
     pub use phf;
     // RFC-058 Phase 2 — template-plan shape + registry. The
     // macro emits a `&'static StaticTemplatePlan` per component

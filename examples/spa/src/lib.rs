@@ -55,11 +55,13 @@ impl NotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    App::new()
-        .register::<AppShell>()
-        .route::<Home>("/")
-        .route::<About>("/about")
-        .route::<BlogPost>("/blog/:id")
-        .route::<NotFound>("*")
-        .run();
+    pocopine::app! {
+        components: [AppShell, Home, About, BlogPost, NotFound],
+        routes: [
+            ("/", Home),
+            ("/about", About),
+            ("/blog/:id", BlogPost),
+            ("*", NotFound),
+        ],
+    };
 }

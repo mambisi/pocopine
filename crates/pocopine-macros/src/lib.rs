@@ -1044,6 +1044,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 <#path as ::pocopine::__private::Component>::register();
             }
         });
+        let extends_vtables = extends_paths.iter().map(|path| {
+            quote! { #path::__POCO_VTABLE }
+        });
         let out = quote! {
             #input
 
@@ -1058,6 +1061,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     #(#extends_calls)*
                 }
 
+                #[doc(hidden)]
+                pub fn __poco_uses() -> &'static [&'static ::pocopine::__private::ComponentVTable] {
+                    static USES: &[&'static ::pocopine::__private::ComponentVTable] = &[
+                        #(#extends_vtables),*
+                    ];
+                    USES
+                }
+
                 // RFC 060 Tier 4 — bundle vtables exist for
                 // symmetry with non-bundle components (so
                 // `app!{}`'s phf map can hold any type
@@ -1069,6 +1080,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     &::pocopine::__private::ComponentVTable {
                         name: #name_str,
                         register: <#struct_ident>::register,
+                        uses: <#struct_ident>::__poco_uses,
+                        is_bundle: true,
                         template_html: None,
                         plan: None,
                         mount_template: None,
@@ -1916,6 +1929,15 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         None => quote! {},
     };
+    let uses_vtables: proc_macro2::TokenStream = match args.uses.as_ref() {
+        Some(table) => {
+            let vtables = table.entries.iter().map(|(_tag, type_path)| {
+                quote! { #type_path::__POCO_VTABLE }
+            });
+            quote! { &[#(#vtables),*] }
+        }
+        None => quote! { &[] },
+    };
 
     // Give each registration function a distinct name so multiple components
     // in one module don't trip the `pub fn register()` duplicate.
@@ -2156,6 +2178,12 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #register_uses_stmts
             }
 
+            #[doc(hidden)]
+            pub fn __poco_uses() -> &'static [&'static ::pocopine::__private::ComponentVTable] {
+                static USES: &[&'static ::pocopine::__private::ComponentVTable] = #uses_vtables;
+                USES
+            }
+
             // RFC 060 Tier 4 — `&'static ComponentVTable` in
             // `.rodata`. Consumed by the `app!{}` macro's
             // `phf::Map` literal (vtable per component, keyed
@@ -2166,6 +2194,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &::pocopine::__private::ComponentVTable {
                     name: #name_str,
                     register: <#struct_ident>::register,
+                    uses: <#struct_ident>::__poco_uses,
+                    is_bundle: false,
                     template_html: Some(#compiled_template_html_lit),
                     plan: #vtable_plan_tokens,
                     mount_template: ::core::option::Option::Some(
@@ -3454,10 +3484,9 @@ fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
     Ok(out)
 }
 
-/// `app!{}` — single-site macro that emits a `&'static
-/// phf::Map<&'static str, &'static ComponentVTable>` from an
-/// explicit `components: [...]` list, then runs an
-/// `App::new()...route::<T>(...).run_with_registry(&REGISTRY)`
+/// `app!{}` — single-site macro that emits a static registry from
+/// an explicit `components: [...]` list, then runs an
+/// `App::new()...route::<T>(...).run_with_static_registry(REGISTRY)`
 /// chain.
 ///
 /// Shape:
@@ -3480,12 +3509,8 @@ fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
 /// ```
 ///
 /// Bundles (`#[component(extends = [...])]`) can appear in
-/// `components`, but their members must also be listed
-/// explicitly — proc-macros can't read const slices at
-/// expansion time, so transitive bundle expansion happens at
-/// runtime via `Bundle::register()` rather than statically in
-/// the phf map. Future work (RFC 061 / 062) may relax this if a
-/// type-level introspection mechanism becomes available.
+/// `components`, but their members must also be listed explicitly
+/// so RFC 065 can validate the whole route-cluster surface.
 #[proc_macro]
 pub fn app(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as AppMacroInput);
@@ -3524,22 +3549,29 @@ pub fn app(input: TokenStream) -> TokenStream {
     }
 
     // Resolve each component entry to (key, vtable_path).
-    let entries = parsed.components.iter().map(|c| match c {
-        AppComponentEntry::Bare(path) => {
-            let last = path.segments.last().expect("path has at least one segment");
-            let kebab = kebab_case(&last.ident.to_string());
-            let vtable_path = quote! { #path::__POCO_VTABLE };
-            (kebab, vtable_path)
-        }
-        AppComponentEntry::Explicit(path, lit) => {
-            let kebab = lit.value();
-            let vtable_path = quote! { #path::__POCO_VTABLE };
-            (kebab, vtable_path)
-        }
-    });
+    let entries: Vec<_> = parsed
+        .components
+        .iter()
+        .map(|c| match c {
+            AppComponentEntry::Bare(path) => {
+                let last = path.segments.last().expect("path has at least one segment");
+                let kebab = kebab_case(&last.ident.to_string());
+                let vtable_path = quote! { #path::__POCO_VTABLE };
+                (kebab, vtable_path)
+            }
+            AppComponentEntry::Explicit(path, lit) => {
+                let kebab = lit.value();
+                let vtable_path = quote! { #path::__POCO_VTABLE };
+                (kebab, vtable_path)
+            }
+        })
+        .collect();
 
-    let phf_arms = entries.map(|(key, vtable)| {
-        quote! { #key => #vtable, }
+    let registry_entries = entries.iter().map(|(key, vtable)| {
+        quote! { (#key, #vtable), }
+    });
+    let component_vtables = entries.iter().map(|(_key, vtable)| {
+        quote! { #vtable }
     });
 
     // Use `route_static` (record-only) so `C::register()` doesn't
@@ -3550,19 +3582,45 @@ pub fn app(input: TokenStream) -> TokenStream {
         let component = &r.component;
         quote! { .route_static::<#component>(#pattern) }
     });
+    let route_roots = parsed.routes.iter().enumerate().map(|(idx, r)| {
+        let component = &r.component;
+        let id = format!("r{idx}");
+        quote! {
+            ::pocopine::__private::RouteClusterRoot {
+                route_id: #id,
+                component: <#component as ::pocopine::__private::Component>::NAME,
+            }
+        }
+    });
+    let run_call = if parsed.routes.is_empty() {
+        quote! { .run_with_static_registry(REGISTRY); }
+    } else {
+        quote! { .run_with_cluster_manifest(REGISTRY, &CLUSTER_MANIFEST); }
+    };
 
     let out = quote! {
         {
-            static REGISTRY: ::pocopine::__private::phf::Map<
+            static REGISTRY: &[(
                 &'static str,
                 &'static ::pocopine::__private::ComponentVTable,
-            > = ::pocopine::__private::phf::phf_map! {
-                #(#phf_arms)*
-            };
+            )] = &[
+                #(#registry_entries)*
+            ];
+            static COMPONENTS: &[&'static ::pocopine::__private::ComponentVTable] = &[
+                #(#component_vtables),*
+            ];
+            static ROUTE_ROOTS: &[::pocopine::__private::RouteClusterRoot] = &[
+                #(#route_roots),*
+            ];
+            static CLUSTER_MANIFEST: ::pocopine::__private::ClusterManifest =
+                ::pocopine::__private::ClusterManifest {
+                    components: COMPONENTS,
+                    routes: ROUTE_ROOTS,
+                };
 
             ::pocopine::App::new()
                 #(#route_calls)*
-                .run_with_registry(&REGISTRY);
+                #run_call
         }
     };
     out.into()
