@@ -51,6 +51,9 @@ struct BuildArgs {
     /// Build in release mode.
     #[arg(long)]
     release: bool,
+    /// Build `app!` routes as separate wasm artifacts.
+    #[arg(long)]
+    split: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -68,6 +71,9 @@ struct ServeArgs {
     /// Build in release mode.
     #[arg(long)]
     release: bool,
+    /// Build `app!` routes as separate wasm artifacts.
+    #[arg(long)]
+    split: bool,
 }
 
 /// `[package.metadata.pocopine]` section parsed from a project's
@@ -145,7 +151,7 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Build(a) => {
             let cfg = load_config(&a.path)?;
-            build(&a.path, a.release)?;
+            build_entry(&a.path, a.release, a.split)?;
             if let Some(tw) = cfg.tailwind.as_ref() {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
@@ -154,7 +160,7 @@ fn main() -> Result<()> {
         }
         Cmd::Run(a) => {
             let cfg = load_config(&a.path)?;
-            build(&a.path, a.release)?;
+            build_entry(&a.path, a.release, a.split)?;
             if let Some(tw) = cfg.tailwind.as_ref() {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
@@ -408,6 +414,206 @@ fn build(path: &Path, release: bool) -> Result<()> {
     Ok(())
 }
 
+fn build_entry(path: &Path, release: bool, split: bool) -> Result<()> {
+    if split {
+        build_split(path, release)
+    } else {
+        build(path, release)
+    }
+}
+
+fn package_name(path: &Path) -> Result<String> {
+    let manifest_path = path.join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+
+    #[derive(Deserialize)]
+    struct Manifest {
+        package: PackageName,
+    }
+    #[derive(Deserialize)]
+    struct PackageName {
+        name: String,
+    }
+
+    let manifest: Manifest =
+        toml::from_str(&text).with_context(|| format!("parse {}", manifest_path.display()))?;
+    Ok(manifest.package.name.replace('-', "_"))
+}
+
+fn build_split(path: &Path, release: bool) -> Result<()> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("could not resolve project path: {}", path.display()))?;
+    let base = package_name(&path)?;
+    println!("▶ split wasm-pack build ({})", path.display());
+    clean_split_artifacts(&path, &base)?;
+    let route_count_path = std::env::temp_dir().join(format!("{base}-pocopine-routes.txt"));
+    let _ = std::fs::remove_file(&route_count_path);
+    run_split_wasm_pack(
+        &path,
+        release,
+        &base,
+        "shell",
+        &base,
+        Some(&route_count_path),
+    )?;
+
+    let route_count_text = std::fs::read_to_string(&route_count_path)
+        .with_context(|| format!("read {}", route_count_path.display()))?;
+    let route_count = route_count_text.trim().parse::<usize>().with_context(|| {
+        format!(
+            "parse split route count from {}",
+            route_count_path.display()
+        )
+    })?;
+    if route_count == 0 {
+        bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
+    }
+
+    for idx in 0..route_count {
+        let mode = format!("route:{idx}");
+        let out_name = format!("{base}_route_{idx}");
+        run_split_wasm_pack(&path, release, &base, &mode, &out_name, None)?;
+    }
+    write_split_loader(&path, &base)?;
+    println!("✓ split build emitted shell + {route_count} route artifact(s)");
+    Ok(())
+}
+
+fn run_split_wasm_pack(
+    path: &Path,
+    release: bool,
+    base: &str,
+    mode: &str,
+    out_name: &str,
+    route_count_out: Option<&Path>,
+) -> Result<()> {
+    let mut cmd = Command::new("wasm-pack");
+    cmd.arg("build")
+        .arg("--target")
+        .arg("web")
+        .arg("--out-dir")
+        .arg("pkg")
+        .arg("--out-name")
+        .arg(out_name);
+    if release {
+        cmd.arg("--release");
+    } else {
+        cmd.arg("--dev");
+    }
+    cmd.env("POCOPINE_SPLIT_MODE", mode)
+        .env("POCOPINE_SPLIT_BASE", base)
+        .current_dir(path);
+    if let Some(path) = route_count_out {
+        cmd.env("POCOPINE_SPLIT_ROUTE_COUNT_OUT", path);
+    }
+    let cfg_name = format!("pocopine_split_{}", split_cfg_suffix(mode));
+    let rustflags = match std::env::var("RUSTFLAGS") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} --cfg={cfg_name}"),
+        _ => format!("--cfg={cfg_name}"),
+    };
+    cmd.env("RUSTFLAGS", rustflags);
+
+    let status = cmd
+        .status()
+        .context("failed to invoke wasm-pack (is it on $PATH?)")?;
+    if !status.success() {
+        bail!("wasm-pack split build `{mode}` failed with status {status}");
+    }
+    Ok(())
+}
+
+fn split_cfg_suffix(mode: &str) -> String {
+    mode.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn clean_split_artifacts(path: &Path, base: &str) -> Result<()> {
+    let pkg = path.join("pkg");
+    if !pkg.exists() {
+        return Ok(());
+    }
+    let route_prefix = format!("{base}_route_");
+    for entry in std::fs::read_dir(&pkg).with_context(|| format!("read {}", pkg.display()))? {
+        let entry = entry.with_context(|| format!("read entry in {}", pkg.display()))?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name.starts_with(&route_prefix) || file_name == "pocopine-split-loader.js" {
+            let path = entry.path();
+            if path.is_file() {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("remove stale split artifact {}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_split_loader(path: &Path, base: &str) -> Result<()> {
+    let pkg = path.join("pkg");
+    std::fs::create_dir_all(&pkg).with_context(|| format!("create {}", pkg.display()))?;
+    let loader = format!(
+        r#"let activeRoute = null;
+
+function routeMatches(pattern, path) {{
+  if (pattern === "*") return true;
+  const patternParts = pattern.split("/").filter(Boolean);
+  const pathParts = path.split("/").filter(Boolean);
+  if (patternParts.length !== pathParts.length) return false;
+  return patternParts.every((part, idx) => part.startsWith(":") || part === pathParts[idx]);
+}}
+
+function matchRoute(routes, path) {{
+  return routes.find((route) => route.pattern !== "*" && routeMatches(route.pattern, path))
+      || routes.find((route) => route.pattern === "*");
+}}
+
+async function mountCurrentRoute(routes) {{
+  const outlet = document.querySelector("pp-outlet");
+  if (!outlet) return;
+  if (activeRoute?.unmount_pocopine_route) {{
+    activeRoute.unmount_pocopine_route();
+  }}
+  const route = matchRoute(routes, location.pathname);
+  if (!route) return;
+  const mod = await import(route.module);
+  await mod.default();
+  mod.mount_pocopine_route(outlet, location.pathname);
+  activeRoute = mod;
+}}
+
+export async function startPocopineSplitApp() {{
+  const shell = await import("/pkg/{base}.js");
+  await shell.default();
+  const manifest = JSON.parse(shell.pocopine_split_manifest());
+  document.addEventListener("click", (event) => {{
+    const anchor = event.target.closest?.("a[pp-route]");
+    if (!anchor) return;
+    const url = new URL(anchor.getAttribute("href"), location.href);
+    if (url.origin !== location.origin) return;
+    event.preventDefault();
+    if (url.pathname === location.pathname && url.search === location.search) return;
+    history.pushState(null, "", url);
+    mountCurrentRoute(manifest.routes);
+  }});
+  window.addEventListener("popstate", () => mountCurrentRoute(manifest.routes));
+  await mountCurrentRoute(manifest.routes);
+}}
+"#
+    );
+    std::fs::write(pkg.join("pocopine-split-loader.js"), loader)
+        .with_context(|| format!("write {}", pkg.join("pocopine-split-loader.js").display()))?;
+    Ok(())
+}
+
 // ---------- server-bin spawn ----------
 
 struct BinChild {
@@ -570,7 +776,7 @@ fn mime_of(path: &Path) -> &'static str {
 fn dev(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = load_config(&args.path)?;
-    build(&project, args.release)?;
+    build_entry(&project, args.release, args.split)?;
 
     // Kick off Tailwind in watch mode *before* we start serving so
     // the first page load already sees compiled CSS.
@@ -623,7 +829,7 @@ fn dev(args: &ServeArgs) -> Result<()> {
         while rx.try_recv().is_ok() {}
 
         println!("↻ rebuilding wasm…");
-        if let Err(e) = build(&project, args.release) {
+        if let Err(e) = build_entry(&project, args.release, args.split) {
             eprintln!("build failed: {e:#}");
         }
     };

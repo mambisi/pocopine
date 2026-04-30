@@ -3539,6 +3539,9 @@ fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
 #[proc_macro]
 pub fn app(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as AppMacroInput);
+    let split_mode = std::env::var("POCOPINE_SPLIT_MODE").ok();
+    let split_base =
+        std::env::var("POCOPINE_SPLIT_BASE").unwrap_or_else(|_| "pocopine_app".to_string());
 
     // RFC 060 — every route target must appear in `components:`
     // for the `&'static phf::Map` to be authoritative. Compare
@@ -3571,6 +3574,39 @@ pub fn app(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+    }
+
+    if let Some(mode) = split_mode.as_deref() {
+        if mode == "shell" {
+            if let Ok(path) = std::env::var("POCOPINE_SPLIT_ROUTE_COUNT_OUT") {
+                if let Err(err) = std::fs::write(&path, parsed.routes.len().to_string()) {
+                    return syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        format!("failed to write POCOPINE_SPLIT_ROUTE_COUNT_OUT `{path}`: {err}"),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+            return emit_split_shell_app(&parsed, &split_base).into();
+        }
+        if let Some(raw_idx) = mode.strip_prefix("route:") {
+            let Ok(route_idx) = raw_idx.parse::<usize>() else {
+                return syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    "POCOPINE_SPLIT_MODE route value must be `route:<index>`",
+                )
+                .to_compile_error()
+                .into();
+            };
+            return emit_split_route_app(&parsed, route_idx).into();
+        }
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "POCOPINE_SPLIT_MODE must be `shell` or `route:<index>`",
+        )
+        .to_compile_error()
+        .into();
     }
 
     // Resolve each component entry to (key, vtable_path).
@@ -3651,4 +3687,184 @@ pub fn app(input: TokenStream) -> TokenStream {
         }
     };
     out.into()
+}
+
+fn app_component_path(c: &AppComponentEntry) -> &syn::Path {
+    match c {
+        AppComponentEntry::Bare(path) => path,
+        AppComponentEntry::Explicit(path, _) => path,
+    }
+}
+
+fn app_component_key(c: &AppComponentEntry) -> String {
+    match c {
+        AppComponentEntry::Bare(path) => {
+            let last = path.segments.last().expect("path has at least one segment");
+            kebab_case(&last.ident.to_string())
+        }
+        AppComponentEntry::Explicit(_, lit) => lit.value(),
+    }
+}
+
+fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2::TokenStream {
+    let route_path_keys: std::collections::HashSet<String> = parsed
+        .routes
+        .iter()
+        .map(|r| {
+            let component = &r.component;
+            quote! { #component }.to_string()
+        })
+        .collect();
+    let shell_entries: Vec<_> = parsed
+        .components
+        .iter()
+        .take_while(|component| {
+            let path = app_component_path(component);
+            !route_path_keys.contains(&quote! { #path }.to_string())
+        })
+        .filter(|component| {
+            let path = app_component_path(component);
+            !route_path_keys.contains(&quote! { #path }.to_string())
+        })
+        .map(|component| {
+            let key = app_component_key(component);
+            let path = app_component_path(component);
+            let vtable_path = quote! { #path::__POCO_VTABLE };
+            (key, vtable_path)
+        })
+        .collect();
+    let registry_entries = shell_entries.iter().map(|(key, vtable)| {
+        quote! { (#key, #vtable), }
+    });
+    let devtools_call = parsed.devtools.then(|| quote! { .with_devtools() });
+    let manifest = split_manifest_json(parsed, split_base);
+
+    quote! {
+        {
+            static REGISTRY: &[(
+                &'static str,
+                &'static ::pocopine::__private::ComponentVTable,
+            )] = &[
+                #(#registry_entries)*
+            ];
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn pocopine_split_manifest() -> ::std::string::String {
+                #manifest.to_string()
+            }
+
+            ::pocopine::App::new()
+                #devtools_call
+                .run_with_static_registry(REGISTRY);
+        }
+    }
+}
+
+fn emit_split_route_app(parsed: &AppMacroInput, route_idx: usize) -> proc_macro2::TokenStream {
+    let Some(route) = parsed.routes.get(route_idx) else {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("POCOPINE_SPLIT_MODE route:{route_idx} is out of range"),
+        )
+        .to_compile_error();
+    };
+    let component = &route.component;
+    let pattern = route.pattern.value();
+    let param_setters = route_param_setters(&pattern);
+
+    quote! {
+        {
+            ::std::thread_local! {
+                static __POCOPINE_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =
+                    const { ::std::cell::RefCell::new(::core::option::Option::None) };
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn unmount_pocopine_route() {
+                __POCOPINE_ROUTE_HANDLE.with(|handle| {
+                    if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
+                        handle.unmount();
+                    }
+                });
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn mount_pocopine_route(
+                outlet: ::pocopine::__private::web_sys::Element,
+                path: ::std::string::String,
+            ) {
+                unmount_pocopine_route();
+                let Some(document) = ::pocopine::__private::web_sys::window()
+                    .and_then(|window| window.document())
+                else {
+                    return;
+                };
+                let Ok(host) = document.create_element(
+                    <#component as ::pocopine::__private::Component>::NAME
+                ) else {
+                    return;
+                };
+                let __pocopine_path_segments: ::std::vec::Vec<&str> = path
+                    .trim_matches('/')
+                    .split('/')
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                #(#param_setters)*
+                outlet.replace_children_with_node_1(host.as_ref());
+                let handle = ::pocopine::App::mount_subtree::<#component>(&host);
+                __POCOPINE_ROUTE_HANDLE.with(|slot| {
+                    *slot.borrow_mut() = ::core::option::Option::Some(handle);
+                });
+            }
+        }
+    }
+}
+
+fn route_param_setters(pattern: &str) -> Vec<proc_macro2::TokenStream> {
+    pattern
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .enumerate()
+        .filter_map(|(idx, segment)| {
+            let name = segment.strip_prefix(':')?;
+            Some(quote! {
+                if let ::core::option::Option::Some(value) = __pocopine_path_segments.get(#idx) {
+                    let _ = host.set_attribute(#name, value);
+                }
+            })
+        })
+        .collect()
+}
+
+fn split_manifest_json(parsed: &AppMacroInput, split_base: &str) -> String {
+    let routes = parsed
+        .routes
+        .iter()
+        .enumerate()
+        .map(|(idx, route)| {
+            format!(
+                "{{\"pattern\":\"{}\",\"module\":\"/pkg/{}_route_{}.js\"}}",
+                json_escape(&route.pattern.value()),
+                json_escape(split_base),
+                idx,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{\"routes\":[{routes}]}}")
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            other => vec![other],
+        })
+        .collect()
 }

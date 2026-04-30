@@ -187,8 +187,15 @@ pub fn main() {
 ```
 
 Routed apps can use `pocopine::app!` to declare the full component
-surface and routes in one place. That enables route-cluster metadata
-today while still producing one wasm binary in RFC 065 Phase 1.
+surface and routes in one place. A normal `pocopine build` still
+produces one wasm binary; `pocopine build --split` emits a shell
+artifact plus one wasm artifact per route and a generated
+`pkg/pocopine-split-loader.js`.
+
+Split mode is route-level browser loading, not shared-runtime dynamic
+linking yet: each route artifact is an independent wasm module, so
+route modules may duplicate framework/runtime code. The first page load
+only imports the shell plus the matched route.
 
 ```html
 <!-- src/Counter.poco -->
@@ -207,7 +214,8 @@ pocopine dev
 # → listening on http://127.0.0.1:5243
 ```
 
-Ship with `pocopine build --release`.
+Ship with `pocopine build --release`, or use
+`pocopine build --release --split` for route-level split output.
 
 ## Examples
 
