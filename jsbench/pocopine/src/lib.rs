@@ -96,10 +96,10 @@ impl JsBenchApp {
 
     pub fn prepend(&mut self) {
         self.measure("prepend(1000)", |s| {
-            let mut more = s.make_rows(1_000);
-            pocopine::prepend_list_inline("rows", &more);
-            more.append(&mut s.rows);
-            s.rows = more;
+            let mut old = std::mem::take(&mut s.rows);
+            s.rows = s.make_rows(1_000);
+            s.rows.append(&mut old);
+            pocopine::prepend_list_inline("rows", &s.rows[..1_000]);
         });
     }
 

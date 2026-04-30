@@ -523,6 +523,11 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
 fn pp_as_render_root(user_root: &Element) -> Element {
     let tag = user_root.local_name();
     if is_registered(&tag) {
+        // Compose one registered child layer: the outer pp-as scope
+        // still drives the template plan explicitly below, while the
+        // child component owns its rendered root. Do not recurse here;
+        // nested component composition should be authored as another
+        // explicit pp-as boundary.
         mount_component(user_root, &tag, None);
         if let Some(rendered_root) = first_element_child(user_root) {
             return rendered_root;
