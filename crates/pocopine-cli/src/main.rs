@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -448,6 +448,7 @@ fn build_split(path: &Path, release: bool) -> Result<()> {
     let base = package_name(&path)?;
     println!("▶ split wasm-pack build ({})", path.display());
     clean_split_artifacts(&path, &base)?;
+    let build_id = split_build_id()?;
     let route_count_path = std::env::temp_dir().join(format!("{base}-pocopine-routes.txt"));
     let _ = std::fs::remove_file(&route_count_path);
     run_split_wasm_pack(
@@ -457,6 +458,7 @@ fn build_split(path: &Path, release: bool) -> Result<()> {
         "shell",
         &base,
         Some(&route_count_path),
+        &build_id,
     )?;
 
     let route_count_text = std::fs::read_to_string(&route_count_path)
@@ -474,7 +476,7 @@ fn build_split(path: &Path, release: bool) -> Result<()> {
     for idx in 0..route_count {
         let mode = format!("route:{idx}");
         let out_name = format!("{base}_route_{idx}");
-        run_split_wasm_pack(&path, release, &base, &mode, &out_name, None)?;
+        run_split_wasm_pack(&path, release, &base, &mode, &out_name, None, &build_id)?;
     }
     write_split_loader(&path, &base)?;
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
@@ -488,6 +490,7 @@ fn run_split_wasm_pack(
     mode: &str,
     out_name: &str,
     route_count_out: Option<&Path>,
+    build_id: &str,
 ) -> Result<()> {
     let mut cmd = Command::new("wasm-pack");
     cmd.arg("build")
@@ -508,7 +511,7 @@ fn run_split_wasm_pack(
     if let Some(path) = route_count_out {
         cmd.env("POCOPINE_SPLIT_ROUTE_COUNT_OUT", path);
     }
-    let cfg_name = format!("pocopine_split_{}", split_cfg_suffix(mode));
+    let cfg_name = format!("pocopine_split_{}_{}", split_cfg_suffix(mode), build_id);
     let rustflags = match std::env::var("RUSTFLAGS") {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing} --cfg={cfg_name}"),
         _ => format!("--cfg={cfg_name}"),
@@ -522,6 +525,13 @@ fn run_split_wasm_pack(
         bail!("wasm-pack split build `{mode}` failed with status {status}");
     }
     Ok(())
+}
+
+fn split_build_id() -> Result<String> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?;
+    Ok(format!("{}", elapsed.as_nanos()))
 }
 
 fn split_cfg_suffix(mode: &str) -> String {
