@@ -595,6 +595,7 @@ fn try_append_fast_path(
     } else {
         for entry in &old_prior {
             entry.loop_state.borrow_mut().total = total;
+            trigger_scope(entry.scope_id);
         }
     }
 
@@ -736,6 +737,8 @@ fn try_prepend_fast_path(
             let mut st = entry.loop_state.borrow_mut();
             st.index = i + added;
             st.total = total;
+            drop(st);
+            trigger_scope(entry.scope_id);
         }
     }
 
@@ -868,7 +871,12 @@ fn try_single_remove_fast_path(
     compiled_bindings_depend_on_position: bool,
 ) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
     let old_len = old_prior.len();
-    if old_len == 0 || old_len != total + 1 || row_plan.is_none() {
+    if old_len == 0 || old_len != total + 1 {
+        return Err(old_prior);
+    }
+    if row_plan.is_none() {
+        // Generic rows need the full removal path so row teardown
+        // goes through the same cleanup surface that mounted them.
         return Err(old_prior);
     }
 
@@ -938,7 +946,12 @@ fn try_two_swap_fast_path(
     row_plan: Option<&Rc<crate::directives::for_plan::CompiledRowPlan>>,
     compiled_bindings_depend_on_position: bool,
 ) -> Result<Vec<PrevItem>, Vec<PrevItem>> {
-    if total < 2 || old_prior.len() != total || row_plan.is_none() {
+    if total < 2 || old_prior.len() != total {
+        return Err(old_prior);
+    }
+    if row_plan.is_none() {
+        // Generic rows still use the full keyed path because their
+        // cleanup/reuse contract is not the compiled-row one.
         return Err(old_prior);
     }
     if old_prior.iter().any(|entry| entry.leaving) {

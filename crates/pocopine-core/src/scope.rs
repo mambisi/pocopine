@@ -420,8 +420,16 @@ impl Scope {
                 let Some(key_str) = key.as_string() else {
                     return JsValue::UNDEFINED;
                 };
-                // Magics take priority over user fields.
                 if key_str.starts_with('$') {
+                    // Loop scopes own these names; other `$...`
+                    // reads stay on the magic resolver.
+                    if matches!(key_str.as_str(), "$index" | "$first" | "$last") {
+                        let local = state_for_get.borrow().get(&key_str);
+                        if !local.is_undefined() {
+                            track(scope_id, &key_str);
+                            return local;
+                        }
+                    }
                     return magics::resolve(&key_str, scope_id);
                 }
                 track(scope_id, &key_str);

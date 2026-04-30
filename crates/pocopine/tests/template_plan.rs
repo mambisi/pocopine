@@ -626,6 +626,8 @@ struct Rfc064KeyedRow {
 #[component(
     name = "rfc064-keyed-fast-host",
     template_inline = r#"<div class="r64k-root">
+        <button class="r64k-append" pp-on:click="append_row">append</button>
+        <button class="r64k-prepend" pp-on:click="prepend_row">prepend</button>
         <button class="r64k-swap" pp-on:click="swap_rows">swap</button>
         <button class="r64k-remove" pp-on:click="remove_second">remove</button>
         <ul>
@@ -663,9 +665,70 @@ impl Rfc064KeyedFastHost {
         pocopine::swap_list_indices_inline("rows", 0, 2);
     }
 
+    pub fn append_row(&mut self) {
+        self.rows.push(Rfc064KeyedRow {
+            id: 4,
+            label: "four".into(),
+        });
+        pocopine::append_list_inline("rows", 3, &self.rows[3..]);
+    }
+
+    pub fn prepend_row(&mut self) {
+        let new_rows = vec![Rfc064KeyedRow {
+            id: 0,
+            label: "zero".into(),
+        }];
+        self.rows.splice(0..0, new_rows.clone());
+        pocopine::prepend_list_inline("rows", &new_rows);
+    }
+
     pub fn remove_second(&mut self) {
         self.rows.remove(1);
         pocopine::remove_list_at_inline("rows", 1);
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rfc064-generic-prepend-host",
+    template_inline = r#"<div class="r64g-root">
+        <button class="r64g-prepend" pp-on:click="prepend_row">prepend</button>
+        <ul>
+          <template pp-for="row in rows" pp-key="row.id">
+            <li class="r64g-row" :data-generic="row.label">
+              <span class="r64g-index" pp-text="$index"></span>
+              <span class="r64g-label" pp-text="row.label"></span>
+            </li>
+          </template>
+        </ul>
+    </div>"#
+)]
+struct Rfc064GenericPrependHost {
+    rows: Vec<Rfc064KeyedRow>,
+}
+
+#[handlers]
+impl Rfc064GenericPrependHost {
+    pub fn on_setup(&mut self) {
+        self.rows = vec![
+            Rfc064KeyedRow {
+                id: 1,
+                label: "one".into(),
+            },
+            Rfc064KeyedRow {
+                id: 2,
+                label: "two".into(),
+            },
+        ];
+    }
+
+    pub fn prepend_row(&mut self) {
+        let new_rows = vec![Rfc064KeyedRow {
+            id: 0,
+            label: "zero".into(),
+        }];
+        self.rows.splice(0..0, new_rows.clone());
+        pocopine::prepend_list_inline("rows", &new_rows);
     }
 }
 
@@ -771,6 +834,7 @@ fn register_all() {
     PlanIfBodyHost::register();
     PlanForBodyHost::register();
     Rfc064KeyedFastHost::register();
+    Rfc064GenericPrependHost::register();
     PlanSlotDynamicHost::register();
     PlanLifecycleLeaf::register();
     PlanIfChildHost::register();
@@ -1119,6 +1183,102 @@ async fn rfc064_keyed_remove_and_swap_reuse_dom_nodes() {
         removed.item(1).unwrap().text_content().as_deref(),
         Some("one"),
     );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn rfc064_keyed_append_reuses_existing_dom_nodes() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+
+    let initial = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(initial.length(), 3);
+    let one = initial.item(0).unwrap();
+    let two = initial.item(1).unwrap();
+    let three = initial.item(2).unwrap();
+
+    let append = host.query_selector(".r64k-append").unwrap().unwrap();
+    append.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let rows = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(rows.length(), 4);
+    assert!(rows.item(0).unwrap().is_same_node(Some(&one)));
+    assert!(rows.item(1).unwrap().is_same_node(Some(&two)));
+    assert!(rows.item(2).unwrap().is_same_node(Some(&three)));
+    assert_eq!(
+        rows.item(3).unwrap().text_content().as_deref(),
+        Some("four")
+    );
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn rfc064_keyed_prepend_reuses_existing_dom_nodes() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<rfc064-keyed-fast-host></rfc064-keyed-fast-host>");
+    tick().await;
+
+    let initial = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(initial.length(), 3);
+    let one = initial.item(0).unwrap();
+    let two = initial.item(1).unwrap();
+    let three = initial.item(2).unwrap();
+
+    let prepend = host.query_selector(".r64k-prepend").unwrap().unwrap();
+    prepend.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let rows = host.query_selector_all(".r64k-row").unwrap();
+    assert_eq!(rows.length(), 4);
+    assert_eq!(
+        rows.item(0).unwrap().text_content().as_deref(),
+        Some("zero")
+    );
+    assert!(rows.item(1).unwrap().is_same_node(Some(&one)));
+    assert!(rows.item(2).unwrap().is_same_node(Some(&two)));
+    assert!(rows.item(3).unwrap().is_same_node(Some(&three)));
+
+    assert_eq!(plan_failure_count(), 0);
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn rfc064_generic_prepend_refreshes_reused_row_indexes() {
+    register_all();
+    reset_plan_failure_count();
+
+    let host = mount("<rfc064-generic-prepend-host></rfc064-generic-prepend-host>");
+    tick().await;
+
+    let initial = host.query_selector_all(".r64g-row").unwrap();
+    assert_eq!(initial.length(), 2);
+    let one = initial.item(0).unwrap();
+    let two = initial.item(1).unwrap();
+    assert_eq!(read(&host, ".r64g-row:nth-child(1) .r64g-index"), "0");
+    assert_eq!(read(&host, ".r64g-row:nth-child(2) .r64g-index"), "1");
+
+    let prepend = host.query_selector(".r64g-prepend").unwrap().unwrap();
+    prepend.dyn_ref::<HtmlElement>().unwrap().click();
+    tick().await;
+
+    let rows = host.query_selector_all(".r64g-row").unwrap();
+    assert_eq!(rows.length(), 3);
+    assert_eq!(read(&host, ".r64g-row:nth-child(1) .r64g-index"), "0");
+    assert_eq!(read(&host, ".r64g-row:nth-child(2) .r64g-index"), "1");
+    assert_eq!(read(&host, ".r64g-row:nth-child(3) .r64g-index"), "2");
+    assert_eq!(read(&host, ".r64g-row:nth-child(1) .r64g-label"), "zero");
+    assert!(rows.item(1).unwrap().is_same_node(Some(&one)));
+    assert!(rows.item(2).unwrap().is_same_node(Some(&two)));
 
     assert_eq!(plan_failure_count(), 0);
     host.remove();
