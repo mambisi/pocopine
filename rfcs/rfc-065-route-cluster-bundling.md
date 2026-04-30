@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Draft (active design 2026-04-30) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-29 |
 | **Supersedes** | RFC 064 §4.1 (split out per council feedback 2026-04-29) |
@@ -12,18 +12,22 @@
 ## 1. Summary
 
 Implement the route-boundary clustering committed by RFC 058
-§5.10.1: per-route bundle splitting driven by the `uses` graph
-RFC 060 already builds. The shell cluster ships at boot; each
-route's cluster fetches on first navigation. **No author code
-changes** — the split is inferred from `App::route::<C>(...)`
-calls + `uses` declarations the macro already requires.
+§5.10.1: bundle splitting driven by route roots and the `uses`
+graph RFC 060 already builds. The shell cluster ships at boot;
+route-owned and shared route clusters fetch on first navigation
+or prefetch on route intent. **No author code changes** — the
+split is inferred from `App::route::<C>(...)` calls + `uses`
+declarations the macro already requires.
 
 This is **not a runtime perf RFC** — it doesn't make any code
 faster. It's a delivery-architecture RFC: same code, distributed
-across smaller artifacts that load lazily. Council split it out
-of RFC 064 because the concerns (artifact generation, cluster
-loaders, route-load behavior) don't share a code surface with
-RFC 064's runtime perf work and shouldn't share an RFC.
+across smaller artifacts that load lazily. The default fallback
+remains today's monolithic bundle, so unsupported targets do not
+lose correctness while the split-artifact pipeline matures.
+Council split this out of RFC 064 because the concerns
+(artifact generation, cluster loaders, route-load behavior) do
+not share a code surface with RFC 064's runtime perf work and
+should not share an RFC.
 
 ## 2. Motivation
 
@@ -49,15 +53,16 @@ depends on the route shape — measurement-gated per §3.
 ## 3. Baseline requirement
 
 **This RFC is not actionable until a fresh baseline measurement
-is captured.** Before the implementation PR opens, capture and
-commit to `bench/baseline-clustering.md`:
+is captured.** Before the implementation PR opens, capture the
+following in the PR body (and update `jsbench/RESULTS.md` if
+framework or bundle-size summary tables change):
 
 - **`examples/website` boot bundle**: raw + gzip wasm size
   today (single-binary).
 - **Per-route reachability map**: from each `App::route::<C>`
   entry, list the transitive `uses` closure. This becomes the
-  cluster definition; the audit confirms it's small enough to
-  matter.
+  cluster definition; include route-set signatures so shared
+  clusters are visible in review.
 - **Counter boot bundle** (control): unchanged; serves as the
   "one-route apps don't pay" verification.
 
@@ -70,7 +75,7 @@ discipline*, not an absolute target.
 - **Not WIT-bindgen / Component Model split delivery.** RFC 058
   Phase 8 is the long-term direction; this RFC ships the
   per-cluster wasm *generation* and a fetch-driven loader, not
-  Component Model artifacts. The fetch loader is the v1
+  Component Model artifacts. The fetch loader is the Phase 2
   delivery; WIT-bindgen replaces it later without author code
   changes.
 - **Not hand-tunable cluster boundaries.** v1 infers everything
@@ -89,41 +94,65 @@ discipline*, not an absolute target.
 
 Given `App::route::<C1>(...)`, `App::route::<C2>(...)`, ...:
 
-- **Shell cluster** = ⋂ (transitive `uses` closure of each
-  route's root component). Components every route needs;
-  ships at boot.
-- **Route cluster N** = (transitive `uses` closure of route
-  N's root) − shell cluster. Components only that route
-  needs; ships on first navigation to that route.
+- Compute `uses_closure(route_i)` for every route root.
+- For every component, compute its **route-set signature**:
+  the set of route IDs whose closure contains that component.
+- **Shell cluster** = components needed before route matching
+  plus components whose route-set signature is every route.
+  This ships at boot.
+- **Route cluster `route_i`** = components whose route-set
+  signature is exactly `{route_i}`. This ships on first
+  navigation to that route.
+- **Shared cluster `S`** = components whose route-set
+  signature is a proper multi-route subset, e.g.
+  `{settings, billing}`. This ships before any route in that
+  subset mounts, and is cached for the other routes in the
+  subset.
 
 The closure walk extends RFC 060 Tier 4's existing
 infrastructure. Each cluster gets its own `&'static phf::Map`
-literal at build time.
+literal at build time. This route-set model avoids the bad
+middle ground where a component used by routes A and B but not
+C is either duplicated in both route clusters or incorrectly
+promoted to the shell.
+
+The naming surface is internal and stable enough for debugging:
+
+```text
+shell
+route:<route-id>
+shared:<stable-hash-of-route-set>
+```
+
+`route-id` is assigned by route declaration order in the macro's
+expanded app registration.
 
 ### 5.2 Artifact generation
 
-The `app!{}` macro (RFC 060 Tier 4) gains a closure-walk pass
-that:
+The compiled application registration path (RFC 060 Tier 4)
+gains a closure-walk pass that:
 
 1. Computes cluster membership per §5.1.
 2. Emits one `&'static phf::Map` per cluster (shell + N route
-   clusters).
-3. Wraps each non-shell cluster's component code in a
+   clusters + shared clusters).
+3. Emits route metadata naming the clusters required for each
+   route.
+4. Wraps each non-shell cluster's component code in a
    `#[link_section]` or equivalent mechanism that lets the
    build pipeline emit them as separate wasm modules.
 
 The exact "separate wasm module" mechanism depends on
 toolchain support. Three options, ordered by complexity:
 
-- **Option A — single binary, lazy-init**: all clusters live in
-  one wasm. The cluster loader is a no-op fetch (returns
-  immediately). Buys nothing on first paint but proves the
-  architecture before per-cluster artifacts exist. v1 ships
-  this.
+- **Option A — single binary, cluster metadata**: all clusters
+  live in one wasm. The cluster loader marks clusters ready
+  immediately. This buys nothing on first paint but proves the
+  route-set computation, route metadata, and loader API before
+  per-cluster artifacts exist. Phase 1 ships this.
 - **Option B — multiple wasm artifacts, fetch-loaded**: each
   non-shell cluster builds to its own `*.wasm`. The shell's
   cluster loader fetches the route's wasm on navigation,
-  instantiates it, registers its components. v1.5 ships this
+  instantiates it, registers its components. Phase 2 ships this
   once the cargo + wasm-pack story for multi-artifact builds is
   proven.
 - **Option C — Component Model / WIT-bindgen**: each cluster is
@@ -133,7 +162,8 @@ toolchain support. Three options, ordered by complexity:
 This RFC ships **Option A first** as the architectural
 commitment, with Option B as the delivery follow-up. Authors
 write the same code either way; the linker/fetch behavior
-differs.
+differs. WIT is explicitly a future retrieval handle, not a
+prerequisite for RFC 065.
 
 ### 5.3 Cluster loader runtime
 
@@ -148,32 +178,44 @@ pub struct Cluster {
     pub init: fn(),  // calls register() on each component
 }
 
+pub struct RouteClusterPlan {
+    pub route_id: u32,
+    pub clusters: &'static [&'static str],
+}
+
 /// Shell cluster — loaded by App::run_with_registry.
 pub fn install_shell(shell: &'static Cluster);
 
 /// Route cluster — loaded by router on navigation.
-pub async fn ensure_route_cluster(route: &str) -> Result<(), ClusterLoadError>;
+pub async fn ensure_clusters(names: &'static [&'static str]) -> Result<(), ClusterLoadError>;
+
+/// Optional. Called by links/router affordances on hover, focus,
+/// viewport visibility, or app-specific intent.
+pub fn prefetch_clusters(names: &'static [&'static str]);
 ```
 
-Option A's `ensure_route_cluster` is a synchronous no-op in
-async clothing. Option B fills it in with `fetch()` +
-`WebAssembly.instantiate()` + the cluster's `init()` call.
+Option A's `ensure_clusters` is a ready future. Option B fills
+it in with `fetch()` + `WebAssembly.instantiate()` + each
+cluster's `init()` call. Loaded clusters are memoized by name so
+shared clusters fetch once.
 
 ### 5.4 Router integration (RFC 003 touch)
 
 `router::navigate(target)` becomes async-aware:
 
-1. Determine the matched route's cluster.
-2. `ensure_route_cluster(cluster_name).await`.
+1. Determine the matched route's cluster plan.
+2. `ensure_clusters(plan.clusters).await`.
 3. Mount the route's component into `<pp-outlet>`.
 
 Option A: step 2 returns immediately. Option B: step 2 awaits
 the fetch.
 
-UI behavior during the fetch is its own concern — Vue 3's
-`<Suspense>` + Solid's transition machinery solve this. v1
-default: simple "loading…" placeholder; richer story in a
-follow-on RFC.
+UI behavior during the fetch is deliberately small in v1:
+the existing outlet stays mounted until the new route's
+clusters are ready, then the router swaps. Initial direct load
+to an unloaded route may show a default text fallback inside
+`<pp-outlet>`. Suspense-style placeholders, streaming route
+transitions, and custom error views are follow-on work.
 
 ### 5.5 Author-facing API
 
@@ -188,9 +230,14 @@ App::new()
     .run();
 ```
 
-The `app!{}` macro (RFC 060 Tier 4) does the cluster walk; the
-runtime does the lazy load; the author sees identical
-ergonomics.
+The compiled application registration path (RFC 060 Tier 4)
+does the cluster walk; the runtime does the lazy load; the
+author sees identical ergonomics.
+
+If an app does not opt into the compiled application registration
+path yet, it gets today's monolithic behavior. Route clustering
+is an optimization of the compiled registration surface, not a
+new requirement for basic `App::new().register::<C>()...run()`.
 
 ### 5.6 Subtree mounts and clusters
 
@@ -207,9 +254,10 @@ affordance with its own ergonomics question (does
 ### 6.1 Phase 1 — Option A (single-binary cluster architecture)
 
 **Deliverable**: cluster computation runs at build time;
-shell + per-route clusters exist as separate `phf::Map`
-literals; the cluster loader exists; routes go through the
-loader (which is a no-op). The wasm binary is unchanged in
+shell + route + shared clusters exist as separate `phf::Map`
+literals; route metadata records the cluster list for each
+route; the cluster loader exists; routes go through the loader
+(which is ready immediately). The wasm binary is unchanged in
 size and behavior; the *architecture* is in place.
 
 **Phase delivery (gated)**:
@@ -217,7 +265,7 @@ size and behavior; the *architecture* is in place.
 - Counter behavior unchanged; counter binary size unchanged
   (single-route apps have an empty cluster split).
 - Website example `App::run` produces the same DOM as today.
-- Per-route cluster definitions match the §3 baseline's
+- Per-route/shared cluster definitions match the §3 baseline's
   reachability map.
 - All existing tests pass.
 
@@ -230,9 +278,10 @@ size and behavior; the *architecture* is in place.
   wasm artifacts from one `App::run` is reproducible; this
   may require a custom build helper.
 
-**Deliverable**: per-route cluster wasm files emitted; the
-shell wasm shrinks by the cluster sizes; navigation triggers
-fetch + instantiate + registration before mount.
+**Deliverable**: per-route and shared-cluster wasm files
+emitted; the shell wasm shrinks by the cluster sizes;
+navigation triggers fetch + instantiate + registration before
+mount.
 
 **Phase delivery (gated)**:
 
@@ -240,7 +289,7 @@ fetch + instantiate + registration before mount.
   amount vs the Phase 1 endpoint (target TBD post-baseline;
   RFC 058 §5.10 implied "≥40%" but that's a guess until §3
   baseline + per-route reachability lands).
-- Per-route cluster wasm files exist on disk.
+- Per-route and shared cluster wasm files exist on disk.
 - Navigation latency for cluster load (cold) measured + below
   a chosen threshold (e.g. ≤500 ms on a 4G connection).
 - Counter unchanged.
@@ -259,16 +308,19 @@ Per phase:
 - **Phase 1**:
   - New test: cluster computation against a synthetic
     multi-route fixture matches a hand-rolled expected
-    cluster definition.
+    cluster definition, including a component shared by two
+    routes but not all routes.
   - Existing tests + counter + website example boot to the
     same DOM as today.
   - Twiggy: per-cluster `phf::Map` symbols exist in the
     binary.
 
 - **Phase 2**:
-  - Navigation test: visiting a route triggers a fetch for
-    its cluster, then mounts.
+  - Navigation test: visiting a route triggers fetches for
+    every missing route/shared cluster, then mounts.
   - Per-cluster wasm files are present in the build output.
+  - Shared-cluster memoization test: routes A and B that use
+    the same shared cluster fetch it once.
   - Cold + warm navigation latency measured; warm is
     cache-served (≤10 ms).
   - Failed fetch surfaces a router error, not a panic.
@@ -283,8 +335,10 @@ Each PR includes in its body:
   measured against a representative network profile.
 - Counter wasm size (control — should not change).
 
-The dashboard at `bench/dashboard.md` (shared with RFC 064)
-gains rows for shell + per-cluster sizes.
+The benchmark/result surface used by the implementation PR
+records shell + per-cluster sizes. Do not add new long-lived
+`bench/*.md` files unless the project reintroduces that
+convention.
 
 ## 9. Open questions
 
@@ -309,18 +363,15 @@ gains rows for shell + per-cluster sizes.
    graph), but the question reopens for tooling-mounted
    widgets in non-pocopine pages.
 
-3. **Per-route cluster boundary on shared compounds** — when
-   `PineDialog` is used by routes A + B but not C, it
-   belongs to the shell (A ∩ B ⊂ shell? — no, only A ∩ B ∩
-   C, which is wrong). The §5.1 definition needs sharpening:
-   "components reachable from ≥2 routes" probably belong in
-   the shell to avoid duplicating across clusters. Worth
-   spec'ing precisely before Phase 1.
-
-4. **Cluster loader async story** — `ensure_route_cluster`
+3. **Cluster loader async story** — `ensure_clusters`
    returns a Future. The router needs to handle the await.
    Today's router (RFC 003) is synchronous. Migrating to
    async-aware routing is a small but real touch on RFC 003.
+
+4. **Prefetch triggers** — v1 exposes `prefetch_clusters`, but
+   this RFC does not decide which built-in affordances call it.
+   Candidate triggers: route link hover, route link focus,
+   route link intersection, and explicit app code.
 
 ## 10. Why this is enough
 
