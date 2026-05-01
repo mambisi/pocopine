@@ -712,7 +712,7 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
     }
 
-    emit_post_link_split_chunks(&path, &base, &route_ids)?;
+    emit_post_link_split_chunks(&path, &base, &route_ids, release)?;
 
     for route_id in &route_ids {
         if write_descriptor_route_if_static(&path, &base, route_id)? {
@@ -935,6 +935,10 @@ fn run_split_wasm_pack(
     } else {
         cmd.arg("--dev");
     }
+    // Defer wasm-opt to per-chunk runs after the splitter, so the name
+    // section survives into the splitter's input. Name-based ownership
+    // classification depends on it.
+    cmd.arg("--no-opt");
     cmd.env("POCOPINE_SPLIT_MODE", mode)
         .env("POCOPINE_SPLIT_BASE", ctx.base)
         .env("POCOPINE_SPLIT_STRICT", if ctx.strict { "1" } else { "0" })
@@ -1006,7 +1010,12 @@ fn clean_split_artifacts(path: &Path, base: &str) -> Result<()> {
     Ok(())
 }
 
-fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) -> Result<()> {
+fn emit_post_link_split_chunks(
+    path: &Path,
+    base: &str,
+    route_ids: &[String],
+    release: bool,
+) -> Result<()> {
     let pkg = path.join("pkg");
     let wasm_path = pkg.join(format!("{base}_bg.wasm"));
     let wasm =
@@ -1072,7 +1081,7 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
     }
 
     let plan = module
-        .plan_route_split(shell_roots, &routes)
+        .plan_route_split_with_ownership(shell_roots, &routes, route_ids)
         .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?;
     let links = module.build_link_plan(&plan);
     module
@@ -1090,17 +1099,20 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
     std::fs::create_dir_all(&split_dir)
         .with_context(|| format!("create {}", split_dir.display()))?;
 
+    let optimize = release;
     write_split_shell_chunk(
         &module,
         &links.shell,
         &split_host_aliases,
         &split_dir.join("shell.wasm"),
+        optimize,
     )?;
     for route in &links.routes {
         write_split_chunk(
             &module,
             route,
             &split_dir.join(format!("route_{}.wasm", route.name)),
+            optimize,
         )?;
     }
     for shared in &links.shared {
@@ -1115,7 +1127,7 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
                 }
             })
             .collect::<String>();
-        write_split_chunk(&module, shared, &split_dir.join(format!("{name}.wasm")))?;
+        write_split_chunk(&module, shared, &split_dir.join(format!("{name}.wasm")), optimize)?;
     }
 
     println!(
@@ -1389,11 +1401,65 @@ fn patch_shell_js_for_split_boot(path: &Path, base: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_wasm_opt(path: &Path) -> Result<()> {
+    let bin = locate_wasm_opt();
+    let Some(bin) = bin else {
+        // wasm-opt unavailable — leave the chunk as-is and warn once.
+        eprintln!("  wasm-opt not found in PATH or wasm-pack cache; skipping optimization");
+        return Ok(());
+    };
+    // Match wasm-pack's default feature set rather than --all-features so the
+    // output stays widely compatible. Reference types lets externref through;
+    // bulk memory + mutable globals + sign-ext + nontrapping-float-to-int are
+    // standard for current wasm-bindgen / Rust target output.
+    let status = Command::new(&bin)
+        .arg("-Oz")
+        .arg("--enable-bulk-memory")
+        .arg("--enable-mutable-globals")
+        .arg("--enable-sign-ext")
+        .arg("--enable-nontrapping-float-to-int")
+        .arg("--enable-reference-types")
+        .arg("--enable-multivalue")
+        .arg(path)
+        .arg("-o")
+        .arg(path)
+        .status()
+        .with_context(|| format!("invoke wasm-opt at {}", bin.display()))?;
+    if !status.success() {
+        bail!("wasm-opt failed with status {status} on {}", path.display());
+    }
+    Ok(())
+}
+
+fn locate_wasm_opt() -> Option<PathBuf> {
+    if let Ok(output) = Command::new("which").arg("wasm-opt").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    // Fall back to whatever wasm-pack cached.
+    let cache = std::env::var("HOME").ok().map(PathBuf::from)?.join(".cache/.wasm-pack");
+    if let Ok(entries) = std::fs::read_dir(&cache) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin").join("wasm-opt");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 fn write_split_shell_chunk(
     module: &pocopine_wasm_split::ModuleAnalysis,
     chunk: &pocopine_wasm_split::ChunkLinkPlan,
     split_host_aliases: &BTreeSet<Dependency>,
     path: &Path,
+    optimize: bool,
 ) -> Result<()> {
     let mut wasm = module
         .emit_function_chunk(chunk)
@@ -1407,6 +1473,9 @@ fn write_split_shell_chunk(
         .validate_all(&wasm)
         .with_context(|| format!("validate post-link split chunk `{}`", chunk.name))?;
     std::fs::write(path, wasm).with_context(|| format!("write {}", path.display()))?;
+    if optimize {
+        run_wasm_opt(path)?;
+    }
     Ok(())
 }
 
@@ -1414,6 +1483,7 @@ fn write_split_chunk(
     module: &pocopine_wasm_split::ModuleAnalysis,
     chunk: &pocopine_wasm_split::ChunkLinkPlan,
     path: &Path,
+    optimize: bool,
 ) -> Result<()> {
     let wasm = module
         .emit_function_chunk(chunk)
@@ -1422,6 +1492,9 @@ fn write_split_chunk(
         .validate_all(&wasm)
         .with_context(|| format!("validate post-link split chunk `{}`", chunk.name))?;
     std::fs::write(path, wasm).with_context(|| format!("write {}", path.display()))?;
+    if optimize {
+        run_wasm_opt(path)?;
+    }
     Ok(())
 }
 
