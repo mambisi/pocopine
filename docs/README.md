@@ -17,6 +17,9 @@ looks the way it does — the code itself tells you *what*.
 - [`performance-strategy.md`](./performance-strategy.md) — current
   large-list performance strategy, including why Vue / Svelte are
   ahead and what pocopine should optimize next.
+- [`route-splitting.md`](./route-splitting.md) — why standalone
+  route wasm did not reduce first-load size, and the shared-runtime
+  descriptor direction that replaces it.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
