@@ -24,6 +24,18 @@ pub enum Dependency {
     Element(u32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndexSpaces {
+    pub functions: u32,
+    pub types: u32,
+    pub tables: u32,
+    pub memories: u32,
+    pub globals: u32,
+    pub tags: u32,
+    pub data: u32,
+    pub elements: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexUse {
     pub offset: usize,
@@ -43,6 +55,7 @@ pub struct FunctionAnalysis {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModuleAnalysis {
     pub imported_functions: u32,
+    pub index_spaces: IndexSpaces,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
 }
@@ -54,6 +67,116 @@ pub struct ExportAnalysis {
     pub index: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationError {
+    FunctionTypeIndexOutOfBounds {
+        function: u32,
+        type_index: u32,
+        limit: u32,
+    },
+    FunctionIndexOutOfBounds {
+        function: u32,
+        offset: usize,
+        operator: &'static str,
+        dependency: Dependency,
+        limit: u32,
+    },
+    ExportIndexOutOfBounds {
+        export: String,
+        kind: ExternalKind,
+        index: u32,
+        limit: u32,
+    },
+}
+
+impl ModuleAnalysis {
+    pub fn validate_indices(&self) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+        for function in &self.functions {
+            if function.type_index >= self.index_spaces.types {
+                errors.push(ValidationError::FunctionTypeIndexOutOfBounds {
+                    function: function.index,
+                    type_index: function.type_index,
+                    limit: self.index_spaces.types,
+                });
+            }
+
+            for index_use in &function.index_uses {
+                if let Some(limit) = self.index_spaces.limit_for(index_use.dependency) {
+                    if index_use.dependency.index() >= limit {
+                        errors.push(ValidationError::FunctionIndexOutOfBounds {
+                            function: function.index,
+                            offset: index_use.offset,
+                            operator: index_use.operator,
+                            dependency: index_use.dependency,
+                            limit,
+                        });
+                    }
+                }
+            }
+        }
+
+        for export in &self.exports {
+            if let Some(limit) = self.index_spaces.limit_for_export(export.kind) {
+                if export.index >= limit {
+                    errors.push(ValidationError::ExportIndexOutOfBounds {
+                        export: export.name.clone(),
+                        kind: export.kind,
+                        index: export.index,
+                        limit,
+                    });
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Dependency {
+    fn index(self) -> u32 {
+        match self {
+            Dependency::Function(index)
+            | Dependency::Type(index)
+            | Dependency::Table(index)
+            | Dependency::Memory(index)
+            | Dependency::Global(index)
+            | Dependency::Tag(index)
+            | Dependency::Data(index)
+            | Dependency::Element(index) => index,
+        }
+    }
+}
+
+impl IndexSpaces {
+    fn limit_for(self, dependency: Dependency) -> Option<u32> {
+        Some(match dependency {
+            Dependency::Function(_) => self.functions,
+            Dependency::Type(_) => self.types,
+            Dependency::Table(_) => self.tables,
+            Dependency::Memory(_) => self.memories,
+            Dependency::Global(_) => self.globals,
+            Dependency::Tag(_) => self.tags,
+            Dependency::Data(_) => self.data,
+            Dependency::Element(_) => self.elements,
+        })
+    }
+
+    fn limit_for_export(self, kind: ExternalKind) -> Option<u32> {
+        match kind {
+            ExternalKind::Func => Some(self.functions),
+            ExternalKind::Table => Some(self.tables),
+            ExternalKind::Memory => Some(self.memories),
+            ExternalKind::Global => Some(self.globals),
+            ExternalKind::Tag => Some(self.tags),
+        }
+    }
+}
+
 pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
     let mut analysis = ModuleAnalysis::default();
     let mut imported_function_types = Vec::new();
@@ -62,11 +185,28 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
 
     for payload in wasmparser::Parser::new(0).parse_all(wasm) {
         match payload? {
+            Payload::TypeSection(reader) => {
+                analysis.index_spaces.types = count_type_section(reader)?;
+            }
             Payload::ImportSection(reader) => {
                 for import in reader {
                     let import = import?;
-                    if let TypeRef::Func(type_index) = import.ty {
-                        imported_function_types.push(type_index);
+                    match import.ty {
+                        TypeRef::Func(type_index) => {
+                            imported_function_types.push(type_index);
+                        }
+                        TypeRef::Table(_) => {
+                            analysis.index_spaces.tables += 1;
+                        }
+                        TypeRef::Memory(_) => {
+                            analysis.index_spaces.memories += 1;
+                        }
+                        TypeRef::Global(_) => {
+                            analysis.index_spaces.globals += 1;
+                        }
+                        TypeRef::Tag(_) => {
+                            analysis.index_spaces.tags += 1;
+                        }
                     }
                 }
             }
@@ -75,6 +215,27 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
             }
             Payload::CodeSectionEntry(body) => {
                 defined_function_bodies.push(scan_function_body(&body)?);
+            }
+            Payload::TableSection(reader) => {
+                analysis.index_spaces.tables += count_section(reader)?;
+            }
+            Payload::MemorySection(reader) => {
+                analysis.index_spaces.memories += count_section(reader)?;
+            }
+            Payload::GlobalSection(reader) => {
+                analysis.index_spaces.globals += count_section(reader)?;
+            }
+            Payload::TagSection(reader) => {
+                analysis.index_spaces.tags += count_section(reader)?;
+            }
+            Payload::ElementSection(reader) => {
+                analysis.index_spaces.elements += count_section(reader)?;
+            }
+            Payload::DataSection(reader) => {
+                analysis.index_spaces.data += count_section(reader)?;
+            }
+            Payload::DataCountSection { count, .. } => {
+                analysis.index_spaces.data = analysis.index_spaces.data.max(count);
             }
             Payload::ExportSection(reader) => {
                 for export in reader {
@@ -116,8 +277,17 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
         function.type_index = type_index;
         analysis.functions.push(function);
     }
+    analysis.index_spaces.functions = analysis.functions.len() as u32;
 
     Ok(analysis)
+}
+
+fn count_type_section(reader: wasmparser::TypeSectionReader<'_>) -> WasmResult<u32> {
+    Ok(reader.count())
+}
+
+fn count_section<T>(reader: wasmparser::SectionLimited<'_, T>) -> WasmResult<u32> {
+    Ok(reader.count())
 }
 
 fn empty_defined_function(index: u32, type_index: u32) -> FunctionAnalysis {
@@ -312,7 +482,7 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze, Dependency};
+    use super::{analyze, Dependency, ValidationError};
 
     #[test]
     fn scans_function_indices_without_relocations() {
@@ -362,5 +532,74 @@ mod tests {
         assert!(function.dependencies.contains(&Dependency::Global(0)));
         assert!(function.dependencies.contains(&Dependency::Function(0)));
         assert!(function.dependencies.contains(&Dependency::Table(0)));
+
+        assert_eq!(module.index_spaces.functions, 1);
+        assert_eq!(module.index_spaces.globals, 1);
+        assert_eq!(module.index_spaces.tables, 1);
+        assert_eq!(module.index_spaces.elements, 1);
+        module.validate_indices().unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_out_of_bounds_instruction_indices() {
+        let mut module = wasm_encoder::Module::new();
+        let mut types = wasm_encoder::TypeSection::new();
+        types.ty().function([], []);
+        module.section(&types);
+
+        let mut functions = wasm_encoder::FunctionSection::new();
+        functions.function(0);
+        module.section(&functions);
+
+        let mut code = wasm_encoder::CodeSection::new();
+        let mut function = wasm_encoder::Function::new([]);
+        function.instruction(&wasm_encoder::Instruction::Call(99));
+        function.instruction(&wasm_encoder::Instruction::End);
+        code.function(&function);
+        module.section(&code);
+
+        let analysis = analyze(&module.finish()).unwrap();
+        let errors = analysis.validate_indices().unwrap_err();
+
+        assert!(matches!(
+            errors.as_slice(),
+            [ValidationError::FunctionIndexOutOfBounds {
+                function: 0,
+                operator: "call",
+                dependency: Dependency::Function(99),
+                limit: 1,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_out_of_bounds_function_type_indices() {
+        let mut module = wasm_encoder::Module::new();
+        let mut types = wasm_encoder::TypeSection::new();
+        types.ty().function([], []);
+        module.section(&types);
+
+        let mut functions = wasm_encoder::FunctionSection::new();
+        functions.function(7);
+        module.section(&functions);
+
+        let mut code = wasm_encoder::CodeSection::new();
+        let mut function = wasm_encoder::Function::new([]);
+        function.instruction(&wasm_encoder::Instruction::End);
+        code.function(&function);
+        module.section(&code);
+
+        let analysis = analyze(&module.finish()).unwrap();
+        let errors = analysis.validate_indices().unwrap_err();
+
+        assert!(matches!(
+            errors.as_slice(),
+            [ValidationError::FunctionTypeIndexOutOfBounds {
+                function: 0,
+                type_index: 7,
+                limit: 1,
+            }]
+        ));
     }
 }

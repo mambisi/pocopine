@@ -61,6 +61,24 @@ This is deliberately lower-level than route manifests. The route
 layer will later provide split roots; the wasm layer must prove the
 binary can be sliced safely.
 
+## Current foundation
+
+`pocopine-wasm-split` now records the module's index-space sizes:
+
+```text
+functions, types, tables, memories, globals, tags, data segments,
+element segments
+```
+
+`ModuleAnalysis::validate_indices()` is the first fail-closed gate. It
+checks that every recorded instruction dependency, every exported item,
+and every function signature type index points inside the input
+module's index spaces before later passes try to split the graph.
+
+For example, a module with one function and a body containing
+`call 99` fails as `FunctionIndexOutOfBounds` instead of being copied
+into a route chunk with a stale index.
+
 ## Contributor mental model
 
 A wasm module has index spaces:

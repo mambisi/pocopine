@@ -10,4 +10,5 @@ description = "Pocopine-owned WebAssembly route splitting analysis."
 wasmparser = "0.240"
 
 [dev-dependencies]
+wasm-encoder = "0.240"
 wat = "1"

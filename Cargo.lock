@@ -2403,6 +2403,7 @@ dependencies = [
 name = "pocopine-wasm-split"
 version = "0.1.0"
 dependencies = [
+ "wasm-encoder 0.240.0",
  "wasmparser 0.240.0",
  "wat",
 ]
@@ -3988,6 +3989,16 @@ name = "wasm-bindgen-test-shared"
 version = "0.2.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23cda5ecc67248c48d3e705d3e03e00af905769b78b9d2a1678b663b8b9d4472"
+
+[[package]]
+name = "wasm-encoder"
+version = "0.240.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d642d8c5ecc083aafe9ceb32809276a304547a3a6eeecceb5d8152598bc71f"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.240.0",
+]
 
 [[package]]
 name = "wasm-encoder"
