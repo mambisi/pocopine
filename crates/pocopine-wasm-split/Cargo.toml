@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Pocopine-owned WebAssembly route splitting analysis."
 
 [dependencies]
+wasm-encoder = { version = "0.240", features = ["wasmparser"] }
 wasmparser = "0.240"
 
 [dev-dependencies]
-wasm-encoder = "0.240"
 wat = "1"

@@ -141,6 +141,13 @@ or external remap. If a `call`, `ref.func`, table, memory, global,
 data, element, or tag index has no mapping, the split must fail before
 writing bytes.
 
+`ModuleAnalysis::emit_function_chunk()` is the first byte-writing
+pass. It emits a valid core wasm module for the function/type/import
+subset of a link plan, re-encoding function bodies through the remap
+instead of copying bytes. This first emitter intentionally fails on
+tables, memories, globals, tags, data, and elements until those
+sections have the same explicit ownership and remap treatment.
+
 ## Contributor mental model
 
 A wasm module has index spaces:

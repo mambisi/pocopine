@@ -7,7 +7,9 @@
 //! split or rewrite a module.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
+use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
 use wasmparser::{ExternalKind, Operator, Payload, TypeRef};
 
 pub type WasmResult<T> = Result<T, wasmparser::BinaryReaderError>;
@@ -48,6 +50,7 @@ pub struct FunctionAnalysis {
     pub index: u32,
     pub type_index: u32,
     pub defined: bool,
+    pub body: Option<Vec<u8>>,
     pub index_uses: Vec<IndexUse>,
     pub dependencies: BTreeSet<Dependency>,
 }
@@ -57,6 +60,7 @@ pub struct ModuleAnalysis {
     pub imported_functions: u32,
     pub index_spaces: IndexSpaces,
     pub imports: BTreeSet<Dependency>,
+    pub types: Vec<wasmparser::FuncType>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
 }
@@ -117,6 +121,52 @@ pub enum LinkError {
         dependency: Dependency,
     },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmitError {
+    Link(Vec<LinkError>),
+    UnsupportedImport {
+        dependency: Dependency,
+    },
+    MissingFunction {
+        function: u32,
+    },
+    MissingFunctionBody {
+        function: u32,
+    },
+    MissingType {
+        type_index: u32,
+    },
+    MissingRemap {
+        chunk: String,
+        dependency: Dependency,
+    },
+    Parse(String),
+}
+
+impl fmt::Display for EmitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EmitError::Link(errors) => {
+                write!(f, "link validation failed with {} errors", errors.len())
+            }
+            EmitError::UnsupportedImport { dependency } => {
+                write!(f, "unsupported external import dependency: {dependency:?}")
+            }
+            EmitError::MissingFunction { function } => write!(f, "missing function {function}"),
+            EmitError::MissingFunctionBody { function } => {
+                write!(f, "missing function body for function {function}")
+            }
+            EmitError::MissingType { type_index } => write!(f, "missing type {type_index}"),
+            EmitError::MissingRemap { chunk, dependency } => {
+                write!(f, "missing remap for {dependency:?} in chunk {chunk}")
+            }
+            EmitError::Parse(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for EmitError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitPlan {
@@ -485,6 +535,150 @@ impl ModuleAnalysis {
         }
     }
 
+    pub fn emit_function_chunk(&self, chunk: &ChunkLinkPlan) -> Result<Vec<u8>, EmitError> {
+        self.validate_chunk_for_emission(chunk)?;
+
+        let mut module = wasm_encoder::Module::new();
+        let mut types = wasm_encoder::TypeSection::new();
+        for old_type in ordered_indices(&chunk.external_remap.types) {
+            self.encode_type(&mut types, old_type)?;
+        }
+        for old_type in ordered_indices(&chunk.local_remap.types) {
+            self.encode_type(&mut types, old_type)?;
+        }
+        if !types.is_empty() {
+            module.section(&types);
+        }
+
+        let mut imports = wasm_encoder::ImportSection::new();
+        for old_function in ordered_indices(&chunk.external_remap.functions) {
+            let function = self
+                .function(old_function)
+                .ok_or(EmitError::MissingFunction {
+                    function: old_function,
+                })?;
+            let type_index = combined_type_index(chunk, function.type_index)?;
+            imports.import(
+                "pocopine:split",
+                &format!("func:{old_function}"),
+                wasm_encoder::EntityType::Function(type_index),
+            );
+        }
+        if !imports.is_empty() {
+            module.section(&imports);
+        }
+
+        let mut functions = wasm_encoder::FunctionSection::new();
+        let local_functions = ordered_indices(&chunk.local_remap.functions);
+        for old_function in &local_functions {
+            let function = self
+                .function(*old_function)
+                .ok_or(EmitError::MissingFunction {
+                    function: *old_function,
+                })?;
+            functions.function(combined_type_index(chunk, function.type_index)?);
+        }
+        if !functions.is_empty() {
+            module.section(&functions);
+        }
+
+        let mut exports = wasm_encoder::ExportSection::new();
+        for export in &self.exports {
+            if export.kind == ExternalKind::Func {
+                if let Some(index) = combined_function_index(chunk, export.index) {
+                    exports.export(&export.name, wasm_encoder::ExportKind::Func, index);
+                }
+            }
+        }
+        if !exports.is_empty() {
+            module.section(&exports);
+        }
+
+        let mut code = wasm_encoder::CodeSection::new();
+        for old_function in local_functions {
+            let function = self
+                .function(old_function)
+                .ok_or(EmitError::MissingFunction {
+                    function: old_function,
+                })?;
+            let body = function
+                .body
+                .as_deref()
+                .ok_or(EmitError::MissingFunctionBody {
+                    function: old_function,
+                })?;
+            let body = wasmparser::FunctionBody::new(wasmparser::BinaryReader::new(body, 0));
+            let mut reencoder = ChunkReencoder { chunk };
+            reencoder
+                .parse_function_body(&mut code, body)
+                .map_err(emit_reencode_error)?;
+        }
+        if !code.is_empty() {
+            module.section(&code);
+        }
+
+        Ok(module.finish())
+    }
+
+    fn validate_chunk_for_emission(&self, chunk: &ChunkLinkPlan) -> Result<(), EmitError> {
+        if let Err(errors) = self.validate_single_chunk_link(chunk) {
+            return Err(EmitError::Link(errors));
+        }
+
+        for dependency in chunk.owned.iter().chain(&chunk.external) {
+            match dependency {
+                Dependency::Function(_) | Dependency::Type(_) => {}
+                _ => {
+                    return Err(EmitError::UnsupportedImport {
+                        dependency: *dependency,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_single_chunk_link(&self, chunk: &ChunkLinkPlan) -> Result<(), Vec<LinkError>> {
+        let mut errors = Vec::new();
+        self.validate_chunk_link_plan(chunk, &mut errors);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn encode_type(
+        &self,
+        types: &mut wasm_encoder::TypeSection,
+        old_type: u32,
+    ) -> Result<(), EmitError> {
+        let ty = self
+            .types
+            .get(old_type as usize)
+            .ok_or(EmitError::MissingType {
+                type_index: old_type,
+            })?;
+        let params = ty
+            .params()
+            .iter()
+            .map(|ty| {
+                wasm_encoder::ValType::try_from(*ty)
+                    .map_err(|err| EmitError::Parse(err.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let results = ty
+            .results()
+            .iter()
+            .map(|ty| {
+                wasm_encoder::ValType::try_from(*ty)
+                    .map_err(|err| EmitError::Parse(err.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        types.ty().function(params, results);
+        Ok(())
+    }
+
     fn build_chunk_link_plan(
         &self,
         name: String,
@@ -612,6 +806,112 @@ fn shared_chunk_name(routes: &[String]) -> String {
     format!("shared:{}", routes.join("+"))
 }
 
+fn ordered_indices(remap: &BTreeMap<u32, u32>) -> Vec<u32> {
+    let mut pairs = remap
+        .iter()
+        .map(|(old_index, new_index)| (*old_index, *new_index))
+        .collect::<Vec<_>>();
+    pairs.sort_by_key(|(_, new_index)| *new_index);
+    pairs.into_iter().map(|(old_index, _)| old_index).collect()
+}
+
+fn combined_function_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.functions.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .functions
+            .get(&old_index)
+            .map(|index| chunk.external_remap.functions.len() as u32 + *index)
+    }
+}
+
+fn combined_type_index(chunk: &ChunkLinkPlan, old_index: u32) -> Result<u32, EmitError> {
+    if let Some(index) = chunk.external_remap.types.get(&old_index) {
+        Ok(*index)
+    } else if let Some(index) = chunk.local_remap.types.get(&old_index) {
+        Ok(chunk.external_remap.types.len() as u32 + *index)
+    } else {
+        Err(EmitError::MissingRemap {
+            chunk: chunk.name.clone(),
+            dependency: Dependency::Type(old_index),
+        })
+    }
+}
+
+fn combined_required_index(
+    chunk: &ChunkLinkPlan,
+    dependency: Dependency,
+) -> Result<u32, ReencodeError<EmitError>> {
+    match dependency {
+        Dependency::Function(index) => combined_function_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
+        Dependency::Type(index) => {
+            combined_type_index(chunk, index).map_err(ReencodeError::UserError)
+        }
+        Dependency::Table(_)
+        | Dependency::Memory(_)
+        | Dependency::Global(_)
+        | Dependency::Tag(_)
+        | Dependency::Data(_)
+        | Dependency::Element(_) => Err(ReencodeError::UserError(EmitError::UnsupportedImport {
+            dependency,
+        })),
+    }
+}
+
+fn emit_reencode_error(error: ReencodeError<EmitError>) -> EmitError {
+    match error {
+        ReencodeError::UserError(error) => error,
+        other => EmitError::Parse(other.to_string()),
+    }
+}
+
+struct ChunkReencoder<'a> {
+    chunk: &'a ChunkLinkPlan,
+}
+
+impl Reencode for ChunkReencoder<'_> {
+    type Error = EmitError;
+
+    fn function_index(&mut self, func: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Function(func))
+    }
+
+    fn type_index(&mut self, ty: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Type(ty))
+    }
+
+    fn table_index(&mut self, table: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Table(table))
+    }
+
+    fn memory_index(&mut self, memory: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Memory(memory))
+    }
+
+    fn global_index(&mut self, global: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Global(global))
+    }
+
+    fn tag_index(&mut self, tag: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Tag(tag))
+    }
+
+    fn data_index(&mut self, data: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Data(data))
+    }
+
+    fn element_index(&mut self, element: u32) -> Result<u32, ReencodeError<Self::Error>> {
+        combined_required_index(self.chunk, Dependency::Element(element))
+    }
+}
+
 pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
     let mut analysis = ModuleAnalysis::default();
     let mut imported_function_types = Vec::new();
@@ -621,7 +921,10 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
     for payload in wasmparser::Parser::new(0).parse_all(wasm) {
         match payload? {
             Payload::TypeSection(reader) => {
-                analysis.index_spaces.types = count_type_section(reader)?;
+                analysis.types = reader
+                    .into_iter_err_on_gc_types()
+                    .collect::<Result<Vec<_>, _>>()?;
+                analysis.index_spaces.types = analysis.types.len() as u32;
             }
             Payload::ImportSection(reader) => {
                 for import in reader {
@@ -712,6 +1015,7 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                     index: index as u32,
                     type_index,
                     defined: false,
+                    body: None,
                     index_uses: Vec::new(),
                     dependencies: BTreeSet::new(),
                 }),
@@ -732,10 +1036,6 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
     Ok(analysis)
 }
 
-fn count_type_section(reader: wasmparser::TypeSectionReader<'_>) -> WasmResult<u32> {
-    Ok(reader.count())
-}
-
 fn count_section<T>(reader: wasmparser::SectionLimited<'_, T>) -> WasmResult<u32> {
     Ok(reader.count())
 }
@@ -745,6 +1045,7 @@ fn empty_defined_function(index: u32, type_index: u32) -> FunctionAnalysis {
         index,
         type_index,
         defined: true,
+        body: None,
         index_uses: Vec::new(),
         dependencies: BTreeSet::new(),
     }
@@ -755,6 +1056,7 @@ fn scan_function_body(body: &wasmparser::FunctionBody<'_>) -> WasmResult<Functio
         index: 0,
         type_index: 0,
         defined: true,
+        body: Some(body.as_bytes().to_vec()),
         index_uses: Vec::new(),
         dependencies: BTreeSet::new(),
     };
@@ -1384,5 +1686,49 @@ mod tests {
                 ..
             } if chunk == "route"
         )));
+    }
+
+    #[test]
+    fn emits_function_chunk_with_remapped_calls() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (func $shell (type $t0)
+                i32.const 0)
+              (func $route_leaf (type $t0)
+                i32.const 7)
+              (func $route_entry (type $t0)
+                call $route_leaf)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(3)],
+            },
+        ];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.types, 1);
+        assert_eq!(emitted.index_spaces.functions, 2);
+        let route_entry = emitted.functions.iter().find(|f| f.index == 1).unwrap();
+        assert!(route_entry.dependencies.contains(&Dependency::Function(0)));
     }
 }
