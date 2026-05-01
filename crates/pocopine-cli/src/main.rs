@@ -1080,7 +1080,7 @@ fn emit_post_link_split_chunks(
         );
     }
 
-    let plan = module
+    let (plan, ownership_report) = module
         .plan_route_split_with_ownership(shell_roots, &routes, route_ids)
         .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?;
     let links = module.build_link_plan(&plan);
@@ -1115,19 +1115,20 @@ fn emit_post_link_split_chunks(
             optimize,
         )?;
     }
-    for shared in &links.shared {
-        let name = shared
-            .name
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        write_split_chunk(&module, shared, &split_dir.join(format!("{name}.wasm")), optimize)?;
+    if !links.shared.is_empty() {
+        // The runtime loader doesn't pre-fetch shared chunks before mounting
+        // a route, so shared chunks would be unresolvable imports at link
+        // time. The planner promotes shared deps to shell to avoid this; if
+        // any shared chunks survive, a loader change is also required.
+        let names: Vec<&str> = links.shared.iter().map(|c| c.name.as_str()).collect();
+        bail!(
+            "split planner emitted {} shared chunk(s) but the runtime loader doesn't \
+             support shared chunks yet: {}. Either teach the loader to pre-fetch shared \
+             chunks before route imports, or extend the planner to promote shared deps \
+             to shell.",
+            links.shared.len(),
+            names.join(", ")
+        );
     }
 
     println!(
@@ -1136,8 +1137,125 @@ fn emit_post_link_split_chunks(
         links.routes.len(),
         links.shared.len()
     );
+    print_split_report(&split_dir, &module, &plan, &ownership_report)?;
     std::fs::remove_file(&wasm_path)
         .with_context(|| format!("remove unsplit wasm artifact {}", wasm_path.display()))?;
+    Ok(())
+}
+
+fn print_split_report(
+    split_dir: &Path,
+    module: &pocopine_wasm_split::ModuleAnalysis,
+    plan: &pocopine_wasm_split::SplitPlan,
+    report: &pocopine_wasm_split::OwnershipReport,
+) -> Result<()> {
+    let chunk_size = |name: &str| -> Option<u64> {
+        std::fs::metadata(split_dir.join(name))
+            .ok()
+            .map(|m| m.len())
+    };
+    let function_count = |deps: &BTreeSet<Dependency>| -> usize {
+        deps.iter()
+            .filter(|d| matches!(d, Dependency::Function(_)))
+            .count()
+    };
+    let body_bytes = |deps: &BTreeSet<Dependency>| -> u64 {
+        deps.iter()
+            .filter_map(|d| match d {
+                Dependency::Function(idx) => module
+                    .functions
+                    .iter()
+                    .find(|f| f.index == *idx)
+                    .and_then(|f| f.body.as_ref())
+                    .map(|b| b.len() as u64),
+                _ => None,
+            })
+            .sum()
+    };
+
+    println!("  split report:");
+    if let Some(sz) = chunk_size("shell.wasm") {
+        println!(
+            "    shell           {:>9} bytes  ({} funcs, {} body bytes pre-opt)",
+            sz,
+            function_count(&plan.shell),
+            body_bytes(&plan.shell)
+        );
+    }
+    for route in &plan.routes {
+        let file = format!("route_{}.wasm", route.name);
+        if let Some(sz) = chunk_size(&file) {
+            println!(
+                "    route {:<10} {:>9} bytes  ({} funcs, {} body bytes pre-opt)",
+                route.name,
+                sz,
+                function_count(&route.dependencies),
+                body_bytes(&route.dependencies),
+            );
+        }
+    }
+    if !report.cross_route_promotions.is_empty() {
+        let mut by_route: BTreeMap<&str, u64> = BTreeMap::new();
+        for (idx, route) in &report.cross_route_promotions {
+            let bytes = module
+                .functions
+                .iter()
+                .find(|f| f.index == *idx)
+                .and_then(|f| f.body.as_ref())
+                .map(|b| b.len() as u64)
+                .unwrap_or(0);
+            *by_route.entry(route.as_str()).or_default() += bytes;
+        }
+        let total_bytes: u64 = by_route.values().sum();
+        println!(
+            "    promoted cross-route -> shell: {} funcs ({} body bytes) — needed by route deps the loader can't satisfy across chunks",
+            report.cross_route_promotions.len(),
+            total_bytes
+        );
+        for (route, bytes) in by_route {
+            println!("      from route {route}: {bytes} bytes");
+        }
+    }
+    if !report.shared_promotions.is_empty() {
+        let bytes: u64 = report
+            .shared_promotions
+            .iter()
+            .map(|idx| {
+                module
+                    .functions
+                    .iter()
+                    .find(|f| f.index == *idx)
+                    .and_then(|f| f.body.as_ref())
+                    .map(|b| b.len() as u64)
+                    .unwrap_or(0)
+            })
+            .sum();
+        println!(
+            "    promoted shared -> shell: {} funcs ({} body bytes) — runtime loader doesn't pre-fetch shared chunks",
+            report.shared_promotions.len(),
+            bytes
+        );
+    }
+    if !report.unclassified_table_funcs.is_empty() {
+        let bytes: u64 = report
+            .unclassified_table_funcs
+            .iter()
+            .map(|idx| {
+                module
+                    .functions
+                    .iter()
+                    .find(|f| f.index == *idx)
+                    .and_then(|f| f.body.as_ref())
+                    .map(|b| b.len() as u64)
+                    .unwrap_or(0)
+            })
+            .sum();
+        println!(
+            "    {} table funcs ({} body bytes) had no name for ownership classification — defaulted to shell",
+            report.unclassified_table_funcs.len(),
+            bytes
+        );
+    }
     Ok(())
 }
 
@@ -1442,7 +1560,10 @@ fn locate_wasm_opt() -> Option<PathBuf> {
         }
     }
     // Fall back to whatever wasm-pack cached.
-    let cache = std::env::var("HOME").ok().map(PathBuf::from)?.join(".cache/.wasm-pack");
+    let cache = std::env::var("HOME")
+        .ok()
+        .map(PathBuf::from)?
+        .join(".cache/.wasm-pack");
     if let Ok(entries) = std::fs::read_dir(&cache) {
         for entry in entries.flatten() {
             let candidate = entry.path().join("bin").join("wasm-opt");

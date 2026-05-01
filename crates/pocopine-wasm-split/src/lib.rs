@@ -230,7 +230,9 @@ impl FunctionOwner {
     /// produce `Shared`. Names without any match are `Shell`. `None` produces
     /// `Unknown` (treated conservatively by the partitioner).
     pub fn from_name(name: Option<&str>, route_ids: &[String]) -> Self {
-        let Some(name) = name else { return Self::Unknown };
+        let Some(name) = name else {
+            return Self::Unknown;
+        };
         let mut hits: Vec<String> = Vec::new();
         for route_id in route_ids {
             let needle = format!("::routes::{route_id}::");
@@ -382,6 +384,27 @@ pub struct SplitPlan {
     pub shell: BTreeSet<Dependency>,
     pub routes: Vec<RouteChunkPlan>,
     pub shared: Vec<SharedChunkPlan>,
+}
+
+/// Diagnostic record returned alongside an ownership-aware split plan.
+///
+/// Lets the build pipeline explain *why* code is shaped the way it is —
+/// promotions out of routes (cross-route deps the loader can't satisfy),
+/// promotions out of shared (loader doesn't pre-fetch shared chunks),
+/// and how many table-installed functions had no resolvable owner.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OwnershipReport {
+    /// Functions promoted to shell because a route's owned function called
+    /// them but they were originally assigned to a different chunk. Each
+    /// entry is `(function_index, route_that_needed_it)`.
+    pub cross_route_promotions: Vec<(u32, String)>,
+    /// Functions promoted to shell because they were assigned to a shared
+    /// chunk that the runtime loader can't pre-fetch.
+    pub shared_promotions: Vec<u32>,
+    /// Functions installed in active table segments that had no name to
+    /// classify by. They default to shell, which is safe but blocks
+    /// further size wins.
+    pub unclassified_table_funcs: Vec<u32>,
 }
 
 impl SplitPlan {
@@ -856,10 +879,12 @@ impl ModuleAnalysis {
         shell_roots: I,
         routes: &[RouteSplitRoot],
         route_ids: &[String],
-    ) -> Result<SplitPlan, GraphError>
+    ) -> Result<(SplitPlan, OwnershipReport), GraphError>
     where
         I: IntoIterator<Item = Dependency>,
     {
+        let mut report = OwnershipReport::default();
+
         // Phase 1: direct-only closures. Indirect (table-mediated)
         // reachability is deferred to phase 3, where naming breaks ties.
         let shell_direct = self.direct_dependency_closure(shell_roots)?;
@@ -870,8 +895,7 @@ impl ModuleAnalysis {
 
         // Phase 2: classify deps that live in *some* direct closure.
         let mut shell: BTreeSet<Dependency> = shell_direct.clone();
-        let mut route_dependencies: Vec<BTreeSet<Dependency>> =
-            vec![BTreeSet::new(); routes.len()];
+        let mut route_dependencies: Vec<BTreeSet<Dependency>> = vec![BTreeSet::new(); routes.len()];
         let mut shared_buckets: BTreeMap<BTreeSet<usize>, BTreeSet<Dependency>> = BTreeMap::new();
 
         let mut all_deps: BTreeSet<Dependency> = shell_direct.iter().copied().collect();
@@ -906,6 +930,23 @@ impl ModuleAnalysis {
         // appear in any direct closure. The naive splitter would either pull
         // every such function into every chunk (via Table(0) → element
         // expansion) or pin it to shell. Use mangled names instead.
+        //
+        // Restrict this to functions actually installed in an active element
+        // segment. The synthesized-segment emitter only knows how to move
+        // those across chunks; assigning a route owner to a function that's
+        // not in any table would just leak it into a route's import list with
+        // no way for the route's chunk to satisfy the import.
+        let table_installed: BTreeSet<u32> = self
+            .elements
+            .iter()
+            .filter(|e| matches!(e.kind, ElementKindAnalysis::Active { .. }))
+            .filter_map(|e| match &e.items {
+                ElementItemsAnalysis::Functions(funcs) => Some(funcs.iter().copied()),
+                ElementItemsAnalysis::Expressions => None,
+            })
+            .flatten()
+            .collect();
+
         for function in &self.functions {
             let dep = Dependency::Function(function.index);
             if shell.contains(&dep) || route_dependencies.iter().any(|r| r.contains(&dep)) {
@@ -915,10 +956,18 @@ impl ModuleAnalysis {
             if !function.defined {
                 continue;
             }
+            // Only consider functions the table actually points at.
+            if !table_installed.contains(&function.index) {
+                continue;
+            }
 
             let owner = FunctionOwner::from_name(function.name.as_deref(), route_ids);
             match owner {
-                FunctionOwner::Shell | FunctionOwner::Unknown => {
+                FunctionOwner::Unknown => {
+                    report.unclassified_table_funcs.push(function.index);
+                    shell.insert(dep);
+                }
+                FunctionOwner::Shell => {
                     shell.insert(dep);
                 }
                 FunctionOwner::Route(route_id) => {
@@ -957,15 +1006,25 @@ impl ModuleAnalysis {
         // Cross-route deps (route_home owns F that calls G owned by route_story)
         // would link-fail: shell can't alias what it doesn't have.
         //
-        // Resolve by promoting any such "leaked" dep to shell. Iterate to a
-        // fixed point because promoting a function can expose new leaks
-        // through that function's own deps.
+        // Shell faces a stricter version of the same invariant: every direct
+        // dep of a shell-owned function must also live in shell, since shell
+        // doesn't import from anywhere it could resolve those names. Phase 3's
+        // table-installed restriction can leave shell-owned functions whose
+        // own deps are unowned (dead-or-table-only), so this loop has to
+        // catch them too.
+        //
+        // Iterate to a fixed point because promoting a function can expose
+        // new leaks through that function's own deps.
         loop {
             let mut promoted = false;
-            for route_deps in &route_dependencies {
+            for (route_index, route_deps) in route_dependencies.iter().enumerate() {
                 for dep in route_deps {
-                    let Dependency::Function(idx) = dep else { continue };
-                    let Some(function) = self.function(*idx) else { continue };
+                    let Dependency::Function(idx) = dep else {
+                        continue;
+                    };
+                    let Some(function) = self.function(*idx) else {
+                        continue;
+                    };
                     for sub_dep in &function.dependencies {
                         if shell.contains(sub_dep) || route_deps.contains(sub_dep) {
                             continue;
@@ -975,14 +1034,50 @@ impl ModuleAnalysis {
                         if !shell.insert(*sub_dep) {
                             continue;
                         }
+                        if let Dependency::Function(sub_idx) = sub_dep {
+                            report
+                                .cross_route_promotions
+                                .push((*sub_idx, routes[route_index].name.clone()));
+                        }
+                        promoted = true;
+                    }
+                }
+            }
+            // Walk shell's own deps too — anything shell-resident with a
+            // dangling Function dep needs the callee resident somewhere, and
+            // shell can't import from pocopine:split (it *is* pocopine:split).
+            let shell_funcs: Vec<u32> = shell
+                .iter()
+                .filter_map(|d| match d {
+                    Dependency::Function(i) => Some(*i),
+                    _ => None,
+                })
+                .collect();
+            for idx in shell_funcs {
+                let Some(function) = self.function(idx) else {
+                    continue;
+                };
+                for sub_dep in &function.dependencies {
+                    if shell.contains(sub_dep) {
+                        continue;
+                    }
+                    // Only Function deps need resident-anywhere; Type/Table/etc.
+                    // are imports the chunk emit handles.
+                    let Dependency::Function(_) = sub_dep else {
+                        continue;
+                    };
+                    if shell.insert(*sub_dep) {
                         promoted = true;
                     }
                 }
             }
             // Drop promoted deps from route_dependencies and shared_buckets.
             for route_deps in route_dependencies.iter_mut() {
-                let to_remove: Vec<Dependency> =
-                    route_deps.iter().filter(|d| shell.contains(d)).copied().collect();
+                let to_remove: Vec<Dependency> = route_deps
+                    .iter()
+                    .filter(|d| shell.contains(d))
+                    .copied()
+                    .collect();
                 for d in to_remove {
                     route_deps.remove(&d);
                 }
@@ -993,6 +1088,24 @@ impl ModuleAnalysis {
             });
             if !promoted {
                 break;
+            }
+        }
+
+        // Phase 3.7: collapse shared chunks into shell.
+        //
+        // The runtime loader (`pocopine-split-loader.js`) doesn't currently
+        // pre-fetch shared chunks before mounting a route, so anything we
+        // emitted into a shared chunk wouldn't actually be importable from
+        // route code. Promote those deps into shell so the build is correct.
+        // When the loader gains shared-chunk support, gate this collapse on a
+        // capability flag instead of doing it unconditionally.
+        for (_, deps) in std::mem::take(&mut shared_buckets) {
+            for dep in deps {
+                if shell.insert(dep) {
+                    if let Dependency::Function(idx) = dep {
+                        report.shared_promotions.push(idx);
+                    }
+                }
             }
         }
 
@@ -1023,11 +1136,14 @@ impl ModuleAnalysis {
             })
             .collect();
 
-        Ok(SplitPlan {
-            shell,
-            routes: route_plans,
-            shared,
-        })
+        Ok((
+            SplitPlan {
+                shell,
+                routes: route_plans,
+                shared,
+            },
+            report,
+        ))
     }
 
     pub fn build_link_plan(&self, plan: &SplitPlan) -> SplitLinkPlan {
@@ -1438,12 +1554,11 @@ impl ModuleAnalysis {
                 let base_slot = run[0].0;
                 let funcs: Vec<u32> = run.iter().map(|(_, idx)| *idx).collect();
                 let offset = wasm_encoder::ConstExpr::i32_const(base_slot as i32);
-                let combined_table = combined_table_index(chunk, table).ok_or_else(|| {
-                    EmitError::MissingRemap {
+                let combined_table =
+                    combined_table_index(chunk, table).ok_or_else(|| EmitError::MissingRemap {
                         chunk: chunk.name.clone(),
                         dependency: Dependency::Table(table),
-                    }
-                })?;
+                    })?;
                 let table_arg = if combined_table == 0 {
                     None
                 } else {
@@ -1472,8 +1587,7 @@ impl ModuleAnalysis {
                     flush(elements, chunk, table, &mut run)?;
                     continue;
                 };
-                let combined =
-                    chunk.external_remap.functions.len() as u32 + *local_idx;
+                let combined = chunk.external_remap.functions.len() as u32 + *local_idx;
                 if !run.is_empty() && run.last().unwrap().0 + 1 != slot {
                     flush(elements, chunk, table, &mut run)?;
                 }
@@ -2808,14 +2922,12 @@ mod tests {
         // WAT identifiers can't carry the `::routes::a::` substring the
         // classifier looks for, so build the module with wasm_encoder and
         // attach a name section by hand.
-        let wasm = build_test_module_with_names(
-            &[
-                (0, "route_a_entry"),
-                (1, "route_b_entry"),
-                (2, "shell_helper"),
-                (3, "<crate::routes::a::Foo>::handler"),
-            ],
-        );
+        let wasm = build_test_module_with_names(&[
+            (0, "route_a_entry"),
+            (1, "route_b_entry"),
+            (2, "shell_helper"),
+            (3, "<crate::routes::a::Foo>::handler"),
+        ]);
 
         let module = analyze(&wasm).unwrap();
         let target = module.functions.iter().find(|f| f.index == 3).unwrap();
@@ -2835,7 +2947,7 @@ mod tests {
             },
         ];
         let route_ids = vec!["a".to_string(), "b".to_string()];
-        let plan = module
+        let (plan, _report) = module
             .plan_route_split_with_ownership([Dependency::Function(2)], &routes, &route_ids)
             .unwrap();
 
@@ -2959,10 +3071,8 @@ mod tests {
         use super::FunctionOwner;
         let routes = vec!["home".to_string(), "story".to_string()];
 
-        let shell = FunctionOwner::from_name(
-            Some("<core::ptr::drop_in_place::<Box<dyn Fn()>>>"),
-            &routes,
-        );
+        let shell =
+            FunctionOwner::from_name(Some("<core::ptr::drop_in_place::<Box<dyn Fn()>>>"), &routes);
         assert_eq!(shell, FunctionOwner::Shell);
 
         let home = FunctionOwner::from_name(
