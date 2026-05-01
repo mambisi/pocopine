@@ -3918,6 +3918,45 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
                 }
             }
         });
+    let route_mount_arms = split_route_ids(parsed)
+        .into_iter()
+        .zip(parsed.routes.iter())
+        .map(|(id, route)| {
+            let id = id.name;
+            let component = &route.component;
+            let pattern = route.pattern.value();
+            let param_setters = route_param_setters(&pattern);
+            quote! {
+                #id => {
+                    __POCOPINE_ROUTE_HANDLE.with(|handle| {
+                        if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
+                            handle.unmount();
+                        }
+                    });
+                    let Some(document) = ::pocopine::__private::web_sys::window()
+                        .and_then(|window| window.document())
+                    else {
+                        return;
+                    };
+                    let Ok(host) = document.create_element(
+                        <#component as ::pocopine::__private::Component>::NAME
+                    ) else {
+                        return;
+                    };
+                    let __pocopine_path_segments: ::std::vec::Vec<&str> = path
+                        .trim_matches('/')
+                        .split('/')
+                        .filter(|segment| !segment.is_empty())
+                        .collect();
+                    #(#param_setters)*
+                    outlet.replace_children_with_node_1(host.as_ref());
+                    let handle = ::pocopine::App::mount_subtree::<#component>(&host);
+                    __POCOPINE_ROUTE_HANDLE.with(|slot| {
+                        *slot.borrow_mut() = ::core::option::Option::Some(handle);
+                    });
+                }
+            }
+        });
     let devtools_call = parsed.devtools.then(|| quote! { .with_devtools() });
     let manifest = split_manifest_json(parsed, split_base);
 
@@ -3940,11 +3979,34 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
             ::std::thread_local! {
                 static __POCOPINE_DESCRIPTOR_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =
                     const { ::std::cell::RefCell::new(::core::option::Option::None) };
+                static __POCOPINE_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =
+                    const { ::std::cell::RefCell::new(::core::option::Option::None) };
             }
 
             #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
             pub fn pocopine_split_manifest() -> ::std::string::String {
                 #manifest.to_string()
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn pocopine_split_unmount_route() {
+                __POCOPINE_ROUTE_HANDLE.with(|handle| {
+                    if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
+                        handle.unmount();
+                    }
+                });
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn pocopine_split_mount_route(
+                route_id: ::std::string::String,
+                outlet: ::pocopine::__private::web_sys::Element,
+                path: ::std::string::String,
+            ) {
+                match route_id.as_str() {
+                    #(#route_mount_arms)*
+                    _ => {}
+                }
             }
 
             #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]

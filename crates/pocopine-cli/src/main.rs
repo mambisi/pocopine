@@ -727,19 +727,25 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
 
 fn write_post_link_route_module(path: &Path, base: &str, route_id: &str) -> Result<()> {
     let module = format!(
-        r#"const CHUNK = "/pkg/.pocopine-split/route_{route_id}.wasm";
+        r#"export const chunk = "/pkg/.pocopine-split/route_{route_id}.wasm";
+const ROUTE_ID = {route_id_json};
 
 export default async function init() {{
-  await WebAssembly.compileStreaming(fetch(CHUNK));
+  if (WebAssembly.compileStreaming) {{
+    await WebAssembly.compileStreaming(fetch(chunk));
+  }}
 }}
 
-export function unmount_pocopine_route() {{}}
+export function unmount_pocopine_route() {{
+  window.__pocopine_shell?.pocopine_split_unmount_route?.();
+}}
 
-export async function mount_pocopine_route(_outlet, _path) {{
-  throw new Error("pocopine post-link route chunks are emitted but the runtime linker is not wired yet: " + CHUNK);
+export async function mount_pocopine_route(outlet, path) {{
+  window.__pocopine_shell.pocopine_split_mount_route(ROUTE_ID, outlet, path);
 }}
 "#,
         route_id = route_id,
+        route_id_json = js_string(route_id),
     );
     let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
     std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
