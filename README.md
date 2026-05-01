@@ -203,6 +203,11 @@ route-private components under `routes`, and cross-route components
 under `shared`. During migration, `pocopine build --split --no-strict`
 keeps the older permissive behavior.
 
+Use `pocopine route add <name> --pattern <pattern>` to scaffold a
+strict-layout route module and print the `app!` entries to add. Split
+artifacts use stable route names such as `pkg/app_route_home.js`, not
+positional `route_0` names.
+
 ```html
 <!-- src/Counter.poco -->
 <button @click="bump">

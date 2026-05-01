@@ -37,6 +37,8 @@ enum Cmd {
     Build(BuildArgs),
     /// Remove generated browser artifacts from the project pkg directory.
     Clean(CleanArgs),
+    /// Manage strict-layout route modules.
+    Route(RouteArgs),
     /// Build, then serve. Spawns the configured server bin if one exists;
     /// otherwise serves the project directory as static files.
     Run(ServeArgs),
@@ -69,6 +71,33 @@ struct CleanArgs {
     /// Path to the crate to clean (defaults to current dir).
     #[arg(long, default_value = ".")]
     path: PathBuf,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct RouteArgs {
+    #[command(subcommand)]
+    cmd: RouteCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum RouteCmd {
+    /// Scaffold a strict-layout route module under src/routes/<name>.
+    Add(RouteAddArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+struct RouteAddArgs {
+    /// Route module name, for example `story` or `admin_settings`.
+    name: String,
+    /// Path to the crate to update (defaults to current dir).
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
+    /// Route pattern to add to app!, for example `/item/:id`.
+    #[arg(long)]
+    pattern: String,
+    /// Component struct name. Defaults to PascalCase(name).
+    #[arg(long)]
+    component: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -185,6 +214,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Clean(a) => clean(&a.path),
+        Cmd::Route(a) => route_cmd(a),
         Cmd::Run(a) => {
             let cfg = load_config(&a.path)?;
             build_entry(
@@ -463,6 +493,161 @@ fn clean(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn route_cmd(args: RouteArgs) -> Result<()> {
+    match args.cmd {
+        RouteCmd::Add(args) => route_add(args),
+    }
+}
+
+fn route_add(args: RouteAddArgs) -> Result<()> {
+    let project = args
+        .path
+        .canonicalize()
+        .with_context(|| format!("could not resolve project path: {}", args.path.display()))?;
+    let route_name = normalize_route_module_name(&args.name)?;
+    let component = args
+        .component
+        .as_deref()
+        .map(validate_component_ident)
+        .transpose()?
+        .unwrap_or_else(|| pascal_case(&route_name));
+    let routes_dir = project.join("src").join("routes");
+    let route_dir = routes_dir.join(&route_name);
+    if route_dir.exists() {
+        bail!("route module already exists: {}", route_dir.display());
+    }
+
+    std::fs::create_dir_all(&route_dir)
+        .with_context(|| format!("create {}", route_dir.display()))?;
+    ensure_routes_mod(&routes_dir, &route_name)?;
+
+    let mod_rs = format!(
+        r#"use pocopine::prelude::*;
+use serde::{{Deserialize, Serialize}};
+
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct {component} {{}}
+
+#[handlers]
+impl {component} {{}}
+"#
+    );
+    std::fs::write(route_dir.join("mod.rs"), mod_rs)
+        .with_context(|| format!("write {}", route_dir.join("mod.rs").display()))?;
+    let title = title_case(&route_name);
+    let template = format!("<section>\n  <h1>{title}</h1>\n</section>\n");
+    std::fs::write(route_dir.join(format!("{component}.poco")), template).with_context(|| {
+        format!(
+            "write {}",
+            route_dir.join(format!("{component}.poco")).display()
+        )
+    })?;
+
+    println!("✓ created route module src/routes/{route_name}");
+    println!("Add to `pocopine::app!` components:");
+    println!("    crate::routes::{route_name}::{component},");
+    println!("Add to `pocopine::app!` routes:");
+    println!(
+        "    (\"{}\", crate::routes::{route_name}::{component}),",
+        args.pattern
+    );
+    Ok(())
+}
+
+fn ensure_routes_mod(routes_dir: &Path, route_name: &str) -> Result<()> {
+    std::fs::create_dir_all(routes_dir)
+        .with_context(|| format!("create {}", routes_dir.display()))?;
+    let mod_path = routes_dir.join("mod.rs");
+    let line = format!("pub mod {route_name};");
+    if !mod_path.exists() {
+        std::fs::write(
+            &mod_path,
+            format!("//! Route-private component clusters.\n\n{line}\n"),
+        )
+        .with_context(|| format!("write {}", mod_path.display()))?;
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&mod_path)
+        .with_context(|| format!("read {}", mod_path.display()))?;
+    if text.lines().any(|existing| existing.trim() == line) {
+        return Ok(());
+    }
+    let mut next = text;
+    if !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push_str(&line);
+    next.push('\n');
+    std::fs::write(&mod_path, next).with_context(|| format!("write {}", mod_path.display()))?;
+    Ok(())
+}
+
+fn normalize_route_module_name(raw: &str) -> Result<String> {
+    let name = raw.trim().replace('-', "_");
+    if is_valid_snake_ident(&name) {
+        Ok(name)
+    } else {
+        bail!("route name `{raw}` must be a Rust module identifier: use snake_case or kebab-case");
+    }
+}
+
+fn validate_component_ident(raw: &str) -> Result<String> {
+    let ident = raw.trim();
+    if is_valid_pascal_ident(ident) {
+        Ok(ident.to_string())
+    } else {
+        bail!("component `{raw}` must be a PascalCase Rust type identifier");
+    }
+}
+
+fn is_valid_snake_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if ch == '_' || ch.is_ascii_lowercase())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_lowercase() || ch.is_ascii_digit())
+}
+
+fn is_valid_pascal_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_uppercase())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn pascal_case(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let mut out = String::new();
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+            out
+        })
+        .collect()
+}
+
+fn title_case(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let mut out = String::new();
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+            out
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn split_strict(release: bool, strict: bool, no_strict: bool) -> bool {
     strict || (release && !no_strict)
 }
@@ -508,28 +693,29 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         build_id: &build_id,
         strict,
     };
-    let route_count_path = std::env::temp_dir().join(format!("{base}-pocopine-routes.txt"));
-    let _ = std::fs::remove_file(&route_count_path);
-    run_split_wasm_pack(&path, &ctx, "shell", &base, Some(&route_count_path))?;
+    let route_ids_path = std::env::temp_dir().join(format!("{base}-pocopine-route-ids.txt"));
+    let _ = std::fs::remove_file(&route_ids_path);
+    run_split_wasm_pack(&path, &ctx, "shell", &base, Some(&route_ids_path))?;
 
-    let route_count_text = std::fs::read_to_string(&route_count_path)
-        .with_context(|| format!("read {}", route_count_path.display()))?;
-    let route_count = route_count_text.trim().parse::<usize>().with_context(|| {
-        format!(
-            "parse split route count from {}",
-            route_count_path.display()
-        )
-    })?;
-    if route_count == 0 {
+    let route_ids_text = std::fs::read_to_string(&route_ids_path)
+        .with_context(|| format!("read {}", route_ids_path.display()))?;
+    let route_ids = route_ids_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if route_ids.is_empty() {
         bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
     }
 
-    for idx in 0..route_count {
+    for (idx, route_id) in route_ids.iter().enumerate() {
         let mode = format!("route:{idx}");
-        let out_name = format!("{base}_route_{idx}");
+        let out_name = format!("{base}_route_{route_id}");
         run_split_wasm_pack(&path, &ctx, &mode, &out_name, None)?;
     }
     write_split_loader(&path, &base)?;
+    let route_count = route_ids.len();
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
     Ok(())
 }
@@ -546,7 +732,7 @@ fn run_split_wasm_pack(
     ctx: &SplitBuildCtx<'_>,
     mode: &str,
     out_name: &str,
-    route_count_out: Option<&Path>,
+    route_ids_out: Option<&Path>,
 ) -> Result<()> {
     let mut cmd = Command::new("wasm-pack");
     cmd.arg("build")
@@ -565,8 +751,8 @@ fn run_split_wasm_pack(
         .env("POCOPINE_SPLIT_BASE", ctx.base)
         .env("POCOPINE_SPLIT_STRICT", if ctx.strict { "1" } else { "0" })
         .current_dir(path);
-    if let Some(path) = route_count_out {
-        cmd.env("POCOPINE_SPLIT_ROUTE_COUNT_OUT", path);
+    if let Some(path) = route_ids_out {
+        cmd.env("POCOPINE_SPLIT_ROUTE_IDS_OUT", path);
     }
     let cfg_name = format!("pocopine_split_{}_{}", split_cfg_suffix(mode), ctx.build_id);
     let rustflags = match std::env::var("RUSTFLAGS") {

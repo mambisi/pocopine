@@ -3593,6 +3593,21 @@ pub fn app(input: TokenStream) -> TokenStream {
                     .into();
                 }
             }
+            if let Ok(path) = std::env::var("POCOPINE_SPLIT_ROUTE_IDS_OUT") {
+                let route_ids = split_route_ids(&parsed)
+                    .into_iter()
+                    .map(|id| id.name)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if let Err(err) = std::fs::write(&path, route_ids) {
+                    return syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        format!("failed to write POCOPINE_SPLIT_ROUTE_IDS_OUT `{path}`: {err}"),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
             return emit_split_shell_app(&parsed, &split_base).into();
         }
         if let Some(raw_idx) = mode.strip_prefix("route:") {
@@ -3731,6 +3746,19 @@ fn validate_split_convention(parsed: &AppMacroInput) -> syn::Result<()> {
             ));
         }
     }
+    let mut seen_route_ids = std::collections::HashSet::new();
+    for (idx, route) in parsed.routes.iter().enumerate() {
+        let id = split_route_id(idx, &route.component);
+        if !seen_route_ids.insert(id.clone()) {
+            return Err(syn::Error::new_spanned(
+                &route.component,
+                format!(
+                    "split strict mode derived duplicate route id `{id}`; \
+                     put route roots under distinct `routes::<id>::...` modules"
+                ),
+            ));
+        }
+    }
 
     for component in parsed.components.iter().take_while(|component| {
         let path = app_component_path(component);
@@ -3747,6 +3775,59 @@ fn validate_split_convention(parsed: &AppMacroInput) -> syn::Result<()> {
     }
 
     Ok(())
+}
+
+struct SplitRouteId {
+    name: String,
+}
+
+fn split_route_ids(parsed: &AppMacroInput) -> Vec<SplitRouteId> {
+    parsed
+        .routes
+        .iter()
+        .enumerate()
+        .map(|(idx, route)| SplitRouteId {
+            name: split_route_id(idx, &route.component),
+        })
+        .collect()
+}
+
+fn split_route_id(idx: usize, path: &syn::Path) -> String {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    if let Some(route_pos) = segments.iter().position(|segment| segment == "routes") {
+        if let Some(name) = segments.get(route_pos + 1) {
+            return sanitize_split_id(name);
+        }
+    }
+    let fallback = path
+        .segments
+        .last()
+        .map(|segment| kebab_case(&segment.ident.to_string()).replace('-', "_"))
+        .unwrap_or_else(|| format!("route_{idx}"));
+    let fallback = sanitize_split_id(&fallback);
+    if fallback.is_empty() {
+        format!("route_{idx}")
+    } else {
+        fallback
+    }
+}
+
+fn sanitize_split_id(raw: &str) -> String {
+    raw.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3922,11 +4003,13 @@ fn split_manifest_json(parsed: &AppMacroInput, split_base: &str) -> String {
         .iter()
         .enumerate()
         .map(|(idx, route)| {
+            let id = split_route_id(idx, &route.component);
             format!(
-                "{{\"pattern\":\"{}\",\"module\":\"/pkg/{}_route_{}.js\"}}",
+                "{{\"id\":\"{}\",\"pattern\":\"{}\",\"module\":\"/pkg/{}_route_{}.js\"}}",
+                json_escape(&id),
                 json_escape(&route.pattern.value()),
                 json_escape(split_base),
-                idx,
+                json_escape(&id),
             )
         })
         .collect::<Vec<_>>()
