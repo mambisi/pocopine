@@ -60,9 +60,18 @@ pub struct ModuleAnalysis {
     pub imported_functions: u32,
     pub index_spaces: IndexSpaces,
     pub imports: BTreeSet<Dependency>,
+    pub function_imports: BTreeMap<u32, FunctionImport>,
     pub types: Vec<wasmparser::FuncType>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionImport {
+    pub function: u32,
+    pub module: String,
+    pub name: String,
+    pub type_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -558,11 +567,19 @@ impl ModuleAnalysis {
                     function: old_function,
                 })?;
             let type_index = combined_type_index(chunk, function.type_index)?;
-            imports.import(
-                "pocopine:split",
-                &format!("func:{old_function}"),
-                wasm_encoder::EntityType::Function(type_index),
-            );
+            if let Some(import) = self.function_imports.get(&old_function) {
+                imports.import(
+                    &import.module,
+                    &import.name,
+                    wasm_encoder::EntityType::Function(type_index),
+                );
+            } else {
+                imports.import(
+                    "pocopine:split",
+                    &format!("func:{old_function}"),
+                    wasm_encoder::EntityType::Function(type_index),
+                );
+            }
         }
         if !imports.is_empty() {
             module.section(&imports);
@@ -584,10 +601,16 @@ impl ModuleAnalysis {
 
         let mut exports = wasm_encoder::ExportSection::new();
         for export in &self.exports {
-            if export.kind == ExternalKind::Func {
-                if let Some(index) = combined_function_index(chunk, export.index) {
-                    exports.export(&export.name, wasm_encoder::ExportKind::Func, index);
-                }
+            if export.kind == ExternalKind::Func
+                && chunk.local_remap.functions.contains_key(&export.index)
+            {
+                let index = combined_function_index(chunk, export.index).ok_or_else(|| {
+                    EmitError::MissingRemap {
+                        chunk: chunk.name.clone(),
+                        dependency: Dependency::Function(export.index),
+                    }
+                })?;
+                exports.export(&export.name, wasm_encoder::ExportKind::Func, index);
             }
         }
         if !exports.is_empty() {
@@ -931,9 +954,17 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                     let import = import?;
                     match import.ty {
                         TypeRef::Func(type_index) => {
-                            analysis
-                                .imports
-                                .insert(Dependency::Function(imported_function_types.len() as u32));
+                            let function = imported_function_types.len() as u32;
+                            analysis.imports.insert(Dependency::Function(function));
+                            analysis.function_imports.insert(
+                                function,
+                                FunctionImport {
+                                    function,
+                                    module: import.module.to_string(),
+                                    name: import.name.to_string(),
+                                    type_index,
+                                },
+                            );
                             imported_function_types.push(type_index);
                         }
                         TypeRef::Table(_) => {
@@ -1234,7 +1265,7 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze, Dependency, GraphError, RouteSplitRoot, ValidationError};
+    use super::{analyze, Dependency, FunctionImport, GraphError, RouteSplitRoot, ValidationError};
 
     #[test]
     fn scans_function_indices_without_relocations() {
@@ -1730,5 +1761,128 @@ mod tests {
         assert_eq!(emitted.index_spaces.functions, 2);
         let route_entry = emitted.functions.iter().find(|f| f.index == 1).unwrap();
         assert!(route_entry.dependencies.contains(&Dependency::Function(0)));
+    }
+
+    #[test]
+    fn emits_original_function_import_names() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (import "env" "host_value" (func $host_value (type $t0)))
+              (func $route_entry (type $t0)
+                call $host_value)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(
+            module.function_imports.get(&0).unwrap(),
+            &FunctionImport {
+                function: 0,
+                module: "env".to_string(),
+                name: "host_value".to_string(),
+                type_index: 0,
+            }
+        );
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let imports = function_import_names(&emitted);
+        assert_eq!(
+            imports,
+            vec![("env".to_string(), "host_value".to_string(), 0)]
+        );
+    }
+
+    #[test]
+    fn emits_only_owned_function_exports() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (func $shell (type $t0)
+                i32.const 0)
+              (func $route_entry (type $t0)
+                call $shell)
+              (func $other_route_entry (type $t0)
+                i32.const 3)
+              (export "shell" (func $shell))
+              (export "route_entry" (func $route_entry)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        assert_eq!(function_export_names(&emitted), vec!["route_entry"]);
+    }
+
+    fn function_import_names(wasm: &[u8]) -> Vec<(String, String, u32)> {
+        let mut imports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ImportSection(reader) = payload.unwrap() {
+                for import in reader {
+                    let import = import.unwrap();
+                    if let wasmparser::TypeRef::Func(type_index) = import.ty {
+                        imports.push((
+                            import.module.to_string(),
+                            import.name.to_string(),
+                            type_index,
+                        ));
+                    }
+                }
+            }
+        }
+        imports
+    }
+
+    fn function_export_names(wasm: &[u8]) -> Vec<String> {
+        let mut exports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ExportSection(reader) = payload.unwrap() {
+                for export in reader {
+                    let export = export.unwrap();
+                    if export.kind == wasmparser::ExternalKind::Func {
+                        exports.push(export.name.to_string());
+                    }
+                }
+            }
+        }
+        exports
     }
 }

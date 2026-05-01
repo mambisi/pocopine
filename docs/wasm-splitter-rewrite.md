@@ -147,6 +147,11 @@ subset of a link plan, re-encoding function bodies through the remap
 instead of copying bytes. This first emitter intentionally fails on
 tables, memories, globals, tags, data, and elements until those
 sections have the same explicit ownership and remap treatment.
+Original wasm function imports preserve their module/name/type
+metadata. Cross-chunk function references still use a temporary
+`pocopine:split` import namespace until the shared runtime ABI is
+defined. Function exports are only emitted for functions owned by the
+chunk, never for functions that are merely external references.
 
 ## Contributor mental model
 
