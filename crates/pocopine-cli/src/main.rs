@@ -1084,9 +1084,27 @@ fn emit_post_link_split_chunks(
         );
     }
 
-    let (plan, ownership_report) = module
-        .plan_route_split_with_ownership(shell_roots, &routes, route_ids)
-        .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?;
+    // Default to the legacy partitioner: it over-pulls into shell via the
+    // Table(0) closure, but it doesn't trap. The ownership-based partitioner
+    // shrinks shell ~67 KB on HN but currently traps in a real browser with
+    // "function signature mismatch" on cold load — vtable / function-pointer
+    // bytes in the data section reference table slots whose contents we
+    // moved into a route chunk, so shell's first call_indirect into one of
+    // those slots dispatches to nothing.
+    //
+    // Opt in with POCOPINE_OWNERSHIP_PARTITIONER=1 once a data-section
+    // dataflow pass or a placeholder/trampoline mechanism (see Emscripten
+    // wasm-split) lands to make it safe.
+    let (plan, ownership_report) = if std::env::var("POCOPINE_OWNERSHIP_PARTITIONER").is_ok() {
+        module
+            .plan_route_split_with_ownership(shell_roots, &routes, route_ids)
+            .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?
+    } else {
+        let plan = module
+            .plan_route_split(shell_roots, &routes)
+            .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?;
+        (plan, pocopine_wasm_split::OwnershipReport::default())
+    };
     let links = module.build_link_plan(&plan);
     module
         .validate_link_plan(&links)

@@ -874,6 +874,16 @@ impl ModuleAnalysis {
     /// funcref table are then assigned by name: a function whose mangled name
     /// contains exactly one `routes::<id>::` substring goes to that route;
     /// multiple matches → shared; none/unknown → shell.
+    ///
+    /// **Known correctness gap.** Real-browser testing shows this trips
+    /// "function signature mismatch" on cold load for HN. Rust embeds vtables
+    /// and function-pointer constants in the data section; some shell
+    /// `call_indirect` sites pull their target index from a memory load whose
+    /// value points at a slot whose function this planner moved into a route
+    /// chunk. Until a data-section dataflow pass or an Emscripten-style
+    /// placeholder mechanism lands, the CLI default is the legacy planner;
+    /// this entry point exists for further research and is gated by
+    /// `POCOPINE_OWNERSHIP_PARTITIONER=1`.
     pub fn plan_route_split_with_ownership<I>(
         &self,
         shell_roots: I,
