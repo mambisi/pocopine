@@ -6,7 +6,7 @@
 //! index-bearing operator is recorded before any future emitter is allowed to
 //! split or rewrite a module.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wasmparser::{ExternalKind, Operator, Payload, TypeRef};
 
@@ -61,6 +61,12 @@ pub struct ModuleAnalysis {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteSplitRoot {
+    pub name: String,
+    pub roots: Vec<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportAnalysis {
     pub name: String,
     pub kind: ExternalKind,
@@ -93,6 +99,25 @@ pub enum ValidationError {
 pub enum GraphError {
     InvalidModule(Vec<ValidationError>),
     RootIndexOutOfBounds { dependency: Dependency, limit: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SplitPlan {
+    pub shell: BTreeSet<Dependency>,
+    pub routes: Vec<RouteChunkPlan>,
+    pub shared: Vec<SharedChunkPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteChunkPlan {
+    pub name: String,
+    pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedChunkPlan {
+    pub routes: Vec<String>,
+    pub dependencies: BTreeSet<Dependency>,
 }
 
 impl ModuleAnalysis {
@@ -181,6 +206,80 @@ impl ModuleAnalysis {
         }
 
         Ok(closure)
+    }
+
+    pub fn plan_route_split<I>(
+        &self,
+        shell_roots: I,
+        routes: &[RouteSplitRoot],
+    ) -> Result<SplitPlan, GraphError>
+    where
+        I: IntoIterator<Item = Dependency>,
+    {
+        let mut shell = self.dependency_closure(shell_roots)?;
+        let mut usage: BTreeMap<Dependency, BTreeSet<usize>> = BTreeMap::new();
+
+        for (route_index, route) in routes.iter().enumerate() {
+            let closure = self.dependency_closure(route.roots.iter().copied())?;
+            for dependency in &closure {
+                if !shell.contains(dependency) {
+                    usage.entry(*dependency).or_default().insert(route_index);
+                }
+            }
+        }
+
+        let route_count = routes.len();
+        for (dependency, route_indices) in &usage {
+            if route_count > 0 && route_indices.len() == route_count {
+                shell.insert(*dependency);
+            }
+        }
+
+        let mut route_dependencies = vec![BTreeSet::new(); route_count];
+        let mut shared_dependencies: BTreeMap<BTreeSet<usize>, BTreeSet<Dependency>> =
+            BTreeMap::new();
+
+        for (dependency, route_indices) in usage {
+            if shell.contains(&dependency) {
+                continue;
+            }
+
+            if route_indices.len() == 1 {
+                let route_index = *route_indices.iter().next().expect("route index exists");
+                route_dependencies[route_index].insert(dependency);
+            } else {
+                shared_dependencies
+                    .entry(route_indices)
+                    .or_default()
+                    .insert(dependency);
+            }
+        }
+
+        let route_plans = routes
+            .iter()
+            .zip(route_dependencies)
+            .map(|(route, dependencies)| RouteChunkPlan {
+                name: route.name.clone(),
+                dependencies,
+            })
+            .collect();
+
+        let shared = shared_dependencies
+            .into_iter()
+            .map(|(route_indices, dependencies)| SharedChunkPlan {
+                routes: route_indices
+                    .into_iter()
+                    .map(|index| routes[index].name.clone())
+                    .collect(),
+                dependencies,
+            })
+            .collect();
+
+        Ok(SplitPlan {
+            shell,
+            routes: route_plans,
+            shared,
+        })
     }
 
     fn function(&self, index: u32) -> Option<&FunctionAnalysis> {
@@ -535,7 +634,7 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze, Dependency, GraphError, ValidationError};
+    use super::{analyze, Dependency, GraphError, RouteSplitRoot, ValidationError};
 
     #[test]
     fn scans_function_indices_without_relocations() {
@@ -709,5 +808,112 @@ mod tests {
                 limit: 1,
             }
         );
+    }
+
+    #[test]
+    fn route_split_plan_classifies_shell_route_and_shared_dependencies() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (func $shell_util (type $t0))
+              (func $route_a_leaf (type $t0))
+              (func $shared_ab_helper (type $t0))
+              (func $route_a_entry (type $t0)
+                call $route_a_leaf
+                call $shared_ab_helper)
+              (func $route_b_entry (type $t0)
+                call $shared_ab_helper)
+              (func $route_c_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(3)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(4)],
+            },
+            RouteSplitRoot {
+                name: "c".to_string(),
+                roots: vec![Dependency::Function(5)],
+            },
+        ];
+
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+
+        assert!(plan.shell.contains(&Dependency::Function(0)));
+        assert!(plan.shell.contains(&Dependency::Type(0)));
+        assert!(plan.routes[0]
+            .dependencies
+            .contains(&Dependency::Function(3)));
+        assert!(plan.routes[0]
+            .dependencies
+            .contains(&Dependency::Function(1)));
+        assert!(plan.routes[1]
+            .dependencies
+            .contains(&Dependency::Function(4)));
+        assert!(plan.routes[2]
+            .dependencies
+            .contains(&Dependency::Function(5)));
+
+        assert_eq!(plan.shared.len(), 1);
+        assert_eq!(plan.shared[0].routes, vec!["a", "b"]);
+        assert!(plan.shared[0]
+            .dependencies
+            .contains(&Dependency::Function(2)));
+        assert!(!plan.routes[0]
+            .dependencies
+            .contains(&Dependency::Function(2)));
+        assert!(!plan.routes[1]
+            .dependencies
+            .contains(&Dependency::Function(2)));
+    }
+
+    #[test]
+    fn route_split_plan_promotes_all_route_dependencies_to_shell() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (func $shared_all_helper (type $t0))
+              (func $route_a_entry (type $t0)
+                call $shared_all_helper)
+              (func $route_b_entry (type $t0)
+                call $shared_all_helper))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+
+        let plan = module.plan_route_split([], &routes).unwrap();
+
+        assert!(plan.shell.contains(&Dependency::Function(0)));
+        assert!(plan.shell.contains(&Dependency::Type(0)));
+        assert!(plan.routes[0]
+            .dependencies
+            .contains(&Dependency::Function(1)));
+        assert!(plan.routes[1]
+            .dependencies
+            .contains(&Dependency::Function(2)));
+        assert!(plan.shared.is_empty());
     }
 }

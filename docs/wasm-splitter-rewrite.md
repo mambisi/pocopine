@@ -97,6 +97,20 @@ This is still analysis-only. The next passes must decide which
 closures belong to shell, route, or shared chunks, then build remap
 tables for each output module.
 
+`ModuleAnalysis::plan_route_split()` performs that first deterministic
+classification:
+
+```text
+explicit shell roots        -> shell
+used by every route         -> shell
+used by exactly one route   -> that route chunk
+used by some routes         -> shared chunk for that route subset
+```
+
+It still returns dependency sets, not wasm files. That boundary is
+intentional: planning should be testable before the emitter starts
+rewriting functions, imports, exports, tables, memories, and data.
+
 ## Contributor mental model
 
 A wasm module has index spaces:
