@@ -63,8 +63,10 @@ pub struct ModuleAnalysis {
     pub imports: BTreeSet<Dependency>,
     pub function_imports: BTreeMap<u32, FunctionImport>,
     pub table_imports: BTreeMap<u32, TableImport>,
+    pub global_imports: BTreeMap<u32, GlobalImport>,
     pub types: Vec<wasmparser::FuncType>,
     pub tables: Vec<TableAnalysis>,
+    pub globals: Vec<GlobalAnalysis>,
     pub elements: Vec<ElementAnalysis>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
@@ -86,11 +88,27 @@ pub struct TableImport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalImport {
+    pub global: u32,
+    pub module: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableAnalysis {
     pub index: u32,
     pub ty: wasmparser::TableType,
     pub imported: bool,
     pub has_init_expr: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalAnalysis {
+    pub index: u32,
+    pub ty: wasmparser::GlobalType,
+    pub imported: bool,
+    pub init_expr: Option<ConstExprAnalysis>,
+    pub dependencies: BTreeSet<Dependency>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +132,7 @@ pub enum ElementKindAnalysis {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstExprAnalysis {
     I32Const(i32),
+    GlobalGet(u32),
     Unsupported,
 }
 
@@ -158,6 +177,11 @@ pub enum ValidationError {
     },
     ElementIndexOutOfBounds {
         element: u32,
+        dependency: Dependency,
+        limit: u32,
+    },
+    GlobalIndexOutOfBounds {
+        global: u32,
         dependency: Dependency,
         limit: u32,
     },
@@ -453,6 +477,20 @@ impl ModuleAnalysis {
             }
         }
 
+        for global in &self.globals {
+            for dependency in &global.dependencies {
+                if let Some(limit) = self.index_spaces.limit_for(*dependency) {
+                    if dependency.index() >= limit {
+                        errors.push(ValidationError::GlobalIndexOutOfBounds {
+                            global: global.index,
+                            dependency: *dependency,
+                            limit,
+                        });
+                    }
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -505,6 +543,15 @@ impl ModuleAnalysis {
                         });
                     };
                     stack.extend(element.dependencies.iter().copied());
+                }
+                Dependency::Global(index) => {
+                    let Some(global) = self.global(index) else {
+                        return Err(GraphError::RootIndexOutOfBounds {
+                            dependency,
+                            limit: self.index_spaces.globals,
+                        });
+                    };
+                    stack.extend(global.dependencies.iter().copied());
                 }
                 _ => {}
             }
@@ -687,6 +734,18 @@ impl ModuleAnalysis {
                 imports.import("pocopine:split", &format!("table:{old_table}"), ty);
             }
         }
+        for old_global in ordered_indices(&chunk.external_remap.globals) {
+            let global = self.global(old_global).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Global(old_global),
+            })?;
+            let ty = encode_global_type(global.ty)?;
+            if let Some(import) = self.global_imports.get(&old_global) {
+                imports.import(&import.module, &import.name, ty);
+            } else {
+                imports.import("pocopine:split", &format!("global:{old_global}"), ty);
+            }
+        }
         if !imports.is_empty() {
             module.section(&imports);
         }
@@ -718,6 +777,25 @@ impl ModuleAnalysis {
         }
         if !tables.is_empty() {
             module.section(&tables);
+        }
+
+        let mut globals = wasm_encoder::GlobalSection::new();
+        for old_global in ordered_indices(&chunk.local_remap.globals) {
+            let global = self.global(old_global).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Global(old_global),
+            })?;
+            let init_expr = global.init_expr.as_ref().ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Global(old_global),
+            })?;
+            globals.global(
+                encode_global_type(global.ty)?,
+                &encode_const_expr(chunk, init_expr)?,
+            );
+        }
+        if !globals.is_empty() {
+            module.section(&globals);
         }
 
         let mut exports = wasm_encoder::ExportSection::new();
@@ -782,6 +860,7 @@ impl ModuleAnalysis {
                 Dependency::Function(_)
                 | Dependency::Type(_)
                 | Dependency::Table(_)
+                | Dependency::Global(_)
                 | Dependency::Element(_) => {}
                 _ => {
                     return Err(EmitError::UnsupportedImport {
@@ -792,7 +871,10 @@ impl ModuleAnalysis {
         }
         for dependency in &chunk.external {
             match dependency {
-                Dependency::Function(_) | Dependency::Type(_) | Dependency::Table(_) => {}
+                Dependency::Function(_)
+                | Dependency::Type(_)
+                | Dependency::Table(_)
+                | Dependency::Global(_) => {}
                 _ => {
                     return Err(EmitError::UnsupportedImport {
                         dependency: *dependency,
@@ -903,7 +985,7 @@ impl ModuleAnalysis {
                         }
                     },
                 };
-                let offset = encode_const_expr(offset_expr);
+                let offset = encode_const_expr(chunk, offset_expr)?;
                 elements.active(remapped_table, &offset, items);
             }
         }
@@ -955,6 +1037,20 @@ impl ModuleAnalysis {
             for element_dependency in &element.dependencies {
                 if !owned.contains(element_dependency) {
                     external.insert(*element_dependency);
+                }
+            }
+        }
+
+        for dependency in &owned {
+            let Dependency::Global(index) = dependency else {
+                continue;
+            };
+            let Some(global) = self.global(*index) else {
+                continue;
+            };
+            for global_dependency in &global.dependencies {
+                if !owned.contains(global_dependency) {
+                    external.insert(*global_dependency);
                 }
             }
         }
@@ -1016,6 +1112,12 @@ impl ModuleAnalysis {
         self.elements
             .get(index as usize)
             .filter(|element| element.index == index)
+    }
+
+    fn global(&self, index: u32) -> Option<&GlobalAnalysis> {
+        self.globals
+            .get(index as usize)
+            .filter(|global| global.index == index)
     }
 }
 
@@ -1096,6 +1198,18 @@ fn combined_table_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
     }
 }
 
+fn combined_global_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.globals.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .globals
+            .get(&old_index)
+            .map(|index| chunk.external_remap.globals.len() as u32 + *index)
+    }
+}
+
 fn combined_element_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
     if let Some(index) = chunk.external_remap.elements.get(&old_index) {
         Some(*index)
@@ -1147,12 +1261,17 @@ fn combined_required_index(
                 dependency,
             })
         }),
-        Dependency::Memory(_)
-        | Dependency::Global(_)
-        | Dependency::Tag(_)
-        | Dependency::Data(_) => Err(ReencodeError::UserError(EmitError::UnsupportedImport {
-            dependency,
-        })),
+        Dependency::Global(index) => combined_global_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
+        Dependency::Memory(_) | Dependency::Tag(_) | Dependency::Data(_) => {
+            Err(ReencodeError::UserError(EmitError::UnsupportedImport {
+                dependency,
+            }))
+        }
     }
 }
 
@@ -1160,10 +1279,25 @@ fn encode_table_type(ty: wasmparser::TableType) -> Result<wasm_encoder::TableTyp
     wasm_encoder::TableType::try_from(ty).map_err(|err| EmitError::Parse(err.to_string()))
 }
 
-fn encode_const_expr(expr: &ConstExprAnalysis) -> wasm_encoder::ConstExpr {
+fn encode_global_type(ty: wasmparser::GlobalType) -> Result<wasm_encoder::GlobalType, EmitError> {
+    wasm_encoder::GlobalType::try_from(ty).map_err(|err| EmitError::Parse(err.to_string()))
+}
+
+fn encode_const_expr(
+    chunk: &ChunkLinkPlan,
+    expr: &ConstExprAnalysis,
+) -> Result<wasm_encoder::ConstExpr, EmitError> {
     match expr {
-        ConstExprAnalysis::I32Const(value) => wasm_encoder::ConstExpr::i32_const(*value),
-        ConstExprAnalysis::Unsupported => wasm_encoder::ConstExpr::empty(),
+        ConstExprAnalysis::I32Const(value) => Ok(wasm_encoder::ConstExpr::i32_const(*value)),
+        ConstExprAnalysis::GlobalGet(global) => {
+            let global =
+                combined_global_index(chunk, *global).ok_or_else(|| EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Global(*global),
+                })?;
+            Ok(wasm_encoder::ConstExpr::global_get(global))
+        }
+        ConstExprAnalysis::Unsupported => Err(EmitError::UnsupportedConstExpr),
     }
 }
 
@@ -1271,10 +1405,24 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                                 .insert(Dependency::Memory(analysis.index_spaces.memories));
                             analysis.index_spaces.memories += 1;
                         }
-                        TypeRef::Global(_) => {
-                            analysis
-                                .imports
-                                .insert(Dependency::Global(analysis.index_spaces.globals));
+                        TypeRef::Global(ty) => {
+                            let global = analysis.index_spaces.globals;
+                            analysis.imports.insert(Dependency::Global(global));
+                            analysis.global_imports.insert(
+                                global,
+                                GlobalImport {
+                                    global,
+                                    module: import.module.to_string(),
+                                    name: import.name.to_string(),
+                                },
+                            );
+                            analysis.globals.push(GlobalAnalysis {
+                                index: global,
+                                ty,
+                                imported: true,
+                                init_expr: None,
+                                dependencies: BTreeSet::new(),
+                            });
                             analysis.index_spaces.globals += 1;
                         }
                         TypeRef::Tag(_) => {
@@ -1309,7 +1457,23 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 analysis.index_spaces.memories += count_section(reader)?;
             }
             Payload::GlobalSection(reader) => {
-                analysis.index_spaces.globals += count_section(reader)?;
+                for global in reader {
+                    let global = global?;
+                    let index = analysis.index_spaces.globals;
+                    let init_expr = analyze_const_expr(global.init_expr);
+                    let mut dependencies = BTreeSet::new();
+                    if let ConstExprAnalysis::GlobalGet(global_index) = init_expr {
+                        dependencies.insert(Dependency::Global(global_index));
+                    }
+                    analysis.globals.push(GlobalAnalysis {
+                        index,
+                        ty: global.ty,
+                        imported: false,
+                        init_expr: Some(init_expr),
+                        dependencies,
+                    });
+                    analysis.index_spaces.globals += 1;
+                }
             }
             Payload::TagSection(reader) => {
                 analysis.index_spaces.tags += count_section(reader)?;
@@ -1418,6 +1582,7 @@ fn analyze_const_expr(expr: wasmparser::ConstExpr<'_>) -> ConstExprAnalysis {
     };
     let out = match first {
         Operator::I32Const { value } => ConstExprAnalysis::I32Const(value),
+        Operator::GlobalGet { global_index } => ConstExprAnalysis::GlobalGet(global_index),
         _ => return ConstExprAnalysis::Unsupported,
     };
     match ops.read() {
@@ -2381,6 +2546,86 @@ mod tests {
             .contains(&Dependency::Element(0)));
     }
 
+    #[test]
+    fn emits_defined_globals_and_remaps_global_get() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (global $g (mut i32) (i32.const 7))
+              (func $route_entry (type $t0)
+                global.get $g)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.globals, 1);
+        assert!(emitted.functions[0]
+            .dependencies
+            .contains(&Dependency::Global(0)));
+    }
+
+    #[test]
+    fn emits_original_global_import_names() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (import "env" "host_global" (global $host_global i32))
+              (func $route_entry (type $t0)
+                global.get $host_global)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.global_imports.get(&0).unwrap().module, "env");
+        assert_eq!(module.global_imports.get(&0).unwrap().name, "host_global");
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        assert_eq!(
+            global_import_names(&emitted),
+            vec![("env".to_string(), "host_global".to_string())]
+        );
+    }
+
     fn function_import_names(wasm: &[u8]) -> Vec<(String, String, u32)> {
         let mut imports = Vec::new();
         for payload in wasmparser::Parser::new(0).parse_all(wasm) {
@@ -2422,6 +2667,21 @@ mod tests {
                 for import in reader {
                     let import = import.unwrap();
                     if matches!(import.ty, wasmparser::TypeRef::Table(_)) {
+                        imports.push((import.module.to_string(), import.name.to_string()));
+                    }
+                }
+            }
+        }
+        imports
+    }
+
+    fn global_import_names(wasm: &[u8]) -> Vec<(String, String)> {
+        let mut imports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ImportSection(reader) = payload.unwrap() {
+                for import in reader {
+                    let import = import.unwrap();
+                    if matches!(import.ty, wasmparser::TypeRef::Global(_)) {
                         imports.push((import.module.to_string(), import.name.to_string()));
                     }
                 }
