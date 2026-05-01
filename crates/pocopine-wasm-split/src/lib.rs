@@ -63,10 +63,15 @@ pub struct ModuleAnalysis {
     pub imports: BTreeSet<Dependency>,
     pub function_imports: BTreeMap<u32, FunctionImport>,
     pub table_imports: BTreeMap<u32, TableImport>,
+    pub memory_imports: BTreeMap<u32, MemoryImport>,
     pub global_imports: BTreeMap<u32, GlobalImport>,
+    pub tag_imports: BTreeMap<u32, TagImport>,
     pub types: Vec<wasmparser::FuncType>,
     pub tables: Vec<TableAnalysis>,
+    pub memories: Vec<MemoryAnalysis>,
     pub globals: Vec<GlobalAnalysis>,
+    pub tags: Vec<TagAnalysis>,
+    pub data_segments: Vec<DataAnalysis>,
     pub elements: Vec<ElementAnalysis>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
@@ -88,8 +93,22 @@ pub struct TableImport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryImport {
+    pub memory: u32,
+    pub module: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalImport {
     pub global: u32,
+    pub module: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagImport {
+    pub tag: u32,
     pub module: String,
     pub name: String,
 }
@@ -103,12 +122,44 @@ pub struct TableAnalysis {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryAnalysis {
+    pub index: u32,
+    pub ty: wasmparser::MemoryType,
+    pub imported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalAnalysis {
     pub index: u32,
     pub ty: wasmparser::GlobalType,
     pub imported: bool,
     pub init_expr: Option<ConstExprAnalysis>,
     pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagAnalysis {
+    pub index: u32,
+    pub ty: wasmparser::TagType,
+    pub imported: bool,
+    pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataAnalysis {
+    pub index: u32,
+    pub kind: DataKindAnalysis,
+    pub data: Vec<u8>,
+    pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataKindAnalysis {
+    Passive,
+    Active {
+        memory_index: u32,
+        offset_expr: ConstExprAnalysis,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +233,16 @@ pub enum ValidationError {
     },
     GlobalIndexOutOfBounds {
         global: u32,
+        dependency: Dependency,
+        limit: u32,
+    },
+    DataIndexOutOfBounds {
+        data: u32,
+        dependency: Dependency,
+        limit: u32,
+    },
+    TagIndexOutOfBounds {
+        tag: u32,
         dependency: Dependency,
         limit: u32,
     },
@@ -491,6 +552,34 @@ impl ModuleAnalysis {
             }
         }
 
+        for data in &self.data_segments {
+            for dependency in &data.dependencies {
+                if let Some(limit) = self.index_spaces.limit_for(*dependency) {
+                    if dependency.index() >= limit {
+                        errors.push(ValidationError::DataIndexOutOfBounds {
+                            data: data.index,
+                            dependency: *dependency,
+                            limit,
+                        });
+                    }
+                }
+            }
+        }
+
+        for tag in &self.tags {
+            for dependency in &tag.dependencies {
+                if let Some(limit) = self.index_spaces.limit_for(*dependency) {
+                    if dependency.index() >= limit {
+                        errors.push(ValidationError::TagIndexOutOfBounds {
+                            tag: tag.index,
+                            dependency: *dependency,
+                            limit,
+                        });
+                    }
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -552,6 +641,24 @@ impl ModuleAnalysis {
                         });
                     };
                     stack.extend(global.dependencies.iter().copied());
+                }
+                Dependency::Data(index) => {
+                    let Some(data) = self.data(index) else {
+                        return Err(GraphError::RootIndexOutOfBounds {
+                            dependency,
+                            limit: self.index_spaces.data,
+                        });
+                    };
+                    stack.extend(data.dependencies.iter().copied());
+                }
+                Dependency::Tag(index) => {
+                    let Some(tag) = self.tag(index) else {
+                        return Err(GraphError::RootIndexOutOfBounds {
+                            dependency,
+                            limit: self.index_spaces.tags,
+                        });
+                    };
+                    stack.extend(tag.dependencies.iter().copied());
                 }
                 _ => {}
             }
@@ -734,6 +841,18 @@ impl ModuleAnalysis {
                 imports.import("pocopine:split", &format!("table:{old_table}"), ty);
             }
         }
+        for old_memory in ordered_indices(&chunk.external_remap.memories) {
+            let memory = self.memory(old_memory).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Memory(old_memory),
+            })?;
+            let ty = encode_memory_type(memory.ty);
+            if let Some(import) = self.memory_imports.get(&old_memory) {
+                imports.import(&import.module, &import.name, ty);
+            } else {
+                imports.import("pocopine:split", &format!("memory:{old_memory}"), ty);
+            }
+        }
         for old_global in ordered_indices(&chunk.external_remap.globals) {
             let global = self.global(old_global).ok_or(EmitError::MissingRemap {
                 chunk: chunk.name.clone(),
@@ -744,6 +863,18 @@ impl ModuleAnalysis {
                 imports.import(&import.module, &import.name, ty);
             } else {
                 imports.import("pocopine:split", &format!("global:{old_global}"), ty);
+            }
+        }
+        for old_tag in ordered_indices(&chunk.external_remap.tags) {
+            let tag = self.tag(old_tag).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Tag(old_tag),
+            })?;
+            let ty = encode_tag_type(chunk, tag.ty)?;
+            if let Some(import) = self.tag_imports.get(&old_tag) {
+                imports.import(&import.module, &import.name, ty);
+            } else {
+                imports.import("pocopine:split", &format!("tag:{old_tag}"), ty);
             }
         }
         if !imports.is_empty() {
@@ -779,6 +910,18 @@ impl ModuleAnalysis {
             module.section(&tables);
         }
 
+        let mut memories = wasm_encoder::MemorySection::new();
+        for old_memory in ordered_indices(&chunk.local_remap.memories) {
+            let memory = self.memory(old_memory).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Memory(old_memory),
+            })?;
+            memories.memory(encode_memory_type(memory.ty));
+        }
+        if !memories.is_empty() {
+            module.section(&memories);
+        }
+
         let mut globals = wasm_encoder::GlobalSection::new();
         for old_global in ordered_indices(&chunk.local_remap.globals) {
             let global = self.global(old_global).ok_or(EmitError::MissingRemap {
@@ -796,6 +939,18 @@ impl ModuleAnalysis {
         }
         if !globals.is_empty() {
             module.section(&globals);
+        }
+
+        let mut tags = wasm_encoder::TagSection::new();
+        for old_tag in ordered_indices(&chunk.local_remap.tags) {
+            let tag = self.tag(old_tag).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Tag(old_tag),
+            })?;
+            tags.tag(encode_tag_type(chunk, tag.ty)?);
+        }
+        if !tags.is_empty() {
+            module.section(&tags);
         }
 
         let mut exports = wasm_encoder::ExportSection::new();
@@ -824,6 +979,13 @@ impl ModuleAnalysis {
             module.section(&elements);
         }
 
+        let has_data = !chunk.local_remap.data.is_empty();
+        if has_data {
+            module.section(&wasm_encoder::DataCountSection {
+                count: chunk.local_remap.data.len() as u32,
+            });
+        }
+
         let mut code = wasm_encoder::CodeSection::new();
         for old_function in local_functions {
             let function = self
@@ -847,6 +1009,14 @@ impl ModuleAnalysis {
             module.section(&code);
         }
 
+        let mut data = wasm_encoder::DataSection::new();
+        for old_data in ordered_indices(&chunk.local_remap.data) {
+            self.encode_data(chunk, &mut data, old_data)?;
+        }
+        if !data.is_empty() {
+            module.section(&data);
+        }
+
         Ok(module.finish())
     }
 
@@ -855,26 +1025,14 @@ impl ModuleAnalysis {
             return Err(EmitError::Link(errors));
         }
 
-        for dependency in &chunk.owned {
-            match dependency {
-                Dependency::Function(_)
-                | Dependency::Type(_)
-                | Dependency::Table(_)
-                | Dependency::Global(_)
-                | Dependency::Element(_) => {}
-                _ => {
-                    return Err(EmitError::UnsupportedImport {
-                        dependency: *dependency,
-                    });
-                }
-            }
-        }
         for dependency in &chunk.external {
             match dependency {
                 Dependency::Function(_)
                 | Dependency::Type(_)
                 | Dependency::Table(_)
-                | Dependency::Global(_) => {}
+                | Dependency::Memory(_)
+                | Dependency::Global(_)
+                | Dependency::Tag(_) => {}
                 _ => {
                     return Err(EmitError::UnsupportedImport {
                         dependency: *dependency,
@@ -992,6 +1150,38 @@ impl ModuleAnalysis {
         Ok(())
     }
 
+    fn encode_data(
+        &self,
+        chunk: &ChunkLinkPlan,
+        data: &mut wasm_encoder::DataSection,
+        old_data: u32,
+    ) -> Result<(), EmitError> {
+        let segment = self.data(old_data).ok_or(EmitError::MissingRemap {
+            chunk: chunk.name.clone(),
+            dependency: Dependency::Data(old_data),
+        })?;
+
+        match &segment.kind {
+            DataKindAnalysis::Passive => {
+                data.passive(segment.data.iter().copied());
+            }
+            DataKindAnalysis::Active {
+                memory_index,
+                offset_expr,
+            } => {
+                let memory = combined_memory_index(chunk, *memory_index).ok_or_else(|| {
+                    EmitError::MissingRemap {
+                        chunk: chunk.name.clone(),
+                        dependency: Dependency::Memory(*memory_index),
+                    }
+                })?;
+                let offset = encode_const_expr(chunk, offset_expr)?;
+                data.active(memory, &offset, segment.data.iter().copied());
+            }
+        }
+        Ok(())
+    }
+
     fn build_chunk_link_plan(
         &self,
         name: String,
@@ -1051,6 +1241,34 @@ impl ModuleAnalysis {
             for global_dependency in &global.dependencies {
                 if !owned.contains(global_dependency) {
                     external.insert(*global_dependency);
+                }
+            }
+        }
+
+        for dependency in &owned {
+            let Dependency::Data(index) = dependency else {
+                continue;
+            };
+            let Some(data) = self.data(*index) else {
+                continue;
+            };
+            for data_dependency in &data.dependencies {
+                if !owned.contains(data_dependency) {
+                    external.insert(*data_dependency);
+                }
+            }
+        }
+
+        for dependency in &owned {
+            let Dependency::Tag(index) = dependency else {
+                continue;
+            };
+            let Some(tag) = self.tag(*index) else {
+                continue;
+            };
+            for tag_dependency in &tag.dependencies {
+                if !owned.contains(tag_dependency) {
+                    external.insert(*tag_dependency);
                 }
             }
         }
@@ -1118,6 +1336,24 @@ impl ModuleAnalysis {
         self.globals
             .get(index as usize)
             .filter(|global| global.index == index)
+    }
+
+    fn memory(&self, index: u32) -> Option<&MemoryAnalysis> {
+        self.memories
+            .get(index as usize)
+            .filter(|memory| memory.index == index)
+    }
+
+    fn data(&self, index: u32) -> Option<&DataAnalysis> {
+        self.data_segments
+            .get(index as usize)
+            .filter(|data| data.index == index)
+    }
+
+    fn tag(&self, index: u32) -> Option<&TagAnalysis> {
+        self.tags
+            .get(index as usize)
+            .filter(|tag| tag.index == index)
     }
 }
 
@@ -1198,6 +1434,18 @@ fn combined_table_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
     }
 }
 
+fn combined_memory_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.memories.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .memories
+            .get(&old_index)
+            .map(|index| chunk.external_remap.memories.len() as u32 + *index)
+    }
+}
+
 fn combined_global_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
     if let Some(index) = chunk.external_remap.globals.get(&old_index) {
         Some(*index)
@@ -1208,6 +1456,22 @@ fn combined_global_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
             .get(&old_index)
             .map(|index| chunk.external_remap.globals.len() as u32 + *index)
     }
+}
+
+fn combined_tag_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.tags.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .tags
+            .get(&old_index)
+            .map(|index| chunk.external_remap.tags.len() as u32 + *index)
+    }
+}
+
+fn combined_data_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    chunk.local_remap.data.get(&old_index).copied()
 }
 
 fn combined_element_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
@@ -1255,6 +1519,12 @@ fn combined_required_index(
                 dependency,
             })
         }),
+        Dependency::Memory(index) => combined_memory_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
         Dependency::Element(index) => combined_element_index(chunk, index).ok_or_else(|| {
             ReencodeError::UserError(EmitError::MissingRemap {
                 chunk: chunk.name.clone(),
@@ -1267,11 +1537,18 @@ fn combined_required_index(
                 dependency,
             })
         }),
-        Dependency::Memory(_) | Dependency::Tag(_) | Dependency::Data(_) => {
-            Err(ReencodeError::UserError(EmitError::UnsupportedImport {
+        Dependency::Data(index) => combined_data_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
                 dependency,
-            }))
-        }
+            })
+        }),
+        Dependency::Tag(index) => combined_tag_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
     }
 }
 
@@ -1281,6 +1558,23 @@ fn encode_table_type(ty: wasmparser::TableType) -> Result<wasm_encoder::TableTyp
 
 fn encode_global_type(ty: wasmparser::GlobalType) -> Result<wasm_encoder::GlobalType, EmitError> {
     wasm_encoder::GlobalType::try_from(ty).map_err(|err| EmitError::Parse(err.to_string()))
+}
+
+fn encode_memory_type(ty: wasmparser::MemoryType) -> wasm_encoder::MemoryType {
+    ty.into()
+}
+
+fn encode_tag_type(
+    chunk: &ChunkLinkPlan,
+    ty: wasmparser::TagType,
+) -> Result<wasm_encoder::TagType, EmitError> {
+    let kind = match ty.kind {
+        wasmparser::TagKind::Exception => wasm_encoder::TagKind::Exception,
+    };
+    Ok(wasm_encoder::TagType {
+        kind,
+        func_type_idx: combined_type_index(chunk, ty.func_type_idx)?,
+    })
 }
 
 fn encode_const_expr(
@@ -1399,10 +1693,22 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                             });
                             analysis.index_spaces.tables += 1;
                         }
-                        TypeRef::Memory(_) => {
-                            analysis
-                                .imports
-                                .insert(Dependency::Memory(analysis.index_spaces.memories));
+                        TypeRef::Memory(ty) => {
+                            let memory = analysis.index_spaces.memories;
+                            analysis.imports.insert(Dependency::Memory(memory));
+                            analysis.memory_imports.insert(
+                                memory,
+                                MemoryImport {
+                                    memory,
+                                    module: import.module.to_string(),
+                                    name: import.name.to_string(),
+                                },
+                            );
+                            analysis.memories.push(MemoryAnalysis {
+                                index: memory,
+                                ty,
+                                imported: true,
+                            });
                             analysis.index_spaces.memories += 1;
                         }
                         TypeRef::Global(ty) => {
@@ -1425,10 +1731,23 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                             });
                             analysis.index_spaces.globals += 1;
                         }
-                        TypeRef::Tag(_) => {
-                            analysis
-                                .imports
-                                .insert(Dependency::Tag(analysis.index_spaces.tags));
+                        TypeRef::Tag(ty) => {
+                            let tag = analysis.index_spaces.tags;
+                            analysis.imports.insert(Dependency::Tag(tag));
+                            analysis.tag_imports.insert(
+                                tag,
+                                TagImport {
+                                    tag,
+                                    module: import.module.to_string(),
+                                    name: import.name.to_string(),
+                                },
+                            );
+                            analysis.tags.push(TagAnalysis {
+                                index: tag,
+                                ty,
+                                imported: true,
+                                dependencies: BTreeSet::from([Dependency::Type(ty.func_type_idx)]),
+                            });
                             analysis.index_spaces.tags += 1;
                         }
                     }
@@ -1454,7 +1773,16 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 }
             }
             Payload::MemorySection(reader) => {
-                analysis.index_spaces.memories += count_section(reader)?;
+                for memory in reader {
+                    let memory = memory?;
+                    let index = analysis.index_spaces.memories;
+                    analysis.memories.push(MemoryAnalysis {
+                        index,
+                        ty: memory,
+                        imported: false,
+                    });
+                    analysis.index_spaces.memories += 1;
+                }
             }
             Payload::GlobalSection(reader) => {
                 for global in reader {
@@ -1476,7 +1804,17 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 }
             }
             Payload::TagSection(reader) => {
-                analysis.index_spaces.tags += count_section(reader)?;
+                for tag in reader {
+                    let tag = tag?;
+                    let index = analysis.index_spaces.tags;
+                    analysis.tags.push(TagAnalysis {
+                        index,
+                        ty: tag,
+                        imported: false,
+                        dependencies: BTreeSet::from([Dependency::Type(tag.func_type_idx)]),
+                    });
+                    analysis.index_spaces.tags += 1;
+                }
             }
             Payload::ElementSection(reader) => {
                 for element in reader {
@@ -1486,11 +1824,13 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 }
             }
             Payload::DataSection(reader) => {
-                analysis.index_spaces.data += count_section(reader)?;
+                for data in reader {
+                    let index = analysis.index_spaces.data;
+                    analysis.data_segments.push(analyze_data(index, data?)?);
+                    analysis.index_spaces.data += 1;
+                }
             }
-            Payload::DataCountSection { count, .. } => {
-                analysis.index_spaces.data = analysis.index_spaces.data.max(count);
-            }
+            Payload::DataCountSection { .. } => {}
             Payload::ExportSection(reader) => {
                 for export in reader {
                     let export = export?;
@@ -1537,8 +1877,32 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
     Ok(analysis)
 }
 
-fn count_section<T>(reader: wasmparser::SectionLimited<'_, T>) -> WasmResult<u32> {
-    Ok(reader.count())
+fn analyze_data(index: u32, data: wasmparser::Data<'_>) -> WasmResult<DataAnalysis> {
+    let mut dependencies = BTreeSet::new();
+    let kind = match data.kind {
+        wasmparser::DataKind::Passive => DataKindAnalysis::Passive,
+        wasmparser::DataKind::Active {
+            memory_index,
+            offset_expr,
+        } => {
+            dependencies.insert(Dependency::Memory(memory_index));
+            let offset_expr = analyze_const_expr(offset_expr);
+            if let ConstExprAnalysis::GlobalGet(global_index) = offset_expr {
+                dependencies.insert(Dependency::Global(global_index));
+            }
+            DataKindAnalysis::Active {
+                memory_index,
+                offset_expr,
+            }
+        }
+    };
+
+    Ok(DataAnalysis {
+        index,
+        kind,
+        data: data.data.to_vec(),
+        dependencies,
+    })
 }
 
 fn analyze_element(index: u32, element: wasmparser::Element<'_>) -> WasmResult<ElementAnalysis> {
@@ -1712,6 +2076,130 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
                 "global_set",
             );
         }
+        Operator::I32Load { memarg }
+        | Operator::I64Load { memarg }
+        | Operator::F32Load { memarg }
+        | Operator::F64Load { memarg }
+        | Operator::I32Load8S { memarg }
+        | Operator::I32Load8U { memarg }
+        | Operator::I32Load16S { memarg }
+        | Operator::I32Load16U { memarg }
+        | Operator::I64Load8S { memarg }
+        | Operator::I64Load8U { memarg }
+        | Operator::I64Load16S { memarg }
+        | Operator::I64Load16U { memarg }
+        | Operator::I64Load32S { memarg }
+        | Operator::I64Load32U { memarg }
+        | Operator::I32Store { memarg }
+        | Operator::I64Store { memarg }
+        | Operator::F32Store { memarg }
+        | Operator::F64Store { memarg }
+        | Operator::I32Store8 { memarg }
+        | Operator::I32Store16 { memarg }
+        | Operator::I64Store8 { memarg }
+        | Operator::I64Store16 { memarg }
+        | Operator::I64Store32 { memarg }
+        | Operator::MemoryAtomicNotify { memarg }
+        | Operator::MemoryAtomicWait32 { memarg }
+        | Operator::MemoryAtomicWait64 { memarg }
+        | Operator::I32AtomicLoad { memarg }
+        | Operator::I64AtomicLoad { memarg }
+        | Operator::I32AtomicLoad8U { memarg }
+        | Operator::I32AtomicLoad16U { memarg }
+        | Operator::I64AtomicLoad8U { memarg }
+        | Operator::I64AtomicLoad16U { memarg }
+        | Operator::I64AtomicLoad32U { memarg }
+        | Operator::I32AtomicStore { memarg }
+        | Operator::I64AtomicStore { memarg }
+        | Operator::I32AtomicStore8 { memarg }
+        | Operator::I32AtomicStore16 { memarg }
+        | Operator::I64AtomicStore8 { memarg }
+        | Operator::I64AtomicStore16 { memarg }
+        | Operator::I64AtomicStore32 { memarg }
+        | Operator::I32AtomicRmwAdd { memarg }
+        | Operator::I64AtomicRmwAdd { memarg }
+        | Operator::I32AtomicRmw8AddU { memarg }
+        | Operator::I32AtomicRmw16AddU { memarg }
+        | Operator::I64AtomicRmw8AddU { memarg }
+        | Operator::I64AtomicRmw16AddU { memarg }
+        | Operator::I64AtomicRmw32AddU { memarg }
+        | Operator::I32AtomicRmwSub { memarg }
+        | Operator::I64AtomicRmwSub { memarg }
+        | Operator::I32AtomicRmw8SubU { memarg }
+        | Operator::I32AtomicRmw16SubU { memarg }
+        | Operator::I64AtomicRmw8SubU { memarg }
+        | Operator::I64AtomicRmw16SubU { memarg }
+        | Operator::I64AtomicRmw32SubU { memarg }
+        | Operator::I32AtomicRmwAnd { memarg }
+        | Operator::I64AtomicRmwAnd { memarg }
+        | Operator::I32AtomicRmw8AndU { memarg }
+        | Operator::I32AtomicRmw16AndU { memarg }
+        | Operator::I64AtomicRmw8AndU { memarg }
+        | Operator::I64AtomicRmw16AndU { memarg }
+        | Operator::I64AtomicRmw32AndU { memarg }
+        | Operator::I32AtomicRmwOr { memarg }
+        | Operator::I64AtomicRmwOr { memarg }
+        | Operator::I32AtomicRmw8OrU { memarg }
+        | Operator::I32AtomicRmw16OrU { memarg }
+        | Operator::I64AtomicRmw8OrU { memarg }
+        | Operator::I64AtomicRmw16OrU { memarg }
+        | Operator::I64AtomicRmw32OrU { memarg }
+        | Operator::I32AtomicRmwXor { memarg }
+        | Operator::I64AtomicRmwXor { memarg }
+        | Operator::I32AtomicRmw8XorU { memarg }
+        | Operator::I32AtomicRmw16XorU { memarg }
+        | Operator::I64AtomicRmw8XorU { memarg }
+        | Operator::I64AtomicRmw16XorU { memarg }
+        | Operator::I64AtomicRmw32XorU { memarg }
+        | Operator::I32AtomicRmwXchg { memarg }
+        | Operator::I64AtomicRmwXchg { memarg }
+        | Operator::I32AtomicRmw8XchgU { memarg }
+        | Operator::I32AtomicRmw16XchgU { memarg }
+        | Operator::I64AtomicRmw8XchgU { memarg }
+        | Operator::I64AtomicRmw16XchgU { memarg }
+        | Operator::I64AtomicRmw32XchgU { memarg }
+        | Operator::I32AtomicRmwCmpxchg { memarg }
+        | Operator::I64AtomicRmwCmpxchg { memarg }
+        | Operator::I32AtomicRmw8CmpxchgU { memarg }
+        | Operator::I32AtomicRmw16CmpxchgU { memarg }
+        | Operator::I64AtomicRmw8CmpxchgU { memarg }
+        | Operator::I64AtomicRmw16CmpxchgU { memarg }
+        | Operator::I64AtomicRmw32CmpxchgU { memarg }
+        | Operator::V128Load { memarg }
+        | Operator::V128Load8x8S { memarg }
+        | Operator::V128Load8x8U { memarg }
+        | Operator::V128Load16x4S { memarg }
+        | Operator::V128Load16x4U { memarg }
+        | Operator::V128Load32x2S { memarg }
+        | Operator::V128Load32x2U { memarg }
+        | Operator::V128Load8Splat { memarg }
+        | Operator::V128Load16Splat { memarg }
+        | Operator::V128Load32Splat { memarg }
+        | Operator::V128Load64Splat { memarg }
+        | Operator::V128Load32Zero { memarg }
+        | Operator::V128Load64Zero { memarg }
+        | Operator::V128Store { memarg }
+        | Operator::V128Load8Lane { memarg, .. }
+        | Operator::V128Load16Lane { memarg, .. }
+        | Operator::V128Load32Lane { memarg, .. }
+        | Operator::V128Load64Lane { memarg, .. }
+        | Operator::V128Store8Lane { memarg, .. }
+        | Operator::V128Store16Lane { memarg, .. }
+        | Operator::V128Store32Lane { memarg, .. }
+        | Operator::V128Store64Lane { memarg, .. } => {
+            record(
+                function,
+                offset,
+                Dependency::Memory(memarg.memory),
+                "memory_access",
+            );
+        }
+        Operator::MemorySize { mem } => {
+            record(function, offset, Dependency::Memory(*mem), "memory_size");
+        }
+        Operator::MemoryGrow { mem } => {
+            record(function, offset, Dependency::Memory(*mem), "memory_grow");
+        }
         Operator::TableGet { table } => {
             record(function, offset, Dependency::Table(*table), "table_get");
         }
@@ -1764,6 +2252,36 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
         }
         Operator::DataDrop { data_index } => {
             record(function, offset, Dependency::Data(*data_index), "data_drop");
+        }
+        Operator::MemoryCopy { dst_mem, src_mem } => {
+            record(
+                function,
+                offset,
+                Dependency::Memory(*dst_mem),
+                "memory_copy",
+            );
+            record(
+                function,
+                offset,
+                Dependency::Memory(*src_mem),
+                "memory_copy",
+            );
+        }
+        Operator::MemoryFill { mem } => {
+            record(function, offset, Dependency::Memory(*mem), "memory_fill");
+        }
+        Operator::MemoryDiscard { mem } => {
+            record(function, offset, Dependency::Memory(*mem), "memory_discard");
+        }
+        Operator::TryTable { try_table } => {
+            for catch in &try_table.catches {
+                match catch {
+                    wasmparser::Catch::One { tag, .. } | wasmparser::Catch::OneRef { tag, .. } => {
+                        record(function, offset, Dependency::Tag(*tag), "try_table");
+                    }
+                    wasmparser::Catch::All { .. } | wasmparser::Catch::AllRef { .. } => {}
+                }
+            }
         }
         Operator::ElemDrop { elem_index } => {
             record(
@@ -2626,6 +3144,227 @@ mod tests {
         );
     }
 
+    #[test]
+    fn emits_defined_memory_and_active_data_segments() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (memory $mem 1)
+              (data (i32.const 0) "route-data")
+              (func $route_entry (type $t0)
+                i32.const 0
+                i32.load)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.memories.len(), 1);
+        assert_eq!(module.data_segments.len(), 1);
+        assert!(module.data_segments[0]
+            .dependencies
+            .contains(&Dependency::Memory(0)));
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0), Dependency::Data(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.memories, 1);
+        assert_eq!(emitted.index_spaces.data, 1);
+        assert!(emitted.functions[0]
+            .dependencies
+            .contains(&Dependency::Memory(0)));
+        assert!(emitted.data_segments[0]
+            .dependencies
+            .contains(&Dependency::Memory(0)));
+    }
+
+    #[test]
+    fn emits_passive_data_segments_for_memory_init() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (memory $mem 1)
+              (data $segment "abc")
+              (func $route_entry (type $t0)
+                i32.const 0
+                i32.const 0
+                i32.const 3
+                memory.init $segment)
+              (func $other_route_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.memories, 1);
+        assert_eq!(emitted.index_spaces.data, 1);
+        assert!(emitted.functions[0]
+            .dependencies
+            .contains(&Dependency::Data(0)));
+        assert!(emitted.functions[0]
+            .dependencies
+            .contains(&Dependency::Memory(0)));
+    }
+
+    #[test]
+    fn emits_original_memory_import_names() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (import "env" "memory" (memory $mem 1))
+              (data (i32.const 0) "route-data")
+              (func $route_entry (type $t0)
+                i32.const 0
+                i32.load)
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.memory_imports.get(&0).unwrap().module, "env");
+        assert_eq!(module.memory_imports.get(&0).unwrap().name, "memory");
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0), Dependency::Data(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        assert_eq!(
+            memory_import_names(&emitted),
+            vec![("env".to_string(), "memory".to_string())]
+        );
+    }
+
+    #[test]
+    fn emits_defined_tags_and_remaps_throw() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (tag $route_error (type $t0))
+              (func $route_entry (type $t0)
+                throw $route_error)
+              (func $other_route_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.tags.len(), 1);
+        assert!(module.tags[0].dependencies.contains(&Dependency::Type(0)));
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.tags, 1);
+        assert!(emitted.functions[0]
+            .dependencies
+            .contains(&Dependency::Tag(0)));
+    }
+
+    #[test]
+    fn emits_original_tag_import_names() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (import "env" "route_error" (tag $route_error (type $t0)))
+              (func $route_entry (type $t0)
+                throw $route_error)
+              (func $other_route_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.tag_imports.get(&0).unwrap().module, "env");
+        assert_eq!(module.tag_imports.get(&0).unwrap().name, "route_error");
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        assert_eq!(
+            tag_import_names(&emitted),
+            vec![("env".to_string(), "route_error".to_string())]
+        );
+    }
+
     fn function_import_names(wasm: &[u8]) -> Vec<(String, String, u32)> {
         let mut imports = Vec::new();
         for payload in wasmparser::Parser::new(0).parse_all(wasm) {
@@ -2667,6 +3406,36 @@ mod tests {
                 for import in reader {
                     let import = import.unwrap();
                     if matches!(import.ty, wasmparser::TypeRef::Table(_)) {
+                        imports.push((import.module.to_string(), import.name.to_string()));
+                    }
+                }
+            }
+        }
+        imports
+    }
+
+    fn memory_import_names(wasm: &[u8]) -> Vec<(String, String)> {
+        let mut imports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ImportSection(reader) = payload.unwrap() {
+                for import in reader {
+                    let import = import.unwrap();
+                    if matches!(import.ty, wasmparser::TypeRef::Memory(_)) {
+                        imports.push((import.module.to_string(), import.name.to_string()));
+                    }
+                }
+            }
+        }
+        imports
+    }
+
+    fn tag_import_names(wasm: &[u8]) -> Vec<(String, String)> {
+        let mut imports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ImportSection(reader) = payload.unwrap() {
+                for import in reader {
+                    let import = import.unwrap();
+                    if matches!(import.ty, wasmparser::TypeRef::Tag(_)) {
                         imports.push((import.module.to_string(), import.name.to_string()));
                     }
                 }
