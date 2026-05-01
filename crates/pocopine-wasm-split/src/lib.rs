@@ -2799,6 +2799,162 @@ mod tests {
     use super::{analyze, Dependency, FunctionImport, GraphError, RouteSplitRoot, ValidationError};
 
     #[test]
+    fn ownership_plan_keeps_indirect_route_funcs_off_shell() {
+        // Mirrors the HN bug: a route reaches a function only via the funcref
+        // table, and that function's mangled name says it belongs to the route.
+        // The legacy planner pulled it into shell ("used by all" via Table(0)
+        // expansion); the ownership-aware planner should leave it in the route.
+        //
+        // WAT identifiers can't carry the `::routes::a::` substring the
+        // classifier looks for, so build the module with wasm_encoder and
+        // attach a name section by hand.
+        let wasm = build_test_module_with_names(
+            &[
+                (0, "route_a_entry"),
+                (1, "route_b_entry"),
+                (2, "shell_helper"),
+                (3, "<crate::routes::a::Foo>::handler"),
+            ],
+        );
+
+        let module = analyze(&wasm).unwrap();
+        let target = module.functions.iter().find(|f| f.index == 3).unwrap();
+        assert_eq!(
+            target.name.as_deref(),
+            Some("<crate::routes::a::Foo>::handler")
+        );
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let route_ids = vec!["a".to_string(), "b".to_string()];
+        let plan = module
+            .plan_route_split_with_ownership([Dependency::Function(2)], &routes, &route_ids)
+            .unwrap();
+
+        let target_dep = Dependency::Function(3);
+        assert!(
+            !plan.shell.contains(&target_dep),
+            "ownership planner should not pin route-named indirect targets to shell"
+        );
+        assert!(
+            plan.routes[0].dependencies.contains(&target_dep),
+            "indirect target with `routes::a::` in its name should belong to route a"
+        );
+        assert!(
+            !plan.routes[1].dependencies.contains(&target_dep),
+            "route b should not own a function whose name says route a"
+        );
+    }
+
+    fn build_test_module_with_names(names: &[(u32, &str)]) -> Vec<u8> {
+        // Module with: 2 types (void, entry-with-i32-param), one funcref table,
+        // 4 funcs (3 entries that call_indirect, 1 indirect-only target),
+        // an active elem segment installing the indirect target, and exports
+        // for the shell + route roots.
+        use wasm_encoder::*;
+        let mut module = Module::new();
+
+        let mut types = TypeSection::new();
+        types.ty().function([], []); // type 0: () -> ()
+        types.ty().function([ValType::I32], []); // type 1: (i32) -> ()
+        module.section(&types);
+
+        let mut funcs = FunctionSection::new();
+        funcs.function(1); // route_a_entry: (i32) -> ()
+        funcs.function(1); // route_b_entry: (i32) -> ()
+        funcs.function(0); // shell_helper: () -> ()
+        funcs.function(0); // a_only_indirect: () -> ()
+        module.section(&funcs);
+
+        let mut tables = TableSection::new();
+        tables.table(TableType {
+            element_type: RefType::FUNCREF,
+            table64: false,
+            minimum: 1,
+            maximum: Some(1),
+            shared: false,
+        });
+        module.section(&tables);
+
+        let mut exports = ExportSection::new();
+        exports.export("pocopine_route_mount_a", ExportKind::Func, 0);
+        exports.export("pocopine_route_mount_b", ExportKind::Func, 1);
+        exports.export("shell_root", ExportKind::Func, 2);
+        module.section(&exports);
+
+        let mut elements = ElementSection::new();
+        elements.active(
+            None,
+            &ConstExpr::i32_const(0),
+            Elements::Functions(std::borrow::Cow::Owned(vec![3])),
+        );
+        module.section(&elements);
+
+        let mut codes = CodeSection::new();
+        // route_a_entry / route_b_entry: local.get 0; call_indirect type 0
+        for _ in 0..2 {
+            let mut f = Function::new([]);
+            f.instruction(&Instruction::LocalGet(0));
+            f.instruction(&Instruction::CallIndirect {
+                type_index: 0,
+                table_index: 0,
+            });
+            f.instruction(&Instruction::End);
+            codes.function(&f);
+        }
+        // shell_helper + a_only_indirect: empty bodies
+        for _ in 0..2 {
+            let mut f = Function::new([]);
+            f.instruction(&Instruction::End);
+            codes.function(&f);
+        }
+        module.section(&codes);
+
+        // Encode the name custom section by hand.
+        let mut name_payload = Vec::new();
+        // Subsection 1: function names; vec(naming) where naming = (idx, name)
+        let mut subsection = Vec::new();
+        // count
+        encode_u32(&mut subsection, names.len() as u32);
+        for (idx, name) in names {
+            encode_u32(&mut subsection, *idx);
+            encode_u32(&mut subsection, name.len() as u32);
+            subsection.extend_from_slice(name.as_bytes());
+        }
+        name_payload.push(0x01); // subsection id: function names
+        encode_u32(&mut name_payload, subsection.len() as u32);
+        name_payload.extend_from_slice(&subsection);
+        module.section(&CustomSection {
+            name: std::borrow::Cow::Borrowed("name"),
+            data: std::borrow::Cow::Owned(name_payload),
+        });
+
+        module.finish()
+    }
+
+    fn encode_u32(buf: &mut Vec<u8>, mut v: u32) {
+        loop {
+            let mut byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                byte |= 0x80;
+            }
+            buf.push(byte);
+            if v == 0 {
+                break;
+            }
+        }
+    }
+
+    #[test]
     fn classify_function_owner_picks_route_or_shared() {
         use super::FunctionOwner;
         let routes = vec!["home".to_string(), "story".to_string()];
