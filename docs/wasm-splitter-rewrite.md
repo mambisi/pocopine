@@ -154,7 +154,11 @@ defined. Function exports are only emitted for functions owned by the
 chunk, never for functions that are merely external references.
 The emitter also handles table dependencies for indirect calls and
 table operators, preserving original table import names and emitting
-owned table definitions. Element segments remain a separate follow-up.
+owned table definitions. Function-index element segments are now part
+of the graph too: active, passive, and declared segments remap their
+function items, and active segments remap their table. Expression
+element segments and non-`i32.const` active offsets still fail closed
+until const-expression remapping is expanded.
 
 ## Contributor mental model
 

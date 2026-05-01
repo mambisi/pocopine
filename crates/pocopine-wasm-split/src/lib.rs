@@ -6,6 +6,7 @@
 //! index-bearing operator is recorded before any future emitter is allowed to
 //! split or rewrite a module.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -64,6 +65,7 @@ pub struct ModuleAnalysis {
     pub table_imports: BTreeMap<u32, TableImport>,
     pub types: Vec<wasmparser::FuncType>,
     pub tables: Vec<TableAnalysis>,
+    pub elements: Vec<ElementAnalysis>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
 }
@@ -89,6 +91,36 @@ pub struct TableAnalysis {
     pub ty: wasmparser::TableType,
     pub imported: bool,
     pub has_init_expr: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementAnalysis {
+    pub index: u32,
+    pub kind: ElementKindAnalysis,
+    pub items: ElementItemsAnalysis,
+    pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElementKindAnalysis {
+    Passive,
+    Active {
+        table_index: Option<u32>,
+        offset_expr: ConstExprAnalysis,
+    },
+    Declared,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstExprAnalysis {
+    I32Const(i32),
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElementItemsAnalysis {
+    Functions(Vec<u32>),
+    Expressions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +156,11 @@ pub enum ValidationError {
         index: u32,
         limit: u32,
     },
+    ElementIndexOutOfBounds {
+        element: u32,
+        dependency: Dependency,
+        limit: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +194,10 @@ pub enum EmitError {
     UnsupportedTableInit {
         table: u32,
     },
+    UnsupportedElementExpressions {
+        element: u32,
+    },
+    UnsupportedConstExpr,
     MissingFunction {
         function: u32,
     },
@@ -185,6 +226,10 @@ impl fmt::Display for EmitError {
             EmitError::UnsupportedTableInit { table } => {
                 write!(f, "unsupported table init expression for table {table}")
             }
+            EmitError::UnsupportedElementExpressions { element } => {
+                write!(f, "unsupported expression element segment {element}")
+            }
+            EmitError::UnsupportedConstExpr => write!(f, "unsupported constant expression"),
             EmitError::MissingFunction { function } => write!(f, "missing function {function}"),
             EmitError::MissingFunctionBody { function } => {
                 write!(f, "missing function body for function {function}")
@@ -394,6 +439,20 @@ impl ModuleAnalysis {
             }
         }
 
+        for element in &self.elements {
+            for dependency in &element.dependencies {
+                if let Some(limit) = self.index_spaces.limit_for(*dependency) {
+                    if dependency.index() >= limit {
+                        errors.push(ValidationError::ElementIndexOutOfBounds {
+                            element: element.index,
+                            dependency: *dependency,
+                            limit,
+                        });
+                    }
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -427,15 +486,27 @@ impl ModuleAnalysis {
                 continue;
             }
 
-            if let Dependency::Function(index) = dependency {
-                let Some(function) = self.function(index) else {
-                    return Err(GraphError::RootIndexOutOfBounds {
-                        dependency,
-                        limit: self.index_spaces.functions,
-                    });
-                };
-                stack.push(Dependency::Type(function.type_index));
-                stack.extend(function.dependencies.iter().copied());
+            match dependency {
+                Dependency::Function(index) => {
+                    let Some(function) = self.function(index) else {
+                        return Err(GraphError::RootIndexOutOfBounds {
+                            dependency,
+                            limit: self.index_spaces.functions,
+                        });
+                    };
+                    stack.push(Dependency::Type(function.type_index));
+                    stack.extend(function.dependencies.iter().copied());
+                }
+                Dependency::Element(index) => {
+                    let Some(element) = self.element(index) else {
+                        return Err(GraphError::RootIndexOutOfBounds {
+                            dependency,
+                            limit: self.index_spaces.elements,
+                        });
+                    };
+                    stack.extend(element.dependencies.iter().copied());
+                }
+                _ => {}
             }
         }
 
@@ -667,6 +738,14 @@ impl ModuleAnalysis {
             module.section(&exports);
         }
 
+        let mut elements = wasm_encoder::ElementSection::new();
+        for old_element in ordered_indices(&chunk.local_remap.elements) {
+            self.encode_element(chunk, &mut elements, old_element)?;
+        }
+        if !elements.is_empty() {
+            module.section(&elements);
+        }
+
         let mut code = wasm_encoder::CodeSection::new();
         for old_function in local_functions {
             let function = self
@@ -698,7 +777,20 @@ impl ModuleAnalysis {
             return Err(EmitError::Link(errors));
         }
 
-        for dependency in chunk.owned.iter().chain(&chunk.external) {
+        for dependency in &chunk.owned {
+            match dependency {
+                Dependency::Function(_)
+                | Dependency::Type(_)
+                | Dependency::Table(_)
+                | Dependency::Element(_) => {}
+                _ => {
+                    return Err(EmitError::UnsupportedImport {
+                        dependency: *dependency,
+                    });
+                }
+            }
+        }
+        for dependency in &chunk.external {
             match dependency {
                 Dependency::Function(_) | Dependency::Type(_) | Dependency::Table(_) => {}
                 _ => {
@@ -752,6 +844,72 @@ impl ModuleAnalysis {
         Ok(())
     }
 
+    fn encode_element(
+        &self,
+        chunk: &ChunkLinkPlan,
+        elements: &mut wasm_encoder::ElementSection,
+        old_element: u32,
+    ) -> Result<(), EmitError> {
+        let element = self.element(old_element).ok_or(EmitError::MissingRemap {
+            chunk: chunk.name.clone(),
+            dependency: Dependency::Element(old_element),
+        })?;
+        let ElementItemsAnalysis::Functions(functions) = &element.items else {
+            return Err(EmitError::UnsupportedElementExpressions {
+                element: old_element,
+            });
+        };
+
+        let remapped_functions = functions
+            .iter()
+            .map(|function| {
+                combined_function_index(chunk, *function).ok_or_else(|| EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Function(*function),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let items = wasm_encoder::Elements::Functions(Cow::Owned(remapped_functions));
+
+        match &element.kind {
+            ElementKindAnalysis::Passive => {
+                elements.passive(items);
+            }
+            ElementKindAnalysis::Declared => {
+                elements.declared(items);
+            }
+            ElementKindAnalysis::Active {
+                table_index,
+                offset_expr,
+            } => {
+                if matches!(offset_expr, ConstExprAnalysis::Unsupported) {
+                    return Err(EmitError::UnsupportedConstExpr);
+                }
+                let remapped_table = match table_index {
+                    Some(table) => Some(combined_table_index(chunk, *table).ok_or_else(|| {
+                        EmitError::MissingRemap {
+                            chunk: chunk.name.clone(),
+                            dependency: Dependency::Table(*table),
+                        }
+                    })?),
+                    None => match combined_table_index(chunk, 0) {
+                        Some(0) => None,
+                        Some(index) => Some(index),
+                        None => {
+                            return Err(EmitError::MissingRemap {
+                                chunk: chunk.name.clone(),
+                                dependency: Dependency::Table(0),
+                            });
+                        }
+                    },
+                };
+                let offset = encode_const_expr(offset_expr);
+                elements.active(remapped_table, &offset, items);
+            }
+        }
+        Ok(())
+    }
+
     fn build_chunk_link_plan(
         &self,
         name: String,
@@ -783,6 +941,20 @@ impl ModuleAnalysis {
             for function_dependency in &function.dependencies {
                 if !owned.contains(function_dependency) {
                     external.insert(*function_dependency);
+                }
+            }
+        }
+
+        for dependency in &owned {
+            let Dependency::Element(index) = dependency else {
+                continue;
+            };
+            let Some(element) = self.element(*index) else {
+                continue;
+            };
+            for element_dependency in &element.dependencies {
+                if !owned.contains(element_dependency) {
+                    external.insert(*element_dependency);
                 }
             }
         }
@@ -838,6 +1010,12 @@ impl ModuleAnalysis {
         self.tables
             .get(index as usize)
             .filter(|table| table.index == index)
+    }
+
+    fn element(&self, index: u32) -> Option<&ElementAnalysis> {
+        self.elements
+            .get(index as usize)
+            .filter(|element| element.index == index)
     }
 }
 
@@ -918,6 +1096,18 @@ fn combined_table_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
     }
 }
 
+fn combined_element_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.elements.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .elements
+            .get(&old_index)
+            .map(|index| chunk.external_remap.elements.len() as u32 + *index)
+    }
+}
+
 fn combined_type_index(chunk: &ChunkLinkPlan, old_index: u32) -> Result<u32, EmitError> {
     if let Some(index) = chunk.external_remap.types.get(&old_index) {
         Ok(*index)
@@ -951,11 +1141,16 @@ fn combined_required_index(
                 dependency,
             })
         }),
+        Dependency::Element(index) => combined_element_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
         Dependency::Memory(_)
         | Dependency::Global(_)
         | Dependency::Tag(_)
-        | Dependency::Data(_)
-        | Dependency::Element(_) => Err(ReencodeError::UserError(EmitError::UnsupportedImport {
+        | Dependency::Data(_) => Err(ReencodeError::UserError(EmitError::UnsupportedImport {
             dependency,
         })),
     }
@@ -963,6 +1158,13 @@ fn combined_required_index(
 
 fn encode_table_type(ty: wasmparser::TableType) -> Result<wasm_encoder::TableType, EmitError> {
     wasm_encoder::TableType::try_from(ty).map_err(|err| EmitError::Parse(err.to_string()))
+}
+
+fn encode_const_expr(expr: &ConstExprAnalysis) -> wasm_encoder::ConstExpr {
+    match expr {
+        ConstExprAnalysis::I32Const(value) => wasm_encoder::ConstExpr::i32_const(*value),
+        ConstExprAnalysis::Unsupported => wasm_encoder::ConstExpr::empty(),
+    }
 }
 
 fn emit_reencode_error(error: ReencodeError<EmitError>) -> EmitError {
@@ -1113,7 +1315,11 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 analysis.index_spaces.tags += count_section(reader)?;
             }
             Payload::ElementSection(reader) => {
-                analysis.index_spaces.elements += count_section(reader)?;
+                for element in reader {
+                    let index = analysis.index_spaces.elements;
+                    analysis.elements.push(analyze_element(index, element?)?);
+                    analysis.index_spaces.elements += 1;
+                }
             }
             Payload::DataSection(reader) => {
                 analysis.index_spaces.data += count_section(reader)?;
@@ -1169,6 +1375,55 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
 
 fn count_section<T>(reader: wasmparser::SectionLimited<'_, T>) -> WasmResult<u32> {
     Ok(reader.count())
+}
+
+fn analyze_element(index: u32, element: wasmparser::Element<'_>) -> WasmResult<ElementAnalysis> {
+    let mut dependencies = BTreeSet::new();
+    let kind = match element.kind {
+        wasmparser::ElementKind::Passive => ElementKindAnalysis::Passive,
+        wasmparser::ElementKind::Declared => ElementKindAnalysis::Declared,
+        wasmparser::ElementKind::Active {
+            table_index,
+            offset_expr,
+        } => {
+            dependencies.insert(Dependency::Table(table_index.unwrap_or(0)));
+            ElementKindAnalysis::Active {
+                table_index,
+                offset_expr: analyze_const_expr(offset_expr),
+            }
+        }
+    };
+
+    let items = match element.items {
+        wasmparser::ElementItems::Functions(functions) => {
+            let functions = functions.into_iter().collect::<Result<Vec<_>, _>>()?;
+            dependencies.extend(functions.iter().copied().map(Dependency::Function));
+            ElementItemsAnalysis::Functions(functions)
+        }
+        wasmparser::ElementItems::Expressions(_, _) => ElementItemsAnalysis::Expressions,
+    };
+
+    Ok(ElementAnalysis {
+        index,
+        kind,
+        items,
+        dependencies,
+    })
+}
+
+fn analyze_const_expr(expr: wasmparser::ConstExpr<'_>) -> ConstExprAnalysis {
+    let mut ops = expr.get_operators_reader();
+    let Ok(first) = ops.read() else {
+        return ConstExprAnalysis::Unsupported;
+    };
+    let out = match first {
+        Operator::I32Const { value } => ConstExprAnalysis::I32Const(value),
+        _ => return ConstExprAnalysis::Unsupported,
+    };
+    match ops.read() {
+        Ok(Operator::End) => out,
+        _ => ConstExprAnalysis::Unsupported,
+    }
 }
 
 fn empty_defined_function(index: u32, type_index: u32) -> FunctionAnalysis {
@@ -2031,6 +2286,99 @@ mod tests {
             table_import_names(&emitted),
             vec![("env".to_string(), "indirect_table".to_string())]
         );
+    }
+
+    #[test]
+    fn emits_active_function_element_segments() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (table $table 1 funcref)
+              (func $route_entry (type $t0))
+              (func $other_route_entry (type $t0))
+              (elem (i32.const 0) $route_entry))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.elements.len(), 1);
+        assert!(module.elements[0]
+            .dependencies
+            .contains(&Dependency::Function(0)));
+        assert!(module.elements[0]
+            .dependencies
+            .contains(&Dependency::Table(0)));
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0), Dependency::Element(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.elements, 1);
+        assert_eq!(emitted.index_spaces.tables, 1);
+        assert!(emitted.elements[0]
+            .dependencies
+            .contains(&Dependency::Function(0)));
+        assert!(emitted.elements[0]
+            .dependencies
+            .contains(&Dependency::Table(0)));
+    }
+
+    #[test]
+    fn emits_passive_element_segments_for_table_init() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (table $table 1 funcref)
+              (func $route_leaf (type $t0))
+              (elem $segment func $route_leaf)
+              (func $route_entry (type $t0)
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                table.init $table $segment)
+              (func $other_route_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.elements, 1);
+        assert!(emitted.functions[1]
+            .dependencies
+            .contains(&Dependency::Element(0)));
     }
 
     fn function_import_names(wasm: &[u8]) -> Vec<(String, String, u32)> {
