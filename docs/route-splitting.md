@@ -161,44 +161,41 @@ This is the important proof. When the route crosses the boundary
 as data instead of a standalone wasm app, the duplicated runtime
 disappears.
 
-## The post-link backend
+## The rejected post-link prototype
 
-Dynamic routes now use a different backend from the naive split.
-Instead of compiling each route as a separate wasm app, Pocopine
-builds one linked wasm binary with route entry functions marked as
-split points. The CLI then runs a post-link wasm splitter before
-`wasm-bindgen`.
+We briefly tested a post-link splitter prototype that builds one
+linked wasm binary with route entry functions marked as split
+points, then slices that binary before `wasm-bindgen`.
 
-That gives the splitter one whole-program dependency graph. Runtime
-code, memory, tables, wasm-bindgen support, and shared route code
-can stay in the main/shared modules instead of being duplicated in
-every route file.
+The size direction was right, but the implementation model was not
+safe enough for Pocopine. The prototype trusted relocation records
+as the source of truth and raw-copied function bodies while patching
+only known relocation sites. Issue #29 in that prototype showed the
+fundamental problem: `wasm-ld` can synthesize functions that contain
+index-bearing instructions, such as `call`, without corresponding
+`reloc.CODE` entries. A splitter built on relocation-only byte
+patching can therefore emit stale function indices.
 
-Current HN release split output:
+That backend has been removed from the codebase.
 
-```text
-hn_bg.wasm:                    530,971 raw / 213,651 gzip
-chunk_5.wasm:                   99,779 raw /  44,572 gzip
-split_pocopine_route_home.wasm: 27,514 raw /  11,552 gzip
-split_pocopine_route_story.wasm:37,556 raw /  13,924 gzip
-hn_route_not_found.js:             605 raw
-```
+## The rewrite invariant
 
-The first dynamic route load is now:
+The new splitter is being rebuilt around one rule:
 
 ```text
-home:  shell + shared chunk + home chunk
-story: shell + shared chunk + story chunk
+Never raw-copy executable wasm bodies unless every embedded index is
+known, remapped, and validated.
 ```
 
-The route chunk is no longer another complete Pocopine app.
+The rewrite starts in `crates/pocopine-wasm-split`. Its first job is
+not emission. Its first job is instruction-level analysis:
 
-## What this still does not solve
-
-Post-link splitting is not independent route deployment. All chunks
-come from the same build and must be deployed together. A content
-change can move code between main, route, and shared chunks because
-the splitter re-runs reachability analysis over the whole wasm.
+- parse every function body,
+- record every `call`, `ref.func`, `call_indirect`, global, table,
+  memory, data, element, and tag index use,
+- build dependency graphs from the instructions themselves,
+- use relocations only as supplemental metadata,
+- fail strict builds if an index cannot be remapped or validated.
 
 The descriptor path also still only handles simple static route
 templates. Dynamic routes use wasm chunks; static routes can be even
@@ -227,8 +224,8 @@ Inner route crates are still useful: if `routes::story` depends on
 an external markdown crate and `routes::home` does not, that
 dependency should live in the story route crate. But inner crates
 are an authoring and dependency hygiene layer. The duplicated
-runtime problem is solved by post-link splitting and the shared
-runtime ABI.
+runtime problem must be solved by a verified instruction-rewriting
+splitter and the shared runtime ABI.
 
 ## Production details
 

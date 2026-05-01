@@ -20,6 +20,8 @@ looks the way it does — the code itself tells you *what*.
 - [`route-splitting.md`](./route-splitting.md) — why standalone
   route wasm did not reduce first-load size, and the shared-runtime
   descriptor direction that replaces it.
+- [`wasm-splitter-rewrite.md`](./wasm-splitter-rewrite.md) — the
+  instruction-first wasm splitter rewrite and its safety invariant.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 

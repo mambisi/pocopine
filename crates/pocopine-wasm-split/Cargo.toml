@@ -1,0 +1,13 @@
+[package]
+name = "pocopine-wasm-split"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pocopine-owned WebAssembly route splitting analysis."
+
+[dependencies]
+wasmparser = "0.240"
+
+[dev-dependencies]
+wat = "1"

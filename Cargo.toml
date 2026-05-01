@@ -11,9 +11,7 @@ members = [
     "crates/pocopine-expr",
     "crates/pocopine-macros",
     "crates/pocopine-server",
-    "crates/wasm_split",
-    "crates/wasm_split_cli",
-    "crates/wasm_split_macros",
+    "crates/pocopine-wasm-split",
     "examples/blog",
     "examples/counter",
     "examples/hn",
@@ -48,9 +46,6 @@ repository = "https://github.com/mambisi/pocopine"
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
-wasm_split_helpers = { path = "crates/wasm_split", version = "0.2.1" }
-wasm_split_macros = { path = "crates/wasm_split_macros", version = "0.2.1" }
-wasm_split_cli_support = { path = "crates/wasm_split_cli", version = "0.2.1" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

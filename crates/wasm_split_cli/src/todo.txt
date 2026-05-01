@@ -1,3 +1,0 @@
-- [ ] Make all names unique by appending random string
-
-- [ ] Apply dependencies to post-bindgen wasm (validate?)

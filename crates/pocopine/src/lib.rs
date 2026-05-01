@@ -72,7 +72,6 @@ pub mod __private {
     // RFC 060 Tier 4 compatibility — static phf registries remain
     // supported even though `app!{}` now emits a plain slice.
     pub use phf;
-    pub use wasm_split_helpers;
     // RFC-058 Phase 2 — template-plan shape + registry. The
     // macro emits a `&'static StaticTemplatePlan` per component
     // and registers it via `register_template_plan` alongside the
