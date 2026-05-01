@@ -2346,10 +2346,12 @@ dependencies = [
  "anyhow",
  "clap",
  "notify",
+ "pocopine-wasm-split",
  "reqwest",
  "serde",
  "tiny_http",
  "toml 0.8.23",
+ "wasmparser 0.240.0",
 ]
 
 [[package]]

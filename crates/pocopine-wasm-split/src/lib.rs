@@ -1273,6 +1273,25 @@ impl ModuleAnalysis {
             }
         }
 
+        let external_dependencies = external.iter().copied().collect::<Vec<_>>();
+        for dependency in external_dependencies {
+            match dependency {
+                Dependency::Function(index) => {
+                    let Some(function) = self.function(index) else {
+                        continue;
+                    };
+                    external.insert(Dependency::Type(function.type_index));
+                }
+                Dependency::Tag(index) => {
+                    let Some(tag) = self.tag(index) else {
+                        continue;
+                    };
+                    external.insert(Dependency::Type(tag.ty.func_type_idx));
+                }
+                _ => {}
+            }
+        }
+
         ChunkLinkPlan {
             name,
             local_remap: IndexRemap::from_dependencies(&owned),

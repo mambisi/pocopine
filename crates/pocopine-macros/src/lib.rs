@@ -3896,6 +3896,28 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
     let registry_entries = shell_entries.iter().map(|(key, vtable)| {
         quote! { (#key, #vtable), }
     });
+    let shell_registers = shell_entries.iter().map(|(_key, vtable)| {
+        quote! { (#vtable.register)(); }
+    });
+    let route_root_markers = split_route_ids(parsed)
+        .into_iter()
+        .zip(parsed.routes.iter())
+        .map(|(id, route)| {
+            let marker = quote::format_ident!("__pocopine_split_route_root_{}", id.name);
+            let component = &route.component;
+            quote! {
+                #[no_mangle]
+                pub extern "C" fn #marker() {
+                    <#component as ::pocopine::__private::Component>::register();
+                    let __pocopine_host = unsafe {
+                        &*::core::ptr::NonNull::<::pocopine::__private::web_sys::Element>::dangling().as_ptr()
+                    };
+                    let __pocopine_handle =
+                        ::pocopine::App::mount_subtree::<#component>(__pocopine_host);
+                    let _ = ::core::hint::black_box(__pocopine_handle);
+                }
+            }
+        });
     let devtools_call = parsed.devtools.then(|| quote! { .with_devtools() });
     let manifest = split_manifest_json(parsed, split_base);
 
@@ -3907,6 +3929,13 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
             )] = &[
                 #(#registry_entries)*
             ];
+
+            #[no_mangle]
+            pub extern "C" fn __pocopine_split_shell_root() {
+                #(#shell_registers)*
+            }
+
+            #(#route_root_markers)*
 
             ::std::thread_local! {
                 static __POCOPINE_DESCRIPTOR_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =

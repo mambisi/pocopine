@@ -22,7 +22,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use pocopine_wasm_split::{Dependency, RouteSplitRoot};
 use serde::Deserialize;
+use wasmparser::ExternalKind;
 
 #[derive(Parser, Debug)]
 #[command(name = "pocopine", about = "pocopine project CLI", version)]
@@ -709,6 +711,8 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
     }
 
+    emit_post_link_split_chunks(&path, &base, &route_ids)?;
+
     for (idx, route_id) in route_ids.iter().enumerate() {
         if write_descriptor_route_if_static(&path, &base, route_id)? {
             continue;
@@ -921,6 +925,14 @@ fn clean_split_artifacts(path: &Path, base: &str) -> Result<()> {
         let entry = entry.with_context(|| format!("read entry in {}", pkg.display()))?;
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
+        if file_name == ".pocopine-split" {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("remove stale split directory {}", path.display()))?;
+            }
+            continue;
+        }
         if file_name.starts_with(&route_prefix) || file_name == "pocopine-split-loader.js" {
             let path = entry.path();
             if path.is_file() {
@@ -929,6 +941,126 @@ fn clean_split_artifacts(path: &Path, base: &str) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) -> Result<()> {
+    let pkg = path.join("pkg");
+    let wasm_path = pkg.join(format!("{base}_bg.wasm"));
+    let wasm =
+        std::fs::read(&wasm_path).with_context(|| format!("read {}", wasm_path.display()))?;
+    let module = pocopine_wasm_split::analyze(&wasm)
+        .with_context(|| format!("analyze {}", wasm_path.display()))?;
+    module
+        .validate_indices()
+        .map_err(|errors| anyhow!("split input validation failed: {errors:?}"))?;
+
+    let routes = route_ids
+        .iter()
+        .map(|route_id| {
+            let marker = format!("__pocopine_split_route_root_{route_id}");
+            let function = exported_function(&module, &marker).ok_or_else(|| {
+                anyhow!(
+                    "split route root marker `{marker}` was not exported by {}",
+                    wasm_path.display()
+                )
+            })?;
+            Ok(RouteSplitRoot {
+                name: route_id.clone(),
+                roots: vec![Dependency::Function(function)],
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let route_markers = route_ids
+        .iter()
+        .map(|route_id| format!("__pocopine_split_route_root_{route_id}"))
+        .collect::<std::collections::BTreeSet<_>>();
+    let shell_roots = module
+        .exports
+        .iter()
+        .filter(|export| {
+            export.kind == ExternalKind::Func
+                && !route_markers.contains(&export.name)
+                && !export.name.starts_with("__pocopine_split_route_root_")
+        })
+        .map(|export| Dependency::Function(export.index))
+        .collect::<Vec<_>>();
+    if shell_roots.is_empty() {
+        bail!(
+            "split shell build exported no shell function roots in {}",
+            wasm_path.display()
+        );
+    }
+
+    let plan = module
+        .plan_route_split(shell_roots, &routes)
+        .map_err(|error| anyhow!("plan post-link route split: {error:?}"))?;
+    let links = module.build_link_plan(&plan);
+    module
+        .validate_link_plan(&links)
+        .map_err(|errors| anyhow!("validate post-link route split: {errors:?}"))?;
+
+    let split_dir = pkg.join(".pocopine-split");
+    if split_dir.exists() {
+        std::fs::remove_dir_all(&split_dir)
+            .with_context(|| format!("remove {}", split_dir.display()))?;
+    }
+    std::fs::create_dir_all(&split_dir)
+        .with_context(|| format!("create {}", split_dir.display()))?;
+
+    write_split_chunk(&module, &links.shell, &split_dir.join("shell.wasm"))?;
+    for route in &links.routes {
+        write_split_chunk(
+            &module,
+            route,
+            &split_dir.join(format!("route_{}.wasm", route.name)),
+        )?;
+    }
+    for shared in &links.shared {
+        let name = shared
+            .name
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        write_split_chunk(&module, shared, &split_dir.join(format!("{name}.wasm")))?;
+    }
+
+    println!(
+        "  post-link split chunks -> {} (shell + {} route + {} shared)",
+        split_dir.display(),
+        links.routes.len(),
+        links.shared.len()
+    );
+    Ok(())
+}
+
+fn exported_function(module: &pocopine_wasm_split::ModuleAnalysis, name: &str) -> Option<u32> {
+    module
+        .exports
+        .iter()
+        .find(|export| export.kind == ExternalKind::Func && export.name == name)
+        .map(|export| export.index)
+}
+
+fn write_split_chunk(
+    module: &pocopine_wasm_split::ModuleAnalysis,
+    chunk: &pocopine_wasm_split::ChunkLinkPlan,
+    path: &Path,
+) -> Result<()> {
+    let wasm = module
+        .emit_function_chunk(chunk)
+        .with_context(|| format!("emit post-link split chunk `{}`", chunk.name))?;
+    wasmparser::Validator::new()
+        .validate_all(&wasm)
+        .with_context(|| format!("validate post-link split chunk `{}`", chunk.name))?;
+    std::fs::write(path, wasm).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
