@@ -6,7 +6,7 @@ the numbers showed an important problem: a route wasm file is not
 automatically a small route chunk.
 
 This article explains what failed, what we learned, and the
-direction we are moving toward.
+post-link split backend now used by `pocopine build --split`.
 
 ## The naive split
 
@@ -161,26 +161,48 @@ This is the important proof. When the route crosses the boundary
 as data instead of a standalone wasm app, the duplicated runtime
 disappears.
 
-## What this does not solve yet
+## The post-link backend
 
-This does not yet make every route small.
+Dynamic routes now use a different backend from the naive split.
+Instead of compiling each route as a separate wasm app, Pocopine
+builds one linked wasm binary with route entry functions marked as
+split points. The CLI then runs a post-link wasm splitter before
+`wasm-bindgen`.
 
-The current descriptor path only handles simple static route
-templates. Dynamic routes like HN's `home` and `story` still build
-as route wasm artifacts because they have state, bindings, events,
-handlers, and server-function calls.
+That gives the splitter one whole-program dependency graph. Runtime
+code, memory, tables, wasm-bindgen support, and shared route code
+can stay in the main/shared modules instead of being duplicated in
+every route file.
 
-Current status:
+Current HN release split output:
 
 ```text
-shell wasm:       ~479 KiB raw
-home route wasm:  ~486 KiB raw
-story route wasm: ~508 KiB raw
-not_found route:  605 B JS
+hn_bg.wasm:                    530,971 raw / 213,651 gzip
+chunk_5.wasm:                   99,779 raw /  44,572 gzip
+split_pocopine_route_home.wasm: 27,514 raw /  11,552 gzip
+split_pocopine_route_story.wasm:37,556 raw /  13,924 gzip
+hn_route_not_found.js:             605 raw
 ```
 
-So this is not the final split system. It is the first proof that
-the final system must be descriptor/ABI-based.
+The first dynamic route load is now:
+
+```text
+home:  shell + shared chunk + home chunk
+story: shell + shared chunk + story chunk
+```
+
+The route chunk is no longer another complete Pocopine app.
+
+## What this still does not solve
+
+Post-link splitting is not independent route deployment. All chunks
+come from the same build and must be deployed together. A content
+change can move code between main, route, and shared chunks because
+the splitter re-runs reachability analysis over the whole wasm.
+
+The descriptor path also still only handles simple static route
+templates. Dynamic routes use wasm chunks; static routes can be even
+smaller because they cross the boundary as serializable HTML data.
 
 ## The next steps
 
@@ -201,12 +223,12 @@ Then add events and state updates:
 - shell-interpreted update operations
 - server-function dispatch through shell-owned transport
 
-Only after that should inner route crates become the main focus.
-Inner crates are still useful: if `routes::story` depends on an
-external markdown crate and `routes::home` does not, that
+Inner route crates are still useful: if `routes::story` depends on
+an external markdown crate and `routes::home` does not, that
 dependency should live in the story route crate. But inner crates
-do not solve duplicated runtime by themselves. The shared runtime
-ABI does.
+are an authoring and dependency hygiene layer. The duplicated
+runtime problem is solved by post-link splitting and the shared
+runtime ABI.
 
 ## Production details
 

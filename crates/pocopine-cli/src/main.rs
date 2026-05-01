@@ -684,18 +684,13 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
     let base = package_name(&path)?;
-    println!("▶ split wasm-pack build ({})", path.display());
+    println!("▶ post-link split build ({})", path.display());
     clean_split_artifacts(&path, &base)?;
     let build_id = split_build_id()?;
-    let ctx = SplitBuildCtx {
-        release,
-        base: &base,
-        build_id: &build_id,
-        strict,
-    };
     let route_ids_path = std::env::temp_dir().join(format!("{base}-pocopine-route-ids.txt"));
     let _ = std::fs::remove_file(&route_ids_path);
-    run_split_wasm_pack(&path, &ctx, "shell", &base, Some(&route_ids_path))?;
+    let input_wasm =
+        run_postlink_cargo_build(&path, release, strict, &base, &build_id, &route_ids_path)?;
 
     let route_ids_text = std::fs::read_to_string(&route_ids_path)
         .with_context(|| format!("read {}", route_ids_path.display()))?;
@@ -709,18 +704,332 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
     }
 
-    for (idx, route_id) in route_ids.iter().enumerate() {
+    let pkg = path.join("pkg");
+    let split_tmp = pkg.join(".pocopine-split");
+    if split_tmp.exists() {
+        std::fs::remove_dir_all(&split_tmp)
+            .with_context(|| format!("remove {}", split_tmp.display()))?;
+    }
+    std::fs::create_dir_all(&split_tmp)
+        .with_context(|| format!("create {}", split_tmp.display()))?;
+    let main_wasm = split_tmp.join("main.wasm");
+    run_wasm_split_transform(&input_wasm, &split_tmp, &main_wasm, &base)?;
+    run_wasm_bindgen(&main_wasm, &pkg, &base)?;
+    copy_postlink_split_artifacts(&split_tmp, &pkg)?;
+    if release {
+        optimize_wasm_artifacts(&pkg)?;
+    }
+
+    for route_id in &route_ids {
         if write_descriptor_route_if_static(&path, &base, route_id)? {
+            remove_unused_static_route_split(&pkg, route_id)?;
             continue;
         }
-        let mode = format!("route:{idx}");
-        let out_name = format!("{base}_route_{route_id}");
-        run_split_wasm_pack(&path, &ctx, &mode, &out_name, None)?;
+        write_postlink_route_proxy(&path, &base, route_id)?;
     }
     write_split_loader(&path, &base)?;
     let route_count = route_ids.len();
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
     Ok(())
+}
+
+fn optimize_wasm_artifacts(pkg: &Path) -> Result<()> {
+    let wasm_opt = find_wasm_opt()?;
+    for entry in std::fs::read_dir(pkg).with_context(|| format!("read {}", pkg.display()))? {
+        let entry = entry.with_context(|| format!("read entry in {}", pkg.display()))?;
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "wasm") {
+            continue;
+        }
+        let status = Command::new(&wasm_opt)
+            .arg("-Os")
+            .arg(&path)
+            .arg("-o")
+            .arg(&path)
+            .status()
+            .with_context(|| format!("failed to invoke {}", wasm_opt.display()))?;
+        if !status.success() {
+            bail!(
+                "wasm-opt failed for {} with status {status}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn find_wasm_opt() -> Result<PathBuf> {
+    if Command::new("wasm-opt")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return Ok(PathBuf::from("wasm-opt"));
+    }
+
+    let Some(home) = std::env::var_os("HOME") else {
+        bail!("wasm-opt is not on $PATH and HOME is not set");
+    };
+    let cache = PathBuf::from(home).join(".cache").join(".wasm-pack");
+    let mut candidates = Vec::new();
+    if cache.is_dir() {
+        for entry in
+            std::fs::read_dir(&cache).with_context(|| format!("read {}", cache.display()))?
+        {
+            let entry = entry.with_context(|| format!("read entry in {}", cache.display()))?;
+            let path = entry.path().join("bin").join("wasm-opt");
+            if path.is_file() {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    candidates.reverse();
+    candidates
+        .into_iter()
+        .next()
+        .with_context(|| "wasm-opt is not on $PATH and no wasm-pack cached binary was found")
+}
+
+fn run_postlink_cargo_build(
+    path: &Path,
+    release: bool,
+    strict: bool,
+    base: &str,
+    build_id: &str,
+    route_ids_out: &Path,
+) -> Result<PathBuf> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
+        .arg("--lib")
+        .arg("--target")
+        .arg("wasm32-unknown-unknown")
+        .arg("--message-format=json");
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env("POCOPINE_SPLIT_MODE", "postlink")
+        .env("POCOPINE_SPLIT_BASE", base)
+        .env("POCOPINE_SPLIT_STRICT", if strict { "1" } else { "0" })
+        .env("POCOPINE_SPLIT_ROUTE_IDS_OUT", route_ids_out)
+        .current_dir(path);
+    let cfg_name = format!("pocopine_split_postlink_{}", split_cfg_suffix(build_id));
+    let rustflags = match std::env::var("RUSTFLAGS") {
+        Ok(existing) if !existing.trim().is_empty() => {
+            format!("{existing} --cfg={cfg_name} -Clink-args=--emit-relocs")
+        }
+        _ => format!("--cfg={cfg_name} -Clink-args=--emit-relocs"),
+    };
+    cmd.env("RUSTFLAGS", rustflags);
+
+    let output = cmd.output().context("failed to invoke cargo build")?;
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+    if !output.status.success() {
+        if !output.stdout.is_empty() {
+            eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+        }
+        bail!("cargo split build failed with status {}", output.status);
+    }
+
+    #[derive(Deserialize)]
+    struct CargoMessage {
+        reason: String,
+        filenames: Option<Vec<PathBuf>>,
+        target: Option<CargoTarget>,
+    }
+    #[derive(Deserialize)]
+    struct CargoTarget {
+        kind: Vec<String>,
+    }
+
+    let mut wasm = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(message) = serde_json::from_str::<CargoMessage>(line) else {
+            continue;
+        };
+        if message.reason != "compiler-artifact" {
+            continue;
+        }
+        let is_cdylib = message
+            .target
+            .as_ref()
+            .is_some_and(|target| target.kind.iter().any(|kind| kind == "cdylib"));
+        if !is_cdylib {
+            continue;
+        }
+        if let Some(path) = message
+            .filenames
+            .unwrap_or_default()
+            .into_iter()
+            .find(|path| path.extension().is_some_and(|ext| ext == "wasm"))
+        {
+            wasm = Some(path);
+        }
+    }
+    wasm.context("cargo build did not report a cdylib wasm artifact")
+}
+
+fn run_wasm_split_transform(
+    input_wasm: &Path,
+    split_tmp: &Path,
+    main_wasm: &Path,
+    base: &str,
+) -> Result<()> {
+    let input =
+        std::fs::read(input_wasm).with_context(|| format!("read {}", input_wasm.display()))?;
+    let main_module = format!("./{base}.js");
+    let mut opts = wasm_split_cli_support::Options::new(&input);
+    opts.output_dir = split_tmp;
+    opts.main_out_path = main_wasm;
+    opts.main_module = &main_module;
+    wasm_split_cli_support::transform(opts)
+        .map_err(|err| anyhow!("post-link wasm split failed: {err:?}"))?;
+    Ok(())
+}
+
+fn run_wasm_bindgen(main_wasm: &Path, pkg: &Path, base: &str) -> Result<()> {
+    std::fs::create_dir_all(pkg).with_context(|| format!("create {}", pkg.display()))?;
+    let wasm_bindgen = find_wasm_bindgen()?;
+    let status = Command::new(&wasm_bindgen)
+        .arg(main_wasm)
+        .arg("--out-dir")
+        .arg(pkg)
+        .arg("--out-name")
+        .arg(base)
+        .arg("--target")
+        .arg("web")
+        .arg("--no-demangle")
+        .arg("--keep-lld-exports")
+        .status()
+        .with_context(|| format!("failed to invoke {}", wasm_bindgen.display()))?;
+    if !status.success() {
+        bail!("wasm-bindgen split build failed with status {status}");
+    }
+    Ok(())
+}
+
+fn find_wasm_bindgen() -> Result<PathBuf> {
+    if Command::new("wasm-bindgen")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return Ok(PathBuf::from("wasm-bindgen"));
+    }
+
+    let Some(home) = std::env::var_os("HOME") else {
+        bail!("wasm-bindgen is not on $PATH and HOME is not set");
+    };
+    let cache = PathBuf::from(home).join(".cache").join(".wasm-pack");
+    let mut candidates = Vec::new();
+    if cache.is_dir() {
+        for entry in
+            std::fs::read_dir(&cache).with_context(|| format!("read {}", cache.display()))?
+        {
+            let entry = entry.with_context(|| format!("read entry in {}", cache.display()))?;
+            let path = entry.path().join("wasm-bindgen");
+            if path.is_file() {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    candidates.reverse();
+    candidates
+        .into_iter()
+        .next()
+        .with_context(|| "wasm-bindgen is not on $PATH and no wasm-pack cached binary was found")
+}
+
+fn copy_postlink_split_artifacts(split_tmp: &Path, pkg: &Path) -> Result<()> {
+    for entry in
+        std::fs::read_dir(split_tmp).with_context(|| format!("read {}", split_tmp.display()))?
+    {
+        let entry = entry.with_context(|| format!("read entry in {}", split_tmp.display()))?;
+        let src = entry.path();
+        if src.file_name().is_some_and(|name| name == "main.wasm") || !src.is_file() {
+            continue;
+        }
+        let dest = pkg.join(entry.file_name());
+        std::fs::copy(&src, &dest)
+            .with_context(|| format!("copy {} to {}", src.display(), dest.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_unused_static_route_split(pkg: &Path, route_id: &str) -> Result<()> {
+    let suffix = split_route_ident_suffix(0, route_id);
+    let split_name = format!("split_pocopine_route_{suffix}.wasm");
+    let path = pkg.join(split_name);
+    if path.exists() {
+        std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+    }
+    let link_module = pkg.join("__wasm_split.js");
+    if link_module.exists() {
+        let loader = format!("__wasm_split_load_pocopine_route_{suffix}");
+        let text = std::fs::read_to_string(&link_module)
+            .with_context(|| format!("read {}", link_module.display()))?;
+        let rewritten = text
+            .lines()
+            .map(|line| {
+                if line.starts_with(&format!("export const {loader} = ")) {
+                    format!("export const {loader} = wrapAsyncCb(makeLoad(undefined, []));")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&link_module, format!("{rewritten}\n"))
+            .with_context(|| format!("write {}", link_module.display()))?;
+    }
+    Ok(())
+}
+
+fn write_postlink_route_proxy(path: &Path, base: &str, route_id: &str) -> Result<()> {
+    let suffix = split_route_ident_suffix(0, route_id);
+    let preload = format!("preload_pocopine_route_{suffix}");
+    let mount = format!("mount_pocopine_route_{suffix}");
+    let module = format!(
+        r#"export default async function init() {{
+  await window.__pocopine_shell.{preload}();
+}}
+
+export function unmount_pocopine_route() {{
+  window.__pocopine_shell.unmount_pocopine_route();
+}}
+
+export async function mount_pocopine_route(outlet, path) {{
+  await window.__pocopine_shell.{mount}(outlet, path);
+}}
+"#
+    );
+    let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
+    std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
+    Ok(())
+}
+
+fn split_route_ident_suffix(idx: usize, route_id: &str) -> String {
+    let mut out = String::new();
+    for ch in route_id.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_');
+    if out.is_empty() || out.as_bytes()[0].is_ascii_digit() {
+        format!("route_{idx}_{out}")
+    } else {
+        out.to_string()
+    }
 }
 
 fn write_descriptor_route_if_static(path: &Path, base: &str, route_id: &str) -> Result<bool> {
@@ -842,56 +1151,6 @@ fn js_string(value: &str) -> String {
     out
 }
 
-struct SplitBuildCtx<'a> {
-    release: bool,
-    base: &'a str,
-    build_id: &'a str,
-    strict: bool,
-}
-
-fn run_split_wasm_pack(
-    path: &Path,
-    ctx: &SplitBuildCtx<'_>,
-    mode: &str,
-    out_name: &str,
-    route_ids_out: Option<&Path>,
-) -> Result<()> {
-    let mut cmd = Command::new("wasm-pack");
-    cmd.arg("build")
-        .arg("--target")
-        .arg("web")
-        .arg("--out-dir")
-        .arg("pkg")
-        .arg("--out-name")
-        .arg(out_name);
-    if ctx.release {
-        cmd.arg("--release");
-    } else {
-        cmd.arg("--dev");
-    }
-    cmd.env("POCOPINE_SPLIT_MODE", mode)
-        .env("POCOPINE_SPLIT_BASE", ctx.base)
-        .env("POCOPINE_SPLIT_STRICT", if ctx.strict { "1" } else { "0" })
-        .current_dir(path);
-    if let Some(path) = route_ids_out {
-        cmd.env("POCOPINE_SPLIT_ROUTE_IDS_OUT", path);
-    }
-    let cfg_name = format!("pocopine_split_{}_{}", split_cfg_suffix(mode), ctx.build_id);
-    let rustflags = match std::env::var("RUSTFLAGS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} --cfg={cfg_name}"),
-        _ => format!("--cfg={cfg_name}"),
-    };
-    cmd.env("RUSTFLAGS", rustflags);
-
-    let status = cmd
-        .status()
-        .context("failed to invoke wasm-pack (is it on $PATH?)")?;
-    if !status.success() {
-        bail!("wasm-pack split build `{mode}` failed with status {status}");
-    }
-    Ok(())
-}
-
 fn split_build_id() -> Result<String> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -961,7 +1220,7 @@ async function mountCurrentRoute(routes) {{
   if (!route) return;
   const mod = await import(route.module);
   await mod.default();
-  mod.mount_pocopine_route(outlet, location.pathname);
+  await mod.mount_pocopine_route(outlet, location.pathname);
   activeRoute = mod;
 }}
 

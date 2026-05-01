@@ -1,0 +1,12 @@
+[package]
+name = "wasm_split_helpers"
+version = "0.2.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vendored post-link WebAssembly splitting runtime helpers."
+readme = "README.md"
+
+[dependencies]
+async-once-cell = "0.5.3"
+wasm_split_macros.workspace = true
