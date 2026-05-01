@@ -111,6 +111,21 @@ It still returns dependency sets, not wasm files. That boundary is
 intentional: planning should be testable before the emitter starts
 rewriting functions, imports, exports, tables, memories, and data.
 
+`SplitPlan::build_remaps()` turns each planned dependency set into
+compact per-index-space remap tables:
+
+```text
+old Function(928495) -> new function 12
+old Type(41)         -> new type 3
+old Global(8)        -> new global 0
+```
+
+Those tables are the emitter contract. A future body rewriter must
+look up every recorded index-bearing operator in the remap for the
+output it is generating, or fail the build. The current remap layer
+does not yet decide cross-chunk imports; it only proves that owned
+dependencies can be assigned deterministic new indices.
+
 ## Contributor mental model
 
 A wasm module has index spaces:

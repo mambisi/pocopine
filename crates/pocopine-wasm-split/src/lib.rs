@@ -108,6 +108,36 @@ pub struct SplitPlan {
     pub shared: Vec<SharedChunkPlan>,
 }
 
+impl SplitPlan {
+    pub fn build_remaps(&self) -> SplitRemapPlan {
+        SplitRemapPlan {
+            shell: ChunkRemapPlan {
+                name: "shell".to_string(),
+                dependencies: self.shell.clone(),
+                remap: IndexRemap::from_dependencies(&self.shell),
+            },
+            routes: self
+                .routes
+                .iter()
+                .map(|route| ChunkRemapPlan {
+                    name: route.name.clone(),
+                    dependencies: route.dependencies.clone(),
+                    remap: IndexRemap::from_dependencies(&route.dependencies),
+                })
+                .collect(),
+            shared: self
+                .shared
+                .iter()
+                .map(|shared| ChunkRemapPlan {
+                    name: shared_chunk_name(&shared.routes),
+                    dependencies: shared.dependencies.clone(),
+                    remap: IndexRemap::from_dependencies(&shared.dependencies),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteChunkPlan {
     pub name: String,
@@ -118,6 +148,84 @@ pub struct RouteChunkPlan {
 pub struct SharedChunkPlan {
     pub routes: Vec<String>,
     pub dependencies: BTreeSet<Dependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitRemapPlan {
+    pub shell: ChunkRemapPlan,
+    pub routes: Vec<ChunkRemapPlan>,
+    pub shared: Vec<ChunkRemapPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkRemapPlan {
+    pub name: String,
+    pub dependencies: BTreeSet<Dependency>,
+    pub remap: IndexRemap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IndexRemap {
+    pub functions: BTreeMap<u32, u32>,
+    pub types: BTreeMap<u32, u32>,
+    pub tables: BTreeMap<u32, u32>,
+    pub memories: BTreeMap<u32, u32>,
+    pub globals: BTreeMap<u32, u32>,
+    pub tags: BTreeMap<u32, u32>,
+    pub data: BTreeMap<u32, u32>,
+    pub elements: BTreeMap<u32, u32>,
+}
+
+impl IndexRemap {
+    pub fn from_dependencies(dependencies: &BTreeSet<Dependency>) -> Self {
+        let mut remap = Self::default();
+        for dependency in dependencies {
+            remap.insert(*dependency);
+        }
+        remap
+    }
+
+    pub fn remap(&self, dependency: Dependency) -> Option<u32> {
+        self.space(dependency).get(&dependency.index()).copied()
+    }
+
+    fn insert(&mut self, dependency: Dependency) -> u32 {
+        let old_index = dependency.index();
+        let space = self.space_mut(dependency);
+        if let Some(new_index) = space.get(&old_index) {
+            *new_index
+        } else {
+            let new_index = space.len() as u32;
+            space.insert(old_index, new_index);
+            new_index
+        }
+    }
+
+    fn space(&self, dependency: Dependency) -> &BTreeMap<u32, u32> {
+        match dependency {
+            Dependency::Function(_) => &self.functions,
+            Dependency::Type(_) => &self.types,
+            Dependency::Table(_) => &self.tables,
+            Dependency::Memory(_) => &self.memories,
+            Dependency::Global(_) => &self.globals,
+            Dependency::Tag(_) => &self.tags,
+            Dependency::Data(_) => &self.data,
+            Dependency::Element(_) => &self.elements,
+        }
+    }
+
+    fn space_mut(&mut self, dependency: Dependency) -> &mut BTreeMap<u32, u32> {
+        match dependency {
+            Dependency::Function(_) => &mut self.functions,
+            Dependency::Type(_) => &mut self.types,
+            Dependency::Table(_) => &mut self.tables,
+            Dependency::Memory(_) => &mut self.memories,
+            Dependency::Global(_) => &mut self.globals,
+            Dependency::Tag(_) => &mut self.tags,
+            Dependency::Data(_) => &mut self.data,
+            Dependency::Element(_) => &mut self.elements,
+        }
+    }
 }
 
 impl ModuleAnalysis {
@@ -327,6 +435,10 @@ impl IndexSpaces {
             ExternalKind::Tag => Some(self.tags),
         }
     }
+}
+
+fn shared_chunk_name(routes: &[String]) -> String {
+    format!("shared:{}", routes.join("+"))
 }
 
 pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
@@ -915,5 +1027,69 @@ mod tests {
             .dependencies
             .contains(&Dependency::Function(2)));
         assert!(plan.shared.is_empty());
+    }
+
+    #[test]
+    fn split_plan_builds_compact_remap_tables() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (func $shell_util (type $t0))
+              (func $route_a_leaf (type $t0))
+              (func $shared_ab_helper (type $t0))
+              (func $route_a_entry (type $t0)
+                call $route_a_leaf
+                call $shared_ab_helper)
+              (func $route_b_entry (type $t0)
+                call $shared_ab_helper)
+              (func $route_c_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(3)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(4)],
+            },
+            RouteSplitRoot {
+                name: "c".to_string(),
+                roots: vec![Dependency::Function(5)],
+            },
+        ];
+
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+        let remaps = plan.build_remaps();
+
+        assert_eq!(remaps.shell.remap.remap(Dependency::Function(0)), Some(0));
+        assert_eq!(remaps.shell.remap.remap(Dependency::Type(0)), Some(0));
+        assert_eq!(remaps.routes[0].name, "a");
+        assert_eq!(
+            remaps.routes[0].remap.remap(Dependency::Function(1)),
+            Some(0)
+        );
+        assert_eq!(
+            remaps.routes[0].remap.remap(Dependency::Function(3)),
+            Some(1)
+        );
+        assert_eq!(remaps.routes[0].remap.remap(Dependency::Function(2)), None);
+        assert_eq!(remaps.routes[1].name, "b");
+        assert_eq!(
+            remaps.routes[1].remap.remap(Dependency::Function(4)),
+            Some(0)
+        );
+        assert_eq!(remaps.shared[0].name, "shared:a+b");
+        assert_eq!(
+            remaps.shared[0].remap.remap(Dependency::Function(2)),
+            Some(0)
+        );
     }
 }
