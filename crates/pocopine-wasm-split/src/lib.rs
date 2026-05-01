@@ -56,6 +56,7 @@ pub struct FunctionAnalysis {
 pub struct ModuleAnalysis {
     pub imported_functions: u32,
     pub index_spaces: IndexSpaces,
+    pub imports: BTreeSet<Dependency>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
 }
@@ -141,6 +142,7 @@ impl SplitPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteChunkPlan {
     pub name: String,
+    pub required_dependencies: BTreeSet<Dependency>,
     pub dependencies: BTreeSet<Dependency>,
 }
 
@@ -155,6 +157,22 @@ pub struct SplitRemapPlan {
     pub shell: ChunkRemapPlan,
     pub routes: Vec<ChunkRemapPlan>,
     pub shared: Vec<ChunkRemapPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitLinkPlan {
+    pub shell: ChunkLinkPlan,
+    pub routes: Vec<ChunkLinkPlan>,
+    pub shared: Vec<ChunkLinkPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkLinkPlan {
+    pub name: String,
+    pub owned: BTreeSet<Dependency>,
+    pub external: BTreeSet<Dependency>,
+    pub local_remap: IndexRemap,
+    pub external_remap: IndexRemap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,6 +344,7 @@ impl ModuleAnalysis {
     {
         let mut shell = self.dependency_closure(shell_roots)?;
         let mut usage: BTreeMap<Dependency, BTreeSet<usize>> = BTreeMap::new();
+        let mut route_closures = Vec::with_capacity(routes.len());
 
         for (route_index, route) in routes.iter().enumerate() {
             let closure = self.dependency_closure(route.roots.iter().copied())?;
@@ -334,6 +353,7 @@ impl ModuleAnalysis {
                     usage.entry(*dependency).or_default().insert(route_index);
                 }
             }
+            route_closures.push(closure);
         }
 
         let route_count = routes.len();
@@ -366,10 +386,14 @@ impl ModuleAnalysis {
         let route_plans = routes
             .iter()
             .zip(route_dependencies)
-            .map(|(route, dependencies)| RouteChunkPlan {
-                name: route.name.clone(),
-                dependencies,
-            })
+            .zip(route_closures)
+            .map(
+                |((route, dependencies), required_dependencies)| RouteChunkPlan {
+                    name: route.name.clone(),
+                    required_dependencies,
+                    dependencies,
+                },
+            )
             .collect();
 
         let shared = shared_dependencies
@@ -388,6 +412,78 @@ impl ModuleAnalysis {
             routes: route_plans,
             shared,
         })
+    }
+
+    pub fn build_link_plan(&self, plan: &SplitPlan) -> SplitLinkPlan {
+        SplitLinkPlan {
+            shell: self.build_chunk_link_plan("shell".to_string(), &plan.shell, &plan.shell),
+            routes: plan
+                .routes
+                .iter()
+                .map(|route| {
+                    self.build_chunk_link_plan(
+                        route.name.clone(),
+                        &route.dependencies,
+                        &route.required_dependencies,
+                    )
+                })
+                .collect(),
+            shared: plan
+                .shared
+                .iter()
+                .map(|shared| {
+                    self.build_chunk_link_plan(
+                        shared_chunk_name(&shared.routes),
+                        &shared.dependencies,
+                        &shared.dependencies,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn build_chunk_link_plan(
+        &self,
+        name: String,
+        owned_dependencies: &BTreeSet<Dependency>,
+        _required_dependencies: &BTreeSet<Dependency>,
+    ) -> ChunkLinkPlan {
+        let owned = owned_dependencies
+            .difference(&self.imports)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut external = owned_dependencies
+            .intersection(&self.imports)
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        for dependency in &owned {
+            let Dependency::Function(index) = dependency else {
+                continue;
+            };
+            let Some(function) = self.function(*index) else {
+                continue;
+            };
+
+            let type_dependency = Dependency::Type(function.type_index);
+            if !owned.contains(&type_dependency) {
+                external.insert(type_dependency);
+            }
+
+            for function_dependency in &function.dependencies {
+                if !owned.contains(function_dependency) {
+                    external.insert(*function_dependency);
+                }
+            }
+        }
+
+        ChunkLinkPlan {
+            name,
+            local_remap: IndexRemap::from_dependencies(&owned),
+            external_remap: IndexRemap::from_dependencies(&external),
+            owned,
+            external,
+        }
     }
 
     fn function(&self, index: u32) -> Option<&FunctionAnalysis> {
@@ -457,18 +553,33 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                     let import = import?;
                     match import.ty {
                         TypeRef::Func(type_index) => {
+                            analysis
+                                .imports
+                                .insert(Dependency::Function(imported_function_types.len() as u32));
                             imported_function_types.push(type_index);
                         }
                         TypeRef::Table(_) => {
+                            analysis
+                                .imports
+                                .insert(Dependency::Table(analysis.index_spaces.tables));
                             analysis.index_spaces.tables += 1;
                         }
                         TypeRef::Memory(_) => {
+                            analysis
+                                .imports
+                                .insert(Dependency::Memory(analysis.index_spaces.memories));
                             analysis.index_spaces.memories += 1;
                         }
                         TypeRef::Global(_) => {
+                            analysis
+                                .imports
+                                .insert(Dependency::Global(analysis.index_spaces.globals));
                             analysis.index_spaces.globals += 1;
                         }
                         TypeRef::Tag(_) => {
+                            analysis
+                                .imports
+                                .insert(Dependency::Tag(analysis.index_spaces.tags));
                             analysis.index_spaces.tags += 1;
                         }
                     }
@@ -1089,6 +1200,67 @@ mod tests {
         assert_eq!(remaps.shared[0].name, "shared:a+b");
         assert_eq!(
             remaps.shared[0].remap.remap(Dependency::Function(2)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn link_plan_separates_owned_dependencies_from_externals() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (import "env" "host" (func $host (type $t0)))
+              (func $shared_ab_helper (type $t0)
+                call $host)
+              (func $route_a_entry (type $t0)
+                call $shared_ab_helper)
+              (func $route_b_entry (type $t0)
+                call $shared_ab_helper)
+              (func $route_c_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert!(module.imports.contains(&Dependency::Function(0)));
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(3)],
+            },
+            RouteSplitRoot {
+                name: "c".to_string(),
+                roots: vec![Dependency::Function(4)],
+            },
+        ];
+
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        assert!(links.shell.owned.contains(&Dependency::Type(0)));
+        assert!(links.routes[0].owned.contains(&Dependency::Function(2)));
+        assert!(links.routes[0].external.contains(&Dependency::Function(1)));
+        assert!(links.routes[0].external.contains(&Dependency::Type(0)));
+        assert_eq!(
+            links.routes[0]
+                .external_remap
+                .remap(Dependency::Function(1)),
+            Some(0)
+        );
+
+        assert!(links.shared[0].owned.contains(&Dependency::Function(1)));
+        assert!(links.shared[0].external.contains(&Dependency::Function(0)));
+        assert!(links.shared[0].external.contains(&Dependency::Type(0)));
+        assert_eq!(
+            links.shared[0]
+                .external_remap
+                .remap(Dependency::Function(0)),
             Some(0)
         );
     }

@@ -126,6 +126,14 @@ output it is generating, or fail the build. The current remap layer
 does not yet decide cross-chunk imports; it only proves that owned
 dependencies can be assigned deterministic new indices.
 
+`ModuleAnalysis::build_link_plan()` then separates each output's
+owned dependencies from external references. External references
+include original wasm imports and dependencies owned by another
+planned output, such as a route body calling a shared helper. This is
+not byte emission yet; it is the link contract the emitter must
+satisfy when it decides whether an external reference becomes an
+actual wasm import, copied metadata, or a host-ABI call.
+
 ## Contributor mental model
 
 A wasm module has index spaces:
