@@ -290,6 +290,18 @@ impl App {
             active: true,
         }
     }
+
+    /// RFC 066 proof hook: mount an already-registered component by
+    /// tag name. Unlike [`Self::mount_subtree`], this does not have a
+    /// Rust component type to register; descriptor/host-ABI routes
+    /// register serializable component data before calling this.
+    pub fn mount_registered_subtree(host: &Element, tag: &str) -> SubtreeHandle {
+        mount::mount_child_component(host, tag);
+        SubtreeHandle {
+            host: host.clone(),
+            active: true,
+        }
+    }
 }
 
 /// RFC 061 Phase 2 — handle returned by [`App::mount_subtree`].

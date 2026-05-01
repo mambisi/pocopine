@@ -6,10 +6,18 @@
 | **Author** | pocopine team |
 | **Created** | 2026-04-29 |
 | **Supersedes** | RFC 064 §4.1 (split out per council feedback 2026-04-29) |
-| **Related** | [RFC 003](./rfc-003-router.md), [RFC 058 §5.10](./rfc-058-compiled-views-walker-removal.md), [RFC 060](./rfc-060-component-uses-registry.md), [RFC 061](./rfc-061-compiled-mount-only.md), [RFC 064](./rfc-064-performance-roadmap.md) |
+| **Related** | [RFC 003](./rfc-003-router.md), [RFC 058 §5.10](./rfc-058-compiled-views-walker-removal.md), [RFC 060](./rfc-060-component-uses-registry.md), [RFC 061](./rfc-061-compiled-mount-only.md), [RFC 064](./rfc-064-performance-roadmap.md), [RFC 066](./rfc-066-shared-runtime-route-abi.md) |
 | **Depends on** | RFC 060 implemented; baseline measurement of `examples/website` boot bundle |
 
 ## 1. Summary
+
+**2026-05-01 correction:** Phase 2's original "fetch route
+wasm and register its Rust components into the shell" model is
+superseded by RFC 066. The route ownership, strict layout,
+manifest, loader, and named-artifact work in this RFC remain
+valid; the cross-artifact runtime ABI must be descriptor/host-call
+based, not Rust `ComponentVTable` function pointers crossing wasm
+instances.
 
 Implement the route-boundary clustering committed by RFC 058
 §5.10.1: bundle splitting driven by route roots and the `uses`

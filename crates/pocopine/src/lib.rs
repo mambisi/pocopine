@@ -60,13 +60,14 @@ pub mod __private {
     };
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
-        inject_style, mark_registered, register_component_with_mount, register_row_plans,
-        register_store_scope, register_template, spawn as runtime_spawn,
-        spawn_latest as runtime_spawn_latest, spawn_scoped as runtime_spawn_scoped, store_scope,
-        task::TaskHandle, track, with_write_origin, BindingKind, ClusterManifest, Component,
-        ComponentMountFn, ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch,
-        LifecycleContext, RouteClusterRoot, Scope, StaticBinOp, StaticBinding, StaticExpr,
-        StaticListener, StaticLiteral, StaticRowPlan, Store, WriteOrigin,
+        inject_style, mark_registered, register_component_with_mount,
+        register_descriptor_component, register_row_plans, register_store_scope, register_template,
+        spawn as runtime_spawn, spawn_latest as runtime_spawn_latest,
+        spawn_scoped as runtime_spawn_scoped, store_scope, task::TaskHandle, track,
+        with_write_origin, BindingKind, ClusterManifest, Component, ComponentMountFn,
+        ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext,
+        RouteClusterRoot, Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener,
+        StaticLiteral, StaticRowPlan, Store, WriteOrigin,
     };
     // RFC 060 Tier 4 compatibility — static phf registries remain
     // supported even though `app!{}` now emits a plain slice.

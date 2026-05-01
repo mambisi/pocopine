@@ -3908,9 +3908,47 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
                 #(#registry_entries)*
             ];
 
+            ::std::thread_local! {
+                static __POCOPINE_DESCRIPTOR_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =
+                    const { ::std::cell::RefCell::new(::core::option::Option::None) };
+            }
+
             #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
             pub fn pocopine_split_manifest() -> ::std::string::String {
                 #manifest.to_string()
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn pocopine_host_register_static_component(
+                tag: ::std::string::String,
+                html: ::std::string::String,
+            ) {
+                ::pocopine::__private::register_descriptor_component(tag, html);
+            }
+
+            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+            pub fn pocopine_host_mount_static_component(
+                outlet: ::pocopine::__private::web_sys::Element,
+                tag: ::std::string::String,
+            ) {
+                __POCOPINE_DESCRIPTOR_ROUTE_HANDLE.with(|handle| {
+                    if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
+                        handle.unmount();
+                    }
+                });
+                let Some(document) = ::pocopine::__private::web_sys::window()
+                    .and_then(|window| window.document())
+                else {
+                    return;
+                };
+                let Ok(host) = document.create_element(&tag) else {
+                    return;
+                };
+                outlet.replace_children_with_node_1(host.as_ref());
+                let handle = ::pocopine::App::mount_registered_subtree(&host, &tag);
+                __POCOPINE_DESCRIPTOR_ROUTE_HANDLE.with(|slot| {
+                    *slot.borrow_mut() = ::core::option::Option::Some(handle);
+                });
             }
 
             ::pocopine::App::new()

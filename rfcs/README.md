@@ -74,3 +74,4 @@ Conventions:
 | 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
 | 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
 | 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
+| 066 | [Shared runtime route ABI](./rfc-066-shared-runtime-route-abi.md) | Draft |

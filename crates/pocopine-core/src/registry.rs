@@ -16,12 +16,15 @@
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
+use js_sys::Array;
 use wasm_bindgen::JsValue;
 use web_sys::Element;
 
 use crate::reactive::ScopeId;
-use crate::scope::Scope;
+use crate::scope::{ComponentState, Scope};
+use crate::templates::register_template;
 use crate::templates_plan::StaticTemplatePlan;
 
 /// Constructor returned by the `#[component]` macro. Builds a fresh typed
@@ -150,6 +153,48 @@ pub struct ComponentVTable {
     pub template_html: Option<&'static str>,
     pub plan: Option<&'static StaticTemplatePlan>,
     pub mount_template: Option<ComponentMountFn>,
+}
+
+struct DescriptorState;
+
+impl ComponentState for DescriptorState {
+    fn get(&self, _key: &str) -> JsValue {
+        JsValue::UNDEFINED
+    }
+
+    fn cacheable_fields(&self) -> bool {
+        false
+    }
+
+    fn set(&mut self, _key: &str, _value: JsValue) {}
+
+    fn keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn invoke(&mut self, _key: &str, _args: &Array) -> JsValue {
+        JsValue::UNDEFINED
+    }
+
+    fn type_name(&self) -> &'static str {
+        "descriptor"
+    }
+}
+
+fn descriptor_ctor() -> Scope {
+    Scope::new(Rc::new(RefCell::new(DescriptorState)))
+}
+
+/// Register a template-only descriptor component owned by the
+/// shared runtime. This is the first RFC 066 host-ABI primitive:
+/// route descriptors can hand the shell serializable component
+/// data without exporting Rust constructors or mount function
+/// pointers across wasm instances.
+pub fn register_descriptor_component(tag: String, html: String) {
+    let tag: &'static str = Box::leak(tag.into_boxed_str());
+    let html: &'static str = Box::leak(html.into_boxed_str());
+    register_component_with_mount(tag, "__pocopine_descriptor", descriptor_ctor, None);
+    register_template(tag, html);
 }
 
 /// Install the active static registry for phf-first runtime
