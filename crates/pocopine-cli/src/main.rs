@@ -710,6 +710,9 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
     }
 
     for (idx, route_id) in route_ids.iter().enumerate() {
+        if write_descriptor_route_if_static(&path, &base, route_id)? {
+            continue;
+        }
         let mode = format!("route:{idx}");
         let out_name = format!("{base}_route_{route_id}");
         run_split_wasm_pack(&path, &ctx, &mode, &out_name, None)?;
@@ -718,6 +721,97 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
     let route_count = route_ids.len();
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
     Ok(())
+}
+
+fn write_descriptor_route_if_static(path: &Path, base: &str, route_id: &str) -> Result<bool> {
+    let route_dir = path.join("src").join("routes").join(route_id);
+    if !route_dir.is_dir() {
+        return Ok(false);
+    }
+    let templates = std::fs::read_dir(&route_dir)
+        .with_context(|| format!("read {}", route_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "poco"))
+        .collect::<Vec<_>>();
+    let [template_path] = templates.as_slice() else {
+        return Ok(false);
+    };
+    let html = std::fs::read_to_string(template_path)
+        .with_context(|| format!("read {}", template_path.display()))?;
+    if !is_static_descriptor_template(&html) {
+        return Ok(false);
+    }
+    let Some(stem) = template_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return Ok(false);
+    };
+    let tag = kebab_case(stem);
+    let module = format!(
+        r#"const TAG = {tag};
+const HTML = {html};
+let registered = false;
+
+export default async function init() {{}}
+
+export function unmount_pocopine_route() {{}}
+
+export function mount_pocopine_route(outlet, _path) {{
+  if (!registered) {{
+    registered = true;
+    window.__pocopine_shell.pocopine_host_register_static_component(TAG, HTML);
+  }}
+  window.__pocopine_shell.pocopine_host_mount_static_component(outlet, TAG);
+}}
+"#,
+        tag = js_string(&tag),
+        html = js_string(&html),
+    );
+    let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
+    std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
+    println!("  descriptor route {route_id} -> {}", out.display());
+    Ok(true)
+}
+
+fn is_static_descriptor_template(html: &str) -> bool {
+    const DYNAMIC_MARKERS: &[&str] = &[
+        "pp-text", "pp-html", "pp-for", "pp-if", "pp-bind", "pp-model", "pp-on", "@", ":", "{{",
+    ];
+    !DYNAMIC_MARKERS.iter().any(|marker| html.contains(marker))
+}
+
+fn kebab_case(value: &str) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if idx != 0 {
+                out.push('-');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else if ch == '_' {
+            out.push('-');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn js_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 struct SplitBuildCtx<'a> {
@@ -846,6 +940,7 @@ async function mountCurrentRoute(routes) {{
 export async function startPocopineSplitApp() {{
   const shell = await import("/pkg/{base}.js");
   await shell.default();
+  window.__pocopine_shell = shell;
   const manifest = JSON.parse(shell.pocopine_split_manifest());
   document.addEventListener("click", (event) => {{
     const anchor = event.target.closest?.("a[pp-route]");
