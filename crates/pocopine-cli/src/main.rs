@@ -35,6 +35,8 @@ struct Cli {
 enum Cmd {
     /// Build the wasm bundle (and the server bin, if configured).
     Build(BuildArgs),
+    /// Remove generated browser artifacts from the project pkg directory.
+    Clean(CleanArgs),
     /// Build, then serve. Spawns the configured server bin if one exists;
     /// otherwise serves the project directory as static files.
     Run(ServeArgs),
@@ -60,6 +62,13 @@ struct BuildArgs {
     /// Disable split ownership enforcement.
     #[arg(long, action = clap::ArgAction::SetTrue)]
     no_strict: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct CleanArgs {
+    /// Path to the crate to clean (defaults to current dir).
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -175,6 +184,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Clean(a) => clean(&a.path),
         Cmd::Run(a) => {
             let cfg = load_config(&a.path)?;
             build_entry(
@@ -433,6 +443,23 @@ fn build(path: &Path, release: bool) -> Result<()> {
     if !status.success() {
         bail!("wasm-pack build failed with status {status}");
     }
+    Ok(())
+}
+
+fn clean(path: &Path) -> Result<()> {
+    let project = path
+        .canonicalize()
+        .with_context(|| format!("could not resolve project path: {}", path.display()))?;
+    let pkg = project.join("pkg");
+    if !pkg.exists() {
+        println!("✓ nothing to clean: {}", pkg.display());
+        return Ok(());
+    }
+    if !pkg.is_dir() {
+        bail!("refusing to clean non-directory {}", pkg.display());
+    }
+    std::fs::remove_dir_all(&pkg).with_context(|| format!("remove {}", pkg.display()))?;
+    println!("✓ cleaned {}", pkg.display());
     Ok(())
 }
 
