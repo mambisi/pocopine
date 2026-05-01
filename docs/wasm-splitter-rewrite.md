@@ -152,6 +152,9 @@ metadata. Cross-chunk function references still use a temporary
 `pocopine:split` import namespace until the shared runtime ABI is
 defined. Function exports are only emitted for functions owned by the
 chunk, never for functions that are merely external references.
+The emitter also handles table dependencies for indirect calls and
+table operators, preserving original table import names and emitting
+owned table definitions. Element segments remain a separate follow-up.
 
 ## Contributor mental model
 

@@ -61,7 +61,9 @@ pub struct ModuleAnalysis {
     pub index_spaces: IndexSpaces,
     pub imports: BTreeSet<Dependency>,
     pub function_imports: BTreeMap<u32, FunctionImport>,
+    pub table_imports: BTreeMap<u32, TableImport>,
     pub types: Vec<wasmparser::FuncType>,
+    pub tables: Vec<TableAnalysis>,
     pub functions: Vec<FunctionAnalysis>,
     pub exports: Vec<ExportAnalysis>,
 }
@@ -72,6 +74,21 @@ pub struct FunctionImport {
     pub module: String,
     pub name: String,
     pub type_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableImport {
+    pub table: u32,
+    pub module: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAnalysis {
+    pub index: u32,
+    pub ty: wasmparser::TableType,
+    pub imported: bool,
+    pub has_init_expr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +154,9 @@ pub enum EmitError {
     UnsupportedImport {
         dependency: Dependency,
     },
+    UnsupportedTableInit {
+        table: u32,
+    },
     MissingFunction {
         function: u32,
     },
@@ -161,6 +181,9 @@ impl fmt::Display for EmitError {
             }
             EmitError::UnsupportedImport { dependency } => {
                 write!(f, "unsupported external import dependency: {dependency:?}")
+            }
+            EmitError::UnsupportedTableInit { table } => {
+                write!(f, "unsupported table init expression for table {table}")
             }
             EmitError::MissingFunction { function } => write!(f, "missing function {function}"),
             EmitError::MissingFunctionBody { function } => {
@@ -581,6 +604,18 @@ impl ModuleAnalysis {
                 );
             }
         }
+        for old_table in ordered_indices(&chunk.external_remap.tables) {
+            let table = self.table(old_table).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Table(old_table),
+            })?;
+            let ty = encode_table_type(table.ty)?;
+            if let Some(import) = self.table_imports.get(&old_table) {
+                imports.import(&import.module, &import.name, ty);
+            } else {
+                imports.import("pocopine:split", &format!("table:{old_table}"), ty);
+            }
+        }
         if !imports.is_empty() {
             module.section(&imports);
         }
@@ -597,6 +632,21 @@ impl ModuleAnalysis {
         }
         if !functions.is_empty() {
             module.section(&functions);
+        }
+
+        let mut tables = wasm_encoder::TableSection::new();
+        for old_table in ordered_indices(&chunk.local_remap.tables) {
+            let table = self.table(old_table).ok_or(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Table(old_table),
+            })?;
+            if table.has_init_expr {
+                return Err(EmitError::UnsupportedTableInit { table: old_table });
+            }
+            tables.table(encode_table_type(table.ty)?);
+        }
+        if !tables.is_empty() {
+            module.section(&tables);
         }
 
         let mut exports = wasm_encoder::ExportSection::new();
@@ -650,7 +700,7 @@ impl ModuleAnalysis {
 
         for dependency in chunk.owned.iter().chain(&chunk.external) {
             match dependency {
-                Dependency::Function(_) | Dependency::Type(_) => {}
+                Dependency::Function(_) | Dependency::Type(_) | Dependency::Table(_) => {}
                 _ => {
                     return Err(EmitError::UnsupportedImport {
                         dependency: *dependency,
@@ -783,6 +833,12 @@ impl ModuleAnalysis {
             .get(index as usize)
             .filter(|function| function.index == index)
     }
+
+    fn table(&self, index: u32) -> Option<&TableAnalysis> {
+        self.tables
+            .get(index as usize)
+            .filter(|table| table.index == index)
+    }
 }
 
 impl Dependency {
@@ -850,6 +906,18 @@ fn combined_function_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32>
     }
 }
 
+fn combined_table_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
+    if let Some(index) = chunk.external_remap.tables.get(&old_index) {
+        Some(*index)
+    } else {
+        chunk
+            .local_remap
+            .tables
+            .get(&old_index)
+            .map(|index| chunk.external_remap.tables.len() as u32 + *index)
+    }
+}
+
 fn combined_type_index(chunk: &ChunkLinkPlan, old_index: u32) -> Result<u32, EmitError> {
     if let Some(index) = chunk.external_remap.types.get(&old_index) {
         Ok(*index)
@@ -877,8 +945,13 @@ fn combined_required_index(
         Dependency::Type(index) => {
             combined_type_index(chunk, index).map_err(ReencodeError::UserError)
         }
-        Dependency::Table(_)
-        | Dependency::Memory(_)
+        Dependency::Table(index) => combined_table_index(chunk, index).ok_or_else(|| {
+            ReencodeError::UserError(EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency,
+            })
+        }),
+        Dependency::Memory(_)
         | Dependency::Global(_)
         | Dependency::Tag(_)
         | Dependency::Data(_)
@@ -886,6 +959,10 @@ fn combined_required_index(
             dependency,
         })),
     }
+}
+
+fn encode_table_type(ty: wasmparser::TableType) -> Result<wasm_encoder::TableType, EmitError> {
+    wasm_encoder::TableType::try_from(ty).map_err(|err| EmitError::Parse(err.to_string()))
 }
 
 fn emit_reencode_error(error: ReencodeError<EmitError>) -> EmitError {
@@ -967,10 +1044,23 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                             );
                             imported_function_types.push(type_index);
                         }
-                        TypeRef::Table(_) => {
-                            analysis
-                                .imports
-                                .insert(Dependency::Table(analysis.index_spaces.tables));
+                        TypeRef::Table(ty) => {
+                            let table = analysis.index_spaces.tables;
+                            analysis.imports.insert(Dependency::Table(table));
+                            analysis.table_imports.insert(
+                                table,
+                                TableImport {
+                                    table,
+                                    module: import.module.to_string(),
+                                    name: import.name.to_string(),
+                                },
+                            );
+                            analysis.tables.push(TableAnalysis {
+                                index: table,
+                                ty,
+                                imported: true,
+                                has_init_expr: false,
+                            });
                             analysis.index_spaces.tables += 1;
                         }
                         TypeRef::Memory(_) => {
@@ -1001,7 +1091,17 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                 defined_function_bodies.push(scan_function_body(&body)?);
             }
             Payload::TableSection(reader) => {
-                analysis.index_spaces.tables += count_section(reader)?;
+                for table in reader {
+                    let table = table?;
+                    let index = analysis.index_spaces.tables;
+                    analysis.tables.push(TableAnalysis {
+                        index,
+                        ty: table.ty,
+                        imported: false,
+                        has_init_expr: !matches!(table.init, wasmparser::TableInit::RefNull),
+                    });
+                    analysis.index_spaces.tables += 1;
+                }
             }
             Payload::MemorySection(reader) => {
                 analysis.index_spaces.memories += count_section(reader)?;
@@ -1852,6 +1952,87 @@ mod tests {
         assert_eq!(function_export_names(&emitted), vec!["route_entry"]);
     }
 
+    #[test]
+    fn emits_defined_table_for_indirect_calls() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (table $table 1 funcref)
+              (func $route_entry (type $t0)
+                i32.const 0
+                call_indirect (type $t0))
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let emitted = analyze(&emitted).unwrap();
+        assert_eq!(emitted.index_spaces.tables, 1);
+        let route_entry = emitted.functions.iter().find(|f| f.index == 0).unwrap();
+        assert!(route_entry.dependencies.contains(&Dependency::Table(0)));
+    }
+
+    #[test]
+    fn emits_original_table_import_names() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func (result i32)))
+              (import "env" "indirect_table" (table $table 1 funcref))
+              (func $route_entry (type $t0)
+                i32.const 0
+                call_indirect (type $t0))
+              (func $other_route_entry (type $t0)
+                i32.const 3))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert_eq!(module.table_imports.get(&0).unwrap().module, "env");
+        assert_eq!(module.table_imports.get(&0).unwrap().name, "indirect_table");
+
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(0)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+        ];
+        let plan = module.plan_route_split([], &routes).unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.routes[0]).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        assert_eq!(
+            table_import_names(&emitted),
+            vec![("env".to_string(), "indirect_table".to_string())]
+        );
+    }
+
     fn function_import_names(wasm: &[u8]) -> Vec<(String, String, u32)> {
         let mut imports = Vec::new();
         for payload in wasmparser::Parser::new(0).parse_all(wasm) {
@@ -1884,5 +2065,20 @@ mod tests {
             }
         }
         exports
+    }
+
+    fn table_import_names(wasm: &[u8]) -> Vec<(String, String)> {
+        let mut imports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ImportSection(reader) = payload.unwrap() {
+                for import in reader {
+                    let import = import.unwrap();
+                    if matches!(import.ty, wasmparser::TypeRef::Table(_)) {
+                        imports.push((import.module.to_string(), import.name.to_string()));
+                    }
+                }
+            }
+        }
+        imports
     }
 }
