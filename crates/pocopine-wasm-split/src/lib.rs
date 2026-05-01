@@ -998,6 +998,67 @@ impl ModuleAnalysis {
             }
         }
 
+        // Phase 3.4: extend each route by direct calls from its phase-3 additions.
+        //
+        // A name-classified table-installed function (e.g. a trait-impl
+        // trampoline `<routes::home::StoryList as Component>::mount_template`)
+        // typically calls a sibling function (e.g. the inherent
+        // `<routes::home::StoryList>::__pocopine_mount_template`) that is NOT
+        // table-installed, so phase 3 won't classify the callee. Without
+        // this pass the callee falls through to phase 3.5 and gets force-
+        // promoted to shell — defeating the point of the route assignment.
+        //
+        // Walk a direct closure starting from the route's current owned
+        // functions, restricted to functions not yet owned by any chunk.
+        // Functions already in shell or in another route stay where they are
+        // (phase 3.5 still handles those).
+        for (route_index, _) in routes.iter().enumerate() {
+            let seeds: Vec<Dependency> = route_dependencies[route_index].iter().copied().collect();
+            let mut frontier: Vec<Dependency> = seeds;
+            let mut visited: BTreeSet<Dependency> = BTreeSet::new();
+            while let Some(dep) = frontier.pop() {
+                if !visited.insert(dep) {
+                    continue;
+                }
+                let Dependency::Function(idx) = dep else {
+                    continue;
+                };
+                let Some(function) = self.function(idx) else {
+                    continue;
+                };
+                for sub_dep in &function.dependencies {
+                    let Dependency::Function(sub_idx) = sub_dep else {
+                        continue;
+                    };
+                    if shell.contains(sub_dep) {
+                        continue;
+                    }
+                    if route_dependencies[route_index].contains(sub_dep) {
+                        // Already owned by this route — keep walking but no insert.
+                        frontier.push(*sub_dep);
+                        continue;
+                    }
+                    if route_dependencies
+                        .iter()
+                        .enumerate()
+                        .any(|(i, r)| i != route_index && r.contains(sub_dep))
+                    {
+                        // Owned by a different route — leave for phase 3.5
+                        // to promote to shell with proper accounting.
+                        continue;
+                    }
+                    let Some(sub_fn) = self.function(*sub_idx) else {
+                        continue;
+                    };
+                    if !sub_fn.defined {
+                        continue;
+                    }
+                    route_dependencies[route_index].insert(*sub_dep);
+                    frontier.push(*sub_dep);
+                }
+            }
+        }
+
         // Phase 3.5: enforce the chunk-boundary invariant.
         //
         // Routes import their non-local deps from `pocopine:split`, which the

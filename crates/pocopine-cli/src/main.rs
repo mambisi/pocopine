@@ -751,7 +751,11 @@ export default async function init() {{
   if (!shell) {{
     throw new Error("pocopine split route loaded before shell exports were ready");
   }}
-  const imports = {{ "pocopine:split": shell }};
+  // Routes can own their own template/closure code, which calls back into
+  // wasm-bindgen JS shims. Pull those imports from shell so the route's
+  // wasm uses the same shared shims (and the same shell-owned memory).
+  const wbgImports = window.__pocopine_shell?.__pocopine_wbg_imports?.() ?? {{}};
+  const imports = {{ ...wbgImports, "pocopine:split": shell }};
   const response = fetch(chunk);
   if (WebAssembly.instantiateStreaming) {{
     try {{
@@ -1510,9 +1514,13 @@ fn patch_shell_js_for_split_boot(path: &Path, base: &str) -> Result<()> {
                 js_path.display()
             );
         };
+        // Routes that own their own template/closure code need the same
+        // wasm-bindgen JS shim imports shell uses (`./hn_bg.js`). Expose
+        // the same import object the shell built.
         js.insert_str(
             pos,
-            "export function __pocopine_split_exports() {\n    return wasm;\n}\n\n",
+            "export function __pocopine_split_exports() {\n    return wasm;\n}\n\n\
+             export function __pocopine_wbg_imports() {\n    return __wbg_get_imports();\n}\n\n",
         );
     }
     std::fs::write(&js_path, js).with_context(|| format!("write {}", js_path.display()))?;
