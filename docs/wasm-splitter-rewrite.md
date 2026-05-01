@@ -79,6 +79,24 @@ For example, a module with one function and a body containing
 `call 99` fails as `FunctionIndexOutOfBounds` instead of being copied
 into a route chunk with a stale index.
 
+After validation, `ModuleAnalysis::dependency_closure()` can walk from
+typed roots such as `Function(42)` to every directly and transitively
+required dependency. Function roots pull in their signature type and
+their recorded instruction dependencies, so a route root can become a
+concrete set like:
+
+```text
+Function(route_entry)
+Function(render_helper)
+Type(component_signature)
+Global(component_state)
+Table(function_table)
+```
+
+This is still analysis-only. The next passes must decide which
+closures belong to shell, route, or shared chunks, then build remap
+tables for each output module.
+
 ## Contributor mental model
 
 A wasm module has index spaces:

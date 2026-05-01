@@ -89,6 +89,12 @@ pub enum ValidationError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphError {
+    InvalidModule(Vec<ValidationError>),
+    RootIndexOutOfBounds { dependency: Dependency, limit: u32 },
+}
+
 impl ModuleAnalysis {
     pub fn validate_indices(&self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
@@ -134,6 +140,53 @@ impl ModuleAnalysis {
         } else {
             Err(errors)
         }
+    }
+
+    pub fn dependency_closure<I>(&self, roots: I) -> Result<BTreeSet<Dependency>, GraphError>
+    where
+        I: IntoIterator<Item = Dependency>,
+    {
+        self.validate_indices().map_err(GraphError::InvalidModule)?;
+
+        let mut closure = BTreeSet::new();
+        let mut stack = Vec::new();
+
+        for root in roots {
+            if let Some(limit) = self.index_spaces.limit_for(root) {
+                if root.index() >= limit {
+                    return Err(GraphError::RootIndexOutOfBounds {
+                        dependency: root,
+                        limit,
+                    });
+                }
+            }
+            stack.push(root);
+        }
+
+        while let Some(dependency) = stack.pop() {
+            if !closure.insert(dependency) {
+                continue;
+            }
+
+            if let Dependency::Function(index) = dependency {
+                let Some(function) = self.function(index) else {
+                    return Err(GraphError::RootIndexOutOfBounds {
+                        dependency,
+                        limit: self.index_spaces.functions,
+                    });
+                };
+                stack.push(Dependency::Type(function.type_index));
+                stack.extend(function.dependencies.iter().copied());
+            }
+        }
+
+        Ok(closure)
+    }
+
+    fn function(&self, index: u32) -> Option<&FunctionAnalysis> {
+        self.functions
+            .get(index as usize)
+            .filter(|function| function.index == index)
     }
 }
 
@@ -482,7 +535,7 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze, Dependency, ValidationError};
+    use super::{analyze, Dependency, GraphError, ValidationError};
 
     #[test]
     fn scans_function_indices_without_relocations() {
@@ -601,5 +654,60 @@ mod tests {
                 limit: 1,
             }]
         ));
+    }
+
+    #[test]
+    fn dependency_closure_walks_transitive_function_edges() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (global $g i32 (i32.const 7))
+              (func $leaf (type $t0)
+                global.get $g
+                drop)
+              (func $middle (type $t0)
+                call $leaf)
+              (func $root (type $t0)
+                call $middle))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let closure = module
+            .dependency_closure([Dependency::Function(2)])
+            .unwrap();
+
+        assert!(closure.contains(&Dependency::Function(2)));
+        assert!(closure.contains(&Dependency::Function(1)));
+        assert!(closure.contains(&Dependency::Function(0)));
+        assert!(closure.contains(&Dependency::Type(0)));
+        assert!(closure.contains(&Dependency::Global(0)));
+    }
+
+    #[test]
+    fn dependency_closure_rejects_out_of_bounds_roots() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (func $root (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let error = module
+            .dependency_closure([Dependency::Function(9)])
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            GraphError::RootIndexOutOfBounds {
+                dependency: Dependency::Function(9),
+                limit: 1,
+            }
+        );
     }
 }
