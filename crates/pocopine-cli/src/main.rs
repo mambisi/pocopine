@@ -713,17 +713,37 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
 
     emit_post_link_split_chunks(&path, &base, &route_ids)?;
 
-    for (idx, route_id) in route_ids.iter().enumerate() {
+    for route_id in &route_ids {
         if write_descriptor_route_if_static(&path, &base, route_id)? {
             continue;
         }
-        let mode = format!("route:{idx}");
-        let out_name = format!("{base}_route_{route_id}");
-        run_split_wasm_pack(&path, &ctx, &mode, &out_name, None)?;
+        write_post_link_route_module(&path, &base, route_id)?;
     }
     write_split_loader(&path, &base)?;
     let route_count = route_ids.len();
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
+    Ok(())
+}
+
+fn write_post_link_route_module(path: &Path, base: &str, route_id: &str) -> Result<()> {
+    let module = format!(
+        r#"const CHUNK = "/pkg/.pocopine-split/route_{route_id}.wasm";
+
+export default async function init() {{
+  await WebAssembly.compileStreaming(fetch(CHUNK));
+}}
+
+export function unmount_pocopine_route() {{}}
+
+export async function mount_pocopine_route(_outlet, _path) {{
+  throw new Error("pocopine post-link route chunks are emitted but the runtime linker is not wired yet: " + CHUNK);
+}}
+"#,
+        route_id = route_id,
+    );
+    let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
+    std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
+    println!("  post-link route {route_id} -> {}", out.display());
     Ok(())
 }
 
