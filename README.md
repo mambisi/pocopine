@@ -197,6 +197,12 @@ linking yet: each route artifact is an independent wasm module, so
 route modules may duplicate framework/runtime code. The first page load
 only imports the shell plus the matched route.
 
+Release split builds are strict by default. Components must follow the
+split-ready ownership layout: shell-owned components under `shell`,
+route-private components under `routes`, and cross-route components
+under `shared`. During migration, `pocopine build --split --no-strict`
+keeps the older permissive behavior.
+
 ```html
 <!-- src/Counter.poco -->
 <button @click="bump">

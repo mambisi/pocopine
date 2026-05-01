@@ -54,6 +54,12 @@ struct BuildArgs {
     /// Build `app!` routes as separate wasm artifacts.
     #[arg(long)]
     split: bool,
+    /// Enforce split-ready shell/routes/shared ownership conventions.
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_strict")]
+    strict: bool,
+    /// Disable split ownership enforcement.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    no_strict: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -74,6 +80,12 @@ struct ServeArgs {
     /// Build `app!` routes as separate wasm artifacts.
     #[arg(long)]
     split: bool,
+    /// Enforce split-ready shell/routes/shared ownership conventions.
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_strict")]
+    strict: bool,
+    /// Disable split ownership enforcement.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    no_strict: bool,
 }
 
 /// `[package.metadata.pocopine]` section parsed from a project's
@@ -151,7 +163,12 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Build(a) => {
             let cfg = load_config(&a.path)?;
-            build_entry(&a.path, a.release, a.split)?;
+            build_entry(
+                &a.path,
+                a.release,
+                a.split,
+                split_strict(a.release, a.strict, a.no_strict),
+            )?;
             if let Some(tw) = cfg.tailwind.as_ref() {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
@@ -160,7 +177,12 @@ fn main() -> Result<()> {
         }
         Cmd::Run(a) => {
             let cfg = load_config(&a.path)?;
-            build_entry(&a.path, a.release, a.split)?;
+            build_entry(
+                &a.path,
+                a.release,
+                a.split,
+                split_strict(a.release, a.strict, a.no_strict),
+            )?;
             if let Some(tw) = cfg.tailwind.as_ref() {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
@@ -414,9 +436,13 @@ fn build(path: &Path, release: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_entry(path: &Path, release: bool, split: bool) -> Result<()> {
+fn split_strict(release: bool, strict: bool, no_strict: bool) -> bool {
+    strict || (release && !no_strict)
+}
+
+fn build_entry(path: &Path, release: bool, split: bool, strict: bool) -> Result<()> {
     if split {
-        build_split(path, release)
+        build_split(path, release, strict)
     } else {
         build(path, release)
     }
@@ -441,7 +467,7 @@ fn package_name(path: &Path) -> Result<String> {
     Ok(manifest.package.name.replace('-', "_"))
 }
 
-fn build_split(path: &Path, release: bool) -> Result<()> {
+fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
     let path = path
         .canonicalize()
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
@@ -449,17 +475,15 @@ fn build_split(path: &Path, release: bool) -> Result<()> {
     println!("▶ split wasm-pack build ({})", path.display());
     clean_split_artifacts(&path, &base)?;
     let build_id = split_build_id()?;
+    let ctx = SplitBuildCtx {
+        release,
+        base: &base,
+        build_id: &build_id,
+        strict,
+    };
     let route_count_path = std::env::temp_dir().join(format!("{base}-pocopine-routes.txt"));
     let _ = std::fs::remove_file(&route_count_path);
-    run_split_wasm_pack(
-        &path,
-        release,
-        &base,
-        "shell",
-        &base,
-        Some(&route_count_path),
-        &build_id,
-    )?;
+    run_split_wasm_pack(&path, &ctx, "shell", &base, Some(&route_count_path))?;
 
     let route_count_text = std::fs::read_to_string(&route_count_path)
         .with_context(|| format!("read {}", route_count_path.display()))?;
@@ -476,21 +500,26 @@ fn build_split(path: &Path, release: bool) -> Result<()> {
     for idx in 0..route_count {
         let mode = format!("route:{idx}");
         let out_name = format!("{base}_route_{idx}");
-        run_split_wasm_pack(&path, release, &base, &mode, &out_name, None, &build_id)?;
+        run_split_wasm_pack(&path, &ctx, &mode, &out_name, None)?;
     }
     write_split_loader(&path, &base)?;
     println!("✓ split build emitted shell + {route_count} route artifact(s)");
     Ok(())
 }
 
+struct SplitBuildCtx<'a> {
+    release: bool,
+    base: &'a str,
+    build_id: &'a str,
+    strict: bool,
+}
+
 fn run_split_wasm_pack(
     path: &Path,
-    release: bool,
-    base: &str,
+    ctx: &SplitBuildCtx<'_>,
     mode: &str,
     out_name: &str,
     route_count_out: Option<&Path>,
-    build_id: &str,
 ) -> Result<()> {
     let mut cmd = Command::new("wasm-pack");
     cmd.arg("build")
@@ -500,18 +529,19 @@ fn run_split_wasm_pack(
         .arg("pkg")
         .arg("--out-name")
         .arg(out_name);
-    if release {
+    if ctx.release {
         cmd.arg("--release");
     } else {
         cmd.arg("--dev");
     }
     cmd.env("POCOPINE_SPLIT_MODE", mode)
-        .env("POCOPINE_SPLIT_BASE", base)
+        .env("POCOPINE_SPLIT_BASE", ctx.base)
+        .env("POCOPINE_SPLIT_STRICT", if ctx.strict { "1" } else { "0" })
         .current_dir(path);
     if let Some(path) = route_count_out {
         cmd.env("POCOPINE_SPLIT_ROUTE_COUNT_OUT", path);
     }
-    let cfg_name = format!("pocopine_split_{}_{}", split_cfg_suffix(mode), build_id);
+    let cfg_name = format!("pocopine_split_{}_{}", split_cfg_suffix(mode), ctx.build_id);
     let rustflags = match std::env::var("RUSTFLAGS") {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing} --cfg={cfg_name}"),
         _ => format!("--cfg={cfg_name}"),
@@ -786,7 +816,8 @@ fn mime_of(path: &Path) -> &'static str {
 fn dev(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = load_config(&args.path)?;
-    build_entry(&project, args.release, args.split)?;
+    let strict = split_strict(args.release, args.strict, args.no_strict);
+    build_entry(&project, args.release, args.split, strict)?;
 
     // Kick off Tailwind in watch mode *before* we start serving so
     // the first page load already sees compiled CSS.
@@ -839,7 +870,7 @@ fn dev(args: &ServeArgs) -> Result<()> {
         while rx.try_recv().is_ok() {}
 
         println!("↻ rebuilding wasm…");
-        if let Err(e) = build_entry(&project, args.release, args.split) {
+        if let Err(e) = build_entry(&project, args.release, args.split, strict) {
             eprintln!("build failed: {e:#}");
         }
     };

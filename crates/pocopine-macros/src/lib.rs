@@ -3577,6 +3577,11 @@ pub fn app(input: TokenStream) -> TokenStream {
     }
 
     if let Some(mode) = split_mode.as_deref() {
+        if split_strict_enabled() {
+            if let Err(err) = validate_split_convention(&parsed) {
+                return err.to_compile_error().into();
+            }
+        }
         if mode == "shell" {
             if let Ok(path) = std::env::var("POCOPINE_SPLIT_ROUTE_COUNT_OUT") {
                 if let Err(err) = std::fs::write(&path, parsed.routes.len().to_string()) {
@@ -3687,6 +3692,80 @@ pub fn app(input: TokenStream) -> TokenStream {
         }
     };
     out.into()
+}
+
+fn split_strict_enabled() -> bool {
+    matches!(
+        std::env::var("POCOPINE_SPLIT_STRICT").as_deref(),
+        Ok("1" | "true" | "yes" | "on")
+    )
+}
+
+fn validate_split_convention(parsed: &AppMacroInput) -> syn::Result<()> {
+    for component in &parsed.components {
+        let path = app_component_path(component);
+        let owner = split_owner(path);
+        if owner.is_none() {
+            return Err(syn::Error::new_spanned(
+                path,
+                "split strict mode requires component paths to live under `shell`, `routes`, or `shared`; \
+                 move this component to the split-ready layout or pass `--no-strict` for a non-release experiment",
+            ));
+        }
+    }
+
+    let route_targets: std::collections::HashSet<String> = parsed
+        .routes
+        .iter()
+        .map(|route| {
+            let component = &route.component;
+            quote! { #component }.to_string()
+        })
+        .collect();
+    for route in &parsed.routes {
+        if split_owner(&route.component) != Some(SplitOwner::Routes) {
+            return Err(syn::Error::new_spanned(
+                &route.component,
+                "split strict mode requires route targets under `routes::<name>::...`; \
+                 shell components are always loaded and shared components are dependencies, not route roots",
+            ));
+        }
+    }
+
+    for component in parsed.components.iter().take_while(|component| {
+        let path = app_component_path(component);
+        !route_targets.contains(&quote! { #path }.to_string())
+    }) {
+        let path = app_component_path(component);
+        if split_owner(path) != Some(SplitOwner::Shell) {
+            return Err(syn::Error::new_spanned(
+                path,
+                "split strict mode treats components before the first route root as shell-owned; \
+                 shell-owned components must live under `shell::...`. Move shared/route components after the route roots",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitOwner {
+    Shell,
+    Routes,
+    Shared,
+}
+
+fn split_owner(path: &syn::Path) -> Option<SplitOwner> {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .find_map(|segment| match segment.as_str() {
+            "shell" => Some(SplitOwner::Shell),
+            "routes" => Some(SplitOwner::Routes),
+            "shared" => Some(SplitOwner::Shared),
+            _ => None,
+        })
 }
 
 fn app_component_path(c: &AppComponentEntry) -> &syn::Path {
