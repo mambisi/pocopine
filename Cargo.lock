@@ -2351,6 +2351,7 @@ dependencies = [
  "serde",
  "tiny_http",
  "toml 0.8.23",
+ "wasm-encoder 0.240.0",
  "wasmparser 0.240.0",
 ]
 

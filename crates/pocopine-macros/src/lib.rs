@@ -3899,40 +3899,31 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
     let shell_registers = shell_entries.iter().map(|(_key, vtable)| {
         quote! { (#vtable.register)(); }
     });
-    let route_root_markers = split_route_ids(parsed)
+    let route_root_exports = split_route_ids(parsed)
         .into_iter()
         .zip(parsed.routes.iter())
         .map(|(id, route)| {
-            let marker = quote::format_ident!("__pocopine_split_route_root_{}", id.name);
-            let component = &route.component;
-            quote! {
-                #[no_mangle]
-                pub extern "C" fn #marker() {
-                    <#component as ::pocopine::__private::Component>::register();
-                    let __pocopine_host = unsafe {
-                        &*::core::ptr::NonNull::<::pocopine::__private::web_sys::Element>::dangling().as_ptr()
-                    };
-                    let __pocopine_handle =
-                        ::pocopine::App::mount_subtree::<#component>(__pocopine_host);
-                    let _ = ::core::hint::black_box(__pocopine_handle);
-                }
-            }
-        });
-    let route_mount_arms = split_route_ids(parsed)
-        .into_iter()
-        .zip(parsed.routes.iter())
-        .map(|(id, route)| {
-            let id = id.name;
+            let mount = quote::format_ident!("pocopine_route_mount_{}", id.name);
+            let unmount = quote::format_ident!("pocopine_route_unmount_{}", id.name);
             let component = &route.component;
             let pattern = route.pattern.value();
             let param_setters = route_param_setters(&pattern);
             quote! {
-                #id => {
+                #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+                pub fn #unmount() {
                     __POCOPINE_ROUTE_HANDLE.with(|handle| {
                         if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
                             handle.unmount();
                         }
                     });
+                }
+
+                #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
+                pub fn #mount(
+                    outlet: ::pocopine::__private::web_sys::Element,
+                    path: ::std::string::String,
+                ) {
+                    #unmount();
                     let Some(document) = ::pocopine::__private::web_sys::window()
                         .and_then(|window| window.document())
                     else {
@@ -3974,7 +3965,7 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
                 #(#shell_registers)*
             }
 
-            #(#route_root_markers)*
+            #(#route_root_exports)*
 
             ::std::thread_local! {
                 static __POCOPINE_DESCRIPTOR_ROUTE_HANDLE: ::std::cell::RefCell<::core::option::Option<::pocopine::SubtreeHandle>> =
@@ -3986,27 +3977,6 @@ fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2
             #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
             pub fn pocopine_split_manifest() -> ::std::string::String {
                 #manifest.to_string()
-            }
-
-            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
-            pub fn pocopine_split_unmount_route() {
-                __POCOPINE_ROUTE_HANDLE.with(|handle| {
-                    if let ::core::option::Option::Some(handle) = handle.borrow_mut().take() {
-                        handle.unmount();
-                    }
-                });
-            }
-
-            #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]
-            pub fn pocopine_split_mount_route(
-                route_id: ::std::string::String,
-                outlet: ::pocopine::__private::web_sys::Element,
-                path: ::std::string::String,
-            ) {
-                match route_id.as_str() {
-                    #(#route_mount_arms)*
-                    _ => {}
-                }
             }
 
             #[::pocopine::__private::wasm_bindgen::prelude::wasm_bindgen]

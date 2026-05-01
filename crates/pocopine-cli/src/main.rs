@@ -13,6 +13,7 @@
 //! `[package.metadata.pocopine]`. See
 //! `examples/blog/Cargo.toml` for a complete server-bin example.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::channel;
@@ -24,7 +25,7 @@ use clap::{Parser, Subcommand};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use pocopine_wasm_split::{Dependency, RouteSplitRoot};
 use serde::Deserialize;
-use wasmparser::ExternalKind;
+use wasmparser::{ExternalKind, Parser as WasmParser, Payload};
 
 #[derive(Parser, Debug)]
 #[command(name = "pocopine", about = "pocopine project CLI", version)]
@@ -726,26 +727,61 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
 }
 
 fn write_post_link_route_module(path: &Path, base: &str, route_id: &str) -> Result<()> {
+    let mount_export = format!("pocopine_route_mount_{route_id}");
+    let unmount_export = format!("pocopine_route_unmount_{route_id}");
     let module = format!(
         r#"export const chunk = "/pkg/.pocopine-split/route_{route_id}.wasm";
-const ROUTE_ID = {route_id_json};
+const MOUNT_EXPORT = {mount_export_json};
+const UNMOUNT_EXPORT = {unmount_export_json};
+let instance = null;
+let encoder = new TextEncoder();
+let vectorLen = 0;
+
+function passStringToShellWasm(value, shell) {{
+  const bytes = encoder.encode(value);
+  const ptr = shell.__wbindgen_malloc(bytes.length, 1);
+  new Uint8Array(shell.memory.buffer).set(bytes, ptr);
+  vectorLen = bytes.length;
+  return ptr;
+}}
 
 export default async function init() {{
-  if (WebAssembly.compileStreaming) {{
-    await WebAssembly.compileStreaming(fetch(chunk));
+  if (instance) return instance;
+  const shell = window.__pocopine_shell?.__pocopine_split_exports?.();
+  if (!shell) {{
+    throw new Error("pocopine split route loaded before shell exports were ready");
   }}
+  const imports = {{ "pocopine:split": shell }};
+  const response = fetch(chunk);
+  if (WebAssembly.instantiateStreaming) {{
+    try {{
+      const result = await WebAssembly.instantiateStreaming(response, imports);
+      instance = result.instance;
+      return instance;
+    }} catch (error) {{
+      if (!String(error).includes("Content-Type")) throw error;
+    }}
+  }}
+  const bytes = await (await response).arrayBuffer();
+  const result = await WebAssembly.instantiate(bytes, imports);
+  instance = result.instance;
+  return instance;
 }}
 
 export function unmount_pocopine_route() {{
-  window.__pocopine_shell?.pocopine_split_unmount_route?.();
+  instance?.exports?.[UNMOUNT_EXPORT]?.();
 }}
 
 export async function mount_pocopine_route(outlet, path) {{
-  window.__pocopine_shell.pocopine_split_mount_route(ROUTE_ID, outlet, path);
+  await init();
+  const shell = window.__pocopine_shell.__pocopine_split_exports();
+  const ptr = passStringToShellWasm(path, shell);
+  instance.exports[MOUNT_EXPORT](outlet, ptr, vectorLen);
 }}
 "#,
         route_id = route_id,
-        route_id_json = js_string(route_id),
+        mount_export_json = js_string(&mount_export),
+        unmount_export_json = js_string(&unmount_export),
     );
     let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
     std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
@@ -984,23 +1020,38 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
     let routes = route_ids
         .iter()
         .map(|route_id| {
-            let marker = format!("__pocopine_split_route_root_{route_id}");
-            let function = exported_function(&module, &marker).ok_or_else(|| {
+            let mount = format!("pocopine_route_mount_{route_id}");
+            let unmount = format!("pocopine_route_unmount_{route_id}");
+            let mount_function = exported_function(&module, &mount).ok_or_else(|| {
                 anyhow!(
-                    "split route root marker `{marker}` was not exported by {}",
+                    "split route mount `{mount}` was not exported by {}",
+                    wasm_path.display()
+                )
+            })?;
+            let unmount_function = exported_function(&module, &unmount).ok_or_else(|| {
+                anyhow!(
+                    "split route unmount `{unmount}` was not exported by {}",
                     wasm_path.display()
                 )
             })?;
             Ok(RouteSplitRoot {
                 name: route_id.clone(),
-                roots: vec![Dependency::Function(function)],
+                roots: vec![
+                    Dependency::Function(mount_function),
+                    Dependency::Function(unmount_function),
+                ],
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
     let route_markers = route_ids
         .iter()
-        .map(|route_id| format!("__pocopine_split_route_root_{route_id}"))
+        .flat_map(|route_id| {
+            [
+                format!("pocopine_route_mount_{route_id}"),
+                format!("pocopine_route_unmount_{route_id}"),
+            ]
+        })
         .collect::<std::collections::BTreeSet<_>>();
     let shell_roots = module
         .exports
@@ -1008,7 +1059,8 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
         .filter(|export| {
             export.kind == ExternalKind::Func
                 && !route_markers.contains(&export.name)
-                && !export.name.starts_with("__pocopine_split_route_root_")
+                && !export.name.starts_with("pocopine_route_mount_")
+                && !export.name.starts_with("pocopine_route_unmount_")
         })
         .map(|export| Dependency::Function(export.index))
         .collect::<Vec<_>>();
@@ -1026,6 +1078,8 @@ fn emit_post_link_split_chunks(path: &Path, base: &str, route_ids: &[String]) ->
     module
         .validate_link_plan(&links)
         .map_err(|errors| anyhow!("validate post-link route split: {errors:?}"))?;
+    export_split_host_aliases(&wasm_path, &wasm, &module, &links)?;
+    patch_shell_js_split_exports(path, base)?;
 
     let split_dir = pkg.join(".pocopine-split");
     if split_dir.exists() {
@@ -1073,6 +1127,152 @@ fn exported_function(module: &pocopine_wasm_split::ModuleAnalysis, name: &str) -
         .iter()
         .find(|export| export.kind == ExternalKind::Func && export.name == name)
         .map(|export| export.index)
+}
+
+fn export_split_host_aliases(
+    wasm_path: &Path,
+    wasm: &[u8],
+    module: &pocopine_wasm_split::ModuleAnalysis,
+    links: &pocopine_wasm_split::SplitLinkPlan,
+) -> Result<()> {
+    let mut aliases = BTreeSet::new();
+    for chunk in links.routes.iter().chain(links.shared.iter()) {
+        for dependency in &chunk.external {
+            if module.imports.contains(dependency) {
+                continue;
+            }
+            if split_export_kind(*dependency).is_some() {
+                aliases.insert(*dependency);
+            }
+        }
+    }
+    if aliases.is_empty() {
+        return Ok(());
+    }
+
+    let patched = add_export_aliases(wasm, &aliases)?;
+    wasmparser::Validator::new()
+        .validate_all(&patched)
+        .with_context(|| format!("validate split host aliases in {}", wasm_path.display()))?;
+    std::fs::write(wasm_path, patched)
+        .with_context(|| format!("write split host aliases to {}", wasm_path.display()))?;
+    Ok(())
+}
+
+fn split_export_kind(dependency: Dependency) -> Option<wasm_encoder::ExportKind> {
+    match dependency {
+        Dependency::Function(_) => Some(wasm_encoder::ExportKind::Func),
+        Dependency::Table(_) => Some(wasm_encoder::ExportKind::Table),
+        Dependency::Memory(_) => Some(wasm_encoder::ExportKind::Memory),
+        Dependency::Global(_) => Some(wasm_encoder::ExportKind::Global),
+        Dependency::Tag(_) => Some(wasm_encoder::ExportKind::Tag),
+        Dependency::Type(_) | Dependency::Data(_) | Dependency::Element(_) => None,
+    }
+}
+
+fn split_export_name(dependency: Dependency) -> Option<String> {
+    match dependency {
+        Dependency::Function(index) => Some(format!("func:{index}")),
+        Dependency::Table(index) => Some(format!("table:{index}")),
+        Dependency::Memory(index) => Some(format!("memory:{index}")),
+        Dependency::Global(index) => Some(format!("global:{index}")),
+        Dependency::Tag(index) => Some(format!("tag:{index}")),
+        Dependency::Type(_) | Dependency::Data(_) | Dependency::Element(_) => None,
+    }
+}
+
+fn add_export_aliases(wasm: &[u8], aliases: &BTreeSet<Dependency>) -> Result<Vec<u8>> {
+    let mut module_out = wasm_encoder::Module::new();
+    let mut export_section_seen = false;
+
+    for payload in WasmParser::new(0).parse_all(wasm) {
+        let payload = payload.context("parse wasm for split export aliases")?;
+        match payload {
+            Payload::Version { .. } | Payload::CodeSectionEntry(_) => {}
+            Payload::ExportSection(reader) => {
+                export_section_seen = true;
+                let mut exports = wasm_encoder::ExportSection::new();
+                let mut names = BTreeSet::new();
+                for export in reader {
+                    let export = export.context("read wasm export")?;
+                    names.insert(export.name.to_string());
+                    exports.export(export.name, reencode_export_kind(export.kind), export.index);
+                }
+                for dependency in aliases {
+                    let Some(name) = split_export_name(*dependency) else {
+                        continue;
+                    };
+                    if names.contains(&name) {
+                        continue;
+                    }
+                    let Some(kind) = split_export_kind(*dependency) else {
+                        continue;
+                    };
+                    exports.export(&name, kind, dependency_index(*dependency));
+                }
+                module_out.section(&exports);
+            }
+            other => {
+                if let Some((id, range)) = other.as_section() {
+                    module_out.section(&wasm_encoder::RawSection {
+                        id,
+                        data: &wasm[range],
+                    });
+                }
+            }
+        }
+    }
+
+    if !export_section_seen {
+        bail!("split host alias patch requires an existing export section");
+    }
+
+    Ok(module_out.finish())
+}
+
+fn reencode_export_kind(kind: ExternalKind) -> wasm_encoder::ExportKind {
+    match kind {
+        ExternalKind::Func => wasm_encoder::ExportKind::Func,
+        ExternalKind::Table => wasm_encoder::ExportKind::Table,
+        ExternalKind::Memory => wasm_encoder::ExportKind::Memory,
+        ExternalKind::Global => wasm_encoder::ExportKind::Global,
+        ExternalKind::Tag => wasm_encoder::ExportKind::Tag,
+    }
+}
+
+fn dependency_index(dependency: Dependency) -> u32 {
+    match dependency {
+        Dependency::Function(index)
+        | Dependency::Table(index)
+        | Dependency::Memory(index)
+        | Dependency::Global(index)
+        | Dependency::Tag(index)
+        | Dependency::Type(index)
+        | Dependency::Data(index)
+        | Dependency::Element(index) => index,
+    }
+}
+
+fn patch_shell_js_split_exports(path: &Path, base: &str) -> Result<()> {
+    let js_path = path.join("pkg").join(format!("{base}.js"));
+    let mut js =
+        std::fs::read_to_string(&js_path).with_context(|| format!("read {}", js_path.display()))?;
+    if js.contains("function __pocopine_split_exports()") {
+        return Ok(());
+    }
+    let marker = "export { initSync, __wbg_init as default };";
+    let Some(pos) = js.rfind(marker) else {
+        bail!(
+            "could not find wasm-bindgen export marker in {}",
+            js_path.display()
+        );
+    };
+    js.insert_str(
+        pos,
+        "export function __pocopine_split_exports() {\n    return wasm;\n}\n\n",
+    );
+    std::fs::write(&js_path, js).with_context(|| format!("write {}", js_path.display()))?;
+    Ok(())
 }
 
 fn write_split_chunk(
