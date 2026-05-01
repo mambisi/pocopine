@@ -102,6 +102,22 @@ pub enum GraphError {
     RootIndexOutOfBounds { dependency: Dependency, limit: u32 },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkError {
+    MissingFunctionTypeRemap {
+        chunk: String,
+        function: u32,
+        type_index: u32,
+    },
+    MissingInstructionRemap {
+        chunk: String,
+        function: u32,
+        offset: usize,
+        operator: &'static str,
+        dependency: Dependency,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitPlan {
     pub shell: BTreeSet<Dependency>,
@@ -175,6 +191,12 @@ pub struct ChunkLinkPlan {
     pub external_remap: IndexRemap,
 }
 
+impl ChunkLinkPlan {
+    pub fn resolves(&self, dependency: Dependency) -> bool {
+        self.local_remap.contains(dependency) || self.external_remap.contains(dependency)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkRemapPlan {
     pub name: String,
@@ -205,6 +227,10 @@ impl IndexRemap {
 
     pub fn remap(&self, dependency: Dependency) -> Option<u32> {
         self.space(dependency).get(&dependency.index()).copied()
+    }
+
+    pub fn contains(&self, dependency: Dependency) -> bool {
+        self.remap(dependency).is_some()
     }
 
     fn insert(&mut self, dependency: Dependency) -> u32 {
@@ -442,6 +468,23 @@ impl ModuleAnalysis {
         }
     }
 
+    pub fn validate_link_plan(&self, plan: &SplitLinkPlan) -> Result<(), Vec<LinkError>> {
+        let mut errors = Vec::new();
+        self.validate_chunk_link_plan(&plan.shell, &mut errors);
+        for route in &plan.routes {
+            self.validate_chunk_link_plan(route, &mut errors);
+        }
+        for shared in &plan.shared {
+            self.validate_chunk_link_plan(shared, &mut errors);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     fn build_chunk_link_plan(
         &self,
         name: String,
@@ -483,6 +526,38 @@ impl ModuleAnalysis {
             external_remap: IndexRemap::from_dependencies(&external),
             owned,
             external,
+        }
+    }
+
+    fn validate_chunk_link_plan(&self, chunk: &ChunkLinkPlan, errors: &mut Vec<LinkError>) {
+        for dependency in &chunk.owned {
+            let Dependency::Function(index) = dependency else {
+                continue;
+            };
+            let Some(function) = self.function(*index) else {
+                continue;
+            };
+
+            let type_dependency = Dependency::Type(function.type_index);
+            if !chunk.resolves(type_dependency) {
+                errors.push(LinkError::MissingFunctionTypeRemap {
+                    chunk: chunk.name.clone(),
+                    function: function.index,
+                    type_index: function.type_index,
+                });
+            }
+
+            for index_use in &function.index_uses {
+                if !chunk.resolves(index_use.dependency) {
+                    errors.push(LinkError::MissingInstructionRemap {
+                        chunk: chunk.name.clone(),
+                        function: function.index,
+                        offset: index_use.offset,
+                        operator: index_use.operator,
+                        dependency: index_use.dependency,
+                    });
+                }
+            }
         }
     }
 
@@ -1242,6 +1317,7 @@ mod tests {
 
         let plan = module.plan_route_split([], &routes).unwrap();
         let links = module.build_link_plan(&plan);
+        module.validate_link_plan(&links).unwrap();
 
         assert!(links.shell.owned.contains(&Dependency::Type(0)));
         assert!(links.routes[0].owned.contains(&Dependency::Function(2)));
@@ -1263,5 +1339,50 @@ mod tests {
                 .remap(Dependency::Function(0)),
             Some(0)
         );
+    }
+
+    #[test]
+    fn link_validation_rejects_unresolved_instruction_indices() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (func $shell_helper (type $t0))
+              (func $route_entry (type $t0)
+                call $shell_helper)
+              (func $other_route_entry (type $t0)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "route".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "other".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+        let mut links = module.build_link_plan(&plan);
+
+        links.routes[0].external_remap = super::IndexRemap::default();
+        let errors = module.validate_link_plan(&links).unwrap_err();
+
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            super::LinkError::MissingInstructionRemap {
+                chunk,
+                function: 1,
+                operator: "call",
+                dependency: Dependency::Function(0),
+                ..
+            } if chunk == "route"
+        )));
     }
 }

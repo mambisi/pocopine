@@ -134,6 +134,13 @@ not byte emission yet; it is the link contract the emitter must
 satisfy when it decides whether an external reference becomes an
 actual wasm import, copied metadata, or a host-ABI call.
 
+`ModuleAnalysis::validate_link_plan()` checks the contract before
+emission. For every owned function body, each signature type and each
+recorded instruction dependency must resolve through the chunk's local
+or external remap. If a `call`, `ref.func`, table, memory, global,
+data, element, or tag index has no mapping, the split must fail before
+writing bytes.
+
 ## Contributor mental model
 
 A wasm module has index spaces:
