@@ -651,6 +651,26 @@ impl ModuleAnalysis {
                     };
                     stack.extend(data.dependencies.iter().copied());
                 }
+                Dependency::Table(index) => {
+                    for element in &self.elements {
+                        let ElementKindAnalysis::Active { table_index, .. } = element.kind else {
+                            continue;
+                        };
+                        if table_index.unwrap_or(0) == index {
+                            stack.push(Dependency::Element(element.index));
+                        }
+                    }
+                }
+                Dependency::Memory(index) => {
+                    for data in &self.data_segments {
+                        let DataKindAnalysis::Active { memory_index, .. } = data.kind else {
+                            continue;
+                        };
+                        if memory_index == index {
+                            stack.push(Dependency::Data(data.index));
+                        }
+                    }
+                }
                 Dependency::Tag(index) => {
                     let Some(tag) = self.tag(index) else {
                         return Err(GraphError::RootIndexOutOfBounds {
@@ -955,17 +975,10 @@ impl ModuleAnalysis {
 
         let mut exports = wasm_encoder::ExportSection::new();
         for export in &self.exports {
-            if export.kind == ExternalKind::Func
-                && chunk.local_remap.functions.contains_key(&export.index)
-            {
-                let index = combined_function_index(chunk, export.index).ok_or_else(|| {
-                    EmitError::MissingRemap {
-                        chunk: chunk.name.clone(),
-                        dependency: Dependency::Function(export.index),
-                    }
-                })?;
-                exports.export(&export.name, wasm_encoder::ExportKind::Func, index);
-            }
+            let Some((kind, index)) = remap_export(chunk, export)? else {
+                continue;
+            };
+            exports.export(&export.name, kind, index);
         }
         if !exports.is_empty() {
             module.section(&exports);
@@ -1427,6 +1440,59 @@ fn ordered_indices(remap: &BTreeMap<u32, u32>) -> Vec<u32> {
         .collect::<Vec<_>>();
     pairs.sort_by_key(|(_, new_index)| *new_index);
     pairs.into_iter().map(|(old_index, _)| old_index).collect()
+}
+
+fn remap_export(
+    chunk: &ChunkLinkPlan,
+    export: &ExportAnalysis,
+) -> Result<Option<(wasm_encoder::ExportKind, u32)>, EmitError> {
+    match export.kind {
+        ExternalKind::Func if chunk.local_remap.functions.contains_key(&export.index) => {
+            let index = combined_function_index(chunk, export.index).ok_or_else(|| {
+                EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Function(export.index),
+                }
+            })?;
+            Ok(Some((wasm_encoder::ExportKind::Func, index)))
+        }
+        ExternalKind::Table if chunk.local_remap.tables.contains_key(&export.index) => {
+            let index = combined_table_index(chunk, export.index).ok_or_else(|| {
+                EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Table(export.index),
+                }
+            })?;
+            Ok(Some((wasm_encoder::ExportKind::Table, index)))
+        }
+        ExternalKind::Memory if chunk.local_remap.memories.contains_key(&export.index) => {
+            let index = combined_memory_index(chunk, export.index).ok_or_else(|| {
+                EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Memory(export.index),
+                }
+            })?;
+            Ok(Some((wasm_encoder::ExportKind::Memory, index)))
+        }
+        ExternalKind::Global if chunk.local_remap.globals.contains_key(&export.index) => {
+            let index = combined_global_index(chunk, export.index).ok_or_else(|| {
+                EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Global(export.index),
+                }
+            })?;
+            Ok(Some((wasm_encoder::ExportKind::Global, index)))
+        }
+        ExternalKind::Tag if chunk.local_remap.tags.contains_key(&export.index) => {
+            let index =
+                combined_tag_index(chunk, export.index).ok_or_else(|| EmitError::MissingRemap {
+                    chunk: chunk.name.clone(),
+                    dependency: Dependency::Tag(export.index),
+                })?;
+            Ok(Some((wasm_encoder::ExportKind::Tag, index)))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn combined_function_index(chunk: &ChunkLinkPlan, old_index: u32) -> Option<u32> {
@@ -2910,6 +2976,49 @@ mod tests {
     }
 
     #[test]
+    fn emits_owned_non_function_exports() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (table $table 1 funcref)
+              (memory $memory 1)
+              (global $global (mut i32) (i32.const 0))
+              (func $shell (type $t0)
+                global.get $global
+                drop)
+              (export "shell" (func $shell))
+              (export "memory" (memory $memory))
+              (export "__wbindgen_externrefs" (table $table))
+              (export "__stack_pointer" (global $global)))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let plan = module
+            .plan_route_split(
+                [
+                    Dependency::Function(0),
+                    Dependency::Memory(0),
+                    Dependency::Table(0),
+                ],
+                &[],
+            )
+            .unwrap();
+        let links = module.build_link_plan(&plan);
+
+        let emitted = module.emit_function_chunk(&links.shell).unwrap();
+        wasmparser::Validator::new().validate_all(&emitted).unwrap();
+
+        let exports = export_names(&emitted);
+        assert!(exports.contains(&"shell".to_string()));
+        assert!(exports.contains(&"memory".to_string()));
+        assert!(exports.contains(&"__wbindgen_externrefs".to_string()));
+        assert!(exports.contains(&"__stack_pointer".to_string()));
+    }
+
+    #[test]
     fn emits_defined_table_for_indirect_calls() {
         let wasm = wat::parse_str(
             r#"
@@ -2946,6 +3055,27 @@ mod tests {
         assert_eq!(emitted.index_spaces.tables, 1);
         let route_entry = emitted.functions.iter().find(|f| f.index == 0).unwrap();
         assert!(route_entry.dependencies.contains(&Dependency::Table(0)));
+    }
+
+    #[test]
+    fn table_dependency_closure_includes_active_element_segment() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (table $table 1 funcref)
+              (func $target (type $t0))
+              (elem (i32.const 0) $target))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let closure = module.dependency_closure([Dependency::Table(0)]).unwrap();
+
+        assert!(closure.contains(&Dependency::Table(0)));
+        assert!(closure.contains(&Dependency::Element(0)));
+        assert!(closure.contains(&Dependency::Function(0)));
     }
 
     #[test]
@@ -2988,6 +3118,24 @@ mod tests {
             table_import_names(&emitted),
             vec![("env".to_string(), "indirect_table".to_string())]
         );
+    }
+
+    #[test]
+    fn memory_dependency_closure_includes_active_data_segment() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (memory $memory 1)
+              (data (i32.const 8) "hello"))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let closure = module.dependency_closure([Dependency::Memory(0)]).unwrap();
+
+        assert!(closure.contains(&Dependency::Memory(0)));
+        assert!(closure.contains(&Dependency::Data(0)));
     }
 
     #[test]
@@ -3412,6 +3560,18 @@ mod tests {
                     if export.kind == wasmparser::ExternalKind::Func {
                         exports.push(export.name.to_string());
                     }
+                }
+            }
+        }
+        exports
+    }
+
+    fn export_names(wasm: &[u8]) -> Vec<String> {
+        let mut exports = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let wasmparser::Payload::ExportSection(reader) = payload.unwrap() {
+                for export in reader {
+                    exports.push(export.unwrap().name.to_string());
                 }
             }
         }
