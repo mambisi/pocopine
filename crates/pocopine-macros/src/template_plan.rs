@@ -2477,10 +2477,12 @@ fn is_debounce_ms(m: &str) -> bool {
 /// the slot owner scope through to descendants so nested
 /// inject chains resolve correctly.
 ///
-/// Excludes:
-///   * `pp-route` / `pp-model` (component scope
-///     boundaries — the body fragment installs against the
-///     enclosing scope only).
+/// `pp-route` is allowed to survive as a preserved attribute:
+/// the fragment compiler still owns the neighbouring text,
+/// show, bind, and listener entries. Treating an otherwise
+/// liftable row as raw fallback just because it contains an SPA
+/// link leaves compiled-only route bodies with inert `pp-text`
+/// and `pp-bind` attributes.
 fn if_body_subtree_is_eligible(el: &Element) -> bool {
     if el.synthetic {
         for child in &el.children {
@@ -2497,16 +2499,12 @@ fn if_body_subtree_is_eligible(el: &Element) -> bool {
     // body fragment's own static plan, and the runtime fallback
     // walk over the cleaned fragment binds any preserved
     // directives inside the mounted child template.
-    let _ = is_plan_native(&el.tag); // kept for symmetry with slot eligibility
-    for (name, _) in &el.attrs {
-        if name == "pp-route" {
-            return false;
-        }
-        // RFC-058 Phase 6.5 — both branches of `pp-model` are
-        // compile-time handled now: native targets lift to
-        // `NativeModelLite`, component targets to
-        // `ChildHostModelLite`. No need to gate either form.
-    }
+    // Kept for symmetry with slot eligibility.
+    let _ = is_plan_native(&el.tag);
+    // RFC-058 Phase 6.5 — both branches of `pp-model` are
+    // compile-time handled now: native targets lift to
+    // `NativeModelLite`, component targets to
+    // `ChildHostModelLite`. No need to gate either form.
     for child in &el.children {
         if let Node::Element(child_el) = child {
             if !if_body_subtree_is_eligible(child_el) {
@@ -2847,7 +2845,11 @@ fn escape_attr(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_lift_eligible_opaque, is_supported_modifier, parse_pp_directive_name};
+    use super::{
+        analyze_template_plan, is_lift_eligible_opaque, is_supported_modifier,
+        parse_pp_directive_name,
+    };
+    use crate::template_parser::parse_strict;
 
     #[test]
     fn supported_listener_modifiers_include_runtime_named_keys() {
@@ -2930,6 +2932,43 @@ mod tests {
         assert!(parse_pp_directive_name("").is_none());
         // Leading dot rejects (would yield empty head).
         assert!(parse_pp_directive_name(".both").is_none());
+    }
+
+    #[test]
+    fn lifted_for_body_keeps_route_links_without_raw_binding_fallback() {
+        let ast = parse_strict(
+            r#"
+            <ol>
+              <template pp-for="story in stories" pp-key="story.id">
+                <li>
+                  <a pp-route pp-bind:href="story.href" pp-text="story.title"></a>
+                </li>
+              </template>
+            </ol>
+            "#,
+            "test.poco",
+        )
+        .expect("test template parses");
+
+        let emitted = analyze_template_plan(&ast, &[], None);
+        let body_fns = emitted.if_body_fns.to_string();
+        let plan = emitted
+            .plan_tokens
+            .expect("pp-for should emit a static plan")
+            .to_string();
+
+        assert!(
+            plan.contains("body : :: core :: option :: Option :: Some"),
+            "pp-route must not force pp-for body_fn = None"
+        );
+        assert!(
+            body_fns.contains("data-pp-text-managed"),
+            "lifted row body should strip pp-text and stamp the managed marker"
+        );
+        assert!(
+            body_fns.contains("pp-route"),
+            "pp-route remains preserved until the route directive has a compiled installer"
+        );
     }
 
     /// `parse_interp_segments` is the macro twin of

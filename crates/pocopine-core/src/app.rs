@@ -285,6 +285,7 @@ impl App {
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
         mount::mount_child_component(host, C::NAME);
+        mount::finalize_compiled_subtree(host);
         SubtreeHandle {
             host: host.clone(),
             active: true,
@@ -297,6 +298,7 @@ impl App {
     /// register serializable component data before calling this.
     pub fn mount_registered_subtree(host: &Element, tag: &str) -> SubtreeHandle {
         mount::mount_child_component(host, tag);
+        mount::finalize_compiled_subtree(host);
         SubtreeHandle {
             host: host.clone(),
             active: true,
