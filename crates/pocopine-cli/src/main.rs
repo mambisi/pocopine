@@ -773,9 +773,37 @@ export function mount_pocopine_route(outlet, _path) {{
 
 fn is_static_descriptor_template(html: &str) -> bool {
     const DYNAMIC_MARKERS: &[&str] = &[
-        "pp-text", "pp-html", "pp-for", "pp-if", "pp-bind", "pp-model", "pp-on", "@", ":", "{{",
+        "pp-text",
+        "pp-html",
+        "pp-for",
+        "pp-if",
+        "pp-bind",
+        "pp-model",
+        "pp-on",
+        "pp-ref",
+        "pp-show",
+        "pp-transition",
+        "pp-teleport",
+        "pp-anchor",
+        "pp-resize",
+        "pp-intersect",
+        "pp-roving",
+        "{{",
     ];
     !DYNAMIC_MARKERS.iter().any(|marker| html.contains(marker))
+        && !contains_binding_attr_prefix(html, ':')
+        && !contains_binding_attr_prefix(html, '@')
+}
+
+fn contains_binding_attr_prefix(html: &str, prefix: char) -> bool {
+    let mut prev = None;
+    for ch in html.chars() {
+        if ch == prefix && matches!(prev, Some(' ' | '\n' | '\r' | '\t')) {
+            return true;
+        }
+        prev = Some(ch);
+    }
+    false
 }
 
 fn kebab_case(value: &str) -> String {
@@ -1190,4 +1218,38 @@ fn dev(args: &ServeArgs) -> Result<()> {
         child.kill();
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_static_descriptor_template;
+
+    #[test]
+    fn static_descriptor_allows_static_route_links_and_urls() {
+        let html = r#"<section>
+  <a href="https://example.com/@team" pp-route>Read more</a>
+</section>"#;
+
+        assert!(is_static_descriptor_template(html));
+    }
+
+    #[test]
+    fn static_descriptor_rejects_binding_attributes() {
+        assert!(!is_static_descriptor_template(
+            r#"<button :disabled="loading">Save</button>"#
+        ));
+        assert!(!is_static_descriptor_template(
+            r#"<button @click="save">Save</button>"#
+        ));
+    }
+
+    #[test]
+    fn static_descriptor_rejects_runtime_directives() {
+        assert!(!is_static_descriptor_template(
+            r#"<span pp-text="title"></span>"#
+        ));
+        assert!(!is_static_descriptor_template(
+            r#"<template pp-if="ready"><p>Ready</p></template>"#
+        ));
+    }
 }
