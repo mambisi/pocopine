@@ -4,7 +4,10 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Comment, HnComment};
+mod comment;
+
+pub use comment::{Comment, HnComment};
+
 use crate::shared::ItemNode;
 use crate::{extract_domain, get_item_tree, humanize_age, performance_now};
 

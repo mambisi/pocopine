@@ -6,16 +6,16 @@ use pocopine::prelude::*;
 pub fn main() {
     pocopine::app! {
         components: [
-            crate::components::AppShell,
-            crate::components::StoryList,
-            crate::components::StoryDetail,
-            crate::components::HnComment,
-            crate::components::NotFound,
+            crate::shell::AppShell,
+            crate::routes::home::StoryList,
+            crate::routes::story::StoryDetail,
+            crate::routes::story::HnComment,
+            crate::routes::not_found::NotFound,
         ],
         routes: [
-            ("/", crate::components::StoryList),
-            ("/item/:id", crate::components::StoryDetail),
-            ("*", crate::components::NotFound),
+            ("/", crate::routes::home::StoryList),
+            ("/item/:id", crate::routes::story::StoryDetail),
+            ("*", crate::routes::not_found::NotFound),
         ],
         devtools: true,
     };

@@ -6,12 +6,14 @@
 //!   otherwise searches story titles / text.
 //! * `get_item_tree(id)`     — story + full nested comment tree.
 //!
-//! Components live under [`components`]; the client entry and router
-//! wiring live in [`app`].
+//! Components are split by ownership: [`shell`] is always loaded,
+//! [`routes`] is route-private, and [`shared`] holds cross-route
+//! data/types.
 
 pub mod app;
-pub mod components;
+pub mod routes;
 pub mod shared;
+pub mod shell;
 
 #[cfg(not(target_arch = "wasm32"))]
 use shared::SearchResult;
