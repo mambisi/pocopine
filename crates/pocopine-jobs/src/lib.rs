@@ -309,6 +309,7 @@ return redis.call(
     pub struct JobClient {
         backend: JobBackend,
         app: String,
+        redis_connection: Arc<Mutex<Option<MultiplexedConnection>>>,
     }
 
     impl JobClient {
@@ -319,6 +320,7 @@ return redis.call(
                 backend: job_backend_from_env()?,
                 app: std::env::var("POCOPINE_APP_NAME")
                     .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string()),
+                redis_connection: Arc::new(Mutex::new(None)),
             })
         }
 
@@ -329,6 +331,7 @@ return redis.call(
                     url: redis_url.into(),
                 },
                 app: app.into(),
+                redis_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -337,6 +340,7 @@ return redis.call(
             Self {
                 backend: JobBackend::Memory,
                 app: app.into(),
+                redis_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -344,6 +348,7 @@ return redis.call(
             Self {
                 backend,
                 app: app.into(),
+                redis_connection: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -435,8 +440,36 @@ return redis.call(
                     "the memory job backend does not have a Redis connection",
                 ));
             };
+            if let Some(conn) = self.cached_connection()? {
+                return Ok(conn);
+            }
+
             let client = redis::Client::open(url.as_str())?;
-            Ok(client.get_multiplexed_async_connection().await?)
+            let conn = client.get_multiplexed_async_connection().await?;
+            let mut cached = self.redis_connection.lock().map_err(|_| {
+                JobError::Env("cached Redis job connection mutex was poisoned".into())
+            })?;
+            if let Some(existing) = cached.as_ref() {
+                return Ok(existing.clone());
+            }
+            *cached = Some(conn.clone());
+            Ok(conn)
+        }
+
+        fn cached_connection(&self) -> JobResult<Option<MultiplexedConnection>> {
+            Ok(self
+                .redis_connection
+                .lock()
+                .map_err(|_| {
+                    JobError::Env("cached Redis job connection mutex was poisoned".into())
+                })?
+                .clone())
+        }
+
+        fn clear_connection(&self) {
+            if let Ok(mut cached) = self.redis_connection.lock() {
+                *cached = None;
+            }
         }
 
         fn queue_key(&self, queue: &str) -> String {
@@ -551,6 +584,7 @@ return redis.call(
                         backoff = Duration::from_millis(DEFAULT_WORKER_ERROR_BACKOFF_MS);
                     }
                     Err(err) => {
+                        self.client.clear_connection();
                         eprintln!("pocopine worker error: {err}; retrying in {backoff:?}");
                         tokio::time::sleep(backoff).await;
                         backoff = (backoff * 2)

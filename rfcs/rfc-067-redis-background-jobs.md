@@ -134,6 +134,14 @@ scheduled promotion removes from the sorted set and writes to the ready
 stream atomically, and retry/dead-letter paths acknowledge the original
 stream entry in the same script that records the next state.
 
+`JobClient` caches a multiplexed Redis connection so burst enqueueing does
+not open a TCP connection per job. The worker clears that cache after a
+Redis loop error before reconnecting with backoff.
+
+This RFC targets single-instance Redis or an operator-managed proxy that
+preserves a primary endpoint across failover. Native Redis Cluster
+`MOVED`/`ASK` handling and Sentinel discovery are not part of this slice.
+
 The memory backend uses the same envelope, scheduled queue, retry backoff,
 dead-letter, and periodic slot semantics inside a process-local store. It
 does not use consumer groups or stale pending reclaim because a handler is
