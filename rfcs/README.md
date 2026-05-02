@@ -75,4 +75,3 @@ Conventions:
 | 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
 | 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
 | 066 | [Shared runtime route ABI](./rfc-066-shared-runtime-route-abi.md) | Draft |
-| 067 | [Route crates and ABI entry points](./rfc-067-route-crates-and-abi-entrypoints.md) | Draft |

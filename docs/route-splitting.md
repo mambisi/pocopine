@@ -206,36 +206,6 @@ smaller because they cross the boundary as serializable HTML data.
 
 The route descriptor model needs to grow in layers.
 
-For serious split apps, the preferred authoring shape is now route
-crates:
-
-```bash
-pocopine route crate story --pattern "/item/:id" --component StoryDetail
-```
-
-This creates:
-
-```text
-routes/story/
-  Cargo.toml
-  src/lib.rs
-  src/StoryDetail.poco
-```
-
-The generated `src/lib.rs` ends with:
-
-```rust
-pocopine::route! {
-    id: "story",
-    path: "/item/:id",
-    component: StoryDetail,
-}
-```
-
-That macro is the stable ABI entry point. It declares route identity
-without passing Rust vtables, constructors, allocators, or `Scope`
-values across artifact boundaries.
-
 First, support more template features as serializable operations:
 
 - static attributes
