@@ -67,6 +67,7 @@ impl From<serde_json::Error> for JobError {
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::collections::{hash_map::DefaultHasher, BTreeSet, HashMap, VecDeque};
+    use std::fs;
     use std::future::Future;
     use std::hash::{Hash, Hasher};
     use std::pin::Pin;
@@ -88,7 +89,7 @@ mod host {
 
     const DEFAULT_APP_NAME: &str = "pocopine";
     const DEFAULT_GROUP: &str = "pocopine-workers";
-    const DEFAULT_CONSUMER: &str = "worker-1";
+    const DEFAULT_CONSUMER_PREFIX: &str = "worker";
     const DEFAULT_BLOCK_MS: usize = 1_000;
     const DEFAULT_BATCH_SIZE: usize = 10;
     const DEFAULT_VISIBILITY_TIMEOUT_MS: u64 = 60_000;
@@ -101,6 +102,7 @@ mod host {
 
     static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
     static MEMORY_STORES: OnceLock<Mutex<HashMap<String, Arc<MemoryStore>>>> = OnceLock::new();
+    static PROCESS_IDENTITY: OnceLock<String> = OnceLock::new();
 
     /// Unique id assigned to an enqueued job.
     #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -434,9 +436,12 @@ mod host {
                 group: std::env::var("POCOPINE_JOB_GROUP")
                     .unwrap_or_else(|_| DEFAULT_GROUP.to_string()),
                 consumer: std::env::var("POCOPINE_JOB_CONSUMER")
-                    .unwrap_or_else(|_| DEFAULT_CONSUMER.to_string()),
+                    .unwrap_or_else(|_| default_consumer_name()),
                 block_ms: DEFAULT_BLOCK_MS,
-                visibility_timeout: Duration::from_millis(DEFAULT_VISIBILITY_TIMEOUT_MS),
+                visibility_timeout: millis_env(
+                    "POCOPINE_JOB_VISIBILITY_MS",
+                    DEFAULT_VISIBILITY_TIMEOUT_MS,
+                )?,
                 scheduler_interval: Duration::from_millis(DEFAULT_SCHEDULER_INTERVAL_MS),
                 batch_size: DEFAULT_BATCH_SIZE,
             })
@@ -1117,6 +1122,25 @@ mod host {
         Ok(url)
     }
 
+    fn millis_env(name: &str, default_ms: u64) -> JobResult<Duration> {
+        match std::env::var(name) {
+            Ok(raw) => parse_positive_millis(name, &raw),
+            Err(_) => Ok(Duration::from_millis(default_ms)),
+        }
+    }
+
+    fn parse_positive_millis(name: &str, raw: &str) -> JobResult<Duration> {
+        let value = raw.trim().parse::<u64>().map_err(|err| {
+            JobError::Env(format!(
+                "{name} must be a positive integer number of milliseconds: {err}"
+            ))
+        })?;
+        if value == 0 {
+            return Err(JobError::Env(format!("{name} must be greater than 0")));
+        }
+        Ok(Duration::from_millis(value))
+    }
+
     fn due_periodic_slot(
         schedule: PeriodicSchedule,
         now_ms: u64,
@@ -1181,8 +1205,7 @@ mod host {
     fn new_job_id() -> JobResult<String> {
         let now = epoch_ms(SystemTime::now())?;
         let next = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        Ok(format!("{now:x}-{pid:x}-{next:x}"))
+        Ok(format!("{now:x}:{}:{next:x}", process_identity()))
     }
 
     fn epoch_ms(time: SystemTime) -> JobResult<u64> {
@@ -1190,6 +1213,55 @@ mod host {
             .duration_since(UNIX_EPOCH)
             .map_err(|err| JobError::Time(err.to_string()))?;
         Ok(duration.as_millis() as u64)
+    }
+
+    fn default_consumer_name() -> String {
+        format!("{DEFAULT_CONSUMER_PREFIX}-{}", process_identity())
+    }
+
+    fn process_identity() -> &'static str {
+        PROCESS_IDENTITY.get_or_init(|| {
+            let host = sanitize_identity_part(&host_name_hint());
+            let pid = std::process::id();
+            let started_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default();
+            format!("{host}_{pid:x}_{started_at:x}")
+        })
+    }
+
+    fn host_name_hint() -> String {
+        std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                fs::read_to_string("/etc/hostname")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_else(|| "host".to_string())
+    }
+
+    fn sanitize_identity_part(raw: &str) -> String {
+        let sanitized: String = raw
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let sanitized = sanitized.trim_matches('_');
+        if sanitized.is_empty() {
+            "host".to_string()
+        } else {
+            sanitized.to_string()
+        }
     }
 
     #[cfg(test)]
@@ -1210,10 +1282,30 @@ mod host {
         #[test]
         fn job_id_includes_process_identity() {
             let id = new_job_id().unwrap();
-            let parts: Vec<_> = id.split('-').collect();
+            let parts: Vec<_> = id.split(':').collect();
 
             assert_eq!(parts.len(), 3);
-            assert_eq!(parts[1], format!("{:x}", std::process::id()));
+            assert!(parts[1].contains(&format!("{:x}", std::process::id())));
+        }
+
+        #[test]
+        fn default_consumer_name_is_process_unique() {
+            let consumer = default_consumer_name();
+
+            assert!(consumer.starts_with("worker-"));
+            assert!(consumer.contains(&format!("{:x}", std::process::id())));
+        }
+
+        #[test]
+        fn visibility_timeout_parser_rejects_zero_and_invalid_values() {
+            assert_eq!(
+                parse_positive_millis("POCOPINE_JOB_VISIBILITY_MS", "1500")
+                    .unwrap()
+                    .as_millis(),
+                1500
+            );
+            assert!(parse_positive_millis("POCOPINE_JOB_VISIBILITY_MS", "0").is_err());
+            assert!(parse_positive_millis("POCOPINE_JOB_VISIBILITY_MS", "banana").is_err());
         }
     }
 }

@@ -82,6 +82,11 @@ worker-bin = "worker"
 - If `POCOPINE_JOB_BACKEND` is unset and `POCOPINE_REDIS_URL` is set, Redis
   is selected.
 - If neither variable is set, memory is selected.
+- `POCOPINE_JOB_VISIBILITY_MS` configures Redis pending-entry reclaim
+  timeout and defaults to `60000`.
+- `POCOPINE_JOB_CONSUMER` overrides the Redis Streams consumer name. If it
+  is unset, Pocopine derives a process-unique name from host, pid, and a
+  process token.
 
 `pocopine dev` injects `POCOPINE_REDIS_URL=redis://127.0.0.1/` into
 spawned server and worker binaries when the variable is not already set so
@@ -105,6 +110,9 @@ workers or periodic/background work owned inside one process.
 
 ## 4. Failure Model
 
+Jobs are at-least-once. Handlers must be idempotent for effects that cannot
+be safely repeated.
+
 The worker acknowledges a stream entry only after the job succeeds, is
 scheduled for retry, or is moved to the dead stream. Delayed jobs and
 retry jobs are promoted by polling the sorted set. Stale pending jobs are
@@ -123,14 +131,15 @@ does not use consumer groups or stale pending reclaim because a handler is
 run directly by the worker task. If a handler hangs, the worker task is
 occupied; if the process restarts, queued memory jobs are lost.
 
-`visibility_timeout` is part of the worker contract: handlers should
-normally finish well under that timeout or be idempotent enough to handle
-reclaim/retry. Periodic jobs follow the same reclaim-attempt accounting as
-manual jobs; a later periodic firing creates a fresh envelope.
+`visibility_timeout` is part of the worker contract and is configured by
+`POCOPINE_JOB_VISIBILITY_MS`: handlers should normally finish well under
+that timeout or be idempotent enough to handle reclaim/retry. Periodic jobs
+follow the same reclaim-attempt accounting as manual jobs; a later periodic
+firing creates a fresh envelope.
 
-Job IDs include timestamp, process id, and process-local counter so
-multiple local workers do not mint the same id during the same
-millisecond.
+Job IDs include timestamp, host/process identity, and process-local counter
+so multiple workers do not mint the same id during the same millisecond and
+retry jitter does not collapse across hosts.
 
 Periodic jobs are not executed directly by the scheduler loop. The worker
 computes the due slot, acquires a backend-specific lock for that job/slot
