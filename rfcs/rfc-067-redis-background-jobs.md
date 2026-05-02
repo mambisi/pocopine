@@ -118,12 +118,21 @@ scheduled for retry, or is moved to the dead stream. Delayed jobs and
 retry jobs are promoted by polling the sorted set. Stale pending jobs are
 reclaimed via Redis stream claiming before each read loop.
 
+Redis workers use Redis `TIME` for scheduler and retry due-time
+comparisons. This keeps workers on different hosts from promoting jobs early
+because their local clocks disagree.
+
 Retries use exponential backoff with jitter and go through the sorted-set
 scheduler instead of being immediately re-added to the ready stream. A
 reclaimed stale job consumes another attempt before it is re-run; if it
 has already reached the max attempt count it is moved to the dead stream.
 The worker loop logs Redis/runtime errors, sleeps with capped backoff, and
 reconnects instead of exiting on a transient Redis failure.
+
+Redis state transitions that cross queue structures are Lua-scripted:
+scheduled promotion removes from the sorted set and writes to the ready
+stream atomically, and retry/dead-letter paths acknowledge the original
+stream entry in the same script that records the next state.
 
 The memory backend uses the same envelope, scheduled queue, retry backoff,
 dead-letter, and periodic slot semantics inside a process-local store. It

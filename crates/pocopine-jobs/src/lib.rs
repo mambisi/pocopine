@@ -99,6 +99,68 @@ mod host {
     const DEFAULT_WORKER_ERROR_BACKOFF_MAX_MS: u64 = 30_000;
     const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
     const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
+    const PROMOTE_SCHEDULED_SCRIPT: &str = r#"
+local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+if removed == 0 then
+  return 0
+end
+return redis.call(
+  'XADD',
+  KEYS[2],
+  '*',
+  'job_id',
+  ARGV[2],
+  'job_name',
+  ARGV[3],
+  'queue',
+  ARGV[4],
+  'payload',
+  ARGV[5],
+  'attempt',
+  ARGV[6],
+  'max_attempts',
+  ARGV[7],
+  'created_at_ms',
+  ARGV[8],
+  'scheduled_for_ms',
+  ARGV[9]
+)
+"#;
+    const SCHEDULE_RETRY_AND_ACK_SCRIPT: &str = r#"
+local acked = redis.call('XACK', KEYS[2], ARGV[3], ARGV[4])
+if acked == 0 then
+  return 0
+end
+redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+return acked
+"#;
+    const DEAD_LETTER_AND_ACK_SCRIPT: &str = r#"
+local acked = redis.call('XACK', KEYS[2], ARGV[9], ARGV[10])
+if acked == 0 then
+  return 0
+end
+return redis.call(
+  'XADD',
+  KEYS[1],
+  '*',
+  'job_id',
+  ARGV[1],
+  'job_name',
+  ARGV[2],
+  'queue',
+  ARGV[3],
+  'attempt',
+  ARGV[4],
+  'max_attempts',
+  ARGV[5],
+  'error',
+  ARGV[6],
+  'envelope',
+  ARGV[7],
+  'failed_at_ms',
+  ARGV[8]
+)
+"#;
 
     static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
     static MEMORY_STORES: OnceLock<Mutex<HashMap<String, Arc<MemoryStore>>>> = OnceLock::new();
@@ -526,8 +588,9 @@ mod host {
         }
 
         async fn run_redis_once(&self, conn: &mut MultiplexedConnection) -> JobResult<usize> {
-            self.enqueue_due_periodic_jobs(&mut *conn).await?;
-            self.promote_due_jobs(&mut *conn).await?;
+            let now_ms = redis_time_ms(&mut *conn).await?;
+            self.enqueue_due_periodic_jobs(&mut *conn, now_ms).await?;
+            self.promote_due_jobs(&mut *conn, now_ms).await?;
             self.reclaim_stale_jobs(&mut *conn).await?;
             self.read_ready_jobs(conn).await
         }
@@ -616,8 +679,8 @@ mod host {
         async fn enqueue_due_periodic_jobs(
             &self,
             conn: &mut MultiplexedConnection,
+            now_ms: u64,
         ) -> JobResult<()> {
-            let now_ms = epoch_ms(SystemTime::now())?;
             for descriptor in self.descriptors.values() {
                 let Some(schedule) = descriptor.periodic else {
                     continue;
@@ -655,12 +718,15 @@ mod host {
             Ok(())
         }
 
-        async fn promote_due_jobs(&self, conn: &mut MultiplexedConnection) -> JobResult<()> {
-            let now = epoch_ms(SystemTime::now())?;
+        async fn promote_due_jobs(
+            &self,
+            conn: &mut MultiplexedConnection,
+            now_ms: u64,
+        ) -> JobResult<()> {
             let raw_jobs: Vec<String> = redis::cmd("ZRANGEBYSCORE")
                 .arg(self.client.scheduled_key())
                 .arg("-inf")
-                .arg(now)
+                .arg(now_ms)
                 .arg("LIMIT")
                 .arg(0)
                 .arg(DEFAULT_MAX_PROMOTE)
@@ -677,7 +743,14 @@ mod host {
                 }
                 let mut envelope: JobEnvelope = serde_json::from_str(&raw)?;
                 envelope.scheduled_for_ms = None;
-                xadd_envelope(conn, &self.client.queue_key(&envelope.queue), &envelope).await?;
+                promote_scheduled_envelope(
+                    conn,
+                    &self.client.scheduled_key(),
+                    &self.client.queue_key(&envelope.queue),
+                    &raw,
+                    &envelope,
+                )
+                .await?;
             }
             Ok(())
         }
@@ -705,9 +778,14 @@ mod host {
                         }
                     };
                     if envelope.attempt >= envelope.max_attempts {
-                        self.move_to_dead(conn, &envelope, "job reclaimed after max attempts")
-                            .await?;
-                        self.ack(conn, &stream, &id.id).await?;
+                        self.move_to_dead_and_ack(
+                            conn,
+                            &stream,
+                            &id.id,
+                            &envelope,
+                            "job reclaimed after max attempts",
+                        )
+                        .await?;
                         continue;
                     }
                     let mut envelope = envelope;
@@ -761,8 +839,8 @@ mod host {
             envelope: JobEnvelope,
         ) -> JobResult<()> {
             let Some(descriptor) = self.descriptors.get(envelope.job_name.as_str()) else {
-                self.move_to_dead(conn, &envelope, "unknown job").await?;
-                self.ack(conn, stream, stream_id).await?;
+                self.move_to_dead_and_ack(conn, stream, stream_id, &envelope, "unknown job")
+                    .await?;
                 return Ok(());
             };
 
@@ -773,15 +851,31 @@ mod host {
                     if envelope.attempt < envelope.max_attempts {
                         let mut retry = envelope.clone();
                         retry.attempt += 1;
-                        let due_ms = epoch_ms(SystemTime::now())?
+                        let due_ms = redis_time_ms(&mut *conn)
+                            .await?
                             .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
                         retry.scheduled_for_ms = Some(due_ms);
-                        schedule_envelope(conn, &self.client.scheduled_key(), &retry, due_ms)
-                            .await?;
+                        schedule_retry_and_ack(
+                            conn,
+                            &self.client.scheduled_key(),
+                            stream,
+                            &self.config.group,
+                            stream_id,
+                            &retry,
+                            due_ms,
+                        )
+                        .await?;
                     } else {
-                        self.move_to_dead(conn, &envelope, &err.to_string()).await?;
+                        self.move_to_dead_and_ack(
+                            conn,
+                            stream,
+                            stream_id,
+                            &envelope,
+                            &err.to_string(),
+                        )
+                        .await?;
                     }
-                    self.ack(conn, stream, stream_id).await
+                    Ok(())
                 }
             }
         }
@@ -817,33 +911,24 @@ mod host {
             memory_move_to_dead(&store, envelope, error)
         }
 
-        async fn move_to_dead(
+        async fn move_to_dead_and_ack(
             &self,
             conn: &mut MultiplexedConnection,
+            stream: &str,
+            stream_id: &str,
             envelope: &JobEnvelope,
             error: &str,
         ) -> JobResult<()> {
-            let raw = serde_json::to_string(envelope)?;
-            let _: String = redis::cmd("XADD")
-                .arg(self.client.dead_key())
-                .arg("*")
-                .arg("job_id")
-                .arg(&envelope.job_id)
-                .arg("job_name")
-                .arg(&envelope.job_name)
-                .arg("queue")
-                .arg(&envelope.queue)
-                .arg("attempt")
-                .arg(envelope.attempt)
-                .arg("max_attempts")
-                .arg(envelope.max_attempts)
-                .arg("error")
-                .arg(error)
-                .arg("envelope")
-                .arg(raw)
-                .query_async(conn)
-                .await?;
-            Ok(())
+            dead_letter_and_ack(
+                conn,
+                &self.client.dead_key(),
+                stream,
+                &self.config.group,
+                stream_id,
+                envelope,
+                error,
+            )
+            .await
         }
 
         async fn ack(
@@ -1030,20 +1115,91 @@ mod host {
         Ok(())
     }
 
-    async fn schedule_envelope(
+    async fn promote_scheduled_envelope(
         conn: &mut MultiplexedConnection,
         scheduled_key: &str,
+        queue_key: &str,
+        raw_scheduled_envelope: &str,
+        envelope: &JobEnvelope,
+    ) -> JobResult<()> {
+        let payload = serde_json::to_string(&envelope.payload)?;
+        let _: Value = redis::cmd("EVAL")
+            .arg(PROMOTE_SCHEDULED_SCRIPT)
+            .arg(2)
+            .arg(scheduled_key)
+            .arg(queue_key)
+            .arg(raw_scheduled_envelope)
+            .arg(&envelope.job_id)
+            .arg(&envelope.job_name)
+            .arg(&envelope.queue)
+            .arg(payload)
+            .arg(envelope.attempt)
+            .arg(envelope.max_attempts)
+            .arg(envelope.created_at_ms)
+            .arg(0_u64)
+            .query_async(conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn schedule_retry_and_ack(
+        conn: &mut MultiplexedConnection,
+        scheduled_key: &str,
+        stream: &str,
+        group: &str,
+        stream_id: &str,
         envelope: &JobEnvelope,
         due_ms: u64,
     ) -> JobResult<()> {
         let raw = serde_json::to_string(envelope)?;
-        let _: () = redis::cmd("ZADD")
+        let _: i32 = redis::cmd("EVAL")
+            .arg(SCHEDULE_RETRY_AND_ACK_SCRIPT)
+            .arg(2)
             .arg(scheduled_key)
+            .arg(stream)
             .arg(due_ms)
             .arg(raw)
+            .arg(group)
+            .arg(stream_id)
             .query_async(conn)
             .await?;
         Ok(())
+    }
+
+    async fn dead_letter_and_ack(
+        conn: &mut MultiplexedConnection,
+        dead_key: &str,
+        stream: &str,
+        group: &str,
+        stream_id: &str,
+        envelope: &JobEnvelope,
+        error: &str,
+    ) -> JobResult<()> {
+        let raw = serde_json::to_string(envelope)?;
+        let failed_at_ms = redis_time_ms(&mut *conn).await?;
+        let _: Value = redis::cmd("EVAL")
+            .arg(DEAD_LETTER_AND_ACK_SCRIPT)
+            .arg(2)
+            .arg(dead_key)
+            .arg(stream)
+            .arg(&envelope.job_id)
+            .arg(&envelope.job_name)
+            .arg(&envelope.queue)
+            .arg(envelope.attempt)
+            .arg(envelope.max_attempts)
+            .arg(error)
+            .arg(raw)
+            .arg(failed_at_ms)
+            .arg(group)
+            .arg(stream_id)
+            .query_async(conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn redis_time_ms(conn: &mut MultiplexedConnection) -> JobResult<u64> {
+        let (seconds, micros): (u64, u64) = redis::cmd("TIME").query_async(conn).await?;
+        Ok(seconds.saturating_mul(1_000).saturating_add(micros / 1_000))
     }
 
     fn envelope_from_stream(map: &HashMap<String, Value>) -> JobResult<JobEnvelope> {
@@ -1159,7 +1315,9 @@ mod host {
                 })?;
                 let interval = ChronoDuration::from_std(scheduler_interval)
                     .unwrap_or_else(|_| ChronoDuration::seconds(1));
-                let window_start = Utc::now() - interval;
+                let now = chrono::DateTime::<Utc>::from_timestamp_millis(now_ms as i64)
+                    .ok_or_else(|| JobError::Time(format!("invalid timestamp ms: {now_ms}")))?;
+                let window_start = now - interval;
                 let Some(next) = schedule.after(&window_start).next() else {
                     return Ok(None);
                 };
