@@ -120,7 +120,9 @@ reclaimed via Redis stream claiming before each read loop.
 
 Redis workers use Redis `TIME` for scheduler and retry due-time
 comparisons. This keeps workers on different hosts from promoting jobs early
-because their local clocks disagree.
+because their local clocks disagree. Redis-backed `schedule_in` also bases
+relative delays on Redis `TIME`; `schedule_at` remains an explicit absolute
+timestamp chosen by the caller.
 
 Retries use exponential backoff with jitter and go through the sorted-set
 scheduler instead of being immediately re-added to the ready stream. A

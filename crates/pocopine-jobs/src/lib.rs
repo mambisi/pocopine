@@ -391,6 +391,21 @@ return redis.call(
             T: Serialize,
         {
             let due_ms = epoch_ms(when)?;
+            self.schedule_json_at_ms(job_name, queue, max_attempts, payload, due_ms)
+                .await
+        }
+
+        async fn schedule_json_at_ms<T>(
+            &self,
+            job_name: &'static str,
+            queue: &'static str,
+            max_attempts: u32,
+            payload: &T,
+            due_ms: u64,
+        ) -> JobResult<JobId>
+        where
+            T: Serialize,
+        {
             let envelope = JobEnvelope::new(job_name, queue, max_attempts, payload, Some(due_ms))?;
             let id = JobId(envelope.job_id.clone());
             match &self.backend {
@@ -424,12 +439,19 @@ return redis.call(
         where
             T: Serialize,
         {
-            self.schedule_json_at(
+            let now_ms = match &self.backend {
+                JobBackend::Redis { .. } => {
+                    let mut conn = self.connection().await?;
+                    redis_time_ms(&mut conn).await?
+                }
+                JobBackend::Memory => epoch_ms(SystemTime::now())?,
+            };
+            self.schedule_json_at_ms(
                 job_name,
                 queue,
                 max_attempts,
                 payload,
-                SystemTime::now() + delay,
+                now_ms.saturating_add(duration_ms(delay)),
             )
             .await
         }
@@ -1480,6 +1502,10 @@ return redis.call(
             .duration_since(UNIX_EPOCH)
             .map_err(|err| JobError::Time(err.to_string()))?;
         Ok(duration.as_millis() as u64)
+    }
+
+    fn duration_ms(duration: Duration) -> u64 {
+        duration.as_millis().min(u128::from(u64::MAX)) as u64
     }
 
     fn default_consumer_name() -> String {
