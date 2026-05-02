@@ -1,4 +1,4 @@
-# RFC 067 - Redis-backed background jobs
+# RFC 067 - Background jobs with Redis and memory backends
 
 | Field | Value |
 |---|---|
@@ -20,8 +20,10 @@ pub async fn send_welcome_email(input: WelcomeEmail) -> JobResult<()> {
 ```
 
 The macro registers job metadata through `inventory`, generates typed
-enqueue/schedule helpers, and keeps Redis/worker code out of wasm
-bundles. A new `pocopine-jobs` crate owns the Redis runtime.
+enqueue/schedule helpers, and keeps host-only worker code out of wasm
+bundles. A new `pocopine-jobs` crate owns the runtime. Redis is the
+durable multi-process backend; a process-local memory backend is available
+for single-process production deployments and tests.
 
 Periodic jobs ship in the same slice:
 
@@ -39,6 +41,10 @@ pub async fn nightly_cleanup() -> JobResult<()> {
 
 ## 2. Design
 
+- The runtime has two storage backends:
+  - Redis for durable-enough queues shared by server and worker binaries.
+  - Memory for process-local queues when enqueueing and worker execution live
+    in the same process.
 - Redis Streams are the ready queue:
   `pocopine:{app}:queue:{queue}`.
 - Redis sorted sets hold delayed jobs:
@@ -69,15 +75,31 @@ bin = "server"
 worker-bin = "worker"
 ```
 
+`JobClient::from_env` and `Worker::from_env` select the backend with:
+
+- `POCOPINE_JOB_BACKEND=memory` for the process-local memory backend.
+- `POCOPINE_JOB_BACKEND=redis` plus `POCOPINE_REDIS_URL=...` for Redis.
+- If `POCOPINE_JOB_BACKEND` is unset and `POCOPINE_REDIS_URL` is set, Redis
+  is selected.
+- If neither variable is set, memory is selected.
+
 `pocopine dev` injects `POCOPINE_REDIS_URL=redis://127.0.0.1/` into
-spawned server and worker binaries when the variable is not already set.
-`pocopine run` and direct `cargo run` do not inject a production default;
-`JobClient::from_env` and `Worker::from_env` fail fast unless
-`POCOPINE_REDIS_URL` is set.
+spawned server and worker binaries when the variable is not already set so
+the default dev path exercises separate server/worker processes. It still
+rejects `POCOPINE_JOB_BACKEND=memory` when a `worker-bin` is configured.
+`pocopine run` and direct `cargo run` do not inject a production default.
+When `pocopine run` sees a configured `worker-bin`, it rejects the
+process-local memory backend and requires a Redis URL because the server
+and worker are separate processes.
+
+A configured `worker-bin` is a separate process. With the memory backend,
+server-to-worker enqueueing across binaries is impossible because the queue
+is not shared; use Redis for that shape. Memory is appropriate for embedded
+workers or periodic/background work owned inside one process.
 
 ## 3. Non-goals
 
-- No in-memory production fallback.
+- No durable in-memory broker or cross-process memory sharing.
 - No result storage API.
 - No dashboard or job inspection UI.
 
@@ -95,6 +117,12 @@ has already reached the max attempt count it is moved to the dead stream.
 The worker loop logs Redis/runtime errors, sleeps with capped backoff, and
 reconnects instead of exiting on a transient Redis failure.
 
+The memory backend uses the same envelope, scheduled queue, retry backoff,
+dead-letter, and periodic slot semantics inside a process-local store. It
+does not use consumer groups or stale pending reclaim because a handler is
+run directly by the worker task. If a handler hangs, the worker task is
+occupied; if the process restarts, queued memory jobs are lost.
+
 `visibility_timeout` is part of the worker contract: handlers should
 normally finish well under that timeout or be idempotent enough to handle
 reclaim/retry. Periodic jobs follow the same reclaim-attempt accounting as
@@ -105,9 +133,10 @@ multiple local workers do not mint the same id during the same
 millisecond.
 
 Periodic jobs are not executed directly by the scheduler loop. The worker
-computes the due slot, acquires a Redis `SET NX PX` lock for that job/slot,
-and enqueues the job with a unit payload. From that point on the job uses
-the same stream, retry, and dead-letter path as manually enqueued work.
+computes the due slot, acquires a backend-specific lock for that job/slot
+(`SET NX PX` in Redis, a process-local lock map in memory), and enqueues the
+job with a unit payload. From that point on the job uses the same retry and
+dead-letter path as manually enqueued work.
 
 ## 5. Example Worker
 

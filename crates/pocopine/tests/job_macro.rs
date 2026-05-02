@@ -1,5 +1,11 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
 use pocopine::JobResult;
 use serde::{Deserialize, Serialize};
+
+static MEMORY_APP_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static MEMORY_JOB_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct JobPayload {
@@ -9,6 +15,13 @@ struct JobPayload {
 #[pocopine::job(queue = "tests", retries = 2)]
 async fn macro_registered_job(input: JobPayload) -> JobResult<()> {
     assert_eq!(input.value, "ok");
+    Ok(())
+}
+
+#[pocopine::job(queue = "memory", retries = 0)]
+async fn memory_backend_job(input: JobPayload) -> JobResult<()> {
+    assert_eq!(input.value, "memory");
+    MEMORY_JOB_RUNS.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
 
@@ -79,4 +92,47 @@ fn generated_periodic_dispatch_decodes_unit_payload() {
         .build()
         .unwrap();
     rt.block_on(future).unwrap();
+}
+
+#[test]
+fn memory_backend_worker_runs_enqueued_job() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        MEMORY_JOB_RUNS.store(0, Ordering::SeqCst);
+        let app = format!(
+            "job-macro-memory-{}-{}",
+            std::process::id(),
+            MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        let client = pocopine::JobClient::memory(app.clone());
+        memory_backend_job_job::enqueue_with(
+            &client,
+            JobPayload {
+                value: "memory".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let worker = pocopine::Worker::new(pocopine::WorkerConfig {
+            backend: pocopine::JobBackend::Memory,
+            app,
+            queues: vec!["memory".to_string()],
+            group: "test".to_string(),
+            consumer: "test".to_string(),
+            block_ms: 0,
+            visibility_timeout: Duration::from_secs(60),
+            scheduler_interval: Duration::from_millis(1),
+            batch_size: 10,
+        })
+        .unwrap();
+
+        assert_eq!(worker.run_once().await.unwrap(), 1);
+        assert_eq!(worker.run_once().await.unwrap(), 0);
+        assert_eq!(MEMORY_JOB_RUNS.load(Ordering::SeqCst), 1);
+    });
 }

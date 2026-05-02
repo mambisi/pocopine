@@ -35,7 +35,8 @@ pub use pocopine_core::{
 pub use pocopine_core::{create_context, inject_key};
 #[cfg(not(target_arch = "wasm32"))]
 pub use pocopine_jobs::{
-    JobClient, JobDescriptor, JobFuture, JobHandler, JobId, PeriodicSchedule, Worker, WorkerConfig,
+    JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId, PeriodicSchedule, Worker,
+    WorkerConfig,
 };
 pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)

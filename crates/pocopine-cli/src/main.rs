@@ -513,7 +513,39 @@ fn ensure_redis_env(cmd: &mut Command) {
     }
 }
 
+fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> Result<()> {
+    let backend = std::env::var("POCOPINE_JOB_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let redis_url = std::env::var("POCOPINE_REDIS_URL").ok();
+    let has_redis_url = redis_url
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+
+    match backend.as_deref() {
+        Some("memory") => bail!(
+            "`worker-bin` runs in a separate process, but POCOPINE_JOB_BACKEND=memory is process-local; use Redis for a separate worker binary or embed the worker in the server process"
+        ),
+        Some("redis") if has_redis_url => Ok(()),
+        Some("redis") if default_redis_url => Ok(()),
+        Some("redis") => bail!(
+            "`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis"
+        ),
+        Some("") => bail!("POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`"),
+        Some(other) => bail!("unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"),
+        None if has_redis_url => Ok(()),
+        None if default_redis_url => Ok(()),
+        None => bail!(
+            "`worker-bin` runs in a separate process; set POCOPINE_REDIS_URL for Redis-backed jobs, or embed the worker in the server process to use the memory backend"
+        ),
+    }
+}
+
 fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) -> Result<()> {
+    if cfg.worker_bin.is_some() {
+        validate_worker_backend_for_separate_process(false)?;
+    }
+
     let worker = cfg
         .worker_bin
         .as_deref()
@@ -735,6 +767,7 @@ fn dev(args: &ServeArgs) -> Result<()> {
         }
     }
     if let Some(worker) = cfg.worker_bin.as_deref() {
+        validate_worker_backend_for_separate_process(true)?;
         bin_children.push(spawn_bin(
             &project,
             worker,

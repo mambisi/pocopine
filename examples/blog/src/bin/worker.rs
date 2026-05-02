@@ -5,7 +5,7 @@
 async fn main() -> pocopine::JobResult<()> {
     use blog as _;
 
-    println!("▶ running blog worker (redis: POCOPINE_REDIS_URL)");
+    println!("▶ running blog worker (POCOPINE_JOB_BACKEND or POCOPINE_REDIS_URL)");
     pocopine::Worker::from_env()?.run().await
 }
 

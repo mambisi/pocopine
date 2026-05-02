@@ -1,7 +1,7 @@
-//! Redis-backed background jobs for pocopine apps.
+//! Background jobs for pocopine apps.
 //!
 //! The public authoring surface normally comes from `#[pocopine::job]`.
-//! This crate owns the host runtime: Redis enqueue/schedule helpers,
+//! This crate owns the host runtime: enqueue/schedule helpers,
 //! `inventory`-backed job registration, and the worker loop.
 
 use std::fmt;
@@ -66,12 +66,13 @@ impl From<serde_json::Error> for JobError {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
-    use std::collections::{hash_map::DefaultHasher, BTreeSet, HashMap};
+    use std::collections::{hash_map::DefaultHasher, BTreeSet, HashMap, VecDeque};
     use std::future::Future;
     use std::hash::{Hash, Hasher};
     use std::pin::Pin;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use chrono::{Duration as ChronoDuration, Utc};
@@ -99,6 +100,7 @@ mod host {
     const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
 
     static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
+    static MEMORY_STORES: OnceLock<Mutex<HashMap<String, Arc<MemoryStore>>>> = OnceLock::new();
 
     /// Unique id assigned to an enqueued job.
     #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -109,6 +111,30 @@ mod host {
         pub fn as_str(&self) -> &str {
             &self.0
         }
+    }
+
+    /// Runtime storage backend for background jobs.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum JobBackend {
+        /// Redis-backed, durable enough for multi-process workers.
+        Redis { url: String },
+        /// Process-local memory backend. This is useful for single-process
+        /// deployments and tests; it is not shared across server/worker
+        /// processes and is not durable across restarts.
+        Memory,
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryStore {
+        state: Mutex<MemoryState>,
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryState {
+        ready: VecDeque<JobEnvelope>,
+        scheduled: Vec<JobEnvelope>,
+        dead: Vec<(JobEnvelope, String)>,
+        periodic_locks: HashMap<String, u64>,
     }
 
     /// Retry behavior attached to generated job descriptors.
@@ -212,19 +238,19 @@ mod host {
         inventory::iter::<JobDescriptor>.into_iter()
     }
 
-    /// Redis client for enqueueing and scheduling background jobs.
+    /// Client for enqueueing and scheduling background jobs.
     #[derive(Clone, Debug)]
     pub struct JobClient {
-        redis_url: String,
+        backend: JobBackend,
         app: String,
     }
 
     impl JobClient {
-        /// Build from `POCOPINE_REDIS_URL` and optional
-        /// `POCOPINE_APP_NAME`.
+        /// Build from `POCOPINE_JOB_BACKEND`, `POCOPINE_REDIS_URL`, and
+        /// optional `POCOPINE_APP_NAME`.
         pub fn from_env() -> JobResult<Self> {
             Ok(Self {
-                redis_url: redis_url_from_env()?,
+                backend: job_backend_from_env()?,
                 app: std::env::var("POCOPINE_APP_NAME")
                     .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string()),
             })
@@ -233,7 +259,24 @@ mod host {
         /// Build a client with explicit Redis URL and app namespace.
         pub fn new(redis_url: impl Into<String>, app: impl Into<String>) -> Self {
             Self {
-                redis_url: redis_url.into(),
+                backend: JobBackend::Redis {
+                    url: redis_url.into(),
+                },
+                app: app.into(),
+            }
+        }
+
+        /// Build a process-local memory client with an app namespace.
+        pub fn memory(app: impl Into<String>) -> Self {
+            Self {
+                backend: JobBackend::Memory,
+                app: app.into(),
+            }
+        }
+
+        fn for_backend(backend: JobBackend, app: impl Into<String>) -> Self {
+            Self {
+                backend,
                 app: app.into(),
             }
         }
@@ -251,8 +294,16 @@ mod host {
         {
             let envelope = JobEnvelope::new(job_name, queue, max_attempts, payload, None)?;
             let id = JobId(envelope.job_id.clone());
-            let mut conn = self.connection().await?;
-            xadd_envelope(&mut conn, &self.queue_key(queue), &envelope).await?;
+            match &self.backend {
+                JobBackend::Redis { .. } => {
+                    let mut conn = self.connection().await?;
+                    xadd_envelope(&mut conn, &self.queue_key(queue), &envelope).await?;
+                }
+                JobBackend::Memory => {
+                    let store = memory_store(&self.app)?;
+                    memory_enqueue_envelope(&store, envelope)?;
+                }
+            }
             Ok(id)
         }
 
@@ -271,14 +322,22 @@ mod host {
             let due_ms = epoch_ms(when)?;
             let envelope = JobEnvelope::new(job_name, queue, max_attempts, payload, Some(due_ms))?;
             let id = JobId(envelope.job_id.clone());
-            let raw = serde_json::to_string(&envelope)?;
-            let mut conn = self.connection().await?;
-            let _: () = redis::cmd("ZADD")
-                .arg(self.scheduled_key())
-                .arg(due_ms)
-                .arg(raw)
-                .query_async(&mut conn)
-                .await?;
+            match &self.backend {
+                JobBackend::Redis { .. } => {
+                    let raw = serde_json::to_string(&envelope)?;
+                    let mut conn = self.connection().await?;
+                    let _: () = redis::cmd("ZADD")
+                        .arg(self.scheduled_key())
+                        .arg(due_ms)
+                        .arg(raw)
+                        .query_async(&mut conn)
+                        .await?;
+                }
+                JobBackend::Memory => {
+                    let store = memory_store(&self.app)?;
+                    memory_schedule_envelope(&store, envelope)?;
+                }
+            }
             Ok(id)
         }
 
@@ -305,7 +364,12 @@ mod host {
         }
 
         async fn connection(&self) -> JobResult<MultiplexedConnection> {
-            let client = redis::Client::open(self.redis_url.as_str())?;
+            let JobBackend::Redis { url } = &self.backend else {
+                return Err(JobError::unsupported(
+                    "the memory job backend does not have a Redis connection",
+                ));
+            };
+            let client = redis::Client::open(url.as_str())?;
             Ok(client.get_multiplexed_async_connection().await?)
         }
 
@@ -329,9 +393,9 @@ mod host {
     /// Worker configuration.
     #[derive(Clone, Debug)]
     pub struct WorkerConfig {
-        /// Redis connection URL.
-        pub redis_url: String,
-        /// Redis key namespace.
+        /// Storage backend.
+        pub backend: JobBackend,
+        /// App namespace.
         pub app: String,
         /// Queues this worker should consume.
         pub queues: Vec<String>,
@@ -363,7 +427,7 @@ mod host {
             };
 
             Ok(Self {
-                redis_url: redis_url_from_env()?,
+                backend: job_backend_from_env()?,
                 app: std::env::var("POCOPINE_APP_NAME")
                     .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string()),
                 queues,
@@ -379,7 +443,7 @@ mod host {
         }
     }
 
-    /// Redis-backed background worker.
+    /// Background worker.
     pub struct Worker {
         config: WorkerConfig,
         client: JobClient,
@@ -394,7 +458,7 @@ mod host {
 
         /// Build from explicit config.
         pub fn new(config: WorkerConfig) -> JobResult<Self> {
-            let client = JobClient::new(config.redis_url.clone(), config.app.clone());
+            let client = JobClient::for_backend(config.backend.clone(), config.app.clone());
             let descriptors = registered_jobs()
                 .map(|descriptor| (descriptor.name, descriptor))
                 .collect();
@@ -423,18 +487,105 @@ mod host {
             }
         }
 
+        /// Run one scheduler/read/execute pass.
+        ///
+        /// This is primarily useful for embedded workers, tests, and hosts that
+        /// want to own the outer loop.
+        pub async fn run_once(&self) -> JobResult<usize> {
+            match &self.config.backend {
+                JobBackend::Redis { .. } => {
+                    let mut conn = self.client.connection().await?;
+                    self.ensure_groups(&mut conn).await?;
+                    self.run_redis_once(&mut conn).await
+                }
+                JobBackend::Memory => self.run_memory_once().await,
+            }
+        }
+
         async fn run_until_error(&self) -> JobResult<()> {
+            match &self.config.backend {
+                JobBackend::Redis { .. } => self.run_redis_until_error().await,
+                JobBackend::Memory => self.run_memory_until_error().await,
+            }
+        }
+
+        async fn run_redis_until_error(&self) -> JobResult<()> {
             let mut conn = self.client.connection().await?;
             self.ensure_groups(&mut conn).await?;
             loop {
-                self.enqueue_due_periodic_jobs(&mut conn).await?;
-                self.promote_due_jobs(&mut conn).await?;
-                self.reclaim_stale_jobs(&mut conn).await?;
-                let handled = self.read_ready_jobs(&mut conn).await?;
+                let handled = self.run_redis_once(&mut conn).await?;
                 if handled == 0 {
                     tokio::time::sleep(self.config.scheduler_interval).await;
                 }
             }
+        }
+
+        async fn run_redis_once(&self, conn: &mut MultiplexedConnection) -> JobResult<usize> {
+            self.enqueue_due_periodic_jobs(&mut *conn).await?;
+            self.promote_due_jobs(&mut *conn).await?;
+            self.reclaim_stale_jobs(&mut *conn).await?;
+            self.read_ready_jobs(conn).await
+        }
+
+        async fn run_memory_until_error(&self) -> JobResult<()> {
+            loop {
+                let handled = self.run_memory_once().await?;
+                if handled == 0 {
+                    tokio::time::sleep(self.config.scheduler_interval).await;
+                }
+            }
+        }
+
+        async fn run_memory_once(&self) -> JobResult<usize> {
+            self.enqueue_due_periodic_jobs_memory()?;
+            self.promote_due_jobs_memory()?;
+
+            let store = memory_store(&self.config.app)?;
+            let envelopes =
+                memory_pop_ready_envelopes(&store, &self.config.queues, self.config.batch_size)?;
+            let handled = envelopes.len();
+            for envelope in envelopes {
+                self.run_envelope_memory(envelope).await?;
+            }
+            Ok(handled)
+        }
+
+        fn enqueue_due_periodic_jobs_memory(&self) -> JobResult<()> {
+            let now_ms = epoch_ms(SystemTime::now())?;
+            let store = memory_store(&self.config.app)?;
+            for descriptor in self.descriptors.values() {
+                let Some(schedule) = descriptor.periodic else {
+                    continue;
+                };
+                if !self.config.queues.iter().any(|q| q == descriptor.queue) {
+                    continue;
+                }
+                let Some(due_ms) =
+                    due_periodic_slot(schedule, now_ms, self.config.scheduler_interval)?
+                else {
+                    continue;
+                };
+                let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
+                let expires_at_ms = now_ms.saturating_add(periodic_lock_ttl_ms(schedule));
+                if !memory_try_periodic_lock(&store, lock_key, now_ms, expires_at_ms)? {
+                    continue;
+                }
+
+                let envelope = JobEnvelope::new(
+                    descriptor.name,
+                    descriptor.queue,
+                    descriptor.retry_policy.max_attempts,
+                    &(),
+                    None,
+                )?;
+                memory_enqueue_envelope(&store, envelope)?;
+            }
+            Ok(())
+        }
+
+        fn promote_due_jobs_memory(&self) -> JobResult<()> {
+            let store = memory_store(&self.config.app)?;
+            memory_promote_due_envelopes(&store, epoch_ms(SystemTime::now())?)
         }
 
         async fn ensure_groups(&self, conn: &mut MultiplexedConnection) -> JobResult<()> {
@@ -630,6 +781,37 @@ mod host {
             }
         }
 
+        async fn run_envelope_memory(&self, envelope: JobEnvelope) -> JobResult<()> {
+            let Some(descriptor) = self.descriptors.get(envelope.job_name.as_str()) else {
+                self.move_to_dead_memory(envelope, "unknown job")?;
+                return Ok(());
+            };
+
+            let payload = serde_json::to_vec(&envelope.payload)?;
+            match (descriptor.handler)(payload).await {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    if envelope.attempt < envelope.max_attempts {
+                        let mut retry = envelope.clone();
+                        retry.attempt += 1;
+                        let due_ms = epoch_ms(SystemTime::now())?
+                            .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
+                        retry.scheduled_for_ms = Some(due_ms);
+                        let store = memory_store(&self.config.app)?;
+                        memory_schedule_envelope(&store, retry)?;
+                    } else {
+                        self.move_to_dead_memory(envelope, &err.to_string())?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+
+        fn move_to_dead_memory(&self, envelope: JobEnvelope, error: &str) -> JobResult<()> {
+            let store = memory_store(&self.config.app)?;
+            memory_move_to_dead(&store, envelope, error)
+        }
+
         async fn move_to_dead(
             &self,
             conn: &mut MultiplexedConnection,
@@ -709,6 +891,108 @@ mod host {
                 scheduled_for_ms,
             })
         }
+    }
+
+    fn memory_store(app: &str) -> JobResult<Arc<MemoryStore>> {
+        let stores = MEMORY_STORES.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut stores = stores
+            .lock()
+            .map_err(|_| JobError::Env("memory job store registry was poisoned".into()))?;
+        Ok(stores
+            .entry(app.to_string())
+            .or_insert_with(|| Arc::new(MemoryStore::default()))
+            .clone())
+    }
+
+    fn memory_state(store: &MemoryStore) -> JobResult<MutexGuard<'_, MemoryState>> {
+        store
+            .state
+            .lock()
+            .map_err(|_| JobError::Env("memory job store was poisoned".into()))
+    }
+
+    fn memory_enqueue_envelope(store: &MemoryStore, envelope: JobEnvelope) -> JobResult<()> {
+        memory_state(store)?.ready.push_back(envelope);
+        Ok(())
+    }
+
+    fn memory_schedule_envelope(store: &MemoryStore, envelope: JobEnvelope) -> JobResult<()> {
+        memory_state(store)?.scheduled.push(envelope);
+        Ok(())
+    }
+
+    fn memory_promote_due_envelopes(store: &MemoryStore, now_ms: u64) -> JobResult<()> {
+        let mut state = memory_state(store)?;
+        let max_promote = DEFAULT_MAX_PROMOTE.max(0) as usize;
+        let scheduled_count = state.scheduled.len();
+        let mut remaining = Vec::with_capacity(scheduled_count);
+        let mut promoted = VecDeque::new();
+
+        for mut envelope in state.scheduled.drain(..) {
+            let is_due = envelope.scheduled_for_ms.unwrap_or(0) <= now_ms;
+            if is_due && promoted.len() < max_promote {
+                envelope.scheduled_for_ms = None;
+                promoted.push_back(envelope);
+            } else {
+                remaining.push(envelope);
+            }
+        }
+
+        state.scheduled = remaining;
+        state.ready.extend(promoted);
+        Ok(())
+    }
+
+    fn memory_pop_ready_envelopes(
+        store: &MemoryStore,
+        queues: &[String],
+        batch_size: usize,
+    ) -> JobResult<Vec<JobEnvelope>> {
+        if queues.is_empty() || batch_size == 0 {
+            return Ok(Vec::new());
+        }
+
+        let allowed: BTreeSet<&str> = queues.iter().map(String::as_str).collect();
+        let mut state = memory_state(store)?;
+        let mut selected = Vec::new();
+        let mut remaining = VecDeque::with_capacity(state.ready.len());
+
+        while let Some(envelope) = state.ready.pop_front() {
+            if selected.len() < batch_size && allowed.contains(envelope.queue.as_str()) {
+                selected.push(envelope);
+            } else {
+                remaining.push_back(envelope);
+            }
+        }
+
+        state.ready = remaining;
+        Ok(selected)
+    }
+
+    fn memory_try_periodic_lock(
+        store: &MemoryStore,
+        lock_key: String,
+        now_ms: u64,
+        expires_at_ms: u64,
+    ) -> JobResult<bool> {
+        let mut state = memory_state(store)?;
+        state.periodic_locks.retain(|_, expires| *expires > now_ms);
+        if state.periodic_locks.contains_key(&lock_key) {
+            return Ok(false);
+        }
+        state.periodic_locks.insert(lock_key, expires_at_ms);
+        Ok(true)
+    }
+
+    fn memory_move_to_dead(
+        store: &MemoryStore,
+        envelope: JobEnvelope,
+        error: &str,
+    ) -> JobResult<()> {
+        memory_state(store)?
+            .dead
+            .push((envelope, error.to_string()));
+        Ok(())
     }
 
     async fn xadd_envelope(
@@ -799,12 +1083,38 @@ mod host {
         }
     }
 
+    fn job_backend_from_env() -> JobResult<JobBackend> {
+        match std::env::var("POCOPINE_JOB_BACKEND") {
+            Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+                "memory" => Ok(JobBackend::Memory),
+                "redis" => redis_url_from_env().map(|url| JobBackend::Redis { url }),
+                "" => Err(JobError::Env(
+                    "POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`".into(),
+                )),
+                other => Err(JobError::Env(format!(
+                    "unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"
+                ))),
+            },
+            Err(_) => match std::env::var("POCOPINE_REDIS_URL") {
+                Ok(url) if !url.trim().is_empty() => Ok(JobBackend::Redis { url }),
+                Ok(_) => Err(JobError::Env(
+                    "POCOPINE_REDIS_URL was set but empty; unset it for memory jobs or set a Redis URL".into(),
+                )),
+                Err(_) => Ok(JobBackend::Memory),
+            },
+        }
+    }
+
     fn redis_url_from_env() -> JobResult<String> {
-        std::env::var("POCOPINE_REDIS_URL").map_err(|_| {
-            JobError::Env(
-                "POCOPINE_REDIS_URL must be set for pocopine jobs; `pocopine dev` defaults it to redis://127.0.0.1/ for local development".into(),
-            )
-        })
+        let url = std::env::var("POCOPINE_REDIS_URL").map_err(|_| {
+            JobError::Env("POCOPINE_REDIS_URL must be set when POCOPINE_JOB_BACKEND=redis".into())
+        })?;
+        if url.trim().is_empty() {
+            return Err(JobError::Env(
+                "POCOPINE_REDIS_URL must not be empty when POCOPINE_JOB_BACKEND=redis".into(),
+            ));
+        }
+        Ok(url)
     }
 
     fn due_periodic_slot(
@@ -910,8 +1220,8 @@ mod host {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{
-    registered_jobs, JobClient, JobDescriptor, JobFuture, JobHandler, JobId, PeriodicSchedule,
-    RetryPolicy, Worker, WorkerConfig,
+    registered_jobs, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId,
+    PeriodicSchedule, RetryPolicy, Worker, WorkerConfig,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
