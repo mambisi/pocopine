@@ -3050,9 +3050,12 @@ fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
         }
     }
 
-    if policy.public && policy.guard.is_some() {
+    if policy.public {
+        let Some(guard) = policy.guard.as_ref() else {
+            return Ok(policy);
+        };
         return Err(syn::Error::new_spanned(
-            policy.guard.as_ref().expect("guard checked"),
+            guard,
             "`public` server functions cannot also declare an auth guard",
         ));
     }
@@ -3620,7 +3623,7 @@ pub fn job(attr: TokenStream, item: TokenStream) -> TokenStream {
                     };
                     JobPayload::Typed {
                         ident: pat_ident.ident.clone(),
-                        ty: (**ty).clone(),
+                        ty: ty.clone(),
                     }
                 }
             }
@@ -3796,7 +3799,7 @@ pub fn job(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 enum JobPayload {
     Unit,
-    Typed { ident: syn::Ident, ty: Type },
+    Typed { ident: syn::Ident, ty: Box<Type> },
 }
 
 impl JobPayload {
