@@ -25,6 +25,11 @@ async fn memory_backend_job(input: JobPayload) -> JobResult<()> {
     Ok(())
 }
 
+#[pocopine::job(queue = "panic", retries = 0)]
+async fn panicking_memory_job(_input: JobPayload) -> JobResult<()> {
+    panic!("intentional panic for memory backend test");
+}
+
 #[pocopine::job(queue = "periodic", every = "15m", retries = 1)]
 async fn refresh_periodic_cache() -> JobResult<()> {
     Ok(())
@@ -135,5 +140,62 @@ fn memory_backend_worker_runs_enqueued_job() {
         assert_eq!(worker.run_once().await.unwrap(), 1);
         assert_eq!(worker.run_once().await.unwrap(), 0);
         assert_eq!(MEMORY_JOB_RUNS.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn memory_backend_routes_handler_panic_through_dead_letter() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let app = format!(
+            "job-macro-panic-{}-{}",
+            std::process::id(),
+            MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        let client = pocopine::JobClient::memory(app.clone());
+        panicking_memory_job_job::enqueue_with(
+            &client,
+            JobPayload {
+                value: "panic".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let worker = pocopine::Worker::new(pocopine::WorkerConfig {
+            backend: pocopine::JobBackend::Memory,
+            app,
+            queues: vec!["panic".to_string()],
+            group: "test".to_string(),
+            consumer: "test".to_string(),
+            block_ms: 0,
+            visibility_timeout: Duration::from_secs(60),
+            scheduler_interval: Duration::from_millis(1),
+            max_periodic_catch_up: 16,
+            batch_size: 10,
+        })
+        .unwrap();
+
+        // retries = 0 → max_attempts = 1, so a panic on the first attempt
+        // dead-letters immediately. The worker must NOT propagate the
+        // panic; if catch-unwind were broken, the spawned task would
+        // unwind through `run_once` and crash this test.
+        assert_eq!(worker.run_once().await.unwrap(), 1);
+        let dead = worker.drain_dead_letter().unwrap();
+        assert_eq!(dead.len(), 1);
+        assert!(
+            dead[0].error.contains("panic"),
+            "expected panic message, got `{}`",
+            dead[0].error
+        );
+        assert_eq!(dead[0].attempt, 1);
+        assert_eq!(dead[0].max_attempts, 1);
+
+        // Drain is single-shot.
+        assert!(worker.drain_dead_letter().unwrap().is_empty());
     });
 }

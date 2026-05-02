@@ -152,6 +152,22 @@ does not use consumer groups or stale pending reclaim because a handler is
 run directly by the worker task. If a handler hangs, the worker task is
 occupied; if the process restarts, queued memory jobs are lost.
 
+Job handlers run on a `tokio::spawn` task so a panicking handler is
+captured by the runtime, converted into a `JobError::Handler`, and routed
+through the same retry/dead-letter path as a normal `Err` return. This
+applies to both backends.
+
+The memory dead-letter buffer is capped (oldest entries dropped first) and
+exposed via `Worker::drain_dead_letter() -> Vec<DeadLetter>` so embedded
+operators can periodically scrape and persist failed jobs. The Redis
+backend does not implement `drain_dead_letter`; the dead-letter stream
+`pocopine:{app}:dead` is queryable directly.
+
+`Worker::run` prints a one-line backend banner at startup so operators can
+confirm whether the worker bound to Redis or to the process-local memory
+backend, defending against the silent-default footgun in multi-process
+deployments where Redis was intended.
+
 `visibility_timeout` is part of the worker contract and is configured by
 `POCOPINE_JOB_VISIBILITY_MS`: handlers should normally finish well under
 that timeout or be idempotent enough to handle reclaim/retry. Periodic jobs

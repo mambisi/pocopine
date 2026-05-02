@@ -26,6 +26,10 @@ pub enum JobError {
     Time(String),
     /// Background jobs are host-only.
     Unsupported(String),
+    /// A job handler panicked or its task was cancelled. The worker
+    /// converts these into the same retry/dead-letter path as a normal
+    /// `Err(_)` return so panicking handlers do not silently lose jobs.
+    Handler(String),
 }
 
 impl JobError {
@@ -45,6 +49,7 @@ impl fmt::Display for JobError {
             JobError::UnknownJob(name) => write!(f, "unknown job: {name}"),
             JobError::Time(msg) => write!(f, "time error: {msg}"),
             JobError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
+            JobError::Handler(msg) => write!(f, "handler failure: {msg}"),
         }
     }
 }
@@ -100,6 +105,12 @@ mod host {
     const DEFAULT_WORKER_ERROR_BACKOFF_MAX_MS: u64 = 30_000;
     const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
     const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
+    /// Cap on the in-memory dead-letter buffer. Keeps a long-running
+    /// embedded worker from leaking memory when a job is consistently
+    /// failing; oldest entries are dropped first. Operators that need
+    /// every dead-lettered job should call `Worker::drain_dead_letter`
+    /// periodically and persist the results.
+    const DEFAULT_MEMORY_DEAD_LETTER_CAP: usize = 1_024;
     const PROMOTE_SCHEDULED_SCRIPT_SRC: &str = r#"
 local removed = redis.call('ZREM', KEYS[1], ARGV[1])
 if removed == 0 then
@@ -216,7 +227,7 @@ return redis.call(
     struct MemoryState {
         ready: VecDeque<JobEnvelope>,
         scheduled: Vec<JobEnvelope>,
-        dead: Vec<(JobEnvelope, String)>,
+        dead: VecDeque<(JobEnvelope, String)>,
         periodic_locks: HashMap<String, u64>,
         periodic_last_fired: HashMap<String, u64>,
     }
@@ -653,8 +664,25 @@ return redis.call(
             })
         }
 
+        /// Take and clear the in-memory dead-letter buffer. Returns
+        /// `Unsupported` for the Redis backend; read the dead-letter
+        /// stream `pocopine:{app}:dead` directly there.
+        pub fn drain_dead_letter(&self) -> JobResult<Vec<DeadLetter>> {
+            match &self.config.backend {
+                JobBackend::Memory => {
+                    let store = self.client.cached_memory_store()?;
+                    memory_drain_dead_letter(&store)
+                }
+                JobBackend::Redis { .. } => Err(JobError::unsupported(
+                    "drain_dead_letter is memory-backend only; \
+                     read the Redis dead-letter stream directly",
+                )),
+            }
+        }
+
         /// Run until the process is stopped.
         pub async fn run(&self) -> JobResult<()> {
+            self.log_startup_backend();
             let mut backoff = Duration::from_millis(DEFAULT_WORKER_ERROR_BACKOFF_MS);
             loop {
                 match self.run_until_error().await {
@@ -691,6 +719,24 @@ return redis.call(
             match &self.config.backend {
                 JobBackend::Redis { .. } => self.run_redis_until_error().await,
                 JobBackend::Memory => self.run_memory_until_error().await,
+            }
+        }
+
+        // Print a one-line banner so operators can confirm which backend
+        // the worker bound to. Especially useful when no env is set and
+        // the backend silently defaults to Memory in a multi-process
+        // deployment where Redis was intended.
+        fn log_startup_backend(&self) {
+            match &self.config.backend {
+                JobBackend::Redis { .. } => eprintln!(
+                    "pocopine worker: backend = redis (durable, multi-process); app = {}",
+                    self.config.app
+                ),
+                JobBackend::Memory => eprintln!(
+                    "pocopine worker: backend = memory (process-local; \
+                     not shared across processes, lost on restart); app = {}",
+                    self.config.app
+                ),
             }
         }
 
@@ -975,7 +1021,7 @@ return redis.call(
             };
 
             let payload = serde_json::to_vec(&envelope.payload)?;
-            match (descriptor.handler)(payload).await {
+            match run_handler_safely(descriptor.handler, payload).await {
                 Ok(()) => self.ack(conn, stream, stream_id).await,
                 Err(err) => {
                     if envelope.attempt < envelope.max_attempts {
@@ -1017,7 +1063,7 @@ return redis.call(
             };
 
             let payload = serde_json::to_vec(&envelope.payload)?;
-            match (descriptor.handler)(payload).await {
+            match run_handler_safely(descriptor.handler, payload).await {
                 Ok(()) => Ok(()),
                 Err(err) => {
                     if envelope.attempt < envelope.max_attempts {
@@ -1074,6 +1120,40 @@ return redis.call(
                 .query_async(conn)
                 .await?;
             Ok(())
+        }
+    }
+
+    /// Snapshot of a dead-lettered job, returned by
+    /// [`Worker::drain_dead_letter`].
+    #[derive(Clone, Debug)]
+    pub struct DeadLetter {
+        /// Stable id assigned at enqueue time.
+        pub job_id: String,
+        /// Registered job name (`module::path::ident`).
+        pub job_name: String,
+        /// Queue the job lived on.
+        pub queue: String,
+        /// Final attempt count when the job was buried.
+        pub attempt: u32,
+        /// Configured retry budget.
+        pub max_attempts: u32,
+        /// Stringified terminal error (`Display` of `JobError`).
+        pub error: String,
+        /// Original enqueue time, milliseconds since the Unix epoch.
+        pub created_at_ms: u64,
+    }
+
+    impl DeadLetter {
+        fn from_envelope(envelope: JobEnvelope, error: String) -> Self {
+            Self {
+                job_id: envelope.job_id,
+                job_name: envelope.job_name,
+                queue: envelope.queue,
+                attempt: envelope.attempt,
+                max_attempts: envelope.max_attempts,
+                error,
+                created_at_ms: envelope.created_at_ms,
+            }
         }
     }
 
@@ -1222,10 +1302,21 @@ return redis.call(
         envelope: JobEnvelope,
         error: &str,
     ) -> JobResult<()> {
-        memory_state(store)?
-            .dead
-            .push((envelope, error.to_string()));
+        let mut state = memory_state(store)?;
+        state.dead.push_back((envelope, error.to_string()));
+        while state.dead.len() > DEFAULT_MEMORY_DEAD_LETTER_CAP {
+            state.dead.pop_front();
+        }
         Ok(())
+    }
+
+    fn memory_drain_dead_letter(store: &MemoryStore) -> JobResult<Vec<DeadLetter>> {
+        let mut state = memory_state(store)?;
+        Ok(state
+            .dead
+            .drain(..)
+            .map(|(envelope, error)| DeadLetter::from_envelope(envelope, error))
+            .collect())
     }
 
     async fn xadd_envelope(
@@ -1332,6 +1423,31 @@ return redis.call(
             .invoke_async(conn)
             .await?;
         Ok(())
+    }
+
+    /// Run a job handler future with panic-safety so a panicking
+    /// handler is converted into a regular `JobError::Handler` and
+    /// flows through the worker's normal retry/dead-letter path
+    /// instead of unwinding the worker task.
+    async fn run_handler_safely(handler: JobHandler, payload: Vec<u8>) -> JobResult<()> {
+        match tokio::spawn(handler(payload)).await {
+            Ok(result) => result,
+            Err(join_err) => {
+                let msg = match join_err.try_into_panic() {
+                    Ok(panic) => {
+                        if let Some(s) = panic.downcast_ref::<&'static str>() {
+                            format!("handler panicked: {s}")
+                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                            format!("handler panicked: {s}")
+                        } else {
+                            "handler panicked".to_string()
+                        }
+                    }
+                    Err(_) => "handler task cancelled before completion".to_string(),
+                };
+                Err(JobError::Handler(msg))
+            }
+        }
     }
 
     async fn redis_time_ms(conn: &mut MultiplexedConnection) -> JobResult<u64> {
@@ -1834,8 +1950,8 @@ return redis.call(
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{
-    registered_jobs, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler, JobId,
-    PeriodicSchedule, RetryPolicy, Worker, WorkerConfig,
+    registered_jobs, DeadLetter, JobBackend, JobClient, JobDescriptor, JobFuture, JobHandler,
+    JobId, PeriodicSchedule, RetryPolicy, Worker, WorkerConfig,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
