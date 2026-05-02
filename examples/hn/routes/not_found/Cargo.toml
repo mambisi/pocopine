@@ -1,0 +1,13 @@
+[package]
+name = "hn-route-not-found"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[workspace]
+
+[dependencies]
+pocopine = { path = "../../../../crates/pocopine" }
+serde = { version = "1", features = ["derive"] }

@@ -236,6 +236,18 @@ That macro is the stable ABI entry point. It declares route identity
 without passing Rust vtables, constructors, allocators, or `Scope`
 values across artifact boundaries.
 
+HN uses this shape for its static `not_found` route:
+
+```text
+examples/hn/routes/not_found/
+```
+
+The split builder prefers `routes/<id>/src/*.poco` for static
+descriptor routes, then falls back to the legacy in-crate
+`src/routes/<id>/*.poco` location. Dynamic HN routes still live in
+`src/routes` until the compiled-plan and handler ABI phases can lower
+their data loading and event handlers.
+
 First, support more template features as serializable operations:
 
 - static attributes

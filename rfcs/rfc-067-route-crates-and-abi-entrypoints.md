@@ -201,6 +201,10 @@ scaffold.
 - Verify route artifacts do not contain Pocopine runtime symbols.
 - Support browser smoke for direct route loads and client navigation.
 
+The HN `not_found` route is the first proof target for this phase:
+`examples/hn/routes/not_found` is a route crate whose static template
+is emitted as descriptor JS with no route wasm chunk.
+
 ### Phase C — Compiled Plan ABI
 
 - Lower text bindings, class/style, child mounts, simple model updates,
@@ -217,4 +221,3 @@ scaffold.
 - Allow route-local Rust handler modules only through explicit host ABI
   imports.
 - Do not share allocators, `Scope`, or Rust pointers across modules.
-

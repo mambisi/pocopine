@@ -608,6 +608,8 @@ edition = "2021"
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+[workspace]
+
 [dependencies]
 {pocopine_dependency}
 serde = {{ version = "1", features = ["derive"] }}
@@ -1065,11 +1067,27 @@ fn read_static_descriptor_route(
     path: &Path,
     route_id: &str,
 ) -> Result<Option<StaticDescriptorRoute>> {
-    let route_dir = path.join("src").join("routes").join(route_id);
+    for route_dir in static_descriptor_route_dirs(path, route_id) {
+        let Some(route) = read_static_descriptor_route_dir(&route_dir)? else {
+            continue;
+        };
+        return Ok(Some(route));
+    }
+    Ok(None)
+}
+
+fn static_descriptor_route_dirs(path: &Path, route_id: &str) -> [PathBuf; 2] {
+    [
+        path.join("routes").join(route_id).join("src"),
+        path.join("src").join("routes").join(route_id),
+    ]
+}
+
+fn read_static_descriptor_route_dir(route_dir: &Path) -> Result<Option<StaticDescriptorRoute>> {
     if !route_dir.is_dir() {
         return Ok(None);
     }
-    let templates = std::fs::read_dir(&route_dir)
+    let templates = std::fs::read_dir(route_dir)
         .with_context(|| format!("read {}", route_dir.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "poco"))
@@ -2239,6 +2257,7 @@ fn dev(args: &ServeArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::static_descriptor_route_dirs;
     use super::{is_static_descriptor_template, relative_path, render_pocopine_dependency};
     use std::path::Path;
 
@@ -2298,5 +2317,13 @@ mod tests {
             ),
             Path::new("../../../crates/pocopine")
         );
+    }
+
+    #[test]
+    fn static_descriptor_prefers_route_crate_layout() {
+        let dirs = static_descriptor_route_dirs(Path::new("/repo/app"), "not_found");
+
+        assert_eq!(dirs[0], Path::new("/repo/app/routes/not_found/src"));
+        assert_eq!(dirs[1], Path::new("/repo/app/src/routes/not_found"));
     }
 }
