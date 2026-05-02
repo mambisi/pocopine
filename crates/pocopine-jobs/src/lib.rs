@@ -367,8 +367,8 @@ return redis.call(
         /// Build from `POCOPINE_JOB_BACKEND`, `POCOPINE_REDIS_URL`, and
         /// optional `POCOPINE_APP_NAME`.
         pub fn from_env() -> JobResult<Self> {
-            let app = std::env::var("POCOPINE_APP_NAME")
-                .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string());
+            let app =
+                std::env::var("POCOPINE_APP_NAME").unwrap_or_else(|_| DEFAULT_APP_NAME.to_string());
             Ok(Self::build(job_backend_from_env()?, app))
         }
 

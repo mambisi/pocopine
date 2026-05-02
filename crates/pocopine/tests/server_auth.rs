@@ -1,3 +1,10 @@
+// `#[pocopine::server(guard = ...)]` and the `protected!` macro only
+// emit the route helper, guard function, and `RequestContext` plumbing
+// on the host target; the umbrella `pocopine` crate also gates the
+// `RequestContext` re-export to non-wasm. Skip the whole file under
+// wasm.
+#![cfg(not(target_arch = "wasm32"))]
+
 use pocopine::{AuthUser, Role, ServerError, ServerResult};
 use pocopine_server::axum::{
     body::{to_bytes, Body},

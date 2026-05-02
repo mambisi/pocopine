@@ -1,3 +1,8 @@
+// `#[pocopine::job]` only generates the host-side worker, client, and
+// dispatch helpers; on `wasm32` the macro emits stubs and the
+// `<fn>_job` modules don't exist. Skip the whole file under wasm.
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
