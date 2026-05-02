@@ -54,6 +54,8 @@ pub struct FunctionAnalysis {
     pub body: Option<Vec<u8>>,
     pub index_uses: Vec<IndexUse>,
     pub dependencies: BTreeSet<Dependency>,
+    pub data_references: BTreeSet<u32>,
+    pub data_reference_offsets: BTreeMap<u32, BTreeSet<u32>>,
     pub name: Option<String>,
 }
 
@@ -218,9 +220,182 @@ pub enum FunctionOwner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClosureMode {
-    Full,
-    Direct,
+struct ClosureMode {
+    expand_tables: bool,
+    expand_memory_data: bool,
+}
+
+const FULL_CLOSURE: ClosureMode = ClosureMode {
+    expand_tables: true,
+    expand_memory_data: true,
+};
+const DIRECT_CLOSURE: ClosureMode = ClosureMode {
+    expand_tables: false,
+    expand_memory_data: false,
+};
+const SPLIT_CLOSURE: ClosureMode = ClosureMode {
+    expand_tables: true,
+    expand_memory_data: false,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DataOffsetOwner {
+    Shell,
+    Routes(BTreeSet<usize>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OwnedDataSlice {
+    route: usize,
+    offset: u32,
+    len: u32,
+}
+
+fn record_data_offset_events(
+    events: &mut BTreeMap<u32, DataOffsetOwner>,
+    function: &FunctionAnalysis,
+    data_index: u32,
+    owner: DataOffsetOwner,
+) {
+    let Some(offsets) = function.data_reference_offsets.get(&data_index) else {
+        return;
+    };
+    for offset in offsets {
+        events
+            .entry(*offset)
+            .and_modify(|existing| {
+                merge_data_offset_owner(existing, &owner);
+            })
+            .or_insert_with(|| owner.clone());
+    }
+}
+
+fn record_route_data_span_candidates(
+    candidates: &mut BTreeMap<(u32, u32), BTreeSet<usize>>,
+    function: &FunctionAnalysis,
+    data_index: u32,
+    route: usize,
+    min_route_slice_bytes: u32,
+) {
+    let Some(offsets) = function.data_reference_offsets.get(&data_index) else {
+        return;
+    };
+    let offsets = offsets.iter().copied().collect::<Vec<_>>();
+    for window in offsets.windows(2) {
+        let [start, end] = window else {
+            continue;
+        };
+        let len = end - start;
+        if len < min_route_slice_bytes {
+            continue;
+        }
+        candidates.entry((*start, len)).or_default().insert(route);
+    }
+}
+
+fn merge_data_offset_owner(existing: &mut DataOffsetOwner, owner: &DataOffsetOwner) {
+    match (&mut *existing, owner) {
+        (DataOffsetOwner::Shell, _) | (_, DataOffsetOwner::Shell) => {
+            *existing = DataOffsetOwner::Shell;
+        }
+        (DataOffsetOwner::Routes(existing), DataOffsetOwner::Routes(new)) => {
+            existing.extend(new.iter().copied());
+        }
+    }
+}
+
+fn data_route_owner(route: usize) -> DataOffsetOwner {
+    DataOffsetOwner::Routes(BTreeSet::from([route]))
+}
+
+fn data_offset_routes(owner: &DataOffsetOwner) -> Vec<usize> {
+    match owner {
+        DataOffsetOwner::Shell => Vec::new(),
+        DataOffsetOwner::Routes(routes) => routes.iter().copied().collect(),
+    }
+}
+
+fn route_owned_data_slices(
+    data_len: u32,
+    events: &BTreeMap<u32, DataOffsetOwner>,
+    min_route_slice_bytes: u32,
+) -> Vec<OwnedDataSlice> {
+    let mut out = Vec::new();
+    let mut route_starts: BTreeMap<usize, u32> = BTreeMap::new();
+    let mut boundaries = events
+        .iter()
+        .filter_map(|(offset, owner)| {
+            if *offset >= data_len {
+                return None;
+            }
+            for route in data_offset_routes(owner) {
+                route_starts
+                    .entry(route)
+                    .and_modify(|start| *start = (*start).min(*offset))
+                    .or_insert(*offset);
+            }
+            Some(*offset)
+        })
+        .collect::<BTreeSet<_>>();
+    boundaries.insert(data_len);
+
+    for (route, offset) in route_starts {
+        let next = boundaries
+            .range((offset + 1)..)
+            .next()
+            .copied()
+            .unwrap_or(data_len);
+        let len = next - offset;
+        if len < min_route_slice_bytes {
+            continue;
+        }
+        out.push(OwnedDataSlice { route, offset, len });
+    }
+
+    out.sort_by_key(|slice| (slice.offset, slice.route));
+    out.dedup_by_key(|slice| (slice.offset, slice.len, slice.route));
+    out
+}
+
+fn add_route_span_candidates(
+    route_slices: &mut Vec<OwnedDataSlice>,
+    events: &BTreeMap<u32, DataOffsetOwner>,
+    candidates: &BTreeMap<(u32, u32), BTreeSet<usize>>,
+    data_len: u32,
+) {
+    for ((offset, len), routes) in candidates {
+        if routes.len() != 1 {
+            continue;
+        }
+        let route = routes.iter().next().copied().expect("single route");
+        let end = offset.saturating_add(*len);
+        if *offset >= data_len || end > data_len {
+            continue;
+        }
+        if route_slices
+            .iter()
+            .any(|slice| ranges_overlap(*offset, end, slice.offset, slice.offset + slice.len))
+        {
+            continue;
+        }
+        if events
+            .range((offset + 1)..end)
+            .any(|(_, owner)| matches!(owner, DataOffsetOwner::Shell))
+        {
+            continue;
+        }
+        route_slices.push(OwnedDataSlice {
+            route,
+            offset: *offset,
+            len: *len,
+        });
+    }
+    route_slices.sort_by_key(|slice| (slice.offset, slice.route));
+    route_slices.dedup_by_key(|slice| (slice.offset, slice.len, slice.route));
+}
+
+fn ranges_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
+    a_start < b_end && b_start < a_end
 }
 
 impl FunctionOwner {
@@ -382,8 +557,23 @@ impl std::error::Error for EmitError {}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitPlan {
     pub shell: BTreeSet<Dependency>,
+    pub shell_data_slices: Vec<DataSlicePlan>,
     pub routes: Vec<RouteChunkPlan>,
     pub shared: Vec<SharedChunkPlan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSlicePlan {
+    pub data: u32,
+    pub offset: u32,
+    pub len: u32,
+}
+
+struct ActiveDataAssignment<'a> {
+    shell: &'a mut BTreeSet<Dependency>,
+    route_dependencies: &'a mut [BTreeSet<Dependency>],
+    shell_data_slices: &'a mut Vec<DataSlicePlan>,
+    route_data_slices: &'a mut [Vec<DataSlicePlan>],
 }
 
 /// Diagnostic record returned alongside an ownership-aware split plan.
@@ -475,6 +665,7 @@ pub struct RouteChunkPlan {
     pub name: String,
     pub required_dependencies: BTreeSet<Dependency>,
     pub dependencies: BTreeSet<Dependency>,
+    pub data_slices: Vec<DataSlicePlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -502,6 +693,7 @@ pub struct ChunkLinkPlan {
     pub name: String,
     pub owned: BTreeSet<Dependency>,
     pub external: BTreeSet<Dependency>,
+    pub data_slices: Vec<DataSlicePlan>,
     pub local_remap: IndexRemap,
     pub external_remap: IndexRemap,
 }
@@ -694,7 +886,7 @@ impl ModuleAnalysis {
     where
         I: IntoIterator<Item = Dependency>,
     {
-        self.closure_with(roots, ClosureMode::Full)
+        self.closure_with(roots, FULL_CLOSURE)
     }
 
     /// Closure that does NOT auto-expand `Table(t)` → all its element segments.
@@ -708,7 +900,14 @@ impl ModuleAnalysis {
     where
         I: IntoIterator<Item = Dependency>,
     {
-        self.closure_with(roots, ClosureMode::Direct)
+        self.closure_with(roots, DIRECT_CLOSURE)
+    }
+
+    fn split_dependency_closure<I>(&self, roots: I) -> Result<BTreeSet<Dependency>, GraphError>
+    where
+        I: IntoIterator<Item = Dependency>,
+    {
+        self.closure_with(roots, SPLIT_CLOSURE)
     }
 
     fn closure_with<I>(
@@ -780,7 +979,7 @@ impl ModuleAnalysis {
                     stack.extend(data.dependencies.iter().copied());
                 }
                 Dependency::Table(index) => {
-                    if matches!(mode, ClosureMode::Full) {
+                    if mode.expand_tables {
                         for element in &self.elements {
                             let ElementKindAnalysis::Active { table_index, .. } = element.kind
                             else {
@@ -793,12 +992,14 @@ impl ModuleAnalysis {
                     }
                 }
                 Dependency::Memory(index) => {
-                    for data in &self.data_segments {
-                        let DataKindAnalysis::Active { memory_index, .. } = data.kind else {
-                            continue;
-                        };
-                        if memory_index == index {
-                            stack.push(Dependency::Data(data.index));
+                    if mode.expand_memory_data {
+                        for data in &self.data_segments {
+                            let DataKindAnalysis::Active { memory_index, .. } = data.kind else {
+                                continue;
+                            };
+                            if memory_index == index {
+                                stack.push(Dependency::Data(data.index));
+                            }
                         }
                     }
                 }
@@ -826,18 +1027,23 @@ impl ModuleAnalysis {
     where
         I: IntoIterator<Item = Dependency>,
     {
-        let mut shell = self.dependency_closure(shell_roots)?;
+        let shell_roots = shell_roots.into_iter().collect::<Vec<_>>();
+        let mut shell = self.split_dependency_closure(shell_roots.iter().copied())?;
+        let shell_direct = self.direct_dependency_closure(shell_roots.iter().copied())?;
         let mut usage: BTreeMap<Dependency, BTreeSet<usize>> = BTreeMap::new();
         let mut route_closures = Vec::with_capacity(routes.len());
+        let mut route_direct = Vec::with_capacity(routes.len());
 
         for (route_index, route) in routes.iter().enumerate() {
-            let closure = self.dependency_closure(route.roots.iter().copied())?;
+            let closure = self.split_dependency_closure(route.roots.iter().copied())?;
+            let direct = self.direct_dependency_closure(route.roots.iter().copied())?;
             for dependency in &closure {
                 if !shell.contains(dependency) {
                     usage.entry(*dependency).or_default().insert(route_index);
                 }
             }
             route_closures.push(closure);
+            route_direct.push(direct);
         }
 
         let route_count = routes.len();
@@ -848,6 +1054,8 @@ impl ModuleAnalysis {
         }
 
         let mut route_dependencies = vec![BTreeSet::new(); route_count];
+        let mut shell_data_slices = Vec::new();
+        let mut route_data_slices = vec![Vec::new(); route_count];
         let mut shared_dependencies: BTreeMap<BTreeSet<usize>, BTreeSet<Dependency>> =
             BTreeMap::new();
 
@@ -866,16 +1074,29 @@ impl ModuleAnalysis {
                     .insert(dependency);
             }
         }
+        self.assign_active_data_segments(
+            &shell_direct,
+            &route_direct,
+            routes,
+            ActiveDataAssignment {
+                shell: &mut shell,
+                route_dependencies: &mut route_dependencies,
+                shell_data_slices: &mut shell_data_slices,
+                route_data_slices: &mut route_data_slices,
+            },
+        );
 
         let route_plans = routes
             .iter()
             .zip(route_dependencies)
             .zip(route_closures)
+            .zip(route_data_slices)
             .map(
-                |((route, dependencies), required_dependencies)| RouteChunkPlan {
+                |(((route, dependencies), required_dependencies), data_slices)| RouteChunkPlan {
                     name: route.name.clone(),
                     required_dependencies,
                     dependencies,
+                    data_slices,
                 },
             )
             .collect();
@@ -893,9 +1114,208 @@ impl ModuleAnalysis {
 
         Ok(SplitPlan {
             shell,
+            shell_data_slices,
             routes: route_plans,
             shared,
         })
+    }
+
+    fn assign_active_data_segments(
+        &self,
+        shell_direct: &BTreeSet<Dependency>,
+        route_direct: &[BTreeSet<Dependency>],
+        routes: &[RouteSplitRoot],
+        assignment: ActiveDataAssignment<'_>,
+    ) {
+        const MIN_ROUTE_DATA_SLICE_BYTES: u32 = 4096;
+
+        let route_ids = routes
+            .iter()
+            .map(|route| route.name.clone())
+            .collect::<Vec<_>>();
+        let route_index_by_name = routes
+            .iter()
+            .enumerate()
+            .map(|(idx, route)| (route.name.as_str(), idx))
+            .collect::<BTreeMap<_, _>>();
+
+        for data in &self.data_segments {
+            let DataKindAnalysis::Active { .. } = data.kind else {
+                continue;
+            };
+            let data_len = data.data.len() as u32;
+            let dep = Dependency::Data(data.index);
+            if assignment.shell.contains(&dep)
+                || assignment
+                    .route_dependencies
+                    .iter()
+                    .any(|deps| deps.contains(&dep))
+            {
+                continue;
+            }
+
+            let mut shell_uses_data = shell_direct.contains(&dep);
+            let mut route_users: BTreeSet<usize> = BTreeSet::new();
+            let mut events: BTreeMap<u32, DataOffsetOwner> = BTreeMap::new();
+            let mut span_candidates: BTreeMap<(u32, u32), BTreeSet<usize>> = BTreeMap::new();
+
+            for dependency in shell_direct {
+                let Dependency::Function(index) = dependency else {
+                    continue;
+                };
+                if let Some(function) = self.function(*index) {
+                    if function.data_references.contains(&data.index) {
+                        shell_uses_data = true;
+                    }
+                    record_data_offset_events(
+                        &mut events,
+                        function,
+                        data.index,
+                        DataOffsetOwner::Shell,
+                    );
+                }
+            }
+
+            for (route_index, closure) in route_direct.iter().enumerate() {
+                if closure.contains(&dep) {
+                    route_users.insert(route_index);
+                    continue;
+                }
+                for dependency in closure {
+                    let Dependency::Function(index) = dependency else {
+                        continue;
+                    };
+                    if let Some(function) = self.function(*index) {
+                        if function.data_references.contains(&data.index) {
+                            route_users.insert(route_index);
+                        }
+                        record_data_offset_events(
+                            &mut events,
+                            function,
+                            data.index,
+                            data_route_owner(route_index),
+                        );
+                        record_route_data_span_candidates(
+                            &mut span_candidates,
+                            function,
+                            data.index,
+                            route_index,
+                            MIN_ROUTE_DATA_SLICE_BYTES,
+                        );
+                    }
+                }
+            }
+
+            for function in &self.functions {
+                if !function.data_references.contains(&data.index) {
+                    continue;
+                }
+                let in_direct_closure = shell_direct
+                    .contains(&Dependency::Function(function.index))
+                    || route_direct
+                        .iter()
+                        .any(|closure| closure.contains(&Dependency::Function(function.index)));
+                if in_direct_closure {
+                    continue;
+                }
+                match FunctionOwner::from_name(function.name.as_deref(), &route_ids) {
+                    FunctionOwner::Route(name) => {
+                        if let Some(index) = route_index_by_name.get(name.as_str()) {
+                            route_users.insert(*index);
+                            record_data_offset_events(
+                                &mut events,
+                                function,
+                                data.index,
+                                data_route_owner(*index),
+                            );
+                            record_route_data_span_candidates(
+                                &mut span_candidates,
+                                function,
+                                data.index,
+                                *index,
+                                MIN_ROUTE_DATA_SLICE_BYTES,
+                            );
+                        } else {
+                            shell_uses_data = true;
+                            record_data_offset_events(
+                                &mut events,
+                                function,
+                                data.index,
+                                DataOffsetOwner::Shell,
+                            );
+                        }
+                    }
+                    FunctionOwner::Shared(names) => {
+                        for name in names {
+                            if let Some(index) = route_index_by_name.get(name.as_str()) {
+                                route_users.insert(*index);
+                                record_data_offset_events(
+                                    &mut events,
+                                    function,
+                                    data.index,
+                                    data_route_owner(*index),
+                                );
+                            } else {
+                                shell_uses_data = true;
+                                record_data_offset_events(
+                                    &mut events,
+                                    function,
+                                    data.index,
+                                    DataOffsetOwner::Shell,
+                                );
+                            }
+                        }
+                    }
+                    FunctionOwner::Shell | FunctionOwner::Unknown => {
+                        shell_uses_data = true;
+                        record_data_offset_events(
+                            &mut events,
+                            function,
+                            data.index,
+                            DataOffsetOwner::Shell,
+                        );
+                    }
+                }
+            }
+
+            if !shell_uses_data && route_users.len() == 1 {
+                let route_index = route_users.iter().next().copied().unwrap();
+                assignment.route_dependencies[route_index].insert(dep);
+                continue;
+            }
+
+            let mut route_slices =
+                route_owned_data_slices(data_len, &events, MIN_ROUTE_DATA_SLICE_BYTES);
+            add_route_span_candidates(&mut route_slices, &events, &span_candidates, data_len);
+            if route_slices.is_empty() {
+                assignment.shell.insert(dep);
+                continue;
+            }
+
+            let mut cursor = 0;
+            for slice in &route_slices {
+                if cursor < slice.offset {
+                    assignment.shell_data_slices.push(DataSlicePlan {
+                        data: data.index,
+                        offset: cursor,
+                        len: slice.offset - cursor,
+                    });
+                }
+                assignment.route_data_slices[slice.route].push(DataSlicePlan {
+                    data: data.index,
+                    offset: slice.offset,
+                    len: slice.len,
+                });
+                cursor = slice.offset + slice.len;
+            }
+            if cursor < data_len {
+                assignment.shell_data_slices.push(DataSlicePlan {
+                    data: data.index,
+                    offset: cursor,
+                    len: data_len - cursor,
+                });
+            }
+        }
     }
 
     /// Like `plan_route_split`, but breaks the Table(0)-pulls-everything tie
@@ -939,6 +1359,8 @@ impl ModuleAnalysis {
         // Phase 2: classify deps that live in *some* direct closure.
         let mut shell: BTreeSet<Dependency> = shell_direct.clone();
         let mut route_dependencies: Vec<BTreeSet<Dependency>> = vec![BTreeSet::new(); routes.len()];
+        let mut shell_data_slices = Vec::new();
+        let mut route_data_slices = vec![Vec::new(); routes.len()];
         let mut shared_buckets: BTreeMap<BTreeSet<usize>, BTreeSet<Dependency>> = BTreeMap::new();
 
         let mut all_deps: BTreeSet<Dependency> = shell_direct.iter().copied().collect();
@@ -1287,6 +1709,18 @@ impl ModuleAnalysis {
             }
         }
 
+        self.assign_active_data_segments(
+            &shell_direct,
+            &route_direct,
+            routes,
+            ActiveDataAssignment {
+                shell: &mut shell,
+                route_dependencies: &mut route_dependencies,
+                shell_data_slices: &mut shell_data_slices,
+                route_data_slices: &mut route_data_slices,
+            },
+        );
+
         // Diagnostic: per-slot ownership snapshot. Walk every active table
         // segment, look up where the installed function landed, and record
         // owner. (Pinning is wired separately by phase 3.3 once the data
@@ -1337,11 +1771,13 @@ impl ModuleAnalysis {
             .iter()
             .zip(route_dependencies)
             .zip(route_direct.iter())
+            .zip(route_data_slices)
             .map(
-                |((route, dependencies), required_dependencies)| RouteChunkPlan {
+                |(((route, dependencies), required_dependencies), data_slices)| RouteChunkPlan {
                     name: route.name.clone(),
                     required_dependencies: required_dependencies.clone(),
                     dependencies,
+                    data_slices,
                 },
             )
             .collect();
@@ -1360,6 +1796,7 @@ impl ModuleAnalysis {
         Ok((
             SplitPlan {
                 shell,
+                shell_data_slices,
                 routes: route_plans,
                 shared,
             },
@@ -1369,7 +1806,12 @@ impl ModuleAnalysis {
 
     pub fn build_link_plan(&self, plan: &SplitPlan) -> SplitLinkPlan {
         SplitLinkPlan {
-            shell: self.build_chunk_link_plan("shell".to_string(), &plan.shell, &plan.shell),
+            shell: self.build_chunk_link_plan(
+                "shell".to_string(),
+                &plan.shell,
+                &plan.shell,
+                &plan.shell_data_slices,
+            ),
             routes: plan
                 .routes
                 .iter()
@@ -1378,6 +1820,7 @@ impl ModuleAnalysis {
                         route.name.clone(),
                         &route.dependencies,
                         &route.required_dependencies,
+                        &route.data_slices,
                     )
                 })
                 .collect(),
@@ -1389,6 +1832,7 @@ impl ModuleAnalysis {
                         shared_chunk_name(&shared.routes),
                         &shared.dependencies,
                         &shared.dependencies,
+                        &[],
                     )
                 })
                 .collect(),
@@ -1595,10 +2039,10 @@ impl ModuleAnalysis {
             module.section(&elements);
         }
 
-        let has_data = !chunk.local_remap.data.is_empty();
+        let has_data = !chunk.local_remap.data.is_empty() || !chunk.data_slices.is_empty();
         if has_data {
             module.section(&wasm_encoder::DataCountSection {
-                count: chunk.local_remap.data.len() as u32,
+                count: (chunk.local_remap.data.len() + chunk.data_slices.len()) as u32,
             });
         }
 
@@ -1628,6 +2072,9 @@ impl ModuleAnalysis {
         let mut data = wasm_encoder::DataSection::new();
         for old_data in ordered_indices(&chunk.local_remap.data) {
             self.encode_data(chunk, &mut data, old_data)?;
+        }
+        for slice in &chunk.data_slices {
+            self.encode_data_slice(chunk, &mut data, slice)?;
         }
         if !data.is_empty() {
             module.section(&data);
@@ -1917,11 +2364,50 @@ impl ModuleAnalysis {
         Ok(())
     }
 
+    fn encode_data_slice(
+        &self,
+        chunk: &ChunkLinkPlan,
+        data: &mut wasm_encoder::DataSection,
+        slice: &DataSlicePlan,
+    ) -> Result<(), EmitError> {
+        let segment = self.data(slice.data).ok_or(EmitError::MissingRemap {
+            chunk: chunk.name.clone(),
+            dependency: Dependency::Data(slice.data),
+        })?;
+        let DataKindAnalysis::Active {
+            memory_index,
+            offset_expr,
+        } = &segment.kind
+        else {
+            return Ok(());
+        };
+        let ConstExprAnalysis::I32Const(base) = offset_expr else {
+            return Err(EmitError::UnsupportedConstExpr);
+        };
+        let memory =
+            combined_memory_index(chunk, *memory_index).ok_or_else(|| EmitError::MissingRemap {
+                chunk: chunk.name.clone(),
+                dependency: Dependency::Memory(*memory_index),
+            })?;
+        let start = slice.offset as usize;
+        let end = start + slice.len as usize;
+        let payload = segment.data.get(start..end).ok_or_else(|| {
+            EmitError::Parse(format!(
+                "data slice {}:{}+{} is out of bounds",
+                slice.data, slice.offset, slice.len
+            ))
+        })?;
+        let offset = wasm_encoder::ConstExpr::i32_const(*base + slice.offset as i32);
+        data.active(memory, &offset, payload.iter().copied());
+        Ok(())
+    }
+
     fn build_chunk_link_plan(
         &self,
         name: String,
         owned_dependencies: &BTreeSet<Dependency>,
         _required_dependencies: &BTreeSet<Dependency>,
+        data_slices: &[DataSlicePlan],
     ) -> ChunkLinkPlan {
         let owned = owned_dependencies
             .difference(&self.imports)
@@ -1931,6 +2417,19 @@ impl ModuleAnalysis {
             .intersection(&self.imports)
             .copied()
             .collect::<BTreeSet<_>>();
+
+        for slice in data_slices {
+            let Some(segment) = self.data(slice.data) else {
+                continue;
+            };
+            let DataKindAnalysis::Active { memory_index, .. } = segment.kind else {
+                continue;
+            };
+            let memory = Dependency::Memory(memory_index);
+            if !owned.contains(&memory) {
+                external.insert(memory);
+            }
+        }
 
         for dependency in &owned {
             let Dependency::Function(index) = dependency else {
@@ -2029,6 +2528,7 @@ impl ModuleAnalysis {
 
         ChunkLinkPlan {
             name,
+            data_slices: data_slices.to_vec(),
             local_remap: IndexRemap::from_dependencies(&owned),
             external_remap: IndexRemap::from_dependencies(&external),
             owned,
@@ -2680,6 +3180,8 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
                     body: None,
                     index_uses: Vec::new(),
                     dependencies: BTreeSet::new(),
+                    data_references: BTreeSet::new(),
+                    data_reference_offsets: BTreeMap::new(),
                     name: None,
                 }),
         );
@@ -2698,6 +3200,14 @@ pub fn analyze(wasm: &[u8]) -> WasmResult<ModuleAnalysis> {
 
     for function in &mut analysis.functions {
         function.name = function_names.remove(&function.index);
+    }
+    let active_data_ranges = active_data_ranges(&analysis.data_segments);
+    for function in &mut analysis.functions {
+        if let Some(body) = function.body.as_deref() {
+            function.data_reference_offsets =
+                scan_function_data_references(body, &active_data_ranges)?;
+            function.data_references = function.data_reference_offsets.keys().copied().collect();
+        }
     }
 
     Ok(analysis)
@@ -2781,6 +3291,50 @@ fn analyze_const_expr(expr: wasmparser::ConstExpr<'_>) -> ConstExprAnalysis {
     }
 }
 
+fn active_data_ranges(data_segments: &[DataAnalysis]) -> Vec<(u32, u32, u32)> {
+    data_segments
+        .iter()
+        .filter_map(|segment| {
+            let DataKindAnalysis::Active { offset_expr, .. } = &segment.kind else {
+                return None;
+            };
+            let ConstExprAnalysis::I32Const(start) = offset_expr else {
+                return None;
+            };
+            let start = (*start).try_into().ok()?;
+            let end = start + segment.data.len() as u32;
+            Some((segment.index, start, end))
+        })
+        .collect()
+}
+
+fn scan_function_data_references(
+    body: &[u8],
+    active_data_ranges: &[(u32, u32, u32)],
+) -> WasmResult<BTreeMap<u32, BTreeSet<u32>>> {
+    let body = wasmparser::FunctionBody::new(wasmparser::BinaryReader::new(body, 0));
+    let mut reader = body.get_operators_reader()?;
+    let mut references = BTreeMap::new();
+    while !reader.eof() {
+        let op = reader.read()?;
+        let Operator::I32Const { value } = op else {
+            continue;
+        };
+        let Ok(value) = u32::try_from(value) else {
+            continue;
+        };
+        for (data_index, start, end) in active_data_ranges {
+            if value >= *start && value < *end {
+                references
+                    .entry(*data_index)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(value - *start);
+            }
+        }
+    }
+    Ok(references)
+}
+
 fn empty_defined_function(index: u32, type_index: u32) -> FunctionAnalysis {
     FunctionAnalysis {
         index,
@@ -2789,6 +3343,8 @@ fn empty_defined_function(index: u32, type_index: u32) -> FunctionAnalysis {
         body: None,
         index_uses: Vec::new(),
         dependencies: BTreeSet::new(),
+        data_references: BTreeSet::new(),
+        data_reference_offsets: BTreeMap::new(),
         name: None,
     }
 }
@@ -2801,6 +3357,8 @@ fn scan_function_body(body: &wasmparser::FunctionBody<'_>) -> WasmResult<Functio
         body: Some(body.as_bytes().to_vec()),
         index_uses: Vec::new(),
         dependencies: BTreeSet::new(),
+        data_references: BTreeSet::new(),
+        data_reference_offsets: BTreeMap::new(),
         name: None,
     };
     let mut reader = body.get_operators_reader()?;
@@ -3131,7 +3689,10 @@ fn record_operator_dependencies(function: &mut FunctionAnalysis, offset: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze, Dependency, FunctionImport, GraphError, RouteSplitRoot, ValidationError};
+    use super::{
+        analyze, DataSlicePlan, Dependency, FunctionImport, GraphError, RouteSplitRoot,
+        ValidationError,
+    };
 
     #[test]
     fn ownership_plan_keeps_indirect_route_funcs_off_shell() {
@@ -4102,6 +4663,148 @@ mod tests {
 
         assert!(closure.contains(&Dependency::Memory(0)));
         assert!(closure.contains(&Dependency::Data(0)));
+    }
+
+    #[test]
+    fn route_split_does_not_treat_memory_use_as_all_data_ownership() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (memory $memory 1)
+              (data (i32.const 1024) "route-only")
+              (func $shell (type $t0)
+                i32.const 0
+                i32.load
+                drop)
+              (func $route_entry (type $t0)
+                i32.const 1024
+                i32.load
+                drop))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        assert!(module.functions[1].data_references.contains(&0));
+
+        let routes = vec![RouteSplitRoot {
+            name: "route".to_string(),
+            roots: vec![Dependency::Function(1)],
+        }];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+
+        assert!(plan.shell.contains(&Dependency::Memory(0)));
+        assert!(!plan.shell.contains(&Dependency::Data(0)));
+        assert!(plan.routes[0].dependencies.contains(&Dependency::Data(0)));
+    }
+
+    #[test]
+    fn shell_referenced_active_data_stays_in_shell() {
+        let wasm = wat::parse_str(
+            r#"
+            (module
+              (type $t0 (func))
+              (memory $memory 1)
+              (data (i32.const 2048) "shell-data")
+              (func $shell (type $t0)
+                i32.const 2048
+                i32.load
+                drop)
+              (func $route_entry (type $t0)
+                i32.const 3
+                drop))
+            "#,
+        )
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![RouteSplitRoot {
+            name: "route".to_string(),
+            roots: vec![Dependency::Function(1)],
+        }];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+
+        assert!(plan.shell.contains(&Dependency::Data(0)));
+        assert!(!plan.routes[0].dependencies.contains(&Dependency::Data(0)));
+    }
+
+    #[test]
+    fn route_split_slices_large_route_owned_active_data() {
+        let route_a = "a".repeat(4096);
+        let route_b = "b".repeat(4096);
+        let tail = "shell";
+        let wasm = wat::parse_str(format!(
+            r#"
+            (module
+              (type $t0 (func))
+              (memory $memory 1)
+              (data (i32.const 1024) "{route_a}{route_b}{tail}")
+              (func $shell (type $t0)
+                ;; This constant aliases route B's start, but is not enough
+                ;; to keep the whole route-B slice in shell.
+                i32.const 5120
+                drop)
+              (func $route_a (type $t0)
+                i32.const 1024
+                i32.load8_u
+                drop
+                i32.const 5120
+                drop)
+              (func $route_b (type $t0)
+                i32.const 5120
+                i32.load8_u
+                drop
+                i32.const 9216
+                drop))
+            "#,
+        ))
+        .unwrap();
+
+        let module = analyze(&wasm).unwrap();
+        let routes = vec![
+            RouteSplitRoot {
+                name: "a".to_string(),
+                roots: vec![Dependency::Function(1)],
+            },
+            RouteSplitRoot {
+                name: "b".to_string(),
+                roots: vec![Dependency::Function(2)],
+            },
+        ];
+        let plan = module
+            .plan_route_split([Dependency::Function(0)], &routes)
+            .unwrap();
+
+        assert!(!plan.shell.contains(&Dependency::Data(0)));
+        assert_eq!(
+            plan.shell_data_slices,
+            vec![DataSlicePlan {
+                data: 0,
+                offset: 8192,
+                len: tail.len() as u32,
+            }]
+        );
+        assert_eq!(
+            plan.routes[0].data_slices,
+            vec![DataSlicePlan {
+                data: 0,
+                offset: 0,
+                len: 4096,
+            }]
+        );
+        assert_eq!(
+            plan.routes[1].data_slices,
+            vec![DataSlicePlan {
+                data: 0,
+                offset: 4096,
+                len: 4096,
+            }]
+        );
     }
 
     #[test]
