@@ -36,7 +36,7 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     Data, DeriveInput, Expr, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit,
-    LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
+    LitBool, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
 };
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
@@ -3339,6 +3339,81 @@ struct AppMacroInput {
     devtools: bool,
 }
 
+struct RouteMacroInput {
+    id: LitStr,
+    path: LitStr,
+    component: Path,
+    hydrate: bool,
+    ssr: bool,
+}
+
+impl Parse for RouteMacroInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut id = None;
+        let mut path = None;
+        let mut component = None;
+        let mut hydrate = false;
+        let mut ssr = false;
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "id" => {
+                    if id.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `id` in route!"));
+                    }
+                    id = Some(input.parse()?);
+                }
+                "path" => {
+                    if path.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `path` in route!"));
+                    }
+                    path = Some(input.parse()?);
+                }
+                "component" => {
+                    if component.is_some() {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            "duplicate `component` in route!",
+                        ));
+                    }
+                    component = Some(input.parse()?);
+                }
+                "hydrate" => {
+                    let value: LitBool = input.parse()?;
+                    hydrate = value.value;
+                }
+                "ssr" => {
+                    let value: LitBool = input.parse()?;
+                    ssr = value.value;
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!(
+                            "unknown `route!{{}}` field `{other}` — expected `id`, `path`, `component`, `hydrate`, or `ssr`"
+                        ),
+                    ));
+                }
+            }
+
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(Self {
+            id: id.ok_or_else(|| input.error("`route!` requires `id: \"...\"`"))?,
+            path: path.ok_or_else(|| input.error("`route!` requires `path: \"...\"`"))?,
+            component: component
+                .ok_or_else(|| input.error("`route!` requires `component: TypePath`"))?,
+            hydrate,
+            ssr,
+        })
+    }
+}
+
 impl Parse for AppMacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut components: Option<Vec<AppComponentEntry>> = None;
@@ -3864,6 +3939,39 @@ fn app_component_key(c: &AppComponentEntry) -> String {
         }
         AppComponentEntry::Explicit(_, lit) => lit.value(),
     }
+}
+
+/// `route!{}` — route-crate entry point for RFC 067.
+///
+/// The macro declares the stable route identity and emits a
+/// serializable descriptor. It intentionally does not export a
+/// `ComponentVTable` or Rust function pointers across artifacts.
+#[proc_macro]
+pub fn route(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as RouteMacroInput);
+    let id = parsed.id;
+    let path = parsed.path;
+    let component = parsed.component;
+    let hydrate = parsed.hydrate;
+    let ssr = parsed.ssr;
+
+    quote! {
+        pub const POCOPINE_ROUTE_DESCRIPTOR: ::pocopine::RouteDescriptor =
+            ::pocopine::RouteDescriptor {
+                abi_version: ::pocopine::ROUTE_ABI_VERSION,
+                id: #id,
+                path: #path,
+                component: <#component as ::pocopine::__private::Component>::NAME,
+                hydrate: #hydrate,
+                ssr: #ssr,
+            };
+
+        #[no_mangle]
+        pub extern "C" fn __pocopine_route_abi_version() -> u32 {
+            ::pocopine::ROUTE_ABI_VERSION
+        }
+    }
+    .into()
 }
 
 fn emit_split_shell_app(parsed: &AppMacroInput, split_base: &str) -> proc_macro2::TokenStream {

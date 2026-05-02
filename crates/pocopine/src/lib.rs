@@ -26,15 +26,15 @@ pub use pocopine_core::{
     ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, Handle, HostEl,
     Inject, IsTeleported, LifecycleContext, ListenerHandle, MountEpoch, NearestParent, Parent,
     ParentId, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, RouteClusterPlan,
-    RouteClusterRoot, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
-    TypedEl, Win,
+    RouteClusterRoot, RouteDescriptor, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle,
+    TeleportHost, TypedEl, Win, ROUTE_ABI_VERSION,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
-pub use pocopine_macros::{app, component, handlers, server, store, Emit};
+pub use pocopine_macros::{app, component, handlers, route, server, store, Emit};
 
 pub mod prelude {
     #[allow(deprecated)]
@@ -43,10 +43,11 @@ pub mod prelude {
         batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
         emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, handlers,
-        inject_key, on, on_cleanup, on_emit, prepend_list_inline, remove_list_at_inline, rw_signal,
-        signal, spawn, spawn_latest, spawn_scoped, store, this, watch, App, Component,
+        inject_key, on, on_cleanup, on_emit, prepend_list_inline, remove_list_at_inline, route,
+        rw_signal, signal, spawn, spawn_latest, spawn_scoped, store, this, watch, App, Component,
         ComponentState, Computed, ContextKey, ContextMarker, Emit, Handle, Inject, NearestParent,
-        Parent, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        Parent, RouteDescriptor, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter,
+        Signal, Store, ROUTE_ABI_VERSION,
     };
     pub use wasm_bindgen::prelude::*;
 }
