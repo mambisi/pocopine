@@ -33,7 +33,7 @@ phf = { version = "0.13", features = ["macros"] }
 [dev-dependencies]
 pocopine-server = { path = "../pocopine-server" }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
 tower = { version = "0.5", features = ["util"] }
 wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = [
@@ -50,3 +50,13 @@ web-sys = { version = "0.3", features = [
     "NodeList",
     "Window",
 ] }
+
+# Redis-backed integration tests spin up a throwaway Redis container per
+# test binary via testcontainers; no external Redis dependency for CI.
+# Host-only — the wasm32 test build can't reach Docker, and tokio's
+# `rt-multi-thread` feature is incompatible with the wasm target.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["redis"] }
+redis = { version = "0.27", features = ["tokio-comp"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
