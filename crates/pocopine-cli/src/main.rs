@@ -86,6 +86,8 @@ struct RouteArgs {
 enum RouteCmd {
     /// Scaffold a strict-layout route module under src/routes/<name>.
     Add(RouteAddArgs),
+    /// Scaffold an ABI-isolated route crate under routes/<name>.
+    Crate(RouteCrateArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -96,6 +98,21 @@ struct RouteAddArgs {
     #[arg(long, default_value = ".")]
     path: PathBuf,
     /// Route pattern to add to app!, for example `/item/:id`.
+    #[arg(long)]
+    pattern: String,
+    /// Component struct name. Defaults to PascalCase(name).
+    #[arg(long)]
+    component: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct RouteCrateArgs {
+    /// Route crate name and route id, for example `story` or `admin_settings`.
+    name: String,
+    /// Path to the shell crate to update (defaults to current dir).
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
+    /// Route pattern, for example `/item/:id`.
     #[arg(long)]
     pattern: String,
     /// Component struct name. Defaults to PascalCase(name).
@@ -499,6 +516,7 @@ fn clean(path: &Path) -> Result<()> {
 fn route_cmd(args: RouteArgs) -> Result<()> {
     match args.cmd {
         RouteCmd::Add(args) => route_add(args),
+        RouteCmd::Crate(args) => route_crate(args),
     }
 }
 
@@ -555,6 +573,109 @@ impl {component} {{}}
         "    (\"{}\", crate::routes::{route_name}::{component}),",
         args.pattern
     );
+    Ok(())
+}
+
+fn route_crate(args: RouteCrateArgs) -> Result<()> {
+    let project = args
+        .path
+        .canonicalize()
+        .with_context(|| format!("could not resolve project path: {}", args.path.display()))?;
+    let route_name = normalize_route_module_name(&args.name)?;
+    let route_id = route_name.clone();
+    let component = args
+        .component
+        .as_deref()
+        .map(validate_component_ident)
+        .transpose()?
+        .unwrap_or_else(|| pascal_case(&route_name));
+    let route_dir = project.join("routes").join(&route_name);
+    if route_dir.exists() {
+        bail!("route crate already exists: {}", route_dir.display());
+    }
+
+    let src_dir = route_dir.join("src");
+    std::fs::create_dir_all(&src_dir).with_context(|| format!("create {}", src_dir.display()))?;
+
+    let route_package = route_package_name(&project, &route_name)?;
+    let pocopine_dependency = pocopine_dependency_for_route_crate(&project, &route_dir)?;
+    let cargo_toml = format!(
+        r#"[package]
+name = "{route_package}"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+{pocopine_dependency}
+serde = {{ version = "1", features = ["derive"] }}
+"#
+    );
+    std::fs::write(route_dir.join("Cargo.toml"), cargo_toml)
+        .with_context(|| format!("write {}", route_dir.join("Cargo.toml").display()))?;
+
+    let lib_rs = format!(
+        r#"//! Route crate for `{route_id}`.
+//!
+//! This crate is an ABI boundary. Keep route-only dependencies here;
+//! do not import shell internals or pass Rust pointers/vtables across
+//! the route boundary.
+
+use pocopine::prelude::*;
+use serde::{{Deserialize, Serialize}};
+
+#[derive(Default, Serialize, Deserialize)]
+#[component]
+pub struct {component} {{}}
+
+#[handlers]
+impl {component} {{}}
+
+pocopine::route! {{
+    id: "{route_id}",
+    path: "{pattern}",
+    component: {component},
+}}
+"#,
+        pattern = args.pattern
+    );
+    std::fs::write(src_dir.join("lib.rs"), lib_rs)
+        .with_context(|| format!("write {}", src_dir.join("lib.rs").display()))?;
+
+    let title = title_case(&route_name);
+    let template = format!("<section>\n  <h1>{title}</h1>\n</section>\n");
+    std::fs::write(src_dir.join(format!("{component}.poco")), template).with_context(|| {
+        format!(
+            "write {}",
+            src_dir.join(format!("{component}.poco")).display()
+        )
+    })?;
+
+    let readme = format!(
+        r#"# {route_package}
+
+Route ABI crate for `{route_id}`.
+
+The `pocopine::route!` entry point declares the route descriptor used by
+future split, SSR, and hydration builds. This crate should own route-only
+dependencies. Shared UI and data contracts should live in an explicit
+shared crate, not in the shell.
+"#
+    );
+    std::fs::write(route_dir.join("README.md"), readme)
+        .with_context(|| format!("write {}", route_dir.join("README.md").display()))?;
+
+    println!("✓ created route crate routes/{route_name}");
+    println!("Route entry point:");
+    println!(
+        "    pocopine::route! {{ id: \"{route_id}\", path: \"{}\", component: {component} }}",
+        args.pattern
+    );
+    println!("Next steps:");
+    println!("    - keep route-only dependencies in routes/{route_name}/Cargo.toml");
+    println!("    - wire this route into the shell once route-crate build integration lands");
     Ok(())
 }
 
@@ -778,6 +899,107 @@ fn package_name(path: &Path) -> Result<String> {
     let manifest: Manifest =
         toml::from_str(&text).with_context(|| format!("parse {}", manifest_path.display()))?;
     Ok(manifest.package.name.replace('-', "_"))
+}
+
+fn route_package_name(project: &Path, route_name: &str) -> Result<String> {
+    let base = package_name(project)?.replace('_', "-");
+    Ok(format!("{base}-route-{}", route_name.replace('_', "-")))
+}
+
+fn pocopine_dependency_for_route_crate(project: &Path, route_dir: &Path) -> Result<String> {
+    let manifest_path = project.join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let manifest: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parse {}", manifest_path.display()))?;
+    let Some(dep) = manifest
+        .get("dependencies")
+        .and_then(|deps| deps.get("pocopine"))
+    else {
+        return Ok(format!("pocopine = \"{}\"", env!("CARGO_PKG_VERSION")));
+    };
+    render_pocopine_dependency(dep, project, route_dir)
+}
+
+fn render_pocopine_dependency(
+    dep: &toml::Value,
+    project: &Path,
+    route_dir: &Path,
+) -> Result<String> {
+    if let Some(version) = dep.as_str() {
+        return Ok(format!("pocopine = {}", toml_basic_string(version)));
+    }
+    let Some(table) = dep.as_table() else {
+        return Ok(format!("pocopine = \"{}\"", env!("CARGO_PKG_VERSION")));
+    };
+    if let Some(path) = table.get("path").and_then(|value| value.as_str()) {
+        let target = project.join(path);
+        let target = target.canonicalize().unwrap_or(target);
+        let rel = relative_path(route_dir, &target);
+        return Ok(format!(
+            "pocopine = {{ path = {} }}",
+            toml_basic_string(&rel.to_string_lossy())
+        ));
+    }
+    if let Some(version) = table.get("version").and_then(|value| value.as_str()) {
+        return Ok(format!("pocopine = {}", toml_basic_string(version)));
+    }
+    Ok(format!("pocopine = \"{}\"", env!("CARGO_PKG_VERSION")))
+}
+
+fn relative_path(from_dir: &Path, to: &Path) -> PathBuf {
+    let from_parts = normal_components(from_dir);
+    let to_parts = normal_components(to);
+    let common = from_parts
+        .iter()
+        .zip(&to_parts)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut out = PathBuf::new();
+    for _ in common..from_parts.len() {
+        out.push("..");
+    }
+    for part in &to_parts[common..] {
+        out.push(part);
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
+}
+
+fn normal_components(path: &Path) -> Vec<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                parts.push(value.to_string_lossy().to_string());
+            }
+            std::path::Component::ParentDir => {
+                parts.pop();
+            }
+            std::path::Component::CurDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {}
+        }
+    }
+    parts
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
@@ -1160,6 +1382,7 @@ fn emit_post_link_split_chunks(
 
     let routes = route_ids
         .iter()
+        .filter(|route_id| !descriptor_route_ids.contains(*route_id))
         .map(|route_id| {
             let mount = format!("pocopine_route_mount_{route_id}");
             let unmount = format!("pocopine_route_unmount_{route_id}");
@@ -1436,6 +1659,20 @@ fn print_split_report(
         for slot in &report.slots {
             if slot.pinned_to_shell.is_some() {
                 pinned_slots += 1;
+            }
+            if std::env::var_os("POCOPINE_DEBUG_SPLIT_SLOTS").is_some()
+                && !matches!(slot.owner, pocopine_wasm_split::SlotOwner::Shell)
+            {
+                let name = module
+                    .functions
+                    .iter()
+                    .find(|f| f.index == slot.function_index)
+                    .and_then(|f| f.name.as_deref())
+                    .unwrap_or("<unnamed>");
+                println!(
+                    "      moved slot {} fn {} owner {:?} pinned {:?}: {}",
+                    slot.slot, slot.function_index, slot.owner, slot.pinned_to_shell, name
+                );
             }
             match &slot.owner {
                 pocopine_wasm_split::SlotOwner::Shell => shell_slots += 1,
@@ -2119,8 +2356,10 @@ fn dev(args: &ServeArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_static_descriptor_template, references_crate_module, validate_split_source_layout,
+        is_static_descriptor_template, references_crate_module, relative_path,
+        render_pocopine_dependency, validate_split_source_layout,
     };
+    use std::path::Path;
 
     fn temp_project(name: &str) -> std::path::PathBuf {
         let suffix = std::time::SystemTime::now()
@@ -2170,6 +2409,35 @@ mod tests {
         std::fs::remove_dir_all(&project).ok();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn route_crate_dependency_rebases_pocopine_path() {
+        let doc: toml::Value =
+            toml::from_str(r#"pocopine = { path = "../../crates/pocopine" }"#).unwrap();
+        let dep = doc.get("pocopine").unwrap();
+        let rendered = render_pocopine_dependency(
+            dep,
+            Path::new("/repo/examples/hn"),
+            Path::new("/repo/examples/hn/routes/story"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            r#"pocopine = { path = "../../../../crates/pocopine" }"#
+        );
+    }
+
+    #[test]
+    fn relative_path_walks_up_to_shared_prefix() {
+        assert_eq!(
+            relative_path(
+                Path::new("/repo/app/routes/story"),
+                Path::new("/repo/crates/pocopine"),
+            ),
+            Path::new("../../../crates/pocopine")
+        );
     }
 
     #[test]

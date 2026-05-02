@@ -38,6 +38,7 @@ pub mod profiler;
 pub mod reactive;
 pub mod refs;
 pub mod registry;
+pub mod route_abi;
 pub mod router;
 pub mod scope;
 pub mod scroll_lock;
@@ -98,6 +99,7 @@ pub use registry::{
     ComponentEntry, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
     RegistryErrorKind, COMPONENT_ENTRIES,
 };
+pub use route_abi::{RouteDescriptor, ROUTE_ABI_VERSION};
 pub use router::{navigate, register_route};
 pub use scope::{
     append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache,

@@ -228,6 +228,19 @@ are an authoring and dependency hygiene layer. The duplicated
 runtime problem must be solved by a verified instruction-rewriting
 splitter and the shared runtime ABI.
 
+The first route-crate surface is now intentionally small:
+
+```bash
+pocopine route crate story --pattern "/item/:id" --component StoryDetail
+```
+
+That scaffold creates `routes/story` with a `pocopine::route!`
+entry point. The entry point emits a serializable route descriptor
+and an ABI-version export. It does not register Rust vtables into
+the shell and it is not wired into split builds yet; it is the
+stable handle future descriptor, SSR, hydration, and host-call
+handler products will share.
+
 ## Production details
 
 Readable route names are useful during development:
