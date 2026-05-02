@@ -95,6 +95,7 @@ mod host {
     const DEFAULT_VISIBILITY_TIMEOUT_MS: u64 = 60_000;
     const DEFAULT_SCHEDULER_INTERVAL_MS: u64 = 1_000;
     const DEFAULT_MAX_PROMOTE: isize = 100;
+    const DEFAULT_MAX_PERIODIC_CATCH_UP: usize = 16;
     const DEFAULT_WORKER_ERROR_BACKOFF_MS: u64 = 1_000;
     const DEFAULT_WORKER_ERROR_BACKOFF_MAX_MS: u64 = 30_000;
     const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
@@ -199,6 +200,7 @@ return redis.call(
         scheduled: Vec<JobEnvelope>,
         dead: Vec<(JobEnvelope, String)>,
         periodic_locks: HashMap<String, u64>,
+        periodic_last_fired: HashMap<String, u64>,
     }
 
     /// Retry behavior attached to generated job descriptors.
@@ -452,6 +454,10 @@ return redis.call(
         fn periodic_lock_key(&self, job_name: &str, due_ms: u64) -> String {
             format!("pocopine:{}:periodic:{job_name}:{due_ms}", self.app)
         }
+
+        fn periodic_last_key(&self, job_name: &str) -> String {
+            format!("pocopine:{}:periodic:last:{job_name}", self.app)
+        }
     }
 
     /// Worker configuration.
@@ -628,25 +634,30 @@ return redis.call(
                 if !self.config.queues.iter().any(|q| q == descriptor.queue) {
                     continue;
                 }
-                let Some(due_ms) =
-                    due_periodic_slot(schedule, now_ms, self.config.scheduler_interval)?
-                else {
-                    continue;
-                };
-                let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
-                let expires_at_ms = now_ms.saturating_add(periodic_lock_ttl_ms(schedule));
-                if !memory_try_periodic_lock(&store, lock_key, now_ms, expires_at_ms)? {
-                    continue;
-                }
+                let last_key = self.client.periodic_last_key(descriptor.name);
+                let last_fired_ms = memory_periodic_last_fired(&store, &last_key)?;
+                for due_ms in due_periodic_slots(
+                    schedule,
+                    now_ms,
+                    self.config.scheduler_interval,
+                    last_fired_ms,
+                )? {
+                    let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
+                    let expires_at_ms = now_ms.saturating_add(periodic_lock_ttl_ms(schedule));
+                    if !memory_try_periodic_lock(&store, lock_key, now_ms, expires_at_ms)? {
+                        continue;
+                    }
 
-                let envelope = JobEnvelope::new(
-                    descriptor.name,
-                    descriptor.queue,
-                    descriptor.retry_policy.max_attempts,
-                    &(),
-                    None,
-                )?;
-                memory_enqueue_envelope(&store, envelope)?;
+                    let envelope = JobEnvelope::new(
+                        descriptor.name,
+                        descriptor.queue,
+                        descriptor.retry_policy.max_attempts,
+                        &(),
+                        None,
+                    )?;
+                    memory_enqueue_envelope(&store, envelope)?;
+                    memory_set_periodic_last_fired(&store, last_key.clone(), due_ms)?;
+                }
             }
             Ok(())
         }
@@ -688,32 +699,42 @@ return redis.call(
                 if !self.config.queues.iter().any(|q| q == descriptor.queue) {
                     continue;
                 }
-                let Some(due_ms) =
-                    due_periodic_slot(schedule, now_ms, self.config.scheduler_interval)?
-                else {
-                    continue;
-                };
-                let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
-                let locked: Option<String> = redis::cmd("SET")
-                    .arg(lock_key)
-                    .arg("1")
-                    .arg("NX")
-                    .arg("PX")
-                    .arg(periodic_lock_ttl_ms(schedule))
-                    .query_async(conn)
-                    .await?;
-                if locked.is_none() {
-                    continue;
-                }
+                let last_key = self.client.periodic_last_key(descriptor.name);
+                let last_fired_ms = redis_get_u64(conn, &last_key).await?;
+                for due_ms in due_periodic_slots(
+                    schedule,
+                    now_ms,
+                    self.config.scheduler_interval,
+                    last_fired_ms,
+                )? {
+                    let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
+                    let locked: Option<String> = redis::cmd("SET")
+                        .arg(lock_key)
+                        .arg("1")
+                        .arg("NX")
+                        .arg("PX")
+                        .arg(periodic_lock_ttl_ms(schedule))
+                        .query_async(&mut *conn)
+                        .await?;
+                    if locked.is_none() {
+                        continue;
+                    }
 
-                let envelope = JobEnvelope::new(
-                    descriptor.name,
-                    descriptor.queue,
-                    descriptor.retry_policy.max_attempts,
-                    &(),
-                    None,
-                )?;
-                xadd_envelope(conn, &self.client.queue_key(descriptor.queue), &envelope).await?;
+                    let envelope = JobEnvelope::new(
+                        descriptor.name,
+                        descriptor.queue,
+                        descriptor.retry_policy.max_attempts,
+                        &(),
+                        None,
+                    )?;
+                    xadd_envelope(
+                        &mut *conn,
+                        &self.client.queue_key(descriptor.queue),
+                        &envelope,
+                    )
+                    .await?;
+                    redis_set_u64(&mut *conn, &last_key, due_ms).await?;
+                }
             }
             Ok(())
         }
@@ -1074,6 +1095,19 @@ return redis.call(
         Ok(true)
     }
 
+    fn memory_periodic_last_fired(store: &MemoryStore, key: &str) -> JobResult<Option<u64>> {
+        Ok(memory_state(store)?.periodic_last_fired.get(key).copied())
+    }
+
+    fn memory_set_periodic_last_fired(
+        store: &MemoryStore,
+        key: String,
+        due_ms: u64,
+    ) -> JobResult<()> {
+        memory_state(store)?.periodic_last_fired.insert(key, due_ms);
+        Ok(())
+    }
+
     fn memory_move_to_dead(
         store: &MemoryStore,
         envelope: JobEnvelope,
@@ -1202,6 +1236,29 @@ return redis.call(
         Ok(seconds.saturating_mul(1_000).saturating_add(micros / 1_000))
     }
 
+    async fn redis_get_u64(conn: &mut MultiplexedConnection, key: &str) -> JobResult<Option<u64>> {
+        let raw: Option<String> = redis::cmd("GET").arg(key).query_async(conn).await?;
+        raw.map(|value| {
+            value.parse::<u64>().map_err(|err| {
+                JobError::Env(format!("Redis key `{key}` should contain a u64: {err}"))
+            })
+        })
+        .transpose()
+    }
+
+    async fn redis_set_u64(
+        conn: &mut MultiplexedConnection,
+        key: &str,
+        value: u64,
+    ) -> JobResult<()> {
+        let _: () = redis::cmd("SET")
+            .arg(key)
+            .arg(value)
+            .query_async(conn)
+            .await?;
+        Ok(())
+    }
+
     fn envelope_from_stream(map: &HashMap<String, Value>) -> JobResult<JobEnvelope> {
         let job_id = field::<String>(map, "job_id")?;
         let job_name = field::<String>(map, "job_name")?;
@@ -1297,36 +1354,54 @@ return redis.call(
         Ok(Duration::from_millis(value))
     }
 
-    fn due_periodic_slot(
+    fn due_periodic_slots(
         schedule: PeriodicSchedule,
         now_ms: u64,
         scheduler_interval: Duration,
-    ) -> JobResult<Option<u64>> {
+        last_fired_ms: Option<u64>,
+    ) -> JobResult<Vec<u64>> {
         match schedule {
             PeriodicSchedule::Every { interval_ms } => {
                 if interval_ms == 0 {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 }
-                Ok(Some((now_ms / interval_ms) * interval_ms))
+                let due_ms = (now_ms / interval_ms) * interval_ms;
+                if last_fired_ms.is_some_and(|last| last >= due_ms) {
+                    Ok(Vec::new())
+                } else {
+                    Ok(vec![due_ms])
+                }
             }
             PeriodicSchedule::Cron { expr } => {
                 let schedule = Schedule::from_str(expr).map_err(|err| {
                     JobError::Env(format!("invalid cron expression `{expr}`: {err}"))
                 })?;
-                let interval = ChronoDuration::from_std(scheduler_interval)
-                    .unwrap_or_else(|_| ChronoDuration::seconds(1));
                 let now = chrono::DateTime::<Utc>::from_timestamp_millis(now_ms as i64)
                     .ok_or_else(|| JobError::Time(format!("invalid timestamp ms: {now_ms}")))?;
-                let window_start = now - interval;
-                let Some(next) = schedule.after(&window_start).next() else {
-                    return Ok(None);
+                let window_start = match last_fired_ms {
+                    Some(last_fired_ms) => {
+                        chrono::DateTime::<Utc>::from_timestamp_millis(last_fired_ms as i64)
+                            .ok_or_else(|| {
+                                JobError::Time(format!(
+                                    "invalid last-fired timestamp ms: {last_fired_ms}"
+                                ))
+                            })?
+                    }
+                    None => {
+                        let interval = ChronoDuration::from_std(scheduler_interval)
+                            .unwrap_or_else(|_| ChronoDuration::seconds(1));
+                        now - interval
+                    }
                 };
-                let due_ms = next.timestamp_millis();
-                if due_ms >= 0 && due_ms as u64 <= now_ms {
-                    Ok(Some(due_ms as u64))
-                } else {
-                    Ok(None)
-                }
+
+                Ok(schedule
+                    .after(&window_start)
+                    .take(DEFAULT_MAX_PERIODIC_CATCH_UP)
+                    .filter_map(|due| {
+                        let due_ms = due.timestamp_millis();
+                        (due_ms >= 0 && due_ms as u64 <= now_ms).then_some(due_ms as u64)
+                    })
+                    .collect())
             }
         }
     }
@@ -1464,6 +1539,44 @@ return redis.call(
             );
             assert!(parse_positive_millis("POCOPINE_JOB_VISIBILITY_MS", "0").is_err());
             assert!(parse_positive_millis("POCOPINE_JOB_VISIBILITY_MS", "banana").is_err());
+        }
+
+        #[test]
+        fn cron_due_slots_catch_up_from_last_fired_time() {
+            let last = chrono::DateTime::parse_from_rfc3339("2026-05-02T00:00:00Z")
+                .unwrap()
+                .timestamp_millis() as u64;
+            let now = chrono::DateTime::parse_from_rfc3339("2026-05-02T00:00:15Z")
+                .unwrap()
+                .timestamp_millis() as u64;
+
+            let slots = due_periodic_slots(
+                PeriodicSchedule::Cron {
+                    expr: "0/5 * * * * * *",
+                },
+                now,
+                Duration::from_secs(1),
+                Some(last),
+            )
+            .unwrap();
+
+            assert_eq!(slots.len(), 3);
+            assert_eq!(slots[0], last + 5_000);
+            assert_eq!(slots[1], last + 10_000);
+            assert_eq!(slots[2], last + 15_000);
+        }
+
+        #[test]
+        fn every_due_slot_does_not_repeat_last_fired_slot() {
+            let slots = due_periodic_slots(
+                PeriodicSchedule::Every { interval_ms: 5_000 },
+                12_000,
+                Duration::from_secs(1),
+                Some(10_000),
+            )
+            .unwrap();
+
+            assert!(slots.is_empty());
         }
     }
 }

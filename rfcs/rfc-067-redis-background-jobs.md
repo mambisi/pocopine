@@ -156,6 +156,10 @@ computes the due slot, acquires a backend-specific lock for that job/slot
 job with a unit payload. From that point on the job uses the same retry and
 dead-letter path as manually enqueued work.
 
+Workers persist the last fired periodic slot per job. Cron jobs evaluate the
+window `(last_fired_at_ms, now]`, capped per loop, so a slow scheduler
+iteration catches up missed firings instead of dropping them permanently.
+
 ## 5. Example Worker
 
 ```rust
