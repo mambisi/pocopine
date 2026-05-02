@@ -647,6 +647,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
+name = "fat-routes"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "pocopine",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

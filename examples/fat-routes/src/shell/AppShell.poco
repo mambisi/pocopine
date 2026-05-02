@@ -1,0 +1,8 @@
+<div class="app-shell">
+  <nav>
+    <a href="/" pp-route>Charts</a>
+    <a href="/editor" pp-route>Editor</a>
+    <a href="/reports" pp-route>Reports</a>
+  </nav>
+  <pp-outlet></pp-outlet>
+</div>

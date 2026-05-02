@@ -655,6 +655,104 @@ fn split_strict(release: bool, strict: bool, no_strict: bool) -> bool {
     strict || (release && !no_strict)
 }
 
+fn validate_split_source_layout(path: &Path) -> Result<()> {
+    let src = path.join("src");
+    if !src.exists() {
+        return Ok(());
+    }
+
+    let routes_dir = src.join("routes");
+    let mut route_ids = BTreeSet::new();
+    if routes_dir.is_dir() {
+        for entry in std::fs::read_dir(&routes_dir)
+            .with_context(|| format!("read {}", routes_dir.display()))?
+        {
+            let entry = entry.with_context(|| format!("read entry in {}", routes_dir.display()))?;
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    route_ids.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    collect_rs_files(&src, &mut files)?;
+    for file in files {
+        validate_split_source_file(&src, &file, &route_ids)?;
+    }
+
+    Ok(())
+}
+
+fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("read entry in {}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, files)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn validate_split_source_file(src: &Path, file: &Path, route_ids: &BTreeSet<String>) -> Result<()> {
+    let rel = file.strip_prefix(src).unwrap_or(file);
+    let parts = rel
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let text = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+
+    match parts.as_slice() {
+        ["shell", ..] | ["shell.rs"] => {
+            if references_crate_module(&text, "routes") {
+                bail!(
+                    "split strict mode forbids shell code from importing route modules; \
+                     move shared code under `shared` or lazy-load it from a route\n --> {}",
+                    file.display()
+                );
+            }
+        }
+        ["shared", ..] | ["shared.rs"] => {
+            if references_crate_module(&text, "routes") || references_crate_module(&text, "shell") {
+                bail!(
+                    "split strict mode forbids shared code from importing `shell` or `routes`; \
+                     shared must be route-independent\n --> {}",
+                    file.display()
+                );
+            }
+        }
+        ["routes", route_id, ..] => {
+            for other in route_ids {
+                if other == route_id {
+                    continue;
+                }
+                let needle = format!("crate::routes::{other}");
+                if text.contains(&needle) {
+                    bail!(
+                        "split strict mode forbids route `{route_id}` from importing sibling route `{other}`; \
+                         move common code under `shared`\n --> {}",
+                        file.display()
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn references_crate_module(text: &str, module: &str) -> bool {
+    text.contains(&format!("crate::{module}"))
+        || text.contains(&format!("use {module}::"))
+        || text.contains(&format!("pub use {module}::"))
+}
+
 fn build_entry(path: &Path, release: bool, split: bool, strict: bool) -> Result<()> {
     if split {
         build_split(path, release, strict)
@@ -688,6 +786,9 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         .with_context(|| format!("could not resolve project path: {}", path.display()))?;
     let base = package_name(&path)?;
     println!("▶ split wasm-pack build ({})", path.display());
+    if strict {
+        validate_split_source_layout(&path)?;
+    }
     clean_split_artifacts(&path, &base)?;
     let build_id = split_build_id()?;
     let ctx = SplitBuildCtx {
@@ -2017,7 +2118,17 @@ fn dev(args: &ServeArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_static_descriptor_template;
+    use super::{
+        is_static_descriptor_template, references_crate_module, validate_split_source_layout,
+    };
+
+    fn temp_project(name: &str) -> std::path::PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("pocopine-{name}-{suffix}"))
+    }
 
     #[test]
     fn static_descriptor_allows_static_route_links_and_urls() {
@@ -2045,6 +2156,73 @@ mod tests {
         ));
         assert!(!is_static_descriptor_template(
             r#"<template pp-if="ready"><p>Ready</p></template>"#
+        ));
+    }
+
+    #[test]
+    fn strict_source_layout_rejects_shell_to_route_imports() {
+        let project = temp_project("shell-route-import");
+        let shell = project.join("src/shell");
+        std::fs::create_dir_all(&shell).unwrap();
+        std::fs::write(shell.join("mod.rs"), "use crate::routes::home::Home;\n").unwrap();
+
+        let result = validate_split_source_layout(&project);
+        std::fs::remove_dir_all(&project).ok();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn strict_source_layout_rejects_sibling_route_imports() {
+        let project = temp_project("sibling-route-import");
+        let home = project.join("src/routes/home");
+        let story = project.join("src/routes/story");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(home.join("mod.rs"), "use crate::routes::story::Story;\n").unwrap();
+        std::fs::write(story.join("mod.rs"), "pub struct Story;\n").unwrap();
+
+        let result = validate_split_source_layout(&project);
+        std::fs::remove_dir_all(&project).ok();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn strict_source_layout_allows_routes_to_import_shared() {
+        let project = temp_project("route-shared-import");
+        let home = project.join("src/routes/home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("mod.rs"),
+            "use crate::shared::format_title;\npub fn run() { let _ = format_title(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("src/shared.rs"),
+            "pub fn format_title() -> &'static str { \"ok\" }\n",
+        )
+        .unwrap();
+
+        let result = validate_split_source_layout(&project);
+        std::fs::remove_dir_all(&project).ok();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn crate_module_reference_helper_is_boundary_specific() {
+        assert!(references_crate_module(
+            "use crate::routes::home;",
+            "routes"
+        ));
+        assert!(references_crate_module(
+            "crate::routes::home::Home",
+            "routes"
+        ));
+        assert!(!references_crate_module(
+            "let path = \"crate::route_not_really\";",
+            "routes"
         ));
     }
 }

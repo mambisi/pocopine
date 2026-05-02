@@ -14,6 +14,7 @@ members = [
     "crates/pocopine-wasm-split",
     "examples/blog",
     "examples/counter",
+    "examples/fat-routes",
     "examples/hn",
     "jsbench/pocopine",
     "jsbench/leptos",
