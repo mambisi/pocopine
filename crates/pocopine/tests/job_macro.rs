@@ -127,6 +127,7 @@ fn memory_backend_worker_runs_enqueued_job() {
             block_ms: 0,
             visibility_timeout: Duration::from_secs(60),
             scheduler_interval: Duration::from_millis(1),
+            max_periodic_catch_up: 16,
             batch_size: 10,
         })
         .unwrap();

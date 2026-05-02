@@ -84,6 +84,8 @@ worker-bin = "worker"
 - If neither variable is set, memory is selected.
 - `POCOPINE_JOB_VISIBILITY_MS` configures Redis pending-entry reclaim
   timeout and defaults to `60000`.
+- `POCOPINE_JOB_PERIODIC_CATCH_UP_MAX` configures the maximum missed
+  periodic slots a worker enqueues in one loop and defaults to `16`.
 - `POCOPINE_JOB_CONSUMER` overrides the Redis Streams consumer name. If it
   is unset, Pocopine derives a process-unique name from host, pid, and a
   process token.
@@ -158,7 +160,8 @@ firing creates a fresh envelope.
 
 Job IDs include timestamp, host/process identity, and process-local counter
 so multiple workers do not mint the same id during the same millisecond and
-retry jitter does not collapse across hosts.
+retry jitter does not collapse across hosts. The separator is `:` because
+the id is an internal metadata value, not a stable external format.
 
 Periodic jobs are not executed directly by the scheduler loop. The worker
 computes the due slot, acquires a backend-specific lock for that job/slot
@@ -169,6 +172,8 @@ dead-letter path as manually enqueued work.
 Workers persist the last fired periodic slot per job. Cron jobs evaluate the
 window `(last_fired_at_ms, now]`, capped per loop, so a slow scheduler
 iteration catches up missed firings instead of dropping them permanently.
+Operators can widen the per-loop cap with
+`POCOPINE_JOB_PERIODIC_CATCH_UP_MAX` for explicit backfill scenarios.
 
 ## 5. Example Worker
 

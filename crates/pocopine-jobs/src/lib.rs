@@ -534,6 +534,8 @@ return redis.call(
         pub visibility_timeout: Duration,
         /// Scheduler polling interval.
         pub scheduler_interval: Duration,
+        /// Maximum missed periodic slots to enqueue in one loop.
+        pub max_periodic_catch_up: usize,
         /// Max jobs read/promoted per loop.
         pub batch_size: usize,
     }
@@ -566,6 +568,10 @@ return redis.call(
                     DEFAULT_VISIBILITY_TIMEOUT_MS,
                 )?,
                 scheduler_interval: Duration::from_millis(DEFAULT_SCHEDULER_INTERVAL_MS),
+                max_periodic_catch_up: usize_env(
+                    "POCOPINE_JOB_PERIODIC_CATCH_UP_MAX",
+                    DEFAULT_MAX_PERIODIC_CATCH_UP,
+                )?,
                 batch_size: DEFAULT_BATCH_SIZE,
             })
         }
@@ -697,6 +703,7 @@ return redis.call(
                     now_ms,
                     self.config.scheduler_interval,
                     last_fired_ms,
+                    self.config.max_periodic_catch_up,
                 )? {
                     let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
                     let expires_at_ms = now_ms.saturating_add(periodic_lock_ttl_ms(schedule));
@@ -762,6 +769,7 @@ return redis.call(
                     now_ms,
                     self.config.scheduler_interval,
                     last_fired_ms,
+                    self.config.max_periodic_catch_up,
                 )? {
                     let lock_key = self.client.periodic_lock_key(descriptor.name, due_ms);
                     let locked: Option<String> = redis::cmd("SET")
@@ -1405,11 +1413,30 @@ return redis.call(
         Ok(Duration::from_millis(value))
     }
 
+    fn usize_env(name: &str, default_value: usize) -> JobResult<usize> {
+        match std::env::var(name) {
+            Ok(raw) => parse_positive_usize(name, &raw),
+            Err(_) => Ok(default_value),
+        }
+    }
+
+    fn parse_positive_usize(name: &str, raw: &str) -> JobResult<usize> {
+        let value = raw
+            .trim()
+            .parse::<usize>()
+            .map_err(|err| JobError::Env(format!("{name} must be a positive integer: {err}")))?;
+        if value == 0 {
+            return Err(JobError::Env(format!("{name} must be greater than 0")));
+        }
+        Ok(value)
+    }
+
     fn due_periodic_slots(
         schedule: PeriodicSchedule,
         now_ms: u64,
         scheduler_interval: Duration,
         last_fired_ms: Option<u64>,
+        max_catch_up: usize,
     ) -> JobResult<Vec<u64>> {
         match schedule {
             PeriodicSchedule::Every { interval_ms } => {
@@ -1447,7 +1474,7 @@ return redis.call(
 
                 Ok(schedule
                     .after(&window_start)
-                    .take(DEFAULT_MAX_PERIODIC_CATCH_UP)
+                    .take(max_catch_up)
                     .filter_map(|due| {
                         let due_ms = due.timestamp_millis();
                         (due_ms >= 0 && due_ms as u64 <= now_ms).then_some(due_ms as u64)
@@ -1597,6 +1624,16 @@ return redis.call(
         }
 
         #[test]
+        fn positive_usize_env_parser_rejects_zero_and_invalid_values() {
+            assert_eq!(
+                parse_positive_usize("POCOPINE_JOB_PERIODIC_CATCH_UP_MAX", "32").unwrap(),
+                32
+            );
+            assert!(parse_positive_usize("POCOPINE_JOB_PERIODIC_CATCH_UP_MAX", "0").is_err());
+            assert!(parse_positive_usize("POCOPINE_JOB_PERIODIC_CATCH_UP_MAX", "banana").is_err());
+        }
+
+        #[test]
         fn cron_due_slots_catch_up_from_last_fired_time() {
             let last = chrono::DateTime::parse_from_rfc3339("2026-05-02T00:00:00Z")
                 .unwrap()
@@ -1612,6 +1649,7 @@ return redis.call(
                 now,
                 Duration::from_secs(1),
                 Some(last),
+                DEFAULT_MAX_PERIODIC_CATCH_UP,
             )
             .unwrap();
 
@@ -1622,12 +1660,38 @@ return redis.call(
         }
 
         #[test]
+        fn cron_due_slots_respect_catch_up_cap() {
+            let last = chrono::DateTime::parse_from_rfc3339("2026-05-02T00:00:00Z")
+                .unwrap()
+                .timestamp_millis() as u64;
+            let now = chrono::DateTime::parse_from_rfc3339("2026-05-02T00:00:15Z")
+                .unwrap()
+                .timestamp_millis() as u64;
+
+            let slots = due_periodic_slots(
+                PeriodicSchedule::Cron {
+                    expr: "0/5 * * * * * *",
+                },
+                now,
+                Duration::from_secs(1),
+                Some(last),
+                2,
+            )
+            .unwrap();
+
+            assert_eq!(slots.len(), 2);
+            assert_eq!(slots[0], last + 5_000);
+            assert_eq!(slots[1], last + 10_000);
+        }
+
+        #[test]
         fn every_due_slot_does_not_repeat_last_fired_slot() {
             let slots = due_periodic_slots(
                 PeriodicSchedule::Every { interval_ms: 5_000 },
                 12_000,
                 Duration::from_secs(1),
                 Some(10_000),
+                DEFAULT_MAX_PERIODIC_CATCH_UP,
             )
             .unwrap();
 
@@ -1684,6 +1748,7 @@ return redis.call(
                     block_ms: 0,
                     visibility_timeout: Duration::from_secs(60),
                     scheduler_interval: Duration::from_millis(1),
+                    max_periodic_catch_up: DEFAULT_MAX_PERIODIC_CATCH_UP,
                     batch_size: 10,
                 })
                 .unwrap();
