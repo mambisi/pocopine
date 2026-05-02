@@ -4,6 +4,9 @@
 //! `#[handlers]` attribute macros from `pocopine-macros`. App code should
 //! depend on `pocopine` and pull everything from `pocopine::prelude::*`.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use pocopine_auth::RequestContext;
+pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
 pub use pocopine_core::{
@@ -30,9 +33,23 @@ pub use pocopine_core::{
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
+#[cfg(not(target_arch = "wasm32"))]
+pub use pocopine_jobs::{
+    JobClient, JobDescriptor, JobFuture, JobHandler, JobId, PeriodicSchedule, Worker, WorkerConfig,
+};
+pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
-pub use pocopine_macros::{app, component, handlers, server, store, Emit};
+pub use pocopine_macros::{app, component, handlers, job, protected, server, store, Emit};
+
+pub mod auth {
+    pub use pocopine_auth::*;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod jobs {
+    pub use pocopine_jobs::*;
+}
 
 pub mod prelude {
     #[allow(deprecated)]
@@ -41,10 +58,11 @@ pub mod prelude {
         batch, component, computed, create_context, cx, dispatch, dispatch_event, effect, emit,
         emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
         emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, handlers,
-        inject_key, on, on_cleanup, on_emit, prepend_list_inline, remove_list_at_inline, rw_signal,
-        signal, spawn, spawn_latest, spawn_scoped, store, this, watch, App, Component,
-        ComponentState, Computed, ContextKey, ContextMarker, Emit, Handle, Inject, NearestParent,
-        Parent, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        inject_key, job, on, on_cleanup, on_emit, prepend_list_inline, protected,
+        remove_list_at_inline, rw_signal, signal, spawn, spawn_latest, spawn_scoped, store, this,
+        watch, App, AuthUser, Component, ComponentState, Computed, ContextKey, ContextMarker, Emit,
+        Handle, Inject, JobError, JobResult, NearestParent, Parent, Permission, Principal, Role,
+        RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }
@@ -66,6 +84,8 @@ pub mod __private {
         Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener, StaticLiteral,
         StaticRowPlan, Store, WriteOrigin,
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use pocopine_jobs as jobs;
     // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.
     pub use phf;
     // RFC-058 Phase 2 — template-plan shape + registry. The

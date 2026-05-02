@@ -16,7 +16,9 @@ mount-profiler = ["pocopine-core/mount-profiler"]
 runtime-expr-fallback = ["pocopine-core/runtime-expr-fallback"]
 
 [dependencies]
+pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
+pocopine-jobs = { workspace = true }
 pocopine-macros = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
@@ -29,6 +31,10 @@ web-sys = { version = "0.3", features = ["Element"] }
 phf = { version = "0.13", features = ["macros"] }
 
 [dev-dependencies]
+pocopine-server = { path = "../pocopine-server" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
 wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = [
     "CustomEvent",

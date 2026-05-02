@@ -19,6 +19,12 @@ use serde::{Deserialize, Serialize};
 pub enum ServerError {
     /// An application-level error produced on the server side.
     App(String),
+    /// Authentication is required but missing or invalid.
+    Unauthorized(String),
+    /// Authentication succeeded, but this caller cannot perform the action.
+    Forbidden(String),
+    /// The request payload was malformed or exceeded the framework body limit.
+    BadRequest(String),
     /// Transport / deserialization failure on the client side.
     Network(String),
 }
@@ -27,12 +33,32 @@ impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ServerError::App(msg) => write!(f, "server error: {msg}"),
+            ServerError::Unauthorized(msg) => write!(f, "unauthorized: {msg}"),
+            ServerError::Forbidden(msg) => write!(f, "forbidden: {msg}"),
+            ServerError::BadRequest(msg) => write!(f, "bad request: {msg}"),
             ServerError::Network(msg) => write!(f, "network error: {msg}"),
         }
     }
 }
 
 impl std::error::Error for ServerError {}
+
+impl ServerError {
+    /// Build an authentication failure.
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        ServerError::Unauthorized(msg.into())
+    }
+
+    /// Build an authorization failure.
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        ServerError::Forbidden(msg.into())
+    }
+
+    /// Build a malformed request failure.
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        ServerError::BadRequest(msg.into())
+    }
+}
 
 impl From<String> for ServerError {
     fn from(s: String) -> Self {
