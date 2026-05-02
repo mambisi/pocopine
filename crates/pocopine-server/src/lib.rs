@@ -27,6 +27,7 @@ pub use tower;
 pub use tower_http;
 
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::Router;
 use tower_http::services::ServeDir;
@@ -44,8 +45,10 @@ pub mod auth {
 ///
 /// Set `POCOPINE_SERVER_FUNCTION_BODY_LIMIT` to override the default.
 /// Values may be raw bytes or use `kb`, `kib`, `mb`, or `mib` suffixes.
+/// Resolved once on first access and reused for the lifetime of the process.
 pub fn server_function_body_limit() -> usize {
-    match std::env::var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT") {
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    *LIMIT.get_or_init(|| match std::env::var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT") {
         Ok(raw) => match parse_body_limit(&raw) {
             Some(limit) => limit,
             None => {
@@ -56,7 +59,7 @@ pub fn server_function_body_limit() -> usize {
             }
         },
         Err(_) => DEFAULT_SERVER_FUNCTION_BODY_LIMIT,
-    }
+    })
 }
 
 fn parse_body_limit(raw: &str) -> Option<usize> {

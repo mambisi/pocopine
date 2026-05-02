@@ -100,7 +100,7 @@ mod host {
     const DEFAULT_WORKER_ERROR_BACKOFF_MAX_MS: u64 = 30_000;
     const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
     const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
-    const PROMOTE_SCHEDULED_SCRIPT: &str = r#"
+    const PROMOTE_SCHEDULED_SCRIPT_SRC: &str = r#"
 local removed = redis.call('ZREM', KEYS[1], ARGV[1])
 if removed == 0 then
   return 0
@@ -127,7 +127,7 @@ return redis.call(
   ARGV[9]
 )
 "#;
-    const SCHEDULE_RETRY_AND_ACK_SCRIPT: &str = r#"
+    const SCHEDULE_RETRY_AND_ACK_SCRIPT_SRC: &str = r#"
 local acked = redis.call('XACK', KEYS[2], ARGV[3], ARGV[4])
 if acked == 0 then
   return 0
@@ -135,7 +135,7 @@ end
 redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
 return acked
 "#;
-    const DEAD_LETTER_AND_ACK_SCRIPT: &str = r#"
+    const DEAD_LETTER_AND_ACK_SCRIPT_SRC: &str = r#"
 local acked = redis.call('XACK', KEYS[2], ARGV[9], ARGV[10])
 if acked == 0 then
   return 0
@@ -162,6 +162,24 @@ return redis.call(
   ARGV[8]
 )
 "#;
+
+    /// Cached `EVALSHA`-able scripts. The `redis` crate's `Script` LOADs
+    /// the body once and uses `EVALSHA` thereafter, avoiding shipping the
+    /// Lua source over the wire on every promote/retry/dead-letter call.
+    fn promote_scheduled_script() -> &'static redis::Script {
+        static SCRIPT: OnceLock<redis::Script> = OnceLock::new();
+        SCRIPT.get_or_init(|| redis::Script::new(PROMOTE_SCHEDULED_SCRIPT_SRC))
+    }
+
+    fn schedule_retry_and_ack_script() -> &'static redis::Script {
+        static SCRIPT: OnceLock<redis::Script> = OnceLock::new();
+        SCRIPT.get_or_init(|| redis::Script::new(SCHEDULE_RETRY_AND_ACK_SCRIPT_SRC))
+    }
+
+    fn dead_letter_and_ack_script() -> &'static redis::Script {
+        static SCRIPT: OnceLock<redis::Script> = OnceLock::new();
+        SCRIPT.get_or_init(|| redis::Script::new(DEAD_LETTER_AND_ACK_SCRIPT_SRC))
+    }
 
     static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
     static MEMORY_STORES: OnceLock<Mutex<HashMap<String, Arc<MemoryStore>>>> = OnceLock::new();
@@ -304,11 +322,33 @@ return redis.call(
         inventory::iter::<JobDescriptor>.into_iter()
     }
 
+    /// Pre-formatted Redis keys for a given app namespace.
+    ///
+    /// `scheduled` and `dead` are constant per-app and are hit on every
+    /// promote, retry, and dead-letter; caching avoids re-formatting them
+    /// on the worker hot path.
+    #[derive(Debug)]
+    struct JobKeys {
+        scheduled: String,
+        dead: String,
+    }
+
+    impl JobKeys {
+        fn new(app: &str) -> Self {
+            Self {
+                scheduled: format!("pocopine:{app}:scheduled"),
+                dead: format!("pocopine:{app}:dead"),
+            }
+        }
+    }
+
     /// Client for enqueueing and scheduling background jobs.
     #[derive(Clone, Debug)]
     pub struct JobClient {
         backend: JobBackend,
         app: String,
+        keys: Arc<JobKeys>,
+        memory_store: Arc<OnceLock<Arc<MemoryStore>>>,
         redis_connection: Arc<Mutex<Option<MultiplexedConnection>>>,
     }
 
@@ -316,38 +356,37 @@ return redis.call(
         /// Build from `POCOPINE_JOB_BACKEND`, `POCOPINE_REDIS_URL`, and
         /// optional `POCOPINE_APP_NAME`.
         pub fn from_env() -> JobResult<Self> {
-            Ok(Self {
-                backend: job_backend_from_env()?,
-                app: std::env::var("POCOPINE_APP_NAME")
-                    .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string()),
-                redis_connection: Arc::new(Mutex::new(None)),
-            })
+            let app = std::env::var("POCOPINE_APP_NAME")
+                .unwrap_or_else(|_| DEFAULT_APP_NAME.to_string());
+            Ok(Self::build(job_backend_from_env()?, app))
         }
 
         /// Build a client with explicit Redis URL and app namespace.
         pub fn new(redis_url: impl Into<String>, app: impl Into<String>) -> Self {
-            Self {
-                backend: JobBackend::Redis {
+            Self::build(
+                JobBackend::Redis {
                     url: redis_url.into(),
                 },
-                app: app.into(),
-                redis_connection: Arc::new(Mutex::new(None)),
-            }
+                app.into(),
+            )
         }
 
         /// Build a process-local memory client with an app namespace.
         pub fn memory(app: impl Into<String>) -> Self {
-            Self {
-                backend: JobBackend::Memory,
-                app: app.into(),
-                redis_connection: Arc::new(Mutex::new(None)),
-            }
+            Self::build(JobBackend::Memory, app.into())
         }
 
         fn for_backend(backend: JobBackend, app: impl Into<String>) -> Self {
+            Self::build(backend, app.into())
+        }
+
+        fn build(backend: JobBackend, app: String) -> Self {
+            let keys = Arc::new(JobKeys::new(&app));
             Self {
                 backend,
-                app: app.into(),
+                app,
+                keys,
+                memory_store: Arc::new(OnceLock::new()),
                 redis_connection: Arc::new(Mutex::new(None)),
             }
         }
@@ -371,7 +410,7 @@ return redis.call(
                     xadd_envelope(&mut conn, &self.queue_key(queue), &envelope).await?;
                 }
                 JobBackend::Memory => {
-                    let store = memory_store(&self.app)?;
+                    let store = self.cached_memory_store()?;
                     memory_enqueue_envelope(&store, envelope)?;
                 }
             }
@@ -420,7 +459,7 @@ return redis.call(
                         .await?;
                 }
                 JobBackend::Memory => {
-                    let store = memory_store(&self.app)?;
+                    let store = self.cached_memory_store()?;
                     memory_schedule_envelope(&store, envelope)?;
                 }
             }
@@ -498,12 +537,12 @@ return redis.call(
             format!("pocopine:{}:queue:{queue}", self.app)
         }
 
-        fn scheduled_key(&self) -> String {
-            format!("pocopine:{}:scheduled", self.app)
+        fn scheduled_key(&self) -> &str {
+            &self.keys.scheduled
         }
 
-        fn dead_key(&self) -> String {
-            format!("pocopine:{}:dead", self.app)
+        fn dead_key(&self) -> &str {
+            &self.keys.dead
         }
 
         fn periodic_lock_key(&self, job_name: &str, due_ms: u64) -> String {
@@ -512,6 +551,17 @@ return redis.call(
 
         fn periodic_last_key(&self, job_name: &str) -> String {
             format!("pocopine:{}:periodic:last:{job_name}", self.app)
+        }
+
+        /// Resolve and cache the per-app `MemoryStore` handle so worker
+        /// loops don't lock the global registry on every iteration.
+        fn cached_memory_store(&self) -> JobResult<Arc<MemoryStore>> {
+            if let Some(store) = self.memory_store.get() {
+                return Ok(store.clone());
+            }
+            let store = memory_store(&self.app)?;
+            let _ = self.memory_store.set(store.clone());
+            Ok(store)
         }
     }
 
@@ -676,7 +726,7 @@ return redis.call(
             self.enqueue_due_periodic_jobs_memory()?;
             self.promote_due_jobs_memory()?;
 
-            let store = memory_store(&self.config.app)?;
+            let store = self.client.cached_memory_store()?;
             let envelopes =
                 memory_pop_ready_envelopes(&store, &self.config.queues, self.config.batch_size)?;
             let handled = envelopes.len();
@@ -688,7 +738,7 @@ return redis.call(
 
         fn enqueue_due_periodic_jobs_memory(&self) -> JobResult<()> {
             let now_ms = epoch_ms(SystemTime::now())?;
-            let store = memory_store(&self.config.app)?;
+            let store = self.client.cached_memory_store()?;
             for descriptor in self.descriptors.values() {
                 let Some(schedule) = descriptor.periodic else {
                     continue;
@@ -726,7 +776,7 @@ return redis.call(
         }
 
         fn promote_due_jobs_memory(&self) -> JobResult<()> {
-            let store = memory_store(&self.config.app)?;
+            let store = self.client.cached_memory_store()?;
             memory_promote_due_envelopes(&store, epoch_ms(SystemTime::now())?)
         }
 
@@ -822,7 +872,7 @@ return redis.call(
                 envelope.scheduled_for_ms = None;
                 let promoted = promote_scheduled_envelope(
                     conn,
-                    &self.client.scheduled_key(),
+                    self.client.scheduled_key(),
                     &self.client.queue_key(&envelope.queue),
                     &raw,
                     &envelope,
@@ -937,7 +987,7 @@ return redis.call(
                         retry.scheduled_for_ms = Some(due_ms);
                         schedule_retry_and_ack(
                             conn,
-                            &self.client.scheduled_key(),
+                            self.client.scheduled_key(),
                             stream,
                             &self.config.group,
                             stream_id,
@@ -976,7 +1026,7 @@ return redis.call(
                         let due_ms = epoch_ms(SystemTime::now())?
                             .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
                         retry.scheduled_for_ms = Some(due_ms);
-                        let store = memory_store(&self.config.app)?;
+                        let store = self.client.cached_memory_store()?;
                         memory_schedule_envelope(&store, retry)?;
                     } else {
                         self.move_to_dead_memory(envelope, &err.to_string())?;
@@ -987,7 +1037,7 @@ return redis.call(
         }
 
         fn move_to_dead_memory(&self, envelope: JobEnvelope, error: &str) -> JobResult<()> {
-            let store = memory_store(&self.config.app)?;
+            let store = self.client.cached_memory_store()?;
             memory_move_to_dead(&store, envelope, error)
         }
 
@@ -1001,7 +1051,7 @@ return redis.call(
         ) -> JobResult<()> {
             dead_letter_and_ack(
                 conn,
-                &self.client.dead_key(),
+                self.client.dead_key(),
                 stream,
                 &self.config.group,
                 stream_id,
@@ -1216,21 +1266,19 @@ return redis.call(
         envelope: &JobEnvelope,
     ) -> JobResult<bool> {
         let payload = serde_json::to_string(&envelope.payload)?;
-        let value: Value = redis::cmd("EVAL")
-            .arg(PROMOTE_SCHEDULED_SCRIPT)
-            .arg(2)
-            .arg(scheduled_key)
-            .arg(queue_key)
+        let value: Value = promote_scheduled_script()
+            .key(scheduled_key)
+            .key(queue_key)
             .arg(raw_scheduled_envelope)
-            .arg(&envelope.job_id)
-            .arg(&envelope.job_name)
-            .arg(&envelope.queue)
+            .arg(envelope.job_id.as_str())
+            .arg(envelope.job_name.as_str())
+            .arg(envelope.queue.as_str())
             .arg(payload)
             .arg(envelope.attempt)
             .arg(envelope.max_attempts)
             .arg(envelope.created_at_ms)
             .arg(0_u64)
-            .query_async(conn)
+            .invoke_async(conn)
             .await?;
         Ok(!matches!(value, Value::Nil | Value::Int(0)))
     }
@@ -1245,16 +1293,14 @@ return redis.call(
         due_ms: u64,
     ) -> JobResult<()> {
         let raw = serde_json::to_string(envelope)?;
-        let _: i32 = redis::cmd("EVAL")
-            .arg(SCHEDULE_RETRY_AND_ACK_SCRIPT)
-            .arg(2)
-            .arg(scheduled_key)
-            .arg(stream)
+        let _: i32 = schedule_retry_and_ack_script()
+            .key(scheduled_key)
+            .key(stream)
             .arg(due_ms)
             .arg(raw)
             .arg(group)
             .arg(stream_id)
-            .query_async(conn)
+            .invoke_async(conn)
             .await?;
         Ok(())
     }
@@ -1270,14 +1316,12 @@ return redis.call(
     ) -> JobResult<()> {
         let raw = serde_json::to_string(envelope)?;
         let failed_at_ms = redis_time_ms(&mut *conn).await?;
-        let _: Value = redis::cmd("EVAL")
-            .arg(DEAD_LETTER_AND_ACK_SCRIPT)
-            .arg(2)
-            .arg(dead_key)
-            .arg(stream)
-            .arg(&envelope.job_id)
-            .arg(&envelope.job_name)
-            .arg(&envelope.queue)
+        let _: Value = dead_letter_and_ack_script()
+            .key(dead_key)
+            .key(stream)
+            .arg(envelope.job_id.as_str())
+            .arg(envelope.job_name.as_str())
+            .arg(envelope.queue.as_str())
             .arg(envelope.attempt)
             .arg(envelope.max_attempts)
             .arg(error)
@@ -1285,7 +1329,7 @@ return redis.call(
             .arg(failed_at_ms)
             .arg(group)
             .arg(stream_id)
-            .query_async(conn)
+            .invoke_async(conn)
             .await?;
         Ok(())
     }

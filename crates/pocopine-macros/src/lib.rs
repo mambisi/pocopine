@@ -3182,99 +3182,70 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         ))
     };
 
-    let route_handler = if let Some(guard_path) = policy.guard.as_ref() {
-        quote! {
-            ::pocopine_server::axum::routing::post(
-                |request: ::pocopine_server::axum::extract::Request| async move {
-                    let (parts, body) = request.into_parts();
-                    let ctx = ::pocopine_server::auth::RequestContext::from_parts(
-                        parts.method,
-                        parts.uri,
-                        parts.headers,
-                        parts.extensions,
-                    );
-                    if let Err(err) = #guard_path(ctx).await {
+    let parts_binding = if policy.guard.is_some() {
+        quote! { let (parts, body) = request.into_parts(); }
+    } else {
+        quote! { let (_parts, body) = request.into_parts(); }
+    };
+    let guard_prologue = match policy.guard.as_ref() {
+        Some(guard_path) => quote! {
+            let ctx = ::pocopine_server::auth::RequestContext::from_parts(
+                parts.method,
+                parts.uri,
+                parts.headers,
+                parts.extensions,
+            );
+            if let Err(err) = #guard_path(ctx).await {
+                let result = ::core::result::Result::Err(
+                    ::core::convert::Into::into(err),
+                );
+                return ::pocopine_server::axum::Json(result);
+            }
+        },
+        None => proc_macro2::TokenStream::new(),
+    };
+
+    // Generated routes take the raw request so the same explicit body
+    // limit applies to public and guarded endpoints; guarded routes run
+    // auth before the body is read.
+    let route_handler = quote! {
+        ::pocopine_server::axum::routing::post(
+            |request: ::pocopine_server::axum::extract::Request| async move {
+                #parts_binding
+                #guard_prologue
+                let body_limit = ::pocopine_server::server_function_body_limit();
+                let body_bytes = match ::pocopine_server::axum::body::to_bytes(
+                    body,
+                    body_limit,
+                ).await {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
                         let result = ::core::result::Result::Err(
-                            ::core::convert::Into::into(err),
+                            ::pocopine::ServerError::BadRequest(
+                                format!("read server-function request body: {err}"),
+                            ),
                         );
                         return ::pocopine_server::axum::Json(result);
                     }
-
-                    let body_limit = ::pocopine_server::server_function_body_limit();
-                    let body_bytes = match ::pocopine_server::axum::body::to_bytes(
-                        body,
-                        body_limit,
-                    ).await {
-                        Ok(bytes) => bytes,
+                };
+                let #destructure: #args_tuple_type =
+                    match ::pocopine_server::serde_json::from_slice(&body_bytes) {
+                        Ok(args) => args,
                         Err(err) => {
                             let result = ::core::result::Result::Err(
                                 ::pocopine::ServerError::BadRequest(
-                                    format!("read server-function request body: {err}"),
+                                    format!("parse server-function request body: {err}"),
                                 ),
                             );
                             return ::pocopine_server::axum::Json(result);
                         }
                     };
-                    let #destructure: #args_tuple_type =
-                        match ::pocopine_server::serde_json::from_slice(&body_bytes) {
-                            Ok(args) => args,
-                            Err(err) => {
-                                let result = ::core::result::Result::Err(
-                                    ::pocopine::ServerError::BadRequest(
-                                        format!("parse server-function request body: {err}"),
-                                    ),
-                                );
-                                return ::pocopine_server::axum::Json(result);
-                            }
-                        };
-                    let result = #fn_ident( #(#arg_idents),* ).await;
-                    ::pocopine_server::axum::Json(result)
-                },
-            )
-        }
-    } else {
-        quote! {
-            ::pocopine_server::axum::routing::post(
-                |request: ::pocopine_server::axum::extract::Request| async move {
-                    let (_parts, body) = request.into_parts();
-                    let body_limit = ::pocopine_server::server_function_body_limit();
-                    let body_bytes = match ::pocopine_server::axum::body::to_bytes(
-                        body,
-                        body_limit,
-                    ).await {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            let result = ::core::result::Result::Err(
-                                ::pocopine::ServerError::BadRequest(
-                                    format!("read server-function request body: {err}"),
-                                ),
-                            );
-                            return ::pocopine_server::axum::Json(result);
-                        }
-                    };
-                    let #destructure: #args_tuple_type =
-                        match ::pocopine_server::serde_json::from_slice(&body_bytes) {
-                            Ok(args) => args,
-                            Err(err) => {
-                                let result = ::core::result::Result::Err(
-                                    ::pocopine::ServerError::BadRequest(
-                                        format!("parse server-function request body: {err}"),
-                                    ),
-                                );
-                                return ::pocopine_server::axum::Json(result);
-                            }
-                        };
-                    let result = #fn_ident( #(#arg_idents),* ).await;
-                    ::pocopine_server::axum::Json(result)
-                },
-            )
-        }
+                let result = #fn_ident( #(#arg_idents),* ).await;
+                ::pocopine_server::axum::Json(result)
+            },
+        )
     };
 
-    // On the server we preserve the user's body, plus emit a route helper.
-    // Generated routes take the raw request so the same explicit body
-    // limit applies to public and guarded endpoints. Guarded routes run
-    // auth before reading the body.
     let server = quote! {
         #[cfg(not(target_arch = "wasm32"))]
         #vis #sig #body

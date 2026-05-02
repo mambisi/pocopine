@@ -81,14 +81,11 @@ impl From<&str> for Role {
 
 impl From<String> for Role {
     fn from(value: String) -> Self {
-        if value == "admin" {
-            Role::Admin
-        } else if value == "staff" {
-            Role::Staff
-        } else if value == "user" {
-            Role::User
-        } else {
-            Role::Named(value)
+        match value.as_str() {
+            "admin" => Role::Admin,
+            "staff" => Role::Staff,
+            "user" => Role::User,
+            _ => Role::Named(value),
         }
     }
 }
