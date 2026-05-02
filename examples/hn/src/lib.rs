@@ -43,7 +43,7 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, poco
 /// Search story titles / text. An empty query returns the front page
 /// (the same 30 stories news.ycombinator.com shows). Otherwise
 /// searches `tags=story` via the Algolia index, ordered by relevance.
-#[pocopine::server]
+#[pocopine::server(public)]
 pub async fn search_stories(query: String) -> pocopine::ServerResult<Vec<Story>> {
     let trimmed = query.trim();
     let url = if trimmed.is_empty() {
@@ -58,7 +58,7 @@ pub async fn search_stories(query: String) -> pocopine::ServerResult<Vec<Story>>
 
 /// Story + full comment subtree. Algolia pre-populates `children`, so
 /// there is no N+1 fan-out — one request, the whole thread.
-#[pocopine::server]
+#[pocopine::server(public)]
 pub async fn get_item_tree(id: u32) -> pocopine::ServerResult<ItemNode> {
     fetch_json(&format!("{ALGOLIA}/items/{id}")).await
 }

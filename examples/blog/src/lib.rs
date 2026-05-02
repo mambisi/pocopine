@@ -13,13 +13,35 @@ use serde::{Deserialize, Serialize};
 
 use shared::Post;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostViewAudit {
+    pub post_id: u32,
+}
+
+#[pocopine::job(queue = "blog", retries = 2)]
+pub async fn record_post_view(input: PostViewAudit) -> JobResult<()> {
+    eprintln!("post view audit: {}", input.post_id);
+    Ok(())
+}
+
+#[pocopine::job(queue = "blog", every = "10m")]
+pub async fn refresh_blog_index() -> JobResult<()> {
+    eprintln!("refresh blog index");
+    Ok(())
+}
+
 /// `#[server]` generates:
 /// * on wasm32 — a client stub that POSTs `[post_id]` to
 ///   `/_pocopine/get_post` and deserializes the response.
 /// * on the host — this body is the real handler, plus a
 ///   `__get_post_route` helper used by `bin/server.rs`.
-#[pocopine::server]
+#[pocopine::server(public)]
 pub async fn get_post(post_id: u32) -> ServerResult<Post> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = record_post_view_job::enqueue(PostViewAudit { post_id }).await;
+    }
+
     match post_id {
         1 => Ok(Post {
             id: 1,

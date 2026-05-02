@@ -26,7 +26,7 @@ use shared::{ContactMessage, ContactResponse};
 
 // ─── server functions ───────────────────────────────────────────
 
-#[pocopine::server]
+#[pocopine::server(public)]
 pub async fn submit_contact(msg: ContactMessage) -> ServerResult<ContactResponse> {
     eprintln!(
         "contact: {name} <{email}>: {msg}",
