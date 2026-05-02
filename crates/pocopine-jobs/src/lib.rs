@@ -810,17 +810,9 @@ return redis.call(
                 .query_async(conn)
                 .await?;
             for raw in raw_jobs {
-                let removed: i32 = redis::cmd("ZREM")
-                    .arg(self.client.scheduled_key())
-                    .arg(&raw)
-                    .query_async(conn)
-                    .await?;
-                if removed == 0 {
-                    continue;
-                }
                 let mut envelope: JobEnvelope = serde_json::from_str(&raw)?;
                 envelope.scheduled_for_ms = None;
-                promote_scheduled_envelope(
+                let promoted = promote_scheduled_envelope(
                     conn,
                     &self.client.scheduled_key(),
                     &self.client.queue_key(&envelope.queue),
@@ -828,6 +820,9 @@ return redis.call(
                     &envelope,
                 )
                 .await?;
+                if !promoted {
+                    continue;
+                }
             }
             Ok(())
         }
@@ -1211,9 +1206,9 @@ return redis.call(
         queue_key: &str,
         raw_scheduled_envelope: &str,
         envelope: &JobEnvelope,
-    ) -> JobResult<()> {
+    ) -> JobResult<bool> {
         let payload = serde_json::to_string(&envelope.payload)?;
-        let _: Value = redis::cmd("EVAL")
+        let value: Value = redis::cmd("EVAL")
             .arg(PROMOTE_SCHEDULED_SCRIPT)
             .arg(2)
             .arg(scheduled_key)
@@ -1229,7 +1224,7 @@ return redis.call(
             .arg(0_u64)
             .query_async(conn)
             .await?;
-        Ok(())
+        Ok(!matches!(value, Value::Nil | Value::Int(0)))
     }
 
     async fn schedule_retry_and_ack(
@@ -1637,6 +1632,93 @@ return redis.call(
             .unwrap();
 
             assert!(slots.is_empty());
+        }
+
+        #[test]
+        fn redis_promotes_scheduled_jobs_when_redis_test_url_is_set() {
+            let Ok(redis_url) = std::env::var("REDIS_TEST_URL") else {
+                return;
+            };
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                const QUEUE: &str = "scheduled-smoke";
+                const JOB_NAME: &str = "redis_promotes_scheduled_jobs";
+
+                let app = format!(
+                    "pocopine-test-promote-{}-{}",
+                    std::process::id(),
+                    JOB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
+                let client = JobClient::new(redis_url.clone(), app.clone());
+                let scheduled_key = client.scheduled_key();
+                let queue_key = client.queue_key(QUEUE);
+                let mut conn = client.connection().await.unwrap();
+                let _: i64 = redis::cmd("DEL")
+                    .arg(&scheduled_key)
+                    .arg(&queue_key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+
+                client
+                    .schedule_json_at(
+                        JOB_NAME,
+                        QUEUE,
+                        1,
+                        &serde_json::json!({ "value": "ok" }),
+                        UNIX_EPOCH,
+                    )
+                    .await
+                    .unwrap();
+
+                let worker = Worker::new(WorkerConfig {
+                    backend: JobBackend::Redis { url: redis_url },
+                    app,
+                    queues: vec![QUEUE.to_string()],
+                    group: "test".to_string(),
+                    consumer: default_consumer_name(),
+                    block_ms: 0,
+                    visibility_timeout: Duration::from_secs(60),
+                    scheduler_interval: Duration::from_millis(1),
+                    batch_size: 10,
+                })
+                .unwrap();
+                let now_ms = redis_time_ms(&mut conn).await.unwrap();
+
+                worker.promote_due_jobs(&mut conn, now_ms).await.unwrap();
+
+                let scheduled_len: i64 = redis::cmd("ZCARD")
+                    .arg(&scheduled_key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                let stream_len: i64 = redis::cmd("XLEN")
+                    .arg(&queue_key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                assert_eq!(scheduled_len, 0);
+                assert_eq!(stream_len, 1);
+
+                worker.promote_due_jobs(&mut conn, now_ms).await.unwrap();
+                let stream_len_after_second_promote: i64 = redis::cmd("XLEN")
+                    .arg(&queue_key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+                assert_eq!(stream_len_after_second_promote, 1);
+
+                let _: i64 = redis::cmd("DEL")
+                    .arg(&scheduled_key)
+                    .arg(&queue_key)
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap();
+            });
         }
     }
 }
