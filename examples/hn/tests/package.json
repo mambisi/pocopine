@@ -1,0 +1,12 @@
+{
+  "name": "hn-split-smoke",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node split.smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

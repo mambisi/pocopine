@@ -405,6 +405,39 @@ pub struct OwnershipReport {
     /// classify by. They default to shell, which is safe but blocks
     /// further size wins.
     pub unclassified_table_funcs: Vec<u32>,
+    /// Per active table slot: who owns the installed function, and whether
+    /// that slot is pinned to shell (e.g., a u32 in a shell-owned data
+    /// segment matches the slot index, suggesting the slot is reachable
+    /// via a memory-loaded function pointer the partitioner can't trace).
+    pub slots: Vec<SlotOwnership>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotOwnership {
+    pub table: u32,
+    pub slot: u32,
+    pub function_index: u32,
+    pub owner: SlotOwner,
+    /// `Some(reason)` means we kept this slot's function in shell on purpose
+    /// even if its name suggested a different owner.
+    pub pinned_to_shell: Option<PinnedReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotOwner {
+    Shell,
+    Route(String),
+    Shared(Vec<String>),
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinnedReason {
+    /// A 4-byte little-endian aligned u32 in a shell-owned (or unowned)
+    /// active data segment matches this slot's index. The shell may load
+    /// it as a function pointer and `call_indirect` it; moving the function
+    /// would risk a runtime trap.
+    DataSectionReference { data_segment: u32, offset: u32 },
 }
 
 impl SplitPlan {
@@ -957,6 +990,69 @@ impl ModuleAnalysis {
             .flatten()
             .collect();
 
+        // Phase 3.3: pin slots referenced by data-segment u32s.
+        //
+        // Rust's vtables and trait-object storage live in the data section as
+        // 4-byte little-endian function indices. The shell loads a pointer
+        // from memory, then `call_indirect`s on it. The partitioner can't
+        // statically trace those memory loads, so any slot whose index appears
+        // as a 4-byte aligned u32 in active data is treated as un-movable.
+        //
+        // This is intentionally conservative (false positives are fine,
+        // false negatives traps at runtime). A small integer constant or a
+        // length that happens to fall in the table-index range pins one slot
+        // unnecessarily — that costs us a route-owned function staying in
+        // shell, never breakage.
+        let mut pinned_slots: BTreeMap<u32, PinnedReason> = BTreeMap::new();
+        let mut function_to_slot: BTreeMap<u32, u32> = BTreeMap::new();
+        for elem in &self.elements {
+            let ElementKindAnalysis::Active { offset_expr, .. } = &elem.kind else {
+                continue;
+            };
+            let ConstExprAnalysis::I32Const(base) = offset_expr else {
+                continue;
+            };
+            let ElementItemsAnalysis::Functions(funcs) = &elem.items else {
+                continue;
+            };
+            for (i, fn_idx) in funcs.iter().enumerate() {
+                function_to_slot.insert(*fn_idx, *base as u32 + i as u32);
+            }
+        }
+        let table_max_slot = function_to_slot.values().copied().max().unwrap_or(0);
+
+        for data in &self.data_segments {
+            // Only scan active segments — passive segments aren't loaded
+            // into linear memory at startup and so can't seed function
+            // pointers on the path we care about.
+            let DataKindAnalysis::Active { .. } = &data.kind else {
+                continue;
+            };
+            let bytes = &data.data;
+            let len = bytes.len();
+            // 4-byte aligned reads. Function pointers in Rust are i32-sized
+            // and align(4) on wasm32; an unaligned scan would multiply false
+            // positives without finding anything new in practice.
+            let mut off = 0usize;
+            while off + 4 <= len {
+                let v = u32::from_le_bytes([
+                    bytes[off],
+                    bytes[off + 1],
+                    bytes[off + 2],
+                    bytes[off + 3],
+                ]);
+                if v >= 1 && v <= table_max_slot {
+                    pinned_slots
+                        .entry(v)
+                        .or_insert(PinnedReason::DataSectionReference {
+                            data_segment: data.index,
+                            offset: off as u32,
+                        });
+                }
+                off += 4;
+            }
+        }
+
         for function in &self.functions {
             let dep = Dependency::Function(function.index);
             if shell.contains(&dep) || route_dependencies.iter().any(|r| r.contains(&dep)) {
@@ -968,6 +1064,17 @@ impl ModuleAnalysis {
             }
             // Only consider functions the table actually points at.
             if !table_installed.contains(&function.index) {
+                continue;
+            }
+
+            // If this function's slot is pinned by the data scanner, the
+            // shell may load its index from memory and call_indirect into it
+            // — moving it would risk a runtime trap. Force shell ownership
+            // regardless of what the name says.
+            let slot = function_to_slot.get(&function.index).copied();
+            let pinned = slot.and_then(|s| pinned_slots.get(&s).cloned());
+            if pinned.is_some() {
+                shell.insert(dep);
                 continue;
             }
 
@@ -1177,6 +1284,49 @@ impl ModuleAnalysis {
                         report.shared_promotions.push(idx);
                     }
                 }
+            }
+        }
+
+        // Diagnostic: per-slot ownership snapshot. Walk every active table
+        // segment, look up where the installed function landed, and record
+        // owner. (Pinning is wired separately by phase 3.3 once the data
+        // scanner exists; for now `pinned_to_shell` stays None.)
+        for elem in &self.elements {
+            let ElementKindAnalysis::Active {
+                table_index,
+                offset_expr,
+            } = &elem.kind
+            else {
+                continue;
+            };
+            let ConstExprAnalysis::I32Const(base) = offset_expr else {
+                continue;
+            };
+            let ElementItemsAnalysis::Functions(funcs) = &elem.items else {
+                continue;
+            };
+            let table = table_index.unwrap_or(0);
+            for (i, fn_idx) in funcs.iter().enumerate() {
+                let dep = Dependency::Function(*fn_idx);
+                let owner = if shell.contains(&dep) {
+                    SlotOwner::Shell
+                } else if let Some((ri, _)) = route_dependencies
+                    .iter()
+                    .enumerate()
+                    .find(|(_, r)| r.contains(&dep))
+                {
+                    SlotOwner::Route(routes[ri].name.clone())
+                } else {
+                    SlotOwner::Unknown
+                };
+                let slot = *base as u32 + i as u32;
+                report.slots.push(SlotOwnership {
+                    table,
+                    slot,
+                    function_index: *fn_idx,
+                    owner,
+                    pinned_to_shell: pinned_slots.get(&slot).cloned(),
+                });
             }
         }
 

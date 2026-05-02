@@ -1278,6 +1278,40 @@ fn print_split_report(
             bytes
         );
     }
+    if !report.slots.is_empty() {
+        let mut shell_slots = 0usize;
+        let mut route_slots: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut shared_slots = 0usize;
+        let mut unknown_slots = 0usize;
+        let mut pinned_slots = 0usize;
+        for slot in &report.slots {
+            if slot.pinned_to_shell.is_some() {
+                pinned_slots += 1;
+            }
+            match &slot.owner {
+                pocopine_wasm_split::SlotOwner::Shell => shell_slots += 1,
+                pocopine_wasm_split::SlotOwner::Route(name) => {
+                    *route_slots.entry(name.as_str()).or_default() += 1;
+                }
+                pocopine_wasm_split::SlotOwner::Shared(_) => shared_slots += 1,
+                pocopine_wasm_split::SlotOwner::Unknown => unknown_slots += 1,
+            }
+        }
+        println!("    table slots: {} total", report.slots.len());
+        println!("      shell-owned:    {shell_slots}");
+        for (name, n) in route_slots {
+            println!("      route {name}-owned: {n}");
+        }
+        if shared_slots > 0 {
+            println!("      shared-owned:   {shared_slots}");
+        }
+        if unknown_slots > 0 {
+            println!("      unknown-owned:  {unknown_slots}");
+        }
+        if pinned_slots > 0 {
+            println!("      pinned to shell: {pinned_slots} (data-section references)");
+        }
+    }
     Ok(())
 }
 
