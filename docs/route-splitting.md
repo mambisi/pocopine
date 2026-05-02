@@ -155,6 +155,7 @@ Result:
 ```text
 old not_found route wasm: ~325,303 raw / ~138,164 gzip
 new not_found route JS:        605 raw
+new not_found route wasm:      not emitted
 ```
 
 This is the important proof. When the route crosses the boundary

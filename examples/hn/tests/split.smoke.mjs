@@ -17,7 +17,7 @@
 
 import { chromium, firefox } from 'playwright';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,9 +38,20 @@ function bail(msg) {
 if (!existsSync(SERVER_BIN)) {
   bail(`server binary missing at ${SERVER_BIN}; run \`cargo build --release -p hn\` first`);
 }
-for (const f of ['shell.wasm', 'route_home.wasm', 'route_story.wasm', 'route_not_found.wasm']) {
-  if (!existsSync(resolve(SPLIT_DIR, f))) {
-    bail(`${f} missing at ${SPLIT_DIR}; run \`pocopine build --release --split --path examples/hn\` first`);
+if (!existsSync(resolve(SPLIT_DIR, 'shell.wasm'))) {
+  bail(`shell.wasm missing at ${SPLIT_DIR}; run \`pocopine build --release --split --path examples/hn\` first`);
+}
+for (const f of ['hn_route_home.js', 'hn_route_story.js', 'hn_route_not_found.js']) {
+  const modulePath = resolve(HN_DIR, 'pkg', f);
+  if (!existsSync(modulePath)) {
+    bail(`${f} missing at ${resolve(HN_DIR, 'pkg')}; run \`pocopine build --release --split --path examples/hn\` first`);
+  }
+  const source = readFileSync(modulePath, 'utf8');
+  for (const match of source.matchAll(/\/pkg\/\.pocopine-split\/([^"']+\.wasm)/g)) {
+    const chunk = match[1];
+    if (!existsSync(resolve(SPLIT_DIR, chunk))) {
+      bail(`${f} references missing split chunk ${chunk}`);
+    }
   }
 }
 

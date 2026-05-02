@@ -712,7 +712,8 @@ fn build_split(path: &Path, release: bool, strict: bool) -> Result<()> {
         bail!("split build found no routes; use plain `pocopine build` for non-routed apps");
     }
 
-    emit_post_link_split_chunks(&path, &base, &route_ids, release)?;
+    let descriptor_route_ids = descriptor_route_ids(&path, &route_ids)?;
+    emit_post_link_split_chunks(&path, &base, &route_ids, &descriptor_route_ids, release)?;
 
     for route_id in &route_ids {
         if write_descriptor_route_if_static(&path, &base, route_id)? {
@@ -793,28 +794,25 @@ export async function mount_pocopine_route(outlet, path) {{
     Ok(())
 }
 
+struct StaticDescriptorRoute {
+    tag: String,
+    html: String,
+}
+
+fn descriptor_route_ids(path: &Path, route_ids: &[String]) -> Result<BTreeSet<String>> {
+    let mut descriptor_ids = BTreeSet::new();
+    for route_id in route_ids {
+        if read_static_descriptor_route(path, route_id)?.is_some() {
+            descriptor_ids.insert(route_id.clone());
+        }
+    }
+    Ok(descriptor_ids)
+}
+
 fn write_descriptor_route_if_static(path: &Path, base: &str, route_id: &str) -> Result<bool> {
-    let route_dir = path.join("src").join("routes").join(route_id);
-    if !route_dir.is_dir() {
-        return Ok(false);
-    }
-    let templates = std::fs::read_dir(&route_dir)
-        .with_context(|| format!("read {}", route_dir.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "poco"))
-        .collect::<Vec<_>>();
-    let [template_path] = templates.as_slice() else {
+    let Some(route) = read_static_descriptor_route(path, route_id)? else {
         return Ok(false);
     };
-    let html = std::fs::read_to_string(template_path)
-        .with_context(|| format!("read {}", template_path.display()))?;
-    if !is_static_descriptor_template(&html) {
-        return Ok(false);
-    }
-    let Some(stem) = template_path.file_stem().and_then(|stem| stem.to_str()) else {
-        return Ok(false);
-    };
-    let tag = kebab_case(stem);
     let module = format!(
         r#"const TAG = {tag};
 const HTML = {html};
@@ -832,13 +830,41 @@ export function mount_pocopine_route(outlet, _path) {{
   window.__pocopine_shell.pocopine_host_mount_static_component(outlet, TAG);
 }}
 "#,
-        tag = js_string(&tag),
-        html = js_string(&html),
+        tag = js_string(&route.tag),
+        html = js_string(&route.html),
     );
     let out = path.join("pkg").join(format!("{base}_route_{route_id}.js"));
     std::fs::write(&out, module).with_context(|| format!("write {}", out.display()))?;
     println!("  descriptor route {route_id} -> {}", out.display());
     Ok(true)
+}
+
+fn read_static_descriptor_route(
+    path: &Path,
+    route_id: &str,
+) -> Result<Option<StaticDescriptorRoute>> {
+    let route_dir = path.join("src").join("routes").join(route_id);
+    if !route_dir.is_dir() {
+        return Ok(None);
+    }
+    let templates = std::fs::read_dir(&route_dir)
+        .with_context(|| format!("read {}", route_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "poco"))
+        .collect::<Vec<_>>();
+    let [template_path] = templates.as_slice() else {
+        return Ok(None);
+    };
+    let html = std::fs::read_to_string(template_path)
+        .with_context(|| format!("read {}", template_path.display()))?;
+    if !is_static_descriptor_template(&html) {
+        return Ok(None);
+    }
+    let Some(stem) = template_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return Ok(None);
+    };
+    let tag = kebab_case(stem);
+    Ok(Some(StaticDescriptorRoute { tag, html }))
 }
 
 fn is_static_descriptor_template(html: &str) -> bool {
@@ -1018,6 +1044,7 @@ fn emit_post_link_split_chunks(
     path: &Path,
     base: &str,
     route_ids: &[String],
+    descriptor_route_ids: &BTreeSet<String>,
     release: bool,
 ) -> Result<()> {
     let pkg = path.join("pkg");
@@ -1130,6 +1157,9 @@ fn emit_post_link_split_chunks(
         optimize,
     )?;
     for route in &links.routes {
+        if descriptor_route_ids.contains(&route.name) {
+            continue;
+        }
         write_split_chunk(
             &module,
             route,
@@ -1153,13 +1183,25 @@ fn emit_post_link_split_chunks(
         );
     }
 
+    let wasm_route_count = links
+        .routes
+        .iter()
+        .filter(|route| !descriptor_route_ids.contains(&route.name))
+        .count();
     println!(
-        "  post-link split chunks -> {} (shell + {} route + {} shared)",
+        "  post-link split chunks -> {} (shell + {} wasm route + {} descriptor route + {} shared)",
         split_dir.display(),
-        links.routes.len(),
+        wasm_route_count,
+        descriptor_route_ids.len(),
         links.shared.len()
     );
-    print_split_report(&split_dir, &module, &plan, &ownership_report)?;
+    print_split_report(
+        &split_dir,
+        &module,
+        &plan,
+        &ownership_report,
+        descriptor_route_ids,
+    )?;
     std::fs::remove_file(&wasm_path)
         .with_context(|| format!("remove unsplit wasm artifact {}", wasm_path.display()))?;
     Ok(())
@@ -1170,6 +1212,7 @@ fn print_split_report(
     module: &pocopine_wasm_split::ModuleAnalysis,
     plan: &pocopine_wasm_split::SplitPlan,
     report: &pocopine_wasm_split::OwnershipReport,
+    descriptor_route_ids: &BTreeSet<String>,
 ) -> Result<()> {
     let chunk_size = |name: &str| -> Option<u64> {
         std::fs::metadata(split_dir.join(name))
@@ -1206,7 +1249,12 @@ fn print_split_report(
     }
     for route in &plan.routes {
         let file = format!("route_{}.wasm", route.name);
-        if let Some(sz) = chunk_size(&file) {
+        if descriptor_route_ids.contains(&route.name) {
+            println!(
+                "    route {:<10} descriptor JS  (no route wasm emitted)",
+                route.name
+            );
+        } else if let Some(sz) = chunk_size(&file) {
             println!(
                 "    route {:<10} {:>9} bytes  ({} funcs, {} body bytes pre-opt)",
                 route.name,
