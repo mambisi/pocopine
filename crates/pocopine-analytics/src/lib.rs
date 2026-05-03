@@ -11,14 +11,43 @@ use pocopine_observe::{
     emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, RedactionPolicy,
 };
 
-pub trait AnalyticsSink {
+#[cfg(not(target_arch = "wasm32"))]
+pub trait AnalyticsSink: Send + Sync {
     fn emit(&self, event: &ObservedEvent) -> Result<(), AnalyticsError>;
 
+    /// Flush buffered records for sinks that batch work.
+    ///
+    /// Closure sinks use this no-op default. Write a concrete sink type when
+    /// batching or network exporters need real flush behavior.
     fn flush(&self) -> Result<(), AnalyticsError> {
         Ok(())
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub trait AnalyticsSink {
+    fn emit(&self, event: &ObservedEvent) -> Result<(), AnalyticsError>;
+
+    /// Flush buffered records for sinks that batch work.
+    ///
+    /// Closure sinks use this no-op default. Write a concrete sink type when
+    /// batching or network exporters need real flush behavior.
+    fn flush(&self) -> Result<(), AnalyticsError> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<F> AnalyticsSink for F
+where
+    F: for<'event> Fn(&'event ObservedEvent) -> Result<(), AnalyticsError> + Send + Sync,
+{
+    fn emit(&self, event: &ObservedEvent) -> Result<(), AnalyticsError> {
+        self(event)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 impl<F> AnalyticsSink for F
 where
     F: for<'event> Fn(&'event ObservedEvent) -> Result<(), AnalyticsError>,
@@ -55,14 +84,20 @@ impl std::error::Error for AnalyticsError {}
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct AnalyticsReport {
+    /// Number of configured sinks attempted for this operation.
     pub attempted: usize,
-    pub delivered: usize,
+    /// Number of sinks that completed the operation successfully.
+    ///
+    /// For `emit`, this means the sink accepted the event. For `flush`, this
+    /// means the sink flushed successfully.
+    pub succeeded: usize,
+    /// Number of sinks that returned an error or panicked.
     pub failed: usize,
     pub errors: Vec<AnalyticsError>,
 }
 
 impl AnalyticsReport {
-    pub fn all_delivered(&self) -> bool {
+    pub fn all_succeeded(&self) -> bool {
         self.failed == 0
     }
 }
@@ -114,7 +149,7 @@ impl AnalyticsClient {
 
         for sink in &self.sinks {
             match catch_unwind(AssertUnwindSafe(|| sink.emit(&event))) {
-                Ok(Ok(())) => report.delivered += 1,
+                Ok(Ok(())) => report.succeeded += 1,
                 Ok(Err(err)) => {
                     report.failed += 1;
                     report.errors.push(err);
@@ -143,7 +178,7 @@ impl AnalyticsClient {
 
         for sink in &self.sinks {
             match catch_unwind(AssertUnwindSafe(|| sink.flush())) {
-                Ok(Ok(())) => report.delivered += 1,
+                Ok(Ok(())) => report.succeeded += 1,
                 Ok(Err(err)) => {
                     report.failed += 1;
                     report.errors.push(err);
@@ -329,6 +364,9 @@ pub mod web {
         match value {
             FieldValue::String(value) => JsValue::from_str(value),
             FieldValue::Bool(value) => JsValue::from_bool(*value),
+            // JavaScript numbers are f64 values; 64-bit integers above 2^53
+            // lose precision in Firebase/GA-style browser adapters. Treat
+            // long-lived IDs as strings before constructing the event.
             FieldValue::I64(value) => JsValue::from_f64(*value as f64),
             FieldValue::U64(value) => JsValue::from_f64(*value as f64),
             FieldValue::F64(value) => JsValue::from_f64(*value),
@@ -346,42 +384,71 @@ pub mod web {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use pocopine_observe::{FieldPrivacy, RedactionPolicy};
 
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn analytics_client_is_send_sync_on_host() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<AnalyticsClient>();
+    }
+
     #[test]
     fn emit_continues_after_sink_error() {
-        let delivered = Rc::new(RefCell::new(0));
-        let delivered_sink = Rc::clone(&delivered);
+        let succeeded = Arc::new(AtomicUsize::new(0));
+        let succeeded_sink = Arc::clone(&succeeded);
         let client = AnalyticsClient::new()
             .without_tracing_events()
             .with_sink(|_: &ObservedEvent| Err(AnalyticsError::new("downstream failed")))
             .with_sink(move |_: &ObservedEvent| {
-                *delivered_sink.borrow_mut() += 1;
+                succeeded_sink.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             });
 
         let report = client.emit(event("signup"));
 
         assert_eq!(report.attempted, 2);
-        assert_eq!(report.delivered, 1);
+        assert_eq!(report.succeeded, 1);
         assert_eq!(report.failed, 1);
-        assert_eq!(*delivered.borrow(), 1);
+        assert_eq!(succeeded.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn emit_continues_after_sink_panic() {
+        let succeeded = Arc::new(AtomicUsize::new(0));
+        let succeeded_sink = Arc::clone(&succeeded);
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(|_: &ObservedEvent| panic!("sink failed"))
+            .with_sink(move |_: &ObservedEvent| {
+                succeeded_sink.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            });
+
+        let report = client.emit(event("signup"));
+
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.succeeded, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.errors[0].message(), "analytics sink panicked");
+        assert_eq!(succeeded.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn redacts_before_dispatch() {
-        let seen = Rc::new(RefCell::new(None));
-        let seen_sink = Rc::clone(&seen);
+        let seen = Arc::new(Mutex::new(None));
+        let seen_sink = Arc::clone(&seen);
         let client = AnalyticsClient::new()
             .without_tracing_events()
             .with_redaction(RedactionPolicy::public_only())
             .with_sink(move |event: &ObservedEvent| {
-                *seen_sink.borrow_mut() = Some(event.clone());
+                *seen_sink.lock().expect("seen lock poisoned") = Some(event.clone());
                 Ok(())
             });
 
@@ -391,8 +458,26 @@ mod tests {
                 .field("email", "person@example.test", FieldPrivacy::Sensitive),
         );
 
-        let event = seen.borrow().clone().expect("event captured");
+        let event = seen
+            .lock()
+            .expect("seen lock poisoned")
+            .clone()
+            .expect("event captured");
         assert!(event.fields.contains_key("plan"));
         assert!(!event.fields.contains_key("email"));
+    }
+
+    #[test]
+    fn flush_reports_success_without_delivery_wording() {
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(|_: &ObservedEvent| Ok(()));
+
+        let report = client.flush();
+
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.succeeded, 1);
+        assert_eq!(report.failed, 0);
+        assert!(report.all_succeeded());
     }
 }

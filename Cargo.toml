@@ -6,8 +6,8 @@ members = [
     "crates/pine-icons-macros",
     "crates/pine-motion",
     "crates/pocopine",
-    "crates/pocopine-auth",
     "crates/pocopine-analytics",
+    "crates/pocopine-auth",
     "crates/pocopine-cli",
     "crates/pocopine-core",
     "crates/pocopine-expr",
@@ -47,9 +47,9 @@ repository = "https://github.com/mambisi/pocopine"
 # `default-features = false` opt-outs actually take effect. Users
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
-pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
+pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }
 pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }

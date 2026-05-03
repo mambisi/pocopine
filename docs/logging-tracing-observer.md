@@ -205,7 +205,7 @@ events are intentional product or telemetry events with a stable schema.
 use pocopine::analytics::{route_view, AnalyticsClient, AnalyticsError};
 
 let analytics = AnalyticsClient::new()
-    .with_sink(|event| {
+    .with_sink(|event: &pocopine::observe::ObservedEvent| {
         // Send to your vendor SDK, HTTP endpoint, or local test collector.
         tracing::debug!(target: "pocopine.analytics", event = ?event);
         Ok::<(), AnalyticsError>(())
@@ -213,7 +213,7 @@ let analytics = AnalyticsClient::new()
 
 let report = analytics.emit(route_view("/settings"));
 
-if !report.all_delivered() {
+if !report.all_succeeded() {
     tracing::warn!(
         target: "pocopine.log",
         failed = report.failed,
@@ -224,6 +224,10 @@ if !report.all_delivered() {
 
 `AnalyticsClient` redacts before dispatch and keeps going when one sink fails.
 Sink panics are caught and reported in the delivery report.
+
+On host targets, analytics sinks must be `Send + Sync` so the client can be
+stored in shared server state such as axum state. On wasm targets this bound is
+relaxed because browser SDK handles are usually JavaScript objects.
 
 ## Browser vendor bridges
 
