@@ -37,9 +37,7 @@ async fn redis_url() -> String {
         .get_or_init(|| async {
             GenericImage::new(REDIS_IMAGE, REDIS_TAG)
                 .with_exposed_port(ContainerPort::Tcp(REDIS_PORT))
-                .with_wait_for(WaitFor::message_on_stdout(
-                    "Ready to accept connections",
-                ))
+                .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
                 .start()
                 .await
                 .expect("start redis testcontainer")
@@ -246,14 +244,7 @@ async fn flaky_handler_retries_through_backoff_and_succeeds() {
     // First attempt fails, retry scheduled with backoff (base 1s).
     // 200 iters * 100 ms = 20 s — comfortably above the 2-3 s the two
     // retries need.
-    drive_until_counter(
-        &worker,
-        &FLAKY_RUNS,
-        3,
-        200,
-        Duration::from_millis(100),
-    )
-    .await;
+    drive_until_counter(&worker, &FLAKY_RUNS, 3, 200, Duration::from_millis(100)).await;
 
     assert_eq!(
         FLAKY_RUNS.load(Ordering::SeqCst),
@@ -288,15 +279,7 @@ async fn permanently_failing_handler_lands_in_dead_letter_stream() {
 
     // retries=1 → max_attempts=2 → 2 attempts then dead-letter.
     let dead_key = format!("pocopine:{app}:dead");
-    drive_until_xlen(
-        &worker,
-        &url,
-        &dead_key,
-        1,
-        200,
-        Duration::from_millis(100),
-    )
-    .await;
+    drive_until_xlen(&worker, &url, &dead_key, 1, 200, Duration::from_millis(100)).await;
 
     assert_eq!(redis_xlen(&url, &dead_key).await, 1);
     assert!(
@@ -335,15 +318,7 @@ async fn handler_panic_is_caught_and_dead_lettered() {
 
     // retries=0 → max_attempts=1 → first panic dead-letters.
     let dead_key = format!("pocopine:{app}:dead");
-    drive_until_xlen(
-        &worker,
-        &url,
-        &dead_key,
-        1,
-        200,
-        Duration::from_millis(50),
-    )
-    .await;
+    drive_until_xlen(&worker, &url, &dead_key, 1, 200, Duration::from_millis(50)).await;
 
     assert_eq!(PANIC_RUNS.load(Ordering::SeqCst), baseline + 1);
     assert_eq!(redis_xlen(&url, &dead_key).await, 1);
