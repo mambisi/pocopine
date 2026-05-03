@@ -66,6 +66,23 @@ fn dispatch_pointer_move(svg: &Element, x: f64, y: f64) {
     .unwrap();
 }
 
+fn dispatch_click(element: &Element) {
+    element
+        .dispatch_event(&web_sys::Event::new("click").unwrap())
+        .unwrap();
+}
+
+fn dispatch_keydown(element: &Element, key: &str) {
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_key(key);
+    element
+        .dispatch_event(
+            &web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap(),
+        )
+        .unwrap();
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -336,6 +353,7 @@ async fn scatter_chart_renders_points_axes_and_hover() {
     assert_eq!(first.get_attribute("cx").as_deref(), Some("0"));
     assert_eq!(first.get_attribute("cy").as_deref(), Some("100"));
     assert_eq!(first.get_attribute("r").as_deref(), Some("5"));
+    assert!(first.has_attribute("data-key"));
     assert_eq!(
         first.get_attribute("data-series").as_deref(),
         Some("Segment A")
@@ -364,6 +382,27 @@ async fn scatter_chart_renders_points_axes_and_hover() {
         tooltip.get_attribute("aria-label").as_deref(),
         Some("Segment B: x 1, y 0")
     );
+
+    dispatch_click(&first);
+    settle().await;
+
+    assert!(first.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+
+    let chart = host.query_selector(".pine-scatter-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    dispatch_keydown(&chart, "ArrowRight");
+    settle().await;
+
+    let second = points.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, " ");
+    settle().await;
+
+    assert!(second.has_attribute("data-selected"));
+    assert!(!first.has_attribute("data-selected"));
 
     host.remove();
 }
@@ -529,6 +568,42 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
     let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
     assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn line_chart_supports_marker_selection_and_keyboard_focus() {
+    let host = mount_fixture::<LineChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+
+    let markers = host.query_selector_all(".pine-chart-marker").unwrap();
+    assert_eq!(markers.length(), 3);
+    let second = markers.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-key"));
+
+    dispatch_click(&second);
+    settle().await;
+
+    assert!(second.has_attribute("data-focused"));
+    assert!(second.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, "ArrowRight");
+    settle().await;
+
+    let third = markers.get(2).unwrap().dyn_into::<Element>().unwrap();
+    assert!(third.has_attribute("data-focused"));
+    assert!(second.has_attribute("data-selected"));
+    assert!(!third.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, "Enter");
+    settle().await;
+
+    assert!(third.has_attribute("data-selected"));
+    assert!(!second.has_attribute("data-selected"));
 
     host.remove();
 }
@@ -758,6 +833,7 @@ async fn bar_chart_renders_svg_rects_axes_and_labels() {
     assert_eq!(first.get_attribute("height").as_deref(), Some("20"));
     assert_eq!(first.get_attribute("aria-label").as_deref(), Some("A: 2"));
     assert_eq!(first.get_attribute("data-category").as_deref(), Some("A"));
+    assert!(first.has_attribute("data-key"));
 
     let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
     assert!(labels.length() >= 6, "category and value labels render");
@@ -799,6 +875,26 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
         tooltip.get_attribute("data-tooltip-x").as_deref(),
         Some("right")
     );
+
+    dispatch_click(&first);
+    settle().await;
+
+    assert!(first.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, "ArrowRight");
+    settle().await;
+
+    let bars = host.query_selector_all(".pine-chart-bar").unwrap();
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, "Enter");
+    settle().await;
+
+    assert!(second.has_attribute("data-selected"));
+    assert!(!first.has_attribute("data-selected"));
 
     let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
     svg.dispatch_event(&leave).unwrap();

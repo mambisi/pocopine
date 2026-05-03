@@ -40,6 +40,20 @@ hovered rect receives `data-hovered`; the tooltip exposes `data-category`,
 variables as line, scatter, and area charts. Bars do not render a crosshair by
 default because the rect itself is the hover target.
 
+Line markers, scatter points, and bars also expose a small selection contract.
+The chart root is keyboard focusable. Arrow keys move an internal focused item,
+and Enter or Space selects it. Pointer clicks select the clicked marker, point,
+or bar. Rendered selectable marks expose:
+
+- `data-key`
+- `data-focused`
+- `data-selected`
+
+Line selection is marker-based, so visible point marks require
+`show_markers="true"`. Keyboard selection still tracks the sampled line data,
+but an application only gets visible selected/focused line marks when markers
+are rendered.
+
 ## Styling
 
 ```css
@@ -69,6 +83,18 @@ default because the rect itself is the hover target.
 .pine-chart-bar[data-hovered] {
   opacity: 1;
   stroke: currentColor;
+}
+
+.pine-chart-marker[data-focused],
+.pine-chart-point[data-focused],
+.pine-chart-bar[data-focused] {
+  stroke-dasharray: 3 2;
+}
+
+.pine-chart-marker[data-selected],
+.pine-chart-point[data-selected],
+.pine-chart-bar[data-selected] {
+  stroke-width: 3;
 }
 ```
 

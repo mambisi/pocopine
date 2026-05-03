@@ -87,6 +87,7 @@ tooltip placement and visual styling.
 Set `show_markers="true"` when every sampled point should render as a visible
 SVG marker. Markers are opt-in so dense line charts do not accidentally produce
 hundreds of visible circles. Multi-series markers include `data-series`.
+Visible markers can be selected by click or by keyboard from the chart root.
 
 Use `x_label` and `y_label` for optional axis labels. They render as SVG
 `<text>` nodes with stable hooks and remain unstyled by default.
@@ -132,7 +133,8 @@ let legend_items = scatter_legend_items(&series);
 
 Each point exposes `data-x`, `data-y`, and `data-series` attributes. The
 `point_radius` prop sets the SVG `r` attribute for every point; visual color,
-opacity, stroke, and hover marker styling remain application CSS.
+opacity, stroke, and hover marker styling remain application CSS. Scatter
+points can be selected by click or by keyboard from the chart root.
 
 ## Area Chart
 
@@ -183,7 +185,7 @@ the y axis is numeric and includes a zero baseline by default. Explicit `y_min`
 and `y_max` props can override the inferred domain.
 Bar charts expose pointer hover on rendered rects; the hovered bar receives
 `data-hovered`, and the tooltip exposes category, value, and optional series
-metadata.
+metadata. Bars can be selected by click or by keyboard from the chart root.
 
 ```rust
 use pine_charts::ChartBar;
@@ -316,12 +318,15 @@ The component emits stable hooks:
 - `data-tooltip-x="left|right"`
 - `data-tooltip-y="above|below"`
 - `data-orientation="horizontal|vertical|..."`
+- `data-key="<stable mark key>"`
 - `data-x="<numeric value>"`
 - `data-y="<numeric value>"`
 - `data-series="<series label>"`
 - `data-category="<category label>"`
 - `data-value="<numeric value>"`
 - `data-hovered`
+- `data-focused`
+- `data-selected`
 - `data-empty`
 - `data-invalid`
 
@@ -358,6 +363,18 @@ treatment:
 .pine-chart-point {
   fill: currentColor;
   stroke: var(--chart-surface);
+}
+
+.pine-chart-marker[data-focused],
+.pine-chart-point[data-focused],
+.pine-chart-bar[data-focused] {
+  stroke-dasharray: 3 2;
+}
+
+.pine-chart-marker[data-selected],
+.pine-chart-point[data-selected],
+.pine-chart-bar[data-selected] {
+  stroke-width: 3;
 }
 
 .pine-chart-tooltip {
