@@ -4,7 +4,9 @@ use core::fmt::Write;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::cartesian::{step_key, ChartStateFields};
+use crate::cartesian::{
+    pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
+};
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -188,6 +190,50 @@ impl SvgPieSlice {
             self.percentage,
         )
     }
+
+    fn contains(&self, point: Point, center: Point, inner_radius: f64, outer_radius: f64) -> bool {
+        let dx = point.x - center.x;
+        let dy = point.y - center.y;
+        let radius = (dx * dx + dy * dy).sqrt();
+        if radius < inner_radius || radius > outer_radius {
+            return false;
+        }
+
+        angle_in_span(dy.atan2(dx) * 180.0 / PI, self.start_angle, self.end_angle)
+    }
+
+    fn hover_update(&self, plot: ChartRect, width: f64, height: f64) -> PieHoverUpdate {
+        PieHoverUpdate {
+            key: self.key.clone(),
+            label: self.label.clone(),
+            value: self.value,
+            value_label: self.value_label.clone(),
+            percentage: self.percentage,
+            percentage_label: self.percentage_label.clone(),
+            aria_label: self.aria_label.clone(),
+            placement: CartesianHoverPlacement::new(
+                Point {
+                    x: self.label_x,
+                    y: self.label_y,
+                },
+                plot,
+                width,
+                height,
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PieHoverUpdate {
+    key: String,
+    label: String,
+    value: f64,
+    value_label: String,
+    percentage: f64,
+    percentage_label: String,
+    aria_label: String,
+    placement: CartesianHoverPlacement,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -215,10 +261,32 @@ pub struct PinePieChart {
     pub start_angle: f64,
     #[prop]
     pub end_angle: f64,
+    #[prop]
+    pub center_label: String,
+    #[prop]
+    pub center_value: String,
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
     pub legend_items: Vec<LegendItem>,
+    pub center_x: f64,
+    pub center_y: f64,
+    pub outer_radius_px: f64,
+    pub inner_radius_px: f64,
+    pub center_visible: bool,
+    pub center_label_text: String,
+    pub center_value_text: String,
+    pub hover_visible: bool,
+    pub hover_key: String,
+    pub hover_label: String,
+    pub hover_value: f64,
+    pub hover_value_label: String,
+    pub hover_percentage: f64,
+    pub hover_percentage_label: String,
+    pub hover_aria_label: String,
+    pub hover_placement_x: String,
+    pub hover_placement_y: String,
+    pub hover_style: String,
     pub focused_key: String,
     pub selected_key: String,
     pub error: String,
@@ -242,10 +310,30 @@ impl Default for PinePieChart {
             inner_radius: options.inner_radius,
             start_angle: options.start_angle,
             end_angle: options.end_angle,
+            center_label: String::new(),
+            center_value: String::new(),
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
             legend_items: Vec::new(),
+            center_x: 0.0,
+            center_y: 0.0,
+            outer_radius_px: 0.0,
+            inner_radius_px: 0.0,
+            center_visible: false,
+            center_label_text: String::new(),
+            center_value_text: String::new(),
+            hover_visible: false,
+            hover_key: String::new(),
+            hover_label: String::new(),
+            hover_value: 0.0,
+            hover_value_label: String::new(),
+            hover_percentage: 0.0,
+            hover_percentage_label: String::new(),
+            hover_aria_label: String::new(),
+            hover_placement_x: "right".into(),
+            hover_placement_y: "above".into(),
+            hover_style: String::new(),
             focused_key: String::new(),
             selected_key: String::new(),
             error: String::new(),
@@ -312,6 +400,37 @@ impl PinePieChart {
         self.recompute();
     }
 
+    #[watch(center_label)]
+    fn on_center_label(&mut self, _: String, _: Option<String>) {
+        self.update_center_visibility();
+    }
+
+    #[watch(center_value)]
+    fn on_center_value(&mut self, _: String, _: Option<String>) {
+        self.update_center_visibility();
+    }
+
+    pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
+        let Some(point) = pointer_event_svg_point(ev, self.width, self.height) else {
+            return;
+        };
+        self.hover_at(point.x, point.y);
+    }
+
+    pub fn clear_hover(&mut self) {
+        self.hover_visible = false;
+        self.hover_key.clear();
+        self.hover_label.clear();
+        self.hover_value = 0.0;
+        self.hover_value_label.clear();
+        self.hover_percentage = 0.0;
+        self.hover_percentage_label.clear();
+        self.hover_aria_label.clear();
+        self.hover_placement_x = "right".into();
+        self.hover_placement_y = "above".into();
+        self.hover_style.clear();
+    }
+
     pub fn select_slice(&mut self, key: String) {
         if let Some(selection) = self.selection_for_slice(&key) {
             self.focused_key = key.clone();
@@ -346,22 +465,28 @@ impl PinePieChart {
                 self.view_box = geometry.view_box;
                 self.slices = geometry.slices;
                 self.legend_items = geometry.legend_items;
+                self.center_x = geometry.center.x;
+                self.center_y = geometry.center.y;
+                self.outer_radius_px = geometry.outer_radius;
+                self.inner_radius_px = geometry.inner_radius;
+                self.update_center_visibility();
                 self.error.clear();
                 self.state_fields()
                     .apply(crate::cartesian::CartesianChartState::Ready);
                 self.reconcile_selection();
+                self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
-                self.slices.clear();
-                self.legend_items.clear();
+                self.clear_geometry();
+                self.clear_hover();
                 self.clear_selection();
                 self.error.clear();
                 self.state_fields()
                     .apply(crate::cartesian::CartesianChartState::Empty);
             }
             Err(error) => {
-                self.slices.clear();
-                self.legend_items.clear();
+                self.clear_geometry();
+                self.clear_hover();
                 self.clear_selection();
                 self.error = error.to_string();
                 self.state_fields()
@@ -386,6 +511,34 @@ impl PinePieChart {
         }
     }
 
+    pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
+        let Ok(point) = Point::new(svg_x, svg_y) else {
+            self.clear_hover();
+            return;
+        };
+        if !self.ready {
+            self.clear_hover();
+            return;
+        }
+
+        let center = Point {
+            x: self.center_x,
+            y: self.center_y,
+        };
+        let plot = self.plot_rect();
+        let Some(update) = self
+            .slices
+            .iter()
+            .find(|slice| slice.contains(point, center, self.inner_radius_px, self.outer_radius_px))
+            .map(|slice| slice.hover_update(plot, self.width, self.height))
+        else {
+            self.clear_hover();
+            return;
+        };
+
+        self.apply_hover(update);
+    }
+
     fn step_slice_focus(&mut self, step: isize) {
         if let Some(key) = step_key(
             self.slices.iter().map(|slice| slice.key.as_str()),
@@ -405,6 +558,46 @@ impl PinePieChart {
             .iter()
             .find(|slice| slice.key == key)
             .map(SvgPieSlice::selection)
+    }
+
+    fn clear_geometry(&mut self) {
+        self.slices.clear();
+        self.legend_items.clear();
+        self.center_x = 0.0;
+        self.center_y = 0.0;
+        self.outer_radius_px = 0.0;
+        self.inner_radius_px = 0.0;
+        self.center_visible = false;
+    }
+
+    fn plot_rect(&self) -> ChartRect {
+        ChartRect {
+            x: self.center_x - self.outer_radius_px,
+            y: self.center_y - self.outer_radius_px,
+            width: self.outer_radius_px * 2.0,
+            height: self.outer_radius_px * 2.0,
+        }
+    }
+
+    fn update_center_visibility(&mut self) {
+        self.center_label_text = self.center_label.clone();
+        self.center_value_text = self.center_value.clone();
+        self.center_visible = self.inner_radius_px > 0.0
+            && (!self.center_label_text.is_empty() || !self.center_value_text.is_empty());
+    }
+
+    fn apply_hover(&mut self, update: PieHoverUpdate) {
+        self.hover_visible = true;
+        self.hover_key = update.key;
+        self.hover_label = update.label;
+        self.hover_value = update.value;
+        self.hover_value_label = update.value_label;
+        self.hover_percentage = update.percentage;
+        self.hover_percentage_label = update.percentage_label;
+        self.hover_aria_label = update.aria_label;
+        self.hover_placement_x = update.placement.x.into();
+        self.hover_placement_y = update.placement.y.into();
+        self.hover_style = update.placement.style;
     }
 
     fn reconcile_selection(&mut self) {
@@ -551,6 +744,14 @@ fn visible_arc_end(start_angle: f64, end_angle: f64) -> f64 {
     }
 }
 
+fn angle_in_span(angle: f64, start_angle: f64, end_angle: f64) -> bool {
+    let mut candidate = angle;
+    while candidate < start_angle {
+        candidate += FULL_CIRCLE_DEGREES;
+    }
+    candidate >= start_angle && candidate <= end_angle
+}
+
 fn polar_point(center: Point, radius: f64, angle_degrees: f64) -> Point {
     let radians = angle_degrees * PI / 180.0;
     Point {
@@ -657,6 +858,43 @@ mod tests {
         assert_eq!(geometry.slices[0].start_angle, 180.0);
         assert_eq!(geometry.slices[0].end_angle, 270.0);
         assert_eq!(geometry.slices[1].end_angle, 360.0);
+    }
+
+    #[test]
+    fn donut_slice_contains_only_its_ring_span() {
+        let options = PieChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.5,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        };
+        let geometry = PieChartGeometry::new(
+            &[ChartPieSlice::new("A", 1.0), ChartPieSlice::new("B", 1.0)],
+            &options,
+        )
+        .unwrap();
+        let slice = &geometry.slices[0];
+
+        assert!(slice.contains(
+            Point { x: 50.0, y: 10.0 },
+            geometry.center,
+            geometry.inner_radius,
+            geometry.outer_radius
+        ));
+        assert!(!slice.contains(
+            Point { x: 50.0, y: 50.0 },
+            geometry.center,
+            geometry.inner_radius,
+            geometry.outer_radius
+        ));
+        assert!(!slice.contains(
+            Point { x: 10.0, y: 50.0 },
+            geometry.center,
+            geometry.inner_radius,
+            geometry.outer_radius
+        ));
     }
 
     #[test]
