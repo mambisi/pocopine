@@ -9,8 +9,8 @@ The first layer is intentionally low level:
 - chart rectangles and margins,
 - linear and band scales,
 - SVG path builders for line and area series,
-- single-line, multi-line, scatter, area, grouped bar, stacked bar, legend,
-  marker, and hover components,
+- single-line, multi-line, scatter, area, grouped bar, stacked bar, pie/donut,
+  legend, marker, and hover components,
 - strict finite-number validation.
 
 Higher level components build on those primitives instead of hiding them. That

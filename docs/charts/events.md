@@ -5,8 +5,9 @@ usually connect to detail panels, filters, or route changes.
 
 ## Selection
 
-Line markers, scatter points, and bars emit `pp:chart:select` when selected by
-pointer or keyboard. The event payload is `ChartSelection`:
+Line markers, scatter points, bars, and pie/donut slices emit
+`pp:chart:select` when selected by pointer or keyboard. The event payload is
+`ChartSelection`:
 
 ```rust
 use pine_charts::ChartSelection;
@@ -14,14 +15,14 @@ use pine_charts::ChartSelection;
 
 Payload fields:
 
-- `chart`: `"line"`, `"scatter"`, or `"bar"`
+- `chart`: `"line"`, `"scatter"`, `"bar"`, or `"pie"`
 - `key`: stable rendered mark key
 - `label`: human-readable mark label
 - `series`: series label when present
 - `category`: categorical label for bars
 - `x` / `y`: numeric coordinates for line and scatter charts
-- `value`: numeric value for bars and future share charts
-- `percentage`: percentage for future share charts
+- `value`: numeric value for bars and pie/donut slices
+- `percentage`: share percentage for pie/donut slices
 
 Template listeners use the event name directly:
 

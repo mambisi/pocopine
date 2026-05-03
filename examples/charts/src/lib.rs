@@ -1,6 +1,7 @@
 use pine_charts::{
     area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items, ChartAreaSeries,
-    ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, ChartScatterSeries, LegendItem,
+    ChartBar, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries,
+    LegendItem,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct ChartDemo {
     pub dataset: String,
     pub bar_mode: String,
+    pub pie_shape: String,
     pub line_series: Vec<ChartLineSeries>,
     pub line_legend: Vec<LegendItem>,
     pub area_series: Vec<ChartAreaSeries>,
@@ -18,6 +20,11 @@ pub struct ChartDemo {
     pub bar_legend: Vec<LegendItem>,
     pub scatter_series: Vec<ChartScatterSeries>,
     pub scatter_legend: Vec<LegendItem>,
+    pub pie_data: Vec<ChartPieSlice>,
+    pub pie_legend: Vec<LegendItem>,
+    pub pie_inner_radius: f64,
+    pub pie_start_angle: f64,
+    pub pie_end_angle: f64,
 }
 
 impl Default for ChartDemo {
@@ -26,9 +33,11 @@ impl Default for ChartDemo {
         let area_series = growth_area_series();
         let bar_series = growth_bar_series();
         let scatter_series = growth_scatter_series();
+        let pie_data = growth_pie_data();
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
+            pie_shape: "pie".into(),
             line_legend: line_legend_items(&line_series),
             line_series,
             area_legend: area_legend_items(&area_series),
@@ -37,6 +46,11 @@ impl Default for ChartDemo {
             bar_series,
             scatter_legend: scatter_legend_items(&scatter_series),
             scatter_series,
+            pie_legend: pine_charts::pie_legend_items(&pie_data),
+            pie_data,
+            pie_inner_radius: 0.0,
+            pie_start_angle: -90.0,
+            pie_end_angle: 270.0,
         }
     }
 }
@@ -48,6 +62,7 @@ impl ChartDemo {
         let area_series = growth_area_series();
         let bar_series = growth_bar_series();
         let scatter_series = growth_scatter_series();
+        let pie_data = growth_pie_data();
         self.dataset = "growth".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
@@ -57,6 +72,8 @@ impl ChartDemo {
         self.bar_series = bar_series;
         self.scatter_legend = scatter_legend_items(&scatter_series);
         self.scatter_series = scatter_series;
+        self.pie_legend = pine_charts::pie_legend_items(&pie_data);
+        self.pie_data = pie_data;
     }
 
     pub fn show_latency(&mut self) {
@@ -64,6 +81,7 @@ impl ChartDemo {
         let area_series = latency_area_series();
         let bar_series = latency_bar_series();
         let scatter_series = latency_scatter_series();
+        let pie_data = latency_pie_data();
         self.dataset = "latency".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
@@ -73,6 +91,8 @@ impl ChartDemo {
         self.bar_series = bar_series;
         self.scatter_legend = scatter_legend_items(&scatter_series);
         self.scatter_series = scatter_series;
+        self.pie_legend = pine_charts::pie_legend_items(&pie_data);
+        self.pie_data = pie_data;
     }
 
     pub fn show_grouped(&mut self) {
@@ -81,6 +101,27 @@ impl ChartDemo {
 
     pub fn show_stacked(&mut self) {
         self.bar_mode = "stacked".into();
+    }
+
+    pub fn show_pie(&mut self) {
+        self.pie_shape = "pie".into();
+        self.pie_inner_radius = 0.0;
+        self.pie_start_angle = -90.0;
+        self.pie_end_angle = 270.0;
+    }
+
+    pub fn show_donut(&mut self) {
+        self.pie_shape = "donut".into();
+        self.pie_inner_radius = 0.58;
+        self.pie_start_angle = -90.0;
+        self.pie_end_angle = 270.0;
+    }
+
+    pub fn show_half_donut(&mut self) {
+        self.pie_shape = "half-donut".into();
+        self.pie_inner_radius = 0.58;
+        self.pie_start_angle = 180.0;
+        self.pie_end_angle = 360.0;
     }
 }
 
@@ -303,6 +344,24 @@ fn latency_bar_series() -> Vec<ChartBarSeries> {
                 ChartBar::new("P99", 30.0),
             ],
         ),
+    ]
+}
+
+fn growth_pie_data() -> Vec<ChartPieSlice> {
+    vec![
+        ChartPieSlice::new("Organic", 42.0),
+        ChartPieSlice::new("Referral", 24.0),
+        ChartPieSlice::new("Paid", 18.0),
+        ChartPieSlice::new("Partner", 10.0),
+    ]
+}
+
+fn latency_pie_data() -> Vec<ChartPieSlice> {
+    vec![
+        ChartPieSlice::new("API", 38.0),
+        ChartPieSlice::new("Render", 29.0),
+        ChartPieSlice::new("Network", 21.0),
+        ChartPieSlice::new("Idle", 12.0),
     ]
 }
 

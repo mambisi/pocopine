@@ -1,0 +1,40 @@
+<root class="pine-chart-root pine-pie-chart"
+      role="img"
+      :aria-label="label"
+      :data-state="state"
+      :data-empty="empty"
+      :data-invalid="invalid"
+      :data-donut="inner_radius > 0"
+      tabindex="0"
+      @keydown.arrow-right.prevent="focus_next_slice"
+      @keydown.arrow-down.prevent="focus_next_slice"
+      @keydown.arrow-left.prevent="focus_prev_slice"
+      @keydown.arrow-up.prevent="focus_prev_slice"
+      @keydown.enter.prevent="select_focused_slice"
+      @keydown.space.prevent="select_focused_slice">
+  <svg class="pine-chart-svg"
+       :width="width"
+       :height="height"
+       :viewBox="view_box"
+       preserveAspectRatio="xMidYMid meet"
+       aria-hidden="true"
+       focusable="false">
+    <g class="pine-chart-pie-slices">
+      <template pp-for="slice in slices" pp-key="slice.key">
+        <path class="pine-chart-pie-slice"
+              :d="slice.d"
+              role="option"
+              :aria-label="slice.aria_label"
+              :aria-selected="slice.key == selected_key ? 'true' : 'false'"
+              :data-key="slice.key"
+              :data-label="slice.label"
+              :data-value="slice.value"
+              :data-percentage="slice.percentage"
+              :data-focused="slice.key == focused_key"
+              :data-selected="slice.key == selected_key"
+              @click.stop="select_slice(slice.key)"></path>
+      </template>
+    </g>
+  </svg>
+  <span class="pine-chart-status" pp-show="invalid" pp-text="error"></span>
+</root>
