@@ -78,3 +78,4 @@ Conventions:
 | 067 | [Background jobs with Redis and memory backends](./rfc-067-redis-background-jobs.md) | Draft |
 | 068 | [SVG namespace template support](./rfc-068-svg-namespace-template-support.md) | Draft |
 | 069 | [Unified observability, logging, and analytics](./rfc-069-observability.md) | Draft |
+| 070 | [Derived props and prop flattening](./rfc-070-derived-props-and-prop-flatten.md) | Draft |
