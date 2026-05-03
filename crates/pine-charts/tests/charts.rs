@@ -150,6 +150,11 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
         .query_selector(".pine-chart-hover-marker")
         .unwrap()
         .unwrap();
+    let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
+    assert_eq!(
+        hover.get_attribute("visibility").as_deref(),
+        Some("visible")
+    );
     assert_eq!(marker.get_attribute("cx").as_deref(), Some("50"));
     assert_eq!(marker.get_attribute("cy").as_deref(), Some("0"));
     assert_eq!(marker.get_attribute("data-x").as_deref(), Some("5"));
@@ -181,6 +186,8 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 
     let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
     assert!(!chart.has_attribute("data-hover"));
+    let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
+    assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
 
     host.remove();
 }
