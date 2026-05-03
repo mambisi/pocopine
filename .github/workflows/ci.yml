@@ -101,12 +101,31 @@ jobs:
         with:
           key: test-host
       # `pine-icons` ships fs-based manifest tests; `pocopine-cli`
-      # is host-only. Other crates' #[test]s either have no
+      # is host-only; `observability-smoke` owns a local OTLP
+      # collector and has a dedicated job below. Other crates'
+      # #[test]s either have no
       # host-runnable shape (gated on `cfg(target_arch = "wasm32")`)
       # or live in `src/` and run cleanly on host. `--tests` skips
       # doc-tests (a few example snippets reference deps the
       # workspace doesn't carry — they're not the contract here).
-      - run: cargo test --workspace --exclude pine --tests
+      - run: cargo test --workspace --exclude pine --exclude observability-smoke --tests
+
+  observability-otlp:
+    name: observability OTLP smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: observability-otlp
+      # In-process fake OTLP collector. Asserts route correctness,
+      # exported span names/attributes, service.name resource metadata,
+      # p95 local latency budget, and that raw request payloads are not
+      # present in exported telemetry.
+      - run: bash scripts/ci/otlp_smoke.sh
 
   test-wasm-node:
     name: wasm-pack test --node (${{ matrix.name }})
