@@ -308,6 +308,105 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
+type RefreshCallback = Box<dyn FnMut(LiveRefreshEvent)>;
+
+#[cfg(any(test, target_arch = "wasm32"))]
+struct RefreshRegistration {
+    name: String,
+    callback: RefreshCallback,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+impl RefreshRegistration {
+    fn new(name: String, handler: impl FnMut(LiveRefreshEvent) + 'static) -> Self {
+        Self {
+            name,
+            callback: Box::new(handler),
+        }
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+#[derive(Default)]
+struct RefreshRegistry {
+    collections: Vec<RefreshRegistration>,
+    query_tags: Vec<RefreshRegistration>,
+    gaps: Vec<RefreshCallback>,
+    errors: Vec<RefreshCallback>,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+impl RefreshRegistry {
+    fn dispatch(&mut self, event: LiveEvent) {
+        let targets = live_refresh_targets(&event);
+
+        if targets.gap.is_some() {
+            self.dispatch_gap(event);
+            return;
+        }
+
+        if targets.error.is_some() {
+            for callback in &mut self.errors {
+                callback(LiveRefreshEvent {
+                    target: LiveRefreshTarget::Error,
+                    live_event: event.clone(),
+                });
+            }
+            return;
+        }
+
+        for collection in targets.collections {
+            for registration in self
+                .collections
+                .iter_mut()
+                .filter(|registration| registration.name == collection)
+            {
+                (registration.callback)(LiveRefreshEvent {
+                    target: LiveRefreshTarget::Collection(collection.clone()),
+                    live_event: event.clone(),
+                });
+            }
+        }
+
+        for query_tag in targets.query_tags {
+            for registration in self
+                .query_tags
+                .iter_mut()
+                .filter(|registration| registration.name == query_tag)
+            {
+                (registration.callback)(LiveRefreshEvent {
+                    target: LiveRefreshTarget::QueryTag(query_tag.clone()),
+                    live_event: event.clone(),
+                });
+            }
+        }
+    }
+
+    fn dispatch_gap(&mut self, event: LiveEvent) {
+        for callback in &mut self.gaps {
+            callback(LiveRefreshEvent {
+                target: LiveRefreshTarget::Gap,
+                live_event: event.clone(),
+            });
+        }
+
+        for registration in &mut self.collections {
+            (registration.callback)(LiveRefreshEvent {
+                target: LiveRefreshTarget::Collection(registration.name.clone()),
+                live_event: event.clone(),
+            });
+        }
+
+        for registration in &mut self.query_tags {
+            (registration.callback)(LiveRefreshEvent {
+                target: LiveRefreshTarget::QueryTag(registration.name.clone()),
+                live_event: event.clone(),
+            });
+        }
+    }
+}
+
 /// Browser-live client failures.
 #[derive(Debug)]
 pub enum LiveClientError {
@@ -619,105 +718,12 @@ mod browser {
     use web_sys::{Event, EventSource, EventSourceInit, EventTarget, MessageEvent};
 
     use crate::{
-        build_live_stream_url, live_refresh_targets, parse_live_event, LiveClientError, LiveEvent,
-        LiveRefreshEvent, LiveRefreshTarget, BUILT_IN_EVENT_KINDS, KIND_ERROR, LIVE_STREAM_PATH,
+        build_live_stream_url, parse_live_event, LiveClientError, LiveEvent, LiveRefreshEvent,
+        RefreshRegistration, RefreshRegistry, BUILT_IN_EVENT_KINDS, KIND_ERROR, LIVE_STREAM_PATH,
     };
 
     type Handler = Rc<RefCell<Box<dyn FnMut(LiveEvent)>>>;
     type Listener = (String, Closure<dyn FnMut(Event)>);
-    type RefreshCallback = Box<dyn FnMut(LiveRefreshEvent)>;
-
-    struct RefreshRegistration {
-        name: String,
-        callback: RefreshCallback,
-    }
-
-    impl RefreshRegistration {
-        fn new(name: String, handler: impl FnMut(LiveRefreshEvent) + 'static) -> Self {
-            Self {
-                name,
-                callback: Box::new(handler),
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct RefreshRegistry {
-        collections: Vec<RefreshRegistration>,
-        query_tags: Vec<RefreshRegistration>,
-        gaps: Vec<RefreshCallback>,
-        errors: Vec<RefreshCallback>,
-    }
-
-    impl RefreshRegistry {
-        fn dispatch(&mut self, event: LiveEvent) {
-            let targets = live_refresh_targets(&event);
-
-            if targets.gap.is_some() {
-                self.dispatch_gap(event);
-                return;
-            }
-
-            if targets.error.is_some() {
-                for callback in &mut self.errors {
-                    callback(LiveRefreshEvent {
-                        target: LiveRefreshTarget::Error,
-                        live_event: event.clone(),
-                    });
-                }
-                return;
-            }
-
-            for collection in targets.collections {
-                for registration in self
-                    .collections
-                    .iter_mut()
-                    .filter(|registration| registration.name == collection)
-                {
-                    (registration.callback)(LiveRefreshEvent {
-                        target: LiveRefreshTarget::Collection(collection.clone()),
-                        live_event: event.clone(),
-                    });
-                }
-            }
-
-            for query_tag in targets.query_tags {
-                for registration in self
-                    .query_tags
-                    .iter_mut()
-                    .filter(|registration| registration.name == query_tag)
-                {
-                    (registration.callback)(LiveRefreshEvent {
-                        target: LiveRefreshTarget::QueryTag(query_tag.clone()),
-                        live_event: event.clone(),
-                    });
-                }
-            }
-        }
-
-        fn dispatch_gap(&mut self, event: LiveEvent) {
-            for callback in &mut self.gaps {
-                callback(LiveRefreshEvent {
-                    target: LiveRefreshTarget::Gap,
-                    live_event: event.clone(),
-                });
-            }
-
-            for registration in &mut self.collections {
-                (registration.callback)(LiveRefreshEvent {
-                    target: LiveRefreshTarget::Collection(registration.name.clone()),
-                    live_event: event.clone(),
-                });
-            }
-
-            for registration in &mut self.query_tags {
-                (registration.callback)(LiveRefreshEvent {
-                    target: LiveRefreshTarget::QueryTag(registration.name.clone()),
-                    live_event: event.clone(),
-                });
-            }
-        }
-    }
 
     /// Browser `EventSource` client for pocopine live streams.
     #[derive(Clone, Debug)]
@@ -1436,6 +1442,96 @@ mod protocol_tests {
             .error,
             Some("stream_failed".to_string())
         );
+    }
+
+    #[test]
+    fn refresh_registry_dispatches_collection_and_query_matches() {
+        let hits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut registry = RefreshRegistry::default();
+
+        registry.collections.push(RefreshRegistration::new(
+            "posts".to_string(),
+            capture_target(hits.clone()),
+        ));
+        registry.query_tags.push(RefreshRegistration::new(
+            "posts:list".to_string(),
+            capture_target(hits.clone()),
+        ));
+        registry.query_tags.push(RefreshRegistration::new(
+            "comments:list".to_string(),
+            capture_target(hits.clone()),
+        ));
+
+        registry.dispatch(LiveEvent::CollectionChanged {
+            collection: "posts".to_string(),
+            op: LiveOp::Upsert,
+            keys: vec!["post_1".to_string()],
+            query_tags: vec!["posts:list".to_string()],
+            schema_version: 1,
+            cursor: Some("memory:3".to_string()),
+            created_at_ms: Some(12),
+        });
+
+        assert_eq!(
+            hits.borrow().as_slice(),
+            &[
+                LiveRefreshTarget::Collection("posts".to_string()),
+                LiveRefreshTarget::QueryTag("posts:list".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn refresh_registry_fans_out_registered_refreshes_on_gap() {
+        let hits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut registry = RefreshRegistry::default();
+
+        registry.gaps.push(Box::new(capture_target(hits.clone())));
+        registry.collections.push(RefreshRegistration::new(
+            "posts".to_string(),
+            capture_target(hits.clone()),
+        ));
+        registry.query_tags.push(RefreshRegistration::new(
+            "posts:list".to_string(),
+            capture_target(hits.clone()),
+        ));
+
+        registry.dispatch(LiveEvent::Gap {
+            reason: "cursor_too_old".to_string(),
+        });
+
+        assert_eq!(
+            hits.borrow().as_slice(),
+            &[
+                LiveRefreshTarget::Gap,
+                LiveRefreshTarget::Collection("posts".to_string()),
+                LiveRefreshTarget::QueryTag("posts:list".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn refresh_registry_dispatches_errors_without_refreshing_data() {
+        let hits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut registry = RefreshRegistry::default();
+
+        registry.errors.push(Box::new(capture_target(hits.clone())));
+        registry.collections.push(RefreshRegistration::new(
+            "posts".to_string(),
+            capture_target(hits.clone()),
+        ));
+
+        registry.dispatch(LiveEvent::Error {
+            reason: "stream_failed".to_string(),
+        });
+
+        assert_eq!(hits.borrow().as_slice(), &[LiveRefreshTarget::Error]);
+    }
+
+    fn capture_target(
+        hits: std::rc::Rc<std::cell::RefCell<Vec<LiveRefreshTarget>>>,
+    ) -> impl FnMut(LiveRefreshEvent) {
+        move |event| hits.borrow_mut().push(event.target)
     }
 }
 
