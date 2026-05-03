@@ -123,6 +123,60 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
     host.remove();
 }
 
+#[wasm_bindgen_test]
+async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
+    let host = mount_fixture::<LineChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
+    assert!(!chart.has_attribute("data-hover"));
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let rect = svg.get_bounding_client_rect();
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x((rect.left() + 50.0).round() as i32);
+    init.set_client_y((rect.top() + 50.0).round() as i32);
+    svg.dispatch_event(
+        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
+    )
+    .unwrap();
+    settle().await;
+
+    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
+    assert!(chart.has_attribute("data-hover"));
+
+    let marker = host
+        .query_selector(".pine-chart-hover-marker")
+        .unwrap()
+        .unwrap();
+    assert_eq!(marker.get_attribute("cx").as_deref(), Some("50"));
+    assert_eq!(marker.get_attribute("cy").as_deref(), Some("0"));
+    assert_eq!(marker.get_attribute("data-x").as_deref(), Some("5"));
+    assert_eq!(marker.get_attribute("data-y").as_deref(), Some("10"));
+
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(tooltip.get_attribute("data-x").as_deref(), Some("5"));
+    assert_eq!(tooltip.get_attribute("data-y").as_deref(), Some("10"));
+    assert_eq!(
+        tooltip.get_attribute("aria-label").as_deref(),
+        Some("x 5, y 10")
+    );
+    assert!(tooltip
+        .get_attribute("style")
+        .unwrap_or_default()
+        .contains("--pine-chart-tooltip-x: 50px"));
+
+    let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
+    svg.dispatch_event(&leave).unwrap();
+    settle().await;
+
+    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
+    assert!(!chart.has_attribute("data-hover"));
+
+    host.remove();
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>

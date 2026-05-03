@@ -13,11 +13,21 @@ doctest = false
 [dependencies]
 pocopine = { path = "../pocopine" }
 serde = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "DomRect",
+    "Element",
+    "EventTarget",
+    "PointerEvent",
+    "PointerEventInit",
+]
 
 [dev-dependencies]
 js-sys = { workspace = true }
 pocopine-core = { workspace = true }
-wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = "0.3"
 
@@ -25,7 +35,6 @@ wasm-bindgen-test = "0.3"
 version = "0.3"
 features = [
     "Document",
-    "Element",
     "HtmlElement",
     "Node",
     "Window",
