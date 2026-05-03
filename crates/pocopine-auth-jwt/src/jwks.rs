@@ -142,18 +142,6 @@ impl JwksResolver {
             }),
         }
     }
-
-    /// Inject a parsed JWKS document directly. Used by
-    /// `KeySource::StaticJwks` and by tests.
-    pub async fn install_static(&self, document: JwkSet) {
-        let mut state = self.inner.state.lock().await;
-        state.jwks = Some(document);
-        // Pin `last_fetch` to "now" but pin TTL to its full window
-        // by setting `last_attempt` to None, so a static install
-        // doesn't gratuitously trigger a network refresh.
-        state.last_fetch = Some(Instant::now());
-        state.last_attempt = None;
-    }
 }
 
 async fn fetch_jwks(url: &str) -> Result<JwkSet, JwtAuthError> {

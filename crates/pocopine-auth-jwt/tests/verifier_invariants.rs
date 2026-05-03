@@ -310,13 +310,26 @@ async fn revocation_hook_short_circuits_after_signature_verify() {
 
 #[tokio::test]
 async fn issuer_round_trips_signed_and_verified_token() {
-    // Symmetry test: issue a token via JwtIssuer, verify with the
-    // matching pocopine preset.
+    // Symmetry test: an HS256 token issued by JwtIssuer round-trips
+    // through a JwtVerifier configured with the matching key, iss,
+    // and aud.
     let secret = SecretBytes::new(SECRET.to_vec());
-    let issuer = JwtIssuer::pocopine(secret.clone()).with_default_ttl(Duration::from_secs(60));
+    let issuer = JwtIssuer::hs256(secret.clone(), "round-trip-iss", "round-trip-aud")
+        .with_default_ttl(Duration::from_secs(60));
     let token = issuer.sign("user-7", json!({ "email": "x@y" })).unwrap();
 
-    let verifier = JwtVerifier::pocopine(secret).unwrap();
+    let verifier_config = JwtConfig {
+        keys: KeySource::Hmac { secret },
+        issuer: Some("round-trip-iss".into()),
+        audience: Some(vec!["round-trip-aud".into()]),
+        algorithms: vec![Algorithm::Hs256],
+        leeway: Duration::from_secs(5),
+        sources: vec![TokenSource::Bearer],
+        revocation: None,
+        claim_map: ClaimMap::oidc(),
+        required_scopes: vec![],
+    };
+    let verifier = JwtVerifier::custom(verifier_config).unwrap();
     let user = verifier.verify_token(&token).await.unwrap();
     assert_eq!(user.id, "user-7");
     assert_eq!(user.claim("email"), Some(&json!("x@y")));

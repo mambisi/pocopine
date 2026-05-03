@@ -6,12 +6,6 @@ license.workspace = true
 repository.workspace = true
 description = "JWT verification engine for pocopine-auth (Firebase, Clerk, Auth0, Supabase, custom OIDC, and pocopine-issued tokens)."
 
-[features]
-# `presets` opts in to the bundled provider configs. Default-on so
-# `JwtVerifier::firebase("project")` Just Works.
-default = ["presets"]
-presets = []
-
 [dependencies]
 pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }

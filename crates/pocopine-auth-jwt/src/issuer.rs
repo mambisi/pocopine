@@ -64,12 +64,6 @@ impl JwtIssuer {
         }
     }
 
-    /// Convenience: pocopine-issued token preset (issuer and
-    /// audience both `"pocopine"`, 1-hour TTL).
-    pub fn pocopine(secret: impl Into<SecretBytes>) -> Self {
-        Self::hs256(secret, "pocopine", "pocopine")
-    }
-
     /// Override the default token lifetime.
     pub fn with_default_ttl(mut self, ttl: Duration) -> Self {
         self.default_ttl = ttl;
