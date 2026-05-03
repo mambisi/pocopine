@@ -8,6 +8,7 @@ pub mod area;
 pub mod bar;
 mod cartesian;
 pub mod error;
+pub mod events;
 pub mod geometry;
 pub mod legend;
 pub mod line;
@@ -24,6 +25,7 @@ pub use bar::{
     PineBarChart, SvgBar,
 };
 pub use error::{ChartError, ChartResult};
+pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use legend::{LegendItem, PineChartLegend};
 pub use line::{

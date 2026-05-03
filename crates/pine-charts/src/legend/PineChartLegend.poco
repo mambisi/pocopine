@@ -2,11 +2,20 @@
       role="group"
       :aria-label="label"
       :data-empty="empty"
+      :data-interactive="interactive"
       :data-orientation="orientation">
   <ul class="pine-chart-legend-list" role="list">
     <template pp-for="item in items" pp-key="item.key">
       <li class="pine-chart-legend-item"
-          :data-series="item.series">
+          role="listitem"
+          :tabindex="interactive ? '0' : '-1'"
+          :aria-pressed="interactive ? (item.active ? 'true' : 'false') : 'false'"
+          :data-key="item.key"
+          :data-series="item.series"
+          :data-active="item.active"
+          @click="toggle_item(item.key)"
+          @keydown.enter.prevent="toggle_item(item.key)"
+          @keydown.space.prevent="toggle_item(item.key)">
         <span class="pine-chart-legend-marker"
               aria-hidden="true"
               :data-series="item.series"></span>

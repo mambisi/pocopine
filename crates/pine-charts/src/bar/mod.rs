@@ -7,6 +7,7 @@ use crate::cartesian::{
     CategoricalGuideUpdate, ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
+use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items, LegendItem};
 use crate::scale::{BandScale, LinearScale};
@@ -211,6 +212,17 @@ impl SvgBar {
             x: self.x + self.width * 0.5,
             y,
         }
+    }
+
+    fn selection(&self) -> ChartSelection {
+        ChartSelection::category(
+            "bar",
+            self.key.clone(),
+            self.aria_label.clone(),
+            self.category_label.clone(),
+            display_series_label(&self.series_label),
+            self.value,
+        )
     }
 
     fn hover_update(&self, plot: ChartRect, width: f64, height: f64) -> BarHoverUpdate {
@@ -777,9 +789,10 @@ impl PineBarChart {
     }
 
     pub fn select_bar(&mut self, key: String) {
-        if self.has_bar_key(&key) {
+        if let Some(selection) = self.selection_for_bar(&key) {
             self.focused_key = key.clone();
             self.selected_key = key;
+            pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
 
@@ -795,8 +808,9 @@ impl PineBarChart {
         if self.focused_key.is_empty() {
             self.step_bar_focus(1);
         }
-        if !self.focused_key.is_empty() {
+        if let Some(selection) = self.selection_for_bar(&self.focused_key) {
             self.selected_key = self.focused_key.clone();
+            pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
 }
@@ -964,6 +978,13 @@ impl PineBarChart {
 
     fn has_bar_key(&self, key: &str) -> bool {
         self.bars.iter().any(|bar| bar.key == key)
+    }
+
+    fn selection_for_bar(&self, key: &str) -> Option<ChartSelection> {
+        self.bars
+            .iter()
+            .find(|bar| bar.key == key)
+            .map(SvgBar::selection)
     }
 
     fn reconcile_selection(&mut self) {
