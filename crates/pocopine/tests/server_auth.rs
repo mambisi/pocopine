@@ -105,26 +105,115 @@ fn oversized_body_returns_bad_request() {
         .enable_all()
         .build()
         .unwrap();
+    let capture = TraceCapture::new();
 
-    rt.block_on(async {
-        let router = __public_echo_route(pocopine_server::axum::Router::new());
-        let oversized_body = vec![b'a'; pocopine_server::DEFAULT_SERVER_FUNCTION_BODY_LIMIT + 1];
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/_pocopine/public_echo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(oversized_body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+    let result = capture.run(|| {
+        rt.block_on(async {
+            let router = __public_echo_route(pocopine_server::axum::Router::new());
+            let mut oversized_body = b"oversized-secret".to_vec();
+            oversized_body.resize(
+                pocopine_server::DEFAULT_SERVER_FUNCTION_BODY_LIMIT + 1,
+                b'a',
+            );
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/_pocopine/public_echo")
+                        .header("content-type", "application/json")
+                        .body(Body::from(oversized_body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
 
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let result: ServerResult<String> = serde_json::from_slice(&bytes).unwrap();
-        assert!(matches!(result, Err(ServerError::BadRequest(_))));
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<ServerResult<String>>(&bytes).unwrap()
+        })
     });
+
+    assert!(matches!(result, Err(ServerError::BadRequest(_))));
+
+    let events =
+        capture.events_with_message("pocopine.log", "server function request body read failed");
+    let event = events
+        .iter()
+        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .expect("body-read failure event should be captured");
+
+    assert_eq!(event.field("function"), Some("public_echo"));
+    assert_eq!(event.field("error_kind"), Some("bad_request"));
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("oversized-secret")),
+        "body-read failure logs must not include raw request payloads"
+    );
+}
+
+#[test]
+fn malformed_body_returns_bad_request_and_emits_parse_log_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    let result = capture.run(|| {
+        rt.block_on(async {
+            let router = __public_echo_route(pocopine_server::axum::Router::new());
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/_pocopine/public_echo")
+                        .header("content-type", "application/json")
+                        .body(Body::from("\"parse-secret\""))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<ServerResult<String>>(&bytes).unwrap()
+        })
+    });
+
+    assert!(matches!(result, Err(ServerError::BadRequest(_))));
+
+    let events =
+        capture.events_with_message("pocopine.log", "server function request body parse failed");
+    let event = events
+        .iter()
+        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .expect("body-parse failure event should be captured");
+
+    assert_eq!(event.field("function"), Some("public_echo"));
+    assert_eq!(event.field("body_bytes"), Some("14"));
+    assert_eq!(event.field("error_kind"), Some("bad_request"));
+    assert_eq!(event.field("error"), Some("request body parse failed"));
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("parse-secret")),
+        "body-parse failure logs must not include raw request payloads"
+    );
 }
 
 #[test]
