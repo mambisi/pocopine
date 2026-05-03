@@ -1894,7 +1894,7 @@ return redis.call(
                 let queue_key = client.queue_key(QUEUE);
                 let mut conn = client.connection().await.unwrap();
                 let _: i64 = redis::cmd("DEL")
-                    .arg(&scheduled_key)
+                    .arg(scheduled_key)
                     .arg(&queue_key)
                     .query_async(&mut conn)
                     .await
@@ -1929,7 +1929,7 @@ return redis.call(
                 worker.promote_due_jobs(&mut conn, now_ms).await.unwrap();
 
                 let scheduled_len: i64 = redis::cmd("ZCARD")
-                    .arg(&scheduled_key)
+                    .arg(scheduled_key)
                     .query_async(&mut conn)
                     .await
                     .unwrap();
@@ -1950,7 +1950,7 @@ return redis.call(
                 assert_eq!(stream_len_after_second_promote, 1);
 
                 let _: i64 = redis::cmd("DEL")
-                    .arg(&scheduled_key)
+                    .arg(scheduled_key)
                     .arg(&queue_key)
                     .query_async(&mut conn)
                     .await
