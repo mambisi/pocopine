@@ -22,3 +22,8 @@ tracing = { workspace = true }
 axum = "0.7"
 futures-util = "0.3"
 serde_urlencoded = "0.7"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+tower = { version = "0.5", features = ["util"] }
