@@ -3,14 +3,17 @@
       :aria-label="label"
       :data-state="state"
       :data-empty="empty"
-      :data-invalid="invalid">
+      :data-invalid="invalid"
+      :data-hover="hover_visible">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
        :viewBox="view_box"
        preserveAspectRatio="none"
        aria-hidden="true"
-       focusable="false">
+       focusable="false"
+       @pointermove="on_pointer_move"
+       @pointerleave="clear_hover">
     <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
       <template pp-for="line in x_grid" pp-key="line.key">
         <line class="pine-chart-grid-line pine-chart-grid-line-x"
@@ -73,7 +76,39 @@
           fill="none"
           stroke="currentColor"
           vector-effect="non-scaling-stroke"></path>
+    <g pp-show="hover_visible"
+       class="pine-chart-hover"
+       aria-hidden="true">
+      <line class="pine-chart-crosshair pine-chart-crosshair-x"
+            :x1="hover_x"
+            :y1="plot_y"
+            :x2="hover_x"
+            :y2="plot_bottom"></line>
+      <line class="pine-chart-crosshair pine-chart-crosshair-y"
+            :x1="plot_x"
+            :y1="hover_y"
+            :x2="plot_right"
+            :y2="hover_y"></line>
+      <circle class="pine-chart-hover-marker"
+              :cx="hover_x"
+              :cy="hover_y"
+              r="4"
+              :data-x="hover_data_x"
+              :data-y="hover_data_y"></circle>
+    </g>
   </svg>
+  <div pp-show="hover_visible"
+       class="pine-chart-tooltip"
+       role="status"
+       :aria-label="hover_aria_label"
+       :style="hover_style"
+       :data-x="hover_data_x"
+       :data-y="hover_data_y">
+    <span class="pine-chart-tooltip-x"
+          pp-text="hover_x_label"></span>
+    <span class="pine-chart-tooltip-y"
+          pp-text="hover_y_label"></span>
+  </div>
   <span pp-show="invalid"
         class="pine-chart-status"
         pp-text="error"></span>

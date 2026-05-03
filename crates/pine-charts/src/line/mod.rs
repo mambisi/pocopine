@@ -1,5 +1,6 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsCast;
 
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -52,6 +53,7 @@ pub struct LineChartGeometry {
     pub view_box: String,
     pub line_d: String,
     pub plot: ChartRect,
+    pub samples: Vec<LineChartSample>,
     pub x_ticks: Vec<crate::Tick>,
     pub y_ticks: Vec<crate::Tick>,
     pub x_grid: Vec<SvgLine>,
@@ -76,12 +78,21 @@ impl LineChartGeometry {
         let y_domain = domain_or_extent(options.y_domain, points.iter().map(|point| point.y))?;
         let x_scale = LinearScale::new(x_domain, (plot.x, plot.right()))?;
         let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
-        let mapped = points
+        let samples = points
             .iter()
-            .map(|point| {
-                Ok(Point {
-                    x: x_scale.map(point.x)?,
-                    y: y_scale.map(point.y)?,
+            .enumerate()
+            .map(|(index, point)| {
+                let x = x_scale.map(point.x)?;
+                let y = y_scale.map(point.y)?;
+                Ok(LineChartSample {
+                    key: format!("point-{index}-{}", format_tick(point.x)),
+                    data_x: point.x,
+                    data_y: point.y,
+                    x,
+                    y,
+                    x_label: format_tick(point.x),
+                    y_label: format_tick(point.y),
+                    aria_label: format!("x {}, y {}", format_tick(point.x), format_tick(point.y)),
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
@@ -91,8 +102,9 @@ impl LineChartGeometry {
 
         Ok(Self {
             view_box: format!("0 0 {width} {height}"),
-            line_d: line_path(mapped)?,
+            line_d: line_path(samples.iter().map(LineChartSample::point))?,
             plot,
+            samples,
             x_grid: grid_lines_for_x(&x_ticks, plot),
             y_grid: grid_lines_for_y(&y_ticks, plot),
             x_tick_labels: tick_labels_for_x(&x_ticks, plot),
@@ -109,6 +121,38 @@ impl LineChartGeometry {
             y_ticks,
         })
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LineChartSample {
+    pub key: String,
+    pub data_x: f64,
+    pub data_y: f64,
+    pub x: f64,
+    pub y: f64,
+    pub x_label: String,
+    pub y_label: String,
+    pub aria_label: String,
+}
+
+impl LineChartSample {
+    fn point(&self) -> Point {
+        Point {
+            x: self.x,
+            y: self.y,
+        }
+    }
+}
+
+pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&LineChartSample> {
+    let svg_x = finite("hover.x", svg_x).ok()?;
+    samples.iter().min_by(|a, b| {
+        let a_distance = (a.x - svg_x).abs();
+        let b_distance = (b.x - svg_x).abs();
+        a_distance
+            .partial_cmp(&b_distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
 }
 
 fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
@@ -246,12 +290,26 @@ pub struct PineLineChart {
     pub state: String,
     pub view_box: String,
     pub line_d: String,
+    pub samples: Vec<LineChartSample>,
+    pub plot_x: f64,
+    pub plot_y: f64,
+    pub plot_right: f64,
+    pub plot_bottom: f64,
     pub x_grid: Vec<SvgLine>,
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
+    pub hover_visible: bool,
+    pub hover_x: f64,
+    pub hover_y: f64,
+    pub hover_data_x: f64,
+    pub hover_data_y: f64,
+    pub hover_x_label: String,
+    pub hover_y_label: String,
+    pub hover_aria_label: String,
+    pub hover_style: String,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -277,12 +335,26 @@ impl Default for PineLineChart {
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),
+            samples: Vec::new(),
+            plot_x: 0.0,
+            plot_y: 0.0,
+            plot_right: 0.0,
+            plot_bottom: 0.0,
             x_grid: Vec::new(),
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
+            hover_visible: false,
+            hover_x: 0.0,
+            hover_y: 0.0,
+            hover_data_x: 0.0,
+            hover_data_y: 0.0,
+            hover_x_label: String::new(),
+            hover_y_label: String::new(),
+            hover_aria_label: String::new(),
+            hover_style: String::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -351,6 +423,37 @@ impl PineLineChart {
     fn on_y_max(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
         self.recompute();
     }
+
+    pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
+        let Ok(ev) = ev.dyn_into::<web_sys::PointerEvent>() else {
+            return;
+        };
+        let Some(target) = ev.current_target() else {
+            return;
+        };
+        let Ok(element) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
+        let rect = element.get_bounding_client_rect();
+        if rect.width() <= 0.0 || self.width <= 0.0 {
+            return;
+        }
+
+        let ratio = ((ev.client_x() as f64) - rect.left()) / rect.width();
+        self.hover_at_x(ratio * self.width);
+    }
+
+    pub fn clear_hover(&mut self) {
+        self.hover_visible = false;
+        self.hover_x = 0.0;
+        self.hover_y = 0.0;
+        self.hover_data_x = 0.0;
+        self.hover_data_y = 0.0;
+        self.hover_x_label.clear();
+        self.hover_y_label.clear();
+        self.hover_aria_label.clear();
+        self.hover_style.clear();
+    }
 }
 
 impl PineLineChart {
@@ -359,6 +462,11 @@ impl PineLineChart {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 self.line_d = geometry.line_d;
+                self.samples = geometry.samples;
+                self.plot_x = geometry.plot.x;
+                self.plot_y = geometry.plot.y;
+                self.plot_right = geometry.plot.right();
+                self.plot_bottom = geometry.plot.bottom();
                 self.x_grid = geometry.x_grid;
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
@@ -370,10 +478,14 @@ impl PineLineChart {
                 self.ready = true;
                 self.empty = false;
                 self.invalid = false;
+                self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
                 self.line_d.clear();
+                self.samples.clear();
+                self.clear_plot();
                 self.clear_guides();
+                self.clear_hover();
                 self.error.clear();
                 self.state = "empty".into();
                 self.ready = false;
@@ -382,7 +494,10 @@ impl PineLineChart {
             }
             Err(error) => {
                 self.line_d.clear();
+                self.samples.clear();
+                self.clear_plot();
                 self.clear_guides();
+                self.clear_hover();
                 self.error = error.to_string();
                 self.state = "invalid".into();
                 self.ready = false;
@@ -414,6 +529,45 @@ impl PineLineChart {
         self.y_tick_labels.clear();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();
+    }
+
+    pub fn hover_at_x(&mut self, svg_x: f64) {
+        if !self.ready || svg_x < self.plot_x || svg_x > self.plot_right {
+            self.clear_hover();
+            return;
+        }
+
+        let Some(sample) = nearest_line_sample(&self.samples, svg_x) else {
+            self.clear_hover();
+            return;
+        };
+        let hover_x = sample.x;
+        let hover_y = sample.y;
+        let hover_data_x = sample.data_x;
+        let hover_data_y = sample.data_y;
+        let hover_x_label = sample.x_label.clone();
+        let hover_y_label = sample.y_label.clone();
+        let hover_aria_label = sample.aria_label.clone();
+
+        self.hover_visible = true;
+        self.hover_x = hover_x;
+        self.hover_y = hover_y;
+        self.hover_data_x = hover_data_x;
+        self.hover_data_y = hover_data_y;
+        self.hover_x_label = hover_x_label;
+        self.hover_y_label = hover_y_label;
+        self.hover_aria_label = hover_aria_label;
+        self.hover_style = format!(
+            "--pine-chart-tooltip-x: {}px; --pine-chart-tooltip-y: {}px;",
+            self.hover_x, self.hover_y
+        );
+    }
+
+    fn clear_plot(&mut self) {
+        self.plot_x = 0.0;
+        self.plot_y = 0.0;
+        self.plot_right = 0.0;
+        self.plot_bottom = 0.0;
     }
 }
 
@@ -449,8 +603,42 @@ mod tests {
 
         assert_eq!(geometry.view_box, "0 0 100 100");
         assert_eq!(geometry.line_d, "M0,100 L50,0 L100,50");
+        assert_eq!(geometry.samples.len(), 3);
+        assert_eq!(geometry.samples[1].data_x, 5.0);
+        assert_eq!(geometry.samples[1].x, 50.0);
+        assert_eq!(geometry.samples[1].y_label, "10");
         assert_eq!(geometry.x_grid.len(), 6);
         assert_eq!(geometry.y_grid.len(), 6);
+    }
+
+    #[test]
+    fn nearest_sample_uses_svg_x_distance() {
+        let samples = vec![
+            LineChartSample {
+                key: "a".into(),
+                data_x: 1.0,
+                data_y: 2.0,
+                x: 10.0,
+                y: 80.0,
+                x_label: "1".into(),
+                y_label: "2".into(),
+                aria_label: "x 1, y 2".into(),
+            },
+            LineChartSample {
+                key: "b".into(),
+                data_x: 5.0,
+                data_y: 8.0,
+                x: 50.0,
+                y: 20.0,
+                x_label: "5".into(),
+                y_label: "8".into(),
+                aria_label: "x 5, y 8".into(),
+            },
+        ];
+
+        let sample = nearest_line_sample(&samples, 41.0).unwrap();
+
+        assert_eq!(sample.key, "b");
     }
 
     #[test]
@@ -487,5 +675,13 @@ mod tests {
         assert_eq!(chart.line_d, "M0,100 L100,0");
         assert!(!chart.x_tick_labels.is_empty());
         assert!(!chart.y_tick_labels.is_empty());
+
+        chart.hover_at_x(95.0);
+
+        assert!(chart.hover_visible);
+        assert_eq!(chart.hover_x, 100.0);
+        assert_eq!(chart.hover_y, 0.0);
+        assert_eq!(chart.hover_x_label, "1");
+        assert_eq!(chart.hover_y_label, "1");
     }
 }

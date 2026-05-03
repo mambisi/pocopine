@@ -9,7 +9,7 @@ The first layer is intentionally low level:
 - chart rectangles and margins,
 - linear and band scales,
 - SVG path builders for line and area series,
-- line, grouped bar, stacked bar, and legend components,
+- line, grouped bar, stacked bar, legend, and line-hover components,
 - strict finite-number validation.
 
 Higher level components build on those primitives instead of hiding them. That
@@ -34,6 +34,7 @@ should remain author-owned whenever possible.
 - [Components](components.md)
 - [Axes and Grid](axes-grid.md)
 - [Legends](legend.md)
+- [Interaction](interaction.md)
 - [Examples](examples.md)
 
 ## Progression

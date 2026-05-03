@@ -20,7 +20,10 @@ pub use bar::{
 pub use error::{ChartError, ChartResult};
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use legend::{LegendItem, PineChartLegend};
-pub use line::{ChartPoint, LineChartGeometry, LineChartOptions, PineLineChart};
+pub use line::{
+    nearest_line_sample, ChartPoint, LineChartGeometry, LineChartOptions, LineChartSample,
+    PineLineChart,
+};
 pub use path::{area_path, line_path};
 pub use scale::{BandScale, LinearScale, Tick};
 pub use svg::{SvgLine, SvgTickLabel};

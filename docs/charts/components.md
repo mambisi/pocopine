@@ -3,8 +3,7 @@
 The first component layer is intentionally small: `PineLineChart` renders a
 single SVG line chart from numeric points, and `PineBarChart` renders categorical
 values as SVG bars. They are useful on their own, but their main job is to prove
-the component contract before legends, tooltips, and richer composition are
-added.
+the component contract before richer composition is added.
 
 ## Registering
 
@@ -39,6 +38,11 @@ In a template, bind data from the parent component:
   width="640"
   height="320"></pine-line-chart>
 ```
+
+Line charts also expose a hover crosshair, marker, and tooltip. Pointer movement
+is mapped to the nearest sampled point in SVG space. The component owns the
+nearest-point state and geometry variables, while the application owns tooltip
+placement and visual styling.
 
 ## Bar Chart
 
@@ -135,6 +139,12 @@ The component emits stable hooks:
 - `.pine-chart-axis`
 - `.pine-chart-tick-label`
 - `.pine-chart-line`
+- `.pine-chart-hover`
+- `.pine-chart-crosshair`
+- `.pine-chart-hover-marker`
+- `.pine-chart-tooltip`
+- `.pine-chart-tooltip-x`
+- `.pine-chart-tooltip-y`
 - `.pine-chart-bar`
 - `.pine-chart-legend`
 - `.pine-chart-legend-list`
@@ -143,7 +153,10 @@ The component emits stable hooks:
 - `.pine-chart-legend-label`
 - `.pine-chart-status`
 - `data-state="empty|ready|invalid"`
+- `data-hover`
 - `data-orientation="horizontal|vertical|..."`
+- `data-x="<numeric value>"`
+- `data-y="<numeric value>"`
 - `data-series="<series label>"`
 - `data-empty`
 - `data-invalid`
@@ -159,6 +172,11 @@ treatment:
 
 .pine-chart-line {
   stroke-width: 2;
+}
+
+.pine-chart-tooltip {
+  left: var(--pine-chart-tooltip-x);
+  top: var(--pine-chart-tooltip-y);
 }
 
 .pine-chart-bar {
