@@ -274,6 +274,8 @@ let legend_items = pie_legend_items(&slices);
   label="Acquisition share"
   pp-bind:data="slices"
   inner_radius="0.55"
+  pp-bind:center_label="center_label"
+  pp-bind:center_value="center_value"
   width="320"
   height="320"></pine-pie-chart>
 ```
@@ -291,7 +293,13 @@ half-circle angle range:
 ```
 
 Slices expose `data-label`, `data-value`, `data-percentage`, `data-focused`, and
-`data-selected`. Selecting a slice emits `pp:chart:select`.
+`data-selected`. Hovering a slice exposes `data-hovered` and a
+`.pine-chart-pie-tooltip`. Selecting a slice emits `pp:chart:select`.
+
+Donut and half-donut charts can render center text with `center_label` and
+`center_value`. Center text is only shown when `inner_radius > 0`, so the same
+component can morph between pie and donut without leaving text floating over a
+solid pie.
 
 ## Legend
 
@@ -354,6 +362,10 @@ The component emits stable hooks:
 - `.pine-pie-chart`
 - `.pine-chart-pie-slices`
 - `.pine-chart-pie-slice`
+- `.pine-chart-pie-tooltip`
+- `.pine-chart-center`
+- `.pine-chart-center-value`
+- `.pine-chart-center-label`
 - `.pine-chart-tooltip-category`
 - `.pine-chart-tooltip-value`
 - `.pine-chart-legend`
@@ -445,6 +457,10 @@ treatment:
 
 .pine-chart-bar[data-hovered] {
   opacity: 1;
+}
+
+.pine-chart-pie-slice[data-hovered] {
+  transform: scale(1.03);
 }
 
 .pine-chart-bar[data-series="Organic"] {

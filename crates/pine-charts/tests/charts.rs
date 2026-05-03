@@ -1151,11 +1151,15 @@ async fn stacked_bar_chart_accumulates_segments() {
                   margin_bottom="0"
                   margin_left="0"
                   inner_radius="0.5"
+                  pp-bind:center_label="center_label"
+                  pp-bind:center_value="center_value"
                   pp-bind:data="data"></pine-pie-chart>
 </div>
 "#)]
 struct PieChartFixture {
     data: Vec<ChartPieSlice>,
+    center_label: String,
+    center_value: String,
 }
 
 impl Default for PieChartFixture {
@@ -1165,6 +1169,8 @@ impl Default for PieChartFixture {
                 ChartPieSlice::new("Organic", 3.0),
                 ChartPieSlice::new("Referral", 1.0),
             ],
+            center_label: "Total".into(),
+            center_value: "4".into(),
         }
     }
 }
@@ -1183,6 +1189,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
     assert!(chart.has_attribute("data-donut"));
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    assert!(!chart.has_attribute("data-hover"));
 
     let slices = host.query_selector_all(".pine-chart-pie-slice").unwrap();
     assert_eq!(slices.length(), 2);
@@ -1199,6 +1206,36 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert_eq!(
         first.get_attribute("aria-label").as_deref(),
         Some("Organic: 3 (75%)")
+    );
+
+    let center_value = host
+        .query_selector(".pine-chart-center-value")
+        .unwrap()
+        .unwrap();
+    assert_eq!(center_value.text_content().as_deref(), Some("4"));
+    let center_label = host
+        .query_selector(".pine-chart-center-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(center_label.text_content().as_deref(), Some("Total"));
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 50.0, 10.0);
+    settle().await;
+
+    assert!(first.has_attribute("data-hovered"));
+    let tooltip = host
+        .query_selector(".pine-chart-pie-tooltip")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-label").as_deref(),
+        Some("Organic")
+    );
+    assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("3"));
+    assert_eq!(
+        tooltip.get_attribute("data-percentage").as_deref(),
+        Some("75")
     );
 
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");

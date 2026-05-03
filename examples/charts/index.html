@@ -279,6 +279,14 @@
       fill: currentColor;
       stroke: white;
       stroke-width: 1.5;
+      transform-box: fill-box;
+      transform-origin: center;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .pine-chart-pie-slice[data-hovered] {
+      opacity: 0.92;
+      transform: scale(1.035);
     }
 
     .pine-chart-pie-slice[data-label="Organic"],
@@ -299,6 +307,19 @@
     .pine-chart-pie-slice[data-label="Partner"],
     .pine-chart-pie-slice[data-label="Idle"] {
       color: #7c3aed;
+    }
+
+    .pine-chart-center-value {
+      fill: #18212f;
+      font-size: 30px;
+      font-weight: 700;
+    }
+
+    .pine-chart-center-label {
+      fill: #526173;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
     }
 
     .pine-chart-legend {

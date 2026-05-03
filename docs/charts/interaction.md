@@ -57,6 +57,11 @@ Line selection is marker-based, so visible point marks require
 but an application only gets visible selected/focused line marks when markers
 are rendered.
 
+Pie and donut hover follows the same hook-first model as bars: the hovered slice
+receives `data-hovered`, and the tooltip exposes `data-label`, `data-value`, and
+`data-percentage`. Applications can use that hook for a grow effect with CSS or
+delegate it to the animation layer later.
+
 Interactive legends are opt-in with `interactive="true"`. The legend then gives
 each item keyboard focus, toggles `data-active`, and emits
 `pp:chart:legend-toggle`. The chart data remains application-owned; the event is

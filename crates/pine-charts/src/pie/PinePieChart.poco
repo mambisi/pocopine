@@ -5,6 +5,7 @@
       :data-empty="empty"
       :data-invalid="invalid"
       :data-donut="inner_radius > 0"
+      :data-hover="hover_visible"
       tabindex="0"
       @keydown.arrow-right.prevent="focus_next_slice"
       @keydown.arrow-down.prevent="focus_next_slice"
@@ -18,7 +19,9 @@
        :viewBox="view_box"
        preserveAspectRatio="xMidYMid meet"
        aria-hidden="true"
-       focusable="false">
+       focusable="false"
+       @pointermove="on_pointer_move"
+       @pointerleave="clear_hover">
     <g class="pine-chart-pie-slices">
       <template pp-for="slice in slices" pp-key="slice.key">
         <path class="pine-chart-pie-slice"
@@ -30,11 +33,46 @@
               :data-label="slice.label"
               :data-value="slice.value"
               :data-percentage="slice.percentage"
+              :data-hovered="slice.key == hover_key"
               :data-focused="slice.key == focused_key"
               :data-selected="slice.key == selected_key"
               @click.stop="select_slice(slice.key)"></path>
       </template>
     </g>
+    <g pp-show="center_visible"
+       class="pine-chart-center"
+       aria-hidden="true"
+       pointer-events="none">
+      <text class="pine-chart-center-value"
+            :x="center_x"
+            :y="center_y - 4"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            pp-text="center_value_text"></text>
+      <text class="pine-chart-center-label"
+            :x="center_x"
+            :y="center_y + 16"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            pp-text="center_label_text"></text>
+    </g>
   </svg>
+  <div pp-show="hover_visible"
+       class="pine-chart-tooltip pine-chart-pie-tooltip"
+       role="status"
+       :aria-label="hover_aria_label"
+       :style="hover_style"
+       :data-tooltip-x="hover_placement_x"
+       :data-tooltip-y="hover_placement_y"
+       :data-label="hover_label"
+       :data-value="hover_value"
+       :data-percentage="hover_percentage">
+    <span class="pine-chart-tooltip-label"
+          pp-text="hover_label"></span>
+    <span class="pine-chart-tooltip-value"
+          pp-text="hover_value_label"></span>
+    <span class="pine-chart-tooltip-percentage"
+          pp-text="hover_percentage_label"></span>
+  </div>
   <span class="pine-chart-status" pp-show="invalid" pp-text="error"></span>
 </root>

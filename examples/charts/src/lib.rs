@@ -25,6 +25,8 @@ pub struct ChartDemo {
     pub pie_inner_radius: f64,
     pub pie_start_angle: f64,
     pub pie_end_angle: f64,
+    pub pie_center_label: String,
+    pub pie_center_value: String,
 }
 
 impl Default for ChartDemo {
@@ -34,6 +36,7 @@ impl Default for ChartDemo {
         let bar_series = growth_bar_series();
         let scatter_series = growth_scatter_series();
         let pie_data = growth_pie_data();
+        let pie_center_value = pie_total_label(&pie_data);
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
@@ -51,6 +54,8 @@ impl Default for ChartDemo {
             pie_inner_radius: 0.0,
             pie_start_angle: -90.0,
             pie_end_angle: 270.0,
+            pie_center_label: "Total".into(),
+            pie_center_value,
         }
     }
 }
@@ -74,6 +79,7 @@ impl ChartDemo {
         self.scatter_series = scatter_series;
         self.pie_legend = pine_charts::pie_legend_items(&pie_data);
         self.pie_data = pie_data;
+        self.update_pie_center();
     }
 
     pub fn show_latency(&mut self) {
@@ -93,6 +99,7 @@ impl ChartDemo {
         self.scatter_series = scatter_series;
         self.pie_legend = pine_charts::pie_legend_items(&pie_data);
         self.pie_data = pie_data;
+        self.update_pie_center();
     }
 
     pub fn show_grouped(&mut self) {
@@ -108,6 +115,7 @@ impl ChartDemo {
         self.pie_inner_radius = 0.0;
         self.pie_start_angle = -90.0;
         self.pie_end_angle = 270.0;
+        self.update_pie_center();
     }
 
     pub fn show_donut(&mut self) {
@@ -115,6 +123,7 @@ impl ChartDemo {
         self.pie_inner_radius = 0.58;
         self.pie_start_angle = -90.0;
         self.pie_end_angle = 270.0;
+        self.update_pie_center();
     }
 
     pub fn show_half_donut(&mut self) {
@@ -122,6 +131,23 @@ impl ChartDemo {
         self.pie_inner_radius = 0.58;
         self.pie_start_angle = 180.0;
         self.pie_end_angle = 360.0;
+        self.update_pie_center();
+    }
+}
+
+impl ChartDemo {
+    fn update_pie_center(&mut self) {
+        if self.pie_shape == "half-donut" {
+            self.pie_center_label = "Progress".into();
+            self.pie_center_value = if self.dataset == "growth" {
+                "74%".into()
+            } else {
+                "62%".into()
+            };
+        } else {
+            self.pie_center_label = "Total".into();
+            self.pie_center_value = pie_total_label(&self.pie_data);
+        }
     }
 }
 
@@ -363,6 +389,14 @@ fn latency_pie_data() -> Vec<ChartPieSlice> {
         ChartPieSlice::new("Network", 21.0),
         ChartPieSlice::new("Idle", 12.0),
     ]
+}
+
+fn pie_total_label(data: &[ChartPieSlice]) -> String {
+    data.iter()
+        .map(|slice| slice.value)
+        .sum::<f64>()
+        .round()
+        .to_string()
 }
 
 #[wasm_bindgen(start)]

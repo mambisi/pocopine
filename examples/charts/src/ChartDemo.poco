@@ -89,6 +89,8 @@
                   pp-bind:inner_radius="pie_inner_radius"
                   pp-bind:start_angle="pie_start_angle"
                   pp-bind:end_angle="pie_end_angle"
+                  pp-bind:center_label="pie_center_label"
+                  pp-bind:center_value="pie_center_value"
                   width="720"
                   height="320"></pine-pie-chart>
 
