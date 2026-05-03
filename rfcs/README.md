@@ -76,3 +76,4 @@ Conventions:
 | 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
 | 066 | [Server-function auth and access policy](./rfc-066-server-function-auth.md) | Draft |
 | 067 | [Background jobs with Redis and memory backends](./rfc-067-redis-background-jobs.md) | Draft |
+| 068 | [JWT-based authentication verification](./rfc-068-jwt-auth-verification.md) | Draft |
