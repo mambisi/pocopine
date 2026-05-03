@@ -40,9 +40,10 @@ In a template, bind data from the parent component:
 ```
 
 Line charts also expose a hover crosshair, marker, and tooltip. Pointer movement
-is mapped to the nearest sampled point in SVG space. The component owns the
-nearest-point state and geometry variables, while the application owns tooltip
-placement and visual styling.
+activates the nearest sampled point only inside that point's hover radius, which
+defaults to `8` SVG pixels and can be changed with `hover_radius`. The component
+owns the nearest-point state and geometry variables, while the application owns
+tooltip placement and visual styling.
 
 ## Bar Chart
 

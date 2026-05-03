@@ -155,6 +155,25 @@ pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&L
     })
 }
 
+pub fn nearest_line_sample_in_radius(
+    samples: &[LineChartSample],
+    point: Point,
+    radius: f64,
+) -> Option<&LineChartSample> {
+    let radius = finite("hover.radius", radius).ok()?.max(0.0);
+    let radius_squared = radius * radius;
+    samples
+        .iter()
+        .filter_map(|sample| {
+            let dx = sample.x - point.x;
+            let dy = sample.y - point.y;
+            let distance_squared = dx * dx + dy * dy;
+            (distance_squared <= radius_squared).then_some((distance_squared, sample))
+        })
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, sample)| sample)
+}
+
 fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
     ticks
         .iter()
@@ -287,6 +306,8 @@ pub struct PineLineChart {
     pub y_min: Option<f64>,
     #[prop]
     pub y_max: Option<f64>,
+    #[prop]
+    pub hover_radius: f64,
     pub state: String,
     pub view_box: String,
     pub line_d: String,
@@ -334,6 +355,7 @@ impl Default for PineLineChart {
             x_max: None,
             y_min: None,
             y_max: None,
+            hover_radius: 8.0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),
@@ -426,6 +448,11 @@ impl PineLineChart {
     #[watch(y_max)]
     fn on_y_max(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
         self.recompute();
+    }
+
+    #[watch(hover_radius)]
+    fn on_hover_radius(&mut self, _: f64, _: Option<f64>) {
+        self.clear_hover();
     }
 
     pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
@@ -553,7 +580,8 @@ impl PineLineChart {
             return;
         }
 
-        let Some(sample) = nearest_line_sample(&self.samples, svg_x) else {
+        let Some(sample) = nearest_line_sample_in_radius(&self.samples, point, self.hover_radius)
+        else {
             self.clear_hover();
             return;
         };
@@ -680,6 +708,41 @@ mod tests {
     }
 
     #[test]
+    fn nearest_sample_radius_uses_actual_point_distance() {
+        let samples = vec![
+            LineChartSample {
+                key: "a".into(),
+                data_x: 1.0,
+                data_y: 2.0,
+                x: 10.0,
+                y: 80.0,
+                x_label: "1".into(),
+                y_label: "2".into(),
+                aria_label: "x 1, y 2".into(),
+            },
+            LineChartSample {
+                key: "b".into(),
+                data_x: 5.0,
+                data_y: 8.0,
+                x: 50.0,
+                y: 20.0,
+                x_label: "5".into(),
+                y_label: "8".into(),
+                aria_label: "x 5, y 8".into(),
+            },
+        ];
+
+        let sample =
+            nearest_line_sample_in_radius(&samples, Point { x: 56.0, y: 20.0 }, 8.0).unwrap();
+
+        assert_eq!(sample.key, "b");
+        assert_eq!(
+            nearest_line_sample_in_radius(&samples, Point { x: 60.0, y: 20.0 }, 8.0),
+            None
+        );
+    }
+
+    #[test]
     fn line_geometry_expands_flat_domains() {
         let options = LineChartOptions {
             width: 100.0,
@@ -714,7 +777,7 @@ mod tests {
         assert!(!chart.x_tick_labels.is_empty());
         assert!(!chart.y_tick_labels.is_empty());
 
-        chart.hover_at_x(95.0);
+        chart.hover_at(95.0, 5.0);
 
         assert!(chart.hover_visible);
         assert_eq!(chart.hover_x, 100.0);
@@ -723,6 +786,10 @@ mod tests {
         assert_eq!(chart.hover_y_label, "1");
 
         chart.hover_at(50.0, -1.0);
+
+        assert!(!chart.hover_visible);
+
+        chart.hover_at(90.0, 10.0);
 
         assert!(!chart.hover_visible);
     }
