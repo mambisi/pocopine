@@ -1,0 +1,15 @@
+[package]
+name = "charts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pine-charts = { path = "../../crates/pine-charts" }
+pocopine = { path = "../../crates/pocopine" }
+serde = { workspace = true }
+wasm-bindgen = { workspace = true }
