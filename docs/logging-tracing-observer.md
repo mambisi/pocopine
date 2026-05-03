@@ -162,6 +162,68 @@ If `RUST_LOG` is unset, the default filter is:
 info,pocopine=debug
 ```
 
+## OTLP trace export
+
+`pocopine-logging` can also install an OpenTelemetry layer for OTLP trace
+export. This is host-only and feature-gated so normal console/JSON logging
+stays lightweight.
+
+With the umbrella crate:
+
+```toml
+[dependencies]
+pocopine = { path = "../../crates/pocopine", features = ["logging-otlp"] }
+```
+
+Or directly:
+
+```toml
+[dependencies]
+pocopine-logging = { path = "../../crates/pocopine-logging", features = ["otlp"] }
+```
+
+Install local logs and OTLP traces with one subscriber:
+
+```rust
+use pocopine::logging::{init_server_logging, OtlpConfig, ServerLoggingConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_server_logging(
+        ServerLoggingConfig::json()
+            .with_env_filter("info,pocopine=debug")
+            .with_otlp(
+                OtlpConfig::grpc("http://localhost:4317")
+                    .with_service_name("blog-api")
+            )
+    )?;
+
+    Ok(())
+}
+```
+
+For environment-driven setup:
+
+```rust
+init_server_logging(
+    ServerLoggingConfig::compact()
+        .with_otlp_from_env()
+)?;
+```
+
+The OTLP config reads these variables, in order:
+
+| Field | Variables | Default |
+|---|---|---|
+| endpoint | `POCOPINE_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` |
+| service name | `POCOPINE_SERVICE_NAME`, `OTEL_SERVICE_NAME` | `pocopine-app` |
+
+This first slice exports traces over OTLP/gRPC with the OpenTelemetry SDK batch
+processor. Logs still go to the local compact/pretty/JSON formatter. Production
+deployments can route JSON logs with their platform log agent and route traces
+through an OpenTelemetry Collector or OTLP-compatible backend. Direct vendor SDKs
+are intentionally out of scope for this layer.
+
 ## Structured observed events
 
 Use `ObservedEvent` when you want a stable framework-facing event schema

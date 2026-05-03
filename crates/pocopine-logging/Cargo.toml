@@ -6,12 +6,25 @@ license.workspace = true
 repository.workspace = true
 description = "Logging adapters for pocopine server and browser applications."
 
+[features]
+default = []
+otlp = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 pocopine-observe = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+opentelemetry = { version = "0.31", optional = true, features = ["trace"] }
+opentelemetry-otlp = { version = "0.31", optional = true, default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.31", optional = true, features = ["trace"] }
 tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt", "json"] }
+tracing-opentelemetry = { version = "0.32", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
