@@ -13,7 +13,7 @@ use crate::line::{
     LineChartSample,
 };
 use crate::path::area_path;
-use crate::svg::{SvgLine, SvgTickLabel};
+use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 use crate::LegendItem;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -43,6 +43,8 @@ pub struct AreaChartGeometry {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
 }
@@ -96,6 +98,8 @@ impl AreaChartGeometry {
             y_grid: geometry.y_grid,
             x_tick_labels: geometry.x_tick_labels,
             y_tick_labels: geometry.y_tick_labels,
+            x_axis_label: geometry.x_axis_label,
+            y_axis_label: geometry.y_axis_label,
             x_axis: geometry.x_axis,
             y_axis: geometry.y_axis,
         })
@@ -131,6 +135,10 @@ pub struct PineAreaChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub x_label: String,
+    #[prop]
+    pub y_label: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -164,6 +172,8 @@ pub struct PineAreaChart {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
     pub hover_visible: bool,
@@ -191,6 +201,8 @@ impl Default for PineAreaChart {
             points: Vec::new(),
             series: Vec::new(),
             label: "Area chart".into(),
+            x_label: String::new(),
+            y_label: String::new(),
             width: options.width,
             height: options.height,
             margin_top: options.margins.top,
@@ -214,6 +226,8 @@ impl Default for PineAreaChart {
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
+            x_axis_label: SvgAxisLabel::default(),
+            y_axis_label: SvgAxisLabel::default(),
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
             hover_visible: false,
@@ -335,6 +349,8 @@ impl PineAreaChart {
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
                 self.y_tick_labels = geometry.y_tick_labels;
+                self.x_axis_label = geometry.x_axis_label;
+                self.y_axis_label = geometry.y_axis_label;
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
                 self.error.clear();
@@ -400,6 +416,8 @@ impl PineAreaChart {
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
+        self.x_axis_label = SvgAxisLabel::default();
+        self.y_axis_label = SvgAxisLabel::default();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();
     }

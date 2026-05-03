@@ -59,6 +59,19 @@
                 pp-text="tick.label"></text>
         </g>
       </template>
+      <text pp-show="x_label"
+            class="pine-chart-axis-label pine-chart-axis-label-x"
+            :x="x_axis_label.x"
+            :y="x_axis_label.y"
+            text-anchor="middle"
+            pp-text="x_label"></text>
+      <text pp-show="y_label"
+            class="pine-chart-axis-label pine-chart-axis-label-y"
+            :x="y_axis_label.x"
+            :y="y_axis_label.y"
+            :transform="y_axis_label.transform"
+            text-anchor="middle"
+            pp-text="y_label"></text>
     </g>
     <g pp-show="ready" class="pine-chart-bars">
       <template pp-for="bar in bars" pp-key="bar.key">

@@ -3,7 +3,7 @@ use wasm_bindgen::JsCast;
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::scale::LinearScale;
-use crate::svg::{format_tick, SvgLine, SvgTickLabel};
+use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CartesianLayout {
@@ -17,6 +17,8 @@ pub(crate) struct CartesianLayout {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
 }
@@ -54,6 +56,8 @@ impl CartesianLayout {
             y_grid: grid_lines_for_y(&y_ticks, plot),
             x_tick_labels: tick_labels_for_x(&x_ticks, plot),
             y_tick_labels: tick_labels_for_y(&y_ticks, plot),
+            x_axis_label: x_axis_label(plot, height),
+            y_axis_label: y_axis_label(plot),
             x_axis: SvgLine::new(
                 "x-axis".into(),
                 plot.x,
@@ -257,6 +261,24 @@ pub(crate) fn clear_plot_edges(
     *plot_bottom = 0.0;
 }
 
+pub(crate) fn x_axis_label(plot: ChartRect, height: f64) -> SvgAxisLabel {
+    SvgAxisLabel {
+        x: plot.x + plot.width * 0.5,
+        y: height - 4.0,
+        transform: String::new(),
+    }
+}
+
+pub(crate) fn y_axis_label(plot: ChartRect) -> SvgAxisLabel {
+    let x = 12.0;
+    let y = plot.y + plot.height * 0.5;
+    SvgAxisLabel {
+        x,
+        y,
+        transform: format!("rotate(-90 {x} {y})"),
+    }
+}
+
 pub(crate) fn nearest_sample_by_x<T, F>(samples: &[T], svg_x: f64, sample_x: F) -> Option<&T>
 where
     F: Fn(&T) -> f64,
@@ -417,6 +439,9 @@ mod tests {
         assert_eq!(layout.y_scale.map(5.0).unwrap(), 50.0);
         assert!(!layout.x_grid.is_empty());
         assert!(!layout.y_grid.is_empty());
+        assert_eq!(layout.x_axis_label.x, 50.0);
+        assert_eq!(layout.x_axis_label.y, 96.0);
+        assert_eq!(layout.y_axis_label.transform, "rotate(-90 12 50)");
     }
 
     #[test]

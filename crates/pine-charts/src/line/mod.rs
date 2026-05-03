@@ -10,7 +10,7 @@ use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items};
 use crate::path::line_path;
-use crate::svg::{format_tick, SvgLine, SvgTickLabel};
+use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartPoint {
@@ -80,6 +80,8 @@ pub struct LineChartGeometry {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
 }
@@ -166,6 +168,8 @@ impl LineChartGeometry {
             y_grid: layout.y_grid,
             x_tick_labels: layout.x_tick_labels,
             y_tick_labels: layout.y_tick_labels,
+            x_axis_label: layout.x_axis_label,
+            y_axis_label: layout.y_axis_label,
             x_axis: layout.x_axis,
             y_axis: layout.y_axis,
             x_ticks: layout.x_ticks,
@@ -302,6 +306,10 @@ pub struct PineLineChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub x_label: String,
+    #[prop]
+    pub y_label: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -336,6 +344,8 @@ pub struct PineLineChart {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
     pub hover_visible: bool,
@@ -362,6 +372,8 @@ impl Default for PineLineChart {
         Self {
             points: Vec::new(),
             label: "Line chart".into(),
+            x_label: String::new(),
+            y_label: String::new(),
             width: options.width,
             height: options.height,
             margin_top: options.margins.top,
@@ -387,6 +399,8 @@ impl Default for PineLineChart {
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
+            x_axis_label: SvgAxisLabel::default(),
+            y_axis_label: SvgAxisLabel::default(),
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
             hover_visible: false,
@@ -509,6 +523,8 @@ impl PineLineChart {
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
                 self.y_tick_labels = geometry.y_tick_labels;
+                self.x_axis_label = geometry.x_axis_label;
+                self.y_axis_label = geometry.y_axis_label;
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
                 self.error.clear();
@@ -576,6 +592,8 @@ impl PineLineChart {
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
+        self.x_axis_label = SvgAxisLabel::default();
+        self.y_axis_label = SvgAxisLabel::default();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();
     }
