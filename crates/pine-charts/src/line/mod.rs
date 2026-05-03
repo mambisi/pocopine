@@ -396,7 +396,7 @@ impl Default for PineLineChart {
             hover_aria_label: String::new(),
             hover_placement_x: "right".into(),
             hover_placement_y: "above".into(),
-            hover_style: "display: none;".into(),
+            hover_style: String::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -507,7 +507,7 @@ impl PineLineChart {
         self.hover_aria_label.clear();
         self.hover_placement_x = "right".into();
         self.hover_placement_y = "above".into();
-        self.hover_style = "display: none;".into();
+        self.hover_style.clear();
     }
 }
 
@@ -855,11 +855,9 @@ mod tests {
         chart.hover_at(50.0, -1.0);
 
         assert!(!chart.hover_visible);
-        assert_eq!(chart.hover_style, "display: none;");
 
         chart.hover_at(90.0, 10.0);
 
         assert!(!chart.hover_visible);
-        assert_eq!(chart.hover_style, "display: none;");
     }
 }
