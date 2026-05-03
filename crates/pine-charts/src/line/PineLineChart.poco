@@ -78,7 +78,8 @@
           vector-effect="non-scaling-stroke"></path>
     <g pp-show="hover_visible"
        class="pine-chart-hover"
-       aria-hidden="true">
+       aria-hidden="true"
+       :visibility="hover_visible ? 'visible' : 'hidden'">
       <line class="pine-chart-crosshair pine-chart-crosshair-x"
             :x1="hover_x"
             :y1="plot_y"
