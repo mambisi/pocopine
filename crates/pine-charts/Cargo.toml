@@ -1,0 +1,13 @@
+[package]
+name = "pine-charts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SVG-first chart primitives for Pine and pocopine."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
