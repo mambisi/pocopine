@@ -13,8 +13,9 @@ all visual styling in `index.html` CSS so the chart crate can stay unstyled.
 The example intentionally uses the same public API an application would use:
 
 - `pine_charts::register_all()` at startup,
-- `Vec<ChartPoint>` data in the parent component,
+- `Vec<ChartPoint>` and `Vec<ChartBar>` data in the parent component,
 - `<pine-line-chart pp-bind:points="points">` in the template,
+- `<pine-bar-chart pp-bind:data="bars">` in the template,
 - CSS selectors from the chart styling contract.
 
 This example should be extended whenever a new chart primitive becomes public.

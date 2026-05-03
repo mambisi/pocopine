@@ -1,9 +1,10 @@
 # Chart Components
 
 The first component layer is intentionally small: `PineLineChart` renders a
-single SVG line chart from numeric points. It is useful on its own, but its main
-job is to prove the component contract before axes, grids, legends, and tooltip
-composition are added.
+single SVG line chart from numeric points, and `PineBarChart` renders categorical
+values as SVG bars. They are useful on their own, but their main job is to prove
+the component contract before legends, tooltips, and richer composition are
+added.
 
 ## Registering
 
@@ -39,24 +40,50 @@ In a template, bind data from the parent component:
   height="320"></pine-line-chart>
 ```
 
+## Bar Chart
+
+`PineBarChart` accepts `Vec<ChartBar>` data. The x axis is categorical; the y
+axis is numeric and includes a zero baseline by default. Explicit `y_min` and
+`y_max` props can override the inferred domain.
+
+```rust
+use pine_charts::ChartBar;
+
+let bars = vec![
+    ChartBar::new("A", 12.0),
+    ChartBar::new("B", 18.0),
+    ChartBar::new("C", 9.0),
+];
+```
+
+```html
+<pine-bar-chart
+  label="Revenue"
+  pp-bind:data="bars"
+  width="640"
+  height="320"></pine-bar-chart>
+```
+
 ## Styling Hooks
 
 The component emits stable hooks:
 
 - `.pine-chart-root`
 - `.pine-line-chart`
+- `.pine-bar-chart`
 - `.pine-chart-svg`
 - `.pine-chart-grid-line`
 - `.pine-chart-axis`
 - `.pine-chart-tick-label`
 - `.pine-chart-line`
+- `.pine-chart-bar`
 - `.pine-chart-status`
 - `data-state="empty|ready|invalid"`
 - `data-empty`
 - `data-invalid`
 
-The default path uses `stroke="currentColor"` and `fill="none"` so the chart is
-visible without a bundled theme. Application CSS should own the final visual
+The default line path uses `stroke="currentColor"` and `fill="none"`, while bars
+use `fill="currentColor"`. Application CSS should own the final visual
 treatment:
 
 ```css
@@ -66,6 +93,10 @@ treatment:
 
 .pine-chart-line {
   stroke-width: 2;
+}
+
+.pine-chart-bar {
+  opacity: 0.85;
 }
 ```
 

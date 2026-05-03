@@ -3,7 +3,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pine_charts::ChartPoint;
+use pine_charts::{ChartBar, ChartPoint};
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -280,6 +280,75 @@ async fn line_chart_reports_invalid_state_and_status() {
             .contains("positive"),
         "invalid status should expose the validation error"
     );
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-bar-chart class="revenue-bars"
+                  label="Revenue"
+                  width="100"
+                  height="100"
+                  margin_top="0"
+                  margin_right="0"
+                  margin_bottom="0"
+                  margin_left="0"
+                  padding_inner="0"
+                  padding_outer="0"
+                  y_min="0"
+                  y_max="10"
+                  pp-bind:data="bars"></pine-bar-chart>
+</div>
+"#)]
+struct BarChartFixture {
+    bars: Vec<ChartBar>,
+}
+
+impl Default for BarChartFixture {
+    fn default() -> Self {
+        Self {
+            bars: vec![
+                ChartBar::new("A", 2.0),
+                ChartBar::new("B", 10.0),
+                ChartBar::new("C", 5.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl BarChartFixture {}
+
+#[wasm_bindgen_test]
+async fn bar_chart_renders_svg_rects_axes_and_labels() {
+    let host = mount_fixture::<BarChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(
+        chart.get_attribute("aria-label").as_deref(),
+        Some("Revenue")
+    );
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let bars = host.query_selector_all(".pine-chart-bar").unwrap();
+    assert_eq!(bars.length(), 3);
+
+    let first = bars.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(first.get_attribute("x").as_deref(), Some("0"));
+    assert_eq!(first.get_attribute("y").as_deref(), Some("80"));
+    assert_eq!(first.get_attribute("height").as_deref(), Some("20"));
+    assert_eq!(first.get_attribute("aria-label").as_deref(), Some("A: 2"));
+
+    let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
+    assert!(labels.length() >= 6, "category and value labels render");
 
     host.remove();
 }

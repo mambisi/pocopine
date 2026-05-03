@@ -20,4 +20,9 @@
                    pp-bind:points="points"
                    width="720"
                    height="360"></pine-line-chart>
+
+  <pine-bar-chart label="Distribution"
+                  pp-bind:data="bars"
+                  width="720"
+                  height="320"></pine-bar-chart>
 </root>

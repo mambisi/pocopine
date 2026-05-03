@@ -1,11 +1,14 @@
 # Axes and Grid
 
-`PineLineChart` now emits a basic SVG guide layer:
+`PineLineChart` and `PineBarChart` emit a basic SVG guide layer:
 
 - grid lines for x ticks,
 - grid lines for y ticks,
 - x and y axis domain lines,
 - tick marks and labels.
+
+Bar charts omit vertical category grid lines for now, but they use the same axis
+and tick-label hooks.
 
 This remains intentionally generated from the same low-level scale data. The
 component does not own colors, fonts, or stroke widths.
@@ -50,8 +53,8 @@ Example:
 
 ## Composition Boundary
 
-Axes and grid are currently part of `PineLineChart` instead of separate child
-components. That is deliberate for the first SVG pass: HTML custom elements
+Axes and grid are currently part of each chart component instead of separate
+child components. That is deliberate for the first SVG pass: HTML custom elements
 inside SVG have namespace and slotting edge cases, so the first stable component
 keeps the SVG tree self-contained. Once that path is proven in examples, the
 same generated guide data can be exposed to composable axis and grid components.

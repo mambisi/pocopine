@@ -1,0 +1,78 @@
+<root class="pine-chart-root pine-bar-chart"
+      role="img"
+      :aria-label="label"
+      :data-state="state"
+      :data-empty="empty"
+      :data-invalid="invalid">
+  <svg class="pine-chart-svg"
+       :width="width"
+       :height="height"
+       :viewBox="view_box"
+       preserveAspectRatio="none"
+       aria-hidden="true"
+       focusable="false">
+    <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
+      <template pp-for="line in y_grid" pp-key="line.key">
+        <line class="pine-chart-grid-line pine-chart-grid-line-y"
+              :x1="line.x1"
+              :y1="line.y1"
+              :x2="line.x2"
+              :y2="line.y2"></line>
+      </template>
+    </g>
+    <g pp-show="ready" class="pine-chart-axes" aria-hidden="true">
+      <line class="pine-chart-axis pine-chart-axis-x"
+            :x1="x_axis.x1"
+            :y1="x_axis.y1"
+            :x2="x_axis.x2"
+            :y2="x_axis.y2"></line>
+      <line class="pine-chart-axis pine-chart-axis-y"
+            :x1="y_axis.x1"
+            :y1="y_axis.y1"
+            :x2="y_axis.x2"
+            :y2="y_axis.y2"></line>
+      <template pp-for="tick in x_tick_labels" pp-key="tick.key">
+        <g class="pine-chart-tick pine-chart-tick-x">
+          <line class="pine-chart-tick-line"
+                :x1="tick.line_x1"
+                :y1="tick.line_y1"
+                :x2="tick.line_x2"
+                :y2="tick.line_y2"></line>
+          <text class="pine-chart-tick-label"
+                :x="tick.x"
+                :y="tick.y"
+                text-anchor="middle"
+                pp-text="tick.label"></text>
+        </g>
+      </template>
+      <template pp-for="tick in y_tick_labels" pp-key="tick.key">
+        <g class="pine-chart-tick pine-chart-tick-y">
+          <line class="pine-chart-tick-line"
+                :x1="tick.line_x1"
+                :y1="tick.line_y1"
+                :x2="tick.line_x2"
+                :y2="tick.line_y2"></line>
+          <text class="pine-chart-tick-label"
+                :x="tick.x"
+                :y="tick.y"
+                text-anchor="end"
+                pp-text="tick.label"></text>
+        </g>
+      </template>
+    </g>
+    <g pp-show="ready" class="pine-chart-bars">
+      <template pp-for="bar in bars" pp-key="bar.key">
+        <rect class="pine-chart-bar"
+              :x="bar.x"
+              :y="bar.y"
+              :width="bar.width"
+              :height="bar.height"
+              :aria-label="bar.aria_label"
+              :data-value="bar.value"></rect>
+      </template>
+    </g>
+  </svg>
+  <span pp-show="invalid"
+        class="pine-chart-status"
+        pp-text="error"></span>
+</root>

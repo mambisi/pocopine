@@ -1,4 +1,4 @@
-use pine_charts::ChartPoint;
+use pine_charts::{ChartBar, ChartPoint};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct ChartDemo {
     pub dataset: String,
     pub points: Vec<ChartPoint>,
+    pub bars: Vec<ChartBar>,
 }
 
 impl Default for ChartDemo {
@@ -14,6 +15,7 @@ impl Default for ChartDemo {
         Self {
             dataset: "growth".into(),
             points: growth_points(),
+            bars: growth_bars(),
         }
     }
 }
@@ -23,11 +25,13 @@ impl ChartDemo {
     pub fn show_growth(&mut self) {
         self.dataset = "growth".into();
         self.points = growth_points();
+        self.bars = growth_bars();
     }
 
     pub fn show_latency(&mut self) {
         self.dataset = "latency".into();
         self.points = latency_points();
+        self.bars = latency_bars();
     }
 }
 
@@ -52,6 +56,28 @@ fn latency_points() -> Vec<ChartPoint> {
         ChartPoint::new(4.0, 69.0),
         ChartPoint::new(5.0, 64.0),
         ChartPoint::new(6.0, 58.0),
+    ]
+}
+
+fn growth_bars() -> Vec<ChartBar> {
+    vec![
+        ChartBar::new("W1", 14.0),
+        ChartBar::new("W2", 18.0),
+        ChartBar::new("W3", 17.0),
+        ChartBar::new("W4", 24.0),
+        ChartBar::new("W5", 31.0),
+        ChartBar::new("W6", 38.0),
+        ChartBar::new("W7", 44.0),
+    ]
+}
+
+fn latency_bars() -> Vec<ChartBar> {
+    vec![
+        ChartBar::new("P50", 58.0),
+        ChartBar::new("P75", 64.0),
+        ChartBar::new("P90", 78.0),
+        ChartBar::new("P95", 86.0),
+        ChartBar::new("P99", 92.0),
     ]
 }
 
