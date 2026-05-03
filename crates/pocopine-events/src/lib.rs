@@ -29,6 +29,8 @@ pub enum EventError {
     InvalidValue { field: &'static str, value: String },
     /// A replay cursor is too old for the configured retention window.
     Gap { cursor: EventCursor },
+    /// A live subscriber fell behind the backend's wake-up buffer.
+    SubscriptionLagged { skipped: u64 },
     /// Backend retention was configured to an unusable value.
     InvalidRetention(String),
     /// A backend lock was poisoned.
@@ -60,6 +62,9 @@ impl fmt::Display for EventError {
                 write!(f, "invalid {field}: {value:?}")
             }
             Self::Gap { cursor } => write!(f, "event cursor is no longer replayable: {cursor}"),
+            Self::SubscriptionLagged { skipped } => {
+                write!(f, "event subscription lagged by {skipped} event(s)")
+            }
             Self::InvalidRetention(msg) => write!(f, "invalid event retention: {msg}"),
             Self::Backend(msg) => write!(f, "event backend error: {msg}"),
             Self::Time(msg) => write!(f, "time error: {msg}"),
@@ -448,6 +453,58 @@ pub trait EventBackend: Send + Sync {
     fn subscribe<'a>(&'a self, request: SubscribeRequest) -> EventFuture<'a, EventSubscription>;
 }
 
+/// Future returned by a live event receiver.
+#[cfg(not(target_arch = "wasm32"))]
+pub type EventReceiverFuture<'a> =
+    Pin<Box<dyn Future<Output = EventResult<Option<EventEnvelope>>> + Send + 'a>>;
+
+/// Receiver for future events after opening replay has completed.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait EventReceiver: Send {
+    /// Return the next future event, or `None` if the backend closed.
+    fn next<'a>(&'a mut self) -> EventReceiverFuture<'a>;
+}
+
+/// Open live subscription with replay plus a future-event receiver.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct LiveEventSubscription {
+    /// Opening subscription state and replay.
+    pub opening: EventSubscription,
+    receiver: Box<dyn EventReceiver>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LiveEventSubscription {
+    /// Build a live subscription from opening replay and a receiver.
+    pub fn new(opening: EventSubscription, receiver: Box<dyn EventReceiver>) -> Self {
+        Self { opening, receiver }
+    }
+
+    /// Return the next future event, or `None` if the backend closed.
+    pub async fn next(&mut self) -> EventResult<Option<EventEnvelope>> {
+        self.receiver.next().await
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl fmt::Debug for LiveEventSubscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LiveEventSubscription")
+            .field("opening", &self.opening)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Host-side backend extension for live event streams.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait LiveEventBackend: EventBackend {
+    /// Open a subscription with replay plus a future-event receiver.
+    fn subscribe_live<'a>(
+        &'a self,
+        request: SubscribeRequest,
+    ) -> EventFuture<'a, LiveEventSubscription>;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::collections::VecDeque;
@@ -455,10 +512,12 @@ mod host {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use pocopine_observe::TRACE_TARGET;
+    use tokio::sync::broadcast;
 
     use crate::{
         EventBackend, EventCursor, EventDraft, EventEnvelope, EventError, EventFuture, EventId,
-        EventResult, EventSubscription, ReplayBatch, ReplayRequest, SubscribeRequest, Topic,
+        EventReceiver, EventReceiverFuture, EventResult, EventSubscription, LiveEventBackend,
+        LiveEventSubscription, ReplayBatch, ReplayRequest, SubscribeRequest, Topic,
     };
 
     /// In-memory event backend configuration.
@@ -466,11 +525,16 @@ mod host {
     pub struct MemoryEventConfig {
         /// Maximum retained events.
         pub capacity: usize,
+        /// Maximum future events buffered per live subscriber.
+        pub subscriber_capacity: usize,
     }
 
     impl Default for MemoryEventConfig {
         fn default() -> Self {
-            Self { capacity: 1_024 }
+            Self {
+                capacity: 1_024,
+                subscriber_capacity: 1_024,
+            }
         }
     }
 
@@ -498,6 +562,7 @@ mod host {
     pub struct MemoryEventBackend {
         config: MemoryEventConfig,
         state: Arc<Mutex<MemoryEventState>>,
+        publisher: broadcast::Sender<EventEnvelope>,
     }
 
     impl MemoryEventBackend {
@@ -509,7 +574,10 @@ mod host {
 
         /// Create an in-memory backend with a custom retained-event cap.
         pub fn with_capacity(capacity: usize) -> EventResult<Self> {
-            Self::with_config(MemoryEventConfig { capacity })
+            Self::with_config(MemoryEventConfig {
+                capacity,
+                subscriber_capacity: capacity,
+            })
         }
 
         /// Create an in-memory backend from config.
@@ -519,32 +587,44 @@ mod host {
                     "capacity must be greater than zero".to_string(),
                 ));
             }
+            if config.subscriber_capacity == 0 {
+                return Err(EventError::InvalidRetention(
+                    "subscriber_capacity must be greater than zero".to_string(),
+                ));
+            }
+            let (publisher, _) = broadcast::channel(config.subscriber_capacity);
 
             Ok(Self {
                 config,
                 state: Arc::new(Mutex::new(MemoryEventState::default())),
+                publisher,
             })
         }
 
         /// Publish immediately without requiring an async executor.
         pub fn publish_now(&self, draft: EventDraft) -> EventResult<EventEnvelope> {
-            let mut state = self.lock_state()?;
-            let seq = state.next_seq;
-            state.next_seq = state.next_seq.saturating_add(1);
+            let envelope = {
+                let mut state = self.lock_state()?;
+                let seq = state.next_seq;
+                state.next_seq = state.next_seq.saturating_add(1);
 
-            let id = EventId::new(format!("memory:{seq}"))?;
-            let cursor = EventCursor::new(format!("memory:{seq}"))?;
-            let created_at_ms = if draft.created_at_ms == 0 {
-                epoch_ms()?
-            } else {
-                draft.created_at_ms
+                let id = EventId::new(format!("memory:{seq}"))?;
+                let cursor = EventCursor::new(format!("memory:{seq}"))?;
+                let created_at_ms = if draft.created_at_ms == 0 {
+                    epoch_ms()?
+                } else {
+                    draft.created_at_ms
+                };
+                let envelope = EventEnvelope::from_draft(draft, id, cursor, created_at_ms);
+
+                state.events.push_back(envelope.clone());
+                while state.events.len() > self.config.capacity {
+                    state.events.pop_front();
+                }
+
+                envelope
             };
-            let envelope = EventEnvelope::from_draft(draft, id, cursor, created_at_ms);
-
-            state.events.push_back(envelope.clone());
-            while state.events.len() > self.config.capacity {
-                state.events.pop_front();
-            }
+            let subscribers = self.publisher.send(envelope.clone()).unwrap_or(0);
 
             tracing::debug!(
                 target: TRACE_TARGET,
@@ -552,7 +632,7 @@ mod host {
                 topic = %envelope.topic,
                 kind = %envelope.kind,
                 cursor = %envelope.cursor,
-                retained = state.events.len(),
+                subscribers,
             );
 
             Ok(envelope)
@@ -617,6 +697,19 @@ mod host {
             })
         }
 
+        /// Open a live subscription immediately.
+        pub fn subscribe_live_now(
+            &self,
+            request: SubscribeRequest,
+        ) -> EventResult<LiveEventSubscription> {
+            let opening = self.subscribe_now(request)?;
+            let receiver = Box::new(MemoryEventReceiver {
+                topics: opening.topics.clone(),
+                receiver: self.publisher.subscribe(),
+            });
+            Ok(LiveEventSubscription::new(opening, receiver))
+        }
+
         fn lock_state(&self) -> EventResult<std::sync::MutexGuard<'_, MemoryEventState>> {
             self.state
                 .lock()
@@ -644,6 +737,39 @@ mod host {
             request: SubscribeRequest,
         ) -> EventFuture<'a, EventSubscription> {
             Box::pin(async move { self.subscribe_now(request) })
+        }
+    }
+
+    impl LiveEventBackend for MemoryEventBackend {
+        fn subscribe_live<'a>(
+            &'a self,
+            request: SubscribeRequest,
+        ) -> EventFuture<'a, LiveEventSubscription> {
+            Box::pin(async move { self.subscribe_live_now(request) })
+        }
+    }
+
+    struct MemoryEventReceiver {
+        topics: Vec<Topic>,
+        receiver: broadcast::Receiver<EventEnvelope>,
+    }
+
+    impl EventReceiver for MemoryEventReceiver {
+        fn next<'a>(&'a mut self) -> EventReceiverFuture<'a> {
+            Box::pin(async move {
+                loop {
+                    match self.receiver.recv().await {
+                        Ok(event) if self.topics.iter().any(|topic| topic == &event.topic) => {
+                            return Ok(Some(event));
+                        }
+                        Ok(_) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return Ok(None),
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            return Err(EventError::SubscriptionLagged { skipped });
+                        }
+                    }
+                }
+            })
         }
     }
 
@@ -810,6 +936,44 @@ mod host {
                 .replay_now(ReplayRequest::new([posts]).after(Some(bad_cursor)))
                 .is_err());
             assert!(backend.replay_now(ReplayRequest::new([])).is_err());
+        }
+
+        #[tokio::test]
+        async fn live_subscription_receives_matching_future_events() {
+            let backend = MemoryEventBackend::with_capacity(8).unwrap();
+            let posts = Topic::new("posts").unwrap();
+            let mut subscription = backend
+                .subscribe_live_now(SubscribeRequest::new([posts.clone()]))
+                .unwrap();
+
+            backend.publish_now(draft("comments", 1)).unwrap();
+            let published = backend.publish_now(draft("posts", 2)).unwrap();
+
+            let received = subscription.next().await.unwrap().unwrap();
+
+            assert_eq!(subscription.opening.topics, vec![posts]);
+            assert_eq!(received, published);
+        }
+
+        #[tokio::test]
+        async fn live_subscription_reports_lag() {
+            let backend = MemoryEventBackend::with_config(MemoryEventConfig {
+                capacity: 8,
+                subscriber_capacity: 1,
+            })
+            .unwrap();
+            let posts = Topic::new("posts").unwrap();
+            let mut subscription = backend
+                .subscribe_live_now(SubscribeRequest::new([posts]))
+                .unwrap();
+
+            backend.publish_now(draft("posts", 1)).unwrap();
+            backend.publish_now(draft("posts", 2)).unwrap();
+            backend.publish_now(draft("posts", 3)).unwrap();
+
+            let err = subscription.next().await.unwrap_err();
+
+            assert!(matches!(err, EventError::SubscriptionLagged { skipped: _ }));
         }
     }
 }
