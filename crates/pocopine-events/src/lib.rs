@@ -965,6 +965,8 @@ mod host {
         };
 
         const DEFAULT_STREAM_MAX_LEN: usize = 10_000;
+        const REDIS_URL_ENV: &str = "POCOPINE_REDIS_URL";
+        const REDIS_STREAM_MAX_LEN_ENV: &str = "POCOPINE_EVENTS_REDIS_STREAM_MAX_LEN";
         const REDIS_CURSOR_PREFIX: &str = "redis:";
         const PUBLISH_SCRIPT_SRC: &str = r#"
 local now_ms = tonumber(ARGV[2])
@@ -1033,12 +1035,35 @@ return {id, tostring(now_ms)}
             /// This deliberately does not default to localhost. Apps that
             /// choose Redis should fail loudly if the broker URL is missing.
             pub fn from_env(app: impl Into<String>) -> EventResult<Self> {
-                let url =
-                    std::env::var("POCOPINE_REDIS_URL").map_err(|_| EventError::InvalidValue {
-                        field: "POCOPINE_REDIS_URL",
-                        value: "missing".to_string(),
-                    })?;
-                Self::new(url, app)
+                let url = std::env::var(REDIS_URL_ENV).map_err(|_| EventError::InvalidValue {
+                    field: REDIS_URL_ENV,
+                    value: "missing".to_string(),
+                })?;
+                let mut config = Self::new(url, app)?;
+                if let Ok(raw) = std::env::var(REDIS_STREAM_MAX_LEN_ENV) {
+                    config = config.with_stream_max_len(parse_stream_max_len_env(&raw)?)?;
+                }
+                Ok(config)
+            }
+
+            /// Name of the environment variable used for Redis URLs.
+            pub const fn redis_url_env() -> &'static str {
+                REDIS_URL_ENV
+            }
+
+            /// Name of the environment variable used for Redis stream retention.
+            pub const fn stream_max_len_env() -> &'static str {
+                REDIS_STREAM_MAX_LEN_ENV
+            }
+
+            /// Default approximate maximum retained stream length.
+            pub const fn default_stream_max_len() -> usize {
+                DEFAULT_STREAM_MAX_LEN
+            }
+
+            /// Parse a stream retention value from configuration text.
+            pub fn parse_stream_max_len(value: &str) -> EventResult<usize> {
+                parse_stream_max_len_env(value)
             }
 
             /// Set the approximate maximum retained stream length.
@@ -1115,6 +1140,14 @@ return {id, tostring(now_ms)}
             }
 
             async fn publish_to_stream(&self, draft: EventDraft) -> EventResult<EventEnvelope> {
+                let result = self.publish_to_stream_inner(draft).await;
+                self.clear_cached_on_redis_error(result)
+            }
+
+            async fn publish_to_stream_inner(
+                &self,
+                draft: EventDraft,
+            ) -> EventResult<EventEnvelope> {
                 let stream_key = self.stream_key();
                 let pubsub_key = self.pubsub_key();
                 let audience = serde_json::to_string(&draft.audience)?;
@@ -1154,6 +1187,14 @@ return {id, tostring(now_ms)}
             }
 
             async fn replay_from_stream(&self, request: ReplayRequest) -> EventResult<ReplayBatch> {
+                let result = self.replay_from_stream_inner(request).await;
+                self.clear_cached_on_redis_error(result)
+            }
+
+            async fn replay_from_stream_inner(
+                &self,
+                request: ReplayRequest,
+            ) -> EventResult<ReplayBatch> {
                 validate_replay_request(&request.topics, request.limit)?;
                 let stream_key = self.stream_key();
                 let mut conn = self.connection().await?;
@@ -1261,6 +1302,14 @@ return {id, tostring(now_ms)}
             }
 
             async fn fetch_envelope(&self, stream_id: &str) -> EventResult<Option<EventEnvelope>> {
+                let result = self.fetch_envelope_inner(stream_id).await;
+                self.clear_cached_on_redis_error(result)
+            }
+
+            async fn fetch_envelope_inner(
+                &self,
+                stream_id: &str,
+            ) -> EventResult<Option<EventEnvelope>> {
                 let stream_key = self.stream_key();
                 let mut conn = self.connection().await?;
                 let reply = xrange_count(&mut conn, &stream_key, stream_id, stream_id, 1).await?;
@@ -1298,6 +1347,27 @@ return {id, tostring(now_ms)}
                         )
                     })?
                     .clone())
+            }
+
+            fn clear_cached_on_redis_error<T>(&self, result: EventResult<T>) -> EventResult<T> {
+                if matches!(result, Err(EventError::Redis(_))) {
+                    match self.clear_connection() {
+                        Ok(()) => {
+                            tracing::debug!(
+                                target: TRACE_TARGET,
+                                event_name = "pocopine.events.redis.clear_cached_connection",
+                            );
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                target: LOG_TARGET,
+                                event_name = "pocopine.events.redis.clear_cached_connection_failed",
+                                error = %err,
+                            );
+                        }
+                    }
+                }
+                result
             }
         }
 
@@ -1343,7 +1413,9 @@ return {id, tostring(now_ms)}
                 Box::pin(async move {
                     loop {
                         let Some(message) = self.stream.as_mut().next().await else {
-                            return Ok(None);
+                            return Err(EventError::Backend(
+                                "Redis event Pub/Sub stream closed".to_string(),
+                            ));
                         };
                         let stream_id: String = match message.get_payload() {
                             Ok(stream_id) => stream_id,
@@ -1508,6 +1580,22 @@ return {id, tostring(now_ms)}
             Ok((ms, seq))
         }
 
+        fn parse_stream_max_len_env(value: &str) -> EventResult<usize> {
+            let stream_max_len = value
+                .parse::<usize>()
+                .map_err(|_| EventError::InvalidValue {
+                    field: REDIS_STREAM_MAX_LEN_ENV,
+                    value: value.to_string(),
+                })?;
+            if stream_max_len == 0 {
+                return Err(EventError::InvalidValue {
+                    field: REDIS_STREAM_MAX_LEN_ENV,
+                    value: value.to_string(),
+                });
+            }
+            Ok(stream_max_len)
+        }
+
         fn validate_redis_app(app: &str) -> EventResult<()> {
             if app.chars().any(|ch| matches!(ch, '{' | '}')) {
                 return Err(EventError::InvalidValue {
@@ -1532,6 +1620,25 @@ return {id, tostring(now_ms)}
                     .unwrap()
                     .with_stream_max_len(0)
                     .is_err());
+            }
+
+            #[test]
+            fn parses_redis_env_stream_retention_strictly() {
+                assert_eq!(
+                    RedisEventConfig::parse_stream_max_len("1024").unwrap(),
+                    1024
+                );
+                assert_eq!(
+                    RedisEventConfig::default_stream_max_len(),
+                    DEFAULT_STREAM_MAX_LEN
+                );
+                assert_eq!(RedisEventConfig::redis_url_env(), REDIS_URL_ENV);
+                assert_eq!(
+                    RedisEventConfig::stream_max_len_env(),
+                    REDIS_STREAM_MAX_LEN_ENV
+                );
+                assert!(RedisEventConfig::parse_stream_max_len("0").is_err());
+                assert!(RedisEventConfig::parse_stream_max_len("banana").is_err());
             }
 
             #[test]
