@@ -6,12 +6,15 @@
 //! insert an [`AuthUser`] or [`Principal`] into request extensions.
 //! Guards then inspect that context through ordinary Rust functions.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt;
 #[cfg(not(target_arch = "wasm32"))]
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::pin::Pin;
+use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use http::{Extensions, HeaderMap, Method, Uri};
@@ -23,34 +26,56 @@ pub const SESSION_COOKIE: &str = "pocopine_session";
 
 /// Role attached to an authenticated user.
 ///
-/// Built-ins cover the common Django-like roles. Use
-/// [`Role::named`] for app-specific roles.
+/// A role is a single named string; equality and hashing both go
+/// through the underlying string. The `admin` / `staff` / `user`
+/// constructors are convenience names — they are *not* privileged
+/// in the framework. Pocopine's built-in `require_admin` /
+/// `require_staff` guards check `Role::admin()` / `Role::staff()`
+/// by string match, so apps that adopt those names get the guard
+/// shortcut; apps that use a different taxonomy define their own
+/// guards via [`ensure_role`].
+///
+/// String construction is explicit (`Role::named(s)` /
+/// `Role::new(cow)`) — there is no `From<&str>` /
+/// `From<String>` impl. That removes the historical footgun where
+/// a JWT claim of `"admin"` deserialized into the framework's
+/// privileged variant before any app code saw it.
 #[derive(Clone, Debug)]
-pub enum Role {
-    /// Administrative user.
-    Admin,
-    /// Staff/back-office user.
-    Staff,
-    /// Regular authenticated user.
-    User,
-    /// App-specific role name.
-    Named(String),
-}
+pub struct Role(Cow<'static, str>);
 
 impl Role {
-    /// Build an app-specific role.
+    /// Conventional administrative role. Matched by the built-in
+    /// `require_admin` guard. App code is not required to use this
+    /// name.
+    pub const fn admin() -> Self {
+        Self(Cow::Borrowed("admin"))
+    }
+
+    /// Conventional staff/back-office role. Matched by
+    /// `require_staff`.
+    pub const fn staff() -> Self {
+        Self(Cow::Borrowed("staff"))
+    }
+
+    /// Conventional regular-user role.
+    pub const fn user() -> Self {
+        Self(Cow::Borrowed("user"))
+    }
+
+    /// Build a role from a `&'static str` without allocating, or
+    /// from any owned string (allocates once).
+    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
+        Self(name.into())
+    }
+
+    /// Build an app-specific role from an owned string.
     pub fn named(name: impl Into<String>) -> Self {
-        Self::Named(name.into())
+        Self(Cow::Owned(name.into()))
     }
 
     /// Stable string representation.
     pub fn as_str(&self) -> &str {
-        match self {
-            Role::Admin => "admin",
-            Role::Staff => "staff",
-            Role::User => "user",
-            Role::Named(name) => name.as_str(),
-        }
+        &self.0
     }
 }
 
@@ -65,28 +90,6 @@ impl Eq for Role {}
 impl Hash for Role {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
-    }
-}
-
-impl From<&str> for Role {
-    fn from(value: &str) -> Self {
-        match value {
-            "admin" => Role::Admin,
-            "staff" => Role::Staff,
-            "user" => Role::User,
-            other => Role::Named(other.to_string()),
-        }
-    }
-}
-
-impl From<String> for Role {
-    fn from(value: String) -> Self {
-        match value.as_str() {
-            "admin" => Role::Admin,
-            "staff" => Role::Staff,
-            "user" => Role::User,
-            _ => Role::Named(value),
-        }
     }
 }
 
@@ -105,7 +108,7 @@ impl<'de> Deserialize<'de> for Role {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Ok(Role::from(value))
+        Ok(Role::named(value))
     }
 }
 
@@ -139,6 +142,12 @@ impl From<String> for Permission {
 }
 
 /// Authenticated application user.
+///
+/// The fixed fields (`id`, `email`, `name`, `roles`, `permissions`)
+/// are the canonical projection a `ClaimMap` populates from a
+/// provider-issued token. Provider-specific data that doesn't fit
+/// the projection round-trips through [`AuthUser::claims`] so app
+/// code can read it without losing information.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AuthUser {
     /// Stable application user id.
@@ -154,6 +163,12 @@ pub struct AuthUser {
     /// Fine-grained permissions granted to this user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<Permission>,
+    /// Provider-specific claims preserved verbatim. JWT verifiers
+    /// dump every unrecognized claim here; app code reads them via
+    /// `claims.get("...")` or via provider-specific extension traits
+    /// (e.g. `pocopine_auth_jwt::FirebaseClaimsExt`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claims: BTreeMap<String, serde_json::Value>,
 }
 
 impl AuthUser {
@@ -165,6 +180,7 @@ impl AuthUser {
             name: None,
             roles: Vec::new(),
             permissions: Vec::new(),
+            claims: BTreeMap::new(),
         }
     }
 
@@ -181,37 +197,83 @@ impl AuthUser {
     }
 
     /// Add a role.
-    pub fn with_role(mut self, role: impl Into<Role>) -> Self {
-        self.roles.push(role.into());
+    pub fn with_role(mut self, role: Role) -> Self {
+        self.roles.push(role);
         self
     }
 
     /// Add a permission.
-    pub fn with_permission(mut self, permission: impl Into<Permission>) -> Self {
-        self.permissions.push(permission.into());
+    pub fn with_permission(mut self, permission: Permission) -> Self {
+        self.permissions.push(permission);
+        self
+    }
+
+    /// Add a provider-specific claim. Repeated keys overwrite.
+    pub fn with_claim(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.claims.insert(key.into(), value);
         self
     }
 
     /// Check whether the user has a role.
-    pub fn has_role(&self, role: impl Into<Role>) -> bool {
-        let role = role.into();
-        self.roles.iter().any(|candidate| candidate == &role)
+    pub fn has_role(&self, role: &Role) -> bool {
+        self.roles.iter().any(|candidate| candidate == role)
     }
 
     /// Check whether the user has a permission.
-    pub fn has_permission(&self, permission: impl Into<Permission>) -> bool {
-        let permission = permission.into();
+    pub fn has_permission(&self, permission: &Permission) -> bool {
         self.permissions
             .iter()
-            .any(|candidate| candidate == &permission)
+            .any(|candidate| candidate == permission)
+    }
+
+    /// Look up a provider-specific claim by key.
+    pub fn claim(&self, key: &str) -> Option<&serde_json::Value> {
+        self.claims.get(key)
     }
 }
 
 /// Request principal. Anonymous requests have no user, but the type still
 /// exposes role/permission probes so guard closures stay ergonomic.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// The user is held behind `Arc` so middleware → guard → handler hops
+/// don't deep-clone the `AuthUser` (with its `claims` map) per request.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Principal {
-    user: Option<AuthUser>,
+    user: Option<Arc<AuthUser>>,
+}
+
+// Hand-rolled (de)serialization avoids depending on serde's `rc`
+// feature just for this one `Arc` field. We feed `Option<&AuthUser>`
+// to `serialize_field` so serde's Option impl writes the correct
+// discriminant (`null` for self-describing formats, an Option tag
+// byte for bincode-style formats) — anything else corrupts
+// non-self-describing payloads.
+impl Serialize for Principal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Principal", 1)?;
+        state.serialize_field("user", &self.user.as_deref())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Principal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            user: Option<AuthUser>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Principal {
+            user: wire.user.map(Arc::new),
+        })
+    }
 }
 
 impl Principal {
@@ -220,8 +282,17 @@ impl Principal {
         Self { user: None }
     }
 
-    /// Authenticated principal.
+    /// Authenticated principal — takes an owned user.
     pub fn from_user(user: AuthUser) -> Self {
+        Self {
+            user: Some(Arc::new(user)),
+        }
+    }
+
+    /// Authenticated principal that reuses an existing `Arc`. Use this
+    /// when middleware cached an `Arc<AuthUser>` and wants to hand it to
+    /// the request without cloning the underlying user.
+    pub fn from_arc(user: Arc<AuthUser>) -> Self {
         Self { user: Some(user) }
     }
 
@@ -232,34 +303,43 @@ impl Principal {
 
     /// Authenticated user, if present.
     pub fn user(&self) -> Option<&AuthUser> {
-        self.user.as_ref()
+        self.user.as_deref()
+    }
+
+    /// Authenticated user as a clonable handle, if present. Cheap clone.
+    pub fn user_arc(&self) -> Option<Arc<AuthUser>> {
+        self.user.clone()
     }
 
     /// Require an authenticated user.
     pub fn require_user(&self) -> ServerResult<&AuthUser> {
         self.user
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| ServerError::unauthorized("login required"))
     }
 
     /// Check whether the authenticated user has a role.
-    pub fn has_role(&self, role: impl Into<Role>) -> bool {
-        self.user
-            .as_ref()
-            .is_some_and(|user| user.has_role(role.into()))
+    pub fn has_role(&self, role: &Role) -> bool {
+        self.user.as_deref().is_some_and(|user| user.has_role(role))
     }
 
     /// Check whether the authenticated user has a permission.
-    pub fn has_permission(&self, permission: impl Into<Permission>) -> bool {
+    pub fn has_permission(&self, permission: &Permission) -> bool {
         self.user
-            .as_ref()
-            .is_some_and(|user| user.has_permission(permission.into()))
+            .as_deref()
+            .is_some_and(|user| user.has_permission(permission))
     }
 }
 
 impl From<AuthUser> for Principal {
     fn from(user: AuthUser) -> Self {
         Self::from_user(user)
+    }
+}
+
+impl From<Arc<AuthUser>> for Principal {
+    fn from(user: Arc<AuthUser>) -> Self {
+        Self::from_arc(user)
     }
 }
 
@@ -480,13 +560,12 @@ pub fn ensure_login(ctx: &RequestContext) -> ServerResult<()> {
 
 /// Ensure the request has a role.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn ensure_role(ctx: &RequestContext, role: impl Into<Role>) -> ServerResult<()> {
+pub fn ensure_role(ctx: &RequestContext, role: &Role) -> ServerResult<()> {
     if !ctx.user.is_authenticated() {
         return Err(ServerError::unauthorized("login required"));
     }
 
-    let role = role.into();
-    if ctx.user.has_role(role.clone()) {
+    if ctx.user.has_role(role) {
         Ok(())
     } else {
         Err(ServerError::forbidden(format!(
@@ -498,16 +577,12 @@ pub fn ensure_role(ctx: &RequestContext, role: impl Into<Role>) -> ServerResult<
 
 /// Ensure the request has a permission.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn ensure_permission(
-    ctx: &RequestContext,
-    permission: impl Into<Permission>,
-) -> ServerResult<()> {
+pub fn ensure_permission(ctx: &RequestContext, permission: &Permission) -> ServerResult<()> {
     if !ctx.user.is_authenticated() {
         return Err(ServerError::unauthorized("login required"));
     }
 
-    let permission = permission.into();
-    if ctx.user.has_permission(permission.clone()) {
+    if ctx.user.has_permission(permission) {
         Ok(())
     } else {
         Err(ServerError::forbidden(format!(
@@ -523,14 +598,96 @@ pub async fn require_login(ctx: RequestContext) -> ServerResult<()> {
     ensure_login(&ctx)
 }
 
-/// Built-in `#[server(guard = ...)]` guard requiring [`Role::Admin`].
+/// Built-in `#[server(guard = ...)]` guard requiring the conventional
+/// `admin` role (matched by string).
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn require_admin(ctx: RequestContext) -> ServerResult<()> {
-    ensure_role(&ctx, Role::Admin)
+    ensure_role(&ctx, &Role::admin())
 }
 
-/// Built-in `#[server(guard = ...)]` guard requiring [`Role::Staff`].
+/// Built-in `#[server(guard = ...)]` guard requiring the conventional
+/// `staff` role (matched by string).
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn require_staff(ctx: RequestContext) -> ServerResult<()> {
-    ensure_role(&ctx, Role::Staff)
+    ensure_role(&ctx, &Role::staff())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_constructors_compare_by_string() {
+        assert_eq!(Role::admin(), Role::named("admin"));
+        assert_eq!(Role::admin(), Role::new("admin"));
+        assert_ne!(Role::admin(), Role::user());
+        assert_eq!(Role::admin().as_str(), "admin");
+    }
+
+    #[test]
+    fn role_deserialization_does_not_promote_to_privileged_variant() {
+        // The pre-refactor footgun: a JWT claim of "admin" would
+        // deserialize into the framework's privileged variant. The
+        // new shape stores the string verbatim and still compares
+        // equal to `Role::admin()` by value, but no privileged
+        // variant exists at the type level.
+        let role: Role = serde_json::from_str(r#""admin""#).unwrap();
+        assert_eq!(role, Role::admin());
+        assert_eq!(role.as_str(), "admin");
+
+        let custom: Role = serde_json::from_str(r#""editor""#).unwrap();
+        assert_eq!(custom.as_str(), "editor");
+        assert_ne!(custom, Role::admin());
+    }
+
+    #[test]
+    fn auth_user_round_trips_arbitrary_claims() {
+        let user = AuthUser::new("uid-1")
+            .with_email("a@example.com")
+            .with_role(Role::admin())
+            .with_claim("firebase_uid", serde_json::json!("xyz"))
+            .with_claim("org_id", serde_json::json!(42));
+
+        let json = serde_json::to_string(&user).unwrap();
+        let round_tripped: AuthUser = serde_json::from_str(&json).unwrap();
+        assert_eq!(user, round_tripped);
+        assert_eq!(
+            round_tripped.claim("firebase_uid"),
+            Some(&serde_json::json!("xyz"))
+        );
+        assert_eq!(round_tripped.claim("org_id"), Some(&serde_json::json!(42)));
+    }
+
+    #[test]
+    fn principal_user_clones_are_cheap() {
+        let user = AuthUser::new("uid-1");
+        let p1 = Principal::from_user(user);
+        let p2 = p1.clone();
+        // Both Principals share the same Arc<AuthUser>.
+        let arc1 = p1.user_arc().expect("p1 has user");
+        let arc2 = p2.user_arc().expect("p2 has user");
+        assert!(Arc::ptr_eq(&arc1, &arc2));
+    }
+
+    #[test]
+    fn principal_serialization_emits_option_discriminant() {
+        // Authenticated: `{"user":{...}}`.
+        let p = Principal::from_user(AuthUser::new("uid-1"));
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"user\":{"), "got: {json}");
+        assert!(json.contains("\"id\":\"uid-1\""), "got: {json}");
+        let round_tripped: Principal = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, round_tripped);
+        assert_eq!(round_tripped.user().unwrap().id, "uid-1");
+
+        // Anonymous: `{"user":null}`. Required so non-self-describing
+        // formats (bincode, postcard, …) keep the `Option` tag in
+        // front of the payload — without the discriminant they can't
+        // round-trip.
+        let anon = Principal::anonymous();
+        let json = serde_json::to_string(&anon).unwrap();
+        assert_eq!(json, r#"{"user":null}"#);
+        let round_tripped: Principal = serde_json::from_str(&json).unwrap();
+        assert!(!round_tripped.is_authenticated());
+    }
 }
