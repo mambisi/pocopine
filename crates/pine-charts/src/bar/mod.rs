@@ -2,9 +2,9 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    optional_domain, plot_rect_from_edges, pointer_event_svg_point, x_axis_label, y_axis_label,
-    CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields, CategoricalGuideUpdate,
-    ChartStateFields, PlotEdgeFields,
+    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, x_axis_label,
+    y_axis_label, CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields,
+    CategoricalGuideUpdate, ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -616,6 +616,8 @@ pub struct PineBarChart {
     pub hover_placement_x: String,
     pub hover_placement_y: String,
     pub hover_style: String,
+    pub focused_key: String,
+    pub selected_key: String,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -668,6 +670,8 @@ impl Default for PineBarChart {
             hover_placement_x: "right".into(),
             hover_placement_y: "above".into(),
             hover_style: String::new(),
+            focused_key: String::new(),
+            selected_key: String::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -771,6 +775,30 @@ impl PineBarChart {
         self.hover_placement_y = "above".into();
         self.hover_style.clear();
     }
+
+    pub fn select_bar(&mut self, key: String) {
+        if self.has_bar_key(&key) {
+            self.focused_key = key.clone();
+            self.selected_key = key;
+        }
+    }
+
+    pub fn focus_next_bar(&mut self) {
+        self.step_bar_focus(1);
+    }
+
+    pub fn focus_prev_bar(&mut self) {
+        self.step_bar_focus(-1);
+    }
+
+    pub fn select_focused_bar(&mut self) {
+        if self.focused_key.is_empty() {
+            self.step_bar_focus(1);
+        }
+        if !self.focused_key.is_empty() {
+            self.selected_key = self.focused_key.clone();
+        }
+    }
 }
 
 impl PineBarChart {
@@ -805,11 +833,13 @@ impl PineBarChart {
                 self.legend_items = geometry.legend_items;
                 self.error.clear();
                 self.state_fields().apply(CartesianChartState::Ready);
+                self.reconcile_selection();
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
                 self.clear_geometry();
                 self.clear_hover();
+                self.clear_selection();
                 self.error.clear();
                 self.state_fields().apply(CartesianChartState::Empty);
             }
@@ -840,6 +870,7 @@ impl PineBarChart {
     fn set_invalid(&mut self, error: ChartError) {
         self.clear_geometry();
         self.clear_hover();
+        self.clear_selection();
         self.error = error.to_string();
         self.state_fields().apply(CartesianChartState::Invalid);
     }
@@ -919,6 +950,34 @@ impl PineBarChart {
             empty: &mut self.empty,
             invalid: &mut self.invalid,
         }
+    }
+
+    fn step_bar_focus(&mut self, step: isize) {
+        if let Some(key) = step_key(
+            self.bars.iter().map(|bar| bar.key.as_str()),
+            &self.focused_key,
+            step,
+        ) {
+            self.focused_key = key;
+        }
+    }
+
+    fn has_bar_key(&self, key: &str) -> bool {
+        self.bars.iter().any(|bar| bar.key == key)
+    }
+
+    fn reconcile_selection(&mut self) {
+        if !self.has_bar_key(&self.focused_key) {
+            self.focused_key.clear();
+        }
+        if !self.has_bar_key(&self.selected_key) {
+            self.selected_key.clear();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.selected_key.clear();
     }
 }
 

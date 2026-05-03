@@ -388,6 +388,26 @@ pub(crate) fn optional_domain(start: Option<f64>, end: Option<f64>) -> Option<(f
     }
 }
 
+pub(crate) fn step_key<'a>(
+    keys: impl IntoIterator<Item = &'a str>,
+    current: &str,
+    step: isize,
+) -> Option<String> {
+    let keys = keys.into_iter().collect::<Vec<_>>();
+    if keys.is_empty() {
+        return None;
+    }
+
+    let current_index = keys.iter().position(|key| *key == current);
+    let next_index = match current_index {
+        Some(index) => (index as isize + step).clamp(0, keys.len() as isize - 1),
+        None if step < 0 => keys.len() as isize - 1,
+        None => 0,
+    };
+
+    keys.get(next_index as usize).map(|key| (*key).to_string())
+}
+
 pub(crate) fn nearest_sample_by_x<T, F>(samples: &[T], svg_x: f64, sample_x: F) -> Option<&T>
 where
     F: Fn(&T) -> f64,
@@ -582,5 +602,15 @@ mod tests {
         assert_eq!(placement.x, "left");
         assert_eq!(placement.y, "below");
         assert!(placement.style.contains("--pine-chart-tooltip-x: 75%"));
+    }
+
+    #[test]
+    fn step_key_clamps_and_starts_from_edge() {
+        let keys = ["a", "b", "c"];
+
+        assert_eq!(step_key(keys, "", 1).as_deref(), Some("a"));
+        assert_eq!(step_key(keys, "", -1).as_deref(), Some("c"));
+        assert_eq!(step_key(keys, "b", 1).as_deref(), Some("c"));
+        assert_eq!(step_key(keys, "c", 1).as_deref(), Some("c"));
     }
 }

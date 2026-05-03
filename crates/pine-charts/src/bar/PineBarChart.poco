@@ -4,7 +4,14 @@
       :data-state="state"
       :data-empty="empty"
       :data-invalid="invalid"
-      :data-hover="hover_visible">
+      :data-hover="hover_visible"
+      tabindex="0"
+      @keydown.arrow-right.prevent="focus_next_bar"
+      @keydown.arrow-down.prevent="focus_next_bar"
+      @keydown.arrow-left.prevent="focus_prev_bar"
+      @keydown.arrow-up.prevent="focus_prev_bar"
+      @keydown.enter.prevent="select_focused_bar"
+      @keydown.space.prevent="select_focused_bar">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
@@ -84,10 +91,14 @@
               :width="bar.width"
               :height="bar.height"
               :aria-label="bar.aria_label"
+              :data-key="bar.key"
               :data-category="bar.category_label"
               :data-series="bar.series_label"
               :data-value="bar.value"
-              :data-hovered="bar.key == hover_key"></rect>
+              :data-hovered="bar.key == hover_key"
+              :data-focused="bar.key == focused_key"
+              :data-selected="bar.key == selected_key"
+              @click.stop="select_bar(bar.key)"></rect>
       </template>
     </g>
   </svg>

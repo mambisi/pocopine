@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
     centered_plot_y, nearest_sample_by_point, nearest_sample_by_x, optional_domain,
-    plot_rect_from_edges, pointer_event_svg_point, CartesianChartState, CartesianGuideFields,
-    CartesianGuideUpdate, CartesianHoverFields, CartesianHoverSample, CartesianHoverUpdate,
-    CartesianLayout, ChartStateFields, PlotEdgeFields,
+    plot_rect_from_edges, pointer_event_svg_point, step_key, CartesianChartState,
+    CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, CartesianHoverSample,
+    CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -361,6 +361,8 @@ pub struct PineLineChart {
     pub hover_placement_x: String,
     pub hover_placement_y: String,
     pub hover_style: String,
+    pub focused_key: String,
+    pub selected_key: String,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -416,6 +418,8 @@ impl Default for PineLineChart {
             hover_placement_x: "right".into(),
             hover_placement_y: "above".into(),
             hover_style: String::new(),
+            focused_key: String::new(),
+            selected_key: String::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -500,6 +504,30 @@ impl PineLineChart {
     pub fn clear_hover(&mut self) {
         self.hover_fields().clear();
     }
+
+    pub fn select_sample(&mut self, key: String) {
+        if self.has_sample_key(&key) {
+            self.focused_key = key.clone();
+            self.selected_key = key;
+        }
+    }
+
+    pub fn focus_next_sample(&mut self) {
+        self.step_sample_focus(1);
+    }
+
+    pub fn focus_prev_sample(&mut self) {
+        self.step_sample_focus(-1);
+    }
+
+    pub fn select_focused_sample(&mut self) {
+        if self.focused_key.is_empty() {
+            self.step_sample_focus(1);
+        }
+        if !self.focused_key.is_empty() {
+            self.selected_key = self.focused_key.clone();
+        }
+    }
 }
 
 impl PineLineChart {
@@ -529,6 +557,7 @@ impl PineLineChart {
                 });
                 self.error.clear();
                 self.state_fields().apply(CartesianChartState::Ready);
+                self.reconcile_selection();
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
@@ -538,6 +567,7 @@ impl PineLineChart {
                 self.plot_edges().clear();
                 self.guides().clear();
                 self.clear_hover();
+                self.clear_selection();
                 self.error.clear();
                 self.state_fields().apply(CartesianChartState::Empty);
             }
@@ -548,6 +578,7 @@ impl PineLineChart {
                 self.plot_edges().clear();
                 self.guides().clear();
                 self.clear_hover();
+                self.clear_selection();
                 self.error = error.to_string();
                 self.state_fields().apply(CartesianChartState::Invalid);
             }
@@ -625,6 +656,34 @@ impl PineLineChart {
             empty: &mut self.empty,
             invalid: &mut self.invalid,
         }
+    }
+
+    fn step_sample_focus(&mut self, step: isize) {
+        if let Some(key) = step_key(
+            self.samples.iter().map(|sample| sample.key.as_str()),
+            &self.focused_key,
+            step,
+        ) {
+            self.focused_key = key;
+        }
+    }
+
+    fn has_sample_key(&self, key: &str) -> bool {
+        self.samples.iter().any(|sample| sample.key == key)
+    }
+
+    fn reconcile_selection(&mut self) {
+        if !self.has_sample_key(&self.focused_key) {
+            self.focused_key.clear();
+        }
+        if !self.has_sample_key(&self.selected_key) {
+            self.selected_key.clear();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.selected_key.clear();
     }
 
     fn hover_fields(&mut self) -> CartesianHoverFields<'_> {

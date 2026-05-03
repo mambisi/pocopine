@@ -4,7 +4,14 @@
       :data-state="state"
       :data-empty="empty"
       :data-invalid="invalid"
-      :data-hover="hover_visible">
+      :data-hover="hover_visible"
+      tabindex="0"
+      @keydown.arrow-right.prevent="focus_next_sample"
+      @keydown.arrow-down.prevent="focus_next_sample"
+      @keydown.arrow-left.prevent="focus_prev_sample"
+      @keydown.arrow-up.prevent="focus_prev_sample"
+      @keydown.enter.prevent="select_focused_sample"
+      @keydown.space.prevent="select_focused_sample">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
@@ -102,9 +109,13 @@
                 :cy="sample.y"
                 r="3"
                 fill="currentColor"
+                :data-key="sample.key"
                 :data-x="sample.data_x"
                 :data-y="sample.data_y"
-                :data-series="sample.series_label"></circle>
+                :data-series="sample.series_label"
+                :data-focused="sample.key == focused_key"
+                :data-selected="sample.key == selected_key"
+                @click.stop="select_sample(sample.key)"></circle>
       </template>
     </g>
     <g pp-show="hover_visible"
