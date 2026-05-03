@@ -37,6 +37,8 @@ In a template, bind data from the parent component:
 <pine-line-chart
   label="Revenue"
   pp-bind:points="points"
+  x_label="Week"
+  y_label="Revenue"
   width="640"
   height="320"></pine-line-chart>
 ```
@@ -65,6 +67,8 @@ let legend_items = line_legend_items(&series);
 <pine-line-chart
   label="Revenue"
   pp-bind:series="series"
+  x_label="Week"
+  y_label="Revenue"
   width="640"
   height="320"></pine-line-chart>
 
@@ -82,6 +86,9 @@ tooltip placement and visual styling.
 Set `show_markers="true"` when every sampled point should render as a visible
 SVG marker. Markers are opt-in so dense line charts do not accidentally produce
 hundreds of visible circles. Multi-series markers include `data-series`.
+
+Use `x_label` and `y_label` for optional axis labels. They render as SVG
+`<text>` nodes with stable hooks and remain unstyled by default.
 
 ## Area Chart
 
@@ -111,6 +118,8 @@ let legend_items = area_legend_items(&series);
 <pine-area-chart
   label="Acquisition"
   pp-bind:series="series"
+  x_label="Week"
+  y_label="Visits"
   width="640"
   height="320"></pine-area-chart>
 
@@ -143,6 +152,8 @@ let bars = vec![
 <pine-bar-chart
   label="Revenue"
   pp-bind:data="bars"
+  x_label="Month"
+  y_label="Revenue"
   width="640"
   height="320"></pine-bar-chart>
 ```
@@ -170,11 +181,15 @@ let series = vec![
 <pine-bar-chart
   label="Acquisition"
   pp-bind:series="series"
+  x_label="Month"
+  y_label="Acquisition"
   mode="grouped"></pine-bar-chart>
 
 <pine-bar-chart
   label="Acquisition"
   pp-bind:series="series"
+  x_label="Month"
+  y_label="Acquisition"
   mode="stacked"></pine-bar-chart>
 ```
 
@@ -216,6 +231,9 @@ The component emits stable hooks:
 - `.pine-chart-svg`
 - `.pine-chart-grid-line`
 - `.pine-chart-axis`
+- `.pine-chart-axis-label`
+- `.pine-chart-axis-label-x`
+- `.pine-chart-axis-label-y`
 - `.pine-chart-tick-label`
 - `.pine-chart-areas`
 - `.pine-chart-area`

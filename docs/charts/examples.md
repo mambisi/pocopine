@@ -22,6 +22,7 @@ The example intentionally uses the same public API an application would use:
 - `<pine-area-chart pp-bind:series="area_series">` in the template,
 - `<pine-bar-chart pp-bind:series="bar_series" pp-bind:mode="bar_mode">` in
   the template,
+- `x_label` and `y_label` attributes for chart axis labels,
 - `<pine-chart-legend pp-bind:items="line_legend">`,
   `<pine-chart-legend pp-bind:items="area_legend">`, and
   `<pine-chart-legend pp-bind:items="bar_legend">` in the template,
