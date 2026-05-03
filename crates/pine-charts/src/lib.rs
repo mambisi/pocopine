@@ -12,7 +12,9 @@ pub mod path;
 pub mod scale;
 pub mod svg;
 
-pub use bar::{BarChartGeometry, BarChartOptions, ChartBar, PineBarChart, SvgBar};
+pub use bar::{
+    BarChartGeometry, BarChartMode, BarChartOptions, ChartBar, ChartBarSeries, PineBarChart, SvgBar,
+};
 pub use error::{ChartError, ChartResult};
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use line::{ChartPoint, LineChartGeometry, LineChartOptions, PineLineChart};

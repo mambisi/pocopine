@@ -14,6 +14,16 @@
               :data-active="dataset == 'latency'"
               @click="show_latency">Latency</button>
     </div>
+    <div class="chart-demo-actions" role="group" aria-label="Bar layout">
+      <button type="button"
+              :aria-pressed="bar_mode == 'grouped' ? 'true' : 'false'"
+              :data-active="bar_mode == 'grouped'"
+              @click="show_grouped">Grouped</button>
+      <button type="button"
+              :aria-pressed="bar_mode == 'stacked' ? 'true' : 'false'"
+              :data-active="bar_mode == 'stacked'"
+              @click="show_stacked">Stacked</button>
+    </div>
   </header>
 
   <pine-line-chart label="Weekly metric"
@@ -22,7 +32,8 @@
                    height="360"></pine-line-chart>
 
   <pine-bar-chart label="Distribution"
-                  pp-bind:data="bars"
+                  pp-bind:series="bar_series"
+                  pp-bind:mode="bar_mode"
                   width="720"
                   height="320"></pine-bar-chart>
 </root>

@@ -4,10 +4,31 @@ pub type ChartResult<T> = Result<T, ChartError>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartError {
-    NonFiniteValue { field: &'static str, value: f64 },
-    InvalidRange { start: f64, end: f64 },
-    InvalidDomain { start: f64, end: f64 },
-    InvalidSize { width: f64, height: f64 },
+    NonFiniteValue {
+        field: &'static str,
+        value: f64,
+    },
+    InvalidRange {
+        start: f64,
+        end: f64,
+    },
+    InvalidDomain {
+        start: f64,
+        end: f64,
+    },
+    InvalidSize {
+        width: f64,
+        height: f64,
+    },
+    InvalidOption {
+        field: &'static str,
+        value: String,
+    },
+    MismatchedSeries {
+        series: String,
+        expected: String,
+        actual: String,
+    },
     EmptySeries,
 }
 
@@ -33,6 +54,19 @@ impl fmt::Display for ChartError {
                 write!(
                     f,
                     "chart size must be positive and finite, got {width}x{height}"
+                )
+            }
+            Self::InvalidOption { field, value } => {
+                write!(f, "chart option `{field}` is not supported: {value}")
+            }
+            Self::MismatchedSeries {
+                series,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "chart series `{series}` must use category `{expected}`, got `{actual}`"
                 )
             }
             Self::EmptySeries => write!(f, "chart series must contain at least one point"),

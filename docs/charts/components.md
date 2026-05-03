@@ -42,9 +42,10 @@ In a template, bind data from the parent component:
 
 ## Bar Chart
 
-`PineBarChart` accepts `Vec<ChartBar>` data. The x axis is categorical; the y
-axis is numeric and includes a zero baseline by default. Explicit `y_min` and
-`y_max` props can override the inferred domain.
+`PineBarChart` accepts `Vec<ChartBar>` for a single series or
+`Vec<ChartBarSeries>` for grouped and stacked series. The x axis is categorical;
+the y axis is numeric and includes a zero baseline by default. Explicit `y_min`
+and `y_max` props can override the inferred domain.
 
 ```rust
 use pine_charts::ChartBar;
@@ -62,6 +63,37 @@ let bars = vec![
   pp-bind:data="bars"
   width="640"
   height="320"></pine-bar-chart>
+```
+
+Grouped and stacked bars use a stricter contract: every series must contain the
+same category labels in the same order. That keeps the rendered chart
+predictable and lets invalid data fail loudly instead of silently shifting bars.
+
+```rust
+use pine_charts::{ChartBar, ChartBarSeries};
+
+let series = vec![
+    ChartBarSeries::new(
+        "Organic",
+        vec![ChartBar::new("Jan", 12.0), ChartBar::new("Feb", 18.0)],
+    ),
+    ChartBarSeries::new(
+        "Referral",
+        vec![ChartBar::new("Jan", 7.0), ChartBar::new("Feb", 10.0)],
+    ),
+];
+```
+
+```html
+<pine-bar-chart
+  label="Acquisition"
+  pp-bind:series="series"
+  mode="grouped"></pine-bar-chart>
+
+<pine-bar-chart
+  label="Acquisition"
+  pp-bind:series="series"
+  mode="stacked"></pine-bar-chart>
 ```
 
 ## Styling Hooks
@@ -97,6 +129,10 @@ treatment:
 
 .pine-chart-bar {
   opacity: 0.85;
+}
+
+.pine-chart-bar[data-series="Organic"] {
+  fill: var(--organic-series);
 }
 ```
 

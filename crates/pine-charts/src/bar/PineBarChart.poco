@@ -68,6 +68,8 @@
               :width="bar.width"
               :height="bar.height"
               :aria-label="bar.aria_label"
+              :data-category="bar.category_label"
+              :data-series="bar.series_label"
               :data-value="bar.value"></rect>
       </template>
     </g>

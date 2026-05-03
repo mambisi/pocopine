@@ -1,4 +1,4 @@
-use pine_charts::{ChartBar, ChartPoint};
+use pine_charts::{ChartBar, ChartBarSeries, ChartPoint};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -6,16 +6,18 @@ use serde::{Deserialize, Serialize};
 #[component(template = "ChartDemo.poco")]
 pub struct ChartDemo {
     pub dataset: String,
+    pub bar_mode: String,
     pub points: Vec<ChartPoint>,
-    pub bars: Vec<ChartBar>,
+    pub bar_series: Vec<ChartBarSeries>,
 }
 
 impl Default for ChartDemo {
     fn default() -> Self {
         Self {
             dataset: "growth".into(),
+            bar_mode: "grouped".into(),
             points: growth_points(),
-            bars: growth_bars(),
+            bar_series: growth_bar_series(),
         }
     }
 }
@@ -25,13 +27,21 @@ impl ChartDemo {
     pub fn show_growth(&mut self) {
         self.dataset = "growth".into();
         self.points = growth_points();
-        self.bars = growth_bars();
+        self.bar_series = growth_bar_series();
     }
 
     pub fn show_latency(&mut self) {
         self.dataset = "latency".into();
         self.points = latency_points();
-        self.bars = latency_bars();
+        self.bar_series = latency_bar_series();
+    }
+
+    pub fn show_grouped(&mut self) {
+        self.bar_mode = "grouped".into();
+    }
+
+    pub fn show_stacked(&mut self) {
+        self.bar_mode = "stacked".into();
     }
 }
 
@@ -59,25 +69,57 @@ fn latency_points() -> Vec<ChartPoint> {
     ]
 }
 
-fn growth_bars() -> Vec<ChartBar> {
+fn growth_bar_series() -> Vec<ChartBarSeries> {
     vec![
-        ChartBar::new("W1", 14.0),
-        ChartBar::new("W2", 18.0),
-        ChartBar::new("W3", 17.0),
-        ChartBar::new("W4", 24.0),
-        ChartBar::new("W5", 31.0),
-        ChartBar::new("W6", 38.0),
-        ChartBar::new("W7", 44.0),
+        ChartBarSeries::new(
+            "Organic",
+            vec![
+                ChartBar::new("W1", 9.0),
+                ChartBar::new("W2", 11.0),
+                ChartBar::new("W3", 12.0),
+                ChartBar::new("W4", 16.0),
+                ChartBar::new("W5", 19.0),
+                ChartBar::new("W6", 23.0),
+                ChartBar::new("W7", 27.0),
+            ],
+        ),
+        ChartBarSeries::new(
+            "Referral",
+            vec![
+                ChartBar::new("W1", 5.0),
+                ChartBar::new("W2", 7.0),
+                ChartBar::new("W3", 5.0),
+                ChartBar::new("W4", 8.0),
+                ChartBar::new("W5", 12.0),
+                ChartBar::new("W6", 15.0),
+                ChartBar::new("W7", 17.0),
+            ],
+        ),
     ]
 }
 
-fn latency_bars() -> Vec<ChartBar> {
+fn latency_bar_series() -> Vec<ChartBarSeries> {
     vec![
-        ChartBar::new("P50", 58.0),
-        ChartBar::new("P75", 64.0),
-        ChartBar::new("P90", 78.0),
-        ChartBar::new("P95", 86.0),
-        ChartBar::new("P99", 92.0),
+        ChartBarSeries::new(
+            "API",
+            vec![
+                ChartBar::new("P50", 31.0),
+                ChartBar::new("P75", 36.0),
+                ChartBar::new("P90", 47.0),
+                ChartBar::new("P95", 51.0),
+                ChartBar::new("P99", 62.0),
+            ],
+        ),
+        ChartBarSeries::new(
+            "Render",
+            vec![
+                ChartBar::new("P50", 27.0),
+                ChartBar::new("P75", 28.0),
+                ChartBar::new("P90", 31.0),
+                ChartBar::new("P95", 35.0),
+                ChartBar::new("P99", 30.0),
+            ],
+        ),
     ]
 }
 

@@ -8,7 +8,9 @@
 - tick marks and labels.
 
 Bar charts omit vertical category grid lines for now, but they use the same axis
-and tick-label hooks.
+and tick-label hooks. Stacked bars infer their y domain from positive and
+negative stack totals, so the axis baseline stays meaningful for mixed-sign
+data.
 
 This remains intentionally generated from the same low-level scale data. The
 component does not own colors, fonts, or stroke widths.
