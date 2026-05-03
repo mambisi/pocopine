@@ -18,3 +18,15 @@ The example intentionally uses the same public API an application would use:
 - CSS selectors from the chart styling contract.
 
 This example should be extended whenever a new chart primitive becomes public.
+
+## Browser Tests
+
+Pine Charts also has browser integration coverage, matching the Pine crate's
+`wasm-bindgen-test` style:
+
+```bash
+wasm-pack test --firefox --headless crates/pine-charts
+```
+
+The browser suite mounts compiled Pocopine fixtures and verifies SVG output,
+reactive bound data updates, and empty/invalid states.
