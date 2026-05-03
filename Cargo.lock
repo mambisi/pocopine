@@ -2994,6 +2994,7 @@ dependencies = [
  "pocopine-observe",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
