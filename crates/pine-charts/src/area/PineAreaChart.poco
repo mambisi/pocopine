@@ -14,7 +14,10 @@
        focusable="false"
        @pointermove="on_pointer_move"
        @pointerleave="clear_hover">
-    <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-grid"
+       data-layer="grid"
+       aria-hidden="true">
       <template pp-for="line in x_grid" pp-key="line.key">
         <line class="pine-chart-grid-line pine-chart-grid-line-x"
               :x1="line.x1"
@@ -30,7 +33,10 @@
               :y2="line.y2"></line>
       </template>
     </g>
-    <g pp-show="ready" class="pine-chart-axes" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-axes"
+       data-layer="axes"
+       aria-hidden="true">
       <line class="pine-chart-axis pine-chart-axis-x"
             :x1="x_axis.x1"
             :y1="x_axis.y1"
@@ -83,7 +89,10 @@
             text-anchor="middle"
             pp-text="y_label"></text>
     </g>
-    <g pp-show="ready" class="pine-chart-areas" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-areas"
+       data-layer="area"
+       aria-hidden="true">
       <template pp-for="series in area_series" pp-key="series.key">
         <path class="pine-chart-area"
               :d="series.area_d"
@@ -92,7 +101,10 @@
               :data-series="series.label"></path>
       </template>
     </g>
-    <g pp-show="ready" class="pine-chart-lines" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-lines"
+       data-layer="series"
+       aria-hidden="true">
       <template pp-for="series in area_series" pp-key="series.key">
         <path class="pine-chart-line"
               :d="series.line_d"
@@ -104,6 +116,7 @@
     </g>
     <g pp-show="ready && show_markers"
        class="pine-chart-markers"
+       data-layer="markers"
        aria-hidden="true">
       <template pp-for="sample in samples" pp-key="sample.key">
         <circle class="pine-chart-marker"
@@ -118,6 +131,7 @@
     </g>
     <g pp-show="hover_visible"
        class="pine-chart-hover"
+       data-layer="hover"
        aria-hidden="true"
        :visibility="hover_visible ? 'visible' : 'hidden'">
       <line class="pine-chart-crosshair pine-chart-crosshair-x"
