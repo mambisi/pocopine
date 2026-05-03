@@ -423,7 +423,86 @@ The whole point of reusable prop groups is that the group owns its public
 surface once. Use-site include lists remain useful for narrowing, not for the
 main path.
 
-## 11. Open Questions
+## 11. Design Discussion Notes
+
+This RFC is intentionally **not ready to merge** until the prop-group
+composition contract is clearer. The current implementation proves that the
+macro surface is feasible, but several API semantics need another pass before
+the framework should commit to them.
+
+### 11.1 Hidden fields must not be accidental
+
+The first design silently ignored unannotated fields inside a `Props` struct.
+That is too easy to misuse: a field can look important in Rust while being
+invisible to templates and parent components.
+
+The revised direction is explicit:
+
+- `#[prop]` fields are flattened into the public component API.
+- `#[state]` fields stay internal to the grouped Rust value.
+- unannotated fields are compile errors.
+
+This keeps room for view-model/source-model patterns, such as keeping a
+`CartItem` next to derived display props, without making accidental hidden
+state possible.
+
+### 11.2 Reusable prop definitions should not own component wiring
+
+Putting `#[observe]`, `#[watch]`, lifecycle hooks, or root-context wiring
+inside a shared `#[derive(Props)]` type makes that type non-reusable. If five
+components share the same prop definition, they should not all inherit the
+same parent/root relationship.
+
+Component wiring should stay on the component:
+
+```rust
+#[derive(Default, Clone, pocopine::Props)]
+pub struct CartItemView {
+    #[prop]
+    pub title: String,
+
+    #[prop]
+    pub price_label: String,
+
+    #[state]
+    pub item: CartItem,
+}
+
+#[component(template = "CartRow.poco")]
+pub struct CartRow {
+    #[prop(flatten)]
+    pub view: CartItemView,
+
+    #[observe(CART_ROOT, field = "current_item")]
+    pub item: CartItem,
+}
+```
+
+Handlers/watchers on `CartRow` can derive `view` from `item`. The reusable
+`CartItemView` stays a data shape, not a component behavior bundle.
+
+### 11.3 Watch and observe need a stricter contract
+
+Flattened `#[prop]` leaves can reasonably behave as first-class component
+keys for template bindings and `#[watch(leaf)]`.
+
+Internal `#[state]` fields inside a prop group are less clear. Bare
+`#[watch(item)]` would make nested state look like a top-level component key,
+while `#[watch(view)]` watches the whole group and future
+`#[watch(view.item)]` would require qualified-path watch support.
+
+The unresolved contract is:
+
+- whether `#[watch(leaf)]` is limited to flattened public `#[prop]` leaves;
+- whether grouped `#[state]` is watchable only through the container field;
+- whether qualified watch paths are worth adding;
+- whether `#[observe]` should ever target a flattened container, and if so
+  whether it observes the whole group only.
+
+Until those answers are firm, RFC 070 should remain draft/experimental and
+Pine Charts should not depend on it.
+
+## 12. Open Questions
 
 - Should a future version support field-level rename, for example
   `#[prop(name = "x-label")]`, or should Pocopine keep Rust-ident wire names
@@ -432,3 +511,7 @@ main path.
   fields require whatever initialization the component already uses?
 - Should nested flatten become legal after v1, or should repeated groups stay
   one level deep permanently for clearer diagnostics?
+- Should `#[derive(Props)]` support `#[state]` permanently, or should source
+  models always live only on the component?
+- Should grouped-state watches require future qualified paths such as
+  `#[watch(view.item)]`?
