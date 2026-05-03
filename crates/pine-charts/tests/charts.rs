@@ -108,6 +108,21 @@ fn assert_svg_fills_frame_without_stretching(frame: &Element, svg: &Element) {
     assert_near(svg_rect.height(), svg_height, "svg rendered height");
 }
 
+fn direct_svg_layers(svg: &Element) -> Vec<String> {
+    let groups = svg.query_selector_all(":scope > g[data-layer]").unwrap();
+    (0..groups.length())
+        .map(|index| {
+            groups
+                .item(index)
+                .unwrap()
+                .dyn_into::<Element>()
+                .unwrap()
+                .get_attribute("data-layer")
+                .unwrap()
+        })
+        .collect()
+}
+
 fn listen_string_field(
     target: &Element,
     event_name: &str,
@@ -203,6 +218,10 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
     assert!(
         svg.get_attribute("viewbox").is_none(),
         "lowercase viewbox is inert in SVG and breaks responsive coordinates",
+    );
+    assert_eq!(
+        direct_svg_layers(&svg),
+        vec!["grid", "axes", "series", "markers", "hover"]
     );
 
     let path = host
@@ -1245,6 +1264,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert_eq!(center_label.get_attribute("y").as_deref(), Some("66"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    assert_eq!(direct_svg_layers(&svg), vec!["series", "labels"]);
     dispatch_pointer_move(&svg, 50.0, 10.0);
     settle().await;
 

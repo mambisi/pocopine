@@ -21,7 +21,10 @@
        focusable="false"
        @pointermove="on_pointer_move"
        @pointerleave="clear_hover">
-    <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-grid"
+       data-layer="grid"
+       aria-hidden="true">
       <template pp-for="line in x_grid" pp-key="line.key">
         <line class="pine-chart-grid-line pine-chart-grid-line-x"
               :x1="line.x1"
@@ -37,7 +40,10 @@
               :y2="line.y2"></line>
       </template>
     </g>
-    <g pp-show="ready" class="pine-chart-axes" aria-hidden="true">
+    <g pp-show="ready"
+       class="pine-chart-axes"
+       data-layer="axes"
+       aria-hidden="true">
       <line class="pine-chart-axis pine-chart-axis-x"
             :x1="x_axis.x1"
             :y1="x_axis.y1"
@@ -92,6 +98,7 @@
     </g>
     <g pp-show="ready"
        class="pine-chart-points pine-chart-scatter-points"
+       data-layer="series"
        aria-hidden="true">
       <template pp-for="series in scatter_series" pp-key="series.key">
         <g class="pine-chart-scatter-series"
@@ -117,6 +124,7 @@
     </g>
     <g pp-show="hover_visible"
        class="pine-chart-hover"
+       data-layer="hover"
        aria-hidden="true"
        :visibility="hover_visible ? 'visible' : 'hidden'">
       <line class="pine-chart-crosshair pine-chart-crosshair-x"
