@@ -9,7 +9,7 @@ The first layer is intentionally low level:
 - chart rectangles and margins,
 - linear and band scales,
 - SVG path builders for line and area series,
-- line, grouped bar, and stacked bar chart components,
+- line, grouped bar, stacked bar, and legend components,
 - strict finite-number validation.
 
 Higher level components build on those primitives instead of hiding them. That
@@ -27,6 +27,14 @@ The crate should prefer attributes and CSS variables over inline presentation
 styles. Inline SVG geometry such as `x`, `y`, `d`, `viewBox`, and ARIA
 attributes is framework-owned; color, stroke width, typography, and spacing
 should remain author-owned whenever possible.
+
+## Guides
+
+- [Foundation](foundation.md)
+- [Components](components.md)
+- [Axes and Grid](axes-grid.md)
+- [Legends](legend.md)
+- [Examples](examples.md)
 
 ## Progression
 

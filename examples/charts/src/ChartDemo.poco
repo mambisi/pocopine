@@ -36,4 +36,7 @@
                   pp-bind:mode="bar_mode"
                   width="720"
                   height="320"></pine-bar-chart>
+
+  <pine-chart-legend label="Distribution legend"
+                     pp-bind:items="bar_legend"></pine-chart-legend>
 </root>

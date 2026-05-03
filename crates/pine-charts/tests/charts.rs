@@ -3,7 +3,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pine_charts::{ChartBar, ChartBarSeries, ChartPoint};
+use pine_charts::{ChartBar, ChartBarSeries, ChartPoint, LegendItem};
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -487,6 +487,90 @@ async fn stacked_bar_chart_accumulates_segments() {
     assert_eq!(second.get_attribute("width").as_deref(), Some("50"));
     assert_eq!(second.get_attribute("y").as_deref(), Some("50"));
     assert_eq!(second.get_attribute("height").as_deref(), Some("30"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <button class="swap-legend" @click="swap">Swap</button>
+  <pine-chart-legend class="fixture-legend"
+                     label="Fixture legend"
+                     pp-bind:items="items"></pine-chart-legend>
+</div>
+"#)]
+struct LegendFixture {
+    items: Vec<LegendItem>,
+}
+
+impl Default for LegendFixture {
+    fn default() -> Self {
+        Self {
+            items: vec![LegendItem::new("Organic"), LegendItem::new("Referral")],
+        }
+    }
+}
+
+#[handlers]
+impl LegendFixture {
+    pub fn swap(&mut self) {
+        self.items = vec![LegendItem::new("API"), LegendItem::new("Render")];
+    }
+}
+
+#[wasm_bindgen_test]
+async fn chart_legend_renders_items_and_updates() {
+    let host = mount_fixture::<LegendFixture>();
+    settle().await;
+
+    let legend = host.query_selector(".fixture-legend").unwrap().unwrap();
+    assert_eq!(legend.get_attribute("role").as_deref(), Some("group"));
+    assert_eq!(
+        legend.get_attribute("aria-label").as_deref(),
+        Some("Fixture legend")
+    );
+    assert!(!legend.has_attribute("data-empty"));
+
+    let items = host.query_selector_all(".pine-chart-legend-item").unwrap();
+    assert_eq!(items.length(), 2);
+
+    let first = items.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first.get_attribute("data-series").as_deref(),
+        Some("Organic")
+    );
+    let first_label = first
+        .query_selector(".pine-chart-legend-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_label.text_content().as_deref(), Some("Organic"));
+
+    let marker = host
+        .query_selector(".pine-chart-legend-marker")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        marker.get_attribute("data-series").as_deref(),
+        Some("Organic")
+    );
+
+    host.query_selector("button.swap-legend")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let items = host.query_selector_all(".pine-chart-legend-item").unwrap();
+    let first = items.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(first.get_attribute("data-series").as_deref(), Some("API"));
+    let first_label = first
+        .query_selector(".pine-chart-legend-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_label.text_content().as_deref(), Some("API"));
 
     host.remove();
 }

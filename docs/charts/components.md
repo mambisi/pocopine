@@ -96,6 +96,33 @@ let series = vec![
   mode="stacked"></pine-bar-chart>
 ```
 
+Use `bar_legend_items(&series)` when a separate legend should mirror the bar
+series:
+
+```rust
+use pine_charts::bar_legend_items;
+
+let legend_items = bar_legend_items(&series);
+```
+
+## Legend
+
+`PineChartLegend` accepts `Vec<LegendItem>` and renders an unstyled HTML list.
+The legend is deliberately separate from chart components so applications can
+place it above, below, beside, or outside the chart container.
+
+```rust
+use pine_charts::LegendItem;
+
+let items = vec![LegendItem::new("Organic"), LegendItem::new("Referral")];
+```
+
+```html
+<pine-chart-legend
+  label="Acquisition legend"
+  pp-bind:items="items"></pine-chart-legend>
+```
+
 ## Styling Hooks
 
 The component emits stable hooks:
@@ -109,8 +136,15 @@ The component emits stable hooks:
 - `.pine-chart-tick-label`
 - `.pine-chart-line`
 - `.pine-chart-bar`
+- `.pine-chart-legend`
+- `.pine-chart-legend-list`
+- `.pine-chart-legend-item`
+- `.pine-chart-legend-marker`
+- `.pine-chart-legend-label`
 - `.pine-chart-status`
 - `data-state="empty|ready|invalid"`
+- `data-orientation="horizontal|vertical|..."`
+- `data-series="<series label>"`
 - `data-empty`
 - `data-invalid`
 
@@ -133,6 +167,10 @@ treatment:
 
 .pine-chart-bar[data-series="Organic"] {
   fill: var(--organic-series);
+}
+
+.pine-chart-legend-marker[data-series="Organic"] {
+  background: var(--organic-series);
 }
 ```
 

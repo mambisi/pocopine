@@ -14,9 +14,11 @@ The example intentionally uses the same public API an application would use:
 
 - `pine_charts::register_all()` at startup,
 - `Vec<ChartPoint>` and `Vec<ChartBarSeries>` data in the parent component,
+- `bar_legend_items(&bar_series)` to drive a separate legend,
 - `<pine-line-chart pp-bind:points="points">` in the template,
 - `<pine-bar-chart pp-bind:series="bar_series" pp-bind:mode="bar_mode">` in
   the template,
+- `<pine-chart-legend pp-bind:items="bar_legend">` in the template,
 - CSS selectors from the chart styling contract.
 
 This example should be extended whenever a new chart primitive becomes public.
