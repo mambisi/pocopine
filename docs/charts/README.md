@@ -36,6 +36,7 @@ should remain author-owned whenever possible.
 - [Axes and Grid](axes-grid.md)
 - [Legends](legend.md)
 - [Responsive Containers](responsive.md)
+- [Layered Charts](layered.md)
 - [Layers](layers.md)
 - [Interaction](interaction.md)
 - [Events](events.md)

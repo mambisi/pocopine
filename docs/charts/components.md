@@ -5,8 +5,9 @@ line charts from numeric points or named numeric series, `PineScatterChart`
 renders point-only numeric series, `PineAreaChart` renders closed SVG area fills
 from the same numeric shape, `PineBarChart` renders categorical values as SVG
 bars, and `PinePieChart` renders pie, donut, half-pie, and half-donut slices.
-They are useful on their own, but their main job is to prove the component
-contract before richer composition is added.
+`PineLayerChart` provides the lower-level compound component surface for custom
+SVG compositions: child tags register lines, guides, markers, labels, and
+annotations into one root-owned SVG.
 
 Use `PineChartResponsive` when a chart should follow its parent size. The
 responsive container measures its content box and writes concrete `width` and

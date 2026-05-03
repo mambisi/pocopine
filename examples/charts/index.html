@@ -82,17 +82,23 @@
       margin-inline: auto;
     }
 
+    .chart-panel--metro {
+      overflow: hidden;
+    }
+
     .pine-chart-responsive-frame {
       min-width: 0;
     }
 
     .pine-chart-responsive-frame > pine-line-chart,
     .pine-chart-responsive-frame > pine-scatter-chart,
+    .pine-chart-responsive-frame > pine-layer-chart,
     .pine-chart-responsive-frame > pine-area-chart,
     .pine-chart-responsive-frame > pine-bar-chart,
     .pine-chart-responsive-frame > pine-pie-chart,
     .chart-panel .pine-line-chart,
     .chart-panel .pine-scatter-chart,
+    .chart-panel .pine-layer-chart,
     .chart-panel .pine-area-chart,
     .chart-panel .pine-bar-chart,
     .chart-panel .pine-pie-chart {
@@ -112,6 +118,10 @@
 
     .pine-scatter-chart {
       color: #5b6ee1;
+    }
+
+    .pine-layer-chart {
+      color: #18212f;
     }
 
     .pine-bar-chart {
@@ -228,6 +238,34 @@
     .pine-chart-pie-slice[data-selected] {
       stroke: #18212f;
       stroke-width: 3;
+    }
+
+    .pine-layer-chart-guide {
+      opacity: 0.55;
+      stroke-dasharray: 4 8;
+    }
+
+    .pine-layer-chart-line {
+      filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.75));
+    }
+
+    .pine-layer-chart-marker {
+      vector-effect: non-scaling-stroke;
+    }
+
+    .pine-layer-chart-reference-dot {
+      opacity: 0.94;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .pine-layer-chart-label {
+      dominant-baseline: middle;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .pine-layer-chart-icon-plane {
+      opacity: 0.86;
     }
 
     .pine-chart-crosshair {

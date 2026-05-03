@@ -1,0 +1,6 @@
+<root class="pine-chart-layer-definition"
+      hidden
+      aria-hidden="true"
+      :data-layer="name">
+  <slot></slot>
+</root>
