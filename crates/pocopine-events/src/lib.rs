@@ -1139,6 +1139,27 @@ return {id, tostring(now_ms)}
                 Ok(())
             }
 
+            /// Clear this backend's Redis stream.
+            ///
+            /// This is only for tests and integration harnesses. Production
+            /// code should manage retention with `stream_max_len` instead.
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub async fn clear_for_tests(&self) -> EventResult<()> {
+                let result = self.clear_for_tests_inner().await;
+                self.clear_cached_on_redis_error(result)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            async fn clear_for_tests_inner(&self) -> EventResult<()> {
+                let mut conn = self.connection().await?;
+                let _: () = redis::cmd("DEL")
+                    .arg(self.stream_key())
+                    .query_async(&mut conn)
+                    .await?;
+                Ok(())
+            }
+
             async fn publish_to_stream(&self, draft: EventDraft) -> EventResult<EventEnvelope> {
                 let result = self.publish_to_stream_inner(draft).await;
                 self.clear_cached_on_redis_error(result)
@@ -1668,7 +1689,7 @@ return {id, tostring(now_ms)}
 
             #[tokio::test]
             async fn redis_publish_replay_and_live_round_trip() -> EventResult<()> {
-                let Some(url) = std::env::var("REDIS_TEST_URL").ok() else {
+                let Some(url) = redis_test_url() else {
                     return Ok(());
                 };
                 let app = format!(
@@ -1681,7 +1702,7 @@ return {id, tostring(now_ms)}
                 );
                 let config = RedisEventConfig::new(url, app)?.with_stream_max_len(128)?;
                 let backend = RedisEventBackend::from_config(config)?;
-                delete_stream(&backend).await?;
+                backend.clear_for_tests().await?;
 
                 let posts = Topic::new("posts")?;
                 let mut subscription = backend
@@ -1708,17 +1729,23 @@ return {id, tostring(now_ms)}
                 assert_eq!(received, published);
                 assert_eq!(replay.events, vec![published]);
 
-                delete_stream(&backend).await?;
+                backend.clear_for_tests().await?;
                 Ok(())
             }
 
-            async fn delete_stream(backend: &RedisEventBackend) -> EventResult<()> {
-                let mut conn = backend.connection().await?;
-                let _: () = redis::cmd("DEL")
-                    .arg(backend.stream_key())
-                    .query_async(&mut conn)
-                    .await?;
-                Ok(())
+            fn redis_test_url() -> Option<String> {
+                let url = match std::env::var("REDIS_TEST_URL") {
+                    Ok(url) => url,
+                    Err(_) => {
+                        eprintln!("skipping Redis event backend test: set REDIS_TEST_URL");
+                        return None;
+                    }
+                };
+                if url.trim().is_empty() {
+                    eprintln!("skipping Redis event backend test: REDIS_TEST_URL is empty");
+                    return None;
+                }
+                Some(url)
             }
         }
     }
