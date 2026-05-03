@@ -85,6 +85,11 @@ mod server {
 
     impl std::error::Error for InitLoggingError {}
 
+    /// Install compact server logging with the default `RUST_LOG` handling.
+    pub fn init_default() -> Result<(), InitLoggingError> {
+        init_server_logging(ServerLoggingConfig::compact())
+    }
+
     pub fn init_server_logging(config: ServerLoggingConfig) -> Result<(), InitLoggingError> {
         let filter = build_filter(config.env_filter)?;
         match config.format {
@@ -128,7 +133,9 @@ mod server {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use server::{init_server_logging, InitLoggingError, LogFormat, ServerLoggingConfig};
+pub use server::{
+    init_default, init_server_logging, InitLoggingError, LogFormat, ServerLoggingConfig,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod web {

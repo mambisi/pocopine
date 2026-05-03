@@ -8,11 +8,11 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use pocopine_logging::{init_server_logging, ServerLoggingConfig};
+    use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
     use site::__submit_contact_route;
 
-    init_server_logging(ServerLoggingConfig::compact()).map_err(std::io::Error::other)?;
+    init_default().map_err(std::io::Error::other)?;
 
     // Anchor to the crate root so the binary works regardless of CWD.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
