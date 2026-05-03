@@ -38,6 +38,7 @@ should remain author-owned whenever possible.
 - [Responsive Containers](responsive.md)
 - [Interaction](interaction.md)
 - [Events](events.md)
+- [Cookbook](cookbook.md)
 - [Examples](examples.md)
 
 ## Progression

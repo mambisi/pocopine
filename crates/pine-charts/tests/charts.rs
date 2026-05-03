@@ -87,6 +87,27 @@ fn dispatch_keydown(element: &Element, key: &str) {
         .unwrap();
 }
 
+fn assert_near(actual: f64, expected: f64, label: &str) {
+    assert!(
+        (actual - expected).abs() <= 0.75,
+        "{label}: expected {expected}, got {actual}"
+    );
+}
+
+fn assert_svg_fills_frame_without_stretching(frame: &Element, svg: &Element) {
+    let frame_rect = frame.get_bounding_client_rect();
+    let svg_rect = svg.get_bounding_client_rect();
+    let svg_width = svg.get_attribute("width").unwrap().parse::<f64>().unwrap();
+    let svg_height = svg.get_attribute("height").unwrap().parse::<f64>().unwrap();
+
+    assert!(svg_rect.left() >= frame_rect.left() - 0.75);
+    assert!(svg_rect.top() >= frame_rect.top() - 0.75);
+    assert!(svg_rect.right() <= frame_rect.right() + 0.75);
+    assert!(svg_rect.bottom() <= frame_rect.bottom() + 0.75);
+    assert_near(svg_rect.width(), svg_width, "svg rendered width");
+    assert_near(svg_rect.height(), svg_height, "svg rendered height");
+}
+
 fn listen_string_field(
     target: &Element,
     event_name: &str,
@@ -1534,6 +1555,171 @@ async fn responsive_container_sizes_to_inner_frame_when_padded() {
     assert!(svg_rect.top() >= frame_rect.top() - 0.5);
     assert!(svg_rect.right() <= frame_rect.right() + 0.5);
     assert!(svg_rect.bottom() <= frame_rect.bottom() + 0.5);
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div class="demo-responsive-shell" style="width: 900px">
+  <style>
+    .demo-responsive-shell {
+      display: block;
+    }
+
+    .demo-chart-panel {
+      box-sizing: border-box;
+      border: 1px solid transparent;
+      padding: 20px;
+      position: relative;
+    }
+
+    .demo-chart-panel--radial {
+      margin-inline: auto;
+    }
+
+    .pine-chart-responsive-frame {
+      min-width: 0;
+    }
+
+    .pine-chart-responsive-frame > pine-line-chart,
+    .pine-chart-responsive-frame > pine-pie-chart,
+    .demo-chart-panel .pine-line-chart,
+    .demo-chart-panel .pine-pie-chart {
+      display: block;
+      height: 100%;
+      position: relative;
+      width: 100%;
+    }
+
+    .demo-chart-panel .pine-chart-svg {
+      display: block;
+      height: auto;
+      max-width: 100%;
+      overflow: visible;
+    }
+  </style>
+  <pine-chart-responsive class="demo-chart-panel demo-wide-chart"
+                         aspect_ratio="2"
+                         min_height="220">
+    <pine-line-chart class="demo-line-chart"
+                     label="Wide"
+                     x_label="Week"
+                     y_label="Value"
+                     margin_top="0"
+                     margin_right="0"
+                     margin_bottom="0"
+                     margin_left="0"
+                     pp-bind:points="points"></pine-line-chart>
+  </pine-chart-responsive>
+  <pine-chart-responsive class="demo-chart-panel demo-chart-panel--radial demo-radial-chart"
+                         width="min(520px, 100%)"
+                         aspect_ratio="1"
+                         min_height="260">
+    <pine-pie-chart class="demo-half-donut"
+                    label="Goal progress"
+                    margin_top="0"
+                    margin_right="0"
+                    margin_bottom="0"
+                    margin_left="0"
+                    inner_radius="0.58"
+                    start_angle="180"
+                    end_angle="360"
+                    center_label="Progress"
+                    center_value="74%"
+                    pp-bind:data="slices"></pine-pie-chart>
+  </pine-chart-responsive>
+</div>
+"#)]
+struct DemoResponsiveChartFixture {
+    points: Vec<ChartPoint>,
+    slices: Vec<ChartPieSlice>,
+}
+
+impl Default for DemoResponsiveChartFixture {
+    fn default() -> Self {
+        Self {
+            points: vec![
+                ChartPoint::new(0.0, 1.0),
+                ChartPoint::new(1.0, 2.0),
+                ChartPoint::new(2.0, 4.0),
+            ],
+            slices: vec![
+                ChartPieSlice::new("Done", 74.0),
+                ChartPieSlice::new("Remaining", 26.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl DemoResponsiveChartFixture {}
+
+#[wasm_bindgen_test]
+async fn demo_responsive_charts_stay_contained_and_unstretched() {
+    let host = mount_fixture::<DemoResponsiveChartFixture>();
+    settle().await;
+    sleep_ms(50).await;
+    settle().await;
+
+    let shell = host
+        .query_selector(".demo-responsive-shell")
+        .unwrap()
+        .unwrap();
+    let wide = host.query_selector(".demo-wide-chart").unwrap().unwrap();
+    assert_eq!(wide.get_attribute("data-width").as_deref(), Some("858"));
+    assert_eq!(wide.get_attribute("data-height").as_deref(), Some("429"));
+    let wide_frame = wide
+        .query_selector(".pine-chart-responsive-frame")
+        .unwrap()
+        .unwrap();
+    let wide_svg = wide
+        .query_selector(".demo-line-chart svg.pine-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(wide_svg.get_attribute("width").as_deref(), Some("858"));
+    assert_eq!(wide_svg.get_attribute("height").as_deref(), Some("429"));
+    assert_svg_fills_frame_without_stretching(&wide_frame, &wide_svg);
+
+    let radial = host.query_selector(".demo-radial-chart").unwrap().unwrap();
+    let shell_rect = shell.get_bounding_client_rect();
+    let radial_rect = radial.get_bounding_client_rect();
+    assert_near(radial_rect.width(), 520.0, "radial panel width");
+    assert_near(
+        radial_rect.left() + radial_rect.width() * 0.5,
+        shell_rect.left() + shell_rect.width() * 0.5,
+        "radial panel center",
+    );
+    assert_eq!(radial.get_attribute("data-width").as_deref(), Some("478"));
+    assert_eq!(radial.get_attribute("data-height").as_deref(), Some("478"));
+    let radial_frame = radial
+        .query_selector(".pine-chart-responsive-frame")
+        .unwrap()
+        .unwrap();
+    let radial_svg = radial
+        .query_selector(".demo-half-donut svg.pine-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_svg_fills_frame_without_stretching(&radial_frame, &radial_svg);
+
+    let center_label = radial
+        .query_selector(".pine-chart-center-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(center_label.text_content().as_deref(), Some("Progress"));
+    assert_eq!(center_label.get_attribute("y").as_deref(), Some("239"));
+
+    shell.set_attribute("style", "width: 260px").unwrap();
+    sleep_ms(50).await;
+    settle().await;
+
+    assert_eq!(wide.get_attribute("data-width").as_deref(), Some("218"));
+    assert_eq!(wide.get_attribute("data-height").as_deref(), Some("220"));
+    assert_svg_fills_frame_without_stretching(&wide_frame, &wide_svg);
+    assert_eq!(radial.get_attribute("data-width").as_deref(), Some("218"));
+    assert_eq!(radial.get_attribute("data-height").as_deref(), Some("260"));
+    assert_svg_fills_frame_without_stretching(&radial_frame, &radial_svg);
+    assert_eq!(center_label.get_attribute("y").as_deref(), Some("130"));
 
     host.remove();
 }
