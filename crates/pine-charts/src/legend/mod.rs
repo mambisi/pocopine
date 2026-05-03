@@ -1,11 +1,14 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::events::{LegendToggle, LEGEND_TOGGLE_EVENT};
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LegendItem {
     pub key: String,
     pub label: String,
     pub series: String,
+    pub active: bool,
 }
 
 impl LegendItem {
@@ -15,6 +18,7 @@ impl LegendItem {
             key: label.clone(),
             series: label.clone(),
             label,
+            active: true,
         }
     }
 
@@ -24,6 +28,7 @@ impl LegendItem {
             key: key.into(),
             series: label.clone(),
             label,
+            active: true,
         }
     }
 
@@ -36,6 +41,7 @@ impl LegendItem {
             key: key.into(),
             label: label.into(),
             series: series.into(),
+            active: true,
         }
     }
 }
@@ -74,6 +80,8 @@ pub struct PineChartLegend {
     pub label: String,
     #[prop]
     pub orientation: String,
+    #[prop]
+    pub interactive: bool,
     pub empty: bool,
 }
 
@@ -83,6 +91,7 @@ impl Default for PineChartLegend {
             items: Vec::new(),
             label: "Chart legend".into(),
             orientation: "horizontal".into(),
+            interactive: false,
             empty: true,
         }
     }
@@ -103,6 +112,23 @@ impl PineChartLegend {
     fn on_orientation(&mut self, _: String, _: Option<String>) {
         self.recompute();
     }
+
+    pub fn toggle_item(&mut self, key: String) {
+        if !self.interactive {
+            return;
+        }
+        let Some(item) = self.items.iter_mut().find(|item| item.key == key) else {
+            return;
+        };
+        item.active = !item.active;
+        let event = LegendToggle {
+            key: item.key.clone(),
+            label: item.label.clone(),
+            series: item.series.clone(),
+            active: item.active,
+        };
+        pocopine::emit(LEGEND_TOGGLE_EVENT, event);
+    }
 }
 
 impl PineChartLegend {
@@ -122,6 +148,7 @@ mod tests {
         assert_eq!(item.key, "Organic");
         assert_eq!(item.label, "Organic");
         assert_eq!(item.series, "Organic");
+        assert!(item.active);
     }
 
     #[test]
@@ -137,6 +164,7 @@ mod tests {
         assert_eq!(items[0].series, "Actual");
         assert_eq!(items[1].key, "line-series-1-Series 2");
         assert_eq!(items[1].label, "Series 2");
+        assert!(items[1].active);
     }
 
     #[test]
@@ -148,5 +176,18 @@ mod tests {
         legend.items = vec![LegendItem::new("Organic")];
         legend.recompute();
         assert!(!legend.empty);
+    }
+
+    #[test]
+    fn component_toggles_items_when_interactive() {
+        let mut legend = PineChartLegend {
+            interactive: true,
+            items: vec![LegendItem::new("Organic")],
+            ..Default::default()
+        };
+
+        legend.toggle_item("Organic".into());
+
+        assert!(!legend.items[0].active);
     }
 }

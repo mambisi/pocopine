@@ -43,16 +43,23 @@ default because the rect itself is the hover target.
 Line markers, scatter points, and bars also expose a small selection contract.
 The chart root is keyboard focusable. Arrow keys move an internal focused item,
 and Enter or Space selects it. Pointer clicks select the clicked marker, point,
-or bar. Rendered selectable marks expose:
+or bar. Selection emits a bubbling `pp:chart:select` event from the selected
+mark/root. Rendered selectable marks expose:
 
 - `data-key`
 - `data-focused`
 - `data-selected`
+- `aria-selected="true|false"`
 
 Line selection is marker-based, so visible point marks require
 `show_markers="true"`. Keyboard selection still tracks the sampled line data,
 but an application only gets visible selected/focused line marks when markers
 are rendered.
+
+Interactive legends are opt-in with `interactive="true"`. The legend then gives
+each item keyboard focus, toggles `data-active`, and emits
+`pp:chart:legend-toggle`. The chart data remains application-owned; the event is
+the hook for filtering or dimming series.
 
 ## Styling
 

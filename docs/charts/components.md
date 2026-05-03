@@ -269,6 +269,10 @@ let items = vec![LegendItem::new("Organic"), LegendItem::new("Referral")];
   pp-bind:items="items"></pine-chart-legend>
 ```
 
+Add `interactive="true"` when legend items should toggle and emit
+`pp:chart:legend-toggle`. The legend owns only item active state and hooks; the
+application still decides how toggles affect chart data.
+
 ## Styling Hooks
 
 The component emits stable hooks:
@@ -327,6 +331,7 @@ The component emits stable hooks:
 - `data-hovered`
 - `data-focused`
 - `data-selected`
+- `data-active`
 - `data-empty`
 - `data-invalid`
 

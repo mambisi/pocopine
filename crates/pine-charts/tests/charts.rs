@@ -3,11 +3,15 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use pine_charts::{
     ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, ChartScatterSeries,
-    LegendItem,
+    LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement};
@@ -81,6 +85,48 @@ fn dispatch_keydown(element: &Element, key: &str) {
             &web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap(),
         )
         .unwrap();
+}
+
+fn listen_string_field(
+    target: &Element,
+    event_name: &str,
+    field: &'static str,
+) -> Rc<RefCell<Option<String>>> {
+    let seen = Rc::new(RefCell::new(None::<String>));
+    let seen_for_listener = seen.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let event: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        let value = js_sys::Reflect::get(&event.detail(), &wasm_bindgen::JsValue::from_str(field))
+            .ok()
+            .and_then(|value| value.as_string());
+        *seen_for_listener.borrow_mut() = value;
+    });
+    target
+        .add_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+    seen
+}
+
+fn listen_bool_field(
+    target: &Element,
+    event_name: &str,
+    field: &'static str,
+) -> Rc<Cell<Option<bool>>> {
+    let seen = Rc::new(Cell::new(None::<bool>));
+    let seen_for_listener = seen.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let event: web_sys::CustomEvent = ev.dyn_into().unwrap();
+        let value = js_sys::Reflect::get(&event.detail(), &wasm_bindgen::JsValue::from_str(field))
+            .ok()
+            .and_then(|value| value.as_bool());
+        seen_for_listener.set(value);
+    });
+    target
+        .add_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+    seen
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -383,11 +429,16 @@ async fn scatter_chart_renders_points_axes_and_hover() {
         Some("Segment B: x 1, y 0")
     );
 
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
     dispatch_click(&first);
     settle().await;
 
     assert!(first.has_attribute("data-focused"));
     assert!(first.has_attribute("data-selected"));
+    assert_eq!(
+        selected_label.borrow().as_deref(),
+        Some("Segment A: x 0, y 0")
+    );
 
     let chart = host.query_selector(".pine-scatter-chart").unwrap().unwrap();
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
@@ -579,6 +630,7 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
 
     let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
 
     let markers = host.query_selector_all(".pine-chart-marker").unwrap();
     assert_eq!(markers.length(), 3);
@@ -590,6 +642,7 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
 
     assert!(second.has_attribute("data-focused"));
     assert!(second.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("x 5, y 10"));
 
     dispatch_keydown(&chart, "ArrowRight");
     settle().await;
@@ -604,6 +657,7 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
 
     assert!(third.has_attribute("data-selected"));
     assert!(!second.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("x 10, y 5"));
 
     host.remove();
 }
@@ -848,6 +902,7 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
 
     let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
     assert!(!chart.has_attribute("data-hover"));
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     dispatch_pointer_move(&svg, 10.0, 90.0);
@@ -881,6 +936,7 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
 
     assert!(first.has_attribute("data-focused"));
     assert!(first.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("A: 2"));
 
     dispatch_keydown(&chart, "ArrowRight");
     settle().await;
@@ -895,6 +951,7 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
 
     assert!(second.has_attribute("data-selected"));
     assert!(!first.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("B: 10"));
 
     let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
     svg.dispatch_event(&leave).unwrap();
@@ -1088,6 +1145,7 @@ async fn stacked_bar_chart_accumulates_segments() {
   <button class="swap-legend" @click="swap">Swap</button>
   <pine-chart-legend class="fixture-legend"
                      label="Fixture legend"
+                     interactive="true"
                      pp-bind:items="items"></pine-chart-legend>
 </div>
 "#)]
@@ -1130,6 +1188,19 @@ async fn chart_legend_renders_items_and_updates() {
     assert_eq!(
         first.get_attribute("data-series").as_deref(),
         Some("Organic")
+    );
+    assert_eq!(first.get_attribute("tabindex").as_deref(), Some("0"));
+    assert_eq!(first.get_attribute("aria-pressed").as_deref(), Some("true"));
+
+    let active = listen_bool_field(&legend, LEGEND_TOGGLE_EVENT, "active");
+    dispatch_keydown(&first, "Enter");
+    settle().await;
+
+    assert_eq!(active.get(), Some(false));
+    assert!(!first.has_attribute("data-active"));
+    assert_eq!(
+        first.get_attribute("aria-pressed").as_deref(),
+        Some("false")
     );
     let first_label = first
         .query_selector(".pine-chart-legend-label")

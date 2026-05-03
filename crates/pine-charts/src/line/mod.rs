@@ -8,6 +8,7 @@ use crate::cartesian::{
     CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
+use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items};
 use crate::path::line_path;
@@ -230,6 +231,17 @@ impl LineChartSample {
             plot,
             width,
             height,
+        )
+    }
+
+    pub(crate) fn selection(&self, chart: &str) -> ChartSelection {
+        ChartSelection::xy(
+            chart,
+            self.key.clone(),
+            self.aria_label.clone(),
+            self.series_label.clone(),
+            self.data_x,
+            self.data_y,
         )
     }
 }
@@ -506,9 +518,10 @@ impl PineLineChart {
     }
 
     pub fn select_sample(&mut self, key: String) {
-        if self.has_sample_key(&key) {
+        if let Some(selection) = self.selection_for_sample(&key) {
             self.focused_key = key.clone();
             self.selected_key = key;
+            pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
 
@@ -524,8 +537,9 @@ impl PineLineChart {
         if self.focused_key.is_empty() {
             self.step_sample_focus(1);
         }
-        if !self.focused_key.is_empty() {
+        if let Some(selection) = self.selection_for_sample(&self.focused_key) {
             self.selected_key = self.focused_key.clone();
+            pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
 }
@@ -670,6 +684,13 @@ impl PineLineChart {
 
     fn has_sample_key(&self, key: &str) -> bool {
         self.samples.iter().any(|sample| sample.key == key)
+    }
+
+    fn selection_for_sample(&self, key: &str) -> Option<ChartSelection> {
+        self.samples
+            .iter()
+            .find(|sample| sample.key == key)
+            .map(|sample| sample.selection("line"))
     }
 
     fn reconcile_selection(&mut self) {

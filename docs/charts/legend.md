@@ -49,6 +49,16 @@ let legend_items = area_legend_items(&series);
   pp-bind:items="legend_items"></pine-chart-legend>
 ```
 
+Set `interactive="true"` when legend items should be keyboard-focusable toggles:
+
+```html
+<pine-chart-legend
+  label="Acquisition legend"
+  interactive="true"
+  pp-bind:items="legend_items"
+  @pp:chart:legend-toggle="toggle_series"></pine-chart-legend>
+```
+
 The component renders an HTML list with stable styling hooks:
 
 - `.pine-chart-legend`
@@ -56,7 +66,12 @@ The component renders an HTML list with stable styling hooks:
 - `.pine-chart-legend-item`
 - `.pine-chart-legend-marker`
 - `.pine-chart-legend-label`
+- `data-key="<stable legend key>"`
 - `data-series="<series label>"`
+- `data-active`
+
+Interactive items also expose `aria-pressed`. Toggling emits
+`pp:chart:legend-toggle`; the chart does not filter itself.
 
 Markers do not ship with framework colors. Applications map `data-series` to
 their palette:

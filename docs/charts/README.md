@@ -36,6 +36,7 @@ should remain author-owned whenever possible.
 - [Axes and Grid](axes-grid.md)
 - [Legends](legend.md)
 - [Interaction](interaction.md)
+- [Events](events.md)
 - [Examples](examples.md)
 
 ## Progression
