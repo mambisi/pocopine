@@ -108,6 +108,34 @@ jobs:
       # workspace doesn't carry — they're not the contract here).
       - run: cargo test --workspace --exclude pine --tests
 
+  test-live-redis:
+    name: live Redis integration
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-live-redis
+      - name: events Redis integration tests
+        run: cargo test -p pocopine-events --features redis,test-support --tests
+      - name: live Redis feature integration tests
+        run: cargo test -p pocopine-live --features redis --tests
+
   test-wasm-node:
     name: wasm-pack test --node (${{ matrix.name }})
     runs-on: ubuntu-latest
