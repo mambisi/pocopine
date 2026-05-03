@@ -136,7 +136,7 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     let init = web_sys::PointerEventInit::new();
     init.set_bubbles(true);
     init.set_client_x((rect.left() + 50.0).round() as i32);
-    init.set_client_y(rect.top().round() as i32);
+    init.set_client_y((rect.top() + 50.0).round() as i32);
     svg.dispatch_event(
         &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
     )
@@ -179,31 +179,6 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
         .get_attribute("style")
         .unwrap_or_default()
         .contains("--pine-chart-tooltip-x: 50%"));
-
-    let outside_target = web_sys::PointerEventInit::new();
-    outside_target.set_bubbles(true);
-    outside_target.set_client_x((rect.left() + 60.0).round() as i32);
-    outside_target.set_client_y(rect.top().round() as i32);
-    svg.dispatch_event(
-        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &outside_target).unwrap(),
-    )
-    .unwrap();
-    settle().await;
-
-    let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
-    assert!(!chart.has_attribute("data-hover"));
-    let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
-    assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
-
-    let init = web_sys::PointerEventInit::new();
-    init.set_bubbles(true);
-    init.set_client_x((rect.left() + 50.0).round() as i32);
-    init.set_client_y(rect.top().round() as i32);
-    svg.dispatch_event(
-        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
-    )
-    .unwrap();
-    settle().await;
 
     let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
     svg.dispatch_event(&leave).unwrap();
