@@ -44,18 +44,25 @@ responsive wrapper as the chart panel and let the chart fill its content box.
   padding: 20px;
 }
 
-.chart-panel > pine-line-chart,
+.pine-chart-responsive-frame {
+  min-width: 0;
+}
+
+.pine-chart-responsive-frame > pine-line-chart,
 .chart-panel .pine-line-chart,
 .chart-panel .pine-chart-svg {
   display: block;
-  height: 100%;
-  width: 100%;
+}
+
+.chart-panel .pine-chart-svg {
+  height: auto;
+  max-width: 100%;
 }
 ```
 
-Padding and borders belong on the responsive container. The wrapper measures
-the content box, so the chart receives the usable drawing size rather than the
-outer card size.
+Padding and borders belong on the responsive container. The wrapper measures an
+inner frame inside that container, so the chart receives the usable drawing
+size rather than the outer card size.
 
 ## Contract
 

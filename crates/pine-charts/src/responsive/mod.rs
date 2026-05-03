@@ -45,6 +45,7 @@ pub struct PineChartResponsive {
     #[prop]
     pub style: String,
     pub container_style: String,
+    pub frame_style: String,
     pub measured_width: f64,
     pub measured_height: f64,
     pub ready: bool,
@@ -60,6 +61,7 @@ impl Default for PineChartResponsive {
             min_height: 0.0,
             style: String::new(),
             container_style: String::new(),
+            frame_style: String::new(),
             measured_width: 0.0,
             measured_height: 0.0,
             ready: false,
@@ -79,32 +81,35 @@ impl PineChartResponsive {
         let Some(root) = refs.get("root") else {
             return;
         };
+        let Some(frame) = refs.get("frame") else {
+            return;
+        };
 
         ensure_host_layout(&root);
-        let root_for_initial = root.clone();
+        let frame_for_initial = frame.clone();
         let handle_for_initial = handle.clone();
         pocopine::tick::next(move || {
-            let (width, height) = measured_size(&root_for_initial);
+            let (width, height) = measured_size(&frame_for_initial);
             handle_for_initial.update(|chart| {
                 chart.recompute_style();
-                chart.apply_measured_size(&root_for_initial, width, height);
+                chart.apply_measured_size(&frame_for_initial, width, height);
             });
         });
 
-        let root_for_observer = root.clone();
+        let frame_for_observer = frame.clone();
         let handle_for_observer = handle.clone();
         let closure = Closure::wrap(Box::new(move |entries: JsValue, _observer: JsValue| {
             let (width, height) =
-                observer_size(&entries).unwrap_or_else(|| measured_size(&root_for_observer));
+                observer_size(&entries).unwrap_or_else(|| measured_size(&frame_for_observer));
             handle_for_observer.update(|chart| {
-                chart.apply_measured_size(&root_for_observer, width, height);
+                chart.apply_measured_size(&frame_for_observer, width, height);
             });
         }) as Box<dyn FnMut(JsValue, JsValue)>);
 
         let Ok(observer) = ResizeObserver::new(closure.as_ref().unchecked_ref()) else {
             return;
         };
-        observer.observe(&root);
+        observer.observe(&frame);
 
         pocopine::on_scope_unmount(move || {
             observer.disconnect();
@@ -166,6 +171,7 @@ impl PineChartResponsive {
     fn apply_measured_size(&mut self, root: &Element, measured_width: f64, measured_height: f64) {
         let Some(size) = self.resolve_size(measured_width, measured_height) else {
             self.ready = false;
+            self.recompute_style();
             return;
         };
 
@@ -179,17 +185,22 @@ impl PineChartResponsive {
         self.measured_width = size.width;
         self.measured_height = size.height;
         self.ready = true;
+        self.recompute_style();
         apply_child_size(root, size);
     }
 
     fn recompute_style(&mut self) {
-        self.container_style = responsive_style(
-            &self.width,
+        let resolved_height = if self.ready && self.derives_height_from_aspect() {
+            Some(self.measured_height)
+        } else {
+            None
+        };
+        self.container_style = responsive_container_style(&self.width, self.min_width, &self.style);
+        self.frame_style = responsive_frame_style(
             &self.height,
             self.aspect_ratio,
-            self.min_width,
             self.min_height,
-            &self.style,
+            resolved_height,
         );
     }
 
@@ -201,6 +212,55 @@ impl PineChartResponsive {
     }
 }
 
+pub fn responsive_container_style(width: &str, min_width: f64, author_style: &str) -> String {
+    let mut parts = vec![
+        "display: block".to_string(),
+        format!("width: {}", css_length_or(width, "100%")),
+    ];
+
+    if min_width.is_finite() && min_width > 0.0 {
+        parts.push(format!("min-width: {}px", trim_float(min_width)));
+    }
+
+    let generated = parts.join("; ");
+    merge_style(&generated, author_style)
+}
+
+pub fn responsive_frame_style(
+    height: &str,
+    aspect_ratio: f64,
+    min_height: f64,
+    resolved_height: Option<f64>,
+) -> String {
+    responsive_frame_style_inner(height, aspect_ratio, min_height, resolved_height)
+}
+
+fn responsive_frame_style_inner(
+    height: &str,
+    aspect_ratio: f64,
+    min_height: f64,
+    resolved_height: Option<f64>,
+) -> String {
+    let mut parts = vec!["display: block".to_string(), "width: 100%".to_string()];
+
+    let height = height.trim();
+    if let Some(resolved_height) =
+        resolved_height.filter(|height| height.is_finite() && *height > 0.0)
+    {
+        parts.push(format!("height: {}px", trim_float(resolved_height)));
+    } else if !height.is_empty() && height != "auto" {
+        parts.push(format!("height: {height}"));
+    } else if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
+        parts.push(format!("aspect-ratio: {}", trim_float(aspect_ratio)));
+    }
+
+    if min_height.is_finite() && min_height > 0.0 {
+        parts.push(format!("min-height: {}px", trim_float(min_height)));
+    }
+
+    parts.join("; ")
+}
+
 pub fn resolve_size(
     measured_width: f64,
     measured_height: f64,
@@ -209,7 +269,7 @@ pub fn resolve_size(
     min_height: f64,
 ) -> Option<ResponsiveChartSize> {
     let mut width = usable_dimension(measured_width);
-    let mut height = usable_dimension(measured_height);
+    let measured_height = usable_dimension(measured_height);
     let min_width = usable_dimension(min_width).unwrap_or(0.0);
     let min_height = usable_dimension(min_height).unwrap_or(0.0);
 
@@ -219,16 +279,11 @@ pub fn resolve_size(
         width = Some(min_width);
     }
 
-    if let Some(value) = height {
-        height = Some(value.max(min_height));
-    } else if min_height > 0.0 {
-        height = Some(min_height);
-    }
-
     let width = width?;
-    let height = match height {
+    let height = match measured_height {
         Some(value) => value,
         None if aspect_ratio.is_finite() && aspect_ratio > 0.0 => width / aspect_ratio,
+        None if min_height > 0.0 => min_height,
         None => return None,
     }
     .max(min_height);
@@ -248,13 +303,37 @@ pub fn responsive_style(
     min_height: f64,
     author_style: &str,
 ) -> String {
+    responsive_style_with_resolved_height(
+        width,
+        height,
+        aspect_ratio,
+        min_width,
+        min_height,
+        author_style,
+        None,
+    )
+}
+
+fn responsive_style_with_resolved_height(
+    width: &str,
+    height: &str,
+    aspect_ratio: f64,
+    min_width: f64,
+    min_height: f64,
+    author_style: &str,
+    resolved_height: Option<f64>,
+) -> String {
     let mut parts = vec![
         "display: block".to_string(),
         format!("width: {}", css_length_or(width, "100%")),
     ];
 
     let height = height.trim();
-    if !height.is_empty() && height != "auto" {
+    if let Some(resolved_height) =
+        resolved_height.filter(|height| height.is_finite() && *height > 0.0)
+    {
+        parts.push(format!("height: {}px", trim_float(resolved_height)));
+    } else if !height.is_empty() && height != "auto" {
         parts.push(format!("height: {height}"));
     } else if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
         parts.push(format!("aspect-ratio: {}", trim_float(aspect_ratio)));
@@ -432,6 +511,14 @@ mod tests {
     }
 
     #[test]
+    fn min_height_does_not_replace_aspect_height() {
+        assert_eq!(
+            resolve_size(480.0, 0.0, 2.0, 0.0, 120.0),
+            Some(ResponsiveChartSize::new(480.0, 240.0))
+        );
+    }
+
+    #[test]
     fn style_keeps_author_overrides_last() {
         assert_eq!(
             responsive_style("100%", "", 2.0, 120.0, 80.0, "height: 240px"),
@@ -446,5 +533,20 @@ mod tests {
             chart.resolve_size(320.0, 185.0),
             Some(ResponsiveChartSize::new(320.0, 160.0))
         );
+    }
+
+    #[test]
+    fn resolved_aspect_height_becomes_explicit_css_height() {
+        let mut chart = PineChartResponsive {
+            ready: true,
+            measured_width: 320.0,
+            measured_height: 160.0,
+            ..Default::default()
+        };
+        chart.recompute_style();
+
+        assert!(chart.frame_style.contains("height: 160px"));
+        assert!(!chart.frame_style.contains("aspect-ratio"));
+        assert!(!chart.container_style.contains("height"));
     }
 }

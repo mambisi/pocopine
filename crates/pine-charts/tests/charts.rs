@@ -1213,11 +1213,15 @@ async fn pie_chart_renders_donut_slices_and_selection() {
         .unwrap()
         .unwrap();
     assert_eq!(center_value.text_content().as_deref(), Some("4"));
+    assert_eq!(center_value.get_attribute("x").as_deref(), Some("50"));
+    assert_eq!(center_value.get_attribute("y").as_deref(), Some("40"));
     let center_label = host
         .query_selector(".pine-chart-center-label")
         .unwrap()
         .unwrap();
     assert_eq!(center_label.text_content().as_deref(), Some("Total"));
+    assert_eq!(center_label.get_attribute("x").as_deref(), Some("50"));
+    assert_eq!(center_label.get_attribute("y").as_deref(), Some("66"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     dispatch_pointer_move(&svg, 50.0, 10.0);
@@ -1441,6 +1445,95 @@ async fn responsive_container_resizes_child_chart_props() {
     assert_eq!(svg.get_attribute("width").as_deref(), Some("480"));
     assert_eq!(svg.get_attribute("height").as_deref(), Some("240"));
     assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 480 240"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div class="padded-responsive-host" style="width: 360px">
+  <style>
+    .padded-responsive {
+      box-sizing: border-box;
+      padding: 20px;
+      border: 1px solid transparent;
+    }
+  </style>
+  <pine-chart-responsive class="padded-responsive"
+                         aspect_ratio="2"
+                         min_height="120">
+    <pine-line-chart class="padded-responsive-line"
+                     label="Padded responsive"
+                     x_label="Week"
+                     y_label="Value"
+                     width="10"
+                     height="10"
+                     margin_top="0"
+                     margin_right="0"
+                     margin_bottom="0"
+                     margin_left="0"
+                     pp-bind:points="points"></pine-line-chart>
+  </pine-chart-responsive>
+</div>
+"#)]
+struct PaddedResponsiveChartFixture {
+    points: Vec<ChartPoint>,
+}
+
+impl Default for PaddedResponsiveChartFixture {
+    fn default() -> Self {
+        Self {
+            points: vec![
+                ChartPoint::new(0.0, 1.0),
+                ChartPoint::new(1.0, 2.0),
+                ChartPoint::new(2.0, 4.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl PaddedResponsiveChartFixture {}
+
+#[wasm_bindgen_test]
+async fn responsive_container_sizes_to_inner_frame_when_padded() {
+    let host = mount_fixture::<PaddedResponsiveChartFixture>();
+    settle().await;
+    sleep_ms(50).await;
+    settle().await;
+
+    let container = host.query_selector(".padded-responsive").unwrap().unwrap();
+    assert_eq!(
+        container.get_attribute("data-ready").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        container.get_attribute("data-width").as_deref(),
+        Some("318")
+    );
+    assert_eq!(
+        container.get_attribute("data-height").as_deref(),
+        Some("159")
+    );
+
+    let frame = host
+        .query_selector(".padded-responsive .pine-chart-responsive-frame")
+        .unwrap()
+        .unwrap();
+    let svg = host
+        .query_selector(".padded-responsive-line svg.pine-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(svg.get_attribute("width").as_deref(), Some("318"));
+    assert_eq!(svg.get_attribute("height").as_deref(), Some("159"));
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 318 159"));
+
+    let frame_rect = frame.get_bounding_client_rect();
+    let svg_rect = svg.get_bounding_client_rect();
+    assert!(svg_rect.left() >= frame_rect.left() - 0.5);
+    assert!(svg_rect.top() >= frame_rect.top() - 0.5);
+    assert!(svg_rect.right() <= frame_rect.right() + 0.5);
+    assert!(svg_rect.bottom() <= frame_rect.bottom() + 0.5);
 
     host.remove();
 }

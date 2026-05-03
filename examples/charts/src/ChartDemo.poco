@@ -51,7 +51,7 @@
   <pine-chart-legend label="Weekly metric legend"
                      pp-bind:items="line_legend"></pine-chart-legend>
 
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
+  <pine-chart-responsive class="chart-panel" aspect_ratio="2" min_height="220">
     <pine-scatter-chart label="Cohort spread"
                         pp-bind:series="scatter_series"
                         x_label="Size"
@@ -84,7 +84,10 @@
   <pine-chart-legend label="Distribution legend"
                      pp-bind:items="bar_legend"></pine-chart-legend>
 
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
+  <pine-chart-responsive class="chart-panel chart-panel--radial"
+                         width="min(520px, 100%)"
+                         aspect_ratio="1"
+                         min_height="260">
     <pine-pie-chart label="Channel share"
                     pp-bind:data="pie_data"
                     pp-bind:inner_radius="pie_inner_radius"
