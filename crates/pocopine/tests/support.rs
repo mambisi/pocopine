@@ -38,6 +38,8 @@ impl TraceCapture {
     }
 
     pub fn events_with_message(&self, target: &str, message: &str) -> Vec<CapturedEvent> {
+        // Message text is part of these observability contract assertions;
+        // rename emitted messages only as a deliberate telemetry change.
         self.events
             .lock()
             .expect("trace capture lock poisoned")
