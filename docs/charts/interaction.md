@@ -27,7 +27,7 @@ points. The component exposes:
 
 The chart owns sampled-point lookup, crosshair geometry, marker coordinates, and
 tooltip data attributes. Tooltip coordinates are emitted as percentages so they
-scale with responsive SVG sizing. `hover_radius` defaults to `8` rendered
+scale with responsive SVG sizing. `hover_radius` defaults to `5` rendered
 pixels, so interaction feels stable when the SVG is responsive. Applications own
 colors, marker radius overrides, tooltip positioning, typography, borders,
 shadows, and transitions.
