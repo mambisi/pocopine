@@ -3,6 +3,17 @@
 //! `pocopine-live` builds on `pocopine-events`: the events crate owns the
 //! neutral event spine, while this crate owns the safe browser protocol
 //! for collection/query invalidation.
+//!
+//! Browser components can either consume raw typed events with
+//! `LiveClient` or use `LiveRefresh` to map collection/query
+//! invalidations to refetch callbacks:
+//!
+//! ```ignore
+//! let handle = pocopine::this::<PostList>();
+//! pocopine::live::LiveRefresh::scoped()
+//!     .collection("posts", move |_| handle.update(|s| s.reload()))
+//!     .open()?;
+//! ```
 
 use std::fmt;
 
