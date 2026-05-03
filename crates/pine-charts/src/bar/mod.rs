@@ -2,59 +2,61 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{finite, ChartError, ChartResult};
-use crate::geometry::{ChartMargins, ChartRect, Point};
-use crate::path::line_path;
-use crate::scale::LinearScale;
+use crate::geometry::{ChartMargins, ChartRect};
+use crate::scale::{BandScale, LinearScale};
 use crate::svg::{format_tick, SvgLine, SvgTickLabel};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ChartPoint {
-    pub x: f64,
-    pub y: f64,
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartBar {
+    pub label: String,
+    pub value: f64,
 }
 
-impl ChartPoint {
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
+impl ChartBar {
+    pub fn new(label: impl Into<String>, value: f64) -> Self {
+        Self {
+            label: label.into(),
+            value,
+        }
     }
 
-    fn validate(self) -> ChartResult<Self> {
+    fn validate(&self) -> ChartResult<Self> {
         Ok(Self {
-            x: finite("point.x", self.x)?,
-            y: finite("point.y", self.y)?,
+            label: self.label.clone(),
+            value: finite("bar.value", self.value)?,
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct LineChartOptions {
+pub struct BarChartOptions {
     pub width: f64,
     pub height: f64,
     pub margins: ChartMargins,
-    pub x_domain: Option<(f64, f64)>,
     pub y_domain: Option<(f64, f64)>,
+    pub padding_inner: f64,
+    pub padding_outer: f64,
 }
 
-impl Default for LineChartOptions {
+impl Default for BarChartOptions {
     fn default() -> Self {
         Self {
             width: 640.0,
             height: 320.0,
             margins: ChartMargins::default(),
-            x_domain: None,
             y_domain: None,
+            padding_inner: 0.2,
+            padding_outer: 0.1,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct LineChartGeometry {
+pub struct BarChartGeometry {
     pub view_box: String,
-    pub line_d: String,
     pub plot: ChartRect,
-    pub x_ticks: Vec<crate::Tick>,
+    pub bars: Vec<SvgBar>,
     pub y_ticks: Vec<crate::Tick>,
-    pub x_grid: Vec<SvgLine>,
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
@@ -62,69 +64,80 @@ pub struct LineChartGeometry {
     pub y_axis: SvgLine,
 }
 
-impl LineChartGeometry {
-    pub fn new(points: &[ChartPoint], options: &LineChartOptions) -> ChartResult<Self> {
-        if points.is_empty() {
+impl BarChartGeometry {
+    pub fn new(data: &[ChartBar], options: &BarChartOptions) -> ChartResult<Self> {
+        if data.is_empty() {
             return Err(ChartError::EmptySeries);
         }
 
         let width = finite("width", options.width)?;
         let height = finite("height", options.height)?;
         let plot = ChartRect::from_outer(width, height, options.margins)?;
-        let points = validate_points(points)?;
-        let x_domain = domain_or_extent(options.x_domain, points.iter().map(|point| point.x))?;
-        let y_domain = domain_or_extent(options.y_domain, points.iter().map(|point| point.y))?;
-        let x_scale = LinearScale::new(x_domain, (plot.x, plot.right()))?;
+        let data = validate_data(data)?;
+        let y_domain = domain_or_bar_extent(options.y_domain, data.iter().map(|bar| bar.value))?;
         let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
-        let mapped = points
+        let x_scale = BandScale::new(
+            data.len(),
+            (plot.x, plot.right()),
+            options.padding_inner,
+            options.padding_outer,
+        )?;
+        let baseline = baseline_value(y_domain);
+        let baseline_y = y_scale.map(baseline)?;
+
+        let bars = data
             .iter()
-            .map(|point| {
-                Ok(Point {
-                    x: x_scale.map(point.x)?,
-                    y: y_scale.map(point.y)?,
+            .enumerate()
+            .map(|(index, bar)| {
+                let x = x_scale.position(index).unwrap_or(plot.x);
+                let value_y = y_scale.map(bar.value)?;
+                let y = value_y.min(baseline_y);
+                let height = (baseline_y - value_y).abs();
+                Ok(SvgBar {
+                    key: format!("bar-{index}-{}", bar.label),
+                    label: bar.label.clone(),
+                    value: bar.value,
+                    aria_label: format!("{}: {}", bar.label, format_tick(bar.value)),
+                    x,
+                    y,
+                    width: x_scale.bandwidth(),
+                    height,
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
 
-        let x_ticks = x_scale.ticks(5);
         let y_ticks = y_scale.ticks(5);
 
         Ok(Self {
             view_box: format!("0 0 {width} {height}"),
-            line_d: line_path(mapped)?,
             plot,
-            x_grid: grid_lines_for_x(&x_ticks, plot),
+            bars,
             y_grid: grid_lines_for_y(&y_ticks, plot),
-            x_tick_labels: tick_labels_for_x(&x_ticks, plot),
+            x_tick_labels: category_tick_labels(&data, x_scale, plot),
             y_tick_labels: tick_labels_for_y(&y_ticks, plot),
             x_axis: SvgLine::new(
                 "x-axis".into(),
                 plot.x,
-                plot.bottom(),
+                baseline_y,
                 plot.right(),
-                plot.bottom(),
+                baseline_y,
             ),
             y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
-            x_ticks,
             y_ticks,
         })
     }
 }
 
-fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| {
-            SvgLine::new(
-                format!("x-grid-{index}-{}", format_tick(tick.value)),
-                tick.position,
-                plot.y,
-                tick.position,
-                plot.bottom(),
-            )
-        })
-        .collect()
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SvgBar {
+    pub key: String,
+    pub label: String,
+    pub value: f64,
+    pub aria_label: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
@@ -143,20 +156,22 @@ fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
         .collect()
 }
 
-fn tick_labels_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
-    ticks
-        .iter()
+fn category_tick_labels(data: &[ChartBar], scale: BandScale, plot: ChartRect) -> Vec<SvgTickLabel> {
+    data.iter()
         .enumerate()
-        .map(|(index, tick)| SvgTickLabel {
-            key: format!("x-tick-{index}-{}", format_tick(tick.value)),
-            value: tick.value,
-            label: format_tick(tick.value),
-            x: tick.position,
-            y: plot.bottom() + 18.0,
-            line_x1: tick.position,
-            line_y1: plot.bottom(),
-            line_x2: tick.position,
-            line_y2: plot.bottom() + 6.0,
+        .filter_map(|(index, bar)| {
+            let x = scale.center(index)?;
+            Some(SvgTickLabel {
+                key: format!("x-tick-{index}-{}", bar.label),
+                value: index as f64,
+                label: bar.label.clone(),
+                x,
+                y: plot.bottom() + 18.0,
+                line_x1: x,
+                line_y1: plot.bottom(),
+                line_x2: x,
+                line_y2: plot.bottom() + 6.0,
+            })
         })
         .collect()
 }
@@ -179,11 +194,11 @@ fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel
         .collect()
 }
 
-fn validate_points(points: &[ChartPoint]) -> ChartResult<Vec<ChartPoint>> {
-    points.iter().copied().map(ChartPoint::validate).collect()
+fn validate_data(data: &[ChartBar]) -> ChartResult<Vec<ChartBar>> {
+    data.iter().map(ChartBar::validate).collect()
 }
 
-fn domain_or_extent(
+fn domain_or_bar_extent(
     domain: Option<(f64, f64)>,
     values: impl IntoIterator<Item = f64>,
 ) -> ChartResult<(f64, f64)> {
@@ -191,17 +206,18 @@ fn domain_or_extent(
         return expanded_domain(finite("domain.start", start)?, finite("domain.end", end)?);
     }
 
-    let mut iter = values.into_iter();
-    let Some(first) = iter.next() else {
-        return Err(ChartError::EmptySeries);
-    };
-
-    let mut min = finite("domain.value", first)?;
-    let mut max = min;
-    for value in iter {
+    let mut min = 0.0_f64;
+    let mut max = 0.0_f64;
+    let mut saw_value = false;
+    for value in values {
         let value = finite("domain.value", value)?;
         min = min.min(value);
         max = max.max(value);
+        saw_value = true;
+    }
+
+    if !saw_value {
+        return Err(ChartError::EmptySeries);
     }
 
     expanded_domain(min, max)
@@ -216,11 +232,17 @@ fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
     Ok((start - pad, end + pad))
 }
 
+fn baseline_value(domain: (f64, f64)) -> f64 {
+    let lo = domain.0.min(domain.1);
+    let hi = domain.0.max(domain.1);
+    0.0_f64.clamp(lo, hi)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[component(template = "PineLineChart.poco", role = "panel")]
-pub struct PineLineChart {
+#[component(template = "PineBarChart.poco", role = "panel")]
+pub struct PineBarChart {
     #[prop]
-    pub points: Vec<ChartPoint>,
+    pub data: Vec<ChartBar>,
     #[prop]
     pub label: String,
     #[prop]
@@ -236,17 +258,16 @@ pub struct PineLineChart {
     #[prop]
     pub margin_left: f64,
     #[prop]
-    pub x_min: Option<f64>,
-    #[prop]
-    pub x_max: Option<f64>,
-    #[prop]
     pub y_min: Option<f64>,
     #[prop]
     pub y_max: Option<f64>,
+    #[prop]
+    pub padding_inner: f64,
+    #[prop]
+    pub padding_outer: f64,
     pub state: String,
     pub view_box: String,
-    pub line_d: String,
-    pub x_grid: Vec<SvgLine>,
+    pub bars: Vec<SvgBar>,
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
@@ -258,26 +279,25 @@ pub struct PineLineChart {
     pub invalid: bool,
 }
 
-impl Default for PineLineChart {
+impl Default for PineBarChart {
     fn default() -> Self {
-        let options = LineChartOptions::default();
+        let options = BarChartOptions::default();
         Self {
-            points: Vec::new(),
-            label: "Line chart".into(),
+            data: Vec::new(),
+            label: "Bar chart".into(),
             width: options.width,
             height: options.height,
             margin_top: options.margins.top,
             margin_right: options.margins.right,
             margin_bottom: options.margins.bottom,
             margin_left: options.margins.left,
-            x_min: None,
-            x_max: None,
             y_min: None,
             y_max: None,
+            padding_inner: options.padding_inner,
+            padding_outer: options.padding_outer,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
-            line_d: String::new(),
-            x_grid: Vec::new(),
+            bars: Vec::new(),
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
@@ -292,13 +312,13 @@ impl Default for PineLineChart {
 }
 
 #[handlers]
-impl PineLineChart {
+impl PineBarChart {
     fn on_setup(&mut self) {
         self.recompute();
     }
 
-    #[watch(points)]
-    fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
+    #[watch(data)]
+    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
         self.recompute();
     }
 
@@ -332,16 +352,6 @@ impl PineLineChart {
         self.recompute();
     }
 
-    #[watch(x_min)]
-    fn on_x_min(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.recompute();
-    }
-
-    #[watch(x_max)]
-    fn on_x_max(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
-        self.recompute();
-    }
-
     #[watch(y_min)]
     fn on_y_min(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
         self.recompute();
@@ -351,15 +361,24 @@ impl PineLineChart {
     fn on_y_max(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
         self.recompute();
     }
+
+    #[watch(padding_inner)]
+    fn on_padding_inner(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(padding_outer)]
+    fn on_padding_outer(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
 }
 
-impl PineLineChart {
+impl PineBarChart {
     fn recompute(&mut self) {
-        match LineChartGeometry::new(&self.points, &self.options()) {
+        match BarChartGeometry::new(&self.data, &self.options()) {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
-                self.line_d = geometry.line_d;
-                self.x_grid = geometry.x_grid;
+                self.bars = geometry.bars;
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
                 self.y_tick_labels = geometry.y_tick_labels;
@@ -372,8 +391,7 @@ impl PineLineChart {
                 self.invalid = false;
             }
             Err(ChartError::EmptySeries) => {
-                self.line_d.clear();
-                self.clear_guides();
+                self.clear_geometry();
                 self.error.clear();
                 self.state = "empty".into();
                 self.ready = false;
@@ -381,8 +399,7 @@ impl PineLineChart {
                 self.invalid = false;
             }
             Err(error) => {
-                self.line_d.clear();
-                self.clear_guides();
+                self.clear_geometry();
                 self.error = error.to_string();
                 self.state = "invalid".into();
                 self.ready = false;
@@ -392,8 +409,8 @@ impl PineLineChart {
         }
     }
 
-    fn options(&self) -> LineChartOptions {
-        LineChartOptions {
+    fn options(&self) -> BarChartOptions {
+        BarChartOptions {
             width: self.width,
             height: self.height,
             margins: ChartMargins::new(
@@ -402,13 +419,14 @@ impl PineLineChart {
                 self.margin_bottom,
                 self.margin_left,
             ),
-            x_domain: zip_domain(self.x_min, self.x_max),
             y_domain: zip_domain(self.y_min, self.y_max),
+            padding_inner: self.padding_inner,
+            padding_outer: self.padding_outer,
         }
     }
 
-    fn clear_guides(&mut self) {
-        self.x_grid.clear();
+    fn clear_geometry(&mut self) {
+        self.bars.clear();
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
@@ -429,63 +447,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_geometry_maps_points_into_svg_space() {
-        let options = LineChartOptions {
+    fn bar_geometry_maps_values_into_rects() {
+        let options = BarChartOptions {
             width: 100.0,
             height: 100.0,
             margins: ChartMargins::ZERO,
-            x_domain: Some((0.0, 10.0)),
             y_domain: Some((0.0, 10.0)),
+            padding_inner: 0.0,
+            padding_outer: 0.0,
         };
-        let geometry = LineChartGeometry::new(
+        let geometry = BarChartGeometry::new(
             &[
-                ChartPoint::new(0.0, 0.0),
-                ChartPoint::new(5.0, 10.0),
-                ChartPoint::new(10.0, 5.0),
+                ChartBar::new("A", 2.0),
+                ChartBar::new("B", 10.0),
+                ChartBar::new("C", 5.0),
             ],
             &options,
         )
         .unwrap();
 
         assert_eq!(geometry.view_box, "0 0 100 100");
-        assert_eq!(geometry.line_d, "M0,100 L50,0 L100,50");
-        assert_eq!(geometry.x_grid.len(), 6);
-        assert_eq!(geometry.y_grid.len(), 6);
+        assert_eq!(geometry.bars.len(), 3);
+        assert_eq!(geometry.bars[0].x, 0.0);
+        assert_eq!(geometry.bars[0].y, 80.0);
+        assert_eq!(geometry.bars[0].height, 20.0);
+        assert_eq!(geometry.bars[1].y, 0.0);
+        assert_eq!(geometry.bars[1].height, 100.0);
+        assert_eq!(geometry.x_tick_labels.len(), 3);
+        assert!(!geometry.y_tick_labels.is_empty());
     }
 
     #[test]
-    fn line_geometry_expands_flat_domains() {
-        let options = LineChartOptions {
+    fn bar_geometry_handles_negative_values() {
+        let options = BarChartOptions {
             width: 100.0,
             height: 100.0,
             margins: ChartMargins::ZERO,
-            x_domain: None,
-            y_domain: None,
+            y_domain: Some((-10.0, 10.0)),
+            padding_inner: 0.0,
+            padding_outer: 0.0,
         };
-        let geometry = LineChartGeometry::new(&[ChartPoint::new(5.0, 5.0)], &options).unwrap();
+        let geometry = BarChartGeometry::new(
+            &[ChartBar::new("Loss", -5.0), ChartBar::new("Gain", 10.0)],
+            &options,
+        )
+        .unwrap();
 
-        assert_eq!(geometry.line_d, "M50,50");
+        assert_eq!(geometry.x_axis.y1, 50.0);
+        assert_eq!(geometry.bars[0].y, 50.0);
+        assert_eq!(geometry.bars[0].height, 25.0);
+        assert_eq!(geometry.bars[1].y, 0.0);
+        assert_eq!(geometry.bars[1].height, 50.0);
     }
 
     #[test]
     fn component_recomputes_state() {
-        let mut chart = PineLineChart {
-            points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+        let mut chart = PineBarChart {
+            data: vec![ChartBar::new("A", 2.0), ChartBar::new("B", 4.0)],
             width: 100.0,
             height: 100.0,
             margin_top: 0.0,
             margin_right: 0.0,
             margin_bottom: 0.0,
             margin_left: 0.0,
-            ..PineLineChart::default()
+            y_min: Some(0.0),
+            y_max: Some(4.0),
+            padding_inner: 0.0,
+            padding_outer: 0.0,
+            ..PineBarChart::default()
         };
 
         chart.recompute();
 
         assert!(chart.ready);
         assert_eq!(chart.state, "ready");
-        assert_eq!(chart.line_d, "M0,100 L100,0");
-        assert!(!chart.x_tick_labels.is_empty());
-        assert!(!chart.y_tick_labels.is_empty());
+        assert_eq!(chart.bars.len(), 2);
+        assert_eq!(chart.bars[1].height, 100.0);
     }
 }

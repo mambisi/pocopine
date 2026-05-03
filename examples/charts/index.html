@@ -67,13 +67,21 @@
       color: #0f58b8;
     }
 
-    .pine-line-chart {
+    .pine-line-chart,
+    .pine-bar-chart {
       display: block;
-      color: #1d6fd8;
       background: white;
       border: 1px solid #dde4ec;
       border-radius: 8px;
       padding: 20px;
+    }
+
+    .pine-line-chart {
+      color: #1d6fd8;
+    }
+
+    .pine-bar-chart {
+      color: #16a085;
     }
 
     .pine-chart-svg {
@@ -103,6 +111,11 @@
       stroke-width: 3;
       stroke-linecap: round;
       stroke-linejoin: round;
+    }
+
+    .pine-chart-bar {
+      fill: currentColor;
+      opacity: 0.86;
     }
 
     @media (max-width: 640px) {
