@@ -17,7 +17,8 @@ struct AxisProps {
     #[prop]
     y_label: String,
 
-    hidden: String,
+    #[state]
+    source_model: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, pocopine::Props)]
@@ -67,15 +68,15 @@ fn derive_props_exposes_only_marked_fields() {
 
     let mut props = AxisProps::default();
     props.set_prop("x_label", JsValue::from_str("Week"));
-    props.set_prop("hidden", JsValue::from_str("internal"));
+    props.set_prop("source_model", JsValue::from_str("internal"));
 
     assert_eq!(props.x_label, "Week");
-    assert_eq!(props.hidden, "");
+    assert_eq!(props.source_model, "");
     assert_eq!(
         props.get_prop("x_label").as_string().as_deref(),
         Some("Week")
     );
-    assert!(props.get_prop("hidden").is_undefined());
+    assert!(props.get_prop("source_model").is_undefined());
 }
 
 #[wasm_bindgen_test]
@@ -88,7 +89,7 @@ fn component_flatten_imports_props_as_prop_only_leaves() {
     assert!(host.is_prop("width"));
     assert!(host.is_prop("height"));
     assert!(!host.is_prop("axis"));
-    assert!(!host.is_prop("hidden"));
+    assert!(!host.is_prop("source_model"));
     assert!(!host.is_model("x_label"));
 
     host.set("x_label", JsValue::from_str("Week"));
@@ -107,7 +108,7 @@ fn component_flatten_imports_props_as_prop_only_leaves() {
     assert!(keys.contains(&"axis"));
     assert!(keys.contains(&"x_label"));
     assert!(keys.contains(&"width"));
-    assert!(!keys.contains(&"hidden"));
+    assert!(!keys.contains(&"source_model"));
 }
 
 #[wasm_bindgen_test]

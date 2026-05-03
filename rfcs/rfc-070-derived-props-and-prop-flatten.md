@@ -88,13 +88,16 @@ pub struct ChartSize {
     #[prop]
     pub height: f64,
 
+    #[state]
     pub measured_width: Option<f64>,
 }
 ```
 
 Only fields annotated with `#[prop]` become part of the props contract.
-Unannotated fields remain ordinary Rust fields and are invisible to component
-callers.
+Fields annotated `#[state]` remain internal to the grouped Rust value and are
+not flattened into the public component API. Unannotated fields are a compile
+error. This keeps hidden view-model/source-model fields possible without
+making accidental invisibility the default.
 
 The derive emits an implementation of a framework-private trait, exposed in
 public API as `pocopine::Props`:
@@ -374,7 +377,8 @@ objects for common HTML-like configuration.
 
 - Unit/macro tests:
   - deriving `Props` on a named struct exposes only `#[prop]` fields;
-  - unannotated fields are not visible;
+  - `#[state]` fields are not visible as flattened prop leaves;
+  - unannotated fields fail at compile time;
   - `#[prop(flatten)]` imports derived keys into a component;
   - `#[prop(flatten = ["..."])]` narrows the imported key set;
   - duplicate keys fail at compile time;
@@ -408,7 +412,7 @@ Rejected.
 
 This copies the most dangerous part of serde-style flattening into component
 APIs. Component props are a public user-facing contract, not a serialization
-detail. Authors must mark fields intentionally.
+detail. Authors must mark fields intentionally as `#[prop]` or `#[state]`.
 
 ### 10.3 Only use `#[prop(flatten = ["..."])]` without `Props`
 

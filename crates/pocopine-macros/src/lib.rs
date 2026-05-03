@@ -4142,9 +4142,10 @@ impl JobPayload {
 
 /// `#[derive(Props)]` — RFC 070 reusable prop groups.
 ///
-/// Implements [`pocopine::Props`] for named-field structs. Only fields marked
-/// with `#[prop]` are exposed; unannotated fields remain ordinary Rust state.
-#[proc_macro_derive(Props, attributes(prop))]
+/// Implements [`pocopine::Props`] for named-field structs. Every field must be
+/// marked `#[prop]` or `#[state]`; `#[state]` fields stay internal to the
+/// grouped Rust value and are not part of the flattened public prop surface.
+#[proc_macro_derive(Props, attributes(prop, state))]
 pub fn derive_props(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_ident = &input.ident;
@@ -4175,7 +4176,22 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
             continue;
         };
         let mut exposed = false;
+        let mut hidden_state = false;
         for attr in &field.attrs {
+            if attr.path().is_ident("state") {
+                match &attr.meta {
+                    Meta::Path(_) => hidden_state = true,
+                    _ => {
+                        return syn::Error::new_spanned(
+                            attr,
+                            "#[state] on a Props field does not accept arguments",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+                }
+                continue;
+            }
             if !attr.path().is_ident("prop") {
                 continue;
             }
@@ -4194,14 +4210,31 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
                 Err(err) => return err.to_compile_error().into(),
             }
         }
-        if exposed {
-            let name = ident.to_string().trim_start_matches("r#").to_string();
-            if let Err(err) = push_unique_key(&mut seen, &name, ident.span()) {
-                return err.to_compile_error().into();
-            }
-            prop_idents.push(ident);
-            prop_names.push(name);
+        if exposed && hidden_state {
+            return syn::Error::new_spanned(
+                field,
+                "Props fields cannot be both #[prop] and #[state]",
+            )
+            .to_compile_error()
+            .into();
         }
+        if hidden_state {
+            continue;
+        }
+        if !exposed {
+            return syn::Error::new_spanned(
+                field,
+                "fields in #[derive(Props)] structs must be annotated #[prop] or #[state]",
+            )
+            .to_compile_error()
+            .into();
+        }
+        let name = ident.to_string().trim_start_matches("r#").to_string();
+        if let Err(err) = push_unique_key(&mut seen, &name, ident.span()) {
+            return err.to_compile_error().into();
+        }
+        prop_idents.push(ident);
+        prop_names.push(name);
     }
 
     let get_arms = prop_idents
