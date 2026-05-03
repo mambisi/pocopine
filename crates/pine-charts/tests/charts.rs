@@ -198,6 +198,11 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
     let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
     assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert!(tooltip
+        .get_attribute("style")
+        .unwrap_or_default()
+        .contains("display: none"));
 
     let init = web_sys::PointerEventInit::new();
     init.set_bubbles(true);
@@ -217,6 +222,11 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
     let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
     assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert!(tooltip
+        .get_attribute("style")
+        .unwrap_or_default()
+        .contains("display: none"));
 
     host.remove();
 }
