@@ -8,6 +8,7 @@ members = [
     "crates/pocopine",
     "crates/pocopine-analytics",
     "crates/pocopine-auth",
+    "crates/pocopine-auth-jwt",
     "crates/pocopine-cli",
     "crates/pocopine-core",
     "crates/pocopine-expr",
@@ -49,6 +50,7 @@ repository = "https://github.com/mambisi/pocopine"
 # feature, which forwards `pocopine-core/devtools`.
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
+pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }

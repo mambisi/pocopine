@@ -1,0 +1,32 @@
+[package]
+name = "pocopine-auth-jwt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JWT verification engine for pocopine-auth (Firebase, Clerk, Auth0, Supabase, custom OIDC, and pocopine-issued tokens)."
+
+[features]
+# `presets` opts in to the bundled provider configs. Default-on so
+# `JwtVerifier::firebase("project")` Just Works.
+default = ["presets"]
+presets = []
+
+[dependencies]
+pocopine-auth = { workspace = true }
+pocopine-core = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = "1"
+
+# Host-only: jsonwebtoken pulls in ring/rustls and isn't shaped for
+# wasm32. Apps embed the verifier in their server bin only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jsonwebtoken = "9"
+http = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["sync", "macros", "time"] }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+base64 = "0.22"
