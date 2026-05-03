@@ -374,7 +374,8 @@ mod host {
         let (parts, _) = request.into_parts();
         let query = parse_query(&parts.uri)?;
         let last_event_id = last_event_id(&parts.headers).or_else(|| query.last_event_id.clone());
-        let ctx = RequestContext::from_parts(parts.method, parts.uri, parts.headers, parts.extensions);
+        let ctx =
+            RequestContext::from_parts(parts.method, parts.uri, parts.headers, parts.extensions);
         let topics = hub.allowed_topics(&ctx, &query)?;
         let after = last_event_id
             .map(EventCursor::new)
