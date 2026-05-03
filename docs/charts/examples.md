@@ -3,12 +3,11 @@
 The `examples/charts` app is the first integration target for Pine Charts.
 
 ```bash
-cd examples/charts
-wasm-pack build --target web --out-dir pkg
-python3 -m http.server 8000
+cargo run -p pocopine-cli -- build --path examples/charts
+cargo run -p pocopine-cli -- run --path examples/charts --port 8025
 ```
 
-Open `http://localhost:8000` and switch between the two datasets. The demo keeps
+Open `http://localhost:8025` and switch between the two datasets. The demo keeps
 all visual styling in `index.html` CSS so the chart crate can stay unstyled.
 
 The example intentionally uses the same public API an application would use:
