@@ -33,6 +33,12 @@ async fn public_echo(value: String) -> ServerResult<String> {
     Ok(value)
 }
 
+#[pocopine::server(public)]
+async fn failing_echo(value: String) -> ServerResult<String> {
+    assert_eq!(value, "fail-input");
+    Err(ServerError::from("app failure"))
+}
+
 pocopine::protected! {
     require |ctx| ctx.user.has_role(Role::Admin);
 
@@ -46,6 +52,7 @@ fn guarded_and_public_route_helpers_typecheck() {
     let router = pocopine_server::axum::Router::new();
     let router = __guarded_echo_route(router);
     let router = __public_echo_route(router);
+    let router = __failing_echo_route(router);
     let _router = __admin_echo_route(router);
 }
 
@@ -168,5 +175,115 @@ fn server_function_route_emits_trace_without_payload() {
     assert!(
         event.fields.values().all(|value| !value.contains("hello")),
         "server-function logs must not include raw request payloads"
+    );
+}
+
+#[test]
+fn server_function_guard_rejection_emits_log_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    let result = capture.run(|| {
+        rt.block_on(async {
+            let router = __guarded_echo_route(pocopine_server::axum::Router::new());
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/_pocopine/guarded_echo")
+                        .header("content-type", "application/json")
+                        .body(Body::from("[\"guard-secret\"]"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<ServerResult<String>>(&bytes).unwrap()
+        })
+    });
+
+    assert!(matches!(result, Err(ServerError::Unauthorized(_))));
+
+    let events =
+        capture.events_with_message("pocopine.log", "server function guard rejected request");
+    let event = events
+        .iter()
+        .find(|event| event.field("route") == Some("/_pocopine/guarded_echo"))
+        .expect("guard rejection event should be captured");
+
+    assert_eq!(event.field("function"), Some("guarded_echo"));
+    assert_eq!(event.field("error_kind"), Some("unauthorized"));
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("guard-secret")),
+        "guard rejection logs must not include raw request payloads"
+    );
+}
+
+#[test]
+fn server_function_app_failure_emits_log_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    let result = capture.run(|| {
+        rt.block_on(async {
+            let router = __failing_echo_route(pocopine_server::axum::Router::new());
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/_pocopine/failing_echo")
+                        .header("content-type", "application/json")
+                        .body(Body::from("[\"fail-input\"]"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<ServerResult<String>>(&bytes).unwrap()
+        })
+    });
+
+    assert!(matches!(result, Err(ServerError::App(_))));
+
+    let events = capture.events_with_message("pocopine.log", "server function failed");
+    let event = events
+        .iter()
+        .find(|event| event.field("route") == Some("/_pocopine/failing_echo"))
+        .expect("server function failure event should be captured");
+
+    assert_eq!(event.field("function"), Some("failing_echo"));
+    assert_eq!(event.field("body_bytes"), Some("14"));
+    assert_eq!(event.field("error_kind"), Some("app"));
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("fail-input")),
+        "server-function failure logs must not include raw request payloads"
     );
 }

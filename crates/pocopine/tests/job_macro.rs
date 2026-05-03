@@ -14,6 +14,7 @@ use support::TraceCapture;
 
 static MEMORY_APP_COUNTER: AtomicUsize = AtomicUsize::new(1);
 static MEMORY_JOB_RUNS: AtomicUsize = AtomicUsize::new(0);
+static RETRY_JOB_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct JobPayload {
@@ -37,6 +38,13 @@ async fn memory_backend_job(input: JobPayload) -> JobResult<()> {
 async fn traced_memory_job(input: JobPayload) -> JobResult<()> {
     assert_eq!(input.value, "trace-payload");
     Ok(())
+}
+
+#[pocopine::job(queue = "retry", retries = 1)]
+async fn retrying_memory_job(input: JobPayload) -> JobResult<()> {
+    assert_eq!(input.value, "retry-payload");
+    RETRY_JOB_RUNS.fetch_add(1, Ordering::SeqCst);
+    Err(pocopine::JobError::Handler("retry failure".into()))
 }
 
 #[pocopine::job(queue = "panic", retries = 0)]
@@ -307,5 +315,92 @@ fn memory_backend_emits_job_lifecycle_trace_without_payload() {
             .chain(completed.fields.values())
             .all(|value| !value.contains("trace-payload")),
         "job lifecycle logs must not include raw payloads"
+    );
+}
+
+#[test]
+fn memory_backend_retry_emits_schedule_log_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    capture.run(|| {
+        rt.block_on(async {
+            RETRY_JOB_RUNS.store(0, Ordering::SeqCst);
+            let app = format!(
+                "job-macro-retry-{}-{}",
+                std::process::id(),
+                MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
+            );
+            let client = pocopine::JobClient::memory(app.clone());
+            retrying_memory_job_job::enqueue_with(
+                &client,
+                JobPayload {
+                    value: "retry-payload".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+            let worker = pocopine::Worker::new(pocopine::WorkerConfig {
+                backend: pocopine::JobBackend::Memory,
+                app,
+                queues: vec!["retry".to_string()],
+                group: "test".to_string(),
+                consumer: "test".to_string(),
+                block_ms: 0,
+                visibility_timeout: Duration::from_secs(60),
+                scheduler_interval: Duration::from_millis(1),
+                max_periodic_catch_up: 16,
+                batch_size: 10,
+            })
+            .unwrap();
+
+            assert_eq!(worker.run_once().await.unwrap(), 1);
+            assert_eq!(RETRY_JOB_RUNS.load(Ordering::SeqCst), 1);
+            assert!(worker.drain_dead_letter().unwrap().is_empty());
+        });
+    });
+
+    let events = capture.events_with_message("pocopine.log", "job retry scheduled");
+    let event = events
+        .iter()
+        .find(|event| event.field("queue") == Some("retry"))
+        .expect("retry-scheduled event should be captured");
+    assert_eq!(event.field("backend"), Some("memory"));
+    assert!(event
+        .field("job_name")
+        .is_some_and(|value| value.ends_with("::retrying_memory_job")));
+    assert_eq!(event.field("attempt"), Some("1"));
+    assert_eq!(event.field("next_attempt"), Some("2"));
+    assert_eq!(event.field("max_attempts"), Some("2"));
+    assert!(
+        event
+            .field("due_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "due_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|value| value.contains("retry failure")),
+        "retry event should include the retry cause"
+    );
+    assert!(
+        event
+            .fields
+            .values()
+            .all(|value| !value.contains("retry-payload")),
+        "retry logs must not include raw job payloads"
     );
 }
