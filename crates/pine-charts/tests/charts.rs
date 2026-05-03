@@ -97,10 +97,11 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
     assert!(!chart.has_attribute("data-invalid"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
-    let view_box = svg
-        .get_attribute("viewBox")
-        .or_else(|| svg.get_attribute("viewbox"));
-    assert_eq!(view_box.as_deref(), Some("0 0 100 100"));
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 100 100"));
+    assert!(
+        svg.get_attribute("viewbox").is_none(),
+        "lowercase viewbox is inert in SVG and breaks responsive coordinates",
+    );
 
     let path = host
         .query_selector("path.pine-chart-line")
