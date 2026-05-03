@@ -28,6 +28,7 @@ use shared::{ContactMessage, ContactResponse};
 
 #[pocopine::server(public)]
 pub async fn submit_contact(msg: ContactMessage) -> ServerResult<ContactResponse> {
+    // Contact fields may contain personal data; keep raw payloads out of logs.
     tracing::info!(
         target: "pocopine.log",
         message_len = msg.message.len(),
