@@ -227,7 +227,9 @@ Sink panics are caught and reported in the delivery report.
 
 On host targets, analytics sinks must be `Send + Sync` so the client can be
 stored in shared server state such as axum state. On wasm targets this bound is
-relaxed because browser SDK handles are usually JavaScript objects.
+relaxed because browser SDK handles are usually JavaScript objects. The closure
+example above spells out `&pocopine::observe::ObservedEvent` so Rust can infer
+the host closure sink against that `Send + Sync` blanket implementation.
 
 ## Browser vendor bridges
 
