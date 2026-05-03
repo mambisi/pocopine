@@ -1,19 +1,19 @@
-# RFC 072 - Yrs collaboration over WebSocket and Redis
+# RFC 073 - Yrs collaboration over WebSocket and Redis
 
 | Field | Value |
 |---|---|
 | **Status** | Draft |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
-| **Builds on** | [RFC 070](./rfc-070-event-spine-and-live-invalidation.md) |
-| **Related** | [RFC 069](./rfc-069-observability.md), [RFC 071](./rfc-071-offline-sync-protocol.md) |
+| **Builds on** | [RFC 071](./rfc-071-event-spine-and-live-invalidation.md) |
+| **Related** | [RFC 069](./rfc-069-observability.md), [RFC 072](./rfc-072-offline-sync-protocol.md) |
 
 ## 1. Summary
 
 Pocopine should add `pocopine-collab`, a separate collaboration crate for
 shared documents using `yrs`, Redis, and WebSocket. This is the CRDT
-layer. It is not the general database sync protocol from RFC 071 and it
-is not the live invalidation stream from RFC 070.
+layer. It is not the general database sync protocol from RFC 072 and it
+is not the live invalidation stream from RFC 071.
 
 The design follows the useful shape of y/hub: stateless WebSocket
 servers, Redis as the realtime distribution/cache layer, and persistent
@@ -48,7 +48,7 @@ into the database sync protocol.
 
 ## 4. Non-goals
 
-- This RFC does not replace RFC 071 sync.
+- This RFC does not replace RFC 072 sync.
 - This RFC does not define rich text editor UI components.
 - This RFC does not expose raw Redis rooms to clients.
 - This RFC does not require y-websocket wire compatibility in Phase A,
@@ -266,7 +266,7 @@ The CRDT stream should never be treated as the database change stream.
 
 ### Phase F - Live bridge
 
-- Publish RFC 070 invalidations when documents persist.
+- Publish RFC 071 invalidations when documents persist.
 - Keep raw CRDT updates out of live events.
 
 ## 16. Research References

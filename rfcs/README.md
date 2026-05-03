@@ -79,6 +79,6 @@ Conventions:
 | 068 | [SVG namespace template support](./rfc-068-svg-namespace-template-support.md) | Draft |
 | 069 | [Unified observability, logging, and analytics](./rfc-069-observability.md) | Draft |
 | 070 | [JWT-based authentication verification](./rfc-070-jwt-auth-verification.md) | Draft |
-| 070 | [Event spine and live invalidation streams](./rfc-070-event-spine-and-live-invalidation.md) | Draft |
-| 071 | [Offline sync protocol](./rfc-071-offline-sync-protocol.md) | Draft |
-| 072 | [Yrs collaboration over WebSocket and Redis](./rfc-072-yrs-collaboration.md) | Draft |
+| 071 | [Event spine and live invalidation streams](./rfc-071-event-spine-and-live-invalidation.md) | Draft |
+| 072 | [Offline sync protocol](./rfc-072-offline-sync-protocol.md) | Draft |
+| 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |

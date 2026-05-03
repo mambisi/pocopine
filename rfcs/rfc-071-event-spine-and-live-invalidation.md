@@ -1,11 +1,11 @@
-# RFC 070 - Event spine and live invalidation streams
+# RFC 071 - Event spine and live invalidation streams
 
 | Field | Value |
 |---|---|
 | **Status** | Draft |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
-| **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 066](./rfc-066-server-function-auth.md), [RFC 069](./rfc-069-observability.md), [RFC 071](./rfc-071-offline-sync-protocol.md), [RFC 072](./rfc-072-yrs-collaboration.md) |
+| **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 066](./rfc-066-server-function-auth.md), [RFC 069](./rfc-069-observability.md), [RFC 072](./rfc-072-offline-sync-protocol.md), [RFC 073](./rfc-073-yrs-collaboration.md) |
 
 ## 1. Summary
 
