@@ -1,7 +1,9 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
 
+use crate::cartesian::{
+    centered_plot_y, plot_rect_from_edges, pointer_event_svg_point, CartesianHoverPlacement,
+};
 use crate::error::{ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::line::{
@@ -304,23 +306,10 @@ impl PineAreaChart {
     }
 
     pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
-        let Ok(ev) = ev.dyn_into::<web_sys::PointerEvent>() else {
+        let Some(point) = pointer_event_svg_point(ev, self.width, self.height) else {
             return;
         };
-        let Some(target) = ev.current_target() else {
-            return;
-        };
-        let Ok(element) = target.dyn_into::<web_sys::Element>() else {
-            return;
-        };
-        let rect = element.get_bounding_client_rect();
-        if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width <= 0.0 || self.height <= 0.0 {
-            return;
-        }
-
-        let ratio_x = ((ev.client_x() as f64) - rect.left()) / rect.width();
-        let ratio_y = ((ev.client_y() as f64) - rect.top()) / rect.height();
-        self.hover_at(ratio_x * self.width, ratio_y * self.height);
+        self.hover_at(point.x, point.y);
     }
 
     pub fn clear_hover(&mut self) {
@@ -421,7 +410,7 @@ impl PineAreaChart {
     }
 
     pub fn hover_at_x(&mut self, svg_x: f64) {
-        let svg_y = self.plot_y + (self.plot_bottom - self.plot_y) * 0.5;
+        let svg_y = centered_plot_y(self.plot_rect());
         self.hover_at(svg_x, svg_y);
     }
 
@@ -447,18 +436,15 @@ impl PineAreaChart {
         let hover_x_label = sample.x_label.clone();
         let hover_y_label = sample.y_label.clone();
         let hover_aria_label = sample.aria_label.clone();
-        let hover_placement_x = if hover_x >= self.plot_x + (self.plot_right - self.plot_x) * 0.5 {
-            "left"
-        } else {
-            "right"
-        };
-        let hover_placement_y = if hover_y <= self.plot_y + (self.plot_bottom - self.plot_y) * 0.5 {
-            "below"
-        } else {
-            "above"
-        };
-        let hover_x_pct = (hover_x / self.width * 100.0).clamp(0.0, 100.0);
-        let hover_y_pct = (hover_y / self.height * 100.0).clamp(0.0, 100.0);
+        let placement = CartesianHoverPlacement::new(
+            Point {
+                x: hover_x,
+                y: hover_y,
+            },
+            self.plot_rect(),
+            self.width,
+            self.height,
+        );
 
         self.hover_visible = true;
         self.hover_x = hover_x;
@@ -469,20 +455,13 @@ impl PineAreaChart {
         self.hover_x_label = hover_x_label;
         self.hover_y_label = hover_y_label;
         self.hover_aria_label = hover_aria_label;
-        self.hover_placement_x = hover_placement_x.into();
-        self.hover_placement_y = hover_placement_y.into();
-        self.hover_style = format!(
-            "--pine-chart-tooltip-x: {hover_x_pct}%; --pine-chart-tooltip-y: {hover_y_pct}%;"
-        );
+        self.hover_placement_x = placement.x.into();
+        self.hover_placement_y = placement.y.into();
+        self.hover_style = placement.style;
     }
 
     fn plot_rect(&self) -> ChartRect {
-        ChartRect {
-            x: self.plot_x,
-            y: self.plot_y,
-            width: self.plot_right - self.plot_x,
-            height: self.plot_bottom - self.plot_y,
-        }
+        plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
     }
 
     fn clear_plot(&mut self) {

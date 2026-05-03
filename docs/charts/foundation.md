@@ -53,3 +53,15 @@ let d = line_path([
 
 The next layer should consume these helpers rather than duplicating SVG path
 formatting inside components.
+
+## Cartesian Internals
+
+Line and area charts share one internal Cartesian layout path for numeric
+domains, plot rectangles, linear scales, ticks, grid lines, axis lines, and hover
+placement. That keeps future Cartesian primitives from copying chart math while
+still letting each component own its SVG structure and styling hooks.
+
+This module is intentionally crate-private for now. Public components should
+expose stable chart-specific props first; once several primitives need the same
+extension point, the shared Cartesian contract can be promoted deliberately
+instead of leaking early internals.
