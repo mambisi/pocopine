@@ -1,0 +1,24 @@
+<root class="pine-chart-root pine-line-chart"
+      role="img"
+      :aria-label="label"
+      :data-state="state"
+      :data-empty="empty"
+      :data-invalid="invalid">
+  <svg class="pine-chart-svg"
+       :width="width"
+       :height="height"
+       :viewBox="view_box"
+       preserveAspectRatio="none"
+       aria-hidden="true"
+       focusable="false">
+    <path pp-show="ready"
+          class="pine-chart-line"
+          :d="line_d"
+          fill="none"
+          stroke="currentColor"
+          vector-effect="non-scaling-stroke"></path>
+  </svg>
+  <span pp-show="invalid"
+        class="pine-chart-status"
+        pp-text="error"></span>
+</root>

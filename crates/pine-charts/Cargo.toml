@@ -11,3 +11,5 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+pocopine = { path = "../pocopine" }
+serde = { workspace = true }
