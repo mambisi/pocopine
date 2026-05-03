@@ -1,4 +1,7 @@
-use pine_charts::{bar_legend_items, ChartBar, ChartBarSeries, ChartPoint, LegendItem};
+use pine_charts::{
+    bar_legend_items, line_legend_items, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint,
+    LegendItem,
+};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -7,18 +10,21 @@ use serde::{Deserialize, Serialize};
 pub struct ChartDemo {
     pub dataset: String,
     pub bar_mode: String,
-    pub points: Vec<ChartPoint>,
+    pub line_series: Vec<ChartLineSeries>,
+    pub line_legend: Vec<LegendItem>,
     pub bar_series: Vec<ChartBarSeries>,
     pub bar_legend: Vec<LegendItem>,
 }
 
 impl Default for ChartDemo {
     fn default() -> Self {
+        let line_series = growth_line_series();
         let bar_series = growth_bar_series();
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
-            points: growth_points(),
+            line_legend: line_legend_items(&line_series),
+            line_series,
             bar_legend: bar_legend_items(&bar_series),
             bar_series,
         }
@@ -28,17 +34,21 @@ impl Default for ChartDemo {
 #[handlers]
 impl ChartDemo {
     pub fn show_growth(&mut self) {
+        let line_series = growth_line_series();
         let bar_series = growth_bar_series();
         self.dataset = "growth".into();
-        self.points = growth_points();
+        self.line_legend = line_legend_items(&line_series);
+        self.line_series = line_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
     }
 
     pub fn show_latency(&mut self) {
+        let line_series = latency_line_series();
         let bar_series = latency_bar_series();
         self.dataset = "latency".into();
-        self.points = latency_points();
+        self.line_legend = line_legend_items(&line_series);
+        self.line_series = line_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
     }
@@ -73,6 +83,42 @@ fn latency_points() -> Vec<ChartPoint> {
         ChartPoint::new(4.0, 69.0),
         ChartPoint::new(5.0, 64.0),
         ChartPoint::new(6.0, 58.0),
+    ]
+}
+
+fn growth_line_series() -> Vec<ChartLineSeries> {
+    vec![
+        ChartLineSeries::new("Actual", growth_points()),
+        ChartLineSeries::new(
+            "Target",
+            vec![
+                ChartPoint::new(0.0, 12.0),
+                ChartPoint::new(1.0, 15.0),
+                ChartPoint::new(2.0, 19.0),
+                ChartPoint::new(3.0, 24.0),
+                ChartPoint::new(4.0, 30.0),
+                ChartPoint::new(5.0, 37.0),
+                ChartPoint::new(6.0, 45.0),
+            ],
+        ),
+    ]
+}
+
+fn latency_line_series() -> Vec<ChartLineSeries> {
+    vec![
+        ChartLineSeries::new("API", latency_points()),
+        ChartLineSeries::new(
+            "Render",
+            vec![
+                ChartPoint::new(0.0, 64.0),
+                ChartPoint::new(1.0, 59.0),
+                ChartPoint::new(2.0, 57.0),
+                ChartPoint::new(3.0, 52.0),
+                ChartPoint::new(4.0, 48.0),
+                ChartPoint::new(5.0, 46.0),
+                ChartPoint::new(6.0, 42.0),
+            ],
+        ),
     ]
 }
 

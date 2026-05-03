@@ -115,6 +115,27 @@
       stroke-linejoin: round;
     }
 
+    .pine-chart-line[data-series="Actual"],
+    .pine-chart-marker[data-series="Actual"],
+    .pine-chart-hover-marker[data-series="Actual"] {
+      color: #1d6fd8;
+    }
+
+    .pine-chart-line[data-series="API"],
+    .pine-chart-marker[data-series="API"],
+    .pine-chart-hover-marker[data-series="API"] {
+      color: #16a085;
+    }
+
+    .pine-chart-line[data-series="Target"],
+    .pine-chart-marker[data-series="Target"],
+    .pine-chart-hover-marker[data-series="Target"],
+    .pine-chart-line[data-series="Render"],
+    .pine-chart-marker[data-series="Render"],
+    .pine-chart-hover-marker[data-series="Render"] {
+      color: #d96c2c;
+    }
+
     .pine-chart-marker {
       fill: white;
       stroke: currentColor;
@@ -158,6 +179,10 @@
 
     .pine-chart-tooltip[data-tooltip-x="left"][data-tooltip-y="below"] {
       transform: translate(calc(-100% - 10px), 10px);
+    }
+
+    .pine-chart-tooltip-series {
+      font-weight: 600;
     }
 
     .pine-chart-bar {
@@ -208,7 +233,12 @@
       background: #16a085;
     }
 
+    .pine-chart-legend-marker[data-series="Actual"] {
+      background: #1d6fd8;
+    }
+
     .pine-chart-legend-marker[data-series="Referral"],
+    .pine-chart-legend-marker[data-series="Target"],
     .pine-chart-legend-marker[data-series="Render"] {
       background: #d96c2c;
     }

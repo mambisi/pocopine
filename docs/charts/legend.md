@@ -23,6 +23,15 @@ let series: Vec<ChartBarSeries> = /* application data */;
 let legend_items = bar_legend_items(&series);
 ```
 
+For multi-series line charts, use the matching line helper:
+
+```rust
+use pine_charts::{line_legend_items, ChartLineSeries};
+
+let series: Vec<ChartLineSeries> = /* application data */;
+let legend_items = line_legend_items(&series);
+```
+
 ## Component
 
 ```html

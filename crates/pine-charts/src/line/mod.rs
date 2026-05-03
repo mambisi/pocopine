@@ -27,6 +27,21 @@ impl ChartPoint {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartLineSeries {
+    pub label: String,
+    pub data: Vec<ChartPoint>,
+}
+
+impl ChartLineSeries {
+    pub fn new(label: impl Into<String>, data: Vec<ChartPoint>) -> Self {
+        Self {
+            label: label.into(),
+            data,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineChartOptions {
     pub width: f64,
@@ -52,6 +67,7 @@ impl Default for LineChartOptions {
 pub struct LineChartGeometry {
     pub view_box: String,
     pub line_d: String,
+    pub series: Vec<LineChartSeriesRender>,
     pub plot: ChartRect,
     pub samples: Vec<LineChartSample>,
     pub x_ticks: Vec<crate::Tick>,
@@ -66,43 +82,86 @@ pub struct LineChartGeometry {
 
 impl LineChartGeometry {
     pub fn new(points: &[ChartPoint], options: &LineChartOptions) -> ChartResult<Self> {
-        if points.is_empty() {
+        Self::from_series(&[ChartLineSeries::new("", points.to_vec())], options)
+    }
+
+    pub fn from_series(
+        series: &[ChartLineSeries],
+        options: &LineChartOptions,
+    ) -> ChartResult<Self> {
+        if series.is_empty() || series.iter().any(|series| series.data.is_empty()) {
             return Err(ChartError::EmptySeries);
         }
 
         let width = finite("width", options.width)?;
         let height = finite("height", options.height)?;
         let plot = ChartRect::from_outer(width, height, options.margins)?;
-        let points = validate_points(points)?;
-        let x_domain = domain_or_extent(options.x_domain, points.iter().map(|point| point.x))?;
-        let y_domain = domain_or_extent(options.y_domain, points.iter().map(|point| point.y))?;
+        let normalized = normalize_line_series(series)?;
+        let x_domain = domain_or_extent(
+            options.x_domain,
+            normalized
+                .iter()
+                .flat_map(|series| series.data.iter().map(|point| point.x)),
+        )?;
+        let y_domain = domain_or_extent(
+            options.y_domain,
+            normalized
+                .iter()
+                .flat_map(|series| series.data.iter().map(|point| point.y)),
+        )?;
         let x_scale = LinearScale::new(x_domain, (plot.x, plot.right()))?;
         let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
-        let samples = points
+        let series = normalized
             .iter()
             .enumerate()
-            .map(|(index, point)| {
-                let x = x_scale.map(point.x)?;
-                let y = y_scale.map(point.y)?;
-                Ok(LineChartSample {
-                    key: format!("point-{index}-{}", format_tick(point.x)),
-                    data_x: point.x,
-                    data_y: point.y,
-                    x,
-                    y,
-                    x_label: format_tick(point.x),
-                    y_label: format_tick(point.y),
-                    aria_label: format!("x {}, y {}", format_tick(point.x), format_tick(point.y)),
+            .map(|(series_index, series)| {
+                let samples = series
+                    .data
+                    .iter()
+                    .enumerate()
+                    .map(|(point_index, point)| {
+                        let x = x_scale.map(point.x)?;
+                        let y = y_scale.map(point.y)?;
+                        Ok(LineChartSample {
+                            key: format!(
+                                "series-{series_index}-point-{point_index}-{}",
+                                format_tick(point.x)
+                            ),
+                            series_label: series.label.clone(),
+                            data_x: point.x,
+                            data_y: point.y,
+                            x,
+                            y,
+                            x_label: format_tick(point.x),
+                            y_label: format_tick(point.y),
+                            aria_label: sample_aria_label(&series.label, point.x, point.y),
+                        })
+                    })
+                    .collect::<ChartResult<Vec<_>>>()?;
+                Ok(LineChartSeriesRender {
+                    key: format!("line-series-{series_index}-{}", series.label),
+                    label: series.label.clone(),
+                    line_d: line_path(samples.iter().map(LineChartSample::point))?,
+                    samples,
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
+        let samples = series
+            .iter()
+            .flat_map(|series| series.samples.iter().cloned())
+            .collect::<Vec<_>>();
 
         let x_ticks = x_scale.ticks(5);
         let y_ticks = y_scale.ticks(5);
+        let line_d = series
+            .first()
+            .map(|series| series.line_d.clone())
+            .unwrap_or_default();
 
         Ok(Self {
             view_box: format!("0 0 {width} {height}"),
-            line_d: line_path(samples.iter().map(LineChartSample::point))?,
+            line_d,
+            series,
             plot,
             samples,
             x_grid: grid_lines_for_x(&x_ticks, plot),
@@ -124,8 +183,17 @@ impl LineChartGeometry {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LineChartSeriesRender {
+    pub key: String,
+    pub label: String,
+    pub line_d: String,
+    pub samples: Vec<LineChartSample>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LineChartSample {
     pub key: String,
+    pub series_label: String,
     pub data_x: f64,
     pub data_y: f64,
     pub x: f64,
@@ -144,6 +212,21 @@ impl LineChartSample {
     }
 }
 
+pub fn line_legend_items(series: &[ChartLineSeries]) -> Vec<crate::LegendItem> {
+    series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| {
+            let label = legend_line_series_label(series, index);
+            crate::LegendItem::with_series(
+                format!("line-series-{index}-{label}"),
+                label.clone(),
+                label,
+            )
+        })
+        .collect()
+}
+
 pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&LineChartSample> {
     let svg_x = finite("hover.x", svg_x).ok()?;
     samples.iter().min_by(|a, b| {
@@ -153,6 +236,26 @@ pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&L
             .partial_cmp(&b_distance)
             .unwrap_or(std::cmp::Ordering::Equal)
     })
+}
+
+pub fn nearest_line_sample_at(
+    samples: &[LineChartSample],
+    svg_point: Point,
+) -> Option<&LineChartSample> {
+    let svg_point = Point::new(svg_point.x, svg_point.y).ok()?;
+    samples.iter().min_by(|a, b| {
+        let a_distance = squared_distance(a.x, a.y, svg_point.x, svg_point.y);
+        let b_distance = squared_distance(b.x, b.y, svg_point.x, svg_point.y);
+        a_distance
+            .partial_cmp(&b_distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+fn squared_distance(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
 }
 
 fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
@@ -227,6 +330,49 @@ fn validate_points(points: &[ChartPoint]) -> ChartResult<Vec<ChartPoint>> {
     points.iter().copied().map(ChartPoint::validate).collect()
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct NormalizedLineSeries {
+    label: String,
+    data: Vec<ChartPoint>,
+}
+
+fn normalize_line_series(series: &[ChartLineSeries]) -> ChartResult<Vec<NormalizedLineSeries>> {
+    series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| {
+            if series.data.is_empty() {
+                return Err(ChartError::EmptySeries);
+            }
+            Ok(NormalizedLineSeries {
+                label: line_series_label(series, index),
+                data: validate_points(&series.data)?,
+            })
+        })
+        .collect()
+}
+
+fn line_series_label(series: &ChartLineSeries, _index: usize) -> String {
+    series.label.clone()
+}
+
+fn legend_line_series_label(series: &ChartLineSeries, index: usize) -> String {
+    if series.label.is_empty() {
+        format!("Series {}", index + 1)
+    } else {
+        series.label.clone()
+    }
+}
+
+fn sample_aria_label(series: &str, data_x: f64, data_y: f64) -> String {
+    let point_label = format!("x {}, y {}", format_tick(data_x), format_tick(data_y));
+    if series.is_empty() {
+        point_label
+    } else {
+        format!("{series}: {point_label}")
+    }
+}
+
 fn domain_or_extent(
     domain: Option<(f64, f64)>,
     values: impl IntoIterator<Item = f64>,
@@ -266,6 +412,8 @@ pub struct PineLineChart {
     #[prop]
     pub points: Vec<ChartPoint>,
     #[prop]
+    pub series: Vec<ChartLineSeries>,
+    #[prop]
     pub label: String,
     #[prop]
     pub width: f64,
@@ -292,6 +440,7 @@ pub struct PineLineChart {
     pub state: String,
     pub view_box: String,
     pub line_d: String,
+    pub line_series: Vec<LineChartSeriesRender>,
     pub samples: Vec<LineChartSample>,
     pub plot_x: f64,
     pub plot_y: f64,
@@ -308,6 +457,7 @@ pub struct PineLineChart {
     pub hover_y: f64,
     pub hover_data_x: f64,
     pub hover_data_y: f64,
+    pub hover_series: String,
     pub hover_x_label: String,
     pub hover_y_label: String,
     pub hover_aria_label: String,
@@ -340,6 +490,8 @@ impl Default for PineLineChart {
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),
+            series: Vec::new(),
+            line_series: Vec::new(),
             samples: Vec::new(),
             plot_x: 0.0,
             plot_y: 0.0,
@@ -356,6 +508,7 @@ impl Default for PineLineChart {
             hover_y: 0.0,
             hover_data_x: 0.0,
             hover_data_y: 0.0,
+            hover_series: String::new(),
             hover_x_label: String::new(),
             hover_y_label: String::new(),
             hover_aria_label: String::new(),
@@ -378,6 +531,11 @@ impl PineLineChart {
 
     #[watch(points)]
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
+        self.recompute();
+    }
+
+    #[watch(series)]
+    fn on_series(&mut self, _: Vec<ChartLineSeries>, _: Option<Vec<ChartLineSeries>>) {
         self.recompute();
     }
 
@@ -457,6 +615,7 @@ impl PineLineChart {
         self.hover_y = 0.0;
         self.hover_data_x = 0.0;
         self.hover_data_y = 0.0;
+        self.hover_series.clear();
         self.hover_x_label.clear();
         self.hover_y_label.clear();
         self.hover_aria_label.clear();
@@ -468,10 +627,17 @@ impl PineLineChart {
 
 impl PineLineChart {
     fn recompute(&mut self) {
-        match LineChartGeometry::new(&self.points, &self.options()) {
+        let geometry = if self.series.is_empty() {
+            LineChartGeometry::new(&self.points, &self.options())
+        } else {
+            LineChartGeometry::from_series(&self.series, &self.options())
+        };
+
+        match geometry {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 self.line_d = geometry.line_d;
+                self.line_series = geometry.series;
                 self.samples = geometry.samples;
                 self.plot_x = geometry.plot.x;
                 self.plot_y = geometry.plot.y;
@@ -492,6 +658,7 @@ impl PineLineChart {
             }
             Err(ChartError::EmptySeries) => {
                 self.line_d.clear();
+                self.line_series.clear();
                 self.samples.clear();
                 self.clear_plot();
                 self.clear_guides();
@@ -504,6 +671,7 @@ impl PineLineChart {
             }
             Err(error) => {
                 self.line_d.clear();
+                self.line_series.clear();
                 self.samples.clear();
                 self.clear_plot();
                 self.clear_guides();
@@ -556,7 +724,7 @@ impl PineLineChart {
             return;
         }
 
-        let Some(sample) = nearest_line_sample(&self.samples, svg_x) else {
+        let Some(sample) = nearest_line_sample_at(&self.samples, point) else {
             self.clear_hover();
             return;
         };
@@ -564,6 +732,7 @@ impl PineLineChart {
         let hover_y = sample.y;
         let hover_data_x = sample.data_x;
         let hover_data_y = sample.data_y;
+        let hover_series = sample.series_label.clone();
         let hover_x_label = sample.x_label.clone();
         let hover_y_label = sample.y_label.clone();
         let hover_aria_label = sample.aria_label.clone();
@@ -585,6 +754,7 @@ impl PineLineChart {
         self.hover_y = hover_y;
         self.hover_data_x = hover_data_x;
         self.hover_data_y = hover_data_y;
+        self.hover_series = hover_series;
         self.hover_x_label = hover_x_label;
         self.hover_y_label = hover_y_label;
         self.hover_aria_label = hover_aria_label;
@@ -644,6 +814,8 @@ mod tests {
 
         assert_eq!(geometry.view_box, "0 0 100 100");
         assert_eq!(geometry.line_d, "M0,100 L50,0 L100,50");
+        assert_eq!(geometry.series.len(), 1);
+        assert_eq!(geometry.series[0].line_d, "M0,100 L50,0 L100,50");
         assert_eq!(geometry.samples.len(), 3);
         assert_eq!(geometry.samples[1].data_x, 5.0);
         assert_eq!(geometry.samples[1].x, 50.0);
@@ -653,10 +825,50 @@ mod tests {
     }
 
     #[test]
+    fn line_geometry_maps_multiple_series() {
+        let options = LineChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            x_domain: Some((0.0, 1.0)),
+            y_domain: Some((0.0, 2.0)),
+        };
+        let series = vec![
+            ChartLineSeries::new(
+                "Actual",
+                vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 2.0)],
+            ),
+            ChartLineSeries::new(
+                "Target",
+                vec![ChartPoint::new(0.0, 2.0), ChartPoint::new(1.0, 1.0)],
+            ),
+        ];
+
+        let geometry = LineChartGeometry::from_series(&series, &options).unwrap();
+
+        assert_eq!(geometry.series.len(), 2);
+        assert_eq!(geometry.series[0].label, "Actual");
+        assert_eq!(geometry.series[0].line_d, "M0,100 L100,0");
+        assert_eq!(geometry.series[1].label, "Target");
+        assert_eq!(geometry.series[1].line_d, "M0,0 L100,50");
+        assert_eq!(geometry.samples.len(), 4);
+        assert_eq!(geometry.samples[0].series_label, "Actual");
+        assert_eq!(geometry.samples[2].series_label, "Target");
+
+        let legend = line_legend_items(&series);
+        assert_eq!(legend.len(), 2);
+        assert_eq!(legend[0].label, "Actual");
+        assert_eq!(legend[0].series, "Actual");
+        assert_eq!(legend[1].label, "Target");
+        assert_eq!(legend[1].series, "Target");
+    }
+
+    #[test]
     fn nearest_sample_uses_svg_x_distance() {
         let samples = vec![
             LineChartSample {
                 key: "a".into(),
+                series_label: String::new(),
                 data_x: 1.0,
                 data_y: 2.0,
                 x: 10.0,
@@ -667,6 +879,7 @@ mod tests {
             },
             LineChartSample {
                 key: "b".into(),
+                series_label: String::new(),
                 data_x: 5.0,
                 data_y: 8.0,
                 x: 50.0,
@@ -680,6 +893,38 @@ mod tests {
         let sample = nearest_line_sample(&samples, 41.0).unwrap();
 
         assert_eq!(sample.key, "b");
+    }
+
+    #[test]
+    fn nearest_sample_at_uses_svg_xy_distance() {
+        let samples = vec![
+            LineChartSample {
+                key: "actual".into(),
+                series_label: "Actual".into(),
+                data_x: 1.0,
+                data_y: 9.0,
+                x: 50.0,
+                y: 10.0,
+                x_label: "1".into(),
+                y_label: "9".into(),
+                aria_label: "Actual: x 1, y 9".into(),
+            },
+            LineChartSample {
+                key: "target".into(),
+                series_label: "Target".into(),
+                data_x: 1.0,
+                data_y: 1.0,
+                x: 50.0,
+                y: 90.0,
+                x_label: "1".into(),
+                y_label: "1".into(),
+                aria_label: "Target: x 1, y 1".into(),
+            },
+        ];
+
+        let sample = nearest_line_sample_at(&samples, Point { x: 52.0, y: 84.0 }).unwrap();
+
+        assert_eq!(sample.key, "target");
     }
 
     #[test]
@@ -714,6 +959,7 @@ mod tests {
         assert!(chart.ready);
         assert_eq!(chart.state, "ready");
         assert_eq!(chart.line_d, "M0,100 L100,0");
+        assert_eq!(chart.line_series.len(), 1);
         assert!(!chart.x_tick_labels.is_empty());
         assert!(!chart.y_tick_labels.is_empty());
 

@@ -70,13 +70,17 @@
         </g>
       </template>
     </g>
-    <path pp-show="ready"
-          class="pine-chart-line"
-          :d="line_d"
-          fill="none"
-          stroke="currentColor"
-          vector-effect="non-scaling-stroke"></path>
-    <g pp-show="show_markers"
+    <g pp-show="ready" class="pine-chart-lines" aria-hidden="true">
+      <template pp-for="series in line_series" pp-key="series.key">
+        <path class="pine-chart-line"
+              :d="series.line_d"
+              fill="none"
+              stroke="currentColor"
+              vector-effect="non-scaling-stroke"
+              :data-series="series.label"></path>
+      </template>
+    </g>
+    <g pp-show="ready && show_markers"
        class="pine-chart-markers"
        aria-hidden="true">
       <template pp-for="sample in samples" pp-key="sample.key">
@@ -86,7 +90,8 @@
                 r="3"
                 fill="currentColor"
                 :data-x="sample.data_x"
-                :data-y="sample.data_y"></circle>
+                :data-y="sample.data_y"
+                :data-series="sample.series_label"></circle>
       </template>
     </g>
     <g pp-show="hover_visible"
@@ -108,7 +113,8 @@
               :cy="hover_y"
               r="4"
               :data-x="hover_data_x"
-              :data-y="hover_data_y"></circle>
+              :data-y="hover_data_y"
+              :data-series="hover_series"></circle>
     </g>
   </svg>
   <div pp-show="hover_visible"
@@ -119,7 +125,11 @@
        :data-tooltip-x="hover_placement_x"
        :data-tooltip-y="hover_placement_y"
        :data-x="hover_data_x"
-       :data-y="hover_data_y">
+       :data-y="hover_data_y"
+       :data-series="hover_series">
+    <span pp-show="hover_series"
+          class="pine-chart-tooltip-series"
+          pp-text="hover_series"></span>
     <span class="pine-chart-tooltip-x"
           pp-text="hover_x_label"></span>
     <span class="pine-chart-tooltip-y"

@@ -27,10 +27,13 @@
   </header>
 
   <pine-line-chart label="Weekly metric"
-                   pp-bind:points="points"
+                   pp-bind:series="line_series"
                    show_markers="true"
                    width="720"
                    height="360"></pine-line-chart>
+
+  <pine-chart-legend label="Weekly metric legend"
+                     pp-bind:items="line_legend"></pine-chart-legend>
 
   <pine-bar-chart label="Distribution"
                   pp-bind:series="bar_series"
