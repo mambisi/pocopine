@@ -6,6 +6,7 @@
 
 pub mod area;
 pub mod bar;
+mod cartesian;
 pub mod error;
 pub mod geometry;
 pub mod legend;

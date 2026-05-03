@@ -1,11 +1,13 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
 
+use crate::cartesian::{
+    centered_plot_y, nearest_sample_by_point, nearest_sample_by_x, plot_rect_from_edges,
+    pointer_event_svg_point, CartesianHoverPlacement, CartesianLayout,
+};
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::path::line_path;
-use crate::scale::LinearScale;
 use crate::svg::{format_tick, SvgLine, SvgTickLabel};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -93,24 +95,20 @@ impl LineChartGeometry {
             return Err(ChartError::EmptySeries);
         }
 
-        let width = finite("width", options.width)?;
-        let height = finite("height", options.height)?;
-        let plot = ChartRect::from_outer(width, height, options.margins)?;
         let normalized = normalize_line_series(series)?;
-        let x_domain = domain_or_extent(
+        let layout = CartesianLayout::new(
+            options.width,
+            options.height,
+            options.margins,
             options.x_domain,
+            options.y_domain,
             normalized
                 .iter()
                 .flat_map(|series| series.data.iter().map(|point| point.x)),
-        )?;
-        let y_domain = domain_or_extent(
-            options.y_domain,
             normalized
                 .iter()
                 .flat_map(|series| series.data.iter().map(|point| point.y)),
         )?;
-        let x_scale = LinearScale::new(x_domain, (plot.x, plot.right()))?;
-        let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
         let series = normalized
             .iter()
             .enumerate()
@@ -120,8 +118,8 @@ impl LineChartGeometry {
                     .iter()
                     .enumerate()
                     .map(|(point_index, point)| {
-                        let x = x_scale.map(point.x)?;
-                        let y = y_scale.map(point.y)?;
+                        let x = layout.x_scale.map(point.x)?;
+                        let y = layout.y_scale.map(point.y)?;
                         Ok(LineChartSample {
                             key: format!(
                                 "series-{series_index}-point-{point_index}-{}",
@@ -151,33 +149,25 @@ impl LineChartGeometry {
             .flat_map(|series| series.samples.iter().cloned())
             .collect::<Vec<_>>();
 
-        let x_ticks = x_scale.ticks(5);
-        let y_ticks = y_scale.ticks(5);
         let line_d = series
             .first()
             .map(|series| series.line_d.clone())
             .unwrap_or_default();
 
         Ok(Self {
-            view_box: format!("0 0 {width} {height}"),
+            view_box: layout.view_box,
             line_d,
             series,
-            plot,
+            plot: layout.plot,
             samples,
-            x_grid: grid_lines_for_x(&x_ticks, plot),
-            y_grid: grid_lines_for_y(&y_ticks, plot),
-            x_tick_labels: tick_labels_for_x(&x_ticks, plot),
-            y_tick_labels: tick_labels_for_y(&y_ticks, plot),
-            x_axis: SvgLine::new(
-                "x-axis".into(),
-                plot.x,
-                plot.bottom(),
-                plot.right(),
-                plot.bottom(),
-            ),
-            y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
-            x_ticks,
-            y_ticks,
+            x_grid: layout.x_grid,
+            y_grid: layout.y_grid,
+            x_tick_labels: layout.x_tick_labels,
+            y_tick_labels: layout.y_tick_labels,
+            x_axis: layout.x_axis,
+            y_axis: layout.y_axis,
+            x_ticks: layout.x_ticks,
+            y_ticks: layout.y_ticks,
         })
     }
 }
@@ -228,102 +218,17 @@ pub fn line_legend_items(series: &[ChartLineSeries]) -> Vec<crate::LegendItem> {
 }
 
 pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&LineChartSample> {
-    let svg_x = finite("hover.x", svg_x).ok()?;
-    samples.iter().min_by(|a, b| {
-        let a_distance = (a.x - svg_x).abs();
-        let b_distance = (b.x - svg_x).abs();
-        a_distance
-            .partial_cmp(&b_distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
+    nearest_sample_by_x(samples, svg_x, |sample| sample.x)
 }
 
 pub fn nearest_line_sample_at(
     samples: &[LineChartSample],
     svg_point: Point,
 ) -> Option<&LineChartSample> {
-    let svg_point = Point::new(svg_point.x, svg_point.y).ok()?;
-    samples.iter().min_by(|a, b| {
-        let a_distance = squared_distance(a.x, a.y, svg_point.x, svg_point.y);
-        let b_distance = squared_distance(b.x, b.y, svg_point.x, svg_point.y);
-        a_distance
-            .partial_cmp(&b_distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
+    nearest_sample_by_point(samples, svg_point, |sample| Point {
+        x: sample.x,
+        y: sample.y,
     })
-}
-
-fn squared_distance(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
-    let dx = ax - bx;
-    let dy = ay - by;
-    dx * dx + dy * dy
-}
-
-fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| {
-            SvgLine::new(
-                format!("x-grid-{index}-{}", format_tick(tick.value)),
-                tick.position,
-                plot.y,
-                tick.position,
-                plot.bottom(),
-            )
-        })
-        .collect()
-}
-
-fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| {
-            SvgLine::new(
-                format!("y-grid-{index}-{}", format_tick(tick.value)),
-                plot.x,
-                tick.position,
-                plot.right(),
-                tick.position,
-            )
-        })
-        .collect()
-}
-
-fn tick_labels_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| SvgTickLabel {
-            key: format!("x-tick-{index}-{}", format_tick(tick.value)),
-            value: tick.value,
-            label: format_tick(tick.value),
-            x: tick.position,
-            y: plot.bottom() + 18.0,
-            line_x1: tick.position,
-            line_y1: plot.bottom(),
-            line_x2: tick.position,
-            line_y2: plot.bottom() + 6.0,
-        })
-        .collect()
-}
-
-fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| SvgTickLabel {
-            key: format!("y-tick-{index}-{}", format_tick(tick.value)),
-            value: tick.value,
-            label: format_tick(tick.value),
-            x: plot.x - 8.0,
-            y: tick.position + 4.0,
-            line_x1: plot.x - 6.0,
-            line_y1: tick.position,
-            line_x2: plot.x,
-            line_y2: tick.position,
-        })
-        .collect()
 }
 
 fn validate_points(points: &[ChartPoint]) -> ChartResult<Vec<ChartPoint>> {
@@ -371,39 +276,6 @@ fn sample_aria_label(series: &str, data_x: f64, data_y: f64) -> String {
     } else {
         format!("{series}: {point_label}")
     }
-}
-
-fn domain_or_extent(
-    domain: Option<(f64, f64)>,
-    values: impl IntoIterator<Item = f64>,
-) -> ChartResult<(f64, f64)> {
-    if let Some((start, end)) = domain {
-        return expanded_domain(finite("domain.start", start)?, finite("domain.end", end)?);
-    }
-
-    let mut iter = values.into_iter();
-    let Some(first) = iter.next() else {
-        return Err(ChartError::EmptySeries);
-    };
-
-    let mut min = finite("domain.value", first)?;
-    let mut max = min;
-    for value in iter {
-        let value = finite("domain.value", value)?;
-        min = min.min(value);
-        max = max.max(value);
-    }
-
-    expanded_domain(min, max)
-}
-
-fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
-    if start != end {
-        return Ok((start, end));
-    }
-
-    let pad = if start == 0.0 { 1.0 } else { start.abs() * 0.1 };
-    Ok((start - pad, end + pad))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -590,23 +462,10 @@ impl PineLineChart {
     }
 
     pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
-        let Ok(ev) = ev.dyn_into::<web_sys::PointerEvent>() else {
+        let Some(point) = pointer_event_svg_point(ev, self.width, self.height) else {
             return;
         };
-        let Some(target) = ev.current_target() else {
-            return;
-        };
-        let Ok(element) = target.dyn_into::<web_sys::Element>() else {
-            return;
-        };
-        let rect = element.get_bounding_client_rect();
-        if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width <= 0.0 || self.height <= 0.0 {
-            return;
-        }
-
-        let ratio_x = ((ev.client_x() as f64) - rect.left()) / rect.width();
-        let ratio_y = ((ev.client_y() as f64) - rect.top()) / rect.height();
-        self.hover_at(ratio_x * self.width, ratio_y * self.height);
+        self.hover_at(point.x, point.y);
     }
 
     pub fn clear_hover(&mut self) {
@@ -710,7 +569,7 @@ impl PineLineChart {
     }
 
     pub fn hover_at_x(&mut self, svg_x: f64) {
-        let svg_y = self.plot_y + (self.plot_bottom - self.plot_y) * 0.5;
+        let svg_y = centered_plot_y(self.plot_rect());
         self.hover_at(svg_x, svg_y);
     }
 
@@ -736,18 +595,15 @@ impl PineLineChart {
         let hover_x_label = sample.x_label.clone();
         let hover_y_label = sample.y_label.clone();
         let hover_aria_label = sample.aria_label.clone();
-        let hover_placement_x = if hover_x >= self.plot_x + (self.plot_right - self.plot_x) * 0.5 {
-            "left"
-        } else {
-            "right"
-        };
-        let hover_placement_y = if hover_y <= self.plot_y + (self.plot_bottom - self.plot_y) * 0.5 {
-            "below"
-        } else {
-            "above"
-        };
-        let hover_x_pct = (hover_x / self.width * 100.0).clamp(0.0, 100.0);
-        let hover_y_pct = (hover_y / self.height * 100.0).clamp(0.0, 100.0);
+        let placement = CartesianHoverPlacement::new(
+            Point {
+                x: hover_x,
+                y: hover_y,
+            },
+            self.plot_rect(),
+            self.width,
+            self.height,
+        );
 
         self.hover_visible = true;
         self.hover_x = hover_x;
@@ -758,20 +614,13 @@ impl PineLineChart {
         self.hover_x_label = hover_x_label;
         self.hover_y_label = hover_y_label;
         self.hover_aria_label = hover_aria_label;
-        self.hover_placement_x = hover_placement_x.into();
-        self.hover_placement_y = hover_placement_y.into();
-        self.hover_style = format!(
-            "--pine-chart-tooltip-x: {hover_x_pct}%; --pine-chart-tooltip-y: {hover_y_pct}%;"
-        );
+        self.hover_placement_x = placement.x.into();
+        self.hover_placement_y = placement.y.into();
+        self.hover_style = placement.style;
     }
 
     fn plot_rect(&self) -> ChartRect {
-        ChartRect {
-            x: self.plot_x,
-            y: self.plot_y,
-            width: self.plot_right - self.plot_x,
-            height: self.plot_bottom - self.plot_y,
-        }
+        plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
     }
 
     fn clear_plot(&mut self) {
