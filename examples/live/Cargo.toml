@@ -1,0 +1,30 @@
+[package]
+name = "live-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+bin = "server"
+port = 3020
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+required-features = []
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine", features = ["live"] }
+wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-events = { workspace = true }
+pocopine-logging = { workspace = true }
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

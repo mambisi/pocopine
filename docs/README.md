@@ -36,6 +36,8 @@ Example apps:
 - [`examples/counter/`](../examples/counter/) — a single component.
 - [`examples/todo/`](../examples/todo/) — multi-component, slots, and a store.
 - [`examples/blog/`](../examples/blog/) — `App` + `#[server]` + axum server bin.
+- [`examples/live/`](../examples/live/) — `pocopine-live` SSE invalidation
+  with collection/query refetch callbacks.
 - [`examples/observability-smoke/`](../examples/observability-smoke/) — OTLP trace export smoke server.
 - [`examples/spa/`](../examples/spa/) — `App::route` + `<pp-outlet>` + `pp-route` + `$route`.
 - [`examples/site/`](../examples/site/) — the marketing page, dogfooded.

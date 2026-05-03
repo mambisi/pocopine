@@ -22,6 +22,7 @@ members = [
     "examples/blog",
     "examples/counter",
     "examples/hn",
+    "examples/live",
     "examples/observability-smoke",
     "jsbench/pocopine",
     "jsbench/leptos",
