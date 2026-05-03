@@ -3196,9 +3196,27 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 parts.extensions,
             );
             if let Err(err) = #guard_path(ctx).await {
-                let result = ::core::result::Result::Err(
-                    ::core::convert::Into::into(err),
+                let __pocopine_error: ::pocopine::ServerError =
+                    ::core::convert::Into::into(err);
+                let __pocopine_duration_ms =
+                    __pocopine_started.elapsed().as_millis() as u64;
+                let __pocopine_error_kind = match &__pocopine_error {
+                    ::pocopine::ServerError::App(_) => "app",
+                    ::pocopine::ServerError::Unauthorized(_) => "unauthorized",
+                    ::pocopine::ServerError::Forbidden(_) => "forbidden",
+                    ::pocopine::ServerError::BadRequest(_) => "bad_request",
+                    ::pocopine::ServerError::Network(_) => "network",
+                };
+                ::pocopine_server::tracing::warn!(
+                    target: "pocopine.log",
+                    function = #fn_name_str,
+                    route = #route_path,
+                    duration_ms = __pocopine_duration_ms,
+                    error_kind = __pocopine_error_kind,
+                    error = %__pocopine_error,
+                    "server function guard rejected request"
                 );
+                let result = ::core::result::Result::Err(__pocopine_error);
                 return ::pocopine_server::axum::Json(result);
             }
         },
@@ -3211,37 +3229,104 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let route_handler = quote! {
         ::pocopine_server::axum::routing::post(
             |request: ::pocopine_server::axum::extract::Request| async move {
-                #parts_binding
-                #guard_prologue
-                let body_limit = ::pocopine_server::server_function_body_limit();
-                let body_bytes = match ::pocopine_server::axum::body::to_bytes(
-                    body,
-                    body_limit,
-                ).await {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        let result = ::core::result::Result::Err(
-                            ::pocopine::ServerError::BadRequest(
-                                format!("read server-function request body: {err}"),
-                            ),
-                        );
-                        return ::pocopine_server::axum::Json(result);
-                    }
-                };
-                let #destructure: #args_tuple_type =
-                    match ::pocopine_server::serde_json::from_slice(&body_bytes) {
-                        Ok(args) => args,
+                use ::pocopine_server::tracing::Instrument as _;
+
+                async move {
+                    let __pocopine_started = ::std::time::Instant::now();
+                    #parts_binding
+                    #guard_prologue
+                    let body_limit = ::pocopine_server::server_function_body_limit();
+                    let body_bytes = match ::pocopine_server::axum::body::to_bytes(
+                        body,
+                        body_limit,
+                    ).await {
+                        Ok(bytes) => bytes,
                         Err(err) => {
-                            let result = ::core::result::Result::Err(
-                                ::pocopine::ServerError::BadRequest(
-                                    format!("parse server-function request body: {err}"),
-                                ),
+                            let __pocopine_error = ::pocopine::ServerError::BadRequest(
+                                format!("read server-function request body: {err}"),
                             );
+                            let __pocopine_duration_ms =
+                                __pocopine_started.elapsed().as_millis() as u64;
+                            ::pocopine_server::tracing::warn!(
+                                target: "pocopine.log",
+                                function = #fn_name_str,
+                                route = #route_path,
+                                duration_ms = __pocopine_duration_ms,
+                                error_kind = "bad_request",
+                                error = %__pocopine_error,
+                                "server function request body read failed"
+                            );
+                            let result = ::core::result::Result::Err(__pocopine_error);
                             return ::pocopine_server::axum::Json(result);
                         }
                     };
-                let result = #fn_ident( #(#arg_idents),* ).await;
-                ::pocopine_server::axum::Json(result)
+                    let __pocopine_body_bytes = body_bytes.len() as u64;
+                    let #destructure: #args_tuple_type =
+                        match ::pocopine_server::serde_json::from_slice(&body_bytes) {
+                            Ok(args) => args,
+                            Err(err) => {
+                                let __pocopine_error = ::pocopine::ServerError::BadRequest(
+                                    format!("parse server-function request body: {err}"),
+                                );
+                                let __pocopine_duration_ms =
+                                    __pocopine_started.elapsed().as_millis() as u64;
+                                ::pocopine_server::tracing::warn!(
+                                    target: "pocopine.log",
+                                    function = #fn_name_str,
+                                    route = #route_path,
+                                    duration_ms = __pocopine_duration_ms,
+                                    body_bytes = __pocopine_body_bytes,
+                                    error_kind = "bad_request",
+                                    error = %__pocopine_error,
+                                    "server function request body parse failed"
+                                );
+                                let result = ::core::result::Result::Err(__pocopine_error);
+                                return ::pocopine_server::axum::Json(result);
+                            }
+                        };
+                    let result = #fn_ident( #(#arg_idents),* ).await;
+                    let __pocopine_duration_ms =
+                        __pocopine_started.elapsed().as_millis() as u64;
+                    match &result {
+                        ::core::result::Result::Ok(_) => {
+                            ::pocopine_server::tracing::info!(
+                                target: "pocopine.trace",
+                                function = #fn_name_str,
+                                route = #route_path,
+                                duration_ms = __pocopine_duration_ms,
+                                body_bytes = __pocopine_body_bytes,
+                                "server function completed"
+                            );
+                        }
+                        ::core::result::Result::Err(err) => {
+                            let __pocopine_error_kind = match err {
+                                ::pocopine::ServerError::App(_) => "app",
+                                ::pocopine::ServerError::Unauthorized(_) => "unauthorized",
+                                ::pocopine::ServerError::Forbidden(_) => "forbidden",
+                                ::pocopine::ServerError::BadRequest(_) => "bad_request",
+                                ::pocopine::ServerError::Network(_) => "network",
+                            };
+                            ::pocopine_server::tracing::warn!(
+                                target: "pocopine.log",
+                                function = #fn_name_str,
+                                route = #route_path,
+                                duration_ms = __pocopine_duration_ms,
+                                body_bytes = __pocopine_body_bytes,
+                                error_kind = __pocopine_error_kind,
+                                error = %err,
+                                "server function failed"
+                            );
+                        }
+                    }
+                    ::pocopine_server::axum::Json(result)
+                }
+                .instrument(::pocopine_server::tracing::info_span!(
+                    target: "pocopine.trace",
+                    "pocopine.server_function",
+                    function = #fn_name_str,
+                    route = #route_path,
+                ))
+                .await
             },
         )
     };

@@ -144,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For human-readable development logs:
 
 ```rust
-init_server_logging(ServerLoggingConfig::compact())?;
+pocopine::logging::init_default()?;
 ```
 
 For structured production logs:

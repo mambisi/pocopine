@@ -6,10 +6,10 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use hn::{__get_item_tree_route, __search_stories_route};
-    use pocopine_logging::{init_server_logging, ServerLoggingConfig};
+    use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
 
-    init_server_logging(ServerLoggingConfig::compact()).map_err(std::io::Error::other)?;
+    init_default().map_err(std::io::Error::other)?;
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let index_path = format!("{manifest_dir}/index.html");

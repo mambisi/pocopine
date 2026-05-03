@@ -79,7 +79,7 @@ mod host {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use chrono::{Duration as ChronoDuration, Utc};
     use cron::Schedule;
@@ -977,6 +977,7 @@ return redis.call(
                             &id.id,
                             &envelope,
                             "job reclaimed after max attempts",
+                            None,
                         )
                         .await?;
                         continue;
@@ -1039,14 +1040,19 @@ return redis.call(
             envelope: JobEnvelope,
         ) -> JobResult<()> {
             let Some(descriptor) = self.descriptors.get(envelope.job_name.as_str()) else {
-                self.move_to_dead_and_ack(conn, stream, stream_id, &envelope, "unknown job")
+                self.move_to_dead_and_ack(conn, stream, stream_id, &envelope, "unknown job", None)
                     .await?;
                 return Ok(());
             };
 
+            let started = Instant::now();
+            log_job_started(&envelope, "redis");
             let payload = serde_json::to_vec(&envelope.payload)?;
             match run_handler_safely(descriptor.handler, payload).await {
-                Ok(()) => self.ack(conn, stream, stream_id).await,
+                Ok(()) => {
+                    log_job_completed(&envelope, "redis", elapsed_ms(started));
+                    self.ack(conn, stream, stream_id).await
+                }
                 Err(err) => {
                     if envelope.attempt < envelope.max_attempts {
                         let mut retry = envelope.clone();
@@ -1065,6 +1071,14 @@ return redis.call(
                             due_ms,
                         )
                         .await?;
+                        log_job_retry_scheduled(
+                            &envelope,
+                            &retry,
+                            due_ms,
+                            "redis",
+                            elapsed_ms(started),
+                            &err,
+                        );
                     } else {
                         self.move_to_dead_and_ack(
                             conn,
@@ -1072,6 +1086,7 @@ return redis.call(
                             stream_id,
                             &envelope,
                             &err.to_string(),
+                            Some(elapsed_ms(started)),
                         )
                         .await?;
                     }
@@ -1082,13 +1097,18 @@ return redis.call(
 
         async fn run_envelope_memory(&self, envelope: JobEnvelope) -> JobResult<()> {
             let Some(descriptor) = self.descriptors.get(envelope.job_name.as_str()) else {
-                self.move_to_dead_memory(envelope, "unknown job")?;
+                self.move_to_dead_memory(envelope, "unknown job", None)?;
                 return Ok(());
             };
 
+            let started = Instant::now();
+            log_job_started(&envelope, "memory");
             let payload = serde_json::to_vec(&envelope.payload)?;
             match run_handler_safely(descriptor.handler, payload).await {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    log_job_completed(&envelope, "memory", elapsed_ms(started));
+                    Ok(())
+                }
                 Err(err) => {
                     if envelope.attempt < envelope.max_attempts {
                         let mut retry = envelope.clone();
@@ -1097,18 +1117,37 @@ return redis.call(
                             .saturating_add(retry_delay_ms(retry.attempt, &retry.job_id));
                         retry.scheduled_for_ms = Some(due_ms);
                         let store = self.client.cached_memory_store()?;
-                        memory_schedule_envelope(&store, retry)?;
+                        memory_schedule_envelope(&store, retry.clone())?;
+                        log_job_retry_scheduled(
+                            &envelope,
+                            &retry,
+                            due_ms,
+                            "memory",
+                            elapsed_ms(started),
+                            &err,
+                        );
                     } else {
-                        self.move_to_dead_memory(envelope, &err.to_string())?;
+                        self.move_to_dead_memory(
+                            envelope,
+                            &err.to_string(),
+                            Some(elapsed_ms(started)),
+                        )?;
                     }
                     Ok(())
                 }
             }
         }
 
-        fn move_to_dead_memory(&self, envelope: JobEnvelope, error: &str) -> JobResult<()> {
+        fn move_to_dead_memory(
+            &self,
+            envelope: JobEnvelope,
+            error: &str,
+            duration_ms: Option<u64>,
+        ) -> JobResult<()> {
             let store = self.client.cached_memory_store()?;
-            memory_move_to_dead(&store, envelope, error)
+            memory_move_to_dead(&store, envelope.clone(), error)?;
+            log_job_dead_lettered(&envelope, "memory", error, duration_ms);
+            Ok(())
         }
 
         async fn move_to_dead_and_ack(
@@ -1118,6 +1157,7 @@ return redis.call(
             stream_id: &str,
             envelope: &JobEnvelope,
             error: &str,
+            duration_ms: Option<u64>,
         ) -> JobResult<()> {
             dead_letter_and_ack(
                 conn,
@@ -1128,7 +1168,9 @@ return redis.call(
                 envelope,
                 error,
             )
-            .await
+            .await?;
+            log_job_dead_lettered(envelope, "redis", error, duration_ms);
+            Ok(())
         }
 
         async fn ack(
@@ -1144,6 +1186,94 @@ return redis.call(
                 .query_async(conn)
                 .await?;
             Ok(())
+        }
+    }
+
+    fn elapsed_ms(started: Instant) -> u64 {
+        started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    fn log_job_started(envelope: &JobEnvelope, backend: &'static str) {
+        tracing::info!(
+            target: "pocopine.trace",
+            backend = backend,
+            job_id = %envelope.job_id,
+            job_name = %envelope.job_name,
+            queue = %envelope.queue,
+            attempt = envelope.attempt,
+            max_attempts = envelope.max_attempts,
+            "job started"
+        );
+    }
+
+    fn log_job_completed(envelope: &JobEnvelope, backend: &'static str, duration_ms: u64) {
+        tracing::info!(
+            target: "pocopine.trace",
+            backend = backend,
+            job_id = %envelope.job_id,
+            job_name = %envelope.job_name,
+            queue = %envelope.queue,
+            attempt = envelope.attempt,
+            max_attempts = envelope.max_attempts,
+            duration_ms = duration_ms,
+            "job completed"
+        );
+    }
+
+    fn log_job_retry_scheduled(
+        envelope: &JobEnvelope,
+        retry: &JobEnvelope,
+        due_ms: u64,
+        backend: &'static str,
+        duration_ms: u64,
+        error: &JobError,
+    ) {
+        tracing::warn!(
+            target: "pocopine.log",
+            backend = backend,
+            job_id = %envelope.job_id,
+            job_name = %envelope.job_name,
+            queue = %envelope.queue,
+            attempt = envelope.attempt,
+            next_attempt = retry.attempt,
+            max_attempts = envelope.max_attempts,
+            due_ms = due_ms,
+            duration_ms = duration_ms,
+            error = %error,
+            "job retry scheduled"
+        );
+    }
+
+    fn log_job_dead_lettered(
+        envelope: &JobEnvelope,
+        backend: &'static str,
+        error: &str,
+        duration_ms: Option<u64>,
+    ) {
+        match duration_ms {
+            Some(duration_ms) => tracing::warn!(
+                target: "pocopine.log",
+                backend = backend,
+                job_id = %envelope.job_id,
+                job_name = %envelope.job_name,
+                queue = %envelope.queue,
+                attempt = envelope.attempt,
+                max_attempts = envelope.max_attempts,
+                duration_ms = duration_ms,
+                error = error,
+                "job moved to dead letter"
+            ),
+            None => tracing::warn!(
+                target: "pocopine.log",
+                backend = backend,
+                job_id = %envelope.job_id,
+                job_name = %envelope.job_name,
+                queue = %envelope.queue,
+                attempt = envelope.attempt,
+                max_attempts = envelope.max_attempts,
+                error = error,
+                "job moved to dead letter"
+            ),
         }
     }
 
