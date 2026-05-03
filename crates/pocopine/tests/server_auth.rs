@@ -5,12 +5,15 @@
 // wasm.
 #![cfg(not(target_arch = "wasm32"))]
 
+mod support;
+
 use pocopine::{AuthUser, Role, ServerError, ServerResult};
 use pocopine_server::axum::{
     body::{to_bytes, Body},
     http::{Extensions, HeaderMap, Method, Request, Uri},
 };
 use pocopine_server::tower::ServiceExt;
+use support::TraceCapture;
 
 async fn require_token(ctx: pocopine_server::auth::RequestContext) -> ServerResult<()> {
     match ctx.bearer_token() {
@@ -97,23 +100,73 @@ fn oversized_body_returns_bad_request() {
         .unwrap();
 
     rt.block_on(async {
-        std::env::set_var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT", "1");
         let router = __public_echo_route(pocopine_server::axum::Router::new());
+        let oversized_body = vec![b'a'; pocopine_server::DEFAULT_SERVER_FUNCTION_BODY_LIMIT + 1];
         let response = router
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/_pocopine/public_echo")
                     .header("content-type", "application/json")
-                    .body(Body::from("[\"too large\"]"))
+                    .body(Body::from(oversized_body))
                     .unwrap(),
             )
             .await
             .unwrap();
-        std::env::remove_var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT");
 
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let result: ServerResult<String> = serde_json::from_slice(&bytes).unwrap();
         assert!(matches!(result, Err(ServerError::BadRequest(_))));
     });
+}
+
+#[test]
+fn server_function_route_emits_trace_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    let result = capture.run(|| {
+        rt.block_on(async {
+            let router = __public_echo_route(pocopine_server::axum::Router::new());
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/_pocopine/public_echo")
+                        .header("content-type", "application/json")
+                        .body(Body::from("[\"hello\"]"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            serde_json::from_slice::<ServerResult<String>>(&bytes).unwrap()
+        })
+    });
+
+    assert_eq!(result.unwrap(), "hello");
+
+    let events = capture.events_with_message("pocopine.trace", "server function completed");
+    let event = events
+        .iter()
+        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .expect("server function completion event should be captured");
+
+    assert_eq!(event.field("function"), Some("public_echo"));
+    assert_eq!(event.field("body_bytes"), Some("9"));
+    assert!(
+        event
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        event.fields.values().all(|value| !value.contains("hello")),
+        "server-function logs must not include raw request payloads"
+    );
 }

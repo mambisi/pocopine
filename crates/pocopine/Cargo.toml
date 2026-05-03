@@ -41,6 +41,8 @@ pocopine-server = { path = "../pocopine-server" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 tower = { version = "0.5", features = ["util"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = [
     "CustomEvent",
