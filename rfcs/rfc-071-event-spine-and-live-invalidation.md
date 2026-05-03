@@ -176,6 +176,33 @@ Reserved event names:
 
 Keepalive comments may be sent without changing the cursor.
 
+### 6.1 Browser refresh client
+
+The first browser helper is invalidation-driven, not a cache or sync
+database. Components register refetch callbacks for public collection
+names or query tags:
+
+```rust
+let handle = pocopine::this::<PostList>();
+
+pocopine::live::LiveRefresh::scoped()
+    .collection("posts", move |_event| {
+        handle.update(|s| s.reload());
+    })
+    .open()?;
+```
+
+`LiveRefresh::open()` is scope-bound by default and closes the underlying
+`EventSource` on component unmount. `open_unscoped()` exists for
+application-owned streams that keep and drop the returned subscription
+handle explicitly.
+
+Collection invalidations trigger matching collection callbacks and any
+matching query-tag callbacks carried by the event. `query.invalidated`
+triggers query-tag callbacks. `gap` triggers every registered
+collection/query callback so the component refetches from scratch.
+`error` is delivered only to explicit `on_error` handlers.
+
 ## 7. Security Model
 
 Event publication and event subscription are separate checks.
