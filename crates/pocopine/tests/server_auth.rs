@@ -31,7 +31,7 @@ async fn public_echo(value: String) -> ServerResult<String> {
 }
 
 pocopine::protected! {
-    require |ctx| ctx.user.has_role(Role::Admin);
+    require |ctx| ctx.user.has_role(&Role::admin());
 
     async fn admin_echo(value: String) -> ServerResult<String> {
         Ok(value)
@@ -49,7 +49,7 @@ fn guarded_and_public_route_helpers_typecheck() {
 #[test]
 fn request_context_extracts_user_from_extensions() {
     let mut extensions = Extensions::new();
-    extensions.insert(AuthUser::new("user-1").with_role(Role::Admin));
+    extensions.insert(AuthUser::new("user-1").with_role(Role::admin()));
 
     let ctx = pocopine::auth::RequestContext::from_parts(
         Method::GET,
@@ -59,7 +59,7 @@ fn request_context_extracts_user_from_extensions() {
     );
 
     assert!(ctx.user.is_authenticated());
-    assert!(ctx.user.has_role(Role::Admin));
+    assert!(ctx.user.has_role(&Role::admin()));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn protected_macro_guard_checks_inline_policy() {
         Uri::from_static("/_pocopine/admin_echo"),
         HeaderMap::new(),
     )
-    .with_user(AuthUser::new("admin").with_role(Role::Admin));
+    .with_user(AuthUser::new("admin").with_role(Role::admin()));
     rt.block_on(__pocopine_guard_admin_echo(allowed)).unwrap();
 
     let denied = pocopine::auth::RequestContext::new(
@@ -82,7 +82,7 @@ fn protected_macro_guard_checks_inline_policy() {
         Uri::from_static("/_pocopine/admin_echo"),
         HeaderMap::new(),
     )
-    .with_user(AuthUser::new("user").with_role(Role::User));
+    .with_user(AuthUser::new("user").with_role(Role::user()));
     let err = rt
         .block_on(__pocopine_guard_admin_echo(denied))
         .unwrap_err();
