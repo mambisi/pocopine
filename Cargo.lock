@@ -3027,6 +3027,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "pocopine-auth",
+ "pocopine-core",
  "pocopine-events",
  "pocopine-observe",
  "serde",

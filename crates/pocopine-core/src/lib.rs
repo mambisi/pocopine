@@ -66,7 +66,7 @@ pub use emit::{
     emit, emit_cancelable, emit_cancelable_from, emit_event, emit_event_from, emit_from,
     emit_from_host, emit_model, emit_model_field, emit_raw, emit_raw_from, Emit,
 };
-pub use events::{on_scope_unmount, DomEventName, ListenerHandle};
+pub use events::{on_scope_unmount, on_scope_unmount_for, DomEventName, ListenerHandle};
 pub use expr::{StaticBinOp, StaticExpr, StaticLiteral};
 pub use extractors::{Inject, NearestParent, Parent};
 pub use handle::{this, Handle};
@@ -102,7 +102,9 @@ pub use server::{Result as ServerResult, ServerError};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
 pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
 pub use styles::inject_style;
-pub use task::{spawn, spawn_latest, spawn_scoped, TaskHandle};
+pub use task::{
+    spawn, spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped, TaskHandle,
+};
 pub use templates::{
     compile_template, inject_pp_data, is_registered, register_template, template_for,
 };
