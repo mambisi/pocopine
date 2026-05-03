@@ -2886,7 +2886,9 @@ dependencies = [
 name = "pocopine-events"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "pocopine-observe",
+ "redis",
  "serde",
  "serde_json",
  "tokio",
