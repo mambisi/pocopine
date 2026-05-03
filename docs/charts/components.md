@@ -41,7 +41,7 @@ In a template, bind data from the parent component:
 
 Line charts also expose a hover crosshair, marker, and tooltip. Pointer movement
 activates the nearest sampled point only inside that point's hover radius, which
-defaults to `5` rendered pixels and can be changed with `hover_radius`. The
+defaults to `8` rendered pixels and can be changed with `hover_radius`. The
 component owns the nearest-point state and geometry variables, while the
 application owns tooltip placement and visual styling.
 
