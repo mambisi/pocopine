@@ -2469,6 +2469,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "observability-smoke"
+version = "0.1.0"
+dependencies = [
+ "pocopine",
+ "pocopine-server",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "oco_ref"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -20,6 +20,7 @@ members = [
     "examples/blog",
     "examples/counter",
     "examples/hn",
+    "examples/observability-smoke",
     "jsbench/pocopine",
     "jsbench/leptos",
     "jsbench/yew",
