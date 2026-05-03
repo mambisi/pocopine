@@ -133,12 +133,24 @@ impl JwtVerifier {
         };
 
         // Build jsonwebtoken Validation matching our config.
+        //
+        // jsonwebtoken's `Validation::new` defaults `iss = None` and
+        // skips issuer validation in that case automatically — we
+        // only need to call `set_issuer` when an issuer is
+        // configured. Same for `set_audience`.
+        //
+        // The `validate_aud = false` in the audience-None branch is
+        // load-bearing: jsonwebtoken's default `validate_aud = true`
+        // would otherwise enforce the audience check shape even
+        // without an expected list. **Crucially this toggle MUST
+        // NOT appear in the issuer branch** — the prior version
+        // disabled `validate_aud` whenever issuer was unset,
+        // silently bypassing audience validation for a legitimate
+        // `issuer=None, audience=Some(...)` configuration.
         let mut validation = Validation::new(our_alg.into_jwt());
         validation.leeway = self.inner.config.leeway.as_secs();
         if let Some(iss) = &self.inner.config.issuer {
             validation.set_issuer(&[iss]);
-        } else {
-            validation.validate_aud = false;
         }
         if let Some(audiences) = &self.inner.config.audience {
             validation.set_audience(audiences);

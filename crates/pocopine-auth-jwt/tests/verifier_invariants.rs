@@ -168,6 +168,38 @@ async fn audience_mismatch_is_rejected() {
 }
 
 #[tokio::test]
+async fn issuer_none_does_not_disable_audience_validation() {
+    // Regression for the security review on PR #34: when
+    // `issuer = None` and `audience = Some(...)`, an earlier
+    // version of `verify_token` set `validate_aud = false` in
+    // the issuer-`None` branch, which silently disabled audience
+    // checking — letting a token issued for a different audience
+    // (signed with the same key) authenticate against this
+    // verifier.
+    //
+    // The fix removed the buggy `validate_aud = false` from the
+    // issuer-`None` branch. This test pairs the bug's
+    // preconditions (issuer unset + audience configured) and
+    // confirms an audience-mismatched token is rejected.
+    let mut config = standard_config(vec![Algorithm::Hs256]);
+    config.issuer = None;
+    config.audience = Some(vec!["expected-aud".into()]);
+
+    let mut claims = standard_claims();
+    claims["iss"] = serde_json::Value::Null;
+    claims["aud"] = json!("attacker-aud");
+    let token = issue_token(claims);
+
+    let verifier = JwtVerifier::custom(config).unwrap();
+    let err = verifier.verify_token(&token).await.unwrap_err();
+    assert!(
+        matches!(err, JwtAuthError::ClaimRejected { claim: "aud", .. }),
+        "audience must still be validated when issuer is unset; \
+         got: {err:?}"
+    );
+}
+
+#[tokio::test]
 async fn signature_tamper_is_rejected() {
     let mut token = issue_token(standard_claims());
     // Flip the last character of the signature.
