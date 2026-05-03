@@ -11,6 +11,7 @@ members = [
     "crates/pocopine-auth-jwt",
     "crates/pocopine-cli",
     "crates/pocopine-core",
+    "crates/pocopine-events",
     "crates/pocopine-expr",
     "crates/pocopine-jobs",
     "crates/pocopine-logging",
@@ -53,6 +54,7 @@ pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
 pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
+pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }
 pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }
