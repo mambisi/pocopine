@@ -21,6 +21,7 @@ members = [
     "crates/pocopine-observe",
     "crates/pocopine-server",
     "examples/blog",
+    "examples/charts",
     "examples/counter",
     "examples/hn",
     "examples/observability-smoke",

@@ -1,0 +1,23 @@
+<root class="chart-demo">
+  <header class="chart-demo-header">
+    <div>
+      <h1>Pine Charts</h1>
+      <p>SVG-first, unstyled chart primitives for Pocopine apps.</p>
+    </div>
+    <div class="chart-demo-actions" role="group" aria-label="Chart dataset">
+      <button type="button"
+              :aria-pressed="dataset == 'growth' ? 'true' : 'false'"
+              :data-active="dataset == 'growth'"
+              @click="show_growth">Growth</button>
+      <button type="button"
+              :aria-pressed="dataset == 'latency' ? 'true' : 'false'"
+              :data-active="dataset == 'latency'"
+              @click="show_latency">Latency</button>
+    </div>
+  </header>
+
+  <pine-line-chart label="Weekly metric"
+                   pp-bind:points="points"
+                   width="720"
+                   height="360"></pine-line-chart>
+</root>
