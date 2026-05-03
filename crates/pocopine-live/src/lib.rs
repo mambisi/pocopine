@@ -535,6 +535,7 @@ mod browser {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use pocopine_core::{current_scope_id, on_scope_unmount_for};
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
     use web_sys::{Event, EventSource, EventSourceInit, EventTarget, MessageEvent};
@@ -577,10 +578,10 @@ mod browser {
             }
         }
 
-        /// Alias for lifecycle usage. Scope-bound cleanup lands in the
-        /// next phase; v1 returns the same builder as [`Self::new`].
-        pub fn scoped() -> Self {
-            Self::new()
+        /// Build a client whose stream is closed automatically when
+        /// the current component scope unmounts.
+        pub fn scoped() -> ScopedLiveClient {
+            ScopedLiveClient::new()
         }
 
         /// Override the stream endpoint.
@@ -681,6 +682,107 @@ mod browser {
                 active: true,
             })
         }
+
+        /// Open the stream and bind its lifetime to the current
+        /// component scope. Returns an error outside a handler /
+        /// lifecycle context.
+        pub fn connect_scoped<F>(self, handler: F) -> Result<(), LiveClientError>
+        where
+            F: FnMut(LiveEvent) + 'static,
+        {
+            let scope_id = current_scope_id().ok_or_else(|| {
+                LiveClientError::Browser(
+                    "LiveClient::scoped used outside a component handler or lifecycle hook"
+                        .to_string(),
+                )
+            })?;
+            let subscription = self.connect(handler)?;
+            on_scope_unmount_for(scope_id, move || drop(subscription));
+            Ok(())
+        }
+    }
+
+    /// Scope-bound browser `EventSource` client builder.
+    #[derive(Clone, Debug)]
+    pub struct ScopedLiveClient {
+        client: LiveClient,
+    }
+
+    impl Default for ScopedLiveClient {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl ScopedLiveClient {
+        /// Build a scope-bound client for the default pocopine live
+        /// endpoint.
+        pub fn new() -> Self {
+            Self {
+                client: LiveClient::new(),
+            }
+        }
+
+        /// Override the stream endpoint.
+        pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+            self.client = self.client.endpoint(endpoint);
+            self
+        }
+
+        /// Subscribe to a collection invalidation topic.
+        pub fn collection(mut self, collection: impl Into<String>) -> Self {
+            self.client = self.client.collection(collection);
+            self
+        }
+
+        /// Subscribe to an explicit framework topic.
+        pub fn topic(mut self, topic: impl Into<String>) -> Self {
+            self.client = self.client.topic(topic);
+            self
+        }
+
+        /// Subscribe to the framework topic for a query tag.
+        pub fn query_tag(mut self, tag: impl Into<String>) -> Self {
+            self.client = self.client.query_tag(tag);
+            self
+        }
+
+        /// Resume from an opaque stream cursor.
+        pub fn last_event_id(mut self, cursor: impl Into<String>) -> Self {
+            self.client = self.client.last_event_id(cursor);
+            self
+        }
+
+        /// Set the browser `EventSource.withCredentials` flag.
+        pub fn with_credentials(mut self, enabled: bool) -> Self {
+            self.client = self.client.with_credentials(enabled);
+            self
+        }
+
+        /// Listen for an additional application event kind.
+        pub fn event_kind(mut self, kind: impl Into<String>) -> Self {
+            self.client = self.client.event_kind(kind);
+            self
+        }
+
+        /// Attach the event handler and return an opener.
+        pub fn on_event<F>(self, handler: F) -> ScopedLiveClientWithHandler<F>
+        where
+            F: FnMut(LiveEvent) + 'static,
+        {
+            ScopedLiveClientWithHandler {
+                client: self,
+                handler,
+            }
+        }
+
+        /// Open the stream and close it automatically on scope unmount.
+        pub fn connect<F>(self, handler: F) -> Result<(), LiveClientError>
+        where
+            F: FnMut(LiveEvent) + 'static,
+        {
+            self.client.connect_scoped(handler)
+        }
     }
 
     /// Builder returned by [`LiveClient::on_event`].
@@ -700,9 +802,35 @@ mod browser {
         pub fn open(self) -> Result<LiveSubscription, LiveClientError> {
             self.client.connect(self.handler)
         }
+
+        /// Open the stream and bind it to the current component
+        /// scope.
+        pub fn open_scoped(self) -> Result<(), LiveClientError> {
+            self.client.connect_scoped(self.handler)
+        }
+    }
+
+    /// Builder returned by [`ScopedLiveClient::on_event`].
+    pub struct ScopedLiveClientWithHandler<F>
+    where
+        F: FnMut(LiveEvent) + 'static,
+    {
+        client: ScopedLiveClient,
+        handler: F,
+    }
+
+    impl<F> ScopedLiveClientWithHandler<F>
+    where
+        F: FnMut(LiveEvent) + 'static,
+    {
+        /// Open the stream and close it automatically on scope unmount.
+        pub fn open(self) -> Result<(), LiveClientError> {
+            self.client.connect(self.handler)
+        }
     }
 
     /// Active browser live subscription. Dropping it closes the stream.
+    #[must_use = "dropping LiveSubscription closes the EventSource stream immediately"]
     pub struct LiveSubscription {
         source: EventSource,
         listeners: Vec<Listener>,
@@ -1445,4 +1573,7 @@ mod host {
 pub use host::{routes, LiveHub};
 
 #[cfg(target_arch = "wasm32")]
-pub use browser::{LiveClient, LiveClientWithHandler, LiveSubscription};
+pub use browser::{
+    LiveClient, LiveClientWithHandler, LiveSubscription, ScopedLiveClient,
+    ScopedLiveClientWithHandler,
+};

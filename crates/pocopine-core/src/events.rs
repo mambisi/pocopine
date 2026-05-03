@@ -117,6 +117,17 @@ thread_local! {
 pub fn on_scope_unmount(f: impl FnOnce() + 'static) {
     let scope =
         current_scope_id().expect("on_scope_unmount called outside a handler / lifecycle context");
+    on_scope_unmount_for(scope, f);
+}
+
+/// Run `f` when `scope` unmounts. If the scope has already gone away,
+/// the cleanup runs immediately so callers cannot accidentally leak a
+/// resource by registering too late.
+pub fn on_scope_unmount_for(scope: ScopeId, f: impl FnOnce() + 'static) {
+    if crate::scope::Scope::find(scope).is_none() {
+        f();
+        return;
+    }
     UNMOUNT_CBS.with(|m| {
         m.borrow_mut().entry(scope).or_default().push(Box::new(f));
     });
@@ -128,6 +139,24 @@ pub fn clear_scope(scope: ScopeId) {
     let cbs = UNMOUNT_CBS.with(|m| m.borrow_mut().remove(&scope).unwrap_or_default());
     for cb in cbs {
         cb();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+
+    #[test]
+    fn on_scope_unmount_for_runs_immediately_when_scope_is_gone() {
+        let ran = Rc::new(Cell::new(false));
+        let ran_for_cleanup = ran.clone();
+
+        on_scope_unmount_for(ScopeId(u64::MAX), move || ran_for_cleanup.set(true));
+
+        assert!(ran.get());
     }
 }
 

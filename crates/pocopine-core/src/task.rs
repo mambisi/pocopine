@@ -44,6 +44,12 @@ impl TaskHandle {
         }
     }
 
+    fn cancelled() -> Self {
+        let handle = Self::new();
+        handle.cancel();
+        handle
+    }
+
     pub fn cancel(&self) {
         self.inner.cancelled.set(true);
     }
@@ -60,6 +66,17 @@ pub fn spawn(fut: impl Future<Output = ()> + 'static) {
 pub fn spawn_scoped(fut: impl Future<Output = ()> + 'static) -> TaskHandle {
     let scope_id = current_scope_id()
         .expect("pocopine::spawn_scoped called outside a handler / lifecycle context");
+    spawn_for_scope(scope_id, fut)
+}
+
+/// Spawn a task tied to an explicit scope. If that scope has already
+/// unmounted, the future is dropped and the returned handle starts in
+/// the cancelled state.
+pub fn spawn_for_scope(scope_id: ScopeId, fut: impl Future<Output = ()> + 'static) -> TaskHandle {
+    if crate::scope::Scope::find(scope_id).is_none() {
+        return TaskHandle::cancelled();
+    }
+
     let handle = TaskHandle::new();
     TASKS.with(|tasks| {
         tasks
@@ -83,6 +100,23 @@ pub fn spawn_latest(
 ) -> TaskHandle {
     let scope_id = current_scope_id()
         .expect("pocopine::spawn_latest called outside a handler / lifecycle context");
+    let task_name = task_name.into().into_owned();
+    spawn_latest_for_scope(scope_id, task_name, fut)
+}
+
+/// Spawn a latest-wins task tied to an explicit scope. Reusing
+/// `task_name` cancels the previous live task in that slot. If the
+/// scope has already unmounted, the future is dropped and the returned
+/// handle starts in the cancelled state.
+pub fn spawn_latest_for_scope(
+    scope_id: ScopeId,
+    task_name: impl Into<Cow<'static, str>>,
+    fut: impl Future<Output = ()> + 'static,
+) -> TaskHandle {
+    if crate::scope::Scope::find(scope_id).is_none() {
+        return TaskHandle::cancelled();
+    }
+
     let task_name = task_name.into().into_owned();
     let handle = TaskHandle::new();
     TASKS.with(|tasks| {
@@ -124,4 +158,23 @@ pub fn clear_scope(scope_id: ScopeId) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawn_for_scope_returns_cancelled_handle_when_scope_is_gone() {
+        let handle = spawn_for_scope(ScopeId(u64::MAX), async move {});
+
+        assert!(handle.is_cancelled());
+    }
+
+    #[test]
+    fn spawn_latest_for_scope_returns_cancelled_handle_when_scope_is_gone() {
+        let handle = spawn_latest_for_scope(ScopeId(u64::MAX), "search", async move {});
+
+        assert!(handle.is_cancelled());
+    }
 }

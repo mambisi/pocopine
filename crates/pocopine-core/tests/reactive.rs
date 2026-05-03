@@ -8,8 +8,9 @@ use std::rc::Rc;
 
 use js_sys::Reflect;
 use pocopine_core::{
-    batch, computed, effect, flush_sync, on_cleanup, release, rw_signal, set_auto_flush, signal,
-    spawn_latest, spawn_scoped, watch, watch_scope_field_now, Scope,
+    batch, computed, effect, flush_sync, on_cleanup, on_scope_unmount_for, release, rw_signal,
+    set_auto_flush, signal, spawn_for_scope, spawn_latest, spawn_latest_for_scope, spawn_scoped,
+    watch, watch_scope_field_now, Scope,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -322,6 +323,20 @@ fn spawn_scoped_cancels_when_scope_is_removed() {
 }
 
 #[wasm_bindgen_test]
+fn spawn_for_scope_returns_cancelled_handle_when_scope_is_gone() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let scope_id = scope.id;
+    Scope::remove(scope_id);
+
+    let handle = spawn_for_scope(scope_id, async move {});
+
+    assert!(handle.is_cancelled());
+}
+
+#[wasm_bindgen_test]
 fn spawn_latest_cancels_previous_task_in_same_slot() {
     setup();
 
@@ -344,6 +359,43 @@ fn spawn_latest_cancels_previous_task_in_same_slot() {
 
     Scope::remove(scope.id);
     assert!(second.is_cancelled());
+}
+
+#[wasm_bindgen_test]
+fn spawn_latest_for_scope_cancels_previous_task_in_same_slot() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let first = spawn_latest_for_scope(scope.id, "search", async move {});
+    let second = spawn_latest_for_scope(scope.id, "search", async move {});
+
+    assert!(
+        first.is_cancelled(),
+        "older latest-wins task should be cancelled"
+    );
+    assert!(
+        !second.is_cancelled(),
+        "newest latest-wins task should stay active until scope teardown"
+    );
+
+    Scope::remove(scope.id);
+    assert!(second.is_cancelled());
+}
+
+#[wasm_bindgen_test]
+fn on_scope_unmount_for_runs_when_scope_is_removed() {
+    setup();
+
+    let state = Rc::new(std::cell::RefCell::new(TestScopeState::default()));
+    let scope = Scope::new(state);
+    let ran = Rc::new(Cell::new(false));
+    let ran_for_cleanup = ran.clone();
+    on_scope_unmount_for(scope.id, move || ran_for_cleanup.set(true));
+
+    Scope::remove(scope.id);
+
+    assert!(ran.get());
 }
 
 #[wasm_bindgen_test]
