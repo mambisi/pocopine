@@ -154,6 +154,8 @@ The component emits stable hooks:
 - `.pine-chart-status`
 - `data-state="empty|ready|invalid"`
 - `data-hover`
+- `data-tooltip-x="left|right"`
+- `data-tooltip-y="above|below"`
 - `data-orientation="horizontal|vertical|..."`
 - `data-x="<numeric value>"`
 - `data-y="<numeric value>"`
@@ -177,6 +179,10 @@ treatment:
 .pine-chart-tooltip {
   left: var(--pine-chart-tooltip-x);
   top: var(--pine-chart-tooltip-y);
+}
+
+.pine-chart-tooltip[data-tooltip-x="left"] {
+  transform: translate(calc(-100% - 10px), calc(-100% - 10px));
 }
 
 .pine-chart-bar {

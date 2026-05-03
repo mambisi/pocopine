@@ -139,7 +139,19 @@
       pointer-events: none;
       position: absolute;
       top: var(--pine-chart-tooltip-y);
-      transform: translate(10px, -100%);
+      transform: translate(10px, calc(-100% - 10px));
+    }
+
+    .pine-chart-tooltip[data-tooltip-x="left"] {
+      transform: translate(calc(-100% - 10px), calc(-100% - 10px));
+    }
+
+    .pine-chart-tooltip[data-tooltip-y="below"] {
+      transform: translate(10px, 10px);
+    }
+
+    .pine-chart-tooltip[data-tooltip-x="left"][data-tooltip-y="below"] {
+      transform: translate(calc(-100% - 10px), 10px);
     }
 
     .pine-chart-bar {
