@@ -287,6 +287,45 @@ impl Default for LayeredChartFixture {
 #[handlers]
 impl LayeredChartFixture {}
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r##"
+<div>
+  <pine-cartesian-chart class="composed-line-chart"
+                        label="Composed revenue"
+                        width="100"
+                        height="100"
+                        margin_top="0"
+                        margin_right="0"
+                        margin_bottom="0"
+                        margin_left="0">
+    <pine-chart-grid></pine-chart-grid>
+    <pine-x-axis label="Week"></pine-x-axis>
+    <pine-y-axis label="Sales"></pine-y-axis>
+    <pine-line-series key="actual"
+                      label="Actual"
+                      color="#1d6fd8"
+                      stroke_width="4"
+                      show_markers="true"
+                      marker_radius="5"
+                      pp-bind:points="actual"></pine-line-series>
+  </pine-cartesian-chart>
+</div>
+"##)]
+struct ComposedCartesianFixture {
+    actual: Vec<ChartPoint>,
+}
+
+impl Default for ComposedCartesianFixture {
+    fn default() -> Self {
+        Self {
+            actual: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
+        }
+    }
+}
+
+#[handlers]
+impl ComposedCartesianFixture {}
+
 #[wasm_bindgen_test]
 async fn layered_chart_composes_child_marks_into_one_svg_tree() {
     let host = mount_fixture::<LayeredChartFixture>();
@@ -386,6 +425,59 @@ async fn layered_chart_composes_child_marks_into_one_svg_tree() {
         icon.get_attribute("transform").as_deref(),
         Some("translate(20 20) scale(0.1)")
     );
+}
+
+#[wasm_bindgen_test]
+async fn cartesian_chart_composes_grid_axes_and_line_series() {
+    let host = mount_fixture::<ComposedCartesianFixture>();
+    settle().await;
+
+    let chart = host
+        .query_selector(".pine-cartesian-chart")
+        .unwrap()
+        .unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(
+        chart.get_attribute("aria-label").as_deref(),
+        Some("Composed revenue")
+    );
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let svg = host
+        .query_selector("svg.pine-cartesian-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 100 100"));
+    assert_eq!(
+        direct_svg_layers(&svg),
+        vec!["grid", "axes", "series", "markers"]
+    );
+
+    let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
+    assert_eq!(line.get_attribute("d").as_deref(), Some("M0,100 L100,0"));
+    assert_eq!(line.get_attribute("stroke").as_deref(), Some("#1d6fd8"));
+    assert_eq!(line.get_attribute("stroke-width").as_deref(), Some("4"));
+    assert_eq!(line.get_attribute("data-series").as_deref(), Some("Actual"));
+
+    let markers = host.query_selector_all(".pine-chart-marker").unwrap();
+    assert_eq!(markers.length(), 2);
+    let first_marker = markers.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(first_marker.get_attribute("r").as_deref(), Some("5"));
+    assert_eq!(
+        first_marker.get_attribute("aria-label").as_deref(),
+        Some("Actual: x 0, y 0")
+    );
+
+    let x_label = host
+        .query_selector(".pine-chart-axis-label-x")
+        .unwrap()
+        .unwrap();
+    assert_eq!(x_label.text_content().as_deref(), Some("Week"));
+    let y_label = host
+        .query_selector(".pine-chart-axis-label-y")
+        .unwrap()
+        .unwrap();
+    assert_eq!(y_label.text_content().as_deref(), Some("Sales"));
 }
 
 #[wasm_bindgen_test]
