@@ -100,6 +100,115 @@ impl CartesianHoverPlacement {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CartesianChartState {
+    Ready,
+    Empty,
+    Invalid,
+}
+
+pub(crate) fn apply_chart_state(
+    state: &mut String,
+    ready: &mut bool,
+    empty: &mut bool,
+    invalid: &mut bool,
+    next: CartesianChartState,
+) {
+    match next {
+        CartesianChartState::Ready => {
+            *state = "ready".into();
+            *ready = true;
+            *empty = false;
+            *invalid = false;
+        }
+        CartesianChartState::Empty => {
+            *state = "empty".into();
+            *ready = false;
+            *empty = true;
+            *invalid = false;
+        }
+        CartesianChartState::Invalid => {
+            *state = "invalid".into();
+            *ready = false;
+            *empty = false;
+            *invalid = true;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CartesianHoverSample {
+    pub point: Point,
+    pub data_x: f64,
+    pub data_y: f64,
+    pub series: String,
+    pub x_label: String,
+    pub y_label: String,
+    pub aria_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CartesianHoverUpdate {
+    pub sample: CartesianHoverSample,
+    pub placement: CartesianHoverPlacement,
+}
+
+impl CartesianHoverUpdate {
+    pub fn new(sample: CartesianHoverSample, plot: ChartRect, width: f64, height: f64) -> Self {
+        Self {
+            placement: CartesianHoverPlacement::new(sample.point, plot, width, height),
+            sample,
+        }
+    }
+}
+
+pub(crate) struct CartesianHoverFields<'a> {
+    pub visible: &'a mut bool,
+    pub x: &'a mut f64,
+    pub y: &'a mut f64,
+    pub data_x: &'a mut f64,
+    pub data_y: &'a mut f64,
+    pub series: &'a mut String,
+    pub x_label: &'a mut String,
+    pub y_label: &'a mut String,
+    pub aria_label: &'a mut String,
+    pub placement_x: &'a mut String,
+    pub placement_y: &'a mut String,
+    pub style: &'a mut String,
+}
+
+impl CartesianHoverFields<'_> {
+    pub fn clear(self) {
+        *self.visible = false;
+        *self.x = 0.0;
+        *self.y = 0.0;
+        *self.data_x = 0.0;
+        *self.data_y = 0.0;
+        self.series.clear();
+        self.x_label.clear();
+        self.y_label.clear();
+        self.aria_label.clear();
+        *self.placement_x = "right".into();
+        *self.placement_y = "above".into();
+        self.style.clear();
+    }
+
+    pub fn apply(self, update: CartesianHoverUpdate) {
+        *self.visible = true;
+        *self.x = update.sample.point.x;
+        *self.y = update.sample.point.y;
+        *self.data_x = update.sample.data_x;
+        *self.data_y = update.sample.data_y;
+        *self.series = update.sample.series;
+        *self.x_label = update.sample.x_label;
+        *self.y_label = update.sample.y_label;
+        *self.aria_label = update.sample.aria_label;
+        *self.placement_x = update.placement.x.into();
+        *self.placement_y = update.placement.y.into();
+        *self.style = update.placement.style;
+    }
+}
+
 pub(crate) fn pointer_event_svg_point(
     ev: wasm_bindgen::JsValue,
     width: f64,
@@ -134,6 +243,18 @@ pub(crate) fn plot_rect_from_edges(
         width: plot_right - plot_x,
         height: plot_bottom - plot_y,
     }
+}
+
+pub(crate) fn clear_plot_edges(
+    plot_x: &mut f64,
+    plot_y: &mut f64,
+    plot_right: &mut f64,
+    plot_bottom: &mut f64,
+) {
+    *plot_x = 0.0;
+    *plot_y = 0.0;
+    *plot_right = 0.0;
+    *plot_bottom = 0.0;
 }
 
 pub(crate) fn nearest_sample_by_x<T, F>(samples: &[T], svg_x: f64, sample_x: F) -> Option<&T>

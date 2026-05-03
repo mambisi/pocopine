@@ -2,10 +2,12 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    centered_plot_y, plot_rect_from_edges, pointer_event_svg_point, CartesianHoverPlacement,
+    apply_chart_state, centered_plot_y, clear_plot_edges, plot_rect_from_edges,
+    pointer_event_svg_point, CartesianChartState, CartesianHoverFields,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
+use crate::legend::{series_label_or_default, series_legend_items};
 use crate::line::{
     nearest_line_sample_at, ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions,
     LineChartSample,
@@ -110,18 +112,13 @@ pub struct AreaChartSeriesRender {
 }
 
 pub fn area_legend_items(series: &[ChartAreaSeries]) -> Vec<LegendItem> {
-    series
-        .iter()
-        .enumerate()
-        .map(|(index, series)| {
-            let label = if series.label.is_empty() {
-                format!("Series {}", index + 1)
-            } else {
-                series.label.clone()
-            };
-            LegendItem::with_series(format!("area-series-{index}-{label}"), label.clone(), label)
-        })
-        .collect()
+    series_legend_items(
+        "area-series",
+        series
+            .iter()
+            .enumerate()
+            .map(|(index, series)| series_label_or_default(&series.label, index)),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -313,18 +310,7 @@ impl PineAreaChart {
     }
 
     pub fn clear_hover(&mut self) {
-        self.hover_visible = false;
-        self.hover_x = 0.0;
-        self.hover_y = 0.0;
-        self.hover_data_x = 0.0;
-        self.hover_data_y = 0.0;
-        self.hover_series.clear();
-        self.hover_x_label.clear();
-        self.hover_y_label.clear();
-        self.hover_aria_label.clear();
-        self.hover_placement_x = "right".into();
-        self.hover_placement_y = "above".into();
-        self.hover_style.clear();
+        self.hover_fields().clear();
     }
 }
 
@@ -352,10 +338,13 @@ impl PineAreaChart {
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
                 self.error.clear();
-                self.state = "ready".into();
-                self.ready = true;
-                self.empty = false;
-                self.invalid = false;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Ready,
+                );
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
@@ -365,10 +354,13 @@ impl PineAreaChart {
                 self.clear_guides();
                 self.clear_hover();
                 self.error.clear();
-                self.state = "empty".into();
-                self.ready = false;
-                self.empty = true;
-                self.invalid = false;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Empty,
+                );
             }
             Err(error) => {
                 self.area_series.clear();
@@ -377,10 +369,13 @@ impl PineAreaChart {
                 self.clear_guides();
                 self.clear_hover();
                 self.error = error.to_string();
-                self.state = "invalid".into();
-                self.ready = false;
-                self.empty = false;
-                self.invalid = true;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Invalid,
+                );
             }
         }
     }
@@ -428,36 +423,8 @@ impl PineAreaChart {
             self.clear_hover();
             return;
         };
-        let hover_x = sample.x;
-        let hover_y = sample.y;
-        let hover_data_x = sample.data_x;
-        let hover_data_y = sample.data_y;
-        let hover_series = sample.series_label.clone();
-        let hover_x_label = sample.x_label.clone();
-        let hover_y_label = sample.y_label.clone();
-        let hover_aria_label = sample.aria_label.clone();
-        let placement = CartesianHoverPlacement::new(
-            Point {
-                x: hover_x,
-                y: hover_y,
-            },
-            self.plot_rect(),
-            self.width,
-            self.height,
-        );
-
-        self.hover_visible = true;
-        self.hover_x = hover_x;
-        self.hover_y = hover_y;
-        self.hover_data_x = hover_data_x;
-        self.hover_data_y = hover_data_y;
-        self.hover_series = hover_series;
-        self.hover_x_label = hover_x_label;
-        self.hover_y_label = hover_y_label;
-        self.hover_aria_label = hover_aria_label;
-        self.hover_placement_x = placement.x.into();
-        self.hover_placement_y = placement.y.into();
-        self.hover_style = placement.style;
+        let update = sample.hover_update(self.plot_rect(), self.width, self.height);
+        self.hover_fields().apply(update);
     }
 
     fn plot_rect(&self) -> ChartRect {
@@ -465,10 +432,29 @@ impl PineAreaChart {
     }
 
     fn clear_plot(&mut self) {
-        self.plot_x = 0.0;
-        self.plot_y = 0.0;
-        self.plot_right = 0.0;
-        self.plot_bottom = 0.0;
+        clear_plot_edges(
+            &mut self.plot_x,
+            &mut self.plot_y,
+            &mut self.plot_right,
+            &mut self.plot_bottom,
+        );
+    }
+
+    fn hover_fields(&mut self) -> CartesianHoverFields<'_> {
+        CartesianHoverFields {
+            visible: &mut self.hover_visible,
+            x: &mut self.hover_x,
+            y: &mut self.hover_y,
+            data_x: &mut self.hover_data_x,
+            data_y: &mut self.hover_data_y,
+            series: &mut self.hover_series,
+            x_label: &mut self.hover_x_label,
+            y_label: &mut self.hover_y_label,
+            aria_label: &mut self.hover_aria_label,
+            placement_x: &mut self.hover_placement_x,
+            placement_y: &mut self.hover_placement_y,
+            style: &mut self.hover_style,
+        }
     }
 }
 

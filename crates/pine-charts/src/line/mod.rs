@@ -2,11 +2,13 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    centered_plot_y, nearest_sample_by_point, nearest_sample_by_x, plot_rect_from_edges,
-    pointer_event_svg_point, CartesianHoverPlacement, CartesianLayout,
+    apply_chart_state, centered_plot_y, clear_plot_edges, nearest_sample_by_point,
+    nearest_sample_by_x, plot_rect_from_edges, pointer_event_svg_point, CartesianChartState,
+    CartesianHoverFields, CartesianHoverSample, CartesianHoverUpdate, CartesianLayout,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
+use crate::legend::{series_label_or_default, series_legend_items};
 use crate::path::line_path;
 use crate::svg::{format_tick, SvgLine, SvgTickLabel};
 
@@ -200,21 +202,41 @@ impl LineChartSample {
             y: self.y,
         }
     }
+
+    pub(crate) fn hover_update(
+        &self,
+        plot: ChartRect,
+        width: f64,
+        height: f64,
+    ) -> CartesianHoverUpdate {
+        CartesianHoverUpdate::new(
+            CartesianHoverSample {
+                point: Point {
+                    x: self.x,
+                    y: self.y,
+                },
+                data_x: self.data_x,
+                data_y: self.data_y,
+                series: self.series_label.clone(),
+                x_label: self.x_label.clone(),
+                y_label: self.y_label.clone(),
+                aria_label: self.aria_label.clone(),
+            },
+            plot,
+            width,
+            height,
+        )
+    }
 }
 
 pub fn line_legend_items(series: &[ChartLineSeries]) -> Vec<crate::LegendItem> {
-    series
-        .iter()
-        .enumerate()
-        .map(|(index, series)| {
-            let label = legend_line_series_label(series, index);
-            crate::LegendItem::with_series(
-                format!("line-series-{index}-{label}"),
-                label.clone(),
-                label,
-            )
-        })
-        .collect()
+    series_legend_items(
+        "line-series",
+        series
+            .iter()
+            .enumerate()
+            .map(|(index, series)| series_label_or_default(&series.label, index)),
+    )
 }
 
 pub fn nearest_line_sample(samples: &[LineChartSample], svg_x: f64) -> Option<&LineChartSample> {
@@ -259,14 +281,6 @@ fn normalize_line_series(series: &[ChartLineSeries]) -> ChartResult<Vec<Normaliz
 
 fn line_series_label(series: &ChartLineSeries, _index: usize) -> String {
     series.label.clone()
-}
-
-fn legend_line_series_label(series: &ChartLineSeries, index: usize) -> String {
-    if series.label.is_empty() {
-        format!("Series {}", index + 1)
-    } else {
-        series.label.clone()
-    }
 }
 
 fn sample_aria_label(series: &str, data_x: f64, data_y: f64) -> String {
@@ -469,18 +483,7 @@ impl PineLineChart {
     }
 
     pub fn clear_hover(&mut self) {
-        self.hover_visible = false;
-        self.hover_x = 0.0;
-        self.hover_y = 0.0;
-        self.hover_data_x = 0.0;
-        self.hover_data_y = 0.0;
-        self.hover_series.clear();
-        self.hover_x_label.clear();
-        self.hover_y_label.clear();
-        self.hover_aria_label.clear();
-        self.hover_placement_x = "right".into();
-        self.hover_placement_y = "above".into();
-        self.hover_style.clear();
+        self.hover_fields().clear();
     }
 }
 
@@ -509,10 +512,13 @@ impl PineLineChart {
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
                 self.error.clear();
-                self.state = "ready".into();
-                self.ready = true;
-                self.empty = false;
-                self.invalid = false;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Ready,
+                );
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
@@ -523,10 +529,13 @@ impl PineLineChart {
                 self.clear_guides();
                 self.clear_hover();
                 self.error.clear();
-                self.state = "empty".into();
-                self.ready = false;
-                self.empty = true;
-                self.invalid = false;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Empty,
+                );
             }
             Err(error) => {
                 self.line_d.clear();
@@ -536,10 +545,13 @@ impl PineLineChart {
                 self.clear_guides();
                 self.clear_hover();
                 self.error = error.to_string();
-                self.state = "invalid".into();
-                self.ready = false;
-                self.empty = false;
-                self.invalid = true;
+                apply_chart_state(
+                    &mut self.state,
+                    &mut self.ready,
+                    &mut self.empty,
+                    &mut self.invalid,
+                    CartesianChartState::Invalid,
+                );
             }
         }
     }
@@ -587,36 +599,8 @@ impl PineLineChart {
             self.clear_hover();
             return;
         };
-        let hover_x = sample.x;
-        let hover_y = sample.y;
-        let hover_data_x = sample.data_x;
-        let hover_data_y = sample.data_y;
-        let hover_series = sample.series_label.clone();
-        let hover_x_label = sample.x_label.clone();
-        let hover_y_label = sample.y_label.clone();
-        let hover_aria_label = sample.aria_label.clone();
-        let placement = CartesianHoverPlacement::new(
-            Point {
-                x: hover_x,
-                y: hover_y,
-            },
-            self.plot_rect(),
-            self.width,
-            self.height,
-        );
-
-        self.hover_visible = true;
-        self.hover_x = hover_x;
-        self.hover_y = hover_y;
-        self.hover_data_x = hover_data_x;
-        self.hover_data_y = hover_data_y;
-        self.hover_series = hover_series;
-        self.hover_x_label = hover_x_label;
-        self.hover_y_label = hover_y_label;
-        self.hover_aria_label = hover_aria_label;
-        self.hover_placement_x = placement.x.into();
-        self.hover_placement_y = placement.y.into();
-        self.hover_style = placement.style;
+        let update = sample.hover_update(self.plot_rect(), self.width, self.height);
+        self.hover_fields().apply(update);
     }
 
     fn plot_rect(&self) -> ChartRect {
@@ -624,10 +608,29 @@ impl PineLineChart {
     }
 
     fn clear_plot(&mut self) {
-        self.plot_x = 0.0;
-        self.plot_y = 0.0;
-        self.plot_right = 0.0;
-        self.plot_bottom = 0.0;
+        clear_plot_edges(
+            &mut self.plot_x,
+            &mut self.plot_y,
+            &mut self.plot_right,
+            &mut self.plot_bottom,
+        );
+    }
+
+    fn hover_fields(&mut self) -> CartesianHoverFields<'_> {
+        CartesianHoverFields {
+            visible: &mut self.hover_visible,
+            x: &mut self.hover_x,
+            y: &mut self.hover_y,
+            data_x: &mut self.hover_data_x,
+            data_y: &mut self.hover_data_y,
+            series: &mut self.hover_series,
+            x_label: &mut self.hover_x_label,
+            y_label: &mut self.hover_y_label,
+            aria_label: &mut self.hover_aria_label,
+            placement_x: &mut self.hover_placement_x,
+            placement_y: &mut self.hover_placement_y,
+            style: &mut self.hover_style,
+        }
     }
 }
 

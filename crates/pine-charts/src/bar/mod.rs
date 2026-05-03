@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
-use crate::legend::LegendItem;
+use crate::legend::{series_label_or_default, series_legend_items, LegendItem};
 use crate::scale::{BandScale, LinearScale};
 use crate::svg::{format_tick, SvgLine, SvgTickLabel};
 
@@ -159,14 +159,13 @@ impl BarChartGeometry {
 }
 
 pub fn bar_legend_items(series: &[ChartBarSeries]) -> Vec<LegendItem> {
-    series
-        .iter()
-        .enumerate()
-        .map(|(index, series)| {
-            let label = series_label(series, index);
-            LegendItem::with_series(format!("bar-series-{index}-{label}"), label.clone(), label)
-        })
-        .collect()
+    series_legend_items(
+        "bar-series",
+        series
+            .iter()
+            .enumerate()
+            .map(|(index, series)| series_label(series, index)),
+    )
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -257,17 +256,10 @@ impl NormalizedBarData {
             return Vec::new();
         }
 
-        self.series
-            .iter()
-            .enumerate()
-            .map(|(index, series)| {
-                LegendItem::with_series(
-                    format!("bar-series-{index}-{}", series.label),
-                    series.label.clone(),
-                    series.label.clone(),
-                )
-            })
-            .collect()
+        series_legend_items(
+            "bar-series",
+            self.series.iter().map(|series| series.label.clone()),
+        )
     }
 }
 
@@ -278,11 +270,7 @@ struct NormalizedBarSeries {
 }
 
 fn series_label(series: &ChartBarSeries, index: usize) -> String {
-    if series.label.is_empty() {
-        format!("Series {}", index + 1)
-    } else {
-        series.label.clone()
-    }
+    series_label_or_default(&series.label, index)
 }
 
 fn grouped_bars(
