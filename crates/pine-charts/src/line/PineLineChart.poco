@@ -76,6 +76,19 @@
           fill="none"
           stroke="currentColor"
           vector-effect="non-scaling-stroke"></path>
+    <g pp-show="show_markers"
+       class="pine-chart-markers"
+       aria-hidden="true">
+      <template pp-for="sample in samples" pp-key="sample.key">
+        <circle class="pine-chart-marker"
+                :cx="sample.x"
+                :cy="sample.y"
+                r="3"
+                fill="currentColor"
+                :data-x="sample.data_x"
+                :data-y="sample.data_y"></circle>
+      </template>
+    </g>
     <g pp-show="hover_visible"
        class="pine-chart-hover"
        aria-hidden="true"

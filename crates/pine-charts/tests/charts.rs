@@ -62,6 +62,7 @@ async fn settle() {
                    margin_right="0"
                    margin_bottom="0"
                    margin_left="0"
+                   show_markers="true"
                    pp-bind:points="points"></pine-line-chart>
 </div>
 "#)]
@@ -117,6 +118,14 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
 
     let axes = host.query_selector_all(".pine-chart-axis").unwrap();
     assert_eq!(axes.length(), 2, "x and y axis domain lines");
+
+    let markers = host.query_selector_all(".pine-chart-marker").unwrap();
+    assert_eq!(markers.length(), 3, "one marker per sampled point");
+    let first_marker = markers.item(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(first_marker.get_attribute("cx").as_deref(), Some("0"));
+    assert_eq!(first_marker.get_attribute("cy").as_deref(), Some("100"));
+    assert_eq!(first_marker.get_attribute("data-x").as_deref(), Some("0"));
+    assert_eq!(first_marker.get_attribute("data-y").as_deref(), Some("0"));
 
     let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
     assert_eq!(labels.length(), 12, "x and y tick labels render");
