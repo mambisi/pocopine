@@ -48,18 +48,23 @@ pub mod auth {
 /// Resolved once on first access and reused for the lifetime of the process.
 pub fn server_function_body_limit() -> usize {
     static LIMIT: OnceLock<usize> = OnceLock::new();
-    *LIMIT.get_or_init(|| match std::env::var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT") {
-        Ok(raw) => match parse_body_limit(&raw) {
-            Some(limit) => limit,
-            None => {
-                eprintln!(
-                    "invalid POCOPINE_SERVER_FUNCTION_BODY_LIMIT={raw:?}; using default {DEFAULT_SERVER_FUNCTION_BODY_LIMIT}"
-                );
-                DEFAULT_SERVER_FUNCTION_BODY_LIMIT
-            }
+    *LIMIT.get_or_init(
+        || match std::env::var("POCOPINE_SERVER_FUNCTION_BODY_LIMIT") {
+            Ok(raw) => match parse_body_limit(&raw) {
+                Some(limit) => limit,
+                None => {
+                    tracing::warn!(
+                        target: "pocopine.log",
+                        value = ?raw,
+                        default = DEFAULT_SERVER_FUNCTION_BODY_LIMIT,
+                        "invalid POCOPINE_SERVER_FUNCTION_BODY_LIMIT; using default"
+                    );
+                    DEFAULT_SERVER_FUNCTION_BODY_LIMIT
+                }
+            },
+            Err(_) => DEFAULT_SERVER_FUNCTION_BODY_LIMIT,
         },
-        Err(_) => DEFAULT_SERVER_FUNCTION_BODY_LIMIT,
-    })
+    )
 }
 
 fn parse_body_limit(raw: &str) -> Option<usize> {
@@ -97,6 +102,7 @@ pub async fn serve(router: Router, addr: &str) -> std::io::Result<()> {
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(target: "pocopine.log", %addr, "pocopine server listening");
     axum::serve(listener, router).await
 }
 

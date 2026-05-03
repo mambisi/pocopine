@@ -150,9 +150,9 @@ Order matters:
 - **⑤ Read new** — `XREADGROUP ... >` skips PEL entirely.
 
 The outer `Worker::run()` loop wraps `run_redis_once` with capped
-exponential-backoff reconnect on transient errors and prints a
-one-line backend banner so operators can see at startup which backend
-is bound.
+exponential-backoff reconnect on transient errors and logs a one-line
+backend banner through `tracing` so operators can see at startup which
+backend is bound.
 
 ## Lifecycle 1 — happy path
 

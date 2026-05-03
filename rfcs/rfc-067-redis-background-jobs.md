@@ -163,7 +163,7 @@ operators can periodically scrape and persist failed jobs. The Redis
 backend does not implement `drain_dead_letter`; the dead-letter stream
 `pocopine:{app}:dead` is queryable directly.
 
-`Worker::run` prints a one-line backend banner at startup so operators can
+`Worker::run` logs a one-line backend banner at startup so operators can
 confirm whether the worker bound to Redis or to the process-local memory
 backend, defending against the silent-default footgun in multi-process
 deployments where Redis was intended.

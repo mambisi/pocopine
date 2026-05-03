@@ -9,7 +9,10 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use blog::__get_post_route;
+    use pocopine_logging::{init_server_logging, ServerLoggingConfig};
     use pocopine_server::{axum::Router, serve, static_files};
+
+    init_server_logging(ServerLoggingConfig::compact()).map_err(std::io::Error::other)?;
 
     // Anchor static files to the crate root, so the server works
     // regardless of the shell's CWD (including when spawned by
@@ -19,7 +22,7 @@ async fn main() -> std::io::Result<()> {
     let router = __get_post_route(router);
 
     let addr = "127.0.0.1:3000";
-    println!("▶ serving blog example on http://{addr}");
+    tracing::info!(target: "pocopine.log", %addr, "serving blog example");
     serve(router, addr).await
 }
 

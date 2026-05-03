@@ -6,7 +6,10 @@
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use hn::{__get_item_tree_route, __search_stories_route};
+    use pocopine_logging::{init_server_logging, ServerLoggingConfig};
     use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
+
+    init_server_logging(ServerLoggingConfig::compact()).map_err(std::io::Error::other)?;
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let index_path = format!("{manifest_dir}/index.html");
@@ -17,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     let router = __get_item_tree_route(router);
 
     let addr = "127.0.0.1:3001";
-    println!("▶ serving pocopine HN on http://{addr}");
+    tracing::info!(target: "pocopine.log", %addr, "serving pocopine HN");
     serve(router, addr).await
 }
 

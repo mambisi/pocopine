@@ -290,9 +290,11 @@ name = "blog"
 version = "0.1.0"
 dependencies = [
  "pocopine",
+ "pocopine-logging",
  "pocopine-server",
  "serde",
  "tokio",
+ "tracing",
  "wasm-bindgen",
 ]
 
@@ -1447,10 +1449,12 @@ dependencies = [
  "futures",
  "js-sys",
  "pocopine",
+ "pocopine-logging",
  "pocopine-server",
  "reqwest",
  "serde",
  "tokio",
+ "tracing",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -2798,6 +2802,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2844,6 +2849,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
 ]
 
 [[package]]
@@ -3809,9 +3815,11 @@ name = "site"
 version = "0.1.0"
 dependencies = [
  "pocopine",
+ "pocopine-logging",
  "pocopine-server",
  "serde",
  "tokio",
+ "tracing",
  "wasm-bindgen",
 ]
 
