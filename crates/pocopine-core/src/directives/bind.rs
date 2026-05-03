@@ -16,6 +16,7 @@
 //! `class`/`style` mutation triggers a style recalc; eliding those
 //! when nothing changed saves the most expensive browser work.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -115,6 +116,8 @@ pub fn install_eval(
 /// / `remove_attribute` when the serialised form matches the last
 /// write.
 fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Option<String>>>) {
+    let dom_attr = dom_attr_name(el, attr);
+    let dom_attr = dom_attr.as_ref();
     // Shape handling diverges on whether this is a *state* attribute
     // (`data-*` / `aria-*`) or a classic HTML attribute, but ONLY
     // on the truthy side:
@@ -146,7 +149,10 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
             return;
         }
         *p = None;
-        let _ = el.remove_attribute(attr);
+        let _ = el.remove_attribute(dom_attr);
+        if dom_attr != attr {
+            let _ = el.remove_attribute(attr);
+        }
         return;
     }
     // Compute the string we'd write. For class/style object form,
@@ -173,8 +179,86 @@ fn apply_memoised(el: &Element, attr: &str, v: &JsValue, prev: &Rc<RefCell<Optio
         }
     }
     // Write + memo.
-    let _ = el.set_attribute(attr, &serialised);
+    if dom_attr != attr {
+        let _ = el.remove_attribute(attr);
+    }
+    let _ = el.set_attribute(dom_attr, &serialised);
     *prev.borrow_mut() = Some(serialised);
+}
+
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
+fn dom_attr_name<'a>(el: &Element, attr: &'a str) -> Cow<'a, str> {
+    if el.namespace_uri().as_deref() != Some(SVG_NS) {
+        return Cow::Borrowed(attr);
+    }
+
+    canonical_svg_attr(attr)
+        .map(Cow::Borrowed)
+        .unwrap_or(Cow::Borrowed(attr))
+}
+
+fn canonical_svg_attr(attr: &str) -> Option<&'static str> {
+    match attr {
+        "attributename" => Some("attributeName"),
+        "attributetype" => Some("attributeType"),
+        "basefrequency" => Some("baseFrequency"),
+        "baseprofile" => Some("baseProfile"),
+        "calcmode" => Some("calcMode"),
+        "clippathunits" => Some("clipPathUnits"),
+        "diffuseconstant" => Some("diffuseConstant"),
+        "edgemode" => Some("edgeMode"),
+        "filterunits" => Some("filterUnits"),
+        "glyphref" => Some("glyphRef"),
+        "gradienttransform" => Some("gradientTransform"),
+        "gradientunits" => Some("gradientUnits"),
+        "kernelmatrix" => Some("kernelMatrix"),
+        "kernelunitlength" => Some("kernelUnitLength"),
+        "keypoints" => Some("keyPoints"),
+        "keysplines" => Some("keySplines"),
+        "keytimes" => Some("keyTimes"),
+        "lengthadjust" => Some("lengthAdjust"),
+        "limitingconeangle" => Some("limitingConeAngle"),
+        "markerheight" => Some("markerHeight"),
+        "markerunits" => Some("markerUnits"),
+        "markerwidth" => Some("markerWidth"),
+        "maskcontentunits" => Some("maskContentUnits"),
+        "maskunits" => Some("maskUnits"),
+        "numoctaves" => Some("numOctaves"),
+        "pathlength" => Some("pathLength"),
+        "patterncontentunits" => Some("patternContentUnits"),
+        "patterntransform" => Some("patternTransform"),
+        "patternunits" => Some("patternUnits"),
+        "pointsatx" => Some("pointsAtX"),
+        "pointsaty" => Some("pointsAtY"),
+        "pointsatz" => Some("pointsAtZ"),
+        "preservealpha" => Some("preserveAlpha"),
+        "preserveaspectratio" => Some("preserveAspectRatio"),
+        "primitiveunits" => Some("primitiveUnits"),
+        "refx" => Some("refX"),
+        "refy" => Some("refY"),
+        "repeatcount" => Some("repeatCount"),
+        "repeatdur" => Some("repeatDur"),
+        "requiredextensions" => Some("requiredExtensions"),
+        "requiredfeatures" => Some("requiredFeatures"),
+        "specularconstant" => Some("specularConstant"),
+        "specularexponent" => Some("specularExponent"),
+        "spreadmethod" => Some("spreadMethod"),
+        "startoffset" => Some("startOffset"),
+        "stddeviation" => Some("stdDeviation"),
+        "surfacescale" => Some("surfaceScale"),
+        "systemlanguage" => Some("systemLanguage"),
+        "tablevalues" => Some("tableValues"),
+        "targetx" => Some("targetX"),
+        "targety" => Some("targetY"),
+        "textlength" => Some("textLength"),
+        "viewbox" => Some("viewBox"),
+        "viewtarget" => Some("viewTarget"),
+        "xchannelselector" => Some("xChannelSelector"),
+        "ychannelselector" => Some("yChannelSelector"),
+        "zoomandpan" => Some("zoomAndPan"),
+        _ => None,
+    }
 }
 
 /// `data-*` / `aria-*` — attributes read *by value* (CSS selectors,

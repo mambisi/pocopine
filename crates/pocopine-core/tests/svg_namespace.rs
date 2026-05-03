@@ -6,6 +6,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::rc::Rc;
+
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::window;
@@ -69,5 +71,26 @@ fn body_fragment_parser_materializes_svg_roots_in_svg_namespace() {
         root.get_attribute("data-installed").as_deref(),
         Some("true"),
         "fragment install closure should receive the SVG root",
+    );
+}
+
+#[wasm_bindgen_test]
+fn svg_bind_canonicalizes_mixed_case_attributes() {
+    let svg = doc().create_element_ns(Some(SVG_NS), "svg").unwrap();
+    pocopine_core::directives::bind::install_eval(
+        &svg,
+        &JsValue::NULL,
+        "viewbox",
+        Rc::new(|_| JsValue::from_str("0 0 720 360")),
+    );
+
+    assert_eq!(
+        svg.get_attribute("viewBox").as_deref(),
+        Some("0 0 720 360"),
+        "dynamic SVG attrs must use browser-recognized canonical casing",
+    );
+    assert!(
+        svg.get_attribute("viewbox").is_none(),
+        "lowercase viewbox is just an inert attribute in SVG",
     );
 }
