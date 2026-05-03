@@ -3,7 +3,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pine_charts::{ChartBar, ChartPoint};
+use pine_charts::{ChartBar, ChartBarSeries, ChartPoint};
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -346,9 +346,147 @@ async fn bar_chart_renders_svg_rects_axes_and_labels() {
     assert_eq!(first.get_attribute("y").as_deref(), Some("80"));
     assert_eq!(first.get_attribute("height").as_deref(), Some("20"));
     assert_eq!(first.get_attribute("aria-label").as_deref(), Some("A: 2"));
+    assert_eq!(first.get_attribute("data-category").as_deref(), Some("A"));
 
     let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
     assert!(labels.length() >= 6, "category and value labels render");
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-bar-chart class="grouped-bars"
+                  label="Grouped"
+                  width="100"
+                  height="100"
+                  margin_top="0"
+                  margin_right="0"
+                  margin_bottom="0"
+                  margin_left="0"
+                  padding_inner="0"
+                  padding_outer="0"
+                  series_padding_inner="0"
+                  y_min="0"
+                  y_max="10"
+                  pp-bind:series="series"></pine-bar-chart>
+</div>
+"#)]
+struct GroupedBarChartFixture {
+    series: Vec<ChartBarSeries>,
+}
+
+impl Default for GroupedBarChartFixture {
+    fn default() -> Self {
+        Self {
+            series: vec![
+                ChartBarSeries::new(
+                    "New",
+                    vec![ChartBar::new("A", 2.0), ChartBar::new("B", 4.0)],
+                ),
+                ChartBarSeries::new(
+                    "Returning",
+                    vec![ChartBar::new("A", 3.0), ChartBar::new("B", 10.0)],
+                ),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl GroupedBarChartFixture {}
+
+#[wasm_bindgen_test]
+async fn grouped_bar_chart_renders_series_metadata() {
+    let host = mount_fixture::<GroupedBarChartFixture>();
+    settle().await;
+
+    let bars = host.query_selector_all(".pine-chart-bar").unwrap();
+    assert_eq!(bars.length(), 4);
+
+    let first = bars.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(first.get_attribute("x").as_deref(), Some("0"));
+    assert_eq!(first.get_attribute("width").as_deref(), Some("25"));
+    assert_eq!(first.get_attribute("data-series").as_deref(), Some("New"));
+    assert_eq!(first.get_attribute("data-category").as_deref(), Some("A"));
+
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(second.get_attribute("x").as_deref(), Some("25"));
+    assert_eq!(
+        second.get_attribute("data-series").as_deref(),
+        Some("Returning")
+    );
+    assert_eq!(
+        second.get_attribute("aria-label").as_deref(),
+        Some("Returning, A: 3")
+    );
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-bar-chart class="stacked-bars"
+                  label="Stacked"
+                  mode="stacked"
+                  width="100"
+                  height="100"
+                  margin_top="0"
+                  margin_right="0"
+                  margin_bottom="0"
+                  margin_left="0"
+                  padding_inner="0"
+                  padding_outer="0"
+                  y_min="0"
+                  y_max="10"
+                  pp-bind:series="series"></pine-bar-chart>
+</div>
+"#)]
+struct StackedBarChartFixture {
+    series: Vec<ChartBarSeries>,
+}
+
+impl Default for StackedBarChartFixture {
+    fn default() -> Self {
+        Self {
+            series: vec![
+                ChartBarSeries::new(
+                    "New",
+                    vec![ChartBar::new("A", 2.0), ChartBar::new("B", 4.0)],
+                ),
+                ChartBarSeries::new(
+                    "Returning",
+                    vec![ChartBar::new("A", 3.0), ChartBar::new("B", 6.0)],
+                ),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl StackedBarChartFixture {}
+
+#[wasm_bindgen_test]
+async fn stacked_bar_chart_accumulates_segments() {
+    let host = mount_fixture::<StackedBarChartFixture>();
+    settle().await;
+
+    let bars = host.query_selector_all(".pine-chart-bar").unwrap();
+    assert_eq!(bars.length(), 4);
+
+    let first = bars.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(first.get_attribute("x").as_deref(), Some("0"));
+    assert_eq!(first.get_attribute("width").as_deref(), Some("50"));
+    assert_eq!(first.get_attribute("y").as_deref(), Some("80"));
+    assert_eq!(first.get_attribute("height").as_deref(), Some("20"));
+
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(second.get_attribute("x").as_deref(), Some("0"));
+    assert_eq!(second.get_attribute("width").as_deref(), Some("50"));
+    assert_eq!(second.get_attribute("y").as_deref(), Some("50"));
+    assert_eq!(second.get_attribute("height").as_deref(), Some("30"));
 
     host.remove();
 }
