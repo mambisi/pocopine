@@ -3277,7 +3277,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     duration_ms = __pocopine_duration_ms,
                                     body_bytes = __pocopine_body_bytes,
                                     error_kind = "bad_request",
-                                    error = %__pocopine_error,
+                                    error = "request body parse failed",
                                     "server function request body parse failed"
                                 );
                                 let result = ::core::result::Result::Err(__pocopine_error);
