@@ -1,0 +1,49 @@
+<main class="live-board">
+  <section class="composer" aria-labelledby="live-title">
+    <div>
+      <p class="eyebrow">pocopine live</p>
+      <h1 id="live-title">Live posts</h1>
+    </div>
+
+    <form class="composer__form" pp-on:submit.prevent="create">
+      <label>
+        <span>Title</span>
+        <input type="text" pp-model="title" autocomplete="off" />
+      </label>
+      <label>
+        <span>Body</span>
+        <textarea pp-model="body" rows="4"></textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" pp-show="!saving">Publish</button>
+        <button type="button" disabled pp-show="saving">Working</button>
+        <button type="button" class="secondary" pp-on:click="reload">Refresh</button>
+        <button type="button" class="secondary" pp-on:click="reset">Reset</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="feed" aria-label="posts">
+    <div class="feed__bar">
+      <span class="status" pp-text="status"></span>
+      <span class="counter"><strong pp-text="event_count"></strong> live events</span>
+    </div>
+
+    <p pp-show="error" class="error"><span pp-text="error"></span></p>
+    <p pp-show="loading" class="empty">Loading posts.</p>
+    <p pp-show="!loading && !posts.length" class="empty">No posts yet.</p>
+
+    <ol class="posts" pp-show="posts.length">
+      <template pp-for="post in posts" pp-key="post.id">
+        <li class="post">
+          <div class="post__meta">
+            <span pp-text="post.id"></span>
+            <span>v<span pp-text="post.version"></span></span>
+          </div>
+          <h2 pp-text="post.title"></h2>
+          <p pp-text="post.body"></p>
+        </li>
+      </template>
+    </ol>
+  </section>
+</main>

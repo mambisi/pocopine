@@ -210,6 +210,7 @@ Drop into any one with `pocopine dev --path examples/<name>`:
 | [`counter`](./examples/counter) | Single component, basic directives |
 | [`todo`](./examples/todo) | Multi-component, slots, stores |
 | [`blog`](./examples/blog) | `App` + `#[server]` + axum server bin |
+| [`live`](./examples/live) | SSE live invalidation + collection/query refresh |
 | [`spa`](./examples/spa) | Router + `<pp-outlet>` + `pp-route` |
 | [`hn`](./examples/hn) | Full SPA — routing, server fns, transitions, pp-for |
 | [`website`](./examples/website) | Pine UI — every primitive, side-by-side |

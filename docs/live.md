@@ -12,6 +12,8 @@ Enable the umbrella re-export with `pocopine = { features = ["live"] }`.
 Use `live-redis` instead of `live` when the application needs the Redis
 backend.
 
+A runnable example lives in [`examples/live`](../examples/live/).
+
 ## Browser Shape
 
 Use `LiveRefresh::scoped()` from a component lifecycle method or handler.
