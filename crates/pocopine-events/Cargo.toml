@@ -9,6 +9,7 @@ description = "Event envelopes, cursors, and backends for pocopine live features
 [features]
 default = []
 redis = ["dep:futures-util", "dep:redis"]
+test-support = []
 
 [dependencies]
 pocopine-observe = { workspace = true }
