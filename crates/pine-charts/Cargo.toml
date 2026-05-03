@@ -11,7 +11,9 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+js-sys = { workspace = true }
 pocopine = { path = "../pocopine" }
+pocopine-core = { workspace = true }
 serde = { workspace = true }
 wasm-bindgen = { workspace = true }
 
@@ -23,6 +25,8 @@ features = [
     "EventTarget",
     "PointerEvent",
     "PointerEventInit",
+    "ResizeObserver",
+    "ResizeObserverEntry",
 ]
 
 [dev-dependencies]

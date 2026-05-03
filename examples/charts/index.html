@@ -68,41 +68,52 @@
       color: #0f58b8;
     }
 
-    .pine-line-chart,
-    .pine-scatter-chart,
-    .pine-area-chart,
-    .pine-bar-chart {
+    .chart-panel {
       display: block;
       background: white;
       border: 1px solid #dde4ec;
       border-radius: 8px;
+      box-sizing: border-box;
       padding: 20px;
+      position: relative;
+    }
+
+    .chart-panel > pine-line-chart,
+    .chart-panel > pine-scatter-chart,
+    .chart-panel > pine-area-chart,
+    .chart-panel > pine-bar-chart,
+    .chart-panel > pine-pie-chart,
+    .chart-panel .pine-line-chart,
+    .chart-panel .pine-scatter-chart,
+    .chart-panel .pine-area-chart,
+    .chart-panel .pine-bar-chart,
+    .chart-panel .pine-pie-chart {
+      display: block;
+      height: 100%;
+      position: relative;
+      width: 100%;
     }
 
     .pine-line-chart {
       color: #1d6fd8;
-      position: relative;
     }
 
     .pine-area-chart {
       color: #16a085;
-      position: relative;
     }
 
     .pine-scatter-chart {
       color: #5b6ee1;
-      position: relative;
     }
 
     .pine-bar-chart {
       color: #16a085;
-      position: relative;
     }
 
     .pine-chart-svg {
       display: block;
       width: 100%;
-      height: auto;
+      height: 100%;
       overflow: visible;
     }
 
