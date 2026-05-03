@@ -181,6 +181,9 @@ semantic zero baseline, set an explicit `y_min="0"` domain.
 `Vec<ChartBarSeries>` for grouped and stacked series. The x axis is categorical;
 the y axis is numeric and includes a zero baseline by default. Explicit `y_min`
 and `y_max` props can override the inferred domain.
+Bar charts expose pointer hover on rendered rects; the hovered bar receives
+`data-hovered`, and the tooltip exposes category, value, and optional series
+metadata.
 
 ```rust
 use pine_charts::ChartBar;
@@ -299,6 +302,9 @@ The component emits stable hooks:
 - `.pine-chart-tooltip-x`
 - `.pine-chart-tooltip-y`
 - `.pine-chart-bar`
+- `.pine-chart-bar-tooltip`
+- `.pine-chart-tooltip-category`
+- `.pine-chart-tooltip-value`
 - `.pine-chart-legend`
 - `.pine-chart-legend-list`
 - `.pine-chart-legend-item`
@@ -313,6 +319,9 @@ The component emits stable hooks:
 - `data-x="<numeric value>"`
 - `data-y="<numeric value>"`
 - `data-series="<series label>"`
+- `data-category="<category label>"`
+- `data-value="<numeric value>"`
+- `data-hovered`
 - `data-empty`
 - `data-invalid`
 
@@ -362,6 +371,10 @@ treatment:
 
 .pine-chart-bar {
   opacity: 0.85;
+}
+
+.pine-chart-bar[data-hovered] {
+  opacity: 1;
 }
 
 .pine-chart-bar[data-series="Organic"] {

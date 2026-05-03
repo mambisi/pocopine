@@ -3,14 +3,17 @@
       :aria-label="label"
       :data-state="state"
       :data-empty="empty"
-      :data-invalid="invalid">
+      :data-invalid="invalid"
+      :data-hover="hover_visible">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
        :viewBox="view_box"
        preserveAspectRatio="none"
        aria-hidden="true"
-       focusable="false">
+       focusable="false"
+       @pointermove="on_pointer_move"
+       @pointerleave="clear_hover">
     <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
       <template pp-for="line in y_grid" pp-key="line.key">
         <line class="pine-chart-grid-line pine-chart-grid-line-y"
@@ -83,10 +86,29 @@
               :aria-label="bar.aria_label"
               :data-category="bar.category_label"
               :data-series="bar.series_label"
-              :data-value="bar.value"></rect>
+              :data-value="bar.value"
+              :data-hovered="bar.key == hover_key"></rect>
       </template>
     </g>
   </svg>
+  <div pp-show="hover_visible"
+       class="pine-chart-tooltip pine-chart-bar-tooltip"
+       role="status"
+       :aria-label="hover_aria_label"
+       :style="hover_style"
+       :data-tooltip-x="hover_placement_x"
+       :data-tooltip-y="hover_placement_y"
+       :data-category="hover_category"
+       :data-value="hover_value"
+       :data-series="hover_series">
+    <span pp-show="hover_series"
+          class="pine-chart-tooltip-series"
+          pp-text="hover_series"></span>
+    <span class="pine-chart-tooltip-category"
+          pp-text="hover_category"></span>
+    <span class="pine-chart-tooltip-value"
+          pp-text="hover_value_label"></span>
+  </div>
   <span pp-show="invalid"
         class="pine-chart-status"
         pp-text="error"></span>

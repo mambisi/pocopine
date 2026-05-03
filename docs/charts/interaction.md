@@ -3,6 +3,8 @@
 The first interaction layer is intentionally narrow: `PineLineChart`,
 `PineScatterChart`, and `PineAreaChart` support nearest-point hover state. They
 render SVG crosshair lines, an SVG marker, and an HTML tooltip container.
+`PineBarChart` supports rect hit-testing hover and renders the same HTML
+tooltip container with bar-specific category/value metadata.
 
 ## Contract
 
@@ -31,6 +33,13 @@ tooltip data attributes. Tooltip coordinates are emitted as percentages so they
 scale with responsive SVG sizing. Applications own colors, marker radius
 overrides, tooltip positioning, typography, borders, shadows, and transitions.
 
+Bar charts use the same pointer coordinate conversion, but they select the
+painted SVG rect under the pointer instead of the nearest numeric sample. The
+hovered rect receives `data-hovered`; the tooltip exposes `data-category`,
+`data-value`, optional `data-series`, and the same placement attributes and CSS
+variables as line, scatter, and area charts. Bars do not render a crosshair by
+default because the rect itself is the hover target.
+
 ## Styling
 
 ```css
@@ -55,6 +64,11 @@ overrides, tooltip positioning, typography, borders, shadows, and transitions.
 
 .pine-chart-tooltip[data-tooltip-x="left"][data-tooltip-y="below"] {
   transform: translate(calc(-100% - 10px), 10px);
+}
+
+.pine-chart-bar[data-hovered] {
+  opacity: 1;
+  stroke: currentColor;
 }
 ```
 
