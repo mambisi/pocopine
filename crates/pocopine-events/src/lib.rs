@@ -22,6 +22,76 @@ pub type EventFuture<'a, T> = Pin<Box<dyn Future<Output = EventResult<T>> + Send
 /// Canonical result type for the event spine.
 pub type EventResult<T> = Result<T, EventError>;
 
+/// Built-in backend family advertised by an [`EventBackend`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventBackendKind {
+    /// Process-local bounded replay and wake-up buffers.
+    Memory,
+    /// Redis Streams for replay with Pub/Sub wake-ups.
+    Redis,
+    /// Application-provided backend.
+    Custom,
+}
+
+/// Capability metadata for an event backend.
+///
+/// Pocopine live/sync layers use this to choose safe defaults without
+/// encoding a concrete broker type in the browser protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EventBackendCapabilities {
+    /// Backend family.
+    pub kind: EventBackendKind,
+    /// Whether replay data survives process restarts.
+    pub durable_replay: bool,
+    /// Whether subscribers can receive future-event wake-ups without polling.
+    pub live_wakeups: bool,
+    /// Whether the backend can coordinate multiple server processes.
+    pub multi_process: bool,
+    /// Whether a topic's events are replayed in stable publish order.
+    pub ordered_per_topic: bool,
+    /// Whether opaque cursors can resume after disconnect.
+    pub cursor_resume: bool,
+}
+
+impl EventBackendCapabilities {
+    /// Capability set for an unknown application backend.
+    pub const fn custom() -> Self {
+        Self {
+            kind: EventBackendKind::Custom,
+            durable_replay: false,
+            live_wakeups: false,
+            multi_process: false,
+            ordered_per_topic: false,
+            cursor_resume: false,
+        }
+    }
+
+    /// Capability set for [`MemoryEventBackend`].
+    pub const fn memory() -> Self {
+        Self {
+            kind: EventBackendKind::Memory,
+            durable_replay: false,
+            live_wakeups: true,
+            multi_process: false,
+            ordered_per_topic: true,
+            cursor_resume: true,
+        }
+    }
+
+    /// Capability set for the Redis Streams/PubSub backend.
+    pub const fn redis_streams() -> Self {
+        Self {
+            kind: EventBackendKind::Redis,
+            durable_replay: true,
+            live_wakeups: true,
+            multi_process: true,
+            ordered_per_topic: true,
+            cursor_resume: true,
+        }
+    }
+}
+
 /// Errors produced by event validation and backend operations.
 #[derive(Debug)]
 pub enum EventError {
@@ -33,8 +103,13 @@ pub enum EventError {
     SubscriptionLagged { skipped: u64 },
     /// Backend retention was configured to an unusable value.
     InvalidRetention(String),
+    /// JSON payload or metadata could not be encoded or decoded.
+    Json(serde_json::Error),
     /// A backend lock was poisoned.
     Backend(String),
+    /// Redis returned an error.
+    #[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
+    Redis(redis::RedisError),
     /// System time moved before Unix epoch.
     Time(String),
     /// The requested backend is unavailable on this target.
@@ -66,7 +141,10 @@ impl fmt::Display for EventError {
                 write!(f, "event subscription lagged by {skipped} event(s)")
             }
             Self::InvalidRetention(msg) => write!(f, "invalid event retention: {msg}"),
+            Self::Json(err) => write!(f, "event json error: {err}"),
             Self::Backend(msg) => write!(f, "event backend error: {msg}"),
+            #[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
+            Self::Redis(err) => write!(f, "redis event backend error: {err}"),
             Self::Time(msg) => write!(f, "time error: {msg}"),
             Self::Unsupported(msg) => write!(f, "unsupported: {msg}"),
         }
@@ -74,6 +152,19 @@ impl fmt::Display for EventError {
 }
 
 impl std::error::Error for EventError {}
+
+impl From<serde_json::Error> for EventError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::Json(err)
+    }
+}
+
+#[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
+impl From<redis::RedisError> for EventError {
+    fn from(err: redis::RedisError) -> Self {
+        Self::Redis(err)
+    }
+}
 
 fn validate_non_empty(field: &'static str, value: String) -> EventResult<String> {
     let trimmed = value.trim();
@@ -442,6 +533,11 @@ pub struct EventSubscription {
 
 /// Event backend abstraction.
 pub trait EventBackend: Send + Sync {
+    /// Advertise backend capabilities.
+    fn capabilities(&self) -> EventBackendCapabilities {
+        EventBackendCapabilities::custom()
+    }
+
     /// Publish a draft event and return the stored envelope.
     fn publish<'a>(&'a self, draft: EventDraft) -> EventFuture<'a, EventEnvelope>;
 
@@ -515,9 +611,10 @@ mod host {
     use tokio::sync::broadcast;
 
     use crate::{
-        EventBackend, EventCursor, EventDraft, EventEnvelope, EventError, EventFuture, EventId,
-        EventReceiver, EventReceiverFuture, EventResult, EventSubscription, LiveEventBackend,
-        LiveEventSubscription, ReplayBatch, ReplayRequest, SubscribeRequest, Topic,
+        EventBackend, EventBackendCapabilities, EventCursor, EventDraft, EventEnvelope, EventError,
+        EventFuture, EventId, EventReceiver, EventReceiverFuture, EventResult, EventSubscription,
+        LiveEventBackend, LiveEventSubscription, ReplayBatch, ReplayRequest, SubscribeRequest,
+        Topic,
     };
 
     /// In-memory event backend configuration.
@@ -724,6 +821,10 @@ mod host {
     }
 
     impl EventBackend for MemoryEventBackend {
+        fn capabilities(&self) -> EventBackendCapabilities {
+            EventBackendCapabilities::memory()
+        }
+
         fn publish<'a>(&'a self, draft: EventDraft) -> EventFuture<'a, EventEnvelope> {
             Box::pin(async move { self.publish_now(draft) })
         }
@@ -810,6 +911,671 @@ mod host {
         Ok(duration.as_millis().min(u128::from(u64::MAX)) as u64)
     }
 
+    #[cfg(feature = "redis")]
+    mod redis_backend {
+        use std::pin::Pin;
+        use std::sync::OnceLock;
+
+        use futures_util::stream::{Stream, StreamExt};
+        use pocopine_observe::{LOG_TARGET, TRACE_TARGET};
+        use redis::aio::MultiplexedConnection;
+        use redis::streams::{StreamId, StreamRangeReply};
+
+        use super::{validate_replay_request, EventBackend, EventBackendCapabilities};
+        use crate::{
+            Audience, EventCursor, EventDraft, EventEnvelope, EventError, EventFuture, EventId,
+            EventKind, EventReceiver, EventReceiverFuture, EventResult, EventSubscription,
+            LiveEventBackend, LiveEventSubscription, ReplayBatch, ReplayRequest, SubscribeRequest,
+            Topic,
+        };
+
+        const DEFAULT_STREAM_MAX_LEN: usize = 10_000;
+        const REDIS_CURSOR_PREFIX: &str = "redis:";
+        const PUBLISH_SCRIPT_SRC: &str = r#"
+local now_ms = tonumber(ARGV[2])
+if now_ms == 0 then
+  local now = redis.call('TIME')
+  now_ms = now[1] * 1000 + math.floor(now[2] / 1000)
+end
+
+local id = redis.call(
+  'XADD',
+  KEYS[1],
+  'MAXLEN',
+  '~',
+  ARGV[1],
+  '*',
+  'protocol',
+  ARGV[3],
+  'topic',
+  ARGV[4],
+  'kind',
+  ARGV[5],
+  'audience',
+  ARGV[6],
+  'payload',
+  ARGV[7],
+  'created_at_ms',
+  now_ms,
+  'schema_version',
+  ARGV[8]
+)
+redis.call('PUBLISH', KEYS[2], id)
+return {id, tostring(now_ms)}
+"#;
+
+        fn publish_script() -> &'static redis::Script {
+            static SCRIPT: OnceLock<redis::Script> = OnceLock::new();
+            SCRIPT.get_or_init(|| redis::Script::new(PUBLISH_SCRIPT_SRC))
+        }
+
+        /// Redis Streams/PubSub event backend configuration.
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct RedisEventConfig {
+            /// Redis URL. Production callers must provide this explicitly.
+            pub url: String,
+            /// Pocopine application namespace used in Redis keys.
+            pub app: String,
+            /// Approximate maximum number of retained stream entries.
+            pub stream_max_len: usize,
+        }
+
+        impl RedisEventConfig {
+            /// Build a Redis event backend config with default stream retention.
+            pub fn new(url: impl Into<String>, app: impl Into<String>) -> EventResult<Self> {
+                let url = crate::validate_non_empty("redis url", url.into())?;
+                let app = crate::validate_non_empty("redis app", app.into())?;
+                validate_redis_app(&app)?;
+                Ok(Self {
+                    url,
+                    app,
+                    stream_max_len: DEFAULT_STREAM_MAX_LEN,
+                })
+            }
+
+            /// Set the approximate maximum retained stream length.
+            pub fn with_stream_max_len(mut self, stream_max_len: usize) -> EventResult<Self> {
+                if stream_max_len == 0 {
+                    return Err(EventError::InvalidRetention(
+                        "stream_max_len must be greater than zero".to_string(),
+                    ));
+                }
+                self.stream_max_len = stream_max_len;
+                Ok(self)
+            }
+
+            /// Redis stream key used for durable replay.
+            pub fn stream_key(&self) -> String {
+                format!("pocopine:{{{}}}:events:stream", self.app)
+            }
+
+            /// Redis Pub/Sub channel used for live wake-ups.
+            pub fn pubsub_key(&self) -> String {
+                format!("pocopine:{{{}}}:events:pubsub", self.app)
+            }
+        }
+
+        /// Redis Streams backend with Pub/Sub wake-ups.
+        ///
+        /// Events are stored in one app-wide stream so cursors remain
+        /// globally ordered across topics. The `{app}` hash tag keeps the
+        /// stream and wake-up channel in the same Redis Cluster slot.
+        #[derive(Clone, Debug)]
+        pub struct RedisEventBackend {
+            config: RedisEventConfig,
+            client: redis::Client,
+            connection: std::sync::Arc<std::sync::Mutex<Option<MultiplexedConnection>>>,
+        }
+
+        impl RedisEventBackend {
+            /// Build a Redis backend from explicit config.
+            pub fn from_config(config: RedisEventConfig) -> EventResult<Self> {
+                let client = redis::Client::open(config.url.as_str())?;
+                Ok(Self {
+                    config,
+                    client,
+                    connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                })
+            }
+
+            /// Build a Redis backend from `POCOPINE_REDIS_URL`.
+            ///
+            /// This deliberately does not default to localhost. Apps that
+            /// choose Redis should fail loudly if the broker URL is missing.
+            pub fn from_env(app: impl Into<String>) -> EventResult<Self> {
+                let url =
+                    std::env::var("POCOPINE_REDIS_URL").map_err(|_| EventError::InvalidValue {
+                        field: "POCOPINE_REDIS_URL",
+                        value: "missing".to_string(),
+                    })?;
+                Self::from_config(RedisEventConfig::new(url, app)?)
+            }
+
+            /// Redis stream key used for durable replay.
+            pub fn stream_key(&self) -> String {
+                self.config.stream_key()
+            }
+
+            /// Redis Pub/Sub channel used for live wake-ups.
+            pub fn pubsub_key(&self) -> String {
+                self.config.pubsub_key()
+            }
+
+            /// Drop the cached multiplexed connection. The next operation
+            /// opens a fresh Redis connection.
+            pub fn clear_connection(&self) -> EventResult<()> {
+                let mut cached = self.connection.lock().map_err(|_| {
+                    EventError::Backend("cached Redis event connection mutex was poisoned".into())
+                })?;
+                *cached = None;
+                Ok(())
+            }
+
+            async fn publish_to_stream(&self, draft: EventDraft) -> EventResult<EventEnvelope> {
+                let stream_key = self.stream_key();
+                let pubsub_key = self.pubsub_key();
+                let audience = serde_json::to_string(&draft.audience)?;
+                let payload = serde_json::to_string(&draft.payload)?;
+                let mut conn = self.connection().await?;
+                let (stream_id, created_at_raw): (String, String) = publish_script()
+                    .key(&stream_key)
+                    .key(&pubsub_key)
+                    .arg(self.config.stream_max_len)
+                    .arg(draft.created_at_ms)
+                    .arg(&draft.protocol)
+                    .arg(draft.topic.as_str())
+                    .arg(draft.kind.as_str())
+                    .arg(audience)
+                    .arg(payload)
+                    .arg(draft.schema_version)
+                    .invoke_async(&mut conn)
+                    .await?;
+                let created_at_ms = created_at_raw.parse::<u64>().map_err(|err| {
+                    EventError::Backend(format!(
+                        "Redis event script returned invalid timestamp `{created_at_raw}`: {err}"
+                    ))
+                })?;
+                let id = redis_event_id(&stream_id)?;
+                let cursor = redis_event_cursor(&stream_id)?;
+                let envelope = EventEnvelope::from_draft(draft, id, cursor, created_at_ms);
+
+                tracing::debug!(
+                    target: TRACE_TARGET,
+                    event_name = "pocopine.events.redis.publish",
+                    topic = %envelope.topic,
+                    kind = %envelope.kind,
+                    cursor = %envelope.cursor,
+                );
+
+                Ok(envelope)
+            }
+
+            async fn replay_from_stream(&self, request: ReplayRequest) -> EventResult<ReplayBatch> {
+                validate_replay_request(&request.topics, request.limit)?;
+                let stream_key = self.stream_key();
+                let mut conn = self.connection().await?;
+                let after_id = request
+                    .after
+                    .as_ref()
+                    .map(redis_stream_id_from_cursor)
+                    .transpose()?
+                    .map(str::to_string);
+
+                if let Some(after_id) = after_id.as_deref() {
+                    if let Some(oldest_id) = oldest_stream_id(&mut conn, &stream_key).await? {
+                        if redis_stream_id_before(after_id, &oldest_id)? {
+                            tracing::debug!(
+                                target: TRACE_TARGET,
+                                event_name = "pocopine.events.redis.replay_gap",
+                                requested_after = after_id,
+                                oldest_retained = oldest_id,
+                            );
+                            return Ok(ReplayBatch::from_events(Vec::new(), true));
+                        }
+                    }
+                }
+
+                let mut start = after_id
+                    .as_ref()
+                    .map(|id| format!("({id}"))
+                    .unwrap_or_else(|| "-".to_string());
+                let scan_count = request.limit.saturating_mul(4).max(16);
+                let mut events = Vec::new();
+
+                while events.len() < request.limit {
+                    let reply =
+                        xrange_count(&mut conn, &stream_key, &start, "+", scan_count).await?;
+                    let returned = reply.ids.len();
+                    if returned == 0 {
+                        break;
+                    }
+
+                    let mut last_scanned_id = None;
+                    for entry in reply.ids {
+                        last_scanned_id = Some(entry.id.clone());
+                        let envelope = stream_entry_to_envelope(entry)?;
+                        if request.topics.iter().any(|topic| topic == &envelope.topic) {
+                            events.push(envelope);
+                            if events.len() >= request.limit {
+                                break;
+                            }
+                        }
+                    }
+
+                    let Some(last_scanned_id) = last_scanned_id else {
+                        break;
+                    };
+                    start = format!("({last_scanned_id}");
+                    if returned < scan_count {
+                        break;
+                    }
+                }
+
+                Ok(ReplayBatch::from_events(events, false))
+            }
+
+            async fn subscribe_to_stream(
+                &self,
+                request: SubscribeRequest,
+            ) -> EventResult<EventSubscription> {
+                validate_replay_request(&request.topics, request.replay_limit)?;
+                let replay = self
+                    .replay_from_stream(ReplayRequest {
+                        topics: request.topics.clone(),
+                        after: request.after,
+                        limit: request.replay_limit,
+                    })
+                    .await?;
+                Ok(EventSubscription {
+                    topics: request.topics,
+                    replay,
+                })
+            }
+
+            async fn subscribe_live_to_stream(
+                &self,
+                request: SubscribeRequest,
+            ) -> EventResult<LiveEventSubscription> {
+                let resume_after = request.after.clone();
+                let mut pubsub = self.client.get_async_pubsub().await?;
+                pubsub.subscribe(self.pubsub_key()).await?;
+                let opening = self.subscribe_to_stream(request).await?;
+                let last_seen_id = opening
+                    .replay
+                    .cursor
+                    .as_ref()
+                    .or(resume_after.as_ref())
+                    .map(redis_stream_id_from_cursor)
+                    .transpose()?
+                    .map(str::to_string);
+                let receiver = RedisEventReceiver {
+                    backend: self.clone(),
+                    topics: opening.topics.clone(),
+                    last_seen_id,
+                    stream: Box::pin(pubsub.into_on_message()),
+                };
+                Ok(LiveEventSubscription::new(opening, Box::new(receiver)))
+            }
+
+            async fn fetch_envelope(&self, stream_id: &str) -> EventResult<Option<EventEnvelope>> {
+                let stream_key = self.stream_key();
+                let mut conn = self.connection().await?;
+                let reply = xrange_count(&mut conn, &stream_key, stream_id, stream_id, 1).await?;
+                reply
+                    .ids
+                    .into_iter()
+                    .next()
+                    .map(stream_entry_to_envelope)
+                    .transpose()
+            }
+
+            async fn connection(&self) -> EventResult<MultiplexedConnection> {
+                if let Some(conn) = self.cached_connection()? {
+                    return Ok(conn);
+                }
+
+                let conn = self.client.get_multiplexed_async_connection().await?;
+                let mut cached = self.connection.lock().map_err(|_| {
+                    EventError::Backend("cached Redis event connection mutex was poisoned".into())
+                })?;
+                if let Some(existing) = cached.as_ref() {
+                    return Ok(existing.clone());
+                }
+                *cached = Some(conn.clone());
+                Ok(conn)
+            }
+
+            fn cached_connection(&self) -> EventResult<Option<MultiplexedConnection>> {
+                Ok(self
+                    .connection
+                    .lock()
+                    .map_err(|_| {
+                        EventError::Backend(
+                            "cached Redis event connection mutex was poisoned".into(),
+                        )
+                    })?
+                    .clone())
+            }
+        }
+
+        impl EventBackend for RedisEventBackend {
+            fn capabilities(&self) -> EventBackendCapabilities {
+                EventBackendCapabilities::redis_streams()
+            }
+
+            fn publish<'a>(&'a self, draft: EventDraft) -> EventFuture<'a, EventEnvelope> {
+                Box::pin(async move { self.publish_to_stream(draft).await })
+            }
+
+            fn replay<'a>(&'a self, request: ReplayRequest) -> EventFuture<'a, ReplayBatch> {
+                Box::pin(async move { self.replay_from_stream(request).await })
+            }
+
+            fn subscribe<'a>(
+                &'a self,
+                request: SubscribeRequest,
+            ) -> EventFuture<'a, EventSubscription> {
+                Box::pin(async move { self.subscribe_to_stream(request).await })
+            }
+        }
+
+        impl LiveEventBackend for RedisEventBackend {
+            fn subscribe_live<'a>(
+                &'a self,
+                request: SubscribeRequest,
+            ) -> EventFuture<'a, LiveEventSubscription> {
+                Box::pin(async move { self.subscribe_live_to_stream(request).await })
+            }
+        }
+
+        struct RedisEventReceiver {
+            backend: RedisEventBackend,
+            topics: Vec<Topic>,
+            last_seen_id: Option<String>,
+            stream: Pin<Box<dyn Stream<Item = redis::Msg> + Send>>,
+        }
+
+        impl EventReceiver for RedisEventReceiver {
+            fn next<'a>(&'a mut self) -> EventReceiverFuture<'a> {
+                Box::pin(async move {
+                    loop {
+                        let Some(message) = self.stream.as_mut().next().await else {
+                            return Ok(None);
+                        };
+                        let stream_id: String = match message.get_payload() {
+                            Ok(stream_id) => stream_id,
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: LOG_TARGET,
+                                    event_name = "pocopine.events.redis.pubsub_bad_payload",
+                                    error = %err,
+                                );
+                                continue;
+                            }
+                        };
+
+                        if self.has_seen(&stream_id)? {
+                            continue;
+                        }
+                        self.mark_seen(&stream_id)?;
+
+                        let Some(event) = self.backend.fetch_envelope(&stream_id).await? else {
+                            tracing::debug!(
+                                target: TRACE_TARGET,
+                                event_name = "pocopine.events.redis.pubsub_missing_stream_entry",
+                                redis_stream_id = stream_id,
+                            );
+                            continue;
+                        };
+                        if self.topics.iter().any(|topic| topic == &event.topic) {
+                            return Ok(Some(event));
+                        }
+                    }
+                })
+            }
+        }
+
+        impl RedisEventReceiver {
+            fn has_seen(&self, stream_id: &str) -> EventResult<bool> {
+                if let Some(last_seen) = self.last_seen_id.as_deref() {
+                    return Ok(!redis_stream_id_after(stream_id, last_seen)?);
+                }
+                Ok(false)
+            }
+
+            fn mark_seen(&mut self, stream_id: &str) -> EventResult<()> {
+                if self
+                    .last_seen_id
+                    .as_deref()
+                    .map(|last_seen| redis_stream_id_after(stream_id, last_seen))
+                    .transpose()?
+                    .unwrap_or(true)
+                {
+                    self.last_seen_id = Some(stream_id.to_string());
+                }
+                Ok(())
+            }
+        }
+
+        async fn xrange_count(
+            conn: &mut MultiplexedConnection,
+            stream_key: &str,
+            start: &str,
+            end: &str,
+            count: usize,
+        ) -> EventResult<StreamRangeReply> {
+            Ok(redis::cmd("XRANGE")
+                .arg(stream_key)
+                .arg(start)
+                .arg(end)
+                .arg("COUNT")
+                .arg(count)
+                .query_async(conn)
+                .await?)
+        }
+
+        async fn oldest_stream_id(
+            conn: &mut MultiplexedConnection,
+            stream_key: &str,
+        ) -> EventResult<Option<String>> {
+            let reply = xrange_count(conn, stream_key, "-", "+", 1).await?;
+            Ok(reply.ids.first().map(|entry| entry.id.clone()))
+        }
+
+        fn stream_entry_to_envelope(entry: StreamId) -> EventResult<EventEnvelope> {
+            let stream_id = entry.id.clone();
+            let protocol: String = required_stream_field(&entry, "protocol")?;
+            let topic = Topic::new(required_stream_field::<String>(&entry, "topic")?)?;
+            let kind = EventKind::new(required_stream_field::<String>(&entry, "kind")?)?;
+            let audience: Audience =
+                serde_json::from_str(&required_stream_field::<String>(&entry, "audience")?)?;
+            let payload: serde_json::Value =
+                serde_json::from_str(&required_stream_field::<String>(&entry, "payload")?)?;
+            let created_at_ms: u64 = required_stream_field(&entry, "created_at_ms")?;
+            let schema_version: u32 = required_stream_field(&entry, "schema_version")?;
+            let draft = EventDraft {
+                protocol,
+                topic,
+                kind,
+                audience,
+                payload,
+                created_at_ms,
+                schema_version,
+            };
+            Ok(EventEnvelope::from_draft(
+                draft,
+                redis_event_id(&stream_id)?,
+                redis_event_cursor(&stream_id)?,
+                created_at_ms,
+            ))
+        }
+
+        fn required_stream_field<T: redis::FromRedisValue>(
+            entry: &StreamId,
+            field: &'static str,
+        ) -> EventResult<T> {
+            entry.get(field).ok_or_else(|| EventError::InvalidValue {
+                field,
+                value: format!("missing Redis stream field `{field}`"),
+            })
+        }
+
+        fn redis_event_id(stream_id: &str) -> EventResult<EventId> {
+            EventId::new(format!("{REDIS_CURSOR_PREFIX}{stream_id}"))
+        }
+
+        fn redis_event_cursor(stream_id: &str) -> EventResult<EventCursor> {
+            EventCursor::new(format!("{REDIS_CURSOR_PREFIX}{stream_id}"))
+        }
+
+        fn redis_stream_id_from_cursor(cursor: &EventCursor) -> EventResult<&str> {
+            let value = cursor.as_str();
+            let Some(stream_id) = value.strip_prefix(REDIS_CURSOR_PREFIX) else {
+                return Err(EventError::InvalidValue {
+                    field: "event cursor",
+                    value: value.to_string(),
+                });
+            };
+            parse_redis_stream_id(stream_id).map(|_| stream_id)
+        }
+
+        fn redis_stream_id_before(left: &str, right: &str) -> EventResult<bool> {
+            Ok(parse_redis_stream_id(left)? < parse_redis_stream_id(right)?)
+        }
+
+        fn redis_stream_id_after(left: &str, right: &str) -> EventResult<bool> {
+            Ok(parse_redis_stream_id(left)? > parse_redis_stream_id(right)?)
+        }
+
+        fn parse_redis_stream_id(value: &str) -> EventResult<(u64, u64)> {
+            let Some((ms, seq)) = value.split_once('-') else {
+                return Err(EventError::InvalidValue {
+                    field: "redis stream id",
+                    value: value.to_string(),
+                });
+            };
+            let ms = ms.parse::<u64>().map_err(|_| EventError::InvalidValue {
+                field: "redis stream id",
+                value: value.to_string(),
+            })?;
+            let seq = seq.parse::<u64>().map_err(|_| EventError::InvalidValue {
+                field: "redis stream id",
+                value: value.to_string(),
+            })?;
+            Ok((ms, seq))
+        }
+
+        fn validate_redis_app(app: &str) -> EventResult<()> {
+            if app.chars().any(|ch| matches!(ch, '{' | '}')) {
+                return Err(EventError::InvalidValue {
+                    field: "redis app",
+                    value: app.to_string(),
+                });
+            }
+            Ok(())
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            use serde_json::json;
+            use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+            #[test]
+            fn rejects_bad_redis_config() {
+                assert!(RedisEventConfig::new("", "app").is_err());
+                assert!(RedisEventConfig::new("redis://127.0.0.1/", "bad{app").is_err());
+                assert!(RedisEventConfig::new("redis://127.0.0.1/", "app")
+                    .unwrap()
+                    .with_stream_max_len(0)
+                    .is_err());
+            }
+
+            #[test]
+            fn parses_redis_cursors_strictly() {
+                let cursor = EventCursor::new("redis:1700000000000-3").unwrap();
+                assert_eq!(
+                    redis_stream_id_from_cursor(&cursor).unwrap(),
+                    "1700000000000-3"
+                );
+                assert!(redis_stream_id_before("1700000000000-3", "1700000000001-0").unwrap());
+                assert!(
+                    redis_stream_id_from_cursor(&EventCursor::new("memory:1").unwrap()).is_err()
+                );
+                assert!(parse_redis_stream_id("1700000000000").is_err());
+            }
+
+            #[test]
+            fn redis_backend_advertises_supported_capabilities() {
+                let config = RedisEventConfig::new("redis://127.0.0.1/", "events-test").unwrap();
+                let backend = RedisEventBackend::from_config(config).unwrap();
+
+                assert_eq!(
+                    backend.capabilities(),
+                    EventBackendCapabilities::redis_streams()
+                );
+            }
+
+            #[tokio::test]
+            async fn redis_publish_replay_and_live_round_trip() -> EventResult<()> {
+                let Some(url) = std::env::var("REDIS_TEST_URL").ok() else {
+                    return Ok(());
+                };
+                let app = format!(
+                    "events-test-{}-{}",
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|err| EventError::Time(err.to_string()))?
+                        .as_millis()
+                );
+                let config = RedisEventConfig::new(url, app)?.with_stream_max_len(128)?;
+                let backend = RedisEventBackend::from_config(config)?;
+                delete_stream(&backend).await?;
+
+                let posts = Topic::new("posts")?;
+                let mut subscription = backend
+                    .subscribe_live(SubscribeRequest::new([posts.clone()]))
+                    .await?;
+
+                let published = backend
+                    .publish(EventDraft::new(
+                        posts.clone(),
+                        "collection.changed",
+                        json!({ "n": 1 }),
+                    )?)
+                    .await?;
+                let received = tokio::time::timeout(Duration::from_secs(2), subscription.next())
+                    .await
+                    .map_err(|err| {
+                        EventError::Backend(format!("timed out waiting for Redis event: {err}"))
+                    })??
+                    .ok_or_else(|| EventError::Backend("Redis live stream closed".into()))?;
+                let replay = backend
+                    .replay(ReplayRequest::new([posts]).limit(10))
+                    .await?;
+
+                assert_eq!(received, published);
+                assert_eq!(replay.events, vec![published]);
+
+                delete_stream(&backend).await?;
+                Ok(())
+            }
+
+            async fn delete_stream(backend: &RedisEventBackend) -> EventResult<()> {
+                let mut conn = backend.connection().await?;
+                let _: () = redis::cmd("DEL")
+                    .arg(backend.stream_key())
+                    .query_async(&mut conn)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(feature = "redis")]
+    pub use redis_backend::{RedisEventBackend, RedisEventConfig};
+
     #[cfg(test)]
     mod tests {
         use serde_json::json;
@@ -834,6 +1600,15 @@ mod host {
         #[test]
         fn rejects_zero_memory_capacity() {
             assert!(MemoryEventBackend::with_capacity(0).is_err());
+        }
+
+        #[test]
+        fn memory_backend_advertises_process_local_capabilities() {
+            let backend = MemoryEventBackend::new();
+
+            assert_eq!(backend.capabilities(), EventBackendCapabilities::memory());
+            assert!(!backend.capabilities().durable_replay);
+            assert!(!backend.capabilities().multi_process);
         }
 
         #[test]
@@ -980,3 +1755,5 @@ mod host {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{MemoryEventBackend, MemoryEventConfig};
+#[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
+pub use host::{RedisEventBackend, RedisEventConfig};

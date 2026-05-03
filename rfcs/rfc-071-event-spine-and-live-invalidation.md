@@ -72,7 +72,7 @@ not expose database replication internals to browsers.
 
 ```rust
 pub struct EventEnvelope {
-    pub protocol: &'static str,
+    pub protocol: String,
     pub id: EventId,
     pub topic: Topic,
     pub kind: EventKind,
@@ -83,15 +83,30 @@ pub struct EventEnvelope {
     pub schema_version: u32,
 }
 
+pub struct EventBackendCapabilities {
+    pub durable_replay: bool,
+    pub live_wakeups: bool,
+    pub multi_process: bool,
+    pub ordered_per_topic: bool,
+    pub cursor_resume: bool,
+}
+
 pub trait EventBackend {
-    async fn publish(&self, event: EventEnvelope) -> EventResult<EventCursor>;
-    async fn subscribe(&self, request: SubscribeRequest) -> EventResult<EventStream>;
-    async fn replay(&self, request: ReplayRequest) -> EventResult<Vec<EventEnvelope>>;
+    fn capabilities(&self) -> EventBackendCapabilities;
+    async fn publish(&self, draft: EventDraft) -> EventResult<EventEnvelope>;
+    async fn replay(&self, request: ReplayRequest) -> EventResult<ReplayBatch>;
+    async fn subscribe(&self, request: SubscribeRequest) -> EventResult<EventSubscription>;
 }
 ```
 
 The envelope is intentionally generic. It does not know what a database,
 browser, sync shape, or CRDT document is.
+
+The framework only exposes built-in backend identities for implementations
+that ship in the tree. Future RabbitMQ, Kafka, NATS, or database-log
+adapters should implement the same traits in their own crates and advertise
+capabilities through behavior flags. Pocopine must not expose a config preset
+for a service until that backend exists and is tested.
 
 ### 5.2 `pocopine-live`
 
@@ -167,6 +182,20 @@ old payloads, that payload must pass the same guard as a normal read.
 
 ## 8. Backends
 
+Backends are interchangeable at the event-spine boundary:
+
+- `EventBackend` provides publish, retained replay, and subscription
+  opening.
+- `LiveEventBackend` additionally provides a future-event receiver for
+  live streams.
+- `EventBackendCapabilities` tells framework layers whether a backend is
+  process-local, durable, multi-process safe, replayable, and wake-up
+  capable.
+
+The browser protocol does not change when the backend changes. Redis,
+RabbitMQ, Kafka, CDC adapters, and in-memory development backends all have
+to publish the same neutral `EventEnvelope` shape and opaque cursors.
+
 ### 8.1 In-memory backend
 
 The in-memory backend is valid for:
@@ -183,16 +212,34 @@ ring, the backend returns `gap`.
 The Redis backend uses:
 
 ```text
-pocopine:{app}:events:{topic_hash}:stream
-pocopine:{app}:events:{topic_hash}:pubsub
+pocopine:{app}:events:stream
+pocopine:{app}:events:pubsub
 ```
 
-Streams provide replay and cursors. Pub/Sub is only a wake-up path so
-listeners do not need to poll streams constantly.
+The app-wide stream preserves one global cursor order across all framework
+topics. Streams provide durable replay and cursors. Pub/Sub is only a
+wake-up path so listeners do not need to poll streams constantly; subscribers
+fetch the stream entry by id before delivering it.
 
-The backend must document whether keys are intentionally hash-tagged for
-single-slot Redis Cluster behavior. If Lua scripts span multiple keys,
-the key layout must keep those keys in one slot.
+`{app}` is intentionally hash-tagged so the stream and Pub/Sub channel land
+in the same Redis Cluster slot. The current implementation uses the normal
+Redis client, so production support is single-instance Redis or a deployment
+where the configured URL routes to the owner of that slot. Cluster and
+Sentinel clients should be explicit follow-up features, not silent behavior.
+
+`RedisEventBackend::from_env` reads `POCOPINE_REDIS_URL` and fails if it is
+missing. It must not silently default to localhost in production paths.
+
+### 8.3 Future broker adapters
+
+RabbitMQ, Kafka, NATS, and database-log adapters are expected extensions, but
+they are not framework presets until implemented. Each adapter must answer:
+
+- how retained replay is represented,
+- how opaque cursors are encoded,
+- whether ordering is global or per topic,
+- how live wake-ups avoid missed events across subscribe/replay races,
+- what operational topology is supported and documented.
 
 ## 9. Observability
 
