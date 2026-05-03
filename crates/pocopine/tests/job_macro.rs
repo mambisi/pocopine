@@ -3,11 +3,14 @@
 // `<fn>_job` modules don't exist. Skip the whole file under wasm.
 #![cfg(not(target_arch = "wasm32"))]
 
+mod support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pocopine::JobResult;
 use serde::{Deserialize, Serialize};
+use support::TraceCapture;
 
 static MEMORY_APP_COUNTER: AtomicUsize = AtomicUsize::new(1);
 static MEMORY_JOB_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -27,6 +30,12 @@ async fn macro_registered_job(input: JobPayload) -> JobResult<()> {
 async fn memory_backend_job(input: JobPayload) -> JobResult<()> {
     assert_eq!(input.value, "memory");
     MEMORY_JOB_RUNS.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+#[pocopine::job(queue = "trace", retries = 0)]
+async fn traced_memory_job(input: JobPayload) -> JobResult<()> {
+    assert_eq!(input.value, "trace-payload");
     Ok(())
 }
 
@@ -154,53 +163,149 @@ fn memory_backend_routes_handler_panic_through_dead_letter() {
         .enable_all()
         .build()
         .unwrap();
+    let capture = TraceCapture::new();
 
-    rt.block_on(async {
-        let app = format!(
-            "job-macro-panic-{}-{}",
-            std::process::id(),
-            MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
-        );
-        let client = pocopine::JobClient::memory(app.clone());
-        panicking_memory_job_job::enqueue_with(
-            &client,
-            JobPayload {
-                value: "panic".into(),
-            },
-        )
-        .await
-        .unwrap();
+    capture.run(|| {
+        rt.block_on(async {
+            let app = format!(
+                "job-macro-panic-{}-{}",
+                std::process::id(),
+                MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
+            );
+            let client = pocopine::JobClient::memory(app.clone());
+            panicking_memory_job_job::enqueue_with(
+                &client,
+                JobPayload {
+                    value: "panic".into(),
+                },
+            )
+            .await
+            .unwrap();
 
-        let worker = pocopine::Worker::new(pocopine::WorkerConfig {
-            backend: pocopine::JobBackend::Memory,
-            app,
-            queues: vec!["panic".to_string()],
-            group: "test".to_string(),
-            consumer: "test".to_string(),
-            block_ms: 0,
-            visibility_timeout: Duration::from_secs(60),
-            scheduler_interval: Duration::from_millis(1),
-            max_periodic_catch_up: 16,
-            batch_size: 10,
-        })
-        .unwrap();
+            let worker = pocopine::Worker::new(pocopine::WorkerConfig {
+                backend: pocopine::JobBackend::Memory,
+                app,
+                queues: vec!["panic".to_string()],
+                group: "test".to_string(),
+                consumer: "test".to_string(),
+                block_ms: 0,
+                visibility_timeout: Duration::from_secs(60),
+                scheduler_interval: Duration::from_millis(1),
+                max_periodic_catch_up: 16,
+                batch_size: 10,
+            })
+            .unwrap();
 
-        // retries = 0 → max_attempts = 1, so a panic on the first attempt
-        // dead-letters immediately. The worker must NOT propagate the
-        // panic; if catch-unwind were broken, the spawned task would
-        // unwind through `run_once` and crash this test.
-        assert_eq!(worker.run_once().await.unwrap(), 1);
-        let dead = worker.drain_dead_letter().unwrap();
-        assert_eq!(dead.len(), 1);
-        assert!(
-            dead[0].error.contains("panic"),
-            "expected panic message, got `{}`",
-            dead[0].error
-        );
-        assert_eq!(dead[0].attempt, 1);
-        assert_eq!(dead[0].max_attempts, 1);
+            // retries = 0 → max_attempts = 1, so a panic on the first attempt
+            // dead-letters immediately. The worker must NOT propagate the
+            // panic; if catch-unwind were broken, the spawned task would
+            // unwind through `run_once` and crash this test.
+            assert_eq!(worker.run_once().await.unwrap(), 1);
+            let dead = worker.drain_dead_letter().unwrap();
+            assert_eq!(dead.len(), 1);
+            assert!(
+                dead[0].error.contains("panic"),
+                "expected panic message, got `{}`",
+                dead[0].error
+            );
+            assert_eq!(dead[0].attempt, 1);
+            assert_eq!(dead[0].max_attempts, 1);
 
-        // Drain is single-shot.
-        assert!(worker.drain_dead_letter().unwrap().is_empty());
+            // Drain is single-shot.
+            assert!(worker.drain_dead_letter().unwrap().is_empty());
+        });
     });
+
+    let events = capture.events_with_message("pocopine.log", "job moved to dead letter");
+    let event = events
+        .iter()
+        .find(|event| event.field("queue") == Some("panic"))
+        .expect("dead-letter event should be captured");
+    assert_eq!(event.field("backend"), Some("memory"));
+    assert_eq!(event.field("attempt"), Some("1"));
+    assert_eq!(event.field("max_attempts"), Some("1"));
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|value| value.contains("panic")),
+        "dead-letter event should include the terminal error class"
+    );
+}
+
+#[test]
+fn memory_backend_emits_job_lifecycle_trace_without_payload() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = TraceCapture::new();
+
+    capture.run(|| {
+        rt.block_on(async {
+            let app = format!(
+                "job-macro-trace-{}-{}",
+                std::process::id(),
+                MEMORY_APP_COUNTER.fetch_add(1, Ordering::SeqCst)
+            );
+            let client = pocopine::JobClient::memory(app.clone());
+            traced_memory_job_job::enqueue_with(
+                &client,
+                JobPayload {
+                    value: "trace-payload".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+            let worker = pocopine::Worker::new(pocopine::WorkerConfig {
+                backend: pocopine::JobBackend::Memory,
+                app,
+                queues: vec!["trace".to_string()],
+                group: "test".to_string(),
+                consumer: "test".to_string(),
+                block_ms: 0,
+                visibility_timeout: Duration::from_secs(60),
+                scheduler_interval: Duration::from_millis(1),
+                max_periodic_catch_up: 16,
+                batch_size: 10,
+            })
+            .unwrap();
+
+            assert_eq!(worker.run_once().await.unwrap(), 1);
+        });
+    });
+
+    let started = capture.events_with_message("pocopine.trace", "job started");
+    let started = started
+        .iter()
+        .find(|event| event.field("queue") == Some("trace"))
+        .expect("job-start event should be captured");
+    assert_eq!(started.field("backend"), Some("memory"));
+    assert!(started
+        .field("job_name")
+        .is_some_and(|value| value.ends_with("::traced_memory_job")));
+    assert_eq!(started.field("attempt"), Some("1"));
+    assert_eq!(started.field("max_attempts"), Some("1"));
+
+    let completed = capture.events_with_message("pocopine.trace", "job completed");
+    let completed = completed
+        .iter()
+        .find(|event| event.field("queue") == Some("trace"))
+        .expect("job-completed event should be captured");
+    assert_eq!(completed.field("backend"), Some("memory"));
+    assert!(
+        completed
+            .field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some(),
+        "duration_ms should be a numeric tracing field"
+    );
+    assert!(
+        started
+            .fields
+            .values()
+            .chain(completed.fields.values())
+            .all(|value| !value.contains("trace-payload")),
+        "job lifecycle logs must not include raw payloads"
+    );
 }

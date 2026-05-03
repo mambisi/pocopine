@@ -2729,6 +2729,8 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "tower",
+ "tracing",
+ "tracing-subscriber",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
