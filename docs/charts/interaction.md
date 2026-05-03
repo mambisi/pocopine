@@ -6,11 +6,10 @@ HTML tooltip container.
 
 ## Contract
 
-Pointer movement over the chart SVG is converted into SVG-space coordinates for
-geometry and rendered-pixel coordinates for hit testing. Hover activates only
-while the pointer is inside the plot rectangle and inside a sampled point's
-hover radius, not while it is over margins, axes, tick labels, or between
-points. The component exposes:
+Pointer movement over the chart SVG is converted into SVG-space coordinates.
+Hover activates only while the pointer is inside the plot rectangle, not while
+it is over margins, axes, or tick labels. The component selects the nearest
+sampled point by x distance and exposes:
 
 - `.pine-chart-hover`
 - `.pine-chart-crosshair`
@@ -27,10 +26,8 @@ points. The component exposes:
 
 The chart owns sampled-point lookup, crosshair geometry, marker coordinates, and
 tooltip data attributes. Tooltip coordinates are emitted as percentages so they
-scale with responsive SVG sizing. `hover_radius` defaults to `8` rendered
-pixels, so interaction feels stable when the SVG is responsive. Applications own
-colors, marker radius overrides, tooltip positioning, typography, borders,
-shadows, and transitions.
+scale with responsive SVG sizing. Applications own colors, marker radius
+overrides, tooltip positioning, typography, borders, shadows, and transitions.
 
 ## Styling
 
