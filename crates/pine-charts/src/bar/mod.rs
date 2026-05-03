@@ -1,11 +1,12 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::cartesian::{x_axis_label, y_axis_label};
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
 use crate::legend::{series_label_or_default, series_legend_items, LegendItem};
 use crate::scale::{BandScale, LinearScale};
-use crate::svg::{format_tick, SvgLine, SvgTickLabel};
+use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartBar {
@@ -93,6 +94,8 @@ pub struct BarChartGeometry {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
     pub legend_items: Vec<LegendItem>,
@@ -144,6 +147,8 @@ impl BarChartGeometry {
             y_grid: grid_lines_for_y(&y_ticks, plot),
             x_tick_labels: category_tick_labels(&data.categories, x_scale, plot),
             y_tick_labels: tick_labels_for_y(&y_ticks, plot),
+            x_axis_label: x_axis_label(plot, height),
+            y_axis_label: y_axis_label(plot),
             x_axis: SvgLine::new(
                 "x-axis".into(),
                 plot.x,
@@ -502,6 +507,10 @@ pub struct PineBarChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub x_label: String,
+    #[prop]
+    pub y_label: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -529,6 +538,8 @@ pub struct PineBarChart {
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
     pub legend_items: Vec<LegendItem>,
@@ -546,6 +557,8 @@ impl Default for PineBarChart {
             series: Vec::new(),
             mode: "grouped".into(),
             label: "Bar chart".into(),
+            x_label: String::new(),
+            y_label: String::new(),
             width: options.width,
             height: options.height,
             margin_top: options.margins.top,
@@ -563,6 +576,8 @@ impl Default for PineBarChart {
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
+            x_axis_label: SvgAxisLabel::default(),
+            y_axis_label: SvgAxisLabel::default(),
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
             legend_items: Vec::new(),
@@ -673,6 +688,8 @@ impl PineBarChart {
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
                 self.y_tick_labels = geometry.y_tick_labels;
+                self.x_axis_label = geometry.x_axis_label;
+                self.y_axis_label = geometry.y_axis_label;
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
                 self.legend_items = geometry.legend_items;
@@ -728,6 +745,8 @@ impl PineBarChart {
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
+        self.x_axis_label = SvgAxisLabel::default();
+        self.y_axis_label = SvgAxisLabel::default();
         self.legend_items.clear();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();

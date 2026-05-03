@@ -34,6 +34,13 @@ pub struct SvgTickLabel {
     pub line_y2: f64,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SvgAxisLabel {
+    pub x: f64,
+    pub y: f64,
+    pub transform: String,
+}
+
 pub(crate) fn format_tick(value: f64) -> String {
     let rounded = if value.abs() >= 1.0 {
         format!("{value:.2}")

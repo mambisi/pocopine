@@ -31,7 +31,7 @@ pub use line::{
 };
 pub use path::{area_path, line_path};
 pub use scale::{BandScale, LinearScale, Tick};
-pub use svg::{SvgLine, SvgTickLabel};
+pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 
 /// Register every Pine Charts custom-element tag.
 pub fn register_all() {

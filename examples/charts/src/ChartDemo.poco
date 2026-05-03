@@ -28,6 +28,8 @@
 
   <pine-line-chart label="Weekly metric"
                    pp-bind:series="line_series"
+                   x_label="Week"
+                   y_label="Metric"
                    show_markers="true"
                    width="720"
                    height="360"></pine-line-chart>
@@ -37,6 +39,8 @@
 
   <pine-area-chart label="Trend area"
                    pp-bind:series="area_series"
+                   x_label="Week"
+                   y_label="Volume"
                    show_markers="true"
                    width="720"
                    height="320"></pine-area-chart>
@@ -47,6 +51,8 @@
   <pine-bar-chart label="Distribution"
                   pp-bind:series="bar_series"
                   pp-bind:mode="bar_mode"
+                  x_label="Bucket"
+                  y_label="Count"
                   width="720"
                   height="320"></pine-bar-chart>
 
