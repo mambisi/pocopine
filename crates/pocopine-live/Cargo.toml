@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Browser live invalidation streams for pocopine apps."
 
+[features]
+default = []
+redis = ["pocopine-events/redis"]
+
 [dependencies]
 pocopine-auth = { workspace = true }
 pocopine-events = { workspace = true }

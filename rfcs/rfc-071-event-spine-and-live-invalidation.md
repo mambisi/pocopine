@@ -124,6 +124,18 @@ pocopine::live! {
 The macro registers public collection names and guards. The browser sees
 `posts`, not `public.posts`, a Redis key, or a logical replication slot.
 
+Host apps can wire the built-in backends directly:
+
+```rust
+let hub = pocopine_live::LiveHub::memory()
+    .allow_topics([pocopine_live::collection_topic("posts")?]);
+
+let redis_hub = pocopine_live::LiveHub::redis_from_env("my_app")?;
+```
+
+The Redis helpers are behind the `pocopine-live/redis` feature. The
+top-level `pocopine` crate exposes the same path as `live-redis`.
+
 ## 6. Live Protocol
 
 The first endpoint is:
@@ -229,6 +241,8 @@ Sentinel clients should be explicit follow-up features, not silent behavior.
 
 `RedisEventBackend::from_env` reads `POCOPINE_REDIS_URL` and fails if it is
 missing. It must not silently default to localhost in production paths.
+`POCOPINE_EVENTS_REDIS_STREAM_MAX_LEN` can override the approximate stream
+retention length; zero or non-numeric values are configuration errors.
 
 ### 8.3 Future broker adapters
 
