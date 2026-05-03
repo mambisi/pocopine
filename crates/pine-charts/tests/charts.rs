@@ -7,8 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use pine_charts::{
-    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, ChartScatterSeries,
-    LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartPoint,
+    ChartScatterSeries, LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -1135,6 +1135,91 @@ async fn stacked_bar_chart_accumulates_segments() {
     );
     assert_eq!(tooltip.get_attribute("data-category").as_deref(), Some("A"));
     assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("3"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-pie-chart class="share-chart"
+                  label="Share"
+                  width="100"
+                  height="100"
+                  margin_top="0"
+                  margin_right="0"
+                  margin_bottom="0"
+                  margin_left="0"
+                  inner_radius="0.5"
+                  pp-bind:data="data"></pine-pie-chart>
+</div>
+"#)]
+struct PieChartFixture {
+    data: Vec<ChartPieSlice>,
+}
+
+impl Default for PieChartFixture {
+    fn default() -> Self {
+        Self {
+            data: vec![
+                ChartPieSlice::new("Organic", 3.0),
+                ChartPieSlice::new("Referral", 1.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl PieChartFixture {}
+
+#[wasm_bindgen_test]
+async fn pie_chart_renders_donut_slices_and_selection() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-pie-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(chart.get_attribute("aria-label").as_deref(), Some("Share"));
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+    assert!(chart.has_attribute("data-donut"));
+    assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+
+    let slices = host.query_selector_all(".pine-chart-pie-slice").unwrap();
+    assert_eq!(slices.length(), 2);
+    let first = slices.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(
+        first.get_attribute("data-label").as_deref(),
+        Some("Organic")
+    );
+    assert_eq!(first.get_attribute("data-value").as_deref(), Some("3"));
+    assert_eq!(
+        first.get_attribute("aria-label").as_deref(),
+        Some("Organic: 3 (75%)")
+    );
+
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
+    dispatch_click(&first);
+    settle().await;
+
+    assert!(first.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("Organic: 3 (75%)"));
+
+    dispatch_keydown(&chart, "ArrowRight");
+    settle().await;
+    let second = slices.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+
+    dispatch_keydown(&chart, "Enter");
+    settle().await;
+
+    assert!(second.has_attribute("data-selected"));
+    assert!(!first.has_attribute("data-selected"));
 
     host.remove();
 }

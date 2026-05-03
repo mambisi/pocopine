@@ -24,6 +24,20 @@
               :data-active="bar_mode == 'stacked'"
               @click="show_stacked">Stacked</button>
     </div>
+    <div class="chart-demo-actions" role="group" aria-label="Share shape">
+      <button type="button"
+              :aria-pressed="pie_shape == 'pie' ? 'true' : 'false'"
+              :data-active="pie_shape == 'pie'"
+              @click="show_pie">Pie</button>
+      <button type="button"
+              :aria-pressed="pie_shape == 'donut' ? 'true' : 'false'"
+              :data-active="pie_shape == 'donut'"
+              @click="show_donut">Donut</button>
+      <button type="button"
+              :aria-pressed="pie_shape == 'half-donut' ? 'true' : 'false'"
+              :data-active="pie_shape == 'half-donut'"
+              @click="show_half_donut">Half donut</button>
+    </div>
   </header>
 
   <pine-line-chart label="Weekly metric"
@@ -69,4 +83,16 @@
 
   <pine-chart-legend label="Distribution legend"
                      pp-bind:items="bar_legend"></pine-chart-legend>
+
+  <pine-pie-chart label="Channel share"
+                  pp-bind:data="pie_data"
+                  pp-bind:inner_radius="pie_inner_radius"
+                  pp-bind:start_angle="pie_start_angle"
+                  pp-bind:end_angle="pie_end_angle"
+                  width="720"
+                  height="320"></pine-pie-chart>
+
+  <pine-chart-legend label="Channel share legend"
+                     interactive="true"
+                     pp-bind:items="pie_legend"></pine-chart-legend>
 </root>

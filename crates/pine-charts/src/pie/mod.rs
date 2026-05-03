@@ -1,0 +1,691 @@
+use core::f64::consts::PI;
+use core::fmt::Write;
+
+use pocopine::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::cartesian::{step_key, ChartStateFields};
+use crate::error::{finite, ChartError, ChartResult};
+use crate::events::{ChartSelection, CHART_SELECT_EVENT};
+use crate::geometry::{ChartMargins, ChartRect, Point};
+use crate::legend::LegendItem;
+use crate::svg::format_tick;
+
+const FULL_CIRCLE_DEGREES: f64 = 360.0;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartPieSlice {
+    pub label: String,
+    pub value: f64,
+}
+
+impl ChartPieSlice {
+    pub fn new(label: impl Into<String>, value: f64) -> Self {
+        Self {
+            label: label.into(),
+            value,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PieChartOptions {
+    pub width: f64,
+    pub height: f64,
+    pub margins: ChartMargins,
+    pub inner_radius: f64,
+    pub start_angle: f64,
+    pub end_angle: f64,
+}
+
+impl Default for PieChartOptions {
+    fn default() -> Self {
+        Self {
+            width: 320.0,
+            height: 320.0,
+            margins: ChartMargins::new(16.0, 16.0, 16.0, 16.0),
+            inner_radius: 0.0,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PieChartGeometry {
+    pub view_box: String,
+    pub plot: ChartRect,
+    pub center: Point,
+    pub outer_radius: f64,
+    pub inner_radius: f64,
+    pub slices: Vec<SvgPieSlice>,
+    pub legend_items: Vec<LegendItem>,
+    pub total: f64,
+}
+
+impl PieChartGeometry {
+    pub fn new(data: &[ChartPieSlice], options: &PieChartOptions) -> ChartResult<Self> {
+        let width = finite("width", options.width)?;
+        let height = finite("height", options.height)?;
+        let plot = ChartRect::from_outer(width, height, options.margins)?;
+        let inner_ratio = validate_inner_radius(options.inner_radius)?;
+        let start_angle = finite("start_angle", options.start_angle)?;
+        let end_angle = finite("end_angle", options.end_angle)?;
+        if end_angle <= start_angle {
+            return Err(ChartError::InvalidRange {
+                start: start_angle,
+                end: end_angle,
+            });
+        }
+
+        let normalized = normalize_slices(data)?;
+        let total = normalized.iter().map(|slice| slice.value).sum::<f64>();
+        if total <= 0.0 {
+            return Err(ChartError::EmptySeries);
+        }
+
+        let center = Point {
+            x: plot.x + plot.width * 0.5,
+            y: plot.y + plot.height * 0.5,
+        };
+        let outer_radius = plot.width.min(plot.height) * 0.5;
+        let inner_radius = outer_radius * inner_ratio;
+        let span = end_angle - start_angle;
+        let mut current_angle = start_angle;
+        let last_index = normalized.len().saturating_sub(1);
+        let slices = normalized
+            .iter()
+            .enumerate()
+            .map(|(index, slice)| {
+                let slice_start = current_angle;
+                let slice_end = if index == last_index {
+                    end_angle
+                } else {
+                    slice_start + span * (slice.value / total)
+                };
+                current_angle = slice_end;
+                let percentage = slice.value / total * 100.0;
+                let percentage_label = format!("{}%", format_tick(percentage));
+                let value_label = format_tick(slice.value);
+                let label = slice_label(&slice.label, index);
+                let aria_label = format!("{label}: {value_label} ({percentage_label})");
+                let d = pie_slice_path(center, outer_radius, inner_radius, slice_start, slice_end)?;
+                let label_point = polar_point(
+                    center,
+                    label_radius(outer_radius, inner_radius),
+                    (slice_start + slice_end) * 0.5,
+                );
+                Ok(SvgPieSlice {
+                    key: format!("pie-slice-{index}-{label}"),
+                    label,
+                    value: slice.value,
+                    value_label,
+                    percentage,
+                    percentage_label,
+                    aria_label,
+                    d,
+                    start_angle: slice_start,
+                    end_angle: slice_end,
+                    label_x: label_point.x,
+                    label_y: label_point.y,
+                })
+            })
+            .collect::<ChartResult<Vec<_>>>()?;
+        let legend_items = slices
+            .iter()
+            .map(|slice| {
+                LegendItem::with_series(slice.key.clone(), slice.label.clone(), slice.label.clone())
+            })
+            .collect();
+
+        Ok(Self {
+            view_box: format!("0 0 {width} {height}"),
+            plot,
+            center,
+            outer_radius,
+            inner_radius,
+            slices,
+            legend_items,
+            total,
+        })
+    }
+}
+
+pub fn pie_legend_items(data: &[ChartPieSlice]) -> Vec<LegendItem> {
+    data.iter()
+        .enumerate()
+        .filter(|(_, slice)| slice.value > 0.0)
+        .map(|(index, slice)| {
+            let label = slice_label(&slice.label, index);
+            LegendItem::with_series(format!("pie-slice-{index}-{label}"), label.clone(), label)
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SvgPieSlice {
+    pub key: String,
+    pub label: String,
+    pub value: f64,
+    pub value_label: String,
+    pub percentage: f64,
+    pub percentage_label: String,
+    pub aria_label: String,
+    pub d: String,
+    pub start_angle: f64,
+    pub end_angle: f64,
+    pub label_x: f64,
+    pub label_y: f64,
+}
+
+impl SvgPieSlice {
+    fn selection(&self) -> ChartSelection {
+        ChartSelection::share(
+            "pie",
+            self.key.clone(),
+            self.aria_label.clone(),
+            self.value,
+            self.percentage,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[component(template = "PinePieChart.poco", role = "panel")]
+pub struct PinePieChart {
+    #[prop]
+    pub data: Vec<ChartPieSlice>,
+    #[prop]
+    pub label: String,
+    #[prop]
+    pub width: f64,
+    #[prop]
+    pub height: f64,
+    #[prop]
+    pub margin_top: f64,
+    #[prop]
+    pub margin_right: f64,
+    #[prop]
+    pub margin_bottom: f64,
+    #[prop]
+    pub margin_left: f64,
+    #[prop]
+    pub inner_radius: f64,
+    #[prop]
+    pub start_angle: f64,
+    #[prop]
+    pub end_angle: f64,
+    pub state: String,
+    pub view_box: String,
+    pub slices: Vec<SvgPieSlice>,
+    pub legend_items: Vec<LegendItem>,
+    pub focused_key: String,
+    pub selected_key: String,
+    pub error: String,
+    pub ready: bool,
+    pub empty: bool,
+    pub invalid: bool,
+}
+
+impl Default for PinePieChart {
+    fn default() -> Self {
+        let options = PieChartOptions::default();
+        Self {
+            data: Vec::new(),
+            label: "Pie chart".into(),
+            width: options.width,
+            height: options.height,
+            margin_top: options.margins.top,
+            margin_right: options.margins.right,
+            margin_bottom: options.margins.bottom,
+            margin_left: options.margins.left,
+            inner_radius: options.inner_radius,
+            start_angle: options.start_angle,
+            end_angle: options.end_angle,
+            state: "empty".into(),
+            view_box: format!("0 0 {} {}", options.width, options.height),
+            slices: Vec::new(),
+            legend_items: Vec::new(),
+            focused_key: String::new(),
+            selected_key: String::new(),
+            error: String::new(),
+            ready: false,
+            empty: true,
+            invalid: false,
+        }
+    }
+}
+
+#[handlers]
+impl PinePieChart {
+    fn on_setup(&mut self) {
+        self.recompute();
+    }
+
+    #[watch(data)]
+    fn on_data(&mut self, _: Vec<ChartPieSlice>, _: Option<Vec<ChartPieSlice>>) {
+        self.recompute();
+    }
+
+    #[watch(width)]
+    fn on_width(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(height)]
+    fn on_height(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(margin_top)]
+    fn on_margin_top(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(margin_right)]
+    fn on_margin_right(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(margin_bottom)]
+    fn on_margin_bottom(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(margin_left)]
+    fn on_margin_left(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(inner_radius)]
+    fn on_inner_radius(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(start_angle)]
+    fn on_start_angle(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(end_angle)]
+    fn on_end_angle(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    pub fn select_slice(&mut self, key: String) {
+        if let Some(selection) = self.selection_for_slice(&key) {
+            self.focused_key = key.clone();
+            self.selected_key = key;
+            pocopine::emit(CHART_SELECT_EVENT, selection);
+        }
+    }
+
+    pub fn focus_next_slice(&mut self) {
+        self.step_slice_focus(1);
+    }
+
+    pub fn focus_prev_slice(&mut self) {
+        self.step_slice_focus(-1);
+    }
+
+    pub fn select_focused_slice(&mut self) {
+        if self.focused_key.is_empty() {
+            self.step_slice_focus(1);
+        }
+        if let Some(selection) = self.selection_for_slice(&self.focused_key) {
+            self.selected_key = self.focused_key.clone();
+            pocopine::emit(CHART_SELECT_EVENT, selection);
+        }
+    }
+}
+
+impl PinePieChart {
+    fn recompute(&mut self) {
+        match PieChartGeometry::new(&self.data, &self.options()) {
+            Ok(geometry) => {
+                self.view_box = geometry.view_box;
+                self.slices = geometry.slices;
+                self.legend_items = geometry.legend_items;
+                self.error.clear();
+                self.state_fields()
+                    .apply(crate::cartesian::CartesianChartState::Ready);
+                self.reconcile_selection();
+            }
+            Err(ChartError::EmptySeries) => {
+                self.slices.clear();
+                self.legend_items.clear();
+                self.clear_selection();
+                self.error.clear();
+                self.state_fields()
+                    .apply(crate::cartesian::CartesianChartState::Empty);
+            }
+            Err(error) => {
+                self.slices.clear();
+                self.legend_items.clear();
+                self.clear_selection();
+                self.error = error.to_string();
+                self.state_fields()
+                    .apply(crate::cartesian::CartesianChartState::Invalid);
+            }
+        }
+    }
+
+    fn options(&self) -> PieChartOptions {
+        PieChartOptions {
+            width: self.width,
+            height: self.height,
+            margins: ChartMargins::new(
+                self.margin_top,
+                self.margin_right,
+                self.margin_bottom,
+                self.margin_left,
+            ),
+            inner_radius: self.inner_radius,
+            start_angle: self.start_angle,
+            end_angle: self.end_angle,
+        }
+    }
+
+    fn step_slice_focus(&mut self, step: isize) {
+        if let Some(key) = step_key(
+            self.slices.iter().map(|slice| slice.key.as_str()),
+            &self.focused_key,
+            step,
+        ) {
+            self.focused_key = key;
+        }
+    }
+
+    fn has_slice_key(&self, key: &str) -> bool {
+        self.slices.iter().any(|slice| slice.key == key)
+    }
+
+    fn selection_for_slice(&self, key: &str) -> Option<ChartSelection> {
+        self.slices
+            .iter()
+            .find(|slice| slice.key == key)
+            .map(SvgPieSlice::selection)
+    }
+
+    fn reconcile_selection(&mut self) {
+        if !self.has_slice_key(&self.focused_key) {
+            self.focused_key.clear();
+        }
+        if !self.has_slice_key(&self.selected_key) {
+            self.selected_key.clear();
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.selected_key.clear();
+    }
+
+    fn state_fields(&mut self) -> ChartStateFields<'_> {
+        ChartStateFields {
+            state: &mut self.state,
+            ready: &mut self.ready,
+            empty: &mut self.empty,
+            invalid: &mut self.invalid,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NormalizedPieSlice {
+    label: String,
+    value: f64,
+}
+
+fn normalize_slices(data: &[ChartPieSlice]) -> ChartResult<Vec<NormalizedPieSlice>> {
+    if data.is_empty() {
+        return Err(ChartError::EmptySeries);
+    }
+
+    let mut output = Vec::new();
+    for (index, slice) in data.iter().enumerate() {
+        let value = finite("slice.value", slice.value)?;
+        if value < 0.0 {
+            return Err(ChartError::InvalidOption {
+                field: "slice.value",
+                value: value.to_string(),
+            });
+        }
+        if value == 0.0 {
+            continue;
+        }
+        output.push(NormalizedPieSlice {
+            label: slice_label(&slice.label, index),
+            value,
+        });
+    }
+
+    if output.is_empty() {
+        Err(ChartError::EmptySeries)
+    } else {
+        Ok(output)
+    }
+}
+
+fn validate_inner_radius(value: f64) -> ChartResult<f64> {
+    let value = finite("inner_radius", value)?;
+    if !(0.0..1.0).contains(&value) {
+        return Err(ChartError::InvalidOption {
+            field: "inner_radius",
+            value: value.to_string(),
+        });
+    }
+    Ok(value)
+}
+
+fn slice_label(label: &str, index: usize) -> String {
+    if label.is_empty() {
+        format!("Slice {}", index + 1)
+    } else {
+        label.to_owned()
+    }
+}
+
+fn pie_slice_path(
+    center: Point,
+    outer_radius: f64,
+    inner_radius: f64,
+    start_angle: f64,
+    end_angle: f64,
+) -> ChartResult<String> {
+    let end_angle = visible_arc_end(start_angle, end_angle);
+    let outer_start = polar_point(center, outer_radius, start_angle);
+    let outer_end = polar_point(center, outer_radius, end_angle);
+    let large_arc = if (end_angle - start_angle).abs() > 180.0 {
+        1
+    } else {
+        0
+    };
+
+    let mut path = String::new();
+    if inner_radius <= 0.0 {
+        write_point(&mut path, "M", center)?;
+        write_point(&mut path, "L", outer_start)?;
+        write!(
+            path,
+            " A{},{} 0 {large_arc} 1 {},{} Z",
+            clean(outer_radius),
+            clean(outer_radius),
+            clean(outer_end.x),
+            clean(outer_end.y)
+        )
+        .expect("writing to string should not fail");
+        return Ok(path);
+    }
+
+    let inner_start = polar_point(center, inner_radius, start_angle);
+    let inner_end = polar_point(center, inner_radius, end_angle);
+    write_point(&mut path, "M", outer_start)?;
+    write!(
+        path,
+        " A{},{} 0 {large_arc} 1 {},{}",
+        clean(outer_radius),
+        clean(outer_radius),
+        clean(outer_end.x),
+        clean(outer_end.y)
+    )
+    .expect("writing to string should not fail");
+    write_point(&mut path, "L", inner_end)?;
+    write!(
+        path,
+        " A{},{} 0 {large_arc} 0 {},{} Z",
+        clean(inner_radius),
+        clean(inner_radius),
+        clean(inner_start.x),
+        clean(inner_start.y)
+    )
+    .expect("writing to string should not fail");
+    Ok(path)
+}
+
+fn visible_arc_end(start_angle: f64, end_angle: f64) -> f64 {
+    if (end_angle - start_angle).abs() >= FULL_CIRCLE_DEGREES {
+        start_angle + FULL_CIRCLE_DEGREES - 0.001
+    } else {
+        end_angle
+    }
+}
+
+fn polar_point(center: Point, radius: f64, angle_degrees: f64) -> Point {
+    let radians = angle_degrees * PI / 180.0;
+    Point {
+        x: clean(center.x + radius * radians.cos()),
+        y: clean(center.y + radius * radians.sin()),
+    }
+}
+
+fn label_radius(outer_radius: f64, inner_radius: f64) -> f64 {
+    if inner_radius > 0.0 {
+        inner_radius + (outer_radius - inner_radius) * 0.5
+    } else {
+        outer_radius * 0.66
+    }
+}
+
+fn write_point(output: &mut String, command: &str, point: Point) -> ChartResult<()> {
+    let x = finite("point.x", point.x)?;
+    let y = finite("point.y", point.y)?;
+
+    if !output.is_empty() {
+        output.push(' ');
+    }
+    write!(output, "{command}{},{}", clean(x), clean(y))
+        .expect("writing to string should not fail");
+    Ok(())
+}
+
+fn clean(value: f64) -> f64 {
+    if value.abs() < 1e-9 {
+        return 0.0;
+    }
+    let rounded = value.round();
+    if (value - rounded).abs() < 1e-9 {
+        rounded
+    } else {
+        value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pie_geometry_maps_values_to_slices() {
+        let options = PieChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.0,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        };
+
+        let geometry = PieChartGeometry::new(
+            &[ChartPieSlice::new("A", 1.0), ChartPieSlice::new("B", 3.0)],
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(geometry.view_box, "0 0 100 100");
+        assert_eq!(geometry.slices.len(), 2);
+        assert_eq!(geometry.slices[0].percentage, 25.0);
+        assert_eq!(geometry.slices[0].d, "M50,50 L50,0 A50,50 0 0 1 100,50 Z");
+        assert_eq!(geometry.legend_items.len(), 2);
+    }
+
+    #[test]
+    fn donut_geometry_uses_inner_arc() {
+        let options = PieChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.5,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        };
+
+        let geometry = PieChartGeometry::new(&[ChartPieSlice::new("A", 1.0)], &options).unwrap();
+
+        assert_eq!(geometry.inner_radius, 25.0);
+        assert!(geometry.slices[0].d.contains("A50,50"));
+        assert!(geometry.slices[0].d.contains("A25,25"));
+    }
+
+    #[test]
+    fn half_pie_uses_custom_angle_span() {
+        let options = PieChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.0,
+            start_angle: 180.0,
+            end_angle: 360.0,
+        };
+
+        let geometry = PieChartGeometry::new(
+            &[ChartPieSlice::new("A", 1.0), ChartPieSlice::new("B", 1.0)],
+            &options,
+        )
+        .unwrap();
+
+        assert_eq!(geometry.slices[0].start_angle, 180.0);
+        assert_eq!(geometry.slices[0].end_angle, 270.0);
+        assert_eq!(geometry.slices[1].end_angle, 360.0);
+    }
+
+    #[test]
+    fn pie_rejects_negative_values() {
+        let err = PieChartGeometry::new(
+            &[ChartPieSlice::new("A", -1.0)],
+            &PieChartOptions::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ChartError::InvalidOption {
+                field: "slice.value",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn component_recomputes_state() {
+        let mut chart = PinePieChart {
+            data: vec![ChartPieSlice::new("A", 2.0)],
+            ..Default::default()
+        };
+
+        chart.recompute();
+
+        assert!(chart.ready);
+        assert_eq!(chart.slices.len(), 1);
+    }
+}

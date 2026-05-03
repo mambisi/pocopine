@@ -3,9 +3,10 @@
 The first component layer is intentionally small: `PineLineChart` renders SVG
 line charts from numeric points or named numeric series, `PineScatterChart`
 renders point-only numeric series, `PineAreaChart` renders closed SVG area fills
-from the same numeric shape, and `PineBarChart` renders categorical values as
-SVG bars. They are useful on their own, but their main job is to prove the
-component contract before richer composition is added.
+from the same numeric shape, `PineBarChart` renders categorical values as SVG
+bars, and `PinePieChart` renders pie, donut, half-pie, and half-donut slices.
+They are useful on their own, but their main job is to prove the component
+contract before richer composition is added.
 
 ## Registering
 
@@ -251,6 +252,47 @@ use pine_charts::bar_legend_items;
 let legend_items = bar_legend_items(&series);
 ```
 
+## Pie And Donut Chart
+
+`PinePieChart` accepts `Vec<ChartPieSlice>` and renders each positive value as a
+share of the total. A pie and a donut are the same primitive: set
+`inner_radius` to `0` for a pie or to a ratio such as `0.55` for a donut.
+
+```rust
+use pine_charts::{pie_legend_items, ChartPieSlice};
+
+let slices = vec![
+    ChartPieSlice::new("Organic", 42.0),
+    ChartPieSlice::new("Referral", 18.0),
+    ChartPieSlice::new("Paid", 12.0),
+];
+let legend_items = pie_legend_items(&slices);
+```
+
+```html
+<pine-pie-chart
+  label="Acquisition share"
+  pp-bind:data="slices"
+  inner_radius="0.55"
+  width="320"
+  height="320"></pine-pie-chart>
+```
+
+Partial pies use the same component. A top half donut is just a donut with a
+half-circle angle range:
+
+```html
+<pine-pie-chart
+  label="Goal progress"
+  pp-bind:data="slices"
+  inner_radius="0.6"
+  start_angle="180"
+  end_angle="360"></pine-pie-chart>
+```
+
+Slices expose `data-label`, `data-value`, `data-percentage`, `data-focused`, and
+`data-selected`. Selecting a slice emits `pp:chart:select`.
+
 ## Legend
 
 `PineChartLegend` accepts `Vec<LegendItem>` and renders an unstyled HTML list.
@@ -309,6 +351,9 @@ The component emits stable hooks:
 - `.pine-chart-tooltip-y`
 - `.pine-chart-bar`
 - `.pine-chart-bar-tooltip`
+- `.pine-pie-chart`
+- `.pine-chart-pie-slices`
+- `.pine-chart-pie-slice`
 - `.pine-chart-tooltip-category`
 - `.pine-chart-tooltip-value`
 - `.pine-chart-legend`
@@ -328,6 +373,7 @@ The component emits stable hooks:
 - `data-series="<series label>"`
 - `data-category="<category label>"`
 - `data-value="<numeric value>"`
+- `data-percentage="<share percent>"`
 - `data-hovered`
 - `data-focused`
 - `data-selected`
@@ -372,13 +418,15 @@ treatment:
 
 .pine-chart-marker[data-focused],
 .pine-chart-point[data-focused],
-.pine-chart-bar[data-focused] {
+.pine-chart-bar[data-focused],
+.pine-chart-pie-slice[data-focused] {
   stroke-dasharray: 3 2;
 }
 
 .pine-chart-marker[data-selected],
 .pine-chart-point[data-selected],
-.pine-chart-bar[data-selected] {
+.pine-chart-bar[data-selected],
+.pine-chart-pie-slice[data-selected] {
   stroke-width: 3;
 }
 

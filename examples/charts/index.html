@@ -198,13 +198,15 @@
 
     .pine-chart-marker[data-focused],
     .pine-chart-point[data-focused],
-    .pine-chart-bar[data-focused] {
+    .pine-chart-bar[data-focused],
+    .pine-chart-pie-slice[data-focused] {
       stroke-dasharray: 3 2;
     }
 
     .pine-chart-marker[data-selected],
     .pine-chart-point[data-selected],
-    .pine-chart-bar[data-selected] {
+    .pine-chart-bar[data-selected],
+    .pine-chart-pie-slice[data-selected] {
       stroke: #18212f;
       stroke-width: 3;
     }
@@ -273,6 +275,32 @@
       fill: #d96c2c;
     }
 
+    .pine-chart-pie-slice {
+      fill: currentColor;
+      stroke: white;
+      stroke-width: 1.5;
+    }
+
+    .pine-chart-pie-slice[data-label="Organic"],
+    .pine-chart-pie-slice[data-label="API"] {
+      color: #16a085;
+    }
+
+    .pine-chart-pie-slice[data-label="Referral"],
+    .pine-chart-pie-slice[data-label="Render"] {
+      color: #d96c2c;
+    }
+
+    .pine-chart-pie-slice[data-label="Paid"],
+    .pine-chart-pie-slice[data-label="Network"] {
+      color: #1d6fd8;
+    }
+
+    .pine-chart-pie-slice[data-label="Partner"],
+    .pine-chart-pie-slice[data-label="Idle"] {
+      color: #7c3aed;
+    }
+
     .pine-chart-legend {
       display: block;
       color: #18212f;
@@ -319,6 +347,16 @@
     .pine-chart-legend-marker[data-series="Segment B"],
     .pine-chart-legend-marker[data-series="Render"] {
       background: #d96c2c;
+    }
+
+    .pine-chart-legend-marker[data-series="Paid"],
+    .pine-chart-legend-marker[data-series="Network"] {
+      background: #1d6fd8;
+    }
+
+    .pine-chart-legend-marker[data-series="Partner"],
+    .pine-chart-legend-marker[data-series="Idle"] {
+      background: #7c3aed;
     }
 
     @media (max-width: 640px) {
