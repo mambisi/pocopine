@@ -589,7 +589,12 @@ return redis.call(
         pub group: String,
         /// Consumer name inside the group.
         pub consumer: String,
-        /// Blocking read timeout.
+        /// Blocking read timeout for `XREADGROUP`. `0` means
+        /// "non-blocking poll" (the worker returns immediately when no
+        /// new entries are ready); a positive value caps the per-call
+        /// `BLOCK` argument. Note that Redis itself interprets
+        /// `BLOCK 0` as block forever, so this crate special-cases the
+        /// zero value rather than passing it through verbatim.
         pub block_ms: usize,
         /// Jobs idle longer than this may be reclaimed.
         pub visibility_timeout: Duration,
@@ -984,10 +989,17 @@ return redis.call(
                 .map(|queue| self.client.queue_key(queue))
                 .collect();
             let ids: Vec<&str> = streams.iter().map(|_| ">").collect();
-            let options = StreamReadOptions::default()
+            // Special-case `block_ms == 0`: don't send `BLOCK` at all,
+            // so XREADGROUP is a non-blocking poll. Redis treats
+            // `BLOCK 0` as "block forever," which is rarely what
+            // callers want and would deadlock `Worker::run_once` on
+            // an idle stream.
+            let mut options = StreamReadOptions::default()
                 .group(&self.config.group, &self.config.consumer)
-                .count(self.config.batch_size)
-                .block(self.config.block_ms);
+                .count(self.config.batch_size);
+            if self.config.block_ms > 0 {
+                options = options.block(self.config.block_ms);
+            }
             let reply: StreamReadReply = conn.xread_options(&streams, &ids, &options).await?;
 
             let mut handled = 0;

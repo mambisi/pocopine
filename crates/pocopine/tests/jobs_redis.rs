@@ -13,28 +13,40 @@ use std::time::Duration;
 
 use pocopine::{JobBackend, JobClient, JobError, JobResult, Worker, WorkerConfig};
 use serde::{Deserialize, Serialize};
+use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ContainerAsync;
-use testcontainers_modules::redis::Redis;
+use testcontainers::{ContainerAsync, GenericImage};
 use tokio::sync::OnceCell;
+
+// `testcontainers-modules`'s default `Redis` image is pinned to 5.0,
+// which predates `XAUTOCLAIM` (Redis 6.2). The job worker uses
+// `XAUTOCLAIM` in its stale-job reclaim path, so we pin a modern tag
+// here via `GenericImage`.
+const REDIS_IMAGE: &str = "redis";
+const REDIS_TAG: &str = "7-alpine";
+const REDIS_PORT: u16 = 6379;
 
 // One Redis container is shared by every test in this binary. Tests
 // keep state isolated by using a unique `app` namespace, so all keys
 // live under `pocopine:{app}:*` and cannot collide across tests.
-static REDIS: OnceCell<ContainerAsync<Redis>> = OnceCell::const_new();
+static REDIS: OnceCell<ContainerAsync<GenericImage>> = OnceCell::const_new();
 static APP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 async fn redis_url() -> String {
     let container = REDIS
         .get_or_init(|| async {
-            Redis::default()
+            GenericImage::new(REDIS_IMAGE, REDIS_TAG)
+                .with_exposed_port(ContainerPort::Tcp(REDIS_PORT))
+                .with_wait_for(WaitFor::message_on_stdout(
+                    "Ready to accept connections",
+                ))
                 .start()
                 .await
                 .expect("start redis testcontainer")
         })
         .await;
     let port = container
-        .get_host_port_ipv4(6379)
+        .get_host_port_ipv4(REDIS_PORT)
         .await
         .expect("redis container port");
     format!("redis://127.0.0.1:{port}/")
