@@ -230,6 +230,84 @@ pub enum LiveEvent {
     },
 }
 
+/// Refresh callback target derived from a live event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LiveRefreshTarget {
+    /// A collection refresh callback matched this collection.
+    Collection(String),
+    /// A query-tag refresh callback matched this query tag.
+    QueryTag(String),
+    /// The stream reported a replay gap.
+    Gap,
+    /// The stream reported an error frame.
+    Error,
+}
+
+/// Event delivered to high-level refresh callbacks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveRefreshEvent {
+    /// The callback target that matched.
+    pub target: LiveRefreshTarget,
+    /// Original live event that caused the refresh.
+    pub live_event: LiveEvent,
+}
+
+/// Collection/query targets mentioned by a live event.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LiveRefreshTargets {
+    /// Collections invalidated by the event.
+    pub collections: Vec<String>,
+    /// Query tags invalidated by the event.
+    pub query_tags: Vec<String>,
+    /// Replay gap reason, if the stream lost history.
+    pub gap: Option<String>,
+    /// Error reason, if the stream emitted a typed error.
+    pub error: Option<String>,
+}
+
+/// Extract collection/query refresh targets from one typed live event.
+pub fn live_refresh_targets(event: &LiveEvent) -> LiveRefreshTargets {
+    let mut targets = LiveRefreshTargets::default();
+    match event {
+        LiveEvent::CollectionChanged {
+            collection,
+            query_tags,
+            ..
+        }
+        | LiveEvent::CollectionDeleted {
+            collection,
+            query_tags,
+            ..
+        } => {
+            push_unique(&mut targets.collections, collection.clone());
+            push_unique_all(&mut targets.query_tags, query_tags.iter().cloned());
+        }
+        LiveEvent::QueryInvalidated { query_tags, .. } => {
+            push_unique_all(&mut targets.query_tags, query_tags.iter().cloned());
+        }
+        LiveEvent::Gap { reason } => {
+            targets.gap = Some(reason.clone());
+        }
+        LiveEvent::Error { reason } => {
+            targets.error = Some(reason.clone());
+        }
+        LiveEvent::Ready { .. } | LiveEvent::Custom { .. } => {}
+    }
+    targets
+}
+
+fn push_unique_all(values: &mut Vec<String>, incoming: impl IntoIterator<Item = String>) {
+    for value in incoming {
+        push_unique(values, value);
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
 /// Browser-live client failures.
 #[derive(Debug)]
 pub enum LiveClientError {
@@ -541,12 +619,105 @@ mod browser {
     use web_sys::{Event, EventSource, EventSourceInit, EventTarget, MessageEvent};
 
     use crate::{
-        build_live_stream_url, parse_live_event, LiveClientError, LiveEvent, BUILT_IN_EVENT_KINDS,
-        KIND_ERROR, LIVE_STREAM_PATH,
+        build_live_stream_url, live_refresh_targets, parse_live_event, LiveClientError, LiveEvent,
+        LiveRefreshEvent, LiveRefreshTarget, BUILT_IN_EVENT_KINDS, KIND_ERROR, LIVE_STREAM_PATH,
     };
 
     type Handler = Rc<RefCell<Box<dyn FnMut(LiveEvent)>>>;
     type Listener = (String, Closure<dyn FnMut(Event)>);
+    type RefreshCallback = Box<dyn FnMut(LiveRefreshEvent)>;
+
+    struct RefreshRegistration {
+        name: String,
+        callback: RefreshCallback,
+    }
+
+    impl RefreshRegistration {
+        fn new(name: String, handler: impl FnMut(LiveRefreshEvent) + 'static) -> Self {
+            Self {
+                name,
+                callback: Box::new(handler),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct RefreshRegistry {
+        collections: Vec<RefreshRegistration>,
+        query_tags: Vec<RefreshRegistration>,
+        gaps: Vec<RefreshCallback>,
+        errors: Vec<RefreshCallback>,
+    }
+
+    impl RefreshRegistry {
+        fn dispatch(&mut self, event: LiveEvent) {
+            let targets = live_refresh_targets(&event);
+
+            if targets.gap.is_some() {
+                self.dispatch_gap(event);
+                return;
+            }
+
+            if targets.error.is_some() {
+                for callback in &mut self.errors {
+                    callback(LiveRefreshEvent {
+                        target: LiveRefreshTarget::Error,
+                        live_event: event.clone(),
+                    });
+                }
+                return;
+            }
+
+            for collection in targets.collections {
+                for registration in self
+                    .collections
+                    .iter_mut()
+                    .filter(|registration| registration.name == collection)
+                {
+                    (registration.callback)(LiveRefreshEvent {
+                        target: LiveRefreshTarget::Collection(collection.clone()),
+                        live_event: event.clone(),
+                    });
+                }
+            }
+
+            for query_tag in targets.query_tags {
+                for registration in self
+                    .query_tags
+                    .iter_mut()
+                    .filter(|registration| registration.name == query_tag)
+                {
+                    (registration.callback)(LiveRefreshEvent {
+                        target: LiveRefreshTarget::QueryTag(query_tag.clone()),
+                        live_event: event.clone(),
+                    });
+                }
+            }
+        }
+
+        fn dispatch_gap(&mut self, event: LiveEvent) {
+            for callback in &mut self.gaps {
+                callback(LiveRefreshEvent {
+                    target: LiveRefreshTarget::Gap,
+                    live_event: event.clone(),
+                });
+            }
+
+            for registration in &mut self.collections {
+                (registration.callback)(LiveRefreshEvent {
+                    target: LiveRefreshTarget::Collection(registration.name.clone()),
+                    live_event: event.clone(),
+                });
+            }
+
+            for registration in &mut self.query_tags {
+                (registration.callback)(LiveRefreshEvent {
+                    target: LiveRefreshTarget::QueryTag(registration.name.clone()),
+                    live_event: event.clone(),
+                });
+            }
+        }
+    }
 
     /// Browser `EventSource` client for pocopine live streams.
     #[derive(Clone, Debug)]
@@ -782,6 +953,144 @@ mod browser {
             F: FnMut(LiveEvent) + 'static,
         {
             self.client.connect_scoped(handler)
+        }
+    }
+
+    /// High-level collection/query refresh builder.
+    ///
+    /// `open` is scope-bound by default: the underlying `EventSource`
+    /// is closed when the current component unmounts. Use
+    /// [`LiveRefresh::open_unscoped`] only for an application-owned
+    /// subscription with an explicit handle.
+    pub struct LiveRefresh {
+        client: LiveClient,
+        registry: RefreshRegistry,
+    }
+
+    impl Default for LiveRefresh {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl LiveRefresh {
+        /// Build a refresh client for the default pocopine live
+        /// endpoint.
+        pub fn new() -> Self {
+            Self {
+                client: LiveClient::new(),
+                registry: RefreshRegistry::default(),
+            }
+        }
+
+        /// Alias for readability when used inside component lifecycle
+        /// methods.
+        pub fn scoped() -> Self {
+            Self::new()
+        }
+
+        /// Override the stream endpoint.
+        pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+            self.client = self.client.endpoint(endpoint);
+            self
+        }
+
+        /// Resume from an opaque stream cursor.
+        pub fn last_event_id(mut self, cursor: impl Into<String>) -> Self {
+            self.client = self.client.last_event_id(cursor);
+            self
+        }
+
+        /// Set the browser `EventSource.withCredentials` flag.
+        pub fn with_credentials(mut self, enabled: bool) -> Self {
+            self.client = self.client.with_credentials(enabled);
+            self
+        }
+
+        /// Refresh when a collection invalidation mentions
+        /// `collection`.
+        pub fn collection<F>(mut self, collection: impl Into<String>, handler: F) -> Self
+        where
+            F: FnMut(LiveRefreshEvent) + 'static,
+        {
+            let collection = collection.into();
+            if !self
+                .registry
+                .collections
+                .iter()
+                .any(|registration| registration.name == collection)
+            {
+                self.client = self.client.collection(collection.clone());
+            }
+            self.registry
+                .collections
+                .push(RefreshRegistration::new(collection, handler));
+            self
+        }
+
+        /// Refresh when a query invalidation mentions `tag`.
+        pub fn query_tag<F>(mut self, tag: impl Into<String>, handler: F) -> Self
+        where
+            F: FnMut(LiveRefreshEvent) + 'static,
+        {
+            let tag = tag.into();
+            if !self
+                .registry
+                .query_tags
+                .iter()
+                .any(|registration| registration.name == tag)
+            {
+                self.client = self.client.query_tag(tag.clone());
+            }
+            self.registry
+                .query_tags
+                .push(RefreshRegistration::new(tag, handler));
+            self
+        }
+
+        /// Observe replay gaps. Collection and query refresh handlers
+        /// are also invoked on a gap so registered data can be
+        /// refetched from scratch.
+        pub fn on_gap<F>(mut self, handler: F) -> Self
+        where
+            F: FnMut(LiveRefreshEvent) + 'static,
+        {
+            self.registry.gaps.push(Box::new(handler));
+            self
+        }
+
+        /// Observe typed stream errors.
+        pub fn on_error<F>(mut self, handler: F) -> Self
+        where
+            F: FnMut(LiveRefreshEvent) + 'static,
+        {
+            self.registry.errors.push(Box::new(handler));
+            self
+        }
+
+        /// Open the refresh stream and close it automatically on scope
+        /// unmount.
+        pub fn open(self) -> Result<(), LiveClientError> {
+            self.open_scoped()
+        }
+
+        /// Open the refresh stream and close it automatically on scope
+        /// unmount.
+        pub fn open_scoped(self) -> Result<(), LiveClientError> {
+            let LiveRefresh {
+                client,
+                mut registry,
+            } = self;
+            client.connect_scoped(move |event| registry.dispatch(event))
+        }
+
+        /// Open the refresh stream and return an explicit handle.
+        pub fn open_unscoped(self) -> Result<LiveSubscription, LiveClientError> {
+            let LiveRefresh {
+                client,
+                mut registry,
+            } = self;
+            client.connect(move |event| registry.dispatch(event))
         }
     }
 
@@ -1071,6 +1380,62 @@ mod protocol_tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn refresh_targets_include_collection_and_query_tags() {
+        let targets = live_refresh_targets(&LiveEvent::CollectionChanged {
+            collection: "posts".to_string(),
+            op: LiveOp::Upsert,
+            keys: vec!["post_1".to_string()],
+            query_tags: vec!["posts:list".to_string(), "posts:list".to_string()],
+            schema_version: 1,
+            cursor: Some("memory:1".to_string()),
+            created_at_ms: Some(10),
+        });
+
+        assert_eq!(
+            targets,
+            LiveRefreshTargets {
+                collections: vec!["posts".to_string()],
+                query_tags: vec!["posts:list".to_string()],
+                gap: None,
+                error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn refresh_targets_include_query_invalidations() {
+        let targets = live_refresh_targets(&LiveEvent::QueryInvalidated {
+            query_tags: vec!["posts:list".to_string(), "posts:detail:1".to_string()],
+            cursor: Some("memory:2".to_string()),
+            created_at_ms: Some(11),
+        });
+
+        assert_eq!(
+            targets.query_tags,
+            vec!["posts:list".to_string(), "posts:detail:1".to_string()]
+        );
+        assert!(targets.collections.is_empty());
+    }
+
+    #[test]
+    fn refresh_targets_mark_gap_and_error_frames() {
+        assert_eq!(
+            live_refresh_targets(&LiveEvent::Gap {
+                reason: "cursor_too_old".to_string(),
+            })
+            .gap,
+            Some("cursor_too_old".to_string())
+        );
+        assert_eq!(
+            live_refresh_targets(&LiveEvent::Error {
+                reason: "stream_failed".to_string(),
+            })
+            .error,
+            Some("stream_failed".to_string())
+        );
     }
 }
 
@@ -1574,6 +1939,6 @@ pub use host::{routes, LiveHub};
 
 #[cfg(target_arch = "wasm32")]
 pub use browser::{
-    LiveClient, LiveClientWithHandler, LiveSubscription, ScopedLiveClient,
+    LiveClient, LiveClientWithHandler, LiveRefresh, LiveSubscription, ScopedLiveClient,
     ScopedLiveClientWithHandler,
 };
