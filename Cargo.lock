@@ -2756,6 +2756,7 @@ dependencies = [
  "http 1.4.0",
  "pocopine-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
