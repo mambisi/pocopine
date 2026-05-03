@@ -1,12 +1,12 @@
-# RFC 071 - Offline sync protocol
+# RFC 072 - Offline sync protocol
 
 | Field | Value |
 |---|---|
 | **Status** | Draft |
 | **Author** | pocopine team |
 | **Created** | 2026-05-03 |
-| **Builds on** | [RFC 070](./rfc-070-event-spine-and-live-invalidation.md) |
-| **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 069](./rfc-069-observability.md), [RFC 072](./rfc-072-yrs-collaboration.md) |
+| **Builds on** | [RFC 071](./rfc-071-event-spine-and-live-invalidation.md) |
+| **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 069](./rfc-069-observability.md), [RFC 073](./rfc-073-yrs-collaboration.md) |
 
 ## 1. Summary
 
@@ -16,7 +16,7 @@ dedupe, gap recovery, and conflict policy for client-side data stores.
 
 The first version is server-authoritative and database agnostic. It does
 not require CRDTs. CRDTs remain the right tool for collaborative
-documents, covered separately by RFC 072.
+documents, covered separately by RFC 073.
 
 ## 2. Problem Statement
 
@@ -509,7 +509,7 @@ Mutation payloads and row payloads are not logged.
 
 ### Phase B - Live wake-up
 
-- Emit `shape.invalidated` through RFC 070.
+- Emit `shape.invalidated` through RFC 071.
 - Add browser helper that pulls on invalidation.
 - Apply server changes directly to synced collections.
 
@@ -528,7 +528,7 @@ Mutation payloads and row payloads are not logged.
 ### Phase E - Advanced conflict handling
 
 - Add custom resolvers and richer conflict UI hooks.
-- Keep CRDT document sync in RFC 072.
+- Keep CRDT document sync in RFC 073.
 
 ### Phase F - Query-driven sync
 
