@@ -212,7 +212,7 @@ impl PineChartResponsive {
     }
 }
 
-pub fn responsive_container_style(width: &str, min_width: f64, author_style: &str) -> String {
+fn responsive_container_style(width: &str, min_width: f64, author_style: &str) -> String {
     let mut parts = vec![
         "display: block".to_string(),
         format!("width: {}", css_length_or(width, "100%")),
@@ -226,7 +226,7 @@ pub fn responsive_container_style(width: &str, min_width: f64, author_style: &st
     merge_style(&generated, author_style)
 }
 
-pub fn responsive_frame_style(
+fn responsive_frame_style(
     height: &str,
     aspect_ratio: f64,
     min_height: f64,

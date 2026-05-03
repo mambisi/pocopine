@@ -316,7 +316,10 @@ Slices expose `data-label`, `data-value`, `data-percentage`, `data-focused`, and
 Donut and half-donut charts can render center text with `center_label` and
 `center_value`. Center text is only shown when `inner_radius > 0`, so the same
 component can morph between pie and donut without leaving text floating over a
-solid pie.
+solid pie. Full donuts center the two-line stack in the middle of the circle.
+Half donuts keep the label on the chart center line and place the value above
+it, which keeps progress labels visually attached to the half-ring instead of
+drifting into the empty half of the SVG box.
 
 ## Legend
 

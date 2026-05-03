@@ -31,7 +31,39 @@ real measured height exists, the wrapper uses that value instead.
 ```
 
 Use `min_width` and `min_height` when labels, markers, or pie center text need a
-floor on narrow screens.
+floor on narrow screens. The minimum is a floor after aspect sizing, not a
+replacement for the aspect ratio.
+
+## Radial Charts
+
+Pie and donut charts should usually use a square responsive box. Put the width
+constraint on the responsive component, then center the rendered panel with
+normal CSS:
+
+```html
+<pine-chart-responsive
+  class="chart-panel chart-panel--radial"
+  width="min(520px, 100%)"
+  aspect_ratio="1"
+  min_height="260">
+  <pine-pie-chart
+    label="Channel share"
+    pp-bind:data="slices"
+    inner_radius="0.58"
+    pp-bind:center_label="center_label"
+    pp-bind:center_value="center_value"></pine-pie-chart>
+</pine-chart-responsive>
+```
+
+```css
+.chart-panel--radial {
+  margin-inline: auto;
+}
+```
+
+At narrow widths, `min_height` may make the chart box taller than it is wide so
+labels remain readable. The pie geometry still uses the smaller dimension for
+its radius, so the radial mark remains circular instead of stretching.
 
 ## Styling
 
@@ -63,6 +95,11 @@ responsive wrapper as the chart panel and let the chart fill its content box.
 Padding and borders belong on the responsive container. The wrapper measures an
 inner frame inside that container, so the chart receives the usable drawing
 size rather than the outer card size.
+
+Do not force `.pine-chart-svg { width: 100%; height: 100%; }` in application
+CSS. That can non-uniformly scale the SVG and stretch text, circles, and radial
+marks. The responsive wrapper writes concrete `width` and `height` attributes
+to the chart; author CSS should let those attributes define the rendered size.
 
 ## Contract
 
