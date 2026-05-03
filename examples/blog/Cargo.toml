@@ -10,6 +10,7 @@ publish = false
 # running the static-file server. The bin is expected to handle static +
 # `/_pocopine/*` routes itself (see `src/bin/server.rs`).
 bin = "server"
+worker-bin = "worker"
 port = 3000
 
 [lib]
@@ -19,6 +20,11 @@ crate-type = ["cdylib", "rlib"]
 name = "server"
 path = "src/bin/server.rs"
 # Server binary doesn't build on wasm32; only build it on the host.
+required-features = []
+
+[[bin]]
+name = "worker"
+path = "src/bin/worker.rs"
 required-features = []
 
 [dependencies]

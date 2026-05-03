@@ -74,3 +74,5 @@ Conventions:
 | 063 | [Directive cleanup for Vue-3 alignment](./rfc-063-directive-cleanup-vue-alignment.md) | Draft |
 | 064 | [Performance roadmap to community-credible benchmarks](./rfc-064-performance-roadmap.md) | Draft |
 | 065 | [Route-cluster bundling](./rfc-065-route-cluster-bundling.md) | Draft |
+| 066 | [Server-function auth and access policy](./rfc-066-server-function-auth.md) | Draft |
+| 067 | [Background jobs with Redis and memory backends](./rfc-067-redis-background-jobs.md) | Draft |

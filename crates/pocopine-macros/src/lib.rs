@@ -35,8 +35,8 @@ use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
-    Data, DeriveInput, Expr, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl, ItemStruct, Lit,
-    LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
+    Data, DeriveInput, Expr, ExprClosure, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl,
+    ItemStruct, Lit, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
 };
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
@@ -2986,17 +2986,102 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   this target.
 /// * **non-wasm32** — the original user body, plus a helper
 ///   `__<name>_route(router) -> axum::Router` that registers the POST
-///   route so a server binary can mount it.
+///   route so a server binary can mount it. `#[server(guard = path)]`
+///   runs the guard before the user body.
+///
+/// Access policy:
+///
+/// * `#[server(public)]` explicitly declares an open endpoint.
+/// * `#[server(guard = require_user)]` protects the endpoint. The guard
+///   must be an async function that accepts
+///   `pocopine_server::auth::RequestContext` and returns a `Result`.
+/// * `#[server]` without either marker still compiles, but emits a
+///   warning so authors do not accidentally ship unreviewed endpoints.
 ///
 /// The signature shape this milestone supports:
 ///
 /// * `async fn name(arg1: T1, ..., argN: TN) -> Result<R, ServerError>`
 /// * Every arg must be owned (`T`, not `&T` / `&mut T`). Args must
 ///   `Serialize + Deserialize`.
-/// * Return type is ignored by this macro; the user is responsible for
-///   having it round-trip through `serde_json`.
+/// * Return type must round-trip through `serde_json`; guarded routes
+///   expect the canonical `ServerError` for auth/body-decode failures.
+#[derive(Default)]
+struct ServerPolicy {
+    public: bool,
+    guard: Option<Path>,
+}
+
+impl ServerPolicy {
+    fn has_access_policy(&self) -> bool {
+        self.public || self.guard.is_some()
+    }
+}
+
+fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse(attr)?;
+    let mut policy = ServerPolicy::default();
+
+    for meta in metas {
+        match meta {
+            Meta::Path(path) if path.is_ident("public") => {
+                if policy.public {
+                    return Err(syn::Error::new_spanned(path, "duplicate `public` policy"));
+                }
+                policy.public = true;
+            }
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("guard") => {
+                if policy.guard.is_some() {
+                    return Err(syn::Error::new_spanned(path, "duplicate auth guard"));
+                }
+                policy.guard = Some(parse_server_guard_value(value)?);
+            }
+            Meta::List(list) if list.path.is_ident("guard") => {
+                if policy.guard.is_some() {
+                    return Err(syn::Error::new_spanned(list.path, "duplicate auth guard"));
+                }
+                policy.guard = Some(list.parse_args::<Path>()?);
+            }
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "unsupported `#[server]` option; expected `public` or `guard = path`",
+                ));
+            }
+        }
+    }
+
+    if policy.public {
+        let Some(guard) = policy.guard.as_ref() else {
+            return Ok(policy);
+        };
+        return Err(syn::Error::new_spanned(
+            guard,
+            "`public` server functions cannot also declare an auth guard",
+        ));
+    }
+
+    Ok(policy)
+}
+
+fn parse_server_guard_value(value: Expr) -> syn::Result<Path> {
+    match value {
+        Expr::Path(expr_path) => Ok(expr_path.path),
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(lit), ..
+        }) => lit.parse::<Path>(),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "`guard` must be a Rust path, for example `guard = require_user`",
+        )),
+    }
+}
+
 #[proc_macro_attribute]
-pub fn server(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let policy = match parse_server_policy(attr) {
+        Ok(policy) => policy,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let input = parse_macro_input!(item as ItemFn);
     let vis = &input.vis;
     let sig = &input.sig;
@@ -3089,10 +3174,78 @@ pub fn server(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // On the server we preserve the user's body, plus emit a route helper.
-    // The extractor destructures the JSON body into our ident tuple, then
-    // we call the original function by name — Rust method resolution picks
-    // the non-wasm32 definition.
+    let policy_warning = if policy.has_access_policy() {
+        proc_macro2::TokenStream::new()
+    } else {
+        build_warning_tokens(&format!(
+            "pocopine #[server] function `{fn_name_str}` has no access policy. Write #[server(public)] for an intentional public endpoint or #[server(guard = path::to_guard)] to enforce auth. Missing server-function access policy is currently a warning and may become a hard error."
+        ))
+    };
+
+    let parts_binding = if policy.guard.is_some() {
+        quote! { let (parts, body) = request.into_parts(); }
+    } else {
+        quote! { let (_parts, body) = request.into_parts(); }
+    };
+    let guard_prologue = match policy.guard.as_ref() {
+        Some(guard_path) => quote! {
+            let ctx = ::pocopine_server::auth::RequestContext::from_parts(
+                parts.method,
+                parts.uri,
+                parts.headers,
+                parts.extensions,
+            );
+            if let Err(err) = #guard_path(ctx).await {
+                let result = ::core::result::Result::Err(
+                    ::core::convert::Into::into(err),
+                );
+                return ::pocopine_server::axum::Json(result);
+            }
+        },
+        None => proc_macro2::TokenStream::new(),
+    };
+
+    // Generated routes take the raw request so the same explicit body
+    // limit applies to public and guarded endpoints; guarded routes run
+    // auth before the body is read.
+    let route_handler = quote! {
+        ::pocopine_server::axum::routing::post(
+            |request: ::pocopine_server::axum::extract::Request| async move {
+                #parts_binding
+                #guard_prologue
+                let body_limit = ::pocopine_server::server_function_body_limit();
+                let body_bytes = match ::pocopine_server::axum::body::to_bytes(
+                    body,
+                    body_limit,
+                ).await {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        let result = ::core::result::Result::Err(
+                            ::pocopine::ServerError::BadRequest(
+                                format!("read server-function request body: {err}"),
+                            ),
+                        );
+                        return ::pocopine_server::axum::Json(result);
+                    }
+                };
+                let #destructure: #args_tuple_type =
+                    match ::pocopine_server::serde_json::from_slice(&body_bytes) {
+                        Ok(args) => args,
+                        Err(err) => {
+                            let result = ::core::result::Result::Err(
+                                ::pocopine::ServerError::BadRequest(
+                                    format!("parse server-function request body: {err}"),
+                                ),
+                            );
+                            return ::pocopine_server::axum::Json(result);
+                        }
+                    };
+                let result = #fn_ident( #(#arg_idents),* ).await;
+                ::pocopine_server::axum::Json(result)
+            },
+        )
+    };
+
     let server = quote! {
         #[cfg(not(target_arch = "wasm32"))]
         #vis #sig #body
@@ -3102,24 +3255,566 @@ pub fn server(_attr: TokenStream, item: TokenStream) -> TokenStream {
         pub fn #route_ident(
             router: ::pocopine_server::axum::Router,
         ) -> ::pocopine_server::axum::Router {
-            router.route(
-                #route_path,
-                ::pocopine_server::axum::routing::post(
-                    |::pocopine_server::axum::Json(#destructure):
-                        ::pocopine_server::axum::Json<#args_tuple_type>| async move {
-                        let result = #fn_ident( #(#arg_idents),* ).await;
-                        ::pocopine_server::axum::Json(result)
-                    },
-                ),
-            )
+            router.route(#route_path, #route_handler)
         }
     };
 
     let out = quote! {
+        #policy_warning
         #client
         #server
     };
     out.into()
+}
+
+mod protected_kw {
+    syn::custom_keyword!(require);
+}
+
+struct ProtectedInput {
+    check: ExprClosure,
+    function: ItemFn,
+}
+
+impl Parse for ProtectedInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<protected_kw::require>()?;
+        let check = input.parse::<ExprClosure>()?;
+
+        if input.peek(Token![;]) {
+            input.parse::<Token![;]>()?;
+        } else if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        } else {
+            return Err(input.error("expected `;` after `require |ctx| ...`"));
+        }
+
+        let function = input.parse::<ItemFn>()?;
+        Ok(Self { check, function })
+    }
+}
+
+/// `protected!` — declare a guarded server function with inline policy.
+///
+/// ```ignore
+/// pocopine::protected! {
+///     require |ctx| ctx.user.has_role(Role::Admin);
+///
+///     pub async fn create_post(title: String) -> ServerResult<Post> {
+///         /* protected body */
+///     }
+/// }
+/// ```
+///
+/// The require closure must be a synchronous boolean check. The macro
+/// emits a private guard function and feeds it through
+/// `#[pocopine::server(guard = ...)]`, so auth still runs before the
+/// JSON body is decoded.
+#[proc_macro]
+pub fn protected(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ProtectedInput);
+    let check = input.check;
+    let function = input.function;
+    let fn_ident = function.sig.ident.clone();
+    let guard_ident = format_ident!("__pocopine_guard_{fn_ident}");
+    let mut check_inputs = check.inputs.into_iter();
+    let Some(ctx_pat) = check_inputs.next() else {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "`protected!` requires `require |ctx| condition;`",
+        )
+        .to_compile_error()
+        .into();
+    };
+    if let Some(extra) = check_inputs.next() {
+        return syn::Error::new_spanned(
+            extra,
+            "`protected!` require closures must accept exactly one request context argument",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let check_body = check.body;
+
+    quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        async fn #guard_ident(
+            ctx: ::pocopine::auth::RequestContext,
+        ) -> ::pocopine::ServerResult<()> {
+            let __pocopine_guard_allows: bool = {
+                let #ctx_pat = ctx;
+                #check_body
+            };
+            if !__pocopine_guard_allows {
+                return ::core::result::Result::Err(
+                    ::pocopine::ServerError::forbidden("server function access denied"),
+                );
+            }
+            ::core::result::Result::Ok(())
+        }
+
+        #[pocopine::server(guard = #guard_ident)]
+        #function
+    }
+    .into()
+}
+
+#[derive(Clone)]
+struct JobConfig {
+    queue: String,
+    retries: u32,
+    periodic: Option<JobPeriodicConfig>,
+}
+
+#[derive(Clone)]
+enum JobPeriodicConfig {
+    Every { interval_ms: u64 },
+    Cron { expr: String },
+}
+
+impl Default for JobConfig {
+    fn default() -> Self {
+        Self {
+            queue: "default".to_string(),
+            retries: 3,
+            periodic: None,
+        }
+    }
+}
+
+fn parse_job_config(attr: TokenStream) -> syn::Result<JobConfig> {
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse(attr)?;
+    let mut config = JobConfig::default();
+
+    for meta in metas {
+        match meta {
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("queue") => {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "`queue` must be a string literal",
+                    ));
+                };
+                config.queue = lit.value();
+            }
+            Meta::NameValue(MetaNameValue { path, value, .. })
+                if path.is_ident("retries") || path.is_ident("max_retries") =>
+            {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Int(lit), ..
+                }) = value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "`retries` must be an integer literal",
+                    ));
+                };
+                config.retries = lit.base10_parse::<u32>()?;
+            }
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("every") => {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "`every` must be a string literal like \"15m\"",
+                    ));
+                };
+                if config.periodic.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "`every` and `cron` are mutually exclusive",
+                    ));
+                }
+                let interval_ms = parse_job_duration_ms(&lit)?;
+                config.periodic = Some(JobPeriodicConfig::Every { interval_ms });
+            }
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("cron") => {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "`cron` must be a string literal",
+                    ));
+                };
+                if config.periodic.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "`every` and `cron` are mutually exclusive",
+                    ));
+                }
+                let expr = lit.value();
+                expr.parse::<cron::Schedule>().map_err(|err| {
+                    syn::Error::new_spanned(
+                        &lit,
+                        format!("invalid `cron` expression for #[job]: {err}"),
+                    )
+                })?;
+                config.periodic = Some(JobPeriodicConfig::Cron { expr });
+            }
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "unsupported `#[job]` option; expected `queue = \"name\"`, `retries = N`, `every = \"15m\"`, or `cron = \"...\"`",
+                ));
+            }
+        }
+    }
+
+    Ok(config)
+}
+
+fn parse_job_duration_ms(lit: &LitStr) -> syn::Result<u64> {
+    let value = lit.value();
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(syn::Error::new_spanned(lit, "`every` cannot be empty"));
+    }
+
+    let split_at = trimmed
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(trimmed.len());
+    let (num, unit) = trimmed.split_at(split_at);
+    if num.is_empty() || unit.is_empty() {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "`every` must include a number and unit, for example \"30s\", \"15m\", or \"2h\"",
+        ));
+    }
+    let value = num.parse::<u64>().map_err(|err| {
+        syn::Error::new_spanned(lit, format!("invalid `every` duration number: {err}"))
+    })?;
+    let multiplier = match unit {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 60 * 60_000,
+        "d" => 24 * 60 * 60_000,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                lit,
+                "`every` supports ms, s, m, h, and d units",
+            ));
+        }
+    };
+    let interval_ms = value.checked_mul(multiplier).ok_or_else(|| {
+        syn::Error::new_spanned(lit, "`every` duration is too large to represent")
+    })?;
+    if interval_ms == 0 {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "`every` duration must be greater than zero",
+        ));
+    }
+    Ok(interval_ms)
+}
+
+/// `#[job]` — declare a host-side background job.
+///
+/// The function body compiles only for host targets. On wasm32 the macro
+/// emits a stub with the same signature that returns
+/// `JobError::Unsupported`, keeping client bundles free of Redis and worker
+/// runtime dependencies.
+#[proc_macro_attribute]
+pub fn job(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let config = match parse_job_config(attr) {
+        Ok(config) => config,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemFn);
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let body = &input.block;
+
+    if sig.asyncness.is_none() {
+        return syn::Error::new_spanned(sig.fn_token, "`#[job]` functions must be async")
+            .to_compile_error()
+            .into();
+    }
+
+    let fn_ident = sig.ident.clone();
+    let fn_name_str = fn_ident.to_string();
+    let queue = config.queue;
+    let retries = config.retries;
+    let periodic = config.periodic.clone();
+    let job_mod = format_ident!("{fn_name_str}_job");
+    let job_name_const = format_ident!("__pocopine_job_name_{fn_name_str}");
+    let dispatch_ident = format_ident!("__pocopine_dispatch_{fn_name_str}");
+
+    let mut inputs = sig.inputs.iter();
+    let payload = match inputs.next() {
+        Some(input_arg) => {
+            if inputs.next().is_some() {
+                return syn::Error::new_spanned(
+                    sig,
+                    "`#[job]` functions must take zero args for periodic jobs or one owned payload argument for manually enqueued jobs",
+                )
+                .to_compile_error()
+                .into();
+            }
+            if periodic.is_some() {
+                return syn::Error::new_spanned(
+                    sig,
+                    "`#[job(every = ...)]` and `#[job(cron = ...)]` jobs must not take a payload argument",
+                )
+                .to_compile_error()
+                .into();
+            }
+            match input_arg {
+                FnArg::Receiver(r) => {
+                    return syn::Error::new_spanned(
+                        r,
+                        "`#[job]` functions cannot take `self` — they are free functions",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                FnArg::Typed(PatType { pat, ty, .. }) => {
+                    if matches!(**ty, syn::Type::Reference(_)) {
+                        return syn::Error::new_spanned(
+                            ty,
+                            "`#[job]` payloads must be owned — reference types are not supported",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+                    let Pat::Ident(pat_ident) = &**pat else {
+                        return syn::Error::new_spanned(
+                            pat,
+                            "`#[job]` payload argument must be a simple identifier",
+                        )
+                        .to_compile_error()
+                        .into();
+                    };
+                    JobPayload::Typed {
+                        ident: pat_ident.ident.clone(),
+                        ty: ty.clone(),
+                    }
+                }
+            }
+        }
+        None if periodic.is_some() => JobPayload::Unit,
+        None => {
+            return syn::Error::new_spanned(
+                sig,
+                "`#[job]` functions without `every` or `cron` must take one owned payload argument",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    if matches!(sig.output, syn::ReturnType::Default) {
+        return syn::Error::new_spanned(sig, "`#[job]` functions must return `JobResult<()>`")
+            .to_compile_error()
+            .into();
+    }
+
+    let sig_without_body = quote! { #vis #sig };
+    let helper_arg_def = payload.helper_arg_def();
+    let helper_arg_call = payload.helper_arg_call();
+    let payload_ref_binding = payload.payload_ref_binding();
+    let payload_ref = payload.payload_ref();
+    let dispatch_body = payload.dispatch_body(&fn_ident);
+    let descriptor_ctor = match periodic {
+        Some(JobPeriodicConfig::Every { interval_ms }) => quote! {
+            ::pocopine::__private::jobs::JobDescriptor::periodic(
+                #job_name_const,
+                #queue,
+                #retries,
+                ::pocopine::__private::jobs::PeriodicSchedule::every_millis(#interval_ms),
+                #job_mod::#dispatch_ident,
+            )
+        },
+        Some(JobPeriodicConfig::Cron { expr }) => quote! {
+            ::pocopine::__private::jobs::JobDescriptor::periodic(
+                #job_name_const,
+                #queue,
+                #retries,
+                ::pocopine::__private::jobs::PeriodicSchedule::cron(#expr),
+                #job_mod::#dispatch_ident,
+            )
+        },
+        None => quote! {
+            ::pocopine::__private::jobs::JobDescriptor::new(
+                #job_name_const,
+                #queue,
+                #retries,
+                #job_mod::#dispatch_ident,
+            )
+        },
+    };
+
+    let host = quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        #vis #sig #body
+
+        #[cfg(not(target_arch = "wasm32"))]
+        #[allow(non_upper_case_globals)]
+        const #job_name_const: &'static str =
+            concat!(module_path!(), "::", stringify!(#fn_ident));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        #vis mod #job_mod {
+            use super::*;
+
+            pub async fn enqueue(
+                #helper_arg_def
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                let client = ::pocopine::JobClient::from_env()?;
+                enqueue_with(&client, #helper_arg_call).await
+            }
+
+            pub async fn enqueue_with(
+                client: &::pocopine::JobClient,
+                #helper_arg_def
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                #payload_ref_binding
+                client
+                    .enqueue_json(
+                        super::#job_name_const,
+                        #queue,
+                        ::pocopine::__private::jobs::RetryPolicy::from_retries(#retries).max_attempts,
+                        #payload_ref,
+                    )
+                    .await
+            }
+
+            pub async fn schedule_in(
+                #helper_arg_def
+                delay: ::std::time::Duration,
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                let client = ::pocopine::JobClient::from_env()?;
+                schedule_in_with(&client, #helper_arg_call delay).await
+            }
+
+            pub async fn schedule_in_with(
+                client: &::pocopine::JobClient,
+                #helper_arg_def
+                delay: ::std::time::Duration,
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                #payload_ref_binding
+                client
+                    .schedule_json_in(
+                        super::#job_name_const,
+                        #queue,
+                        ::pocopine::__private::jobs::RetryPolicy::from_retries(#retries).max_attempts,
+                        #payload_ref,
+                        delay,
+                    )
+                    .await
+            }
+
+            pub async fn schedule_at(
+                #helper_arg_def
+                when: ::std::time::SystemTime,
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                let client = ::pocopine::JobClient::from_env()?;
+                schedule_at_with(&client, #helper_arg_call when).await
+            }
+
+            pub async fn schedule_at_with(
+                client: &::pocopine::JobClient,
+                #helper_arg_def
+                when: ::std::time::SystemTime,
+            ) -> ::pocopine::JobResult<::pocopine::JobId> {
+                #payload_ref_binding
+                client
+                    .schedule_json_at(
+                        super::#job_name_const,
+                        #queue,
+                        ::pocopine::__private::jobs::RetryPolicy::from_retries(#retries).max_attempts,
+                        #payload_ref,
+                        when,
+                    )
+                    .await
+            }
+
+            pub fn #dispatch_ident(
+                payload: ::std::vec::Vec<u8>,
+            ) -> ::pocopine::JobFuture {
+                ::std::boxed::Box::pin(async move {
+                    #dispatch_body
+                })
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        ::pocopine::__private::jobs::inventory::submit! {
+            #descriptor_ctor
+        }
+    };
+
+    let wasm = quote! {
+        #[cfg(target_arch = "wasm32")]
+        #[allow(unused_variables)]
+        #sig_without_body {
+            ::core::result::Result::Err(::pocopine::JobError::unsupported(
+                "background jobs run on the server worker, not in wasm",
+            ))
+        }
+    };
+
+    quote! {
+        #host
+        #wasm
+    }
+    .into()
+}
+
+enum JobPayload {
+    Unit,
+    Typed { ident: syn::Ident, ty: Box<Type> },
+}
+
+impl JobPayload {
+    fn helper_arg_def(&self) -> proc_macro2::TokenStream {
+        match self {
+            JobPayload::Unit => quote! {},
+            JobPayload::Typed { ident, ty } => quote! { #ident: #ty, },
+        }
+    }
+
+    fn helper_arg_call(&self) -> proc_macro2::TokenStream {
+        match self {
+            JobPayload::Unit => quote! {},
+            JobPayload::Typed { ident, .. } => quote! { #ident, },
+        }
+    }
+
+    fn payload_ref_binding(&self) -> proc_macro2::TokenStream {
+        match self {
+            JobPayload::Unit => quote! { let __pocopine_payload = (); },
+            JobPayload::Typed { .. } => quote! {},
+        }
+    }
+
+    fn payload_ref(&self) -> proc_macro2::TokenStream {
+        match self {
+            JobPayload::Unit => quote! { &__pocopine_payload },
+            JobPayload::Typed { ident, .. } => quote! { &#ident },
+        }
+    }
+
+    fn dispatch_body(&self, fn_ident: &syn::Ident) -> proc_macro2::TokenStream {
+        match self {
+            JobPayload::Unit => quote! {
+                let _: () = ::pocopine::__private::jobs::serde_json::from_slice(&payload)?;
+                super::#fn_ident().await
+            },
+            JobPayload::Typed { ident, ty } => quote! {
+                let #ident: #ty =
+                    ::pocopine::__private::jobs::serde_json::from_slice(&payload)?;
+                super::#fn_ident(#ident).await
+            },
+        }
+    }
 }
 
 /// `#[derive(Emit)]` — RFC 056 §6.8 typed event emission.

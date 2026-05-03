@@ -78,6 +78,9 @@ struct PocopineConfig {
     /// Name of the server binary to spawn in `run` / `dev`. When set,
     /// `pocopine` delegates serving entirely to this bin.
     bin: Option<String>,
+    /// Name of the worker binary to spawn alongside the server/static
+    /// server in `run` / `dev`.
+    worker_bin: Option<String>,
     /// Advisory port shown in log output for server-bin mode. The bin
     /// binds whatever it wants; pocopine does not override it.
     #[allow(dead_code)]
@@ -146,6 +149,7 @@ fn main() -> Result<()> {
         Cmd::Build(a) => {
             let cfg = load_config(&a.path)?;
             build(&a.path, a.release)?;
+            build_configured_bins(&a.path, &cfg, a.release)?;
             if let Some(tw) = cfg.tailwind.as_ref() {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
@@ -159,10 +163,7 @@ fn main() -> Result<()> {
                 let project = a.path.canonicalize()?;
                 run_tailwind_once(&project, tw, a.release)?;
             }
-            match cfg.bin.as_deref() {
-                Some(bin) => spawn_bin(&a.path, bin, a.release)?.wait_for_exit(),
-                None => serve_static(&a.path, a.port),
-            }
+            run_project(&a.path, &cfg, a.release, a.port)
         }
         Cmd::Dev(a) => dev(&a),
     }
@@ -408,29 +409,77 @@ fn build(path: &Path, release: bool) -> Result<()> {
     Ok(())
 }
 
+fn build_configured_bins(path: &Path, cfg: &PocopineConfig, release: bool) -> Result<()> {
+    for bin in configured_bins(cfg) {
+        build_bin(path, bin, release)?;
+    }
+    Ok(())
+}
+
+fn configured_bins(cfg: &PocopineConfig) -> Vec<&str> {
+    let mut bins = Vec::new();
+    if let Some(bin) = cfg.bin.as_deref() {
+        bins.push(bin);
+    }
+    if let Some(worker) = cfg.worker_bin.as_deref() {
+        if !bins.contains(&worker) {
+            bins.push(worker);
+        }
+    }
+    bins
+}
+
+fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
+    let project = path
+        .canonicalize()
+        .with_context(|| format!("resolve {}", path.display()))?;
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--bin").arg(bin);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&project);
+    println!(
+        "▶ building `{bin}` (cargo build --bin {bin} in {})",
+        project.display()
+    );
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to build configured bin `{bin}`"))?;
+    if !status.success() {
+        bail!("configured bin `{bin}` failed to build with {status}");
+    }
+    Ok(())
+}
+
 // ---------- server-bin spawn ----------
 
 struct BinChild {
     child: Child,
     bin: String,
+    role: BinRole,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BinRole {
+    Server,
+    Worker,
 }
 
 impl BinChild {
-    fn wait_for_exit(mut self) -> Result<()> {
-        let status = self.child.wait().context("waiting on server bin")?;
-        if !status.success() {
-            bail!("server bin `{}` exited with {status}", self.bin);
-        }
-        Ok(())
-    }
-
     fn kill(mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-fn spawn_bin(path: &Path, bin: &str, release: bool) -> Result<BinChild> {
+fn spawn_bin(
+    path: &Path,
+    bin: &str,
+    release: bool,
+    role: BinRole,
+    default_redis_url: bool,
+) -> Result<BinChild> {
     let project = path
         .canonicalize()
         .with_context(|| format!("resolve {}", path.display()))?;
@@ -440,6 +489,9 @@ fn spawn_bin(path: &Path, bin: &str, release: bool) -> Result<BinChild> {
         cmd.arg("--release");
     }
     cmd.current_dir(&project);
+    if default_redis_url {
+        ensure_redis_env(&mut cmd);
+    }
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     println!(
         "▶ spawning `{bin}` (cargo run --bin {bin} in {})",
@@ -451,7 +503,116 @@ fn spawn_bin(path: &Path, bin: &str, release: bool) -> Result<BinChild> {
     Ok(BinChild {
         child,
         bin: bin.into(),
+        role,
     })
+}
+
+fn ensure_redis_env(cmd: &mut Command) {
+    if std::env::var_os("POCOPINE_REDIS_URL").is_none() {
+        cmd.env("POCOPINE_REDIS_URL", "redis://127.0.0.1/");
+    }
+}
+
+fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> Result<()> {
+    let backend = std::env::var("POCOPINE_JOB_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let redis_url = std::env::var("POCOPINE_REDIS_URL").ok();
+    let has_redis_url = redis_url
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+
+    match backend.as_deref() {
+        Some("memory") => bail!(
+            "`worker-bin` runs in a separate process, but POCOPINE_JOB_BACKEND=memory is process-local; use Redis for a separate worker binary or embed the worker in the server process"
+        ),
+        Some("redis") if has_redis_url => Ok(()),
+        Some("redis") if default_redis_url => Ok(()),
+        Some("redis") => bail!(
+            "`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis"
+        ),
+        Some("") => bail!("POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`"),
+        Some(other) => bail!("unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"),
+        None if has_redis_url => Ok(()),
+        None if default_redis_url => Ok(()),
+        None => bail!(
+            "`worker-bin` runs in a separate process; set POCOPINE_REDIS_URL for Redis-backed jobs, or embed the worker in the server process to use the memory backend"
+        ),
+    }
+}
+
+fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) -> Result<()> {
+    if cfg.worker_bin.is_some() {
+        validate_worker_backend_for_separate_process(false)?;
+    }
+
+    let worker = cfg
+        .worker_bin
+        .as_deref()
+        .map(|bin| spawn_bin(path, bin, release, BinRole::Worker, false))
+        .transpose()?;
+
+    match cfg.bin.as_deref() {
+        Some(bin) => {
+            let server = spawn_bin(path, bin, release, BinRole::Server, false)?;
+            let mut children = Vec::new();
+            children.push(server);
+            if let Some(worker) = worker {
+                children.push(worker);
+            }
+            wait_for_children(children)
+        }
+        None => {
+            if let Some(worker) = worker {
+                let serve_path = path
+                    .canonicalize()
+                    .with_context(|| format!("bad serve dir: {}", path.display()))?;
+                thread::spawn(move || {
+                    if let Err(e) = serve_static(&serve_path, port) {
+                        eprintln!("server error: {e}");
+                    }
+                });
+                wait_for_children(vec![worker])
+            } else {
+                serve_static(path, port)
+            }
+        }
+    }
+}
+
+fn wait_for_children(mut children: Vec<BinChild>) -> Result<()> {
+    loop {
+        for index in 0..children.len() {
+            if let Some(status) = children[index]
+                .child
+                .try_wait()
+                .with_context(|| format!("poll `{}`", children[index].bin))?
+            {
+                let exited = children.swap_remove(index);
+                for child in children {
+                    child.kill();
+                }
+                if status.success() && exited.role == BinRole::Server {
+                    return Ok(());
+                }
+                bail!(
+                    "{} bin `{}` exited with {status}",
+                    exited.role.label(),
+                    exited.bin
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+impl BinRole {
+    fn label(self) -> &'static str {
+        match self {
+            BinRole::Server => "server",
+            BinRole::Worker => "worker",
+        }
+    }
 }
 
 // ---------- static serving ----------
@@ -571,6 +732,7 @@ fn dev(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = load_config(&args.path)?;
     build(&project, args.release)?;
+    build_configured_bins(&project, &cfg, args.release)?;
 
     // Kick off Tailwind in watch mode *before* we start serving so
     // the first page load already sees compiled CSS.
@@ -585,8 +747,15 @@ fn dev(args: &ServeArgs) -> Result<()> {
 
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
-    let bin_child = match cfg.bin.as_deref() {
-        Some(bin) => Some(spawn_bin(&project, bin, args.release)?),
+    let mut bin_children: Vec<BinChild> = Vec::new();
+    match cfg.bin.as_deref() {
+        Some(bin) => bin_children.push(spawn_bin(
+            &project,
+            bin,
+            args.release,
+            BinRole::Server,
+            true,
+        )?),
         None => {
             let serve_path = project.clone();
             let port = args.port;
@@ -595,9 +764,18 @@ fn dev(args: &ServeArgs) -> Result<()> {
                     eprintln!("server error: {e}");
                 }
             });
-            None
         }
-    };
+    }
+    if let Some(worker) = cfg.worker_bin.as_deref() {
+        validate_worker_backend_for_separate_process(true)?;
+        bin_children.push(spawn_bin(
+            &project,
+            worker,
+            args.release,
+            BinRole::Worker,
+            true,
+        )?);
+    }
 
     let (tx, rx) = channel::<()>();
     let tx_w = tx.clone();
@@ -616,23 +794,46 @@ fn dev(args: &ServeArgs) -> Result<()> {
 
     // Handle Ctrl-C so the spawned server bin gets cleaned up.
     let result = loop {
-        if rx.recv().is_err() {
-            break Ok(());
+        if let Some(message) = poll_children(&mut bin_children)? {
+            break Err(anyhow!("{message}"));
         }
-        thread::sleep(Duration::from_millis(250));
-        while rx.try_recv().is_ok() {}
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(()) => {
+                while rx.try_recv().is_ok() {}
 
-        println!("↻ rebuilding wasm…");
-        if let Err(e) = build(&project, args.release) {
-            eprintln!("build failed: {e:#}");
+                println!("↻ rebuilding wasm…");
+                if let Err(e) = build(&project, args.release) {
+                    eprintln!("build failed: {e:#}");
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         }
     };
 
-    if let Some(child) = bin_child {
+    for child in bin_children {
         child.kill();
     }
     if let Some(child) = tailwind_child {
         child.kill();
     }
     result
+}
+
+fn poll_children(children: &mut Vec<BinChild>) -> Result<Option<String>> {
+    for index in 0..children.len() {
+        if let Some(status) = children[index]
+            .child
+            .try_wait()
+            .with_context(|| format!("poll `{}`", children[index].bin))?
+        {
+            let exited = children.remove(index);
+            return Ok(Some(format!(
+                "{} bin `{}` exited with {status}",
+                exited.role.label(),
+                exited.bin
+            )));
+        }
+    }
+    Ok(None)
 }

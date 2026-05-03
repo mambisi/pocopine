@@ -17,6 +17,10 @@ looks the way it does — the code itself tells you *what*.
 - [`performance-strategy.md`](./performance-strategy.md) — current
   large-list performance strategy, including why Vue / Svelte are
   ahead and what pocopine should optimize next.
+- [`jobs.md`](./jobs.md) — background-job runtime: Redis Streams +
+  sorted-set scheduler + Lua-scripted state transitions, periodic
+  firings, reclaim, and the memory backend. Includes redis-cli
+  recipes for validating a live deployment.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
