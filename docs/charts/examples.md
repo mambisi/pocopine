@@ -13,13 +13,17 @@ all visual styling in `index.html` CSS so the chart crate can stay unstyled.
 The example intentionally uses the same public API an application would use:
 
 - `pine_charts::register_all()` at startup,
-- `Vec<ChartLineSeries>` and `Vec<ChartBarSeries>` data in the parent component,
+- `Vec<ChartLineSeries>`, `Vec<ChartAreaSeries>`, and `Vec<ChartBarSeries>`
+  data in the parent component,
 - `line_legend_items(&line_series)` to drive a separate line legend,
+- `area_legend_items(&area_series)` to drive a separate area legend,
 - `bar_legend_items(&bar_series)` to drive a separate legend,
 - `<pine-line-chart pp-bind:series="line_series">` in the template,
+- `<pine-area-chart pp-bind:series="area_series">` in the template,
 - `<pine-bar-chart pp-bind:series="bar_series" pp-bind:mode="bar_mode">` in
   the template,
-- `<pine-chart-legend pp-bind:items="line_legend">` and
+- `<pine-chart-legend pp-bind:items="line_legend">`,
+  `<pine-chart-legend pp-bind:items="area_legend">`, and
   `<pine-chart-legend pp-bind:items="bar_legend">` in the template,
 - CSS selectors from the chart styling contract.
 

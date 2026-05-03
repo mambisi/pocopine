@@ -3,7 +3,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pine_charts::{ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem};
+use pine_charts::{
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem,
+};
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -228,6 +230,110 @@ async fn multi_line_chart_renders_series_metadata_and_hover() {
         hover_marker.get_attribute("data-series").as_deref(),
         Some("Target")
     );
+
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+    assert_eq!(
+        tooltip.get_attribute("aria-label").as_deref(),
+        Some("Target: x 1, y 0")
+    );
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-area-chart class="multi-area-chart"
+                   label="Area"
+                   width="100"
+                   height="100"
+                   margin_top="0"
+                   margin_right="0"
+                   margin_bottom="0"
+                   margin_left="0"
+                   show_markers="true"
+                   pp-bind:series="series"></pine-area-chart>
+</div>
+"#)]
+struct AreaChartFixture {
+    series: Vec<ChartAreaSeries>,
+}
+
+impl Default for AreaChartFixture {
+    fn default() -> Self {
+        Self {
+            series: vec![
+                ChartAreaSeries::new(
+                    "Actual",
+                    vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+                ),
+                ChartAreaSeries::new(
+                    "Target",
+                    vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)],
+                ),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl AreaChartFixture {}
+
+#[wasm_bindgen_test]
+async fn area_chart_renders_fills_lines_and_hover_metadata() {
+    let host = mount_fixture::<AreaChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-area-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let areas = host.query_selector_all(".pine-chart-area").unwrap();
+    assert_eq!(areas.length(), 2);
+    let first_area = areas.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first_area.get_attribute("data-series").as_deref(),
+        Some("Actual")
+    );
+    assert_eq!(
+        first_area.get_attribute("d").as_deref(),
+        Some("M0,100 L0,100 L100,0 L100,100Z")
+    );
+
+    let lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(lines.length(), 2);
+    let second_line = lines.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        second_line.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+    assert_eq!(
+        second_line.get_attribute("d").as_deref(),
+        Some("M0,0 L100,100")
+    );
+
+    let markers = host
+        .query_selector_all(".pine-area-chart .pine-chart-marker")
+        .unwrap();
+    assert_eq!(markers.length(), 4);
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let rect = svg.get_bounding_client_rect();
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x((rect.left() + 95.0).round() as i32);
+    init.set_client_y((rect.top() + 95.0).round() as i32);
+    svg.dispatch_event(
+        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
+    )
+    .unwrap();
+    settle().await;
 
     let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
     assert_eq!(

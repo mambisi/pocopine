@@ -35,6 +35,15 @@
   <pine-chart-legend label="Weekly metric legend"
                      pp-bind:items="line_legend"></pine-chart-legend>
 
+  <pine-area-chart label="Trend area"
+                   pp-bind:series="area_series"
+                   show_markers="true"
+                   width="720"
+                   height="320"></pine-area-chart>
+
+  <pine-chart-legend label="Trend area legend"
+                     pp-bind:items="area_legend"></pine-chart-legend>
+
   <pine-bar-chart label="Distribution"
                   pp-bind:series="bar_series"
                   pp-bind:mode="bar_mode"

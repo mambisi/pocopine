@@ -32,6 +32,15 @@ let series: Vec<ChartLineSeries> = /* application data */;
 let legend_items = line_legend_items(&series);
 ```
 
+For multi-series area charts, use the area helper:
+
+```rust
+use pine_charts::{area_legend_items, ChartAreaSeries};
+
+let series: Vec<ChartAreaSeries> = /* application data */;
+let legend_items = area_legend_items(&series);
+```
+
 ## Component
 
 ```html

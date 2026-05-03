@@ -69,6 +69,7 @@
     }
 
     .pine-line-chart,
+    .pine-area-chart,
     .pine-bar-chart {
       display: block;
       background: white;
@@ -79,6 +80,11 @@
 
     .pine-line-chart {
       color: #1d6fd8;
+      position: relative;
+    }
+
+    .pine-area-chart {
+      color: #16a085;
       position: relative;
     }
 
@@ -115,24 +121,46 @@
       stroke-linejoin: round;
     }
 
+    .pine-chart-area {
+      opacity: 0.18;
+    }
+
     .pine-chart-line[data-series="Actual"],
+    .pine-chart-area[data-series="Actual"],
     .pine-chart-marker[data-series="Actual"],
     .pine-chart-hover-marker[data-series="Actual"] {
       color: #1d6fd8;
     }
 
     .pine-chart-line[data-series="API"],
+    .pine-chart-area[data-series="API"],
     .pine-chart-marker[data-series="API"],
     .pine-chart-hover-marker[data-series="API"] {
       color: #16a085;
     }
 
     .pine-chart-line[data-series="Target"],
+    .pine-chart-area[data-series="Target"],
     .pine-chart-marker[data-series="Target"],
     .pine-chart-hover-marker[data-series="Target"],
     .pine-chart-line[data-series="Render"],
+    .pine-chart-area[data-series="Render"],
     .pine-chart-marker[data-series="Render"],
     .pine-chart-hover-marker[data-series="Render"] {
+      color: #d96c2c;
+    }
+
+    .pine-chart-line[data-series="Organic"],
+    .pine-chart-area[data-series="Organic"],
+    .pine-chart-marker[data-series="Organic"],
+    .pine-chart-hover-marker[data-series="Organic"] {
+      color: #16a085;
+    }
+
+    .pine-chart-line[data-series="Referral"],
+    .pine-chart-area[data-series="Referral"],
+    .pine-chart-marker[data-series="Referral"],
+    .pine-chart-hover-marker[data-series="Referral"] {
       color: #d96c2c;
     }
 

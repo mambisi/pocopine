@@ -9,8 +9,8 @@ The first layer is intentionally low level:
 - chart rectangles and margins,
 - linear and band scales,
 - SVG path builders for line and area series,
-- single-line, multi-line, grouped bar, stacked bar, legend, marker, and
-  line-hover components,
+- single-line, multi-line, area, grouped bar, stacked bar, legend, marker, and
+  hover components,
 - strict finite-number validation.
 
 Higher level components build on those primitives instead of hiding them. That
@@ -41,7 +41,7 @@ should remain author-owned whenever possible.
 ## Progression
 
 1. Foundation: pure geometry, scale, and path utilities.
-2. Components: SVG root, plot area, and first line/bar series components.
+2. Components: SVG root, plot area, and first line/area/bar series components.
 3. Composition: axes, grid lines, labels, markers, and legends.
 4. Interaction: tooltip, hover/crosshair, selection, and keyboard affordances.
 5. Strict mode: clear validation errors for malformed data and unsafe chart

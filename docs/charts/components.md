@@ -1,9 +1,10 @@
 # Chart Components
 
 The first component layer is intentionally small: `PineLineChart` renders SVG
-line charts from numeric points or named numeric series, and `PineBarChart`
-renders categorical values as SVG bars. They are useful on their own, but their
-main job is to prove the component contract before richer composition is added.
+line charts from numeric points or named numeric series, `PineAreaChart` renders
+closed SVG area fills from the same numeric shape, and `PineBarChart` renders
+categorical values as SVG bars. They are useful on their own, but their main job
+is to prove the component contract before richer composition is added.
 
 ## Registering
 
@@ -81,6 +82,45 @@ tooltip placement and visual styling.
 Set `show_markers="true"` when every sampled point should render as a visible
 SVG marker. Markers are opt-in so dense line charts do not accidentally produce
 hundreds of visible circles. Multi-series markers include `data-series`.
+
+## Area Chart
+
+`PineAreaChart` accepts `Vec<ChartPoint>` for simple area charts or
+`Vec<ChartAreaSeries>` for named and multi-area charts. It uses the same
+dimensions, margins, explicit domains, grid, axis, marker, legend, and hover
+contract as `PineLineChart`, but each series renders both a closed fill path and
+an optional stroke path.
+
+```rust
+use pine_charts::{area_legend_items, ChartAreaSeries, ChartPoint};
+
+let series = vec![
+    ChartAreaSeries::new(
+        "Organic",
+        vec![ChartPoint::new(0.0, 4.0), ChartPoint::new(1.0, 7.0)],
+    ),
+    ChartAreaSeries::new(
+        "Referral",
+        vec![ChartPoint::new(0.0, 3.0), ChartPoint::new(1.0, 5.0)],
+    ),
+];
+let legend_items = area_legend_items(&series);
+```
+
+```html
+<pine-area-chart
+  label="Acquisition"
+  pp-bind:series="series"
+  width="640"
+  height="320"></pine-area-chart>
+
+<pine-chart-legend
+  label="Acquisition legend"
+  pp-bind:items="legend_items"></pine-chart-legend>
+```
+
+Area fills close to the bottom of the plot rectangle. If an application needs a
+semantic zero baseline, set an explicit `y_min="0"` domain.
 
 ## Bar Chart
 
@@ -171,11 +211,14 @@ The component emits stable hooks:
 
 - `.pine-chart-root`
 - `.pine-line-chart`
+- `.pine-area-chart`
 - `.pine-bar-chart`
 - `.pine-chart-svg`
 - `.pine-chart-grid-line`
 - `.pine-chart-axis`
 - `.pine-chart-tick-label`
+- `.pine-chart-areas`
+- `.pine-chart-area`
 - `.pine-chart-lines`
 - `.pine-chart-line`
 - `.pine-chart-markers`
@@ -218,7 +261,15 @@ treatment:
   stroke-width: 2;
 }
 
+.pine-chart-area {
+  opacity: 0.2;
+}
+
 .pine-chart-line[data-series="Target"] {
+  color: var(--target-series);
+}
+
+.pine-chart-area[data-series="Target"] {
   color: var(--target-series);
 }
 
