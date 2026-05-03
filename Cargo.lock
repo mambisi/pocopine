@@ -2849,8 +2849,14 @@ dependencies = [
 name = "pine-charts"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "pocopine",
+ "pocopine-core",
  "serde",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

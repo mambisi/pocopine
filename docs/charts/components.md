@@ -46,6 +46,9 @@ The component emits stable hooks:
 - `.pine-chart-root`
 - `.pine-line-chart`
 - `.pine-chart-svg`
+- `.pine-chart-grid-line`
+- `.pine-chart-axis`
+- `.pine-chart-tick-label`
 - `.pine-chart-line`
 - `.pine-chart-status`
 - `data-state="empty|ready|invalid"`
@@ -69,3 +72,13 @@ treatment:
 Future components must keep following this pattern: generate SVG structure and
 state hooks, but leave palette, typography, spacing, and dashboard layout to the
 application.
+
+## SVG Representation
+
+Pine Charts renders framework-owned SVG as real SVG nodes. Repeated grid and
+tick marks use `pp-for` inside `<svg>` and rely on RFC 068's namespace-aware
+runtime path, not `pp-html` string injection.
+
+That matters for chart consumers because CSS selectors, DOM inspection, ARIA
+tools, and future interaction hooks all see normal SVG elements such as
+`<line>`, `<path>`, `<g>`, and `<text>`.
