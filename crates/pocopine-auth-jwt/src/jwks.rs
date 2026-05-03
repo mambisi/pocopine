@@ -31,6 +31,11 @@ struct Inner {
     url: String,
     cache_ttl: Duration,
     refresh_cooldown: Duration,
+    /// Cached HTTP client. `reqwest::Client` is internally an
+    /// `Arc<ClientRef>`, so cloning is cheap and the connection
+    /// pool persists across fetches — building a fresh client per
+    /// fetch defeated TLS keep-alive in the previous version.
+    http: reqwest::Client,
     state: Mutex<JwksState>,
 }
 
@@ -46,6 +51,17 @@ struct JwksState {
     last_attempt: Option<Instant>,
 }
 
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        // The default builder cannot fail on stable Rust targets
+        // (only "build" return Result for compile-time-disabled
+        // features). Falling back to the default client preserves
+        // the resolver shape without panicking.
+        .unwrap_or_default()
+}
+
 impl JwksResolver {
     /// Build a resolver. The first lookup triggers the first fetch
     /// — there's no eager warm-up.
@@ -55,6 +71,7 @@ impl JwksResolver {
                 url,
                 cache_ttl,
                 refresh_cooldown,
+                http: build_http_client(),
                 state: Mutex::new(JwksState::default()),
             }),
         }
@@ -65,7 +82,7 @@ impl JwksResolver {
     /// `key_for` calls are cache hits until TTL expiry.
     /// `cache_ttl == u32::MAX seconds` paired with the right URL
     /// (or empty URL) makes a static-only resolver.
-    pub fn with_seed(
+    pub(crate) fn with_seed(
         url: String,
         cache_ttl: Duration,
         refresh_cooldown: Duration,
@@ -76,6 +93,7 @@ impl JwksResolver {
                 url,
                 cache_ttl,
                 refresh_cooldown,
+                http: build_http_client(),
                 state: Mutex::new(JwksState {
                     jwks: Some(seed),
                     last_fetch: Some(Instant::now()),
@@ -127,7 +145,7 @@ impl JwksResolver {
             }
         }
         state.last_attempt = Some(now);
-        let fetched = fetch_jwks(&self.inner.url).await?;
+        let fetched = fetch_jwks(&self.inner.http, &self.inner.url).await?;
         state.jwks = Some(fetched);
         state.last_fetch = Some(now);
 
@@ -144,14 +162,8 @@ impl JwksResolver {
     }
 }
 
-async fn fetch_jwks(url: &str) -> Result<JwkSet, JwtAuthError> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| JwtAuthError::KeyResolutionFailed {
-            reason: format!("build http client: {e}"),
-        })?;
-    let response = client
+async fn fetch_jwks(http: &reqwest::Client, url: &str) -> Result<JwkSet, JwtAuthError> {
+    let response = http
         .get(url)
         .send()
         .await

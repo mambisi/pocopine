@@ -58,8 +58,48 @@ impl Algorithm {
     }
 
     /// Whether this algorithm uses asymmetric public-key crypto.
-    pub fn is_asymmetric(&self) -> bool {
+    pub(crate) fn is_asymmetric(&self) -> bool {
         !self.is_hmac()
+    }
+
+    /// Map the upstream `jsonwebtoken::Algorithm` into ours.
+    /// Returns `None` for any algorithm not in our whitelist
+    /// (including `none`, EdDSA, and any future variant the
+    /// upstream crate adds without our explicit acceptance).
+    ///
+    /// Host-only: `jsonwebtoken` doesn't compile on wasm32, and
+    /// the verifier (the only consumer) is host-only too.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn from_jwt(alg: jsonwebtoken::Algorithm) -> Option<Self> {
+        use jsonwebtoken::Algorithm as J;
+        Some(match alg {
+            J::HS256 => Algorithm::Hs256,
+            J::HS384 => Algorithm::Hs384,
+            J::HS512 => Algorithm::Hs512,
+            J::RS256 => Algorithm::Rs256,
+            J::RS384 => Algorithm::Rs384,
+            J::RS512 => Algorithm::Rs512,
+            J::ES256 => Algorithm::Es256,
+            J::ES384 => Algorithm::Es384,
+            _ => return None,
+        })
+    }
+
+    /// Inverse of [`Algorithm::from_jwt`]. Host-only for the same
+    /// reason.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn into_jwt(self) -> jsonwebtoken::Algorithm {
+        use jsonwebtoken::Algorithm as J;
+        match self {
+            Algorithm::Hs256 => J::HS256,
+            Algorithm::Hs384 => J::HS384,
+            Algorithm::Hs512 => J::HS512,
+            Algorithm::Rs256 => J::RS256,
+            Algorithm::Rs384 => J::RS384,
+            Algorithm::Rs512 => J::RS512,
+            Algorithm::Es256 => J::ES256,
+            Algorithm::Es384 => J::ES384,
+        }
     }
 }
 
@@ -260,14 +300,16 @@ pub trait RevocationCheck: Send + Sync + 'static {
     fn is_revoked(&self, claims: &serde_json::Value) -> bool;
 }
 
-/// Verifier configuration. Construct via a preset
-/// (`JwtVerifier::firebase`, `clerk`, `auth0`, `supabase`,
-/// `pocopine`) or by hand for custom OIDC issuers.
+/// Verifier configuration. Construct by hand for custom OIDC
+/// issuers; provider-specific presets (Firebase, Clerk, Auth0,
+/// Supabase, …) ship in their own follow-up PRs alongside
+/// integration tests.
 ///
 /// Doesn't implement `Debug` because the `revocation` field is a
-/// trait object and the `keys` field can hold an HMAC secret. Use
-/// `JwtConfig::summary` (TODO) if you need to log the shape
-/// without the secret.
+/// trait object and the `keys` field can hold an HMAC secret —
+/// no safe whole-config print is possible. Inspect individual
+/// fields (`config.issuer`, `config.audience`, …) directly if
+/// you need to log them.
 #[derive(Clone)]
 pub struct JwtConfig {
     /// Where signing keys come from.

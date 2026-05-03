@@ -85,7 +85,9 @@ impl JwtIssuer {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_err(|e| JwtAuthError::SigningFailed {
+                reason: format!("system clock before unix epoch: {e}"),
+            })?;
         let claims = IssuedClaims {
             sub: subject,
             iss: &self.issuer,
@@ -101,8 +103,8 @@ impl JwtIssuer {
             &claims,
             &EncodingKey::from_secret(self.secret.as_bytes()),
         )
-        .map_err(|e| JwtAuthError::InvalidConfig {
-            reason: format!("token signing failed: {e}"),
+        .map_err(|e| JwtAuthError::SigningFailed {
+            reason: e.to_string(),
         })
     }
 }
