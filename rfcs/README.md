@@ -82,3 +82,4 @@ Conventions:
 | 071 | [Event spine and live invalidation streams](./rfc-071-event-spine-and-live-invalidation.md) | Draft |
 | 072 | [Offline sync protocol](./rfc-072-offline-sync-protocol.md) | Draft |
 | 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |
+| 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Draft |

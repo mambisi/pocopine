@@ -3023,7 +3023,7 @@ dependencies = [
 name = "pocopine-live"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "futures-util",
  "http-body-util",
  "pocopine-auth",
