@@ -96,6 +96,7 @@
 
     .pine-bar-chart {
       color: #16a085;
+      position: relative;
     }
 
     .pine-chart-svg {
@@ -241,6 +242,12 @@
     .pine-chart-bar {
       fill: currentColor;
       opacity: 0.86;
+    }
+
+    .pine-chart-bar[data-hovered] {
+      opacity: 1;
+      stroke: #18212f;
+      stroke-width: 1;
     }
 
     .pine-chart-bar[data-series="Organic"],

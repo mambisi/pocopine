@@ -54,6 +54,18 @@ async fn settle() {
     tick().await;
 }
 
+fn dispatch_pointer_move(svg: &Element, x: f64, y: f64) {
+    let rect = svg.get_bounding_client_rect();
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x((rect.left() + x).round() as i32);
+    init.set_client_y((rect.top() + y).round() as i32);
+    svg.dispatch_event(
+        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
+    )
+    .unwrap();
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -233,15 +245,7 @@ async fn multi_line_chart_renders_series_metadata_and_hover() {
     );
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
-    let rect = svg.get_bounding_client_rect();
-    let init = web_sys::PointerEventInit::new();
-    init.set_bubbles(true);
-    init.set_client_x((rect.left() + 95.0).round() as i32);
-    init.set_client_y((rect.top() + 95.0).round() as i32);
-    svg.dispatch_event(
-        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
-    )
-    .unwrap();
+    dispatch_pointer_move(&svg, 95.0, 95.0);
     settle().await;
 
     let hover_marker = host
@@ -341,15 +345,7 @@ async fn scatter_chart_renders_points_axes_and_hover() {
     assert_eq!(axis_labels.length(), 2);
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
-    let rect = svg.get_bounding_client_rect();
-    let init = web_sys::PointerEventInit::new();
-    init.set_bubbles(true);
-    init.set_client_x((rect.left() + 95.0).round() as i32);
-    init.set_client_y((rect.top() + 95.0).round() as i32);
-    svg.dispatch_event(
-        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
-    )
-    .unwrap();
+    dispatch_pointer_move(&svg, 95.0, 95.0);
     settle().await;
 
     let marker = host
@@ -485,15 +481,7 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
-    let rect = svg.get_bounding_client_rect();
-    let init = web_sys::PointerEventInit::new();
-    init.set_bubbles(true);
-    init.set_client_x((rect.left() + 50.0).round() as i32);
-    init.set_client_y((rect.top() + 50.0).round() as i32);
-    svg.dispatch_event(
-        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
-    )
-    .unwrap();
+    dispatch_pointer_move(&svg, 50.0, 50.0);
     settle().await;
 
     let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
@@ -777,6 +765,52 @@ async fn bar_chart_renders_svg_rects_axes_and_labels() {
     host.remove();
 }
 
+#[wasm_bindgen_test]
+async fn bar_chart_shows_tooltip_on_pointer_move() {
+    let host = mount_fixture::<BarChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
+    assert!(!chart.has_attribute("data-hover"));
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 10.0, 90.0);
+    settle().await;
+
+    let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
+    assert!(chart.has_attribute("data-hover"));
+
+    let first = host
+        .query_selector(".pine-chart-bar")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert!(first.has_attribute("data-hovered"));
+
+    let tooltip = host
+        .query_selector(".pine-chart-bar-tooltip")
+        .unwrap()
+        .unwrap();
+    assert_eq!(tooltip.get_attribute("data-category").as_deref(), Some("A"));
+    assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("2"));
+    assert_eq!(tooltip.get_attribute("aria-label").as_deref(), Some("A: 2"));
+    assert_eq!(
+        tooltip.get_attribute("data-tooltip-x").as_deref(),
+        Some("right")
+    );
+
+    let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
+    svg.dispatch_event(&leave).unwrap();
+    settle().await;
+
+    let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
+    assert!(!chart.has_attribute("data-hover"));
+    assert!(!first.has_attribute("data-hovered"));
+
+    host.remove();
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -845,6 +879,27 @@ async fn grouped_bar_chart_renders_series_metadata() {
         Some("Returning, A: 3")
     );
 
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 30.0, 85.0);
+    settle().await;
+
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-hovered"));
+    let tooltip = host
+        .query_selector(".pine-chart-bar-tooltip")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-series").as_deref(),
+        Some("Returning")
+    );
+    assert_eq!(tooltip.get_attribute("data-category").as_deref(), Some("A"));
+    assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("3"));
+    assert_eq!(
+        tooltip.get_attribute("aria-label").as_deref(),
+        Some("Returning, A: 3")
+    );
+
     host.remove();
 }
 
@@ -910,6 +965,23 @@ async fn stacked_bar_chart_accumulates_segments() {
     assert_eq!(second.get_attribute("width").as_deref(), Some("50"));
     assert_eq!(second.get_attribute("y").as_deref(), Some("50"));
     assert_eq!(second.get_attribute("height").as_deref(), Some("30"));
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 25.0, 60.0);
+    settle().await;
+
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-hovered"));
+    let tooltip = host
+        .query_selector(".pine-chart-bar-tooltip")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-series").as_deref(),
+        Some("Returning")
+    );
+    assert_eq!(tooltip.get_attribute("data-category").as_deref(), Some("A"));
+    assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("3"));
 
     host.remove();
 }

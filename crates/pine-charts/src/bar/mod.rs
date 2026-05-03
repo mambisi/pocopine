@@ -1,9 +1,12 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::cartesian::{x_axis_label, y_axis_label};
+use crate::cartesian::{
+    clear_plot_edges, plot_rect_from_edges, pointer_event_svg_point, x_axis_label, y_axis_label,
+    CartesianHoverPlacement,
+};
 use crate::error::{finite, ChartError, ChartResult};
-use crate::geometry::{ChartMargins, ChartRect};
+use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items, LegendItem};
 use crate::scale::{BandScale, LinearScale};
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
@@ -185,6 +188,53 @@ pub struct SvgBar {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+impl SvgBar {
+    fn contains(&self, point: Point) -> bool {
+        self.width > 0.0
+            && self.height > 0.0
+            && point.x >= self.x
+            && point.x <= self.x + self.width
+            && point.y >= self.y
+            && point.y <= self.y + self.height
+    }
+
+    fn hover_anchor(&self) -> Point {
+        let y = if self.value >= 0.0 {
+            self.y
+        } else {
+            self.y + self.height
+        };
+        Point {
+            x: self.x + self.width * 0.5,
+            y,
+        }
+    }
+
+    fn hover_update(&self, plot: ChartRect, width: f64, height: f64) -> BarHoverUpdate {
+        let point = self.hover_anchor();
+        BarHoverUpdate {
+            key: self.key.clone(),
+            category: self.category_label.clone(),
+            value: self.value,
+            value_label: format_tick(self.value),
+            series: display_series_label(&self.series_label),
+            aria_label: self.aria_label.clone(),
+            placement: CartesianHoverPlacement::new(point, plot, width, height),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BarHoverUpdate {
+    key: String,
+    category: String,
+    value: f64,
+    value_label: String,
+    series: String,
+    aria_label: String,
+    placement: CartesianHoverPlacement,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -371,6 +421,14 @@ fn bar_aria_label(category: &str, series: &str, value: f64) -> String {
     }
 }
 
+fn display_series_label(series: &str) -> String {
+    if series.is_empty() || series == "Series 1" {
+        String::new()
+    } else {
+        series.into()
+    }
+}
+
 fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
     ticks
         .iter()
@@ -535,6 +593,10 @@ pub struct PineBarChart {
     pub state: String,
     pub view_box: String,
     pub bars: Vec<SvgBar>,
+    pub plot_x: f64,
+    pub plot_y: f64,
+    pub plot_right: f64,
+    pub plot_bottom: f64,
     pub y_grid: Vec<SvgLine>,
     pub x_tick_labels: Vec<SvgTickLabel>,
     pub y_tick_labels: Vec<SvgTickLabel>,
@@ -543,6 +605,16 @@ pub struct PineBarChart {
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
     pub legend_items: Vec<LegendItem>,
+    pub hover_visible: bool,
+    pub hover_key: String,
+    pub hover_category: String,
+    pub hover_value: f64,
+    pub hover_value_label: String,
+    pub hover_series: String,
+    pub hover_aria_label: String,
+    pub hover_placement_x: String,
+    pub hover_placement_y: String,
+    pub hover_style: String,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -573,6 +645,10 @@ impl Default for PineBarChart {
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             bars: Vec::new(),
+            plot_x: 0.0,
+            plot_y: 0.0,
+            plot_right: 0.0,
+            plot_bottom: 0.0,
             y_grid: Vec::new(),
             x_tick_labels: Vec::new(),
             y_tick_labels: Vec::new(),
@@ -581,6 +657,16 @@ impl Default for PineBarChart {
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
             legend_items: Vec::new(),
+            hover_visible: false,
+            hover_key: String::new(),
+            hover_category: String::new(),
+            hover_value: 0.0,
+            hover_value_label: String::new(),
+            hover_series: String::new(),
+            hover_aria_label: String::new(),
+            hover_placement_x: "right".into(),
+            hover_placement_y: "above".into(),
+            hover_style: String::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -664,6 +750,26 @@ impl PineBarChart {
     fn on_series_padding_inner(&mut self, _: f64, _: Option<f64>) {
         self.recompute();
     }
+
+    pub fn on_pointer_move(&mut self, ev: wasm_bindgen::JsValue) {
+        let Some(point) = pointer_event_svg_point(ev, self.width, self.height) else {
+            return;
+        };
+        self.hover_at(point.x, point.y);
+    }
+
+    pub fn clear_hover(&mut self) {
+        self.hover_visible = false;
+        self.hover_key.clear();
+        self.hover_category.clear();
+        self.hover_value = 0.0;
+        self.hover_value_label.clear();
+        self.hover_series.clear();
+        self.hover_aria_label.clear();
+        self.hover_placement_x = "right".into();
+        self.hover_placement_y = "above".into();
+        self.hover_style.clear();
+    }
 }
 
 impl PineBarChart {
@@ -685,6 +791,10 @@ impl PineBarChart {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 self.bars = geometry.bars;
+                self.plot_x = geometry.plot.x;
+                self.plot_y = geometry.plot.y;
+                self.plot_right = geometry.plot.right();
+                self.plot_bottom = geometry.plot.bottom();
                 self.y_grid = geometry.y_grid;
                 self.x_tick_labels = geometry.x_tick_labels;
                 self.y_tick_labels = geometry.y_tick_labels;
@@ -698,9 +808,11 @@ impl PineBarChart {
                 self.ready = true;
                 self.empty = false;
                 self.invalid = false;
+                self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
                 self.clear_geometry();
+                self.clear_hover();
                 self.error.clear();
                 self.state = "empty".into();
                 self.ready = false;
@@ -733,6 +845,7 @@ impl PineBarChart {
 
     fn set_invalid(&mut self, error: ChartError) {
         self.clear_geometry();
+        self.clear_hover();
         self.error = error.to_string();
         self.state = "invalid".into();
         self.ready = false;
@@ -742,6 +855,7 @@ impl PineBarChart {
 
     fn clear_geometry(&mut self) {
         self.bars.clear();
+        self.clear_plot();
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
@@ -750,6 +864,55 @@ impl PineBarChart {
         self.legend_items.clear();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();
+    }
+
+    pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
+        let Ok(point) = Point::new(svg_x, svg_y) else {
+            self.clear_hover();
+            return;
+        };
+        if !self.ready || !self.plot_rect().contains(point) {
+            self.clear_hover();
+            return;
+        }
+
+        let Some(update) = self
+            .bars
+            .iter()
+            .rev()
+            .find(|bar| bar.contains(point))
+            .map(|bar| bar.hover_update(self.plot_rect(), self.width, self.height))
+        else {
+            self.clear_hover();
+            return;
+        };
+        self.apply_hover(update);
+    }
+
+    fn apply_hover(&mut self, update: BarHoverUpdate) {
+        self.hover_visible = true;
+        self.hover_key = update.key;
+        self.hover_category = update.category;
+        self.hover_value = update.value;
+        self.hover_value_label = update.value_label;
+        self.hover_series = update.series;
+        self.hover_aria_label = update.aria_label;
+        self.hover_placement_x = update.placement.x.into();
+        self.hover_placement_y = update.placement.y.into();
+        self.hover_style = update.placement.style;
+    }
+
+    fn plot_rect(&self) -> ChartRect {
+        plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
+    }
+
+    fn clear_plot(&mut self) {
+        clear_plot_edges(
+            &mut self.plot_x,
+            &mut self.plot_y,
+            &mut self.plot_right,
+            &mut self.plot_bottom,
+        );
     }
 }
 
@@ -960,5 +1123,49 @@ mod tests {
         assert_eq!(chart.state, "ready");
         assert_eq!(chart.bars.len(), 2);
         assert_eq!(chart.bars[1].height, 100.0);
+    }
+
+    #[test]
+    fn component_tracks_hovered_bar() {
+        let mut chart = PineBarChart {
+            series: vec![
+                ChartBarSeries::new(
+                    "New",
+                    vec![ChartBar::new("A", 2.0), ChartBar::new("B", 4.0)],
+                ),
+                ChartBarSeries::new(
+                    "Returning",
+                    vec![ChartBar::new("A", 3.0), ChartBar::new("B", 10.0)],
+                ),
+            ],
+            width: 100.0,
+            height: 100.0,
+            margin_top: 0.0,
+            margin_right: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            y_min: Some(0.0),
+            y_max: Some(10.0),
+            mode: "grouped".into(),
+            padding_inner: 0.0,
+            padding_outer: 0.0,
+            series_padding_inner: 0.0,
+            ..PineBarChart::default()
+        };
+
+        chart.recompute();
+        chart.hover_at(30.0, 85.0);
+
+        assert!(chart.hover_visible);
+        assert_eq!(chart.hover_key, "bar-grouped-0-1");
+        assert_eq!(chart.hover_category, "A");
+        assert_eq!(chart.hover_value, 3.0);
+        assert_eq!(chart.hover_value_label, "3");
+        assert_eq!(chart.hover_series, "Returning");
+        assert_eq!(chart.hover_aria_label, "Returning, A: 3");
+
+        chart.hover_at(50.0, -1.0);
+
+        assert!(!chart.hover_visible);
     }
 }

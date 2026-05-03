@@ -44,4 +44,4 @@ wasm-pack test --firefox --headless crates/pine-charts
 ```
 
 The browser suite mounts compiled Pocopine fixtures and verifies SVG output,
-reactive bound data updates, and empty/invalid states.
+reactive bound data updates, hover behavior, and empty/invalid states.
