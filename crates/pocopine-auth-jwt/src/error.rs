@@ -51,6 +51,12 @@ pub enum JwtAuthError {
     /// The configured `ClaimMap` could not extract the user id from
     /// the verified claims.
     ClaimMapFailed { path: String },
+
+    /// `JwtIssuer::sign` failed at runtime — clock unavailable, or
+    /// the underlying signer rejected the claims/key. Distinct from
+    /// `InvalidConfig` (which is a construction-time invariant
+    /// violation).
+    SigningFailed { reason: String },
 }
 
 impl JwtAuthError {
@@ -68,6 +74,7 @@ impl JwtAuthError {
             JwtAuthError::ScopeMissing { .. } => "scope_missing",
             JwtAuthError::Revoked => "revoked",
             JwtAuthError::ClaimMapFailed { .. } => "claim_map_failed",
+            JwtAuthError::SigningFailed { .. } => "signing_failed",
         }
     }
 }
@@ -102,6 +109,9 @@ impl fmt::Display for JwtAuthError {
             JwtAuthError::Revoked => f.write_str("token revoked"),
             JwtAuthError::ClaimMapFailed { path } => {
                 write!(f, "claim map failed: could not extract `{path}`")
+            }
+            JwtAuthError::SigningFailed { reason } => {
+                write!(f, "token signing failed: {reason}")
             }
         }
     }

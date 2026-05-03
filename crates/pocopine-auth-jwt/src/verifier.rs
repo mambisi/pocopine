@@ -16,18 +16,25 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use jsonwebtoken::{decode, decode_header, Algorithm as JwtAlg, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use pocopine_auth::{
     AuthError, AuthFuture, AuthProvider, AuthUser, Permission, RequestContext, Role,
 };
+use pocopine_observe::{LOG_TARGET, METRIC_TARGET};
 use serde_json::Value;
 
 use crate::config::{Algorithm, ClaimMap, ClaimPath, JwtConfig, KeySource, TokenSource};
 use crate::error::JwtAuthError;
 use crate::jwks::JwksResolver;
+
+/// Counter name emitted on every successful verification.
+const COUNTER_VERIFICATIONS: &str = "auth.jwt.verifications";
+/// Counter name emitted on every rejection. The `kind` field
+/// carries the [`JwtAuthError::kind`] label so operators can
+/// alert on classes.
+const COUNTER_REJECTIONS: &str = "auth.jwt.rejections";
 
 /// JWT verifier implementing [`AuthProvider`]. Construct via a
 /// preset (`JwtVerifier::firebase`, etc.) or
@@ -92,21 +99,15 @@ impl JwtVerifier {
             reason: malformed_reason(e),
         })?;
 
-        // Algorithm pinning: reject before key resolution. Map the
-        // jsonwebtoken Algorithm to ours; an unknown alg (including
-        // `none`) is auto-rejected because it's not in our enum.
-        let our_alg = match header.alg {
-            JwtAlg::HS256 => Algorithm::Hs256,
-            JwtAlg::HS384 => Algorithm::Hs384,
-            JwtAlg::HS512 => Algorithm::Hs512,
-            JwtAlg::RS256 => Algorithm::Rs256,
-            JwtAlg::RS384 => Algorithm::Rs384,
-            JwtAlg::RS512 => Algorithm::Rs512,
-            JwtAlg::ES256 => Algorithm::Es256,
-            JwtAlg::ES384 => Algorithm::Es384,
-            other => {
+        // Algorithm pinning: reject before key resolution. Any alg
+        // not in our enum (including `none` and EdDSA) is rejected;
+        // any alg in the enum but not in the configured whitelist
+        // is rejected.
+        let our_alg = match Algorithm::from_jwt(header.alg) {
+            Some(a) => a,
+            None => {
                 return Err(JwtAuthError::AlgorithmRejected {
-                    got: format!("{other:?}"),
+                    got: format!("{:?}", header.alg),
                     allowed: self.allowed_alg_strs(),
                 });
             }
@@ -194,8 +195,10 @@ impl JwtVerifier {
             }
         }
 
-        // Project to AuthUser via ClaimMap.
-        project_claims(&claims, &self.inner.config.claim_map)
+        // Project to AuthUser via ClaimMap. Consume by value so the
+        // claim map is moved into AuthUser.claims rather than
+        // deep-cloned per request.
+        project_claims(claims, &self.inner.config.claim_map)
     }
 
     fn allowed_alg_strs(&self) -> Vec<String> {
@@ -224,22 +227,22 @@ impl AuthProvider for JwtVerifier {
             match self.verify_token(&token).await {
                 Ok(user) => {
                     tracing::debug!(
-                        target: "pocopine.metric",
-                        counter = "auth.jwt.verifications",
+                        target: METRIC_TARGET,
+                        counter = COUNTER_VERIFICATIONS,
                         result = "ok",
                     );
                     Ok(Some(user))
                 }
                 Err(err) => {
                     tracing::warn!(
-                        target: "pocopine.log",
+                        target: LOG_TARGET,
                         kind = err.kind(),
                         error = %err,
                         "jwt verification rejected"
                     );
                     tracing::debug!(
-                        target: "pocopine.metric",
-                        counter = "auth.jwt.rejections",
+                        target: METRIC_TARGET,
+                        counter = COUNTER_REJECTIONS,
                         kind = err.kind(),
                     );
                     // The trait surface returns AuthError, not
@@ -302,29 +305,14 @@ fn map_jwt_error(err: jsonwebtoken::errors::Error) -> JwtAuthError {
             claim: "nbf",
             reason: "token not yet valid".into(),
         },
-        ErrorKind::InvalidAlgorithm => JwtAuthError::AlgorithmRejected {
-            got: "<verifier rejected>".into(),
-            allowed: vec![],
-        },
+        // `InvalidAlgorithm` from the upstream decode is unreachable
+        // here — we pin the algorithm before calling `decode` (see
+        // `from_jwt` above). Anything else is a generic claim-side
+        // failure that we surface verbatim.
         _ => JwtAuthError::ClaimRejected {
             claim: "unknown",
             reason: err.to_string(),
         },
-    }
-}
-
-impl Algorithm {
-    pub(crate) fn into_jwt(self) -> JwtAlg {
-        match self {
-            Algorithm::Hs256 => JwtAlg::HS256,
-            Algorithm::Hs384 => JwtAlg::HS384,
-            Algorithm::Hs512 => JwtAlg::HS512,
-            Algorithm::Rs256 => JwtAlg::RS256,
-            Algorithm::Rs384 => JwtAlg::RS384,
-            Algorithm::Rs512 => JwtAlg::RS512,
-            Algorithm::Es256 => JwtAlg::ES256,
-            Algorithm::Es384 => JwtAlg::ES384,
-        }
     }
 }
 
@@ -338,8 +326,11 @@ fn walk_path<'a>(claims: &'a Value, path: &ClaimPath) -> Option<&'a Value> {
     Some(node)
 }
 
-fn project_claims(claims: &Value, map: &ClaimMap) -> Result<AuthUser, JwtAuthError> {
-    let id = walk_path(claims, &map.id)
+fn project_claims(claims: Value, map: &ClaimMap) -> Result<AuthUser, JwtAuthError> {
+    // First read the named projections by reference. This walk
+    // doesn't allocate apart from the small `id`/email/name strings
+    // we have to own (they live on `AuthUser`).
+    let id = walk_path(&claims, &map.id)
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .ok_or_else(|| JwtAuthError::ClaimMapFailed {
@@ -349,24 +340,24 @@ fn project_claims(claims: &Value, map: &ClaimMap) -> Result<AuthUser, JwtAuthErr
     let mut user = AuthUser::new(id);
 
     if let Some(p) = &map.email {
-        if let Some(s) = walk_path(claims, p).and_then(Value::as_str) {
+        if let Some(s) = walk_path(&claims, p).and_then(Value::as_str) {
             user.email = Some(s.to_string());
         }
     }
     if let Some(p) = &map.name {
-        if let Some(s) = walk_path(claims, p).and_then(Value::as_str) {
+        if let Some(s) = walk_path(&claims, p).and_then(Value::as_str) {
             user.name = Some(s.to_string());
         }
     }
     if let Some(p) = &map.roles {
-        if let Some(roles) = walk_path(claims, p) {
+        if let Some(roles) = walk_path(&claims, p) {
             for s in extract_string_or_array(roles) {
                 user.roles.push(Role::named(s));
             }
         }
     }
     if let Some(p) = &map.permissions {
-        if let Some(perms) = walk_path(claims, p) {
+        if let Some(perms) = walk_path(&claims, p) {
             for s in extract_string_or_array(perms) {
                 user.permissions.push(Permission::new(s));
             }
@@ -375,13 +366,11 @@ fn project_claims(claims: &Value, map: &ClaimMap) -> Result<AuthUser, JwtAuthErr
 
     // Stash the entire raw claims object so app code can reach
     // provider-specific fields (Firebase identities, Clerk org_id,
-    // …) via `user.claim("key")`.
-    if let Some(obj) = claims.as_object() {
-        let mut bucket = BTreeMap::new();
-        for (k, v) in obj {
-            bucket.insert(k.clone(), v.clone());
-        }
-        user.claims = bucket;
+    // …) via `user.claim("key")`. Move the map by value — claims
+    // are typed `serde_json::Map<String, Value>` which is itself a
+    // BTreeMap, so the conversion is essentially a rename.
+    if let Value::Object(obj) = claims {
+        user.claims = obj.into_iter().collect();
     }
 
     Ok(user)
