@@ -227,9 +227,12 @@ mod host {
     use futures_util::stream::{self, StreamExt};
     use pocopine_auth::RequestContext;
     use pocopine_events::{
-        EventCursor, EventEnvelope, EventError, LiveEventBackend, LiveEventSubscription,
-        SubscribeRequest, Topic,
+        build_event_backend, EventBackendConfig, EventCursor, EventEnvelope, EventError,
+        EventResult, LiveEventBackend, LiveEventSubscription, MemoryEventBackend,
+        MemoryEventConfig, SharedEventBackend, SubscribeRequest, Topic,
     };
+    #[cfg(feature = "redis")]
+    use pocopine_events::{RedisEventBackend, RedisEventConfig};
     use pocopine_observe::{LOG_TARGET, TRACE_TARGET};
     use serde::Deserialize;
     use serde_json::json;
@@ -294,6 +297,47 @@ mod host {
         ) -> Self {
             self.policy = Arc::new(policy);
             self
+        }
+    }
+
+    impl LiveHub<MemoryEventBackend> {
+        /// Build a live hub backed by process-local memory.
+        ///
+        /// This is safe for tests, development, and explicit
+        /// single-process deployments. It does not coordinate multiple
+        /// server processes and does not survive restarts.
+        pub fn memory() -> Self {
+            Self::new(MemoryEventBackend::new())
+        }
+
+        /// Build a memory-backed live hub with explicit retention.
+        pub fn memory_with_config(config: MemoryEventConfig) -> EventResult<Self> {
+            Ok(Self::new(MemoryEventBackend::with_config(config)?))
+        }
+    }
+
+    impl LiveHub<SharedEventBackend> {
+        /// Build a live hub from a supported built-in backend config.
+        pub fn from_backend_config(config: EventBackendConfig) -> EventResult<Self> {
+            Ok(Self::new(build_event_backend(config)?))
+        }
+
+        /// Build a live hub from an already constructed shared backend.
+        pub fn shared(backend: SharedEventBackend) -> Self {
+            Self::new(backend)
+        }
+    }
+
+    #[cfg(feature = "redis")]
+    impl LiveHub<RedisEventBackend> {
+        /// Build a Redis-backed live hub from explicit config.
+        pub fn redis(config: RedisEventConfig) -> EventResult<Self> {
+            Ok(Self::new(RedisEventBackend::from_config(config)?))
+        }
+
+        /// Build a Redis-backed live hub from `POCOPINE_REDIS_URL`.
+        pub fn redis_from_env(app: impl Into<String>) -> EventResult<Self> {
+            Ok(Self::new(RedisEventBackend::from_env(app)?))
         }
     }
 
@@ -533,7 +577,10 @@ mod host {
     #[cfg(test)]
     mod tests {
         use axum::http::Method;
-        use pocopine_events::{EventDraft, MemoryEventBackend};
+        use pocopine_events::{
+            EventBackend, EventBackendCapabilities, EventBackendConfig, EventDraft,
+            MemoryEventBackend, MemoryEventConfig,
+        };
         use serde_json::json;
 
         use super::*;
@@ -583,6 +630,49 @@ mod host {
             let topics = hub.allowed_topics(&ctx, &query).unwrap();
 
             assert_eq!(topics, vec![posts]);
+        }
+
+        #[test]
+        fn memory_constructor_builds_memory_hub() {
+            let hub = LiveHub::memory();
+
+            assert_eq!(
+                hub.backend.capabilities(),
+                EventBackendCapabilities::memory()
+            );
+        }
+
+        #[test]
+        fn memory_constructor_rejects_invalid_config() {
+            let result = LiveHub::memory_with_config(MemoryEventConfig {
+                capacity: 1,
+                subscriber_capacity: 0,
+            });
+
+            assert!(matches!(result, Err(EventError::InvalidRetention(_))));
+        }
+
+        #[test]
+        fn backend_config_constructor_builds_shared_hub() {
+            let hub = LiveHub::from_backend_config(EventBackendConfig::memory()).unwrap();
+
+            assert_eq!(
+                hub.backend.capabilities(),
+                EventBackendCapabilities::memory()
+            );
+        }
+
+        #[cfg(feature = "redis")]
+        #[test]
+        fn redis_constructor_builds_without_connecting() {
+            let config =
+                pocopine_events::RedisEventConfig::new("redis://127.0.0.1/", "live-test").unwrap();
+            let hub = LiveHub::redis(config).unwrap();
+
+            assert_eq!(
+                hub.backend.capabilities(),
+                EventBackendCapabilities::redis_streams()
+            );
         }
 
         #[test]
