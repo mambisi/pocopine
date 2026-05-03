@@ -8,6 +8,11 @@ bars, and `PinePieChart` renders pie, donut, half-pie, and half-donut slices.
 They are useful on their own, but their main job is to prove the component
 contract before richer composition is added.
 
+Use `PineChartResponsive` when a chart should follow its parent size. The
+responsive container measures its content box and writes concrete `width` and
+`height` props into the slotted chart, so SVG geometry and pointer interaction
+stay aligned after resize.
+
 ## Registering
 
 ```rust
@@ -43,6 +48,18 @@ In a template, bind data from the parent component:
   y_label="Revenue"
   width="640"
   height="320"></pine-line-chart>
+```
+
+Responsive usage keeps dimensions on the wrapper instead of the chart:
+
+```html
+<pine-chart-responsive aspect_ratio="2" min_height="220">
+  <pine-line-chart
+    label="Revenue"
+    pp-bind:points="points"
+    x_label="Week"
+    y_label="Revenue"></pine-line-chart>
+</pine-chart-responsive>
 ```
 
 For named or multi-line charts, bind `Vec<ChartLineSeries>` to `series`. Every

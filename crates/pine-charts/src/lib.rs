@@ -14,6 +14,7 @@ pub mod legend;
 pub mod line;
 pub mod path;
 pub mod pie;
+pub mod responsive;
 pub mod scale;
 pub mod scatter;
 pub mod svg;
@@ -37,6 +38,7 @@ pub use path::{area_path, line_path};
 pub use pie::{
     pie_legend_items, ChartPieSlice, PieChartGeometry, PieChartOptions, PinePieChart, SvgPieSlice,
 };
+pub use responsive::{PineChartResponsive, ResponsiveChartSize};
 pub use scale::{BandScale, LinearScale, Tick};
 pub use scatter::{
     nearest_scatter_sample, scatter_legend_items, ChartScatterSeries, PineScatterChart,
@@ -49,6 +51,7 @@ pub fn register_all() {
     PineAreaChart::register();
     PineBarChart::register();
     PineChartLegend::register();
+    PineChartResponsive::register();
     PineLineChart::register();
     PinePieChart::register();
     PineScatterChart::register();

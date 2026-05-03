@@ -1358,3 +1358,89 @@ async fn chart_legend_renders_items_and_updates() {
 
     host.remove();
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div class="responsive-host" style="width: 320px">
+  <pine-chart-responsive class="responsive-chart" aspect_ratio="2">
+    <pine-line-chart class="responsive-line"
+                     label="Responsive"
+                     x_label="Week"
+                     y_label="Value"
+                     width="10"
+                     height="10"
+                     margin_top="0"
+                     margin_right="0"
+                     margin_bottom="0"
+                     margin_left="0"
+                     pp-bind:points="points"></pine-line-chart>
+  </pine-chart-responsive>
+</div>
+"#)]
+struct ResponsiveChartFixture {
+    points: Vec<ChartPoint>,
+}
+
+impl Default for ResponsiveChartFixture {
+    fn default() -> Self {
+        Self {
+            points: vec![
+                ChartPoint::new(0.0, 1.0),
+                ChartPoint::new(1.0, 2.0),
+                ChartPoint::new(2.0, 4.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl ResponsiveChartFixture {}
+
+#[wasm_bindgen_test]
+async fn responsive_container_resizes_child_chart_props() {
+    let host = mount_fixture::<ResponsiveChartFixture>();
+    settle().await;
+    sleep_ms(50).await;
+    settle().await;
+
+    let container = host.query_selector(".responsive-chart").unwrap().unwrap();
+    assert_eq!(
+        container.get_attribute("data-ready").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        container.get_attribute("data-width").as_deref(),
+        Some("320")
+    );
+    assert_eq!(
+        container.get_attribute("data-height").as_deref(),
+        Some("160")
+    );
+
+    let svg = host
+        .query_selector(".responsive-line svg.pine-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(svg.get_attribute("width").as_deref(), Some("320"));
+    assert_eq!(svg.get_attribute("height").as_deref(), Some("160"));
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 320 160"));
+
+    let parent = host.query_selector(".responsive-host").unwrap().unwrap();
+    parent.set_attribute("style", "width: 480px").unwrap();
+    sleep_ms(50).await;
+    settle().await;
+
+    assert_eq!(
+        container.get_attribute("data-width").as_deref(),
+        Some("480")
+    );
+    assert_eq!(
+        container.get_attribute("data-height").as_deref(),
+        Some("240")
+    );
+    assert_eq!(svg.get_attribute("width").as_deref(), Some("480"));
+    assert_eq!(svg.get_attribute("height").as_deref(), Some("240"));
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 480 240"));
+
+    host.remove();
+}

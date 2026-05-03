@@ -1,0 +1,8 @@
+<root class="pine-chart-responsive"
+      pp-ref="root"
+      :style="container_style"
+      :data-ready="ready"
+      :data-width="measured_width"
+      :data-height="measured_height">
+  <slot></slot>
+</root>

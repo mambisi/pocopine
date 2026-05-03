@@ -35,6 +35,7 @@ should remain author-owned whenever possible.
 - [Components](components.md)
 - [Axes and Grid](axes-grid.md)
 - [Legends](legend.md)
+- [Responsive Containers](responsive.md)
 - [Interaction](interaction.md)
 - [Events](events.md)
 - [Examples](examples.md)
