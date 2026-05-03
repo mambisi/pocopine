@@ -1,0 +1,560 @@
+# RFC 071 - Offline sync protocol
+
+| Field | Value |
+|---|---|
+| **Status** | Draft |
+| **Author** | pocopine team |
+| **Created** | 2026-05-03 |
+| **Builds on** | [RFC 070](./rfc-070-event-spine-and-live-invalidation.md) |
+| **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 069](./rfc-069-observability.md), [RFC 072](./rfc-072-yrs-collaboration.md) |
+
+## 1. Summary
+
+Pocopine should treat sync as a protocol, not just a notification stream.
+The sync layer coordinates snapshots, cursors, pulls, pushes, mutation
+dedupe, gap recovery, and conflict policy for client-side data stores.
+
+The first version is server-authoritative and database agnostic. It does
+not require CRDTs. CRDTs remain the right tool for collaborative
+documents, covered separately by RFC 072.
+
+## 2. Problem Statement
+
+Live invalidation answers "something changed; refresh this data." Offline
+sync answers harder questions:
+
+- Which subset of data should this client own locally?
+- What cursor proves the client has seen all changes through a point in
+  time?
+- How does the client catch up after being offline?
+- How are local mutations deduped when the network retries?
+- What happens when the client edits old data?
+- How does the server avoid leaking rows through deletes and tombstones?
+
+These rules cannot be bolted onto a generic WebSocket event stream after
+the fact. They need a stable protocol boundary.
+
+## 3. Goals
+
+- Define a future `pocopine-sync` crate and protocol.
+- Define the frontend collection/query/mutation surface that consumes the
+  protocol.
+- Keep database adapters behind traits.
+- Allow optional SQLx adapters for authors who want compile-time checked
+  SQL without making SQLx a framework-wide dependency.
+- Support initial snapshots, incremental pulls, mutation pushes, and
+  cursor-based resume.
+- Make sync shapes explicit and guarded.
+- Let components query normalized local data instead of forcing
+  view-specific server endpoints.
+- Provide safe defaults for conflict handling.
+- Use `pocopine-live` only as an invalidation/wake-up path.
+- Leave CRDT merge semantics to `pocopine-collab`.
+
+## 4. Non-goals
+
+- This RFC does not implement peer-to-peer sync.
+- This RFC does not make every application local-first by default.
+- This RFC does not expose arbitrary SQL filters to browsers.
+- This RFC does not solve rich text or multi-user document editing.
+- This RFC does not require a specific database engine.
+
+## 5. Core Concepts
+
+### 5.1 Shape
+
+A shape is a named, authorized subset of application data:
+
+```rust
+pocopine::sync_shape! {
+    posts_for_tenant {
+        collection: posts;
+        key: PostId;
+        schema_version: 1;
+        filter: |ctx, row| row.tenant_id == ctx.tenant_id();
+        projection: PostSyncView;
+    }
+}
+```
+
+The client subscribes to shape names. It does not send table names, SQL
+fragments, or raw database filters.
+
+### 5.2 Cursor
+
+A cursor is an opaque server-issued token. It may encode a backend offset
+such as a Redis stream id, database LSN, sequence id, or framework
+logical clock. Clients must not parse it.
+
+If a cursor expires or is no longer available, the server returns `gap`
+and the client must resnapshot the shape.
+
+### 5.3 Change
+
+The sync protocol has a stable change envelope:
+
+```rust
+pub struct SyncChange {
+    pub shape: String,
+    pub key: serde_json::Value,
+    pub op: SyncOp,
+    pub version: RowVersion,
+    pub payload: Option<serde_json::Value>,
+    pub cursor: SyncCursor,
+}
+
+pub enum SyncOp {
+    Upsert,
+    Delete,
+    Reset,
+}
+```
+
+Deletes carry keys and versions by default. Old row payloads require an
+explicit opt-in and must pass the same read guard as normal rows.
+
+## 6. Frontend Store Model
+
+Pocopine sync should expose a frontend store model similar in spirit to
+TanStack DB: typed collections, live queries over those collections, and
+optimistic mutations that sync back to the server. Pocopine should not
+copy TanStack DB's TypeScript implementation; it should adopt the author
+experience that fits a Rust/Wasm framework.
+
+### 6.1 Collections
+
+A collection is a normalized local set of typed rows:
+
+```rust
+let posts = sync.collection::<PostSyncView>("posts_for_tenant");
+```
+
+Collections may be populated by:
+
+- sync shapes from this RFC,
+- ordinary server-function/query fetches,
+- local-only browser state,
+- direct framework writes from live events or CDC adapters.
+
+The collection keeps two stores:
+
+- synced data: the last server-confirmed view,
+- optimistic overlay: local mutations waiting for server confirmation.
+
+Live queries read the merged view. Persistence and replay operate on the
+synced store plus the pending mutation log, not on arbitrary component
+state.
+
+### 6.2 Live queries
+
+Components should bind to local live queries:
+
+```rust
+let published = sync.live_query(|q| {
+    q.from(posts)
+        .filter(|post| post.status == PostStatus::Published)
+        .order_by(|post| post.created_at.desc())
+        .limit(50)
+});
+```
+
+Live queries should support filtering, projection, ordering, limits, and
+joins across local collections. The first implementation may recompute
+affected queries conservatively. Later implementations can add
+incremental query planning. The public contract is reactivity and
+correctness, not a specific query-engine algorithm.
+
+Every live query result row carries read-only sync metadata:
+
+```rust
+pub struct SyncRowMeta {
+    pub synced: bool,
+    pub origin: ChangeOrigin,
+    pub key: serde_json::Value,
+    pub collection: &'static str,
+    pub version: Option<RowVersion>,
+}
+```
+
+This metadata is queryable but is never persisted back to application
+storage.
+
+### 6.3 Query-driven sync
+
+For large datasets, the observed frontend query should be able to drive
+which server shape subset is loaded:
+
+```rust
+let products = sync.collection::<ProductView>("products");
+
+let results = sync.live_query(|q| {
+    q.from(products)
+        .filter(|p| p.category == selected_category.get())
+        .filter(|p| p.price < max_price.get())
+        .limit(100)
+});
+```
+
+The client does not send arbitrary executable filters. The framework maps
+supported query predicates onto registered shape parameters. Unsupported
+predicates run locally after the authorized shape subset is loaded.
+
+This gives the desired "query the local store from components" workflow
+without creating a raw database query API in the browser.
+
+### 6.4 Optimistic mutations
+
+Collections expose local insert, update, delete, and transaction APIs:
+
+```rust
+posts.update(post_id, |draft| {
+    draft.title = new_title.clone();
+});
+
+sync.transaction(|tx| {
+    tx.collection(posts).insert(new_post);
+    tx.collection(activity).insert(new_activity);
+});
+```
+
+Mutation lifecycle:
+
+1. apply the mutation to the optimistic overlay,
+2. render live queries from the merged view immediately,
+3. send a `push` request with a stable mutation id,
+4. wait for server acceptance and a sync cursor that includes the write,
+5. replace optimistic state with the confirmed server row,
+6. rollback or surface conflict if the server rejects it.
+
+Multiple mutations in one transaction should be sent as one logical
+operation. Mutations against the same key may be coalesced only when the
+result preserves user intent and the server mutation contract allows it.
+
+### 6.5 Direct server writes into collections
+
+Server-originated changes from `pull`, live invalidation refreshes, or
+CDC adapters must write directly into the synced store. They must not
+create optimistic mutations.
+
+Internal collection operations:
+
+```rust
+collection.apply_server_upsert(row, version, cursor);
+collection.apply_server_delete(key, version, cursor);
+collection.apply_server_reset(snapshot, cursor);
+```
+
+These operations update live queries immediately and reconcile any
+pending optimistic overlay for the same key.
+
+### 6.6 Storage adapters
+
+The frontend store starts with memory and IndexedDB adapters:
+
+```rust
+pub trait ClientSyncStore {
+    async fn load_collection(&self, collection: &str) -> SyncResult<ClientSnapshot>;
+    async fn save_changes(&self, batch: ClientChangeBatch) -> SyncResult<()>;
+    async fn load_pending_mutations(&self) -> SyncResult<Vec<ClientMutation>>;
+}
+```
+
+The memory adapter is valid for tests and ephemeral views. IndexedDB is
+the default browser persistence path for offline-capable apps.
+
+### 6.7 Framework integration
+
+The framework should provide hooks/helpers rather than requiring
+components to manually wire streams:
+
+```rust
+let posts = use_sync_collection::<PostSyncView>("posts_for_tenant");
+let visible = use_live_query!(posts.where(|p| p.status == Published));
+let save = use_sync_action!(posts.update);
+```
+
+The exact macro names can change during implementation. The RFC-level
+contract is that collection loading, live query subscription, optimistic
+mutation, error/conflict state, and pending/synced metadata are first
+class frontend primitives.
+
+## 7. Protocol Endpoints
+
+### 7.1 Open
+
+```text
+POST /__pocopine/sync/v1/open
+```
+
+Request:
+
+```json
+{
+  "shapes": ["posts_for_tenant"],
+  "client_id": "device_abc",
+  "known_cursors": {}
+}
+```
+
+Response:
+
+```json
+{
+  "session_id": "sync_sess_123",
+  "shapes": [
+    {
+      "name": "posts_for_tenant",
+      "snapshot_url": "/__pocopine/sync/v1/snapshot/snap_123",
+      "cursor": "sync:v1:cursor_123"
+    }
+  ]
+}
+```
+
+### 7.2 Pull
+
+```text
+POST /__pocopine/sync/v1/pull
+```
+
+The client sends shape cursors. The server returns ordered changes and a
+new cursor. Pull responses may be empty.
+
+### 7.3 Push
+
+```text
+POST /__pocopine/sync/v1/push
+```
+
+The client sends mutations:
+
+```json
+{
+  "client_id": "device_abc",
+  "mutations": [
+    {
+      "mutation_id": "device_abc:42",
+      "shape": "posts_for_tenant",
+      "key": "post_123",
+      "base_version": "row:v7",
+      "op": "update",
+      "payload": {"title": "New title"}
+    }
+  ]
+}
+```
+
+Mutation ids are idempotency keys. Replayed pushes must not apply twice.
+The server returns accepted, rejected, or conflict states per mutation.
+
+## 8. Conflict Policy
+
+The default policy is server-authoritative:
+
+- if the base version still matches, apply the mutation in a transaction;
+- if the base version is stale, reject with `conflict`;
+- the client pulls current data and lets application UI decide what to do.
+
+Applications may register custom resolvers:
+
+```rust
+resolve_conflict: |ctx, local, remote| async move {
+    ConflictDecision::Apply(merge_post(local, remote)?)
+}
+```
+
+The resolver runs on the server and must be explicit. Pocopine should not
+silently merge arbitrary application records.
+
+## 9. Change Sources
+
+Phase A can use server functions and explicit application publication.
+Later phases can add CDC adapters:
+
+```rust
+pub trait ChangeSource {
+    async fn snapshot(&self, shape: ShapeRequest) -> SyncResult<Snapshot>;
+    async fn changes_since(&self, cursor: SyncCursor) -> SyncResult<ChangeBatch>;
+}
+```
+
+Postgres logical replication and Supabase ETL are candidate sources for
+Postgres. SQLite, MySQL, and application-event sources can be added
+behind the same trait.
+
+### 9.1 Future SQLx adapter
+
+SQLx is a good opt-in adapter for teams that want compile-time checked
+SQL. It should not be the core sync abstraction and should not be pulled
+into apps that use another database layer.
+
+The future crate should be separate:
+
+```toml
+[dependencies]
+pocopine-sync = "..."
+pocopine-sync-sqlx = { version = "...", features = ["postgres"] }
+sqlx = { version = "0.8", features = [
+  "runtime-tokio",
+  "tls-rustls-ring-webpki",
+  "postgres",
+  "macros",
+] }
+```
+
+Inline checked SQL should be the default authoring path for small shapes:
+
+```rust
+pocopine::sync_shape! {
+    posts_for_tenant {
+        collection: posts;
+        key: PostId;
+        schema_version: 1;
+
+        source: sqlx::postgres {
+            snapshot: |pool, tenant_id| async move {
+                sqlx::query_as!(
+                    PostSyncView,
+                    r#"
+                    select id, title, description, updated_at
+                    from posts
+                    where tenant_id = $1
+                    order by updated_at asc
+                    "#,
+                    tenant_id
+                )
+                .fetch_all(pool)
+                .await
+            };
+        };
+
+        filter: |ctx| ctx.tenant_id();
+    }
+}
+```
+
+File-backed SQL remains available for long snapshot/change queries:
+
+```rust
+sqlx::query_file_as!(
+    PostSyncView,
+    "sql/sync/posts_for_tenant_snapshot.sql",
+    tenant_id
+)
+```
+
+The adapter contract:
+
+- SQL remains normal SQL, not a Pocopine ORM DSL.
+- Inline `query!`/`query_as!` is preferred for simple shapes.
+- `query_file!`/`query_file_as!` is supported for large or shared SQL.
+- Compile-time checking requires `DATABASE_URL` at build time or checked
+  in SQLx offline metadata under `.sqlx`.
+- CI for SQLx-enabled apps should run `cargo sqlx prepare --check`.
+- Frontend query predicates must map to declared shape parameters. They
+  must not produce unchecked SQL string concatenation.
+
+SQLx checks query shape and database/Rust types for supported macros. It
+does not prove tenant isolation, authorization, conflict correctness, or
+delete privacy. Pocopine still owns those safety checks through shape
+guards, server-side mutation policy, cursor validation, and tombstone
+rules.
+
+## 10. Interaction With `pocopine-live`
+
+Sync does not need to keep a long-running bidirectional socket open for
+the first version. The client can use `pocopine-live` as a wake-up path:
+
+1. open the sync shape and load the snapshot,
+2. listen for `shape.invalidated`,
+3. call `pull` with the current cursor,
+4. apply returned changes to the local store.
+
+If the live stream drops, the next pull is still authoritative.
+
+## 11. Security Model
+
+- Every shape must have a guard.
+- Shape filters run on the server.
+- Clients cannot invent new filters.
+- Pushes execute through typed server mutations, not direct table writes.
+- Tombstones reveal only keys unless explicitly configured.
+- Cursor tokens must not grant access by themselves; access is checked on
+  every open, pull, and push.
+- Frontend query predicates may narrow an authorized shape but must not
+  expand it beyond the server-registered shape guard.
+- SQLx compile-time checks, when enabled, are query/type checks only.
+  They are not authorization proofs.
+
+## 12. Observability
+
+The sync crate must emit tracing events through the framework
+observability model:
+
+- `pocopine.trace` for session lifecycle and cursor progress.
+- `pocopine.log` for gaps, auth denials, and adapter failures.
+- `pocopine.metric` for snapshot bytes, pull latency, mutation retries,
+  conflicts, and cursor-gap counts.
+
+Mutation payloads and row payloads are not logged.
+
+## 13. Phases
+
+### Phase A - Manual source, HTTP protocol
+
+- Add sync shape registration and guarded open/pull/push endpoints.
+- Use application-published changes as the source.
+- Add memory frontend collection store.
+- Add basic live queries with conservative recomputation.
+
+### Phase B - Live wake-up
+
+- Emit `shape.invalidated` through RFC 070.
+- Add browser helper that pulls on invalidation.
+- Apply server changes directly to synced collections.
+
+### Phase C - CDC adapters
+
+- Add Postgres adapter using logical replication or Supabase ETL.
+- Map database changes into shape changes.
+- Add tests for delete privacy and cursor gaps.
+
+### Phase D - Local store helpers
+
+- Add IndexedDB browser persistence.
+- Support optimistic writes with mutation id replay.
+- Add transaction state and conflict metadata exposed to components.
+
+### Phase E - Advanced conflict handling
+
+- Add custom resolvers and richer conflict UI hooks.
+- Keep CRDT document sync in RFC 072.
+
+### Phase F - Query-driven sync
+
+- Map supported frontend predicates to shape parameters.
+- Add request coalescing and subset expansion.
+- Keep unsupported predicates as local-only filters.
+
+### Phase G - Optional SQLx integration
+
+- Add `pocopine-sync-sqlx` behind database features.
+- Support inline `query!`/`query_as!` examples as the default docs path.
+- Support `query_file!`/`query_file_as!` for large sync SQL.
+- Document `DATABASE_URL`, `.sqlx`, and `cargo sqlx prepare --check`.
+- Add compile-time checked snapshot and change-source examples for
+  Postgres first.
+
+## 14. Research References
+
+- Local-first software paper: https://www.inkandswitch.com/essay/local-first/
+- Automerge sync protocol: https://automerge.org/automerge/automerge/sync/index.html
+- CouchDB replication protocol: https://docs.couchdb.org/en/stable/replication/protocol.html
+- ElectricSQL sync engine and shapes: https://electric-sql.com/product/sync
+- PostgreSQL logical replication: https://www.postgresql.org/docs/current/logical-replication.html
+- Supabase ETL: https://supabase.github.io/etl/
+- TanStack DB overview: https://tanstack.com/db/latest/docs/overview
+- TanStack DB live queries: https://tanstack.com/db/latest/docs/guides/live-queries
+- TanStack DB mutations: https://tanstack.com/db/latest/docs/guides/mutations
+- SQLx repository and README: https://github.com/launchbadge/sqlx
+- SQLx `query!` macro and offline mode: https://docs.rs/sqlx/latest/sqlx/macro.query.html
