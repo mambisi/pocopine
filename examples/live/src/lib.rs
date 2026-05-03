@@ -58,11 +58,21 @@ pub fn live_backend() -> MemoryEventBackend {
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn publish_posts_invalidation(op: pocopine::live::LiveOp, key: impl Into<String>) {
-    let draft = pocopine::live::LiveInvalidation::new("posts", op)
+    let collection_draft = pocopine::live::LiveInvalidation::new("posts", op)
         .keys([key.into()])
         .query_tags(["posts:list"])
         .into_draft();
 
+    publish_live_draft(collection_draft).await;
+
+    let query_draft = pocopine::live::query_tag_topic("posts:list")
+        .and_then(|topic| pocopine::live::query_invalidated(topic, ["posts:list"]));
+
+    publish_live_draft(query_draft).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn publish_live_draft(draft: pocopine_events::EventResult<pocopine_events::EventDraft>) {
     let Ok(draft) = draft else {
         return;
     };
