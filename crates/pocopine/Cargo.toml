@@ -15,6 +15,7 @@ analytics = ["dep:pocopine-analytics", "observe"]
 devtools = ["pocopine-core/devtools"]
 logging = ["dep:pocopine-logging", "observe"]
 logging-otlp = ["logging", "pocopine-logging/otlp"]
+live = ["dep:pocopine-live"]
 mount-profiler = ["pocopine-core/mount-profiler"]
 observe = ["dep:pocopine-observe"]
 runtime-expr-fallback = ["pocopine-core/runtime-expr-fallback"]
@@ -24,6 +25,7 @@ pocopine-analytics = { workspace = true, optional = true }
 pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
 pocopine-jobs = { workspace = true }
+pocopine-live = { workspace = true, optional = true }
 pocopine-logging = { workspace = true, optional = true }
 pocopine-macros = { workspace = true }
 pocopine-observe = { workspace = true, optional = true }
