@@ -1,4 +1,4 @@
-use pine_charts::{ChartBar, ChartBarSeries, ChartPoint};
+use pine_charts::{bar_legend_items, ChartBar, ChartBarSeries, ChartPoint, LegendItem};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -9,15 +9,18 @@ pub struct ChartDemo {
     pub bar_mode: String,
     pub points: Vec<ChartPoint>,
     pub bar_series: Vec<ChartBarSeries>,
+    pub bar_legend: Vec<LegendItem>,
 }
 
 impl Default for ChartDemo {
     fn default() -> Self {
+        let bar_series = growth_bar_series();
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
             points: growth_points(),
-            bar_series: growth_bar_series(),
+            bar_legend: bar_legend_items(&bar_series),
+            bar_series,
         }
     }
 }
@@ -25,15 +28,19 @@ impl Default for ChartDemo {
 #[handlers]
 impl ChartDemo {
     pub fn show_growth(&mut self) {
+        let bar_series = growth_bar_series();
         self.dataset = "growth".into();
         self.points = growth_points();
-        self.bar_series = growth_bar_series();
+        self.bar_legend = bar_legend_items(&bar_series);
+        self.bar_series = bar_series;
     }
 
     pub fn show_latency(&mut self) {
+        let bar_series = latency_bar_series();
         self.dataset = "latency".into();
         self.points = latency_points();
-        self.bar_series = latency_bar_series();
+        self.bar_legend = bar_legend_items(&bar_series);
+        self.bar_series = bar_series;
     }
 
     pub fn show_grouped(&mut self) {

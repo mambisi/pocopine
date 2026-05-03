@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
+use crate::legend::LegendItem;
 use crate::scale::{BandScale, LinearScale};
 use crate::svg::{format_tick, SvgLine, SvgTickLabel};
 
@@ -94,6 +95,7 @@ pub struct BarChartGeometry {
     pub y_tick_labels: Vec<SvgTickLabel>,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
+    pub legend_items: Vec<LegendItem>,
 }
 
 impl BarChartGeometry {
@@ -150,9 +152,21 @@ impl BarChartGeometry {
                 baseline_y,
             ),
             y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
+            legend_items: data.legend_items(),
             y_ticks,
         })
     }
+}
+
+pub fn bar_legend_items(series: &[ChartBarSeries]) -> Vec<LegendItem> {
+    series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| {
+            let label = series_label(series, index);
+            LegendItem::with_series(format!("bar-series-{index}-{label}"), label.clone(), label)
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -236,6 +250,24 @@ impl NormalizedBarData {
 
     fn values(&self) -> impl Iterator<Item = &f64> {
         self.series.iter().flat_map(|series| series.values.iter())
+    }
+
+    fn legend_items(&self) -> Vec<LegendItem> {
+        if self.series.len() <= 1 {
+            return Vec::new();
+        }
+
+        self.series
+            .iter()
+            .enumerate()
+            .map(|(index, series)| {
+                LegendItem::with_series(
+                    format!("bar-series-{index}-{}", series.label),
+                    series.label.clone(),
+                    series.label.clone(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -511,6 +543,7 @@ pub struct PineBarChart {
     pub y_tick_labels: Vec<SvgTickLabel>,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
+    pub legend_items: Vec<LegendItem>,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -544,6 +577,7 @@ impl Default for PineBarChart {
             y_tick_labels: Vec::new(),
             x_axis: SvgLine::default(),
             y_axis: SvgLine::default(),
+            legend_items: Vec::new(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -653,6 +687,7 @@ impl PineBarChart {
                 self.y_tick_labels = geometry.y_tick_labels;
                 self.x_axis = geometry.x_axis;
                 self.y_axis = geometry.y_axis;
+                self.legend_items = geometry.legend_items;
                 self.error.clear();
                 self.state = "ready".into();
                 self.ready = true;
@@ -705,6 +740,7 @@ impl PineBarChart {
         self.y_grid.clear();
         self.x_tick_labels.clear();
         self.y_tick_labels.clear();
+        self.legend_items.clear();
         self.x_axis = SvgLine::default();
         self.y_axis = SvgLine::default();
     }
@@ -814,6 +850,9 @@ mod tests {
         assert_eq!(geometry.bars[2].x, 50.0);
         assert_eq!(geometry.bars[3].x, 75.0);
         assert_eq!(geometry.bars[1].series_label, "Returning");
+        assert_eq!(geometry.legend_items.len(), 2);
+        assert_eq!(geometry.legend_items[0].label, "New");
+        assert_eq!(geometry.legend_items[1].series, "Returning");
     }
 
     #[test]
@@ -874,6 +913,19 @@ mod tests {
                 actual: "Feb".into(),
             }
         );
+    }
+
+    #[test]
+    fn helper_builds_legend_items_from_series() {
+        let items = bar_legend_items(&[
+            ChartBarSeries::new("Organic", Vec::new()),
+            ChartBarSeries::new("Referral", Vec::new()),
+        ]);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "Organic");
+        assert_eq!(items[0].series, "Organic");
+        assert_eq!(items[1].key, "bar-series-1-Referral");
     }
 
     #[test]
