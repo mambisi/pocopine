@@ -58,6 +58,8 @@ async fn settle() {
 <div>
   <pine-line-chart class="sales-chart"
                    label="Sales"
+                   x_label="Week"
+                   y_label="Sales"
                    width="100"
                    height="100"
                    margin_top="0"
@@ -131,6 +133,25 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
 
     let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
     assert_eq!(labels.length(), 12, "x and y tick labels render");
+
+    let axis_labels = host.query_selector_all(".pine-chart-axis-label").unwrap();
+    assert_eq!(axis_labels.length(), 2, "x and y axis labels render");
+    let x_axis_label = host
+        .query_selector(".pine-chart-axis-label-x")
+        .unwrap()
+        .unwrap();
+    assert_eq!(x_axis_label.text_content().as_deref(), Some("Week"));
+    assert_eq!(x_axis_label.get_attribute("x").as_deref(), Some("50"));
+    assert_eq!(x_axis_label.get_attribute("y").as_deref(), Some("96"));
+    let y_axis_label = host
+        .query_selector(".pine-chart-axis-label-y")
+        .unwrap()
+        .unwrap();
+    assert_eq!(y_axis_label.text_content().as_deref(), Some("Sales"));
+    assert_eq!(
+        y_axis_label.get_attribute("transform").as_deref(),
+        Some("rotate(-90 12 50)")
+    );
 
     host.remove();
 }

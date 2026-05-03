@@ -5,7 +5,8 @@
 - grid lines for x ticks,
 - grid lines for y ticks,
 - x and y axis domain lines,
-- tick marks and labels.
+- tick marks and labels,
+- optional x and y axis labels from `x_label` and `y_label`.
 
 Bar charts omit vertical category grid lines for now, but they use the same axis
 and tick-label hooks. Stacked bars infer their y domain from positive and
@@ -27,6 +28,9 @@ Use these selectors for chart guides:
 - `.pine-chart-axis`
 - `.pine-chart-axis-x`
 - `.pine-chart-axis-y`
+- `.pine-chart-axis-label`
+- `.pine-chart-axis-label-x`
+- `.pine-chart-axis-label-y`
 - `.pine-chart-tick`
 - `.pine-chart-tick-x`
 - `.pine-chart-tick-y`
@@ -50,6 +54,11 @@ Example:
 .pine-chart-tick-label {
   fill: currentColor;
   font: 12px system-ui;
+}
+
+.pine-chart-axis-label {
+  fill: currentColor;
+  font: 600 12px system-ui;
 }
 ```
 
