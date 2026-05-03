@@ -1,9 +1,9 @@
 # Chart Components
 
-The first component layer is intentionally small: `PineLineChart` renders a
-single SVG line chart from numeric points, and `PineBarChart` renders categorical
-values as SVG bars. They are useful on their own, but their main job is to prove
-the component contract before richer composition is added.
+The first component layer is intentionally small: `PineLineChart` renders SVG
+line charts from numeric points or named numeric series, and `PineBarChart`
+renders categorical values as SVG bars. They are useful on their own, but their
+main job is to prove the component contract before richer composition is added.
 
 ## Registering
 
@@ -17,7 +17,8 @@ fn main() {
 
 `PineLineChart` accepts `Vec<ChartPoint>` data, chart dimensions, margins, and
 optional explicit domains. If a domain is omitted, it is inferred from the
-points. Flat domains are expanded so one-point charts still render.
+points. Flat domains are expanded so one-point charts still render. The
+`points` prop stays available for simple single-line charts.
 
 ```rust
 use pine_charts::ChartPoint;
@@ -39,14 +40,47 @@ In a template, bind data from the parent component:
   height="320"></pine-line-chart>
 ```
 
+For named or multi-line charts, bind `Vec<ChartLineSeries>` to `series`. Every
+series is rendered as its own SVG path with `data-series="<label>"`; markers,
+hover markers, and tooltips expose the same series label.
+
+```rust
+use pine_charts::{line_legend_items, ChartLineSeries, ChartPoint};
+
+let series = vec![
+    ChartLineSeries::new(
+        "Actual",
+        vec![ChartPoint::new(0.0, 12.0), ChartPoint::new(1.0, 18.0)],
+    ),
+    ChartLineSeries::new(
+        "Target",
+        vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 20.0)],
+    ),
+];
+let legend_items = line_legend_items(&series);
+```
+
+```html
+<pine-line-chart
+  label="Revenue"
+  pp-bind:series="series"
+  width="640"
+  height="320"></pine-line-chart>
+
+<pine-chart-legend
+  label="Revenue legend"
+  pp-bind:items="legend_items"></pine-chart-legend>
+```
+
 Line charts also expose a hover crosshair, marker, and tooltip. Pointer movement
-is mapped to the nearest sampled point in SVG space. The component owns the
-nearest-point state and geometry variables, while the application owns tooltip
-placement and visual styling.
+is mapped to the nearest sampled point in SVG space. For multi-series charts,
+that means nearest x/y distance, not just nearest x position. The component owns
+the nearest-point state and geometry variables, while the application owns
+tooltip placement and visual styling.
 
 Set `show_markers="true"` when every sampled point should render as a visible
 SVG marker. Markers are opt-in so dense line charts do not accidentally produce
-hundreds of visible circles.
+hundreds of visible circles. Multi-series markers include `data-series`.
 
 ## Bar Chart
 
@@ -142,6 +176,7 @@ The component emits stable hooks:
 - `.pine-chart-grid-line`
 - `.pine-chart-axis`
 - `.pine-chart-tick-label`
+- `.pine-chart-lines`
 - `.pine-chart-line`
 - `.pine-chart-markers`
 - `.pine-chart-marker`
@@ -149,6 +184,7 @@ The component emits stable hooks:
 - `.pine-chart-crosshair`
 - `.pine-chart-hover-marker`
 - `.pine-chart-tooltip`
+- `.pine-chart-tooltip-series`
 - `.pine-chart-tooltip-x`
 - `.pine-chart-tooltip-y`
 - `.pine-chart-bar`
@@ -169,7 +205,7 @@ The component emits stable hooks:
 - `data-empty`
 - `data-invalid`
 
-The default line path uses `stroke="currentColor"` and `fill="none"`, while bars
+The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
 treatment:
 
@@ -180,6 +216,10 @@ treatment:
 
 .pine-chart-line {
   stroke-width: 2;
+}
+
+.pine-chart-line[data-series="Target"] {
+  color: var(--target-series);
 }
 
 .pine-chart-marker {

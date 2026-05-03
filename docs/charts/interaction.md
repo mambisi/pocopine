@@ -9,12 +9,13 @@ HTML tooltip container.
 Pointer movement over the chart SVG is converted into SVG-space coordinates.
 Hover activates only while the pointer is inside the plot rectangle, not while
 it is over margins, axes, or tick labels. The component selects the nearest
-sampled point by x distance and exposes:
+sampled point by SVG x/y distance and exposes:
 
 - `.pine-chart-hover`
 - `.pine-chart-crosshair`
 - `.pine-chart-hover-marker`
 - `.pine-chart-tooltip`
+- `.pine-chart-tooltip-series`
 - `.pine-chart-tooltip-x`
 - `.pine-chart-tooltip-y`
 - `data-hover`
@@ -22,6 +23,7 @@ sampled point by x distance and exposes:
 - `data-tooltip-y="above|below"`
 - `data-x`
 - `data-y`
+- `data-series`
 - CSS variables `--pine-chart-tooltip-x` and `--pine-chart-tooltip-y`
 
 The chart owns sampled-point lookup, crosshair geometry, marker coordinates, and

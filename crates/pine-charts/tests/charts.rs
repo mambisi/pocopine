@@ -3,7 +3,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use pine_charts::{ChartBar, ChartBarSeries, ChartPoint, LegendItem};
+use pine_charts::{ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem};
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -129,6 +129,115 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
 
     let labels = host.query_selector_all(".pine-chart-tick-label").unwrap();
     assert_eq!(labels.length(), 12, "x and y tick labels render");
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-line-chart class="multi-line-chart"
+                   label="Multi"
+                   width="100"
+                   height="100"
+                   margin_top="0"
+                   margin_right="0"
+                   margin_bottom="0"
+                   margin_left="0"
+                   show_markers="true"
+                   pp-bind:series="series"></pine-line-chart>
+</div>
+"#)]
+struct MultiLineChartFixture {
+    series: Vec<ChartLineSeries>,
+}
+
+impl Default for MultiLineChartFixture {
+    fn default() -> Self {
+        Self {
+            series: vec![
+                ChartLineSeries::new(
+                    "Actual",
+                    vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+                ),
+                ChartLineSeries::new(
+                    "Target",
+                    vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)],
+                ),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl MultiLineChartFixture {}
+
+#[wasm_bindgen_test]
+async fn multi_line_chart_renders_series_metadata_and_hover() {
+    let host = mount_fixture::<MultiLineChartFixture>();
+    settle().await;
+
+    let paths = host.query_selector_all("path.pine-chart-line").unwrap();
+    assert_eq!(paths.length(), 2);
+
+    let first_path = paths.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first_path.get_attribute("data-series").as_deref(),
+        Some("Actual")
+    );
+    assert_eq!(
+        first_path.get_attribute("d").as_deref(),
+        Some("M0,100 L100,0")
+    );
+
+    let second_path = paths.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        second_path.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+    assert_eq!(
+        second_path.get_attribute("d").as_deref(),
+        Some("M0,0 L100,100")
+    );
+
+    let markers = host.query_selector_all(".pine-chart-marker").unwrap();
+    assert_eq!(markers.length(), 4);
+    let target_marker = markers.get(2).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        target_marker.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let rect = svg.get_bounding_client_rect();
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x((rect.left() + 95.0).round() as i32);
+    init.set_client_y((rect.top() + 95.0).round() as i32);
+    svg.dispatch_event(
+        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
+    )
+    .unwrap();
+    settle().await;
+
+    let hover_marker = host
+        .query_selector(".pine-chart-hover-marker")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hover_marker.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+    assert_eq!(
+        tooltip.get_attribute("aria-label").as_deref(),
+        Some("Target: x 1, y 0")
+    );
 
     host.remove();
 }
@@ -304,11 +413,12 @@ async fn line_chart_reports_empty_state() {
     assert!(chart.has_attribute("data-empty"));
     assert!(!chart.has_attribute("data-invalid"));
 
-    let path = host
-        .query_selector("path.pine-chart-line")
-        .unwrap()
-        .unwrap();
-    assert_eq!(path.get_attribute("d").as_deref(), Some(""));
+    assert!(
+        host.query_selector("path.pine-chart-line")
+            .unwrap()
+            .is_none(),
+        "empty charts should not render a data path",
+    );
 
     host.remove();
 }
