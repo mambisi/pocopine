@@ -1,6 +1,6 @@
 use pine_charts::{
-    bar_legend_items, line_legend_items, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint,
-    LegendItem,
+    area_legend_items, bar_legend_items, line_legend_items, ChartAreaSeries, ChartBar,
+    ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,8 @@ pub struct ChartDemo {
     pub bar_mode: String,
     pub line_series: Vec<ChartLineSeries>,
     pub line_legend: Vec<LegendItem>,
+    pub area_series: Vec<ChartAreaSeries>,
+    pub area_legend: Vec<LegendItem>,
     pub bar_series: Vec<ChartBarSeries>,
     pub bar_legend: Vec<LegendItem>,
 }
@@ -19,12 +21,15 @@ pub struct ChartDemo {
 impl Default for ChartDemo {
     fn default() -> Self {
         let line_series = growth_line_series();
+        let area_series = growth_area_series();
         let bar_series = growth_bar_series();
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
             line_legend: line_legend_items(&line_series),
             line_series,
+            area_legend: area_legend_items(&area_series),
+            area_series,
             bar_legend: bar_legend_items(&bar_series),
             bar_series,
         }
@@ -35,20 +40,26 @@ impl Default for ChartDemo {
 impl ChartDemo {
     pub fn show_growth(&mut self) {
         let line_series = growth_line_series();
+        let area_series = growth_area_series();
         let bar_series = growth_bar_series();
         self.dataset = "growth".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
+        self.area_legend = area_legend_items(&area_series);
+        self.area_series = area_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
     }
 
     pub fn show_latency(&mut self) {
         let line_series = latency_line_series();
+        let area_series = latency_area_series();
         let bar_series = latency_bar_series();
         self.dataset = "latency".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
+        self.area_legend = area_legend_items(&area_series);
+        self.area_series = area_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
     }
@@ -117,6 +128,64 @@ fn latency_line_series() -> Vec<ChartLineSeries> {
                 ChartPoint::new(4.0, 48.0),
                 ChartPoint::new(5.0, 46.0),
                 ChartPoint::new(6.0, 42.0),
+            ],
+        ),
+    ]
+}
+
+fn growth_area_series() -> Vec<ChartAreaSeries> {
+    vec![
+        ChartAreaSeries::new(
+            "Organic",
+            vec![
+                ChartPoint::new(0.0, 4.0),
+                ChartPoint::new(1.0, 7.0),
+                ChartPoint::new(2.0, 9.0),
+                ChartPoint::new(3.0, 13.0),
+                ChartPoint::new(4.0, 18.0),
+                ChartPoint::new(5.0, 25.0),
+                ChartPoint::new(6.0, 31.0),
+            ],
+        ),
+        ChartAreaSeries::new(
+            "Referral",
+            vec![
+                ChartPoint::new(0.0, 3.0),
+                ChartPoint::new(1.0, 4.0),
+                ChartPoint::new(2.0, 6.0),
+                ChartPoint::new(3.0, 9.0),
+                ChartPoint::new(4.0, 11.0),
+                ChartPoint::new(5.0, 14.0),
+                ChartPoint::new(6.0, 16.0),
+            ],
+        ),
+    ]
+}
+
+fn latency_area_series() -> Vec<ChartAreaSeries> {
+    vec![
+        ChartAreaSeries::new(
+            "API",
+            vec![
+                ChartPoint::new(0.0, 88.0),
+                ChartPoint::new(1.0, 83.0),
+                ChartPoint::new(2.0, 76.0),
+                ChartPoint::new(3.0, 72.0),
+                ChartPoint::new(4.0, 68.0),
+                ChartPoint::new(5.0, 61.0),
+                ChartPoint::new(6.0, 54.0),
+            ],
+        ),
+        ChartAreaSeries::new(
+            "Render",
+            vec![
+                ChartPoint::new(0.0, 62.0),
+                ChartPoint::new(1.0, 56.0),
+                ChartPoint::new(2.0, 49.0),
+                ChartPoint::new(3.0, 44.0),
+                ChartPoint::new(4.0, 41.0),
+                ChartPoint::new(5.0, 38.0),
+                ChartPoint::new(6.0, 35.0),
             ],
         ),
     ]

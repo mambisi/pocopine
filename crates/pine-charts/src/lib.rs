@@ -4,6 +4,7 @@
 //! Pine components are layered on top of these primitives so chart behavior
 //! can be checked without a browser and without committing to canvas.
 
+pub mod area;
 pub mod bar;
 pub mod error;
 pub mod geometry;
@@ -13,6 +14,9 @@ pub mod path;
 pub mod scale;
 pub mod svg;
 
+pub use area::{
+    area_legend_items, AreaChartGeometry, AreaChartSeriesRender, ChartAreaSeries, PineAreaChart,
+};
 pub use bar::{
     bar_legend_items, BarChartGeometry, BarChartMode, BarChartOptions, ChartBar, ChartBarSeries,
     PineBarChart, SvgBar,
@@ -30,6 +34,7 @@ pub use svg::{SvgLine, SvgTickLabel};
 
 /// Register every Pine Charts custom-element tag.
 pub fn register_all() {
+    PineAreaChart::register();
     PineBarChart::register();
     PineChartLegend::register();
     PineLineChart::register();
