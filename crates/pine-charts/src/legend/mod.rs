@@ -40,6 +40,31 @@ impl LegendItem {
     }
 }
 
+pub(crate) fn series_label_or_default(label: &str, index: usize) -> String {
+    if label.is_empty() {
+        format!("Series {}", index + 1)
+    } else {
+        label.to_owned()
+    }
+}
+
+pub(crate) fn series_legend_items(
+    key_prefix: &str,
+    labels: impl IntoIterator<Item = String>,
+) -> Vec<LegendItem> {
+    labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            LegendItem::with_series(
+                format!("{key_prefix}-{index}-{label}"),
+                label.clone(),
+                label,
+            )
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineChartLegend.poco", role = "panel")]
 pub struct PineChartLegend {
@@ -97,6 +122,21 @@ mod tests {
         assert_eq!(item.key, "Organic");
         assert_eq!(item.label, "Organic");
         assert_eq!(item.series, "Organic");
+    }
+
+    #[test]
+    fn helper_builds_series_legend_items() {
+        let items = series_legend_items(
+            "line-series",
+            ["Actual".to_owned(), series_label_or_default("", 1)],
+        );
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].key, "line-series-0-Actual");
+        assert_eq!(items[0].label, "Actual");
+        assert_eq!(items[0].series, "Actual");
+        assert_eq!(items[1].key, "line-series-1-Series 2");
+        assert_eq!(items[1].label, "Series 2");
     }
 
     #[test]
