@@ -224,6 +224,12 @@ deployments can route JSON logs with their platform log agent and route traces
 through an OpenTelemetry Collector or OTLP-compatible backend. Direct vendor SDKs
 are intentionally out of scope for this layer.
 
+For a runnable smoke path, see
+[`examples/observability-smoke`](../examples/observability-smoke/). It starts a
+small host server, installs `logging-otlp`, exposes one `#[server(public)]`
+endpoint, and includes an OpenTelemetry Collector config that prints received
+spans with the debug exporter.
+
 ## Structured observed events
 
 Use `ObservedEvent` when you want a stable framework-facing event schema

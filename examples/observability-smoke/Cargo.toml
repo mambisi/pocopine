@@ -1,0 +1,26 @@
+[package]
+name = "observability-smoke"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.pocopine]
+bin = "server"
+port = 3010
+
+[lib]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine", features = ["logging-otlp"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-server = { path = "../../crates/pocopine-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
