@@ -32,6 +32,48 @@ Both share the same envelope shape, retry math, and dead-letter
 contract. The Redis backend is the interesting one — the rest of this
 doc covers it. The memory backend is documented at the end.
 
+### High-level topology
+
+```mermaid
+flowchart LR
+    App["app code<br/>(server fn / request handler)"]
+    Client["JobClient"]
+    Worker["Worker"]
+    Redis[("Redis<br/>broker")]
+    Handler["#[pocopine::job]<br/>handler fn"]
+
+    App -->|"enqueue_with / schedule_in"| Client
+    Client -->|"XADD / ZADD"| Redis
+    Worker -->|"TIME / XREADGROUP / XAUTOCLAIM /<br/>EVALSHA promote, retry, dead"| Redis
+    Worker --> Handler
+    Handler -.->|"Ok / Err / panic"| Worker
+```
+
+The client and worker are usually different processes — `bin = "server"`
+and `worker-bin = "worker"` in `[package.metadata.pocopine]`. They
+communicate only through Redis; there's no in-process queue or RPC.
+
+### Job state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Ready: enqueue
+    [*] --> Scheduled: schedule_in / schedule_at
+    Scheduled --> Ready: promote (due_ms reached)
+    Ready --> Running: XREADGROUP delivers
+    Running --> Done: Ok + XACK
+    Running --> Scheduled: Err, attempt < max (retry)
+    Running --> Dead: Err, attempt >= max
+    Running --> Stale: idle > visibility_timeout
+    Stale --> Running: XAUTOCLAIM (attempt += 1)
+    Stale --> Dead: attempt >= max after bump
+    Done --> [*]
+    Dead --> [*]
+```
+
+Every transition is exercised by an integration test in
+`crates/pocopine/tests/jobs_redis.rs`.
+
 ## Data model (Redis keys)
 
 All keys are namespaced by the configured `app` value. Curly braces
@@ -69,9 +111,22 @@ millisecond, and two restarts of the same process can't collide either
 
 ## The worker loop
 
+```mermaid
+flowchart TD
+    Start(["run_redis_once"]) --> T["① now_ms = Redis TIME"]
+    T --> P["② enqueue_due_periodic_jobs"]
+    P --> M["③ promote_due_jobs"]
+    M --> R["④ reclaim_stale_jobs"]
+    R --> X["⑤ read_ready_jobs<br/>(XREADGROUP)"]
+    X --> Z(["return handled count"])
+    Z -->|"handled == 0"| Sleep["sleep scheduler_interval"]
+    Sleep --> Start
+    Z -->|"handled > 0"| Start
+```
+
 ```rust
 async fn run_redis_once(&self, conn) -> JobResult<usize> {
-    let now_ms = redis_time_ms(conn).await?;            // ① broker clock
+    let now_ms = redis_time_ms(conn).await?;             // ①
     self.enqueue_due_periodic_jobs(conn, now_ms).await?; // ②
     self.promote_due_jobs(conn, now_ms).await?;          // ③
     self.reclaim_stale_jobs(conn).await?;                 // ④
@@ -101,27 +156,29 @@ is bound.
 
 ## Lifecycle 1 — happy path
 
-```
-                ┌──────────────────────┐
-                │  app calls            │
-                │  enqueue_with(client, │
-                │     payload)          │
-                └──────────┬───────────┘
-                           ▼
-            XADD pocopine:{app}:queue:{queue} *
-                  job_id, job_name, queue, payload, attempt=1, …
-                           │
-        ─ ── ── ── ── ── ── ┼ ── ── ── ── ── ── ── ── ── ──
-                           ▼
-              ⑤ Worker XREADGROUP ... >
-                           │
-                           ▼
-              run_envelope(stream_id, envelope)
-                           │
-            run_handler_safely(handler, payload).await
-                           │
-                           ▼
-                   Ok(())  ──►  XACK stream group stream_id
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as App code
+    participant Cli as JobClient
+    participant R as Redis
+    participant W as Worker
+    participant H as Handler
+
+    App->>Cli: enqueue_with(payload)
+    Cli->>R: XADD pocopine:{app}:queue:Q *<br/>job_id, attempt=1, payload, …
+    R-->>Cli: stream-id
+
+    loop run loop
+        W->>R: TIME
+        R-->>W: now_ms
+        W->>R: XREADGROUP GROUP g c COUNT N STREAMS Q >
+        R-->>W: stream-id, envelope
+        W->>H: tokio::spawn(handler(payload))
+        H-->>W: Ok(())
+        W->>R: XACK Q g stream-id
+        R-->>W: 1
+    end
 ```
 
 Why `run_handler_safely`? It runs the handler future under
@@ -152,6 +209,44 @@ XLEN pocopine:my-app:queue:emails              # still 1 — the entry is in the
 ```
 
 ## Lifecycle 2 — failure → retry → success or dead-letter
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Worker
+    participant R as Redis
+    participant H as Handler
+
+    Note over W: attempt 1, fails
+    W->>H: tokio::spawn(handler)
+    H-->>W: Err(_)
+    W->>R: TIME
+    R-->>W: now_ms
+    Note over W: due_ms = now + retry_delay(2)
+    W->>R: EVALSHA SCHEDULE_RETRY_AND_ACK<br/>XACK + ZADD scheduled
+    R-->>W: 1
+
+    Note over W,R: ...retry_delay later, next loop iter...
+
+    W->>R: ZRANGEBYSCORE scheduled -inf now_ms
+    R-->>W: [raw envelope (attempt=2)]
+    W->>R: EVALSHA PROMOTE_SCHEDULED<br/>ZREM + XADD ready
+    R-->>W: stream-id (or 0 if a peer won the race)
+    W->>R: XREADGROUP ... >
+    R-->>W: stream-id, envelope (attempt=2)
+    W->>H: tokio::spawn(handler)
+
+    alt handler succeeds
+        H-->>W: Ok(())
+        W->>R: XACK Q g stream-id
+    else attempt < max_attempts
+        H-->>W: Err(_)
+        Note over W: schedule attempt=3 …
+    else attempt >= max_attempts
+        H-->>W: Err(_)
+        W->>R: EVALSHA DEAD_LETTER_AND_ACK<br/>XACK + XADD dead
+    end
+```
 
 When `run_handler_safely` returns `Err(_)`:
 
@@ -291,6 +386,29 @@ asserts the final state.
 
 ## Lifecycle 3 — reclaim (worker died, or handler exceeded visibility)
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Worker A (will die)
+    participant R as Redis
+    participant B as Worker B
+
+    A->>R: XREADGROUP ... >
+    R-->>A: stream-id, envelope (attempt=1)
+    Note over A: handler hangs<br/>or process is killed<br/>before XACK
+
+    Note over R: stream-id remains in PEL,<br/>owner = A's consumer name
+
+    Note over B: ...visibility_timeout (60s)...
+
+    B->>R: XAUTOCLAIM Q g B-consumer<br/>min_idle=60000 0-0 COUNT N
+    R-->>B: [stream-id, envelope]<br/>ownership transferred to B
+
+    Note over B: envelope.attempt += 1
+    B->>B: run_envelope (attempt=2)
+    Note over B: routes through normal Ok / retry / dead path
+```
+
 If a worker reads an entry and never `XACK`s — crashed, OOM-killed,
 network-partitioned, or just took longer than `visibility_timeout` —
 the entry sits in PEL forever from that consumer's perspective.
@@ -356,6 +474,37 @@ complete, eventually `attempt == max_attempts` and the entry moves to
 the dead stream.
 
 ## Lifecycle 4 — periodic jobs
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Worker A
+    participant B as Worker B
+    participant R as Redis
+
+    Note over A,B: tick T+0: both compute the same due_ms
+
+    A->>R: GET pocopine:{app}:periodic:last:job
+    R-->>A: nil (never fired)
+    A->>R: SET pocopine:{app}:periodic:job:T 1 NX PX <ttl>
+    R-->>A: OK (locked)
+    A->>R: XADD ready stream (envelope, payload=())
+    A->>R: SET pocopine:{app}:periodic:last:job T
+
+    B->>R: GET pocopine:{app}:periodic:last:job
+    R-->>B: T (already fired)
+    Note over B: due_periodic_slots returns []<br/>(skip this slot)
+
+    Note over A,B: ...next due slot T'...
+
+    B->>R: GET periodic:last:job
+    R-->>B: T
+    Note over B: T' > T → due
+    B->>R: SET periodic:job:T' 1 NX PX <ttl>
+    R-->>B: OK (B wins this time)
+    B->>R: XADD ready stream
+    B->>R: SET periodic:last:job T'
+```
 
 `#[pocopine::job(every = "15m")]` and `#[pocopine::job(cron = "...")]`
 register a periodic descriptor. Periodic jobs are not executed by the
