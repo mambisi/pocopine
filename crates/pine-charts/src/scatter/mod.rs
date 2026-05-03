@@ -2,8 +2,9 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    apply_chart_state, clear_plot_edges, nearest_sample_by_point, plot_rect_from_edges,
-    pointer_event_svg_point, CartesianChartState, CartesianHoverFields,
+    nearest_sample_by_point, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
+    CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
+    ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -338,57 +339,38 @@ impl PineScatterChart {
                 self.view_box = geometry.view_box;
                 self.scatter_series = geometry.series;
                 self.samples = geometry.samples;
-                self.plot_x = geometry.plot.x;
-                self.plot_y = geometry.plot.y;
-                self.plot_right = geometry.plot.right();
-                self.plot_bottom = geometry.plot.bottom();
-                self.x_grid = geometry.x_grid;
-                self.y_grid = geometry.y_grid;
-                self.x_tick_labels = geometry.x_tick_labels;
-                self.y_tick_labels = geometry.y_tick_labels;
-                self.x_axis_label = geometry.x_axis_label;
-                self.y_axis_label = geometry.y_axis_label;
-                self.x_axis = geometry.x_axis;
-                self.y_axis = geometry.y_axis;
+                self.plot_edges().apply(geometry.plot);
+                self.guides().apply(CartesianGuideUpdate {
+                    x_grid: geometry.x_grid,
+                    y_grid: geometry.y_grid,
+                    x_tick_labels: geometry.x_tick_labels,
+                    y_tick_labels: geometry.y_tick_labels,
+                    x_axis_label: geometry.x_axis_label,
+                    y_axis_label: geometry.y_axis_label,
+                    x_axis: geometry.x_axis,
+                    y_axis: geometry.y_axis,
+                });
                 self.error.clear();
-                apply_chart_state(
-                    &mut self.state,
-                    &mut self.ready,
-                    &mut self.empty,
-                    &mut self.invalid,
-                    CartesianChartState::Ready,
-                );
+                self.state_fields().apply(CartesianChartState::Ready);
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
                 self.scatter_series.clear();
                 self.samples.clear();
-                self.clear_plot();
-                self.clear_guides();
+                self.plot_edges().clear();
+                self.guides().clear();
                 self.clear_hover();
                 self.error.clear();
-                apply_chart_state(
-                    &mut self.state,
-                    &mut self.ready,
-                    &mut self.empty,
-                    &mut self.invalid,
-                    CartesianChartState::Empty,
-                );
+                self.state_fields().apply(CartesianChartState::Empty);
             }
             Err(error) => {
                 self.scatter_series.clear();
                 self.samples.clear();
-                self.clear_plot();
-                self.clear_guides();
+                self.plot_edges().clear();
+                self.guides().clear();
                 self.clear_hover();
                 self.error = error.to_string();
-                apply_chart_state(
-                    &mut self.state,
-                    &mut self.ready,
-                    &mut self.empty,
-                    &mut self.invalid,
-                    CartesianChartState::Invalid,
-                );
+                self.state_fields().apply(CartesianChartState::Invalid);
             }
         }
     }
@@ -403,20 +385,9 @@ impl PineScatterChart {
                 self.margin_bottom,
                 self.margin_left,
             ),
-            x_domain: zip_domain(self.x_min, self.x_max),
-            y_domain: zip_domain(self.y_min, self.y_max),
+            x_domain: optional_domain(self.x_min, self.x_max),
+            y_domain: optional_domain(self.y_min, self.y_max),
         }
-    }
-
-    fn clear_guides(&mut self) {
-        self.x_grid.clear();
-        self.y_grid.clear();
-        self.x_tick_labels.clear();
-        self.y_tick_labels.clear();
-        self.x_axis_label = SvgAxisLabel::default();
-        self.y_axis_label = SvgAxisLabel::default();
-        self.x_axis = SvgLine::default();
-        self.y_axis = SvgLine::default();
     }
 
     pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
@@ -441,13 +412,35 @@ impl PineScatterChart {
         plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
     }
 
-    fn clear_plot(&mut self) {
-        clear_plot_edges(
-            &mut self.plot_x,
-            &mut self.plot_y,
-            &mut self.plot_right,
-            &mut self.plot_bottom,
-        );
+    fn plot_edges(&mut self) -> PlotEdgeFields<'_> {
+        PlotEdgeFields {
+            x: &mut self.plot_x,
+            y: &mut self.plot_y,
+            right: &mut self.plot_right,
+            bottom: &mut self.plot_bottom,
+        }
+    }
+
+    fn guides(&mut self) -> CartesianGuideFields<'_> {
+        CartesianGuideFields {
+            x_grid: &mut self.x_grid,
+            y_grid: &mut self.y_grid,
+            x_tick_labels: &mut self.x_tick_labels,
+            y_tick_labels: &mut self.y_tick_labels,
+            x_axis_label: &mut self.x_axis_label,
+            y_axis_label: &mut self.y_axis_label,
+            x_axis: &mut self.x_axis,
+            y_axis: &mut self.y_axis,
+        }
+    }
+
+    fn state_fields(&mut self) -> ChartStateFields<'_> {
+        ChartStateFields {
+            state: &mut self.state,
+            ready: &mut self.ready,
+            empty: &mut self.empty,
+            invalid: &mut self.invalid,
+        }
     }
 
     fn hover_fields(&mut self) -> CartesianHoverFields<'_> {
@@ -465,13 +458,6 @@ impl PineScatterChart {
             placement_y: &mut self.hover_placement_y,
             style: &mut self.hover_style,
         }
-    }
-}
-
-fn zip_domain(start: Option<f64>, end: Option<f64>) -> Option<(f64, f64)> {
-    match (start, end) {
-        (Some(start), Some(end)) => Some((start, end)),
-        _ => None,
     }
 }
 
