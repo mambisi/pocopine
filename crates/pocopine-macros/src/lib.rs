@@ -31,6 +31,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use std::collections::BTreeSet;
 use syn::{
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
@@ -938,6 +939,86 @@ pub(crate) fn kebab_case(ident: &str) -> String {
     out
 }
 
+enum PropAttrKind {
+    Plain,
+    Flatten(Option<Vec<String>>),
+}
+
+struct PropFlattenField {
+    container: syn::Ident,
+    ty: Type,
+    keys: Option<Vec<String>>,
+}
+
+fn parse_string_array(expr: syn::ExprArray) -> syn::Result<Vec<String>> {
+    let mut out = Vec::with_capacity(expr.elems.len());
+    for elem in expr.elems.iter() {
+        match elem {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) => out.push(s.value()),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "flatten leaves must be string literals",
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn parse_prop_attr(attr: &syn::Attribute) -> syn::Result<PropAttrKind> {
+    match &attr.meta {
+        Meta::Path(_) => Ok(PropAttrKind::Plain),
+        Meta::List(_) => attr.parse_args_with(|input: syn::parse::ParseStream| {
+            let key: syn::Ident = input.parse()?;
+            if key != "flatten" {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "unknown #[prop] key — expected: flatten",
+                ));
+            }
+            let keys = if input.peek(Token![=]) {
+                input.parse::<Token![=]>()?;
+                Some(parse_string_array(input.parse()?)?)
+            } else {
+                None
+            };
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+            if !input.is_empty() {
+                let extra: syn::Ident = input.parse()?;
+                return Err(syn::Error::new_spanned(
+                    extra,
+                    "unknown #[prop] key — expected only: flatten",
+                ));
+            }
+            Ok(PropAttrKind::Flatten(keys))
+        }),
+        Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attr,
+            "#[prop] accepts either bare form, #[prop(flatten)], or \
+             #[prop(flatten = [\"leaf1\", \"leaf2\"])]",
+        )),
+    }
+}
+
+fn push_unique_key(
+    seen: &mut BTreeSet<String>,
+    key: &str,
+    err_span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if !seen.insert(key.to_string()) {
+        return Err(syn::Error::new(
+            err_span,
+            format!("duplicate prop key `{key}` after flattening; rename or remove one prop"),
+        ));
+    }
+    Ok(())
+}
+
 #[proc_macro_attribute]
 pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = match ComponentArgs::parse.parse(attr) {
@@ -1123,6 +1204,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // each leaf is synthesised as an independent prop+model public
     // key that routes get/set through the container's serde impl.
     let mut flatten_fields: Vec<(syn::Ident, Vec<String>)> = Vec::new();
+    // RFC-070 — `#[prop(flatten)]` prop groups. The container is
+    // kept as an internal Rust field while its derived `Props`
+    // leaves become public prop keys.
+    let mut prop_flatten_fields: Vec<PropFlattenField> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else {
             continue;
@@ -1135,7 +1220,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         let mut observe_err: Option<syn::Error> = None;
         field.attrs.retain(|a| {
             if a.path().is_ident("prop") {
-                is_prop = true;
+                match parse_prop_attr(a) {
+                    Ok(PropAttrKind::Plain) => {
+                        is_prop = true;
+                    }
+                    Ok(PropAttrKind::Flatten(keys)) => {
+                        is_prop = false;
+                        prop_flatten_fields.push(PropFlattenField {
+                            container: ident.clone(),
+                            ty: field_ty.clone(),
+                            keys,
+                        });
+                    }
+                    Err(e) => observe_err = Some(e),
+                }
                 return false;
             }
             if a.path().is_ident("model") {
@@ -1382,6 +1480,36 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
     });
 
+    let prop_flatten_key_slice = |entry: &PropFlattenField| {
+        let ty = &entry.ty;
+        match &entry.keys {
+            Some(keys) => quote! { &[#(#keys),*] },
+            None => quote! { <#ty as ::pocopine::Props>::KEYS },
+        }
+    };
+
+    let prop_flatten_get_arms = prop_flatten_fields.iter().map(|entry| {
+        let container = &entry.container;
+        let ty = &entry.ty;
+        let keys = prop_flatten_key_slice(entry);
+        quote! {
+            _ if ::pocopine::__private::props_contains_runtime(#keys, key) => {
+                <#ty as ::pocopine::Props>::get_prop(&self.#container, key)
+            },
+        }
+    });
+
+    let prop_flatten_set_arms = prop_flatten_fields.iter().map(|entry| {
+        let container = &entry.container;
+        let ty = &entry.ty;
+        let keys = prop_flatten_key_slice(entry);
+        quote! {
+            _ if ::pocopine::__private::props_contains_runtime(#keys, key) => {
+                <#ty as ::pocopine::Props>::set_prop(&mut self.#container, key, value);
+            },
+        }
+    });
+
     // `serde_wasm_bindgen::to_value(&None::<T>)` returns `undefined`,
     // but RFC-044 §5.4 promises `None` serialises as `null`. Canonicalise
     // at the boundary so the emit detail, parent mirror-in round-trips,
@@ -1402,7 +1530,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 },
             }
         })
-        .chain(flatten_leaf_get_arms);
+        .chain(flatten_leaf_get_arms)
+        .chain(prop_flatten_get_arms);
 
     let set_arms = field_idents.iter().zip(field_names.iter()).map(|(id, name)| {
         quote! {
@@ -1419,12 +1548,107 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
-    }).chain(flatten_leaf_set_arms);
+    }).chain(flatten_leaf_set_arms)
+        .chain(prop_flatten_set_arms);
 
     let flatten_leaf_names: Vec<&String> = flatten_fields
         .iter()
         .flat_map(|(_, leaves)| leaves.iter())
         .collect();
+
+    let mut known_component_keys = BTreeSet::new();
+    for key in &field_names {
+        if let Err(err) = push_unique_key(&mut known_component_keys, key, struct_ident.span()) {
+            return err.to_compile_error().into();
+        }
+    }
+    for key in &flatten_leaf_names {
+        if let Err(err) = push_unique_key(&mut known_component_keys, key, struct_ident.span()) {
+            return err.to_compile_error().into();
+        }
+    }
+    for entry in &prop_flatten_fields {
+        if let Some(keys) = &entry.keys {
+            for key in keys {
+                if let Err(err) =
+                    push_unique_key(&mut known_component_keys, key, entry.container.span())
+                {
+                    return err.to_compile_error().into();
+                }
+            }
+        }
+    }
+
+    let base_key_literals: Vec<String> = field_names
+        .iter()
+        .cloned()
+        .chain(flatten_leaf_names.iter().map(|key| (*key).clone()))
+        .chain(
+            prop_flatten_fields
+                .iter()
+                .flat_map(|entry| entry.keys.clone().unwrap_or_default()),
+        )
+        .collect();
+
+    let prop_flatten_include_assertions = prop_flatten_fields.iter().flat_map(|entry| {
+        let ty = &entry.ty;
+        entry.keys.iter().flat_map(move |keys| {
+            keys.iter().map(move |key| {
+                quote! {
+                    const _: () = {
+                        ::pocopine::__private::assert_props_key(
+                            <#ty as ::pocopine::Props>::KEYS,
+                            #key,
+                        );
+                    };
+                }
+            })
+        })
+    });
+
+    let prop_flatten_base_disjoint_assertions = prop_flatten_fields.iter().filter_map(|entry| {
+        if entry.keys.is_some() {
+            return None;
+        }
+        let keys = prop_flatten_key_slice(entry);
+        Some(quote! {
+            const _: () = {
+                ::pocopine::__private::assert_props_disjoint(
+                    #keys,
+                    &[#(#base_key_literals),*],
+                );
+            };
+        })
+    });
+
+    let prop_flatten_pair_disjoint_assertions =
+        prop_flatten_fields
+            .iter()
+            .enumerate()
+            .flat_map(|(index, entry)| {
+                prop_flatten_fields
+                    .iter()
+                    .take(index)
+                    .filter_map(move |previous| {
+                        if entry.keys.is_some() && previous.keys.is_some() {
+                            return None;
+                        }
+                        let left = prop_flatten_key_slice(entry);
+                        let right = prop_flatten_key_slice(previous);
+                        Some(quote! {
+                            const _: () = {
+                                ::pocopine::__private::assert_props_disjoint(#left, #right);
+                            };
+                        })
+                    })
+            });
+
+    let prop_flatten_key_extend_stmts = prop_flatten_fields.iter().map(|entry| {
+        let keys = prop_flatten_key_slice(entry);
+        quote! {
+            __keys.extend_from_slice(#keys);
+        }
+    });
 
     let keys_arr = field_names
         .iter()
@@ -1446,10 +1670,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .collect();
     // `matches!(key, a | b | c)` needs at least one pattern —
     // fall back to a `false` literal when no field is a prop.
-    let is_prop_body = if prop_field_names.is_empty() {
+    let prop_field_match = if prop_field_names.is_empty() {
         quote! { let _ = key; false }
     } else {
         quote! { matches!(key, #(#prop_field_names)|*) }
+    };
+    let prop_flatten_is_prop_terms = prop_flatten_fields.iter().map(|entry| {
+        let keys = prop_flatten_key_slice(entry);
+        quote! {
+            || ::pocopine::__private::props_contains_runtime(#keys, key)
+        }
+    });
+    let is_prop_body = quote! {
+        #prop_field_match #(#prop_flatten_is_prop_terms)*
     };
 
     let model_field_names: Vec<&String> = field_names
@@ -2012,6 +2245,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #observe_impl
 
+        #(#prop_flatten_include_assertions)*
+        #(#prop_flatten_base_disjoint_assertions)*
+        #(#prop_flatten_pair_disjoint_assertions)*
+
         impl ::pocopine::__private::ComponentState for #struct_ident {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
                 match key {
@@ -2031,6 +2268,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::std::sync::OnceLock::new();
                 *__POCOPINE_KEYS.get_or_init(|| {
                     let mut __keys = vec![#(#keys_arr),*];
+                    #(#prop_flatten_key_extend_stmts)*
                     __keys.extend_from_slice(
                         <Self as ::pocopine::__private::HandlerDispatch>::computed_keys(),
                     );
@@ -3900,6 +4138,130 @@ impl JobPayload {
             },
         }
     }
+}
+
+/// `#[derive(Props)]` — RFC 070 reusable prop groups.
+///
+/// Implements [`pocopine::Props`] for named-field structs. Only fields marked
+/// with `#[prop]` are exposed; unannotated fields remain ordinary Rust state.
+#[proc_macro_derive(Props, attributes(prop))]
+pub fn derive_props(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Props)] can only be applied to named-field structs",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let Fields::Named(fields) = &data.fields else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Props)] can only be applied to named-field structs",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let mut prop_idents = Vec::new();
+    let mut prop_names = Vec::new();
+    let mut seen = BTreeSet::new();
+    for field in &fields.named {
+        let Some(ident) = field.ident.clone() else {
+            continue;
+        };
+        let mut exposed = false;
+        for attr in &field.attrs {
+            if !attr.path().is_ident("prop") {
+                continue;
+            }
+            match parse_prop_attr(attr) {
+                Ok(PropAttrKind::Plain) => {
+                    exposed = true;
+                }
+                Ok(PropAttrKind::Flatten(_)) => {
+                    return syn::Error::new_spanned(
+                        attr,
+                        "nested #[prop(flatten)] is not supported yet",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                Err(err) => return err.to_compile_error().into(),
+            }
+        }
+        if exposed {
+            let name = ident.to_string().trim_start_matches("r#").to_string();
+            if let Err(err) = push_unique_key(&mut seen, &name, ident.span()) {
+                return err.to_compile_error().into();
+            }
+            prop_idents.push(ident);
+            prop_names.push(name);
+        }
+    }
+
+    let get_arms = prop_idents
+        .iter()
+        .zip(prop_names.iter())
+        .map(|(ident, name)| {
+            quote! {
+                #name => {
+                    let __v = ::pocopine::__private::serde_wasm_bindgen::to_value(&self.#ident)
+                        .unwrap_or(::pocopine::__private::JsValue::NULL);
+                    if __v.is_undefined() {
+                        ::pocopine::__private::JsValue::NULL
+                    } else {
+                        __v
+                    }
+                },
+            }
+        });
+    let set_arms = prop_idents
+        .iter()
+        .zip(prop_names.iter())
+        .map(|(ident, name)| {
+            quote! {
+                #name => {
+                    let __value = value;
+                    if let Ok(v) =
+                        ::pocopine::__private::serde_wasm_bindgen::from_value(__value.clone())
+                    {
+                        self.#ident = v;
+                    } else if __value.as_string().as_deref() == Some("") {
+                        if let Ok(v) = ::pocopine::__private::serde_wasm_bindgen::from_value(
+                            ::pocopine::__private::JsValue::NULL,
+                        ) {
+                            self.#ident = v;
+                        }
+                    }
+                }
+            }
+        });
+
+    quote! {
+        impl #impl_generics ::pocopine::Props for #struct_ident #ty_generics #where_clause {
+            const KEYS: &'static [&'static str] = &[#(#prop_names),*];
+
+            fn get_prop(&self, key: &str) -> ::pocopine::__private::JsValue {
+                match key {
+                    #(#get_arms)*
+                    _ => ::pocopine::__private::JsValue::UNDEFINED,
+                }
+            }
+
+            fn set_prop(&mut self, key: &str, value: ::pocopine::__private::JsValue) {
+                match key {
+                    #(#set_arms)*
+                    _ => {}
+                }
+            }
+        }
+    }
+    .into()
 }
 
 /// `#[derive(Emit)]` — RFC 056 §6.8 typed event emission.
