@@ -13,6 +13,7 @@ pub mod legend;
 pub mod line;
 pub mod path;
 pub mod scale;
+pub mod scatter;
 pub mod svg;
 
 pub use area::{
@@ -31,6 +32,10 @@ pub use line::{
 };
 pub use path::{area_path, line_path};
 pub use scale::{BandScale, LinearScale, Tick};
+pub use scatter::{
+    nearest_scatter_sample, scatter_legend_items, ChartScatterSeries, PineScatterChart,
+    ScatterChartGeometry, ScatterChartOptions, ScatterChartSample, ScatterChartSeriesRender,
+};
 pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 
 /// Register every Pine Charts custom-element tag.
@@ -39,4 +44,5 @@ pub fn register_all() {
     PineBarChart::register();
     PineChartLegend::register();
     PineLineChart::register();
+    PineScatterChart::register();
 }

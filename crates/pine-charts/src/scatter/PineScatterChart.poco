@@ -1,0 +1,148 @@
+<root class="pine-chart-root pine-scatter-chart"
+      role="img"
+      :aria-label="label"
+      :data-state="state"
+      :data-empty="empty"
+      :data-invalid="invalid"
+      :data-hover="hover_visible">
+  <svg class="pine-chart-svg"
+       :width="width"
+       :height="height"
+       :viewBox="view_box"
+       preserveAspectRatio="none"
+       aria-hidden="true"
+       focusable="false"
+       @pointermove="on_pointer_move"
+       @pointerleave="clear_hover">
+    <g pp-show="ready" class="pine-chart-grid" aria-hidden="true">
+      <template pp-for="line in x_grid" pp-key="line.key">
+        <line class="pine-chart-grid-line pine-chart-grid-line-x"
+              :x1="line.x1"
+              :y1="line.y1"
+              :x2="line.x2"
+              :y2="line.y2"></line>
+      </template>
+      <template pp-for="line in y_grid" pp-key="line.key">
+        <line class="pine-chart-grid-line pine-chart-grid-line-y"
+              :x1="line.x1"
+              :y1="line.y1"
+              :x2="line.x2"
+              :y2="line.y2"></line>
+      </template>
+    </g>
+    <g pp-show="ready" class="pine-chart-axes" aria-hidden="true">
+      <line class="pine-chart-axis pine-chart-axis-x"
+            :x1="x_axis.x1"
+            :y1="x_axis.y1"
+            :x2="x_axis.x2"
+            :y2="x_axis.y2"></line>
+      <line class="pine-chart-axis pine-chart-axis-y"
+            :x1="y_axis.x1"
+            :y1="y_axis.y1"
+            :x2="y_axis.x2"
+            :y2="y_axis.y2"></line>
+      <template pp-for="tick in x_tick_labels" pp-key="tick.key">
+        <g class="pine-chart-tick pine-chart-tick-x">
+          <line class="pine-chart-tick-line"
+                :x1="tick.line_x1"
+                :y1="tick.line_y1"
+                :x2="tick.line_x2"
+                :y2="tick.line_y2"></line>
+          <text class="pine-chart-tick-label"
+                :x="tick.x"
+                :y="tick.y"
+                text-anchor="middle"
+                pp-text="tick.label"></text>
+        </g>
+      </template>
+      <template pp-for="tick in y_tick_labels" pp-key="tick.key">
+        <g class="pine-chart-tick pine-chart-tick-y">
+          <line class="pine-chart-tick-line"
+                :x1="tick.line_x1"
+                :y1="tick.line_y1"
+                :x2="tick.line_x2"
+                :y2="tick.line_y2"></line>
+          <text class="pine-chart-tick-label"
+                :x="tick.x"
+                :y="tick.y"
+                text-anchor="end"
+                pp-text="tick.label"></text>
+        </g>
+      </template>
+      <text pp-show="x_label"
+            class="pine-chart-axis-label pine-chart-axis-label-x"
+            :x="x_axis_label.x"
+            :y="x_axis_label.y"
+            text-anchor="middle"
+            pp-text="x_label"></text>
+      <text pp-show="y_label"
+            class="pine-chart-axis-label pine-chart-axis-label-y"
+            :x="y_axis_label.x"
+            :y="y_axis_label.y"
+            :transform="y_axis_label.transform"
+            text-anchor="middle"
+            pp-text="y_label"></text>
+    </g>
+    <g pp-show="ready"
+       class="pine-chart-points pine-chart-scatter-points"
+       aria-hidden="true">
+      <template pp-for="series in scatter_series" pp-key="series.key">
+        <g class="pine-chart-scatter-series"
+           :data-series="series.label">
+          <template pp-for="sample in series.samples" pp-key="sample.key">
+            <circle class="pine-chart-point pine-chart-scatter-point"
+                    :cx="sample.x"
+                    :cy="sample.y"
+                    :r="point_radius"
+                    :data-x="sample.data_x"
+                    :data-y="sample.data_y"
+                    :data-series="sample.series_label"></circle>
+          </template>
+        </g>
+      </template>
+    </g>
+    <g pp-show="hover_visible"
+       class="pine-chart-hover"
+       aria-hidden="true"
+       :visibility="hover_visible ? 'visible' : 'hidden'">
+      <line class="pine-chart-crosshair pine-chart-crosshair-x"
+            :x1="hover_x"
+            :y1="plot_y"
+            :x2="hover_x"
+            :y2="plot_bottom"></line>
+      <line class="pine-chart-crosshair pine-chart-crosshair-y"
+            :x1="plot_x"
+            :y1="hover_y"
+            :x2="plot_right"
+            :y2="hover_y"></line>
+      <circle class="pine-chart-hover-marker"
+              :cx="hover_x"
+              :cy="hover_y"
+              r="5"
+              :data-x="hover_data_x"
+              :data-y="hover_data_y"
+              :data-series="hover_series"></circle>
+    </g>
+  </svg>
+  <div pp-show="hover_visible"
+       class="pine-chart-tooltip"
+       role="status"
+       :aria-label="hover_aria_label"
+       :style="hover_style"
+       :data-tooltip-x="hover_placement_x"
+       :data-tooltip-y="hover_placement_y"
+       :data-x="hover_data_x"
+       :data-y="hover_data_y"
+       :data-series="hover_series">
+    <span pp-show="hover_series"
+          class="pine-chart-tooltip-series"
+          pp-text="hover_series"></span>
+    <span class="pine-chart-tooltip-x"
+          pp-text="hover_x_label"></span>
+    <span class="pine-chart-tooltip-y"
+          pp-text="hover_y_label"></span>
+  </div>
+  <span pp-show="invalid"
+        class="pine-chart-status"
+        pp-text="error"></span>
+</root>

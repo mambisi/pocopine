@@ -1,10 +1,11 @@
 # Chart Components
 
 The first component layer is intentionally small: `PineLineChart` renders SVG
-line charts from numeric points or named numeric series, `PineAreaChart` renders
-closed SVG area fills from the same numeric shape, and `PineBarChart` renders
-categorical values as SVG bars. They are useful on their own, but their main job
-is to prove the component contract before richer composition is added.
+line charts from numeric points or named numeric series, `PineScatterChart`
+renders point-only numeric series, `PineAreaChart` renders closed SVG area fills
+from the same numeric shape, and `PineBarChart` renders categorical values as
+SVG bars. They are useful on their own, but their main job is to prove the
+component contract before richer composition is added.
 
 ## Registering
 
@@ -89,6 +90,49 @@ hundreds of visible circles. Multi-series markers include `data-series`.
 
 Use `x_label` and `y_label` for optional axis labels. They render as SVG
 `<text>` nodes with stable hooks and remain unstyled by default.
+
+## Scatter Chart
+
+`PineScatterChart` accepts `Vec<ChartPoint>` for a single point cloud or
+`Vec<ChartScatterSeries>` for named scatter series. It uses the same numeric
+domain inference, explicit domains, dimensions, margins, grid, axes, axis
+labels, hover crosshair, tooltip, and legend contract as `PineLineChart`, but
+it renders only SVG circles.
+
+```rust
+use pine_charts::{scatter_legend_items, ChartPoint, ChartScatterSeries};
+
+let series = vec![
+    ChartScatterSeries::new(
+        "Segment A",
+        vec![ChartPoint::new(12.0, 42.0), ChartPoint::new(18.0, 49.0)],
+    ),
+    ChartScatterSeries::new(
+        "Segment B",
+        vec![ChartPoint::new(10.0, 35.0), ChartPoint::new(16.0, 39.0)],
+    ),
+];
+let legend_items = scatter_legend_items(&series);
+```
+
+```html
+<pine-scatter-chart
+  label="Cohorts"
+  pp-bind:series="series"
+  x_label="Size"
+  y_label="Retention"
+  point_radius="4"
+  width="640"
+  height="320"></pine-scatter-chart>
+
+<pine-chart-legend
+  label="Cohort legend"
+  pp-bind:items="legend_items"></pine-chart-legend>
+```
+
+Each point exposes `data-x`, `data-y`, and `data-series` attributes. The
+`point_radius` prop sets the SVG `r` attribute for every point; visual color,
+opacity, stroke, and hover marker styling remain application CSS.
 
 ## Area Chart
 
@@ -226,6 +270,7 @@ The component emits stable hooks:
 
 - `.pine-chart-root`
 - `.pine-line-chart`
+- `.pine-scatter-chart`
 - `.pine-area-chart`
 - `.pine-bar-chart`
 - `.pine-chart-svg`
@@ -241,6 +286,11 @@ The component emits stable hooks:
 - `.pine-chart-line`
 - `.pine-chart-markers`
 - `.pine-chart-marker`
+- `.pine-chart-points`
+- `.pine-chart-scatter-series`
+- `.pine-chart-point`
+- `.pine-chart-scatter-points`
+- `.pine-chart-scatter-point`
 - `.pine-chart-hover`
 - `.pine-chart-crosshair`
 - `.pine-chart-hover-marker`
@@ -294,6 +344,11 @@ treatment:
 .pine-chart-marker {
   fill: var(--chart-surface);
   stroke: currentColor;
+}
+
+.pine-chart-point {
+  fill: currentColor;
+  stroke: var(--chart-surface);
 }
 
 .pine-chart-tooltip {

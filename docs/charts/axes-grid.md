@@ -1,6 +1,7 @@
 # Axes and Grid
 
-`PineLineChart` and `PineBarChart` emit a basic SVG guide layer:
+`PineLineChart`, `PineScatterChart`, `PineAreaChart`, and `PineBarChart` emit a
+basic SVG guide layer:
 
 - grid lines for x ticks,
 - grid lines for y ticks,

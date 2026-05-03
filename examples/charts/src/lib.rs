@@ -1,6 +1,6 @@
 use pine_charts::{
-    area_legend_items, bar_legend_items, line_legend_items, ChartAreaSeries, ChartBar,
-    ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem,
+    area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items, ChartAreaSeries,
+    ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, ChartScatterSeries, LegendItem,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,8 @@ pub struct ChartDemo {
     pub area_legend: Vec<LegendItem>,
     pub bar_series: Vec<ChartBarSeries>,
     pub bar_legend: Vec<LegendItem>,
+    pub scatter_series: Vec<ChartScatterSeries>,
+    pub scatter_legend: Vec<LegendItem>,
 }
 
 impl Default for ChartDemo {
@@ -23,6 +25,7 @@ impl Default for ChartDemo {
         let line_series = growth_line_series();
         let area_series = growth_area_series();
         let bar_series = growth_bar_series();
+        let scatter_series = growth_scatter_series();
         Self {
             dataset: "growth".into(),
             bar_mode: "grouped".into(),
@@ -32,6 +35,8 @@ impl Default for ChartDemo {
             area_series,
             bar_legend: bar_legend_items(&bar_series),
             bar_series,
+            scatter_legend: scatter_legend_items(&scatter_series),
+            scatter_series,
         }
     }
 }
@@ -42,6 +47,7 @@ impl ChartDemo {
         let line_series = growth_line_series();
         let area_series = growth_area_series();
         let bar_series = growth_bar_series();
+        let scatter_series = growth_scatter_series();
         self.dataset = "growth".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
@@ -49,12 +55,15 @@ impl ChartDemo {
         self.area_series = area_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
+        self.scatter_legend = scatter_legend_items(&scatter_series);
+        self.scatter_series = scatter_series;
     }
 
     pub fn show_latency(&mut self) {
         let line_series = latency_line_series();
         let area_series = latency_area_series();
         let bar_series = latency_bar_series();
+        let scatter_series = latency_scatter_series();
         self.dataset = "latency".into();
         self.line_legend = line_legend_items(&line_series);
         self.line_series = line_series;
@@ -62,6 +71,8 @@ impl ChartDemo {
         self.area_series = area_series;
         self.bar_legend = bar_legend_items(&bar_series);
         self.bar_series = bar_series;
+        self.scatter_legend = scatter_legend_items(&scatter_series);
+        self.scatter_series = scatter_series;
     }
 
     pub fn show_grouped(&mut self) {
@@ -128,6 +139,56 @@ fn latency_line_series() -> Vec<ChartLineSeries> {
                 ChartPoint::new(4.0, 48.0),
                 ChartPoint::new(5.0, 46.0),
                 ChartPoint::new(6.0, 42.0),
+            ],
+        ),
+    ]
+}
+
+fn growth_scatter_series() -> Vec<ChartScatterSeries> {
+    vec![
+        ChartScatterSeries::new(
+            "Segment A",
+            vec![
+                ChartPoint::new(12.0, 42.0),
+                ChartPoint::new(18.0, 49.0),
+                ChartPoint::new(26.0, 57.0),
+                ChartPoint::new(32.0, 61.0),
+                ChartPoint::new(41.0, 68.0),
+            ],
+        ),
+        ChartScatterSeries::new(
+            "Segment B",
+            vec![
+                ChartPoint::new(10.0, 35.0),
+                ChartPoint::new(16.0, 39.0),
+                ChartPoint::new(22.0, 44.0),
+                ChartPoint::new(31.0, 47.0),
+                ChartPoint::new(38.0, 52.0),
+            ],
+        ),
+    ]
+}
+
+fn latency_scatter_series() -> Vec<ChartScatterSeries> {
+    vec![
+        ChartScatterSeries::new(
+            "API",
+            vec![
+                ChartPoint::new(20.0, 31.0),
+                ChartPoint::new(45.0, 43.0),
+                ChartPoint::new(60.0, 55.0),
+                ChartPoint::new(82.0, 68.0),
+                ChartPoint::new(100.0, 81.0),
+            ],
+        ),
+        ChartScatterSeries::new(
+            "Render",
+            vec![
+                ChartPoint::new(18.0, 24.0),
+                ChartPoint::new(38.0, 30.0),
+                ChartPoint::new(56.0, 34.0),
+                ChartPoint::new(79.0, 43.0),
+                ChartPoint::new(94.0, 49.0),
             ],
         ),
     ]
