@@ -242,9 +242,12 @@ pub struct Principal {
     user: Option<Arc<AuthUser>>,
 }
 
-// Hand-rolled (de)serialization avoids depending on serde's `rc` feature
-// just for this one Arc field; the wire shape stays identical to the
-// previous `Option<AuthUser>` derive.
+// Hand-rolled (de)serialization avoids depending on serde's `rc`
+// feature just for this one `Arc` field. We feed `Option<&AuthUser>`
+// to `serialize_field` so serde's Option impl writes the correct
+// discriminant (`null` for self-describing formats, an Option tag
+// byte for bincode-style formats) — anything else corrupts
+// non-self-describing payloads.
 impl Serialize for Principal {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -252,10 +255,7 @@ impl Serialize for Principal {
     {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("Principal", 1)?;
-        match &self.user {
-            Some(user) => state.serialize_field("user", user.as_ref())?,
-            None => state.skip_field("user")?,
-        }
+        state.serialize_field("user", &self.user.as_deref())?;
         state.end()
     }
 }
@@ -267,7 +267,6 @@ impl<'de> Deserialize<'de> for Principal {
     {
         #[derive(Deserialize)]
         struct Wire {
-            #[serde(default)]
             user: Option<AuthUser>,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -671,19 +670,23 @@ mod tests {
     }
 
     #[test]
-    fn principal_serializes_compatibly_with_pre_arc_shape() {
-        // Wire format is unchanged: `{ "user": { ... } }`. Hand-rolled
-        // (de)serialization keeps backwards compat without depending on
-        // serde's `rc` feature.
+    fn principal_serialization_emits_option_discriminant() {
+        // Authenticated: `{"user":{...}}`.
         let p = Principal::from_user(AuthUser::new("uid-1"));
         let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"user\":{"), "got: {json}");
+        assert!(json.contains("\"id\":\"uid-1\""), "got: {json}");
         let round_tripped: Principal = serde_json::from_str(&json).unwrap();
         assert_eq!(p, round_tripped);
         assert_eq!(round_tripped.user().unwrap().id, "uid-1");
 
+        // Anonymous: `{"user":null}`. Required so non-self-describing
+        // formats (bincode, postcard, …) keep the `Option` tag in
+        // front of the payload — without the discriminant they can't
+        // round-trip.
         let anon = Principal::anonymous();
         let json = serde_json::to_string(&anon).unwrap();
-        assert!(!json.contains("user"));
+        assert_eq!(json, r#"{"user":null}"#);
         let round_tripped: Principal = serde_json::from_str(&json).unwrap();
         assert!(!round_tripped.is_authenticated());
     }
