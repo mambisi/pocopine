@@ -614,6 +614,60 @@ impl PlanForBodyHost {
     }
 }
 
+/// RFC-068 — SVG `<template pp-for>` is a controller anchor,
+/// not an `HTMLTemplateElement`. The row body must materialise
+/// through the SVG namespace and still receive compiled
+/// bindings against the row scope.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Rfc068SvgLine {
+    id: u32,
+    x: u32,
+    label: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rfc068-svg-for-host",
+    template_inline = r#"<svg class="r68-svg" viewBox="0 0 100 100">
+        <g class="r68-lines">
+          <template pp-for="line in lines" pp-key="line.id">
+            <g class="r68-row" :data-line-id="line.id">
+              <line class="r68-line"
+                    :x1="line.x"
+                    y1="0"
+                    :x2="line.x"
+                    y2="100"></line>
+              <text class="r68-label"
+                    :x="line.x"
+                    y="10"
+                    pp-text="line.label"></text>
+            </g>
+          </template>
+        </g>
+    </svg>"#
+)]
+struct Rfc068SvgForHost {
+    lines: Vec<Rfc068SvgLine>,
+}
+
+#[handlers]
+impl Rfc068SvgForHost {
+    pub fn on_setup(&mut self) {
+        self.lines = vec![
+            Rfc068SvgLine {
+                id: 1,
+                x: 10,
+                label: "ten".into(),
+            },
+            Rfc068SvgLine {
+                id: 2,
+                x: 90,
+                label: "ninety".into(),
+            },
+        ];
+    }
+}
+
 /// RFC-064 Phase 4 — keyed compiled row fixture that exercises
 /// the specialized single-remove and two-swap reconcile paths.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -833,6 +887,7 @@ fn register_all() {
     PlanTeleportHost::register();
     PlanIfBodyHost::register();
     PlanForBodyHost::register();
+    Rfc068SvgForHost::register();
     Rfc064KeyedFastHost::register();
     Rfc064GenericPrependHost::register();
     PlanSlotDynamicHost::register();
@@ -1135,6 +1190,65 @@ async fn macro_emitted_pp_for_row_body_fragment_installs_per_row() {
         0,
         "native-only lifted pp-for bodies should not use mount fallback",
     );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn svg_pp_for_mounts_rows_in_svg_namespace() {
+    register_all();
+    reset_plan_failure_count();
+
+    let plan = template_plan_for("rfc068-svg-for-host")
+        .expect("rfc068-svg-for-host registers a template plan");
+    assert_eq!(plan.for_plans.len(), 1);
+    assert!(
+        plan.for_plans[0].body.is_some(),
+        "SVG pp-for rows with SVG attribute bindings must lift into a body fragment",
+    );
+
+    let host = mount("<rfc068-svg-for-host></rfc068-svg-for-host>");
+    tick().await;
+
+    let rows = host.query_selector_all(".r68-row").unwrap();
+    assert_eq!(rows.length(), 2, "only mounted rows should be visible");
+
+    let template = host
+        .query_selector("svg template")
+        .unwrap()
+        .expect("SVG controller anchor remains in place");
+    assert_eq!(
+        template.children().length(),
+        0,
+        "SVG template prototypes are cleared after install",
+    );
+
+    let line = host
+        .query_selector(".r68-line")
+        .unwrap()
+        .expect("first SVG line mounted")
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        line.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(line.get_attribute("x1").as_deref(), Some("10"));
+    assert_eq!(line.get_attribute("x2").as_deref(), Some("10"));
+
+    let label = host
+        .query_selector(".r68-label")
+        .unwrap()
+        .expect("first SVG text mounted")
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        label.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(label.get_attribute("x").as_deref(), Some("10"));
+    assert_eq!(label.text_content().as_deref(), Some("ten"));
+    assert_eq!(plan_failure_count(), 0);
 
     host.remove();
 }

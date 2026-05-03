@@ -2,10 +2,11 @@
 //! `<template>`'s body once per item, bind each clone against a
 //! [`crate::loop_scope::LoopScope`].
 //!
-//! Requires the host to be a `<template>` element. The content of
-//! that template is cloned per iteration; the original template stays
-//! in the DOM as a mount anchor. Clones are inserted as siblings
-//! before the template.
+//! Requires the host to be a `<template>` controller. HTML templates
+//! clone their inert `content`; SVG templates are treated as
+//! controller anchors whose prototype child is captured and cleared
+//! during install (RFC 068). Clones are inserted as siblings before
+//! the template.
 //!
 //! Two modes, controlled by the optional `pp-key` attribute:
 //!
@@ -32,6 +33,69 @@ use crate::mount::{self, bind_scope_to, track_effect_on};
 use crate::path::resolve_path;
 use crate::reactive::{effect, trigger_scope, ScopeId};
 use crate::scope::Scope;
+
+/// Controller source for `pp-for`.
+///
+/// HTML `<template pp-for>` exposes inert row content through
+/// `HTMLTemplateElement::content`. SVG `<template pp-for>` does
+/// not; browsers keep it as a foreign element with live children.
+/// RFC 068 treats that SVG node as a controller anchor and stores
+/// a cloned prototype before clearing the live children.
+#[derive(Clone)]
+pub struct ForTemplate {
+    anchor: Element,
+    html: Option<HtmlTemplateElement>,
+    inline_prototype: Option<Element>,
+}
+
+impl ForTemplate {
+    pub fn from_element(el: Element) -> Option<Self> {
+        if let Ok(template) = el.clone().dyn_into::<HtmlTemplateElement>() {
+            return Some(Self {
+                anchor: el,
+                html: Some(template),
+                inline_prototype: None,
+            });
+        }
+
+        if el.local_name() != "template" {
+            return None;
+        }
+
+        let inline_prototype = el
+            .first_element_child()
+            .and_then(|child| child.clone_node_with_deep(true).ok())
+            .and_then(|node| node.dyn_into::<Element>().ok());
+
+        while let Some(child) = el.first_child() {
+            let _ = el.remove_child(&child);
+        }
+        let _ = el.set_attribute("aria-hidden", "true");
+        let _ = el.set_attribute("style", "display:none");
+
+        Some(Self {
+            anchor: el,
+            html: None,
+            inline_prototype,
+        })
+    }
+
+    fn anchor(&self) -> Element {
+        self.anchor.clone()
+    }
+
+    fn clone_body(&self) -> Option<Element> {
+        if let Some(template) = &self.html {
+            return clone_template_body(template);
+        }
+        self.inline_prototype
+            .as_ref()?
+            .clone_node_with_deep(true)
+            .ok()?
+            .dyn_into::<Element>()
+            .ok()
+    }
+}
 
 /// Return the element child whose layout box represents the
 /// custom-element's visible bounds. Custom tags themselves are
@@ -240,7 +304,7 @@ fn restore_leaver_layout(entry: &PrevItem) {
 /// path.
 #[allow(clippy::too_many_arguments)]
 pub fn install(
-    template: HtmlTemplateElement,
+    template: ForTemplate,
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     item_name: &'static str,
@@ -249,7 +313,7 @@ pub fn install(
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
 ) {
-    let template_el: Element = template.clone().into();
+    let template_el = template.anchor();
     let track_anchor = template_el.clone();
     // RFC-027 inject chain — when this `pp-for` was authored as
     // slot content, the slot materialiser stamped
@@ -317,7 +381,7 @@ fn run_naive(
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: HtmlTemplateElement,
+    template: ForTemplate,
     template_el: Element,
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
@@ -378,7 +442,7 @@ fn run_naive(
                         break;
                     }
                 },
-                None => match clone_template_body(&template) {
+                None => match template.clone_body() {
                     Some(root) => (root, false),
                     None => {
                         console::error_1(&JsValue::from_str(
@@ -458,7 +522,7 @@ fn create_keyed_prev_item(
     parent_proxy: &JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: &HtmlTemplateElement,
+    template: &ForTemplate,
     key: Rc<str>,
     body: Option<crate::directives::for_plan::ForBodyFn>,
     elide_proxy: bool,
@@ -496,7 +560,7 @@ fn create_keyed_prev_item(
     let clone_root = match clone_root {
         Some(root) => root,
         None => {
-            let Some(root) = clone_template_body(template) else {
+            let Some(root) = template.clone_body() else {
                 console::error_1(&JsValue::from_str(
                     "pp-for: <template> body must contain exactly one element",
                 ));
@@ -562,7 +626,7 @@ fn try_append_fast_path(
     parent_proxy: &JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: &HtmlTemplateElement,
+    template: &ForTemplate,
     template_el: &Element,
     parent_node: &Node,
     body: Option<crate::directives::for_plan::ForBodyFn>,
@@ -701,7 +765,7 @@ fn try_prepend_fast_path(
     parent_proxy: &JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: &HtmlTemplateElement,
+    template: &ForTemplate,
     parent_node: &Node,
     body: Option<crate::directives::for_plan::ForBodyFn>,
     elide_proxy: bool,
@@ -1017,7 +1081,7 @@ fn run_keyed(
     parent_proxy: JsValue,
     parent_scope_id: ScopeId,
     inject_parent_id: ScopeId,
-    template: HtmlTemplateElement,
+    template: ForTemplate,
     template_el: Element,
     stagger_ms: u32,
     body: Option<crate::directives::for_plan::ForBodyFn>,
@@ -1369,7 +1433,7 @@ fn run_keyed(
                 let clone_root = match clone_root {
                     Some(root) => root,
                     None => {
-                        let Some(root) = clone_template_body(&template) else {
+                        let Some(root) = template.clone_body() else {
                             console::error_1(&JsValue::from_str(
                                 "pp-for: <template> body must contain exactly one element",
                             ));

@@ -22,8 +22,8 @@
 //!
 //! v1 envelope per RFC-057 §6 (deferred to RFC-058 Phase 2):
 //!
-//! * Eligible: native HTML elements only; `pp-text`, `pp-html`,
-//!   `pp-show`, `pp-bind:<attr>` (HTML attrs, not child-component
+//! * Eligible: native HTML/SVG elements; `pp-text`, `pp-html`,
+//!   `pp-show`, `pp-bind:<attr>` (DOM attrs, not child-component
 //!   props), `pp-on:<event>` with the §6.1 supported modifier
 //!   set, `pp-ref`.
 //! * Not eligible (attribute-preserved, mount-owned): every
@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{console, Element};
+use web_sys::{console, Element, Node};
 
 use crate::directives::for_plan::{
     BindingKind, StaticBinding, StaticChildMount, StaticForPlan, StaticIfPlan, StaticInterp,
@@ -356,9 +356,9 @@ pub fn install_static_for_plan(
     entry: &'static StaticForPlan,
     template_name: &str,
 ) {
-    let template = match el.clone().dyn_into::<web_sys::HtmlTemplateElement>() {
-        Ok(t) => t,
-        Err(_) => {
+    let template = match directives::for_::ForTemplate::from_element(el.clone()) {
+        Some(t) => t,
+        None => {
             fail(
                 "for-plan-template",
                 template_name,
@@ -705,13 +705,12 @@ fn install_child_host_directives(
 /// runtime helper.
 ///
 /// Parses `html` (the macro-cleaned body markup) into a fresh
-/// `<template>`'s content, extracts the single root element,
+/// namespace-aware fragment, extracts the single root element,
 /// scope-binds it, stamps `CTX_PARENT_KEY`, then hands the
 /// install pass off to `install_plan` — the macro-emitted
-/// per-fragment closure that has the plan body unrolled
-/// inline. Returns the root element ready for the
-/// `if_::install` caller to pin its borrowed scope on + insert
-/// into the live DOM.
+/// per-fragment closure that has the plan body unrolled inline.
+/// Returns the root element ready for the `if_::install` caller
+/// to pin its borrowed scope on + insert into the live DOM.
 ///
 /// `None` return signals the body HTML didn't parse to a
 /// single root element — same shape as the legacy
@@ -730,23 +729,7 @@ pub fn stamp_if_body_with(
     install_plan: impl FnOnce(&Element, ScopeId, &JsValue),
 ) -> Option<Element> {
     let doc = web_sys::window().and_then(|w| w.document())?;
-    let template_el = doc.create_element("template").ok()?;
-    template_el.set_inner_html(html);
-    let template_el = template_el
-        .dyn_into::<web_sys::HtmlTemplateElement>()
-        .ok()?;
-    let content = template_el.content();
-    let kids = content.child_nodes();
-    let mut root: Option<Element> = None;
-    for i in 0..kids.length() {
-        if let Some(n) = kids.item(i) {
-            if let Ok(el) = n.dyn_into::<Element>() {
-                root = Some(el);
-                break;
-            }
-        }
-    }
-    let root = root?;
+    let (root, content_parent) = parse_body_fragment_root(&doc, html)?;
     crate::mount::bind_borrowed_scope_to(&root, scope_id, proxy);
     let ctx_key = JsValue::from_str(crate::mount::CTX_PARENT_KEY);
     let ctx_val = JsValue::from_f64(ctx_parent_id.0 as f64);
@@ -756,7 +739,7 @@ pub fn stamp_if_body_with(
         return Some(root);
     }
     // Slot-transparent recovery (see `stamp_if_body` doc).
-    let kids = content.child_nodes();
+    let kids = content_parent.child_nodes();
     for i in 0..kids.length() {
         if let Some(n) = kids.item(i) {
             if let Ok(el) = n.dyn_into::<Element>() {
@@ -765,6 +748,118 @@ pub fn stamp_if_body_with(
         }
     }
     None
+}
+
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
+fn parse_body_fragment_root(doc: &web_sys::Document, html: &str) -> Option<(Element, Node)> {
+    if first_fragment_tag(html).is_some_and(is_svg_fragment_root_tag) {
+        let wrapper = doc.create_element_ns(Some(SVG_NS), "svg").ok()?;
+        wrapper.set_inner_html(html);
+        let root = first_element_child(wrapper.as_ref())?;
+        return Some((root, wrapper.into()));
+    }
+
+    let template_el = doc.create_element("template").ok()?;
+    template_el.set_inner_html(html);
+    let template_el = template_el
+        .dyn_into::<web_sys::HtmlTemplateElement>()
+        .ok()?;
+    let content = template_el.content();
+    let root = first_element_child(content.as_ref())?;
+    Some((root, content.into()))
+}
+
+fn first_element_child(parent: &Node) -> Option<Element> {
+    let kids = parent.child_nodes();
+    for i in 0..kids.length() {
+        if let Some(n) = kids.item(i) {
+            if let Ok(el) = n.dyn_into::<Element>() {
+                return Some(el);
+            }
+        }
+    }
+    None
+}
+
+fn first_fragment_tag(html: &str) -> Option<&str> {
+    let rest = html.trim_start().strip_prefix('<')?;
+    if rest.starts_with('!') || rest.starts_with('?') || rest.starts_with('/') {
+        return None;
+    }
+    let end = rest
+        .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+        .unwrap_or(rest.len());
+    let tag = &rest[..end];
+    (!tag.is_empty()).then_some(tag)
+}
+
+fn is_svg_fragment_root_tag(tag: &str) -> bool {
+    matches!(
+        tag.to_ascii_lowercase().as_str(),
+        "animate"
+            | "animatemotion"
+            | "animatetransform"
+            | "circle"
+            | "clippath"
+            | "defs"
+            | "desc"
+            | "ellipse"
+            | "feblend"
+            | "fecolormatrix"
+            | "fecomponenttransfer"
+            | "fecomposite"
+            | "feconvolvematrix"
+            | "fediffuselighting"
+            | "fedisplacementmap"
+            | "fedistantlight"
+            | "fedropshadow"
+            | "feflood"
+            | "fefunca"
+            | "fefuncb"
+            | "fefuncg"
+            | "fefuncr"
+            | "fegaussianblur"
+            | "feimage"
+            | "femerge"
+            | "femergenode"
+            | "femorphology"
+            | "feoffset"
+            | "fepointlight"
+            | "fespecularlighting"
+            | "fespotlight"
+            | "fetile"
+            | "feturbulence"
+            | "filter"
+            | "foreignobject"
+            | "g"
+            | "image"
+            | "line"
+            | "lineargradient"
+            | "marker"
+            | "mask"
+            | "metadata"
+            | "mpath"
+            | "path"
+            | "pattern"
+            | "polygon"
+            | "polyline"
+            | "radialgradient"
+            | "rect"
+            | "script"
+            | "set"
+            | "stop"
+            | "style"
+            | "svg"
+            | "switch"
+            | "symbol"
+            | "text"
+            | "textpath"
+            | "title"
+            | "tspan"
+            | "use"
+            | "view"
+    )
 }
 
 type StaticEvaluator = Rc<dyn Fn(&JsValue) -> JsValue>;
