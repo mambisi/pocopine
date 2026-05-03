@@ -132,11 +132,15 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    svg.set_attribute("style", "width: 200px; height: 100px;")
+        .unwrap();
     let rect = svg.get_bounding_client_rect();
+    let target_x = rect.left() + rect.width() * 0.5;
+    let target_y = rect.top();
     let init = web_sys::PointerEventInit::new();
     init.set_bubbles(true);
-    init.set_client_x((rect.left() + 50.0).round() as i32);
-    init.set_client_y(rect.top().round() as i32);
+    init.set_client_x(target_x.round() as i32);
+    init.set_client_y(target_y.round() as i32);
     svg.dispatch_event(
         &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
     )
@@ -182,8 +186,8 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 
     let outside_target = web_sys::PointerEventInit::new();
     outside_target.set_bubbles(true);
-    outside_target.set_client_x((rect.left() + 60.0).round() as i32);
-    outside_target.set_client_y(rect.top().round() as i32);
+    outside_target.set_client_x((target_x + 10.0).round() as i32);
+    outside_target.set_client_y(target_y.round() as i32);
     svg.dispatch_event(
         &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &outside_target).unwrap(),
     )
@@ -197,8 +201,8 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 
     let init = web_sys::PointerEventInit::new();
     init.set_bubbles(true);
-    init.set_client_x((rect.left() + 50.0).round() as i32);
-    init.set_client_y(rect.top().round() as i32);
+    init.set_client_x(target_x.round() as i32);
+    init.set_client_y(target_y.round() as i32);
     svg.dispatch_event(
         &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
     )

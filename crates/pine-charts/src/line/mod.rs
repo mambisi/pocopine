@@ -160,13 +160,29 @@ pub fn nearest_line_sample_in_radius(
     point: Point,
     radius: f64,
 ) -> Option<&LineChartSample> {
+    nearest_line_sample_in_scaled_radius(samples, point, radius, 1.0, 1.0)
+}
+
+pub fn nearest_line_sample_in_scaled_radius(
+    samples: &[LineChartSample],
+    point: Point,
+    radius: f64,
+    scale_x: f64,
+    scale_y: f64,
+) -> Option<&LineChartSample> {
     let radius = finite("hover.radius", radius).ok()?.max(0.0);
+    let scale_x = finite("hover.scale_x", scale_x).ok()?;
+    let scale_y = finite("hover.scale_y", scale_y).ok()?;
+    if scale_x <= 0.0 || scale_y <= 0.0 {
+        return None;
+    }
+
     let radius_squared = radius * radius;
     samples
         .iter()
         .filter_map(|sample| {
-            let dx = sample.x - point.x;
-            let dy = sample.y - point.y;
+            let dx = (sample.x - point.x) * scale_x;
+            let dy = (sample.y - point.y) * scale_y;
             let distance_squared = dx * dx + dy * dy;
             (distance_squared <= radius_squared).then_some((distance_squared, sample))
         })
@@ -472,7 +488,12 @@ impl PineLineChart {
 
         let ratio_x = ((ev.client_x() as f64) - rect.left()) / rect.width();
         let ratio_y = ((ev.client_y() as f64) - rect.top()) / rect.height();
-        self.hover_at(ratio_x * self.width, ratio_y * self.height);
+        self.hover_at_scaled(
+            ratio_x * self.width,
+            ratio_y * self.height,
+            rect.width() / self.width,
+            rect.height() / self.height,
+        );
     }
 
     pub fn clear_hover(&mut self) {
@@ -571,6 +592,10 @@ impl PineLineChart {
     }
 
     pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
+        self.hover_at_scaled(svg_x, svg_y, 1.0, 1.0);
+    }
+
+    fn hover_at_scaled(&mut self, svg_x: f64, svg_y: f64, scale_x: f64, scale_y: f64) {
         let Ok(point) = Point::new(svg_x, svg_y) else {
             self.clear_hover();
             return;
@@ -580,8 +605,13 @@ impl PineLineChart {
             return;
         }
 
-        let Some(sample) = nearest_line_sample_in_radius(&self.samples, point, self.hover_radius)
-        else {
+        let Some(sample) = nearest_line_sample_in_scaled_radius(
+            &self.samples,
+            point,
+            self.hover_radius,
+            scale_x,
+            scale_y,
+        ) else {
             self.clear_hover();
             return;
         };
@@ -738,6 +768,43 @@ mod tests {
         assert_eq!(sample.key, "b");
         assert_eq!(
             nearest_line_sample_in_radius(&samples, Point { x: 60.0, y: 20.0 }, 8.0),
+            None
+        );
+    }
+
+    #[test]
+    fn nearest_sample_scaled_radius_uses_rendered_distance() {
+        let samples = vec![LineChartSample {
+            key: "b".into(),
+            data_x: 5.0,
+            data_y: 8.0,
+            x: 50.0,
+            y: 20.0,
+            x_label: "5".into(),
+            y_label: "8".into(),
+            aria_label: "x 5, y 8".into(),
+        }];
+
+        assert_eq!(
+            nearest_line_sample_in_scaled_radius(
+                &samples,
+                Point { x: 54.0, y: 20.0 },
+                8.0,
+                2.0,
+                1.0,
+            )
+            .unwrap()
+            .key,
+            "b"
+        );
+        assert_eq!(
+            nearest_line_sample_in_scaled_radius(
+                &samples,
+                Point { x: 55.0, y: 20.0 },
+                8.0,
+                2.0,
+                1.0,
+            ),
             None
         );
     }
