@@ -28,9 +28,14 @@ pub use tower_http;
 pub use tracing;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::Router;
+use pocopine_auth::{AuthProvider, Principal, RequestContext};
 use tower_http::services::ServeDir;
 
 /// Default maximum JSON request body accepted by generated
@@ -95,6 +100,110 @@ fn parse_body_limit(raw: &str) -> Option<usize> {
 /// that `wasm-pack build --target web` produces, plus `index.html`).
 pub fn static_files(dir: impl AsRef<std::path::Path>) -> ServeDir {
     ServeDir::new(dir)
+}
+
+/// Type-erased handle to an [`AuthProvider`] suitable for use as
+/// axum middleware state. Cloning is a `Arc::clone`.
+pub type SharedAuthProvider = Arc<dyn AuthProvider>;
+
+/// Axum middleware that runs an [`AuthProvider`] before downstream
+/// handlers and inserts the resolved [`Principal`] into the request
+/// extensions. Server-function guards (`#[server(guard = ...)]`)
+/// then read that principal off `RequestContext`.
+///
+/// Errors from the provider are logged and treated as anonymous —
+/// guards on protected routes will reject the request, public
+/// routes still work. Providers that need to **reject** a malformed
+/// token at middleware (e.g. JWT verifiers per RFC-070 §5.6) should
+/// either return `Ok(None)` for "no credential" and use a different
+/// short-circuit mechanism for "bad credential," or layer their own
+/// middleware that returns a 401 directly.
+async fn auth_middleware(
+    State(provider): State<SharedAuthProvider>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    // Build a request context the provider can inspect. Cloning is
+    // unfortunate but Method/Uri/HeaderMap/Extensions are all cheap
+    // to clone (Extensions clones each entry; standard axum types
+    // implement Clone).
+    let ctx = RequestContext::from_parts(
+        req.method().clone(),
+        req.uri().clone(),
+        req.headers().clone(),
+        req.extensions().clone(),
+    );
+
+    match provider.authenticate(&ctx).await {
+        Ok(Some(user)) => {
+            req.extensions_mut().insert(Principal::from_user(user));
+        }
+        Ok(None) => {
+            // No credential present (or provider explicitly returned
+            // anonymous). Don't insert anything — guards see whatever
+            // was already there (default = anonymous).
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "pocopine.log",
+                error = %err,
+                "auth provider failed; treating request as anonymous"
+            );
+        }
+    }
+
+    next.run(req).await
+}
+
+/// Extension trait that installs an [`AuthProvider`] on an axum
+/// [`Router`] in one line.
+///
+/// **Install after routes.** `Router::layer` (which this calls
+/// under the hood) only wraps the routes that exist at the call
+/// site — routes added afterwards silently bypass the middleware.
+/// Always call `with_auth` last:
+///
+/// ```no_run
+/// # use pocopine_server::{axum::Router, RouterAuthExt};
+/// # use pocopine_auth::{AuthProvider, AuthFuture, AuthUser, RequestContext};
+/// # struct StubProvider;
+/// # impl AuthProvider for StubProvider {
+/// #     fn authenticate<'a>(&'a self, _: &'a RequestContext)
+/// #         -> AuthFuture<'a, Option<AuthUser>>
+/// #     { Box::pin(async { Ok(None) }) }
+/// # }
+/// # mod app { pub fn __whoami_route(r: pocopine_server::axum::Router)
+/// #     -> pocopine_server::axum::Router { r } }
+/// let router = Router::new();
+/// let router = app::__whoami_route(router);
+/// // ... register all server-function routes first ...
+/// let router = router.with_auth(StubProvider);
+/// ```
+///
+/// The middleware runs once per request, before any
+/// `#[server(guard = ...)]` route handler. Identity flows from
+/// middleware → request `Extensions` → `RequestContext` → guard.
+pub trait RouterAuthExt {
+    /// Install an `AuthProvider` as request middleware.
+    fn with_auth<P: AuthProvider + 'static>(self, provider: P) -> Self;
+
+    /// Install a pre-`Arc`'d provider — useful when the provider is
+    /// shared with other middleware or accessed via app state.
+    fn with_auth_arc(self, provider: SharedAuthProvider) -> Self;
+}
+
+impl RouterAuthExt for Router {
+    fn with_auth<P: AuthProvider + 'static>(self, provider: P) -> Self {
+        let provider: SharedAuthProvider = Arc::new(provider);
+        self.with_auth_arc(provider)
+    }
+
+    fn with_auth_arc(self, provider: SharedAuthProvider) -> Self {
+        self.layer(axum::middleware::from_fn_with_state(
+            provider,
+            auth_middleware,
+        ))
+    }
 }
 
 /// Bind `router` to `addr` and serve forever.
