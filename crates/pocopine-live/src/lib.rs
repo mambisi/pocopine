@@ -372,12 +372,9 @@ mod host {
         B: LiveEventBackend + Clone + Send + Sync + 'static,
     {
         let (parts, _) = request.into_parts();
-        let method = parts.method.clone();
-        let uri = parts.uri.clone();
-        let headers = parts.headers.clone();
-        let query = parse_query(&uri)?;
-        let last_event_id = last_event_id(&headers).or_else(|| query.last_event_id.clone());
-        let ctx = RequestContext::from_parts(method, uri, headers, parts.extensions);
+        let query = parse_query(&parts.uri)?;
+        let last_event_id = last_event_id(&parts.headers).or_else(|| query.last_event_id.clone());
+        let ctx = RequestContext::from_parts(parts.method, parts.uri, parts.headers, parts.extensions);
         let topics = hub.allowed_topics(&ctx, &query)?;
         let after = last_event_id
             .map(EventCursor::new)
@@ -425,7 +422,7 @@ mod host {
     }
 
     fn sse_from_subscription(
-        subscription: LiveEventSubscription,
+        mut subscription: LiveEventSubscription,
     ) -> Sse<impl futures_util::Stream<Item = Result<SseEvent, Infallible>> + Send + 'static> {
         let mut opening = Vec::new();
         opening.push(Ok(SseEvent::default().event(KIND_READY).data(
@@ -456,13 +453,10 @@ mod host {
                 .to_string(),
             )));
         } else {
+            let replay_events = std::mem::take(&mut subscription.opening.replay.events);
             opening.extend(
-                subscription
-                    .opening
-                    .replay
-                    .events
-                    .iter()
-                    .cloned()
+                replay_events
+                    .into_iter()
                     .map(|event| Ok(sse_for_envelope(event))),
             );
         }
