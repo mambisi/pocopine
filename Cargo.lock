@@ -2838,6 +2838,10 @@ dependencies = [
 [[package]]
 name = "pine-charts"
 version = "0.1.0"
+dependencies = [
+ "pocopine",
+ "serde",
+]
 
 [[package]]
 name = "pine-icons"
