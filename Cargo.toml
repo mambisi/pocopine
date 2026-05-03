@@ -7,11 +7,14 @@ members = [
     "crates/pine-motion",
     "crates/pocopine",
     "crates/pocopine-auth",
+    "crates/pocopine-analytics",
     "crates/pocopine-cli",
     "crates/pocopine-core",
     "crates/pocopine-expr",
     "crates/pocopine-jobs",
+    "crates/pocopine-logging",
     "crates/pocopine-macros",
+    "crates/pocopine-observe",
     "crates/pocopine-server",
     "examples/blog",
     "examples/counter",
@@ -45,10 +48,13 @@ repository = "https://github.com/mambisi/pocopine"
 # of `pocopine` get devtools on by default via its own `default`
 # feature, which forwards `pocopine-core/devtools`.
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
+pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }
 pocopine-jobs = { path = "crates/pocopine-jobs", version = "0.1.0" }
+pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
+pocopine-observe = { path = "crates/pocopine-observe", version = "0.1.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -63,6 +69,7 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 strsim = "0.11"
 cron = "0.12"
+tracing = "0.1"
 
 # RFC-058 Phase 6.5 — match Yew's release-profile knobs.
 # `opt-level = "z"` collapses size-vs-speed in favour of size;

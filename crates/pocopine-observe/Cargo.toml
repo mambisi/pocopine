@@ -1,0 +1,11 @@
+[package]
+name = "pocopine-observe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared observability event contract for pocopine logging, tracing, and analytics."
+
+[dependencies]
+serde = { workspace = true }
+tracing = { workspace = true }

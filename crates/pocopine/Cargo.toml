@@ -11,15 +11,21 @@ description = "Rust/WASM framework with an Alpine.js-style client runtime."
 # opt into `devtools` (in-browser scope inspector) and
 # `mount-profiler` (per-mount timing instrumentation).
 default = ["runtime-expr-fallback"]
+analytics = ["dep:pocopine-analytics", "observe"]
 devtools = ["pocopine-core/devtools"]
+logging = ["dep:pocopine-logging", "observe"]
 mount-profiler = ["pocopine-core/mount-profiler"]
+observe = ["dep:pocopine-observe"]
 runtime-expr-fallback = ["pocopine-core/runtime-expr-fallback"]
 
 [dependencies]
+pocopine-analytics = { workspace = true, optional = true }
 pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
 pocopine-jobs = { workspace = true }
+pocopine-logging = { workspace = true, optional = true }
 pocopine-macros = { workspace = true }
+pocopine-observe = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
