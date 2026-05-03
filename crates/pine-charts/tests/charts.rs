@@ -186,7 +186,7 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 
     let outside_target = web_sys::PointerEventInit::new();
     outside_target.set_bubbles(true);
-    outside_target.set_client_x((target_x + 6.0).round() as i32);
+    outside_target.set_client_x((target_x + 10.0).round() as i32);
     outside_target.set_client_y(target_y.round() as i32);
     svg.dispatch_event(
         &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &outside_target).unwrap(),

@@ -371,7 +371,7 @@ impl Default for PineLineChart {
             x_max: None,
             y_min: None,
             y_max: None,
-            hover_radius: 5.0,
+            hover_radius: 8.0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),
@@ -844,7 +844,7 @@ mod tests {
         assert!(!chart.x_tick_labels.is_empty());
         assert!(!chart.y_tick_labels.is_empty());
 
-        chart.hover_at(97.0, 3.0);
+        chart.hover_at(95.0, 5.0);
 
         assert!(chart.hover_visible);
         assert_eq!(chart.hover_x, 100.0);
