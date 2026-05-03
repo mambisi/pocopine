@@ -53,6 +53,12 @@ pub struct LineChartGeometry {
     pub plot: ChartRect,
     pub x_ticks: Vec<crate::Tick>,
     pub y_ticks: Vec<crate::Tick>,
+    pub x_grid: Vec<SvgLine>,
+    pub y_grid: Vec<SvgLine>,
+    pub x_tick_labels: Vec<SvgTickLabel>,
+    pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis: SvgLine,
+    pub y_axis: SvgLine,
 }
 
 impl LineChartGeometry {
@@ -79,14 +85,143 @@ impl LineChartGeometry {
             })
             .collect::<ChartResult<Vec<_>>>()?;
 
+        let x_ticks = x_scale.ticks(5);
+        let y_ticks = y_scale.ticks(5);
+
         Ok(Self {
             view_box: format!("0 0 {width} {height}"),
             line_d: line_path(mapped)?,
             plot,
-            x_ticks: x_scale.ticks(5),
-            y_ticks: y_scale.ticks(5),
+            x_grid: grid_lines_for_x(&x_ticks, plot),
+            y_grid: grid_lines_for_y(&y_ticks, plot),
+            x_tick_labels: tick_labels_for_x(&x_ticks, plot),
+            y_tick_labels: tick_labels_for_y(&y_ticks, plot),
+            x_axis: SvgLine::new(
+                "x-axis".into(),
+                plot.x,
+                plot.bottom(),
+                plot.right(),
+                plot.bottom(),
+            ),
+            y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
+            x_ticks,
+            y_ticks,
         })
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SvgLine {
+    pub key: String,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+}
+
+impl SvgLine {
+    pub fn new(key: String, x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
+        Self {
+            key,
+            x1,
+            y1,
+            x2,
+            y2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SvgTickLabel {
+    pub key: String,
+    pub value: f64,
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub line_x1: f64,
+    pub line_y1: f64,
+    pub line_x2: f64,
+    pub line_y2: f64,
+}
+
+fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| {
+            SvgLine::new(
+                format!("x-grid-{index}-{}", format_tick(tick.value)),
+                tick.position,
+                plot.y,
+                tick.position,
+                plot.bottom(),
+            )
+        })
+        .collect()
+}
+
+fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| {
+            SvgLine::new(
+                format!("y-grid-{index}-{}", format_tick(tick.value)),
+                plot.x,
+                tick.position,
+                plot.right(),
+                tick.position,
+            )
+        })
+        .collect()
+}
+
+fn tick_labels_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| SvgTickLabel {
+            key: format!("x-tick-{index}-{}", format_tick(tick.value)),
+            value: tick.value,
+            label: format_tick(tick.value),
+            x: tick.position,
+            y: plot.bottom() + 18.0,
+            line_x1: tick.position,
+            line_y1: plot.bottom(),
+            line_x2: tick.position,
+            line_y2: plot.bottom() + 6.0,
+        })
+        .collect()
+}
+
+fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| SvgTickLabel {
+            key: format!("y-tick-{index}-{}", format_tick(tick.value)),
+            value: tick.value,
+            label: format_tick(tick.value),
+            x: plot.x - 8.0,
+            y: tick.position + 4.0,
+            line_x1: plot.x - 6.0,
+            line_y1: tick.position,
+            line_x2: plot.x,
+            line_y2: tick.position,
+        })
+        .collect()
+}
+
+fn format_tick(value: f64) -> String {
+    let rounded = if value.abs() >= 1.0 {
+        format!("{value:.2}")
+    } else {
+        format!("{value:.4}")
+    };
+    rounded
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 fn validate_points(points: &[ChartPoint]) -> ChartResult<Vec<ChartPoint>> {
@@ -156,6 +291,12 @@ pub struct PineLineChart {
     pub state: String,
     pub view_box: String,
     pub line_d: String,
+    pub x_grid: Vec<SvgLine>,
+    pub y_grid: Vec<SvgLine>,
+    pub x_tick_labels: Vec<SvgTickLabel>,
+    pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis: SvgLine,
+    pub y_axis: SvgLine,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -181,6 +322,12 @@ impl Default for PineLineChart {
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),
+            x_grid: Vec::new(),
+            y_grid: Vec::new(),
+            x_tick_labels: Vec::new(),
+            y_tick_labels: Vec::new(),
+            x_axis: SvgLine::default(),
+            y_axis: SvgLine::default(),
             error: String::new(),
             ready: false,
             empty: true,
@@ -257,6 +404,12 @@ impl PineLineChart {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 self.line_d = geometry.line_d;
+                self.x_grid = geometry.x_grid;
+                self.y_grid = geometry.y_grid;
+                self.x_tick_labels = geometry.x_tick_labels;
+                self.y_tick_labels = geometry.y_tick_labels;
+                self.x_axis = geometry.x_axis;
+                self.y_axis = geometry.y_axis;
                 self.error.clear();
                 self.state = "ready".into();
                 self.ready = true;
@@ -265,6 +418,7 @@ impl PineLineChart {
             }
             Err(ChartError::EmptySeries) => {
                 self.line_d.clear();
+                self.clear_guides();
                 self.error.clear();
                 self.state = "empty".into();
                 self.ready = false;
@@ -273,6 +427,7 @@ impl PineLineChart {
             }
             Err(error) => {
                 self.line_d.clear();
+                self.clear_guides();
                 self.error = error.to_string();
                 self.state = "invalid".into();
                 self.ready = false;
@@ -295,6 +450,15 @@ impl PineLineChart {
             x_domain: zip_domain(self.x_min, self.x_max),
             y_domain: zip_domain(self.y_min, self.y_max),
         }
+    }
+
+    fn clear_guides(&mut self) {
+        self.x_grid.clear();
+        self.y_grid.clear();
+        self.x_tick_labels.clear();
+        self.y_tick_labels.clear();
+        self.x_axis = SvgLine::default();
+        self.y_axis = SvgLine::default();
     }
 }
 
@@ -330,6 +494,8 @@ mod tests {
 
         assert_eq!(geometry.view_box, "0 0 100 100");
         assert_eq!(geometry.line_d, "M0,100 L50,0 L100,50");
+        assert_eq!(geometry.x_grid.len(), 6);
+        assert_eq!(geometry.y_grid.len(), 6);
     }
 
     #[test]
@@ -364,5 +530,7 @@ mod tests {
         assert!(chart.ready);
         assert_eq!(chart.state, "ready");
         assert_eq!(chart.line_d, "M0,100 L100,0");
+        assert!(!chart.x_tick_labels.is_empty());
+        assert!(!chart.y_tick_labels.is_empty());
     }
 }

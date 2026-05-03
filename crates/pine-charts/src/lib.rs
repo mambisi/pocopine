@@ -12,7 +12,9 @@ pub mod scale;
 
 pub use error::{ChartError, ChartResult};
 pub use geometry::{ChartMargins, ChartRect, Point};
-pub use line::{ChartPoint, LineChartGeometry, LineChartOptions, PineLineChart};
+pub use line::{
+    ChartPoint, LineChartGeometry, LineChartOptions, PineLineChart, SvgLine, SvgTickLabel,
+};
 pub use path::{area_path, line_path};
 pub use scale::{BandScale, LinearScale, Tick};
 
