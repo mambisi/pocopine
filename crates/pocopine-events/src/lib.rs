@@ -252,7 +252,6 @@ opaque_string_type!(
 
 /// Convert a value into a validated [`Topic`].
 pub trait IntoTopic {
-    /// Perform the conversion.
     fn into_topic(self) -> EventResult<Topic>;
 }
 
@@ -276,7 +275,6 @@ impl IntoTopic for String {
 
 /// Convert a value into a validated [`EventKind`].
 pub trait IntoEventKind {
-    /// Perform the conversion.
     fn into_event_kind(self) -> EventResult<EventKind>;
 }
 
@@ -487,8 +485,7 @@ impl ReplayBatch {
     }
 }
 
-/// Subscription request. Phase A returns replay state only; live wake-up
-/// streams are layered on top by `pocopine-live`.
+/// Subscription request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscribeRequest {
     /// Topics requested by the caller.
@@ -544,8 +541,7 @@ pub trait EventBackend: Send + Sync {
     /// Replay retained events.
     fn replay<'a>(&'a self, request: ReplayRequest) -> EventFuture<'a, ReplayBatch>;
 
-    /// Open a subscription. Phase A only promises replay state; live
-    /// streaming can be added by backend-specific subscription handles.
+    /// Open a subscription with opening replay state.
     fn subscribe<'a>(&'a self, request: SubscribeRequest) -> EventFuture<'a, EventSubscription>;
 }
 
@@ -1097,6 +1093,8 @@ return {id, tostring(now_ms)}
         pub struct RedisEventBackend {
             config: RedisEventConfig,
             client: redis::Client,
+            stream_key: String,
+            pubsub_key: String,
             connection: std::sync::Arc<std::sync::Mutex<Option<MultiplexedConnection>>>,
         }
 
@@ -1104,9 +1102,13 @@ return {id, tostring(now_ms)}
             /// Build a Redis backend from explicit config.
             pub fn from_config(config: RedisEventConfig) -> EventResult<Self> {
                 let client = redis::Client::open(config.url.as_str())?;
+                let stream_key = config.stream_key();
+                let pubsub_key = config.pubsub_key();
                 Ok(Self {
                     config,
                     client,
+                    stream_key,
+                    pubsub_key,
                     connection: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 })
             }
@@ -1121,12 +1123,12 @@ return {id, tostring(now_ms)}
 
             /// Redis stream key used for durable replay.
             pub fn stream_key(&self) -> String {
-                self.config.stream_key()
+                self.stream_key.clone()
             }
 
             /// Redis Pub/Sub channel used for live wake-ups.
             pub fn pubsub_key(&self) -> String {
-                self.config.pubsub_key()
+                self.pubsub_key.clone()
             }
 
             /// Drop the cached multiplexed connection. The next operation
@@ -1154,7 +1156,7 @@ return {id, tostring(now_ms)}
             async fn clear_for_tests_inner(&self) -> EventResult<()> {
                 let mut conn = self.connection().await?;
                 let _: () = redis::cmd("DEL")
-                    .arg(self.stream_key())
+                    .arg(&self.stream_key)
                     .query_async(&mut conn)
                     .await?;
                 Ok(())
@@ -1169,14 +1171,12 @@ return {id, tostring(now_ms)}
                 &self,
                 draft: EventDraft,
             ) -> EventResult<EventEnvelope> {
-                let stream_key = self.stream_key();
-                let pubsub_key = self.pubsub_key();
                 let audience = serde_json::to_string(&draft.audience)?;
                 let payload = serde_json::to_string(&draft.payload)?;
                 let mut conn = self.connection().await?;
                 let (stream_id, created_at_raw): (String, String) = publish_script()
-                    .key(&stream_key)
-                    .key(&pubsub_key)
+                    .key(&self.stream_key)
+                    .key(&self.pubsub_key)
                     .arg(self.config.stream_max_len)
                     .arg(draft.created_at_ms)
                     .arg(&draft.protocol)
@@ -1217,7 +1217,6 @@ return {id, tostring(now_ms)}
                 request: ReplayRequest,
             ) -> EventResult<ReplayBatch> {
                 validate_replay_request(&request.topics, request.limit)?;
-                let stream_key = self.stream_key();
                 let mut conn = self.connection().await?;
                 let after_id = request
                     .after
@@ -1227,7 +1226,9 @@ return {id, tostring(now_ms)}
                     .map(str::to_string);
 
                 if let Some(after_id) = after_id.as_deref() {
-                    if let Some(oldest_id) = oldest_stream_id(&mut conn, &stream_key).await? {
+                    if let Some(oldest_id) =
+                        oldest_stream_id(&mut conn, &self.stream_key).await?
+                    {
                         if redis_stream_id_before(after_id, &oldest_id)? {
                             tracing::debug!(
                                 target: TRACE_TARGET,
@@ -1249,7 +1250,7 @@ return {id, tostring(now_ms)}
 
                 while events.len() < request.limit {
                     let reply =
-                        xrange_count(&mut conn, &stream_key, &start, "+", scan_count).await?;
+                        xrange_count(&mut conn, &self.stream_key, &start, "+", scan_count).await?;
                     let returned = reply.ids.len();
                     if returned == 0 {
                         break;
@@ -1303,20 +1304,21 @@ return {id, tostring(now_ms)}
             ) -> EventResult<LiveEventSubscription> {
                 let resume_after = request.after.clone();
                 let mut pubsub = self.client.get_async_pubsub().await?;
-                pubsub.subscribe(self.pubsub_key()).await?;
+                pubsub.subscribe(&self.pubsub_key).await?;
                 let opening = self.subscribe_to_stream(request).await?;
-                let last_seen_id = opening
+                let last_seen = opening
                     .replay
                     .cursor
                     .as_ref()
                     .or(resume_after.as_ref())
-                    .map(redis_stream_id_from_cursor)
-                    .transpose()?
-                    .map(str::to_string);
+                    .map(|cursor| {
+                        redis_stream_id_from_cursor(cursor).and_then(parse_redis_stream_id)
+                    })
+                    .transpose()?;
                 let receiver = RedisEventReceiver {
                     backend: self.clone(),
                     topics: opening.topics.clone(),
-                    last_seen_id,
+                    last_seen,
                     stream: Box::pin(pubsub.into_on_message()),
                 };
                 Ok(LiveEventSubscription::new(opening, Box::new(receiver)))
@@ -1331,9 +1333,9 @@ return {id, tostring(now_ms)}
                 &self,
                 stream_id: &str,
             ) -> EventResult<Option<EventEnvelope>> {
-                let stream_key = self.stream_key();
                 let mut conn = self.connection().await?;
-                let reply = xrange_count(&mut conn, &stream_key, stream_id, stream_id, 1).await?;
+                let reply =
+                    xrange_count(&mut conn, &self.stream_key, stream_id, stream_id, 1).await?;
                 reply
                     .ids
                     .into_iter()
@@ -1371,20 +1373,22 @@ return {id, tostring(now_ms)}
             }
 
             fn clear_cached_on_redis_error<T>(&self, result: EventResult<T>) -> EventResult<T> {
-                if matches!(result, Err(EventError::Redis(_))) {
-                    match self.clear_connection() {
-                        Ok(()) => {
-                            tracing::debug!(
-                                target: TRACE_TARGET,
-                                event_name = "pocopine.events.redis.clear_cached_connection",
-                            );
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                target: LOG_TARGET,
-                                event_name = "pocopine.events.redis.clear_cached_connection_failed",
-                                error = %err,
-                            );
+                if let Err(EventError::Redis(err)) = &result {
+                    if err.is_io_error() || err.is_connection_dropped() {
+                        match self.clear_connection() {
+                            Ok(()) => {
+                                tracing::debug!(
+                                    target: TRACE_TARGET,
+                                    event_name = "pocopine.events.redis.clear_cached_connection",
+                                );
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: LOG_TARGET,
+                                    event_name = "pocopine.events.redis.clear_cached_connection_failed",
+                                    error = %err,
+                                );
+                            }
                         }
                     }
                 }
@@ -1425,7 +1429,7 @@ return {id, tostring(now_ms)}
         struct RedisEventReceiver {
             backend: RedisEventBackend,
             topics: Vec<Topic>,
-            last_seen_id: Option<String>,
+            last_seen: Option<(u64, u64)>,
             stream: Pin<Box<dyn Stream<Item = redis::Msg> + Send>>,
         }
 
@@ -1450,10 +1454,11 @@ return {id, tostring(now_ms)}
                             }
                         };
 
-                        if self.has_seen(&stream_id)? {
+                        let parsed_id = parse_redis_stream_id(&stream_id)?;
+                        if self.has_seen(parsed_id) {
                             continue;
                         }
-                        self.mark_seen(&stream_id)?;
+                        self.mark_seen(parsed_id);
 
                         let Some(event) = self.backend.fetch_envelope(&stream_id).await? else {
                             tracing::debug!(
@@ -1472,24 +1477,16 @@ return {id, tostring(now_ms)}
         }
 
         impl RedisEventReceiver {
-            fn has_seen(&self, stream_id: &str) -> EventResult<bool> {
-                if let Some(last_seen) = self.last_seen_id.as_deref() {
-                    return Ok(!redis_stream_id_after(stream_id, last_seen)?);
-                }
-                Ok(false)
+            fn has_seen(&self, stream_id: (u64, u64)) -> bool {
+                self.last_seen
+                    .map(|last_seen| stream_id <= last_seen)
+                    .unwrap_or(false)
             }
 
-            fn mark_seen(&mut self, stream_id: &str) -> EventResult<()> {
-                if self
-                    .last_seen_id
-                    .as_deref()
-                    .map(|last_seen| redis_stream_id_after(stream_id, last_seen))
-                    .transpose()?
-                    .unwrap_or(true)
-                {
-                    self.last_seen_id = Some(stream_id.to_string());
+            fn mark_seen(&mut self, stream_id: (u64, u64)) {
+                if self.last_seen.map_or(true, |last_seen| stream_id > last_seen) {
+                    self.last_seen = Some(stream_id);
                 }
-                Ok(())
             }
         }
 
@@ -1577,10 +1574,6 @@ return {id, tostring(now_ms)}
 
         fn redis_stream_id_before(left: &str, right: &str) -> EventResult<bool> {
             Ok(parse_redis_stream_id(left)? < parse_redis_stream_id(right)?)
-        }
-
-        fn redis_stream_id_after(left: &str, right: &str) -> EventResult<bool> {
-            Ok(parse_redis_stream_id(left)? > parse_redis_stream_id(right)?)
         }
 
         fn parse_redis_stream_id(value: &str) -> EventResult<(u64, u64)> {
