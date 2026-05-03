@@ -696,7 +696,12 @@ return redis.call(
                     }
                     Err(err) => {
                         self.client.clear_connection();
-                        eprintln!("pocopine worker error: {err}; retrying in {backoff:?}");
+                        tracing::warn!(
+                            target: "pocopine.log",
+                            error = %err,
+                            retry_in_ms = backoff.as_millis() as u64,
+                            "pocopine worker error; retrying"
+                        );
                         tokio::time::sleep(backoff).await;
                         backoff = (backoff * 2)
                             .min(Duration::from_millis(DEFAULT_WORKER_ERROR_BACKOFF_MAX_MS));
@@ -733,14 +738,21 @@ return redis.call(
         // deployment where Redis was intended.
         fn log_startup_backend(&self) {
             match &self.config.backend {
-                JobBackend::Redis { .. } => eprintln!(
-                    "pocopine worker: backend = redis (durable, multi-process); app = {}",
-                    self.config.app
+                JobBackend::Redis { .. } => tracing::info!(
+                    target: "pocopine.log",
+                    backend = "redis",
+                    app = %self.config.app,
+                    durable = true,
+                    multi_process = true,
+                    "pocopine worker backend selected"
                 ),
-                JobBackend::Memory => eprintln!(
-                    "pocopine worker: backend = memory (process-local; \
-                     not shared across processes, lost on restart); app = {}",
-                    self.config.app
+                JobBackend::Memory => tracing::warn!(
+                    target: "pocopine.log",
+                    backend = "memory",
+                    app = %self.config.app,
+                    durable = false,
+                    multi_process = false,
+                    "pocopine worker backend selected; memory backend is process-local and lost on restart"
                 ),
             }
         }

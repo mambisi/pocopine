@@ -47,6 +47,21 @@ pub mod auth {
     pub use pocopine_auth::*;
 }
 
+#[cfg(feature = "analytics")]
+pub mod analytics {
+    pub use pocopine_analytics::*;
+}
+
+#[cfg(feature = "logging")]
+pub mod logging {
+    pub use pocopine_logging::*;
+}
+
+#[cfg(feature = "observe")]
+pub mod observe {
+    pub use pocopine_observe::*;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub mod jobs {
     pub use pocopine_jobs::*;

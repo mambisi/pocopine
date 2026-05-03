@@ -21,6 +21,9 @@ looks the way it does — the code itself tells you *what*.
   sorted-set scheduler + Lua-scripted state transitions, periodic
   firings, reclaim, and the memory backend. Includes redis-cli
   recipes for validating a live deployment.
+- [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
+  browser console logging, backend logging, structured observed
+  events, analytics sinks, privacy labels, and target filtering.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 

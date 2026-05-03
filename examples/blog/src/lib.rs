@@ -20,13 +20,17 @@ pub struct PostViewAudit {
 
 #[pocopine::job(queue = "blog", retries = 2)]
 pub async fn record_post_view(input: PostViewAudit) -> JobResult<()> {
-    eprintln!("post view audit: {}", input.post_id);
+    tracing::info!(
+        target: "pocopine.log",
+        post_id = input.post_id,
+        "post view audit"
+    );
     Ok(())
 }
 
 #[pocopine::job(queue = "blog", every = "10m")]
 pub async fn refresh_blog_index() -> JobResult<()> {
-    eprintln!("refresh blog index");
+    tracing::info!(target: "pocopine.log", "refresh blog index");
     Ok(())
 }
 

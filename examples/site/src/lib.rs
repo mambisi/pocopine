@@ -28,11 +28,10 @@ use shared::{ContactMessage, ContactResponse};
 
 #[pocopine::server(public)]
 pub async fn submit_contact(msg: ContactMessage) -> ServerResult<ContactResponse> {
-    eprintln!(
-        "contact: {name} <{email}>: {msg}",
-        name = msg.name,
-        email = msg.email,
-        msg = msg.message,
+    tracing::info!(
+        target: "pocopine.log",
+        message_len = msg.message.len(),
+        "contact form submitted"
     );
     let id = (msg.message.len() as u32).wrapping_add(1000);
     Ok(ContactResponse { id, ok: true })
