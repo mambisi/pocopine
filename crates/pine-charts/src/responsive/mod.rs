@@ -27,6 +27,7 @@ impl ResponsiveChartSize {
 #[slot(default, accepts = [
     crate::area::PineAreaChart,
     crate::bar::PineBarChart,
+    crate::cartesian_chart::PineCartesianChart,
     crate::layered::PineLayerChart,
     crate::line::PineLineChart,
     crate::pie::PinePieChart,

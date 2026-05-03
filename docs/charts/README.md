@@ -33,6 +33,7 @@ should remain author-owned whenever possible.
 
 - [Foundation](foundation.md)
 - [Components](components.md)
+- [Cartesian Composition](cartesian.md)
 - [Axes and Grid](axes-grid.md)
 - [Legends](legend.md)
 - [Responsive Containers](responsive.md)

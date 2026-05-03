@@ -41,11 +41,25 @@
   </header>
 
   <pine-chart-responsive class="chart-panel" aspect_ratio="2" min_height="220">
-    <pine-line-chart label="Weekly metric"
-                     pp-bind:series="line_series"
-                     x_label="Week"
-                     y_label="Metric"
-                     show_markers="true"></pine-line-chart>
+    <pine-cartesian-chart label="Weekly metric">
+      <pine-chart-grid></pine-chart-grid>
+      <pine-x-axis label="Week"></pine-x-axis>
+      <pine-y-axis label="Metric"></pine-y-axis>
+      <pine-line-series key="primary"
+                        pp-bind:label="line_primary_label"
+                        pp-bind:color="line_primary_color"
+                        stroke_width="3"
+                        show_markers="true"
+                        marker_radius="3"
+                        pp-bind:points="line_primary_points"></pine-line-series>
+      <pine-line-series key="secondary"
+                        pp-bind:label="line_secondary_label"
+                        pp-bind:color="line_secondary_color"
+                        stroke_width="3"
+                        show_markers="true"
+                        marker_radius="3"
+                        pp-bind:points="line_secondary_points"></pine-line-series>
+    </pine-cartesian-chart>
   </pine-chart-responsive>
 
   <pine-chart-legend label="Weekly metric legend"
