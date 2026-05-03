@@ -34,3 +34,19 @@ You should see spans named `pocopine.server_function` and
 `message_len`.
 
 The example intentionally does not log or export the raw message body.
+
+## CI smoke test
+
+The repository CI runs:
+
+```sh
+bash scripts/ci/otlp_smoke.sh
+```
+
+That test starts a fake OTLP gRPC collector in-process, calls the generated
+server-function route, and asserts:
+
+- spans named `pocopine.server_function` and `observability_smoke.echo` arrive;
+- `function`, `route`, `message_len`, and `service.name` metadata are present;
+- the raw request message is absent from exported telemetry;
+- local p95 request latency stays below a broad CI budget.
