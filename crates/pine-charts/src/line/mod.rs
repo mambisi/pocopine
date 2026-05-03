@@ -309,6 +309,8 @@ pub struct PineLineChart {
     pub hover_x_label: String,
     pub hover_y_label: String,
     pub hover_aria_label: String,
+    pub hover_placement_x: String,
+    pub hover_placement_y: String,
     pub hover_style: String,
     pub error: String,
     pub ready: bool,
@@ -354,6 +356,8 @@ impl Default for PineLineChart {
             hover_x_label: String::new(),
             hover_y_label: String::new(),
             hover_aria_label: String::new(),
+            hover_placement_x: "right".into(),
+            hover_placement_y: "above".into(),
             hover_style: String::new(),
             error: String::new(),
             ready: false,
@@ -435,12 +439,13 @@ impl PineLineChart {
             return;
         };
         let rect = element.get_bounding_client_rect();
-        if rect.width() <= 0.0 || self.width <= 0.0 {
+        if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width <= 0.0 || self.height <= 0.0 {
             return;
         }
 
-        let ratio = ((ev.client_x() as f64) - rect.left()) / rect.width();
-        self.hover_at_x(ratio * self.width);
+        let ratio_x = ((ev.client_x() as f64) - rect.left()) / rect.width();
+        let ratio_y = ((ev.client_y() as f64) - rect.top()) / rect.height();
+        self.hover_at(ratio_x * self.width, ratio_y * self.height);
     }
 
     pub fn clear_hover(&mut self) {
@@ -452,6 +457,8 @@ impl PineLineChart {
         self.hover_x_label.clear();
         self.hover_y_label.clear();
         self.hover_aria_label.clear();
+        self.hover_placement_x = "right".into();
+        self.hover_placement_y = "above".into();
         self.hover_style.clear();
     }
 }
@@ -532,7 +539,16 @@ impl PineLineChart {
     }
 
     pub fn hover_at_x(&mut self, svg_x: f64) {
-        if !self.ready || svg_x < self.plot_x || svg_x > self.plot_right {
+        let svg_y = self.plot_y + (self.plot_bottom - self.plot_y) * 0.5;
+        self.hover_at(svg_x, svg_y);
+    }
+
+    pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
+        let Ok(point) = Point::new(svg_x, svg_y) else {
+            self.clear_hover();
+            return;
+        };
+        if !self.ready || !self.plot_rect().contains(point) {
             self.clear_hover();
             return;
         }
@@ -548,6 +564,18 @@ impl PineLineChart {
         let hover_x_label = sample.x_label.clone();
         let hover_y_label = sample.y_label.clone();
         let hover_aria_label = sample.aria_label.clone();
+        let hover_placement_x = if hover_x >= self.plot_x + (self.plot_right - self.plot_x) * 0.5 {
+            "left"
+        } else {
+            "right"
+        };
+        let hover_placement_y = if hover_y <= self.plot_y + (self.plot_bottom - self.plot_y) * 0.5 {
+            "below"
+        } else {
+            "above"
+        };
+        let hover_x_pct = (hover_x / self.width * 100.0).clamp(0.0, 100.0);
+        let hover_y_pct = (hover_y / self.height * 100.0).clamp(0.0, 100.0);
 
         self.hover_visible = true;
         self.hover_x = hover_x;
@@ -557,10 +585,20 @@ impl PineLineChart {
         self.hover_x_label = hover_x_label;
         self.hover_y_label = hover_y_label;
         self.hover_aria_label = hover_aria_label;
+        self.hover_placement_x = hover_placement_x.into();
+        self.hover_placement_y = hover_placement_y.into();
         self.hover_style = format!(
-            "--pine-chart-tooltip-x: {}px; --pine-chart-tooltip-y: {}px;",
-            self.hover_x, self.hover_y
+            "--pine-chart-tooltip-x: {hover_x_pct}%; --pine-chart-tooltip-y: {hover_y_pct}%;"
         );
+    }
+
+    fn plot_rect(&self) -> ChartRect {
+        ChartRect {
+            x: self.plot_x,
+            y: self.plot_y,
+            width: self.plot_right - self.plot_x,
+            height: self.plot_bottom - self.plot_y,
+        }
     }
 
     fn clear_plot(&mut self) {
@@ -683,5 +721,9 @@ mod tests {
         assert_eq!(chart.hover_y, 0.0);
         assert_eq!(chart.hover_x_label, "1");
         assert_eq!(chart.hover_y_label, "1");
+
+        chart.hover_at(50.0, -1.0);
+
+        assert!(!chart.hover_visible);
     }
 }

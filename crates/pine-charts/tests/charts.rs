@@ -162,10 +162,18 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
         tooltip.get_attribute("aria-label").as_deref(),
         Some("x 5, y 10")
     );
+    assert_eq!(
+        tooltip.get_attribute("data-tooltip-x").as_deref(),
+        Some("left")
+    );
+    assert_eq!(
+        tooltip.get_attribute("data-tooltip-y").as_deref(),
+        Some("below")
+    );
     assert!(tooltip
         .get_attribute("style")
         .unwrap_or_default()
-        .contains("--pine-chart-tooltip-x: 50px"));
+        .contains("--pine-chart-tooltip-x: 50%"));
 
     let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
     svg.dispatch_event(&leave).unwrap();

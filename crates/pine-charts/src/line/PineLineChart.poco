@@ -102,6 +102,8 @@
        role="status"
        :aria-label="hover_aria_label"
        :style="hover_style"
+       :data-tooltip-x="hover_placement_x"
+       :data-tooltip-y="hover_placement_y"
        :data-x="hover_data_x"
        :data-y="hover_data_y">
     <span class="pine-chart-tooltip-x"
