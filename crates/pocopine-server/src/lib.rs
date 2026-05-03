@@ -25,6 +25,7 @@ pub use serde_json;
 pub use tokio;
 pub use tower;
 pub use tower_http;
+pub use tracing;
 
 use std::net::SocketAddr;
 use std::sync::OnceLock;
