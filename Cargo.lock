@@ -2808,6 +2808,7 @@ dependencies = [
  "pocopine-auth",
  "pocopine-core",
  "pocopine-jobs",
+ "pocopine-live",
  "pocopine-logging",
  "pocopine-macros",
  "pocopine-observe",
@@ -2907,6 +2908,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pocopine-live"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "pocopine-auth",
+ "pocopine-events",
+ "pocopine-observe",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "tracing",
 ]
 

@@ -57,6 +57,11 @@ pub mod logging {
     pub use pocopine_logging::*;
 }
 
+#[cfg(feature = "live")]
+pub mod live {
+    pub use pocopine_live::*;
+}
+
 #[cfg(feature = "observe")]
 pub mod observe {
     pub use pocopine_observe::*;
