@@ -602,6 +602,41 @@ pub trait LiveEventBackend: EventBackend {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+impl<B> EventBackend for std::sync::Arc<B>
+where
+    B: EventBackend + ?Sized,
+{
+    fn capabilities(&self) -> EventBackendCapabilities {
+        (**self).capabilities()
+    }
+
+    fn publish<'a>(&'a self, draft: EventDraft) -> EventFuture<'a, EventEnvelope> {
+        (**self).publish(draft)
+    }
+
+    fn replay<'a>(&'a self, request: ReplayRequest) -> EventFuture<'a, ReplayBatch> {
+        (**self).replay(request)
+    }
+
+    fn subscribe<'a>(&'a self, request: SubscribeRequest) -> EventFuture<'a, EventSubscription> {
+        (**self).subscribe(request)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<B> LiveEventBackend for std::sync::Arc<B>
+where
+    B: LiveEventBackend + ?Sized,
+{
+    fn subscribe_live<'a>(
+        &'a self,
+        request: SubscribeRequest,
+    ) -> EventFuture<'a, LiveEventSubscription> {
+        (**self).subscribe_live(request)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -993,6 +1028,19 @@ return {id, tostring(now_ms)}
                 })
             }
 
+            /// Build Redis config from `POCOPINE_REDIS_URL`.
+            ///
+            /// This deliberately does not default to localhost. Apps that
+            /// choose Redis should fail loudly if the broker URL is missing.
+            pub fn from_env(app: impl Into<String>) -> EventResult<Self> {
+                let url =
+                    std::env::var("POCOPINE_REDIS_URL").map_err(|_| EventError::InvalidValue {
+                        field: "POCOPINE_REDIS_URL",
+                        value: "missing".to_string(),
+                    })?;
+                Self::new(url, app)
+            }
+
             /// Set the approximate maximum retained stream length.
             pub fn with_stream_max_len(mut self, stream_max_len: usize) -> EventResult<Self> {
                 if stream_max_len == 0 {
@@ -1043,12 +1091,7 @@ return {id, tostring(now_ms)}
             /// This deliberately does not default to localhost. Apps that
             /// choose Redis should fail loudly if the broker URL is missing.
             pub fn from_env(app: impl Into<String>) -> EventResult<Self> {
-                let url =
-                    std::env::var("POCOPINE_REDIS_URL").map_err(|_| EventError::InvalidValue {
-                        field: "POCOPINE_REDIS_URL",
-                        value: "missing".to_string(),
-                    })?;
-                Self::from_config(RedisEventConfig::new(url, app)?)
+                Self::from_config(RedisEventConfig::from_env(app)?)
             }
 
             /// Redis stream key used for durable replay.
@@ -1576,6 +1619,69 @@ return {id, tostring(now_ms)}
     #[cfg(feature = "redis")]
     pub use redis_backend::{RedisEventBackend, RedisEventConfig};
 
+    /// Shared host-side event backend object.
+    pub type SharedEventBackend = Arc<dyn LiveEventBackend>;
+
+    /// Supported built-in event backend configuration.
+    ///
+    /// This enum only contains backends implemented by this crate.
+    /// RabbitMQ, Kafka, and database-log integrations should live in
+    /// adapter crates that implement [`EventBackend`] and
+    /// [`LiveEventBackend`] directly.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum EventBackendConfig {
+        /// Process-local backend with bounded replay. Explicitly choose
+        /// this only for tests, development, or single-process production.
+        Memory(MemoryEventConfig),
+        /// Redis Streams backend with Pub/Sub wake-ups.
+        #[cfg(feature = "redis")]
+        Redis(RedisEventConfig),
+    }
+
+    impl Default for EventBackendConfig {
+        fn default() -> Self {
+            Self::Memory(MemoryEventConfig::default())
+        }
+    }
+
+    impl EventBackendConfig {
+        /// Build the default in-memory backend config.
+        pub fn memory() -> Self {
+            Self::Memory(MemoryEventConfig::default())
+        }
+
+        /// Build an in-memory backend config.
+        pub fn memory_with_config(config: MemoryEventConfig) -> Self {
+            Self::Memory(config)
+        }
+
+        /// Build a Redis backend config.
+        #[cfg(feature = "redis")]
+        pub fn redis(config: RedisEventConfig) -> Self {
+            Self::Redis(config)
+        }
+
+        /// Build Redis config from `POCOPINE_REDIS_URL`.
+        #[cfg(feature = "redis")]
+        pub fn redis_from_env(app: impl Into<String>) -> EventResult<Self> {
+            RedisEventConfig::from_env(app).map(Self::Redis)
+        }
+
+        /// Instantiate the configured backend.
+        pub fn build(self) -> EventResult<SharedEventBackend> {
+            match self {
+                Self::Memory(config) => Ok(Arc::new(MemoryEventBackend::with_config(config)?)),
+                #[cfg(feature = "redis")]
+                Self::Redis(config) => Ok(Arc::new(RedisEventBackend::from_config(config)?)),
+            }
+        }
+    }
+
+    /// Instantiate a supported built-in event backend.
+    pub fn build_event_backend(config: EventBackendConfig) -> EventResult<SharedEventBackend> {
+        config.build()
+    }
+
     #[cfg(test)]
     mod tests {
         use serde_json::json;
@@ -1609,6 +1715,23 @@ return {id, tostring(now_ms)}
             assert_eq!(backend.capabilities(), EventBackendCapabilities::memory());
             assert!(!backend.capabilities().durable_replay);
             assert!(!backend.capabilities().multi_process);
+        }
+
+        #[test]
+        fn event_backend_config_builds_memory_backend() {
+            let backend = EventBackendConfig::memory().build().unwrap();
+
+            assert_eq!(backend.capabilities(), EventBackendCapabilities::memory());
+        }
+
+        #[test]
+        fn event_backend_config_rejects_invalid_memory_backend() {
+            let config = EventBackendConfig::memory_with_config(MemoryEventConfig {
+                capacity: 0,
+                subscriber_capacity: 1,
+            });
+
+            assert!(config.build().is_err());
         }
 
         #[test]
@@ -1754,6 +1877,9 @@ return {id, tostring(now_ms)}
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use host::{MemoryEventBackend, MemoryEventConfig};
+pub use host::{
+    build_event_backend, EventBackendConfig, MemoryEventBackend, MemoryEventConfig,
+    SharedEventBackend,
+};
 #[cfg(all(feature = "redis", not(target_arch = "wasm32")))]
 pub use host::{RedisEventBackend, RedisEventConfig};
