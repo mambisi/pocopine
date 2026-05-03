@@ -44,6 +44,10 @@ is mapped to the nearest sampled point in SVG space. The component owns the
 nearest-point state and geometry variables, while the application owns tooltip
 placement and visual styling.
 
+Set `show_markers="true"` when every sampled point should render as a visible
+SVG marker. Markers are opt-in so dense line charts do not accidentally produce
+hundreds of visible circles.
+
 ## Bar Chart
 
 `PineBarChart` accepts `Vec<ChartBar>` for a single series or
@@ -139,6 +143,8 @@ The component emits stable hooks:
 - `.pine-chart-axis`
 - `.pine-chart-tick-label`
 - `.pine-chart-line`
+- `.pine-chart-markers`
+- `.pine-chart-marker`
 - `.pine-chart-hover`
 - `.pine-chart-crosshair`
 - `.pine-chart-hover-marker`
@@ -174,6 +180,11 @@ treatment:
 
 .pine-chart-line {
   stroke-width: 2;
+}
+
+.pine-chart-marker {
+  fill: var(--chart-surface);
+  stroke: currentColor;
 }
 
 .pine-chart-tooltip {

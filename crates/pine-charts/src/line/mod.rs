@@ -287,6 +287,8 @@ pub struct PineLineChart {
     pub y_min: Option<f64>,
     #[prop]
     pub y_max: Option<f64>,
+    #[prop]
+    pub show_markers: bool,
     pub state: String,
     pub view_box: String,
     pub line_d: String,
@@ -334,6 +336,7 @@ impl Default for PineLineChart {
             x_max: None,
             y_min: None,
             y_max: None,
+            show_markers: false,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             line_d: String::new(),

@@ -28,6 +28,7 @@
 
   <pine-line-chart label="Weekly metric"
                    pp-bind:points="points"
+                   show_markers="true"
                    width="720"
                    height="360"></pine-line-chart>
 
