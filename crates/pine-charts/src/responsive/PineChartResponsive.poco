@@ -4,5 +4,9 @@
       :data-ready="ready"
       :data-width="measured_width"
       :data-height="measured_height">
-  <slot></slot>
+  <div class="pine-chart-responsive-frame"
+       pp-ref="frame"
+       :style="frame_style">
+    <slot></slot>
+  </div>
 </root>

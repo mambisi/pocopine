@@ -276,6 +276,8 @@ pub struct PinePieChart {
     pub center_visible: bool,
     pub center_label_text: String,
     pub center_value_text: String,
+    pub center_label_y: f64,
+    pub center_value_y: f64,
     pub hover_visible: bool,
     pub hover_key: String,
     pub hover_label: String,
@@ -323,6 +325,8 @@ impl Default for PinePieChart {
             center_visible: false,
             center_label_text: String::new(),
             center_value_text: String::new(),
+            center_label_y: 0.0,
+            center_value_y: 0.0,
             hover_visible: false,
             hover_key: String::new(),
             hover_label: String::new(),
@@ -584,6 +588,34 @@ impl PinePieChart {
         self.center_value_text = self.center_value.clone();
         self.center_visible = self.inner_radius_px > 0.0
             && (!self.center_label_text.is_empty() || !self.center_value_text.is_empty());
+        let has_label = !self.center_label_text.is_empty();
+        let has_value = !self.center_value_text.is_empty();
+        match (has_value, has_label) {
+            (true, true) if self.is_half_donut() => {
+                self.center_value_y = self.center_y - 26.0;
+                self.center_label_y = self.center_y;
+            }
+            (true, true) => {
+                self.center_value_y = self.center_y - 10.0;
+                self.center_label_y = self.center_y + 16.0;
+            }
+            (true, false) => {
+                self.center_value_y = self.center_y;
+                self.center_label_y = self.center_y;
+            }
+            (false, true) => {
+                self.center_value_y = self.center_y;
+                self.center_label_y = self.center_y;
+            }
+            (false, false) => {
+                self.center_value_y = self.center_y;
+                self.center_label_y = self.center_y;
+            }
+        }
+    }
+
+    fn is_half_donut(&self) -> bool {
+        self.inner_radius_px > 0.0 && (self.end_angle - self.start_angle).abs() <= 180.0 + 1e-9
     }
 
     fn apply_hover(&mut self, update: PieHoverUpdate) {
@@ -925,5 +957,41 @@ mod tests {
 
         assert!(chart.ready);
         assert_eq!(chart.slices.len(), 1);
+    }
+
+    #[test]
+    fn center_text_positions_are_computed_fields() {
+        let mut chart = PinePieChart {
+            data: vec![ChartPieSlice::new("A", 2.0)],
+            inner_radius: 0.5,
+            center_label: "Total".into(),
+            center_value: "2".into(),
+            ..Default::default()
+        };
+
+        chart.recompute();
+
+        assert!(chart.center_visible);
+        assert_eq!(chart.center_value_y, chart.center_y - 10.0);
+        assert_eq!(chart.center_label_y, chart.center_y + 16.0);
+    }
+
+    #[test]
+    fn half_donut_center_label_sits_on_center_line() {
+        let mut chart = PinePieChart {
+            data: vec![ChartPieSlice::new("A", 2.0)],
+            inner_radius: 0.5,
+            start_angle: 180.0,
+            end_angle: 360.0,
+            center_label: "Progress".into(),
+            center_value: "74%".into(),
+            ..Default::default()
+        };
+
+        chart.recompute();
+
+        assert!(chart.center_visible);
+        assert_eq!(chart.center_value_y, chart.center_y - 26.0);
+        assert_eq!(chart.center_label_y, chart.center_y);
     }
 }

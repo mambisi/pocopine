@@ -45,13 +45,13 @@
        pointer-events="none">
       <text class="pine-chart-center-value"
             :x="center_x"
-            :y="center_y - 4"
+            :y="center_value_y"
             text-anchor="middle"
             dominant-baseline="middle"
             pp-text="center_value_text"></text>
       <text class="pine-chart-center-label"
             :x="center_x"
-            :y="center_y + 16"
+            :y="center_label_y"
             text-anchor="middle"
             dominant-baseline="middle"
             pp-text="center_label_text"></text>
