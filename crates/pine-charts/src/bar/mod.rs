@@ -2,8 +2,9 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    clear_plot_edges, plot_rect_from_edges, pointer_event_svg_point, x_axis_label, y_axis_label,
-    CartesianHoverPlacement,
+    optional_domain, plot_rect_from_edges, pointer_event_svg_point, x_axis_label, y_axis_label,
+    CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields, CategoricalGuideUpdate,
+    ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -791,33 +792,26 @@ impl PineBarChart {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 self.bars = geometry.bars;
-                self.plot_x = geometry.plot.x;
-                self.plot_y = geometry.plot.y;
-                self.plot_right = geometry.plot.right();
-                self.plot_bottom = geometry.plot.bottom();
-                self.y_grid = geometry.y_grid;
-                self.x_tick_labels = geometry.x_tick_labels;
-                self.y_tick_labels = geometry.y_tick_labels;
-                self.x_axis_label = geometry.x_axis_label;
-                self.y_axis_label = geometry.y_axis_label;
-                self.x_axis = geometry.x_axis;
-                self.y_axis = geometry.y_axis;
+                self.plot_edges().apply(geometry.plot);
+                self.guides().apply(CategoricalGuideUpdate {
+                    y_grid: geometry.y_grid,
+                    x_tick_labels: geometry.x_tick_labels,
+                    y_tick_labels: geometry.y_tick_labels,
+                    x_axis_label: geometry.x_axis_label,
+                    y_axis_label: geometry.y_axis_label,
+                    x_axis: geometry.x_axis,
+                    y_axis: geometry.y_axis,
+                });
                 self.legend_items = geometry.legend_items;
                 self.error.clear();
-                self.state = "ready".into();
-                self.ready = true;
-                self.empty = false;
-                self.invalid = false;
+                self.state_fields().apply(CartesianChartState::Ready);
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
                 self.clear_geometry();
                 self.clear_hover();
                 self.error.clear();
-                self.state = "empty".into();
-                self.ready = false;
-                self.empty = true;
-                self.invalid = false;
+                self.state_fields().apply(CartesianChartState::Empty);
             }
             Err(error) => {
                 self.set_invalid(error);
@@ -835,7 +829,7 @@ impl PineBarChart {
                 self.margin_bottom,
                 self.margin_left,
             ),
-            y_domain: zip_domain(self.y_min, self.y_max),
+            y_domain: optional_domain(self.y_min, self.y_max),
             mode: BarChartMode::parse(&self.mode)?,
             padding_inner: self.padding_inner,
             padding_outer: self.padding_outer,
@@ -847,23 +841,14 @@ impl PineBarChart {
         self.clear_geometry();
         self.clear_hover();
         self.error = error.to_string();
-        self.state = "invalid".into();
-        self.ready = false;
-        self.empty = false;
-        self.invalid = true;
+        self.state_fields().apply(CartesianChartState::Invalid);
     }
 
     fn clear_geometry(&mut self) {
         self.bars.clear();
-        self.clear_plot();
-        self.y_grid.clear();
-        self.x_tick_labels.clear();
-        self.y_tick_labels.clear();
-        self.x_axis_label = SvgAxisLabel::default();
-        self.y_axis_label = SvgAxisLabel::default();
+        self.plot_edges().clear();
+        self.guides().clear();
         self.legend_items.clear();
-        self.x_axis = SvgLine::default();
-        self.y_axis = SvgLine::default();
     }
 
     pub fn hover_at(&mut self, svg_x: f64, svg_y: f64) {
@@ -906,20 +891,34 @@ impl PineBarChart {
         plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
     }
 
-    fn clear_plot(&mut self) {
-        clear_plot_edges(
-            &mut self.plot_x,
-            &mut self.plot_y,
-            &mut self.plot_right,
-            &mut self.plot_bottom,
-        );
+    fn plot_edges(&mut self) -> PlotEdgeFields<'_> {
+        PlotEdgeFields {
+            x: &mut self.plot_x,
+            y: &mut self.plot_y,
+            right: &mut self.plot_right,
+            bottom: &mut self.plot_bottom,
+        }
     }
-}
 
-fn zip_domain(start: Option<f64>, end: Option<f64>) -> Option<(f64, f64)> {
-    match (start, end) {
-        (Some(start), Some(end)) => Some((start, end)),
-        _ => None,
+    fn guides(&mut self) -> CategoricalGuideFields<'_> {
+        CategoricalGuideFields {
+            y_grid: &mut self.y_grid,
+            x_tick_labels: &mut self.x_tick_labels,
+            y_tick_labels: &mut self.y_tick_labels,
+            x_axis_label: &mut self.x_axis_label,
+            y_axis_label: &mut self.y_axis_label,
+            x_axis: &mut self.x_axis,
+            y_axis: &mut self.y_axis,
+        }
+    }
+
+    fn state_fields(&mut self) -> ChartStateFields<'_> {
+        ChartStateFields {
+            state: &mut self.state,
+            ready: &mut self.ready,
+            empty: &mut self.empty,
+            invalid: &mut self.invalid,
+        }
     }
 }
 

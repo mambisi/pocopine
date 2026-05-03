@@ -104,40 +104,43 @@ impl CartesianHoverPlacement {
     }
 }
 
+pub(crate) struct ChartStateFields<'a> {
+    pub state: &'a mut String,
+    pub ready: &'a mut bool,
+    pub empty: &'a mut bool,
+    pub invalid: &'a mut bool,
+}
+
+impl ChartStateFields<'_> {
+    pub fn apply(self, next: CartesianChartState) {
+        match next {
+            CartesianChartState::Ready => {
+                *self.state = "ready".into();
+                *self.ready = true;
+                *self.empty = false;
+                *self.invalid = false;
+            }
+            CartesianChartState::Empty => {
+                *self.state = "empty".into();
+                *self.ready = false;
+                *self.empty = true;
+                *self.invalid = false;
+            }
+            CartesianChartState::Invalid => {
+                *self.state = "invalid".into();
+                *self.ready = false;
+                *self.empty = false;
+                *self.invalid = true;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CartesianChartState {
     Ready,
     Empty,
     Invalid,
-}
-
-pub(crate) fn apply_chart_state(
-    state: &mut String,
-    ready: &mut bool,
-    empty: &mut bool,
-    invalid: &mut bool,
-    next: CartesianChartState,
-) {
-    match next {
-        CartesianChartState::Ready => {
-            *state = "ready".into();
-            *ready = true;
-            *empty = false;
-            *invalid = false;
-        }
-        CartesianChartState::Empty => {
-            *state = "empty".into();
-            *ready = false;
-            *empty = true;
-            *invalid = false;
-        }
-        CartesianChartState::Invalid => {
-            *state = "invalid".into();
-            *ready = false;
-            *empty = false;
-            *invalid = true;
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -213,6 +216,117 @@ impl CartesianHoverFields<'_> {
     }
 }
 
+pub(crate) struct PlotEdgeFields<'a> {
+    pub x: &'a mut f64,
+    pub y: &'a mut f64,
+    pub right: &'a mut f64,
+    pub bottom: &'a mut f64,
+}
+
+impl PlotEdgeFields<'_> {
+    pub fn apply(self, plot: ChartRect) {
+        *self.x = plot.x;
+        *self.y = plot.y;
+        *self.right = plot.right();
+        *self.bottom = plot.bottom();
+    }
+
+    pub fn clear(self) {
+        *self.x = 0.0;
+        *self.y = 0.0;
+        *self.right = 0.0;
+        *self.bottom = 0.0;
+    }
+}
+
+pub(crate) struct CartesianGuideUpdate {
+    pub x_grid: Vec<SvgLine>,
+    pub y_grid: Vec<SvgLine>,
+    pub x_tick_labels: Vec<SvgTickLabel>,
+    pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
+    pub x_axis: SvgLine,
+    pub y_axis: SvgLine,
+}
+
+pub(crate) struct CartesianGuideFields<'a> {
+    pub x_grid: &'a mut Vec<SvgLine>,
+    pub y_grid: &'a mut Vec<SvgLine>,
+    pub x_tick_labels: &'a mut Vec<SvgTickLabel>,
+    pub y_tick_labels: &'a mut Vec<SvgTickLabel>,
+    pub x_axis_label: &'a mut SvgAxisLabel,
+    pub y_axis_label: &'a mut SvgAxisLabel,
+    pub x_axis: &'a mut SvgLine,
+    pub y_axis: &'a mut SvgLine,
+}
+
+impl CartesianGuideFields<'_> {
+    pub fn apply(self, update: CartesianGuideUpdate) {
+        *self.x_grid = update.x_grid;
+        *self.y_grid = update.y_grid;
+        *self.x_tick_labels = update.x_tick_labels;
+        *self.y_tick_labels = update.y_tick_labels;
+        *self.x_axis_label = update.x_axis_label;
+        *self.y_axis_label = update.y_axis_label;
+        *self.x_axis = update.x_axis;
+        *self.y_axis = update.y_axis;
+    }
+
+    pub fn clear(self) {
+        self.x_grid.clear();
+        self.y_grid.clear();
+        self.x_tick_labels.clear();
+        self.y_tick_labels.clear();
+        *self.x_axis_label = SvgAxisLabel::default();
+        *self.y_axis_label = SvgAxisLabel::default();
+        *self.x_axis = SvgLine::default();
+        *self.y_axis = SvgLine::default();
+    }
+}
+
+pub(crate) struct CategoricalGuideUpdate {
+    pub y_grid: Vec<SvgLine>,
+    pub x_tick_labels: Vec<SvgTickLabel>,
+    pub y_tick_labels: Vec<SvgTickLabel>,
+    pub x_axis_label: SvgAxisLabel,
+    pub y_axis_label: SvgAxisLabel,
+    pub x_axis: SvgLine,
+    pub y_axis: SvgLine,
+}
+
+pub(crate) struct CategoricalGuideFields<'a> {
+    pub y_grid: &'a mut Vec<SvgLine>,
+    pub x_tick_labels: &'a mut Vec<SvgTickLabel>,
+    pub y_tick_labels: &'a mut Vec<SvgTickLabel>,
+    pub x_axis_label: &'a mut SvgAxisLabel,
+    pub y_axis_label: &'a mut SvgAxisLabel,
+    pub x_axis: &'a mut SvgLine,
+    pub y_axis: &'a mut SvgLine,
+}
+
+impl CategoricalGuideFields<'_> {
+    pub fn apply(self, update: CategoricalGuideUpdate) {
+        *self.y_grid = update.y_grid;
+        *self.x_tick_labels = update.x_tick_labels;
+        *self.y_tick_labels = update.y_tick_labels;
+        *self.x_axis_label = update.x_axis_label;
+        *self.y_axis_label = update.y_axis_label;
+        *self.x_axis = update.x_axis;
+        *self.y_axis = update.y_axis;
+    }
+
+    pub fn clear(self) {
+        self.y_grid.clear();
+        self.x_tick_labels.clear();
+        self.y_tick_labels.clear();
+        *self.x_axis_label = SvgAxisLabel::default();
+        *self.y_axis_label = SvgAxisLabel::default();
+        *self.x_axis = SvgLine::default();
+        *self.y_axis = SvgLine::default();
+    }
+}
+
 pub(crate) fn pointer_event_svg_point(
     ev: wasm_bindgen::JsValue,
     width: f64,
@@ -249,18 +363,6 @@ pub(crate) fn plot_rect_from_edges(
     }
 }
 
-pub(crate) fn clear_plot_edges(
-    plot_x: &mut f64,
-    plot_y: &mut f64,
-    plot_right: &mut f64,
-    plot_bottom: &mut f64,
-) {
-    *plot_x = 0.0;
-    *plot_y = 0.0;
-    *plot_right = 0.0;
-    *plot_bottom = 0.0;
-}
-
 pub(crate) fn x_axis_label(plot: ChartRect, height: f64) -> SvgAxisLabel {
     SvgAxisLabel {
         x: plot.x + plot.width * 0.5,
@@ -276,6 +378,13 @@ pub(crate) fn y_axis_label(plot: ChartRect) -> SvgAxisLabel {
         x,
         y,
         transform: format!("rotate(-90 {x} {y})"),
+    }
+}
+
+pub(crate) fn optional_domain(start: Option<f64>, end: Option<f64>) -> Option<(f64, f64)> {
+    match (start, end) {
+        (Some(start), Some(end)) => Some((start, end)),
+        _ => None,
     }
 }
 
