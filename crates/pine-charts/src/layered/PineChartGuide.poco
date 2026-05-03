@@ -1,0 +1,4 @@
+<root class="pine-chart-mark-definition pine-chart-guide-definition"
+      hidden
+      aria-hidden="true"
+      :data-key="component_key"></root>

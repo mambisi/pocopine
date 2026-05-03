@@ -7,8 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use pine_charts::{
-    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartPoint,
-    ChartScatterSeries, LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice,
+    ChartPoint, ChartScatterSeries, LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -200,6 +200,193 @@ impl Default for LineChartFixture {
 
 #[handlers]
 impl LineChartFixture {}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r##"
+<div>
+  <pine-layer-chart class="metro-chart"
+                    label="Metro"
+                    width="300"
+                    height="180">
+    <pine-chart-layer name="grid">
+      <pine-chart-guide key="midline" x1="0" y1="90" x2="300" y2="90"></pine-chart-guide>
+    </pine-chart-layer>
+    <pine-chart-layer name="reference-background">
+      <pine-chart-reference-dot key="hub-bg"
+                                label="Hub background"
+                                x="120"
+                                y="30"
+                                radius="18"
+                                fill="#19a974"></pine-chart-reference-dot>
+    </pine-chart-layer>
+    <pine-chart-layer name="series">
+      <pine-chart-line key="line-a"
+                       label="Line A"
+                       color="#1aa300"
+                       stroke_width="12"
+                       pp-bind:points="line"></pine-chart-line>
+    </pine-chart-layer>
+    <pine-chart-layer name="markers">
+      <pine-chart-marker key="stop"
+                         label="Stop"
+                         x="120"
+                         y="30"
+                         radius="8"
+                         fill="#1aa300"
+                         stroke="#ffffff"
+                         stroke_width="2"></pine-chart-marker>
+    </pine-chart-layer>
+    <pine-chart-layer name="reference-foreground">
+      <pine-chart-reference-dot key="hub-fg"
+                                label="Hub foreground"
+                                x="120"
+                                y="30"
+                                radius="20"
+                                fill="#ff242e"
+                                stroke="#ffffff"
+                                stroke_width="3"></pine-chart-reference-dot>
+    </pine-chart-layer>
+    <pine-chart-layer name="annotations">
+      <pine-chart-icon key="airport"
+                       kind="plane"
+                       x="20"
+                       y="20"
+                       scale="0.1"
+                       fill="#18212f"></pine-chart-icon>
+    </pine-chart-layer>
+    <pine-chart-layer name="labels">
+      <pine-chart-label key="hub-label"
+                        text="Hub"
+                        x="120"
+                        y="30"
+                        dx="8"
+                        dy="-12"
+                        angle="-65"
+                        fill="#18212f"
+                        text_anchor="start"
+                        font_weight="700"></pine-chart-label>
+    </pine-chart-layer>
+  </pine-layer-chart>
+</div>
+"##)]
+struct LayeredChartFixture {
+    line: Vec<ChartLayerPoint>,
+}
+
+impl Default for LayeredChartFixture {
+    fn default() -> Self {
+        Self {
+            line: vec![
+                ChartLayerPoint::new(0.0, 140.0),
+                ChartLayerPoint::new(120.0, 30.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl LayeredChartFixture {}
+
+#[wasm_bindgen_test]
+async fn layered_chart_composes_child_marks_into_one_svg_tree() {
+    let host = mount_fixture::<LayeredChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-layer-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(chart.get_attribute("aria-label").as_deref(), Some("Metro"));
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let definitions = host
+        .query_selector(".pine-layer-chart-definitions")
+        .unwrap()
+        .unwrap();
+    assert!(definitions.has_attribute("hidden"));
+
+    let svg = host
+        .query_selector("svg.pine-layer-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 300 180"));
+    assert_eq!(
+        direct_svg_layers(&svg),
+        vec![
+            "grid",
+            "reference-background",
+            "series",
+            "markers",
+            "reference-foreground",
+            "annotations",
+            "labels",
+        ]
+    );
+
+    let guide = host
+        .query_selector(".pine-layer-chart-guide")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        guide.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(guide.get_attribute("x1").as_deref(), Some("0"));
+    assert_eq!(guide.get_attribute("y2").as_deref(), Some("90"));
+
+    let line = host
+        .query_selector(".pine-layer-chart-line")
+        .unwrap()
+        .unwrap();
+    assert_eq!(line.get_attribute("d").as_deref(), Some("M0,140 L120,30"));
+    assert_eq!(line.get_attribute("stroke").as_deref(), Some("#1aa300"));
+    assert_eq!(line.get_attribute("data-series").as_deref(), Some("Line A"));
+
+    let background_dot = host
+        .query_selector(".pine-layer-chart-reference-background .pine-layer-chart-reference-dot")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        background_dot.get_attribute("data-label").as_deref(),
+        Some("Hub background")
+    );
+
+    let foreground_dot = host
+        .query_selector(".pine-layer-chart-reference-foreground .pine-layer-chart-reference-dot")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        foreground_dot.get_attribute("data-label").as_deref(),
+        Some("Hub foreground")
+    );
+    assert_eq!(foreground_dot.get_attribute("r").as_deref(), Some("20"));
+
+    let marker = host
+        .query_selector(".pine-layer-chart-marker")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        marker.get_attribute("aria-label").as_deref(),
+        Some("Stop: x 120, y 30")
+    );
+
+    let label = host
+        .query_selector(".pine-layer-chart-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(label.text_content().as_deref(), Some("Hub"));
+    assert_eq!(
+        label.get_attribute("transform").as_deref(),
+        Some("rotate(-65 128 18)")
+    );
+
+    let icon = host
+        .query_selector(".pine-layer-chart-icon-plane")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        icon.get_attribute("transform").as_deref(),
+        Some("translate(20 20) scale(0.1)")
+    );
+}
 
 #[wasm_bindgen_test]
 async fn line_chart_renders_svg_path_axes_and_grid() {

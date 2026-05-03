@@ -1,7 +1,7 @@
 use pine_charts::{
     area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items, ChartAreaSeries,
-    ChartBar, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries,
-    LegendItem,
+    ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint,
+    ChartScatterSeries, LegendItem,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,9 @@ pub struct ChartDemo {
     pub pie_shape: String,
     pub line_series: Vec<ChartLineSeries>,
     pub line_legend: Vec<LegendItem>,
+    pub metro_line_a: Vec<ChartLayerPoint>,
+    pub metro_line_b: Vec<ChartLayerPoint>,
+    pub metro_line_c: Vec<ChartLayerPoint>,
     pub area_series: Vec<ChartAreaSeries>,
     pub area_legend: Vec<LegendItem>,
     pub bar_series: Vec<ChartBarSeries>,
@@ -43,6 +46,9 @@ impl Default for ChartDemo {
             pie_shape: "pie".into(),
             line_legend: line_legend_items(&line_series),
             line_series,
+            metro_line_a: metro_line_a(),
+            metro_line_b: metro_line_b(),
+            metro_line_c: metro_line_c(),
             area_legend: area_legend_items(&area_series),
             area_series,
             bar_legend: bar_legend_items(&bar_series),
@@ -208,6 +214,40 @@ fn latency_line_series() -> Vec<ChartLineSeries> {
                 ChartPoint::new(6.0, 42.0),
             ],
         ),
+    ]
+}
+
+fn metro_line_a() -> Vec<ChartLayerPoint> {
+    vec![
+        ChartLayerPoint::new(100.0, 120.0),
+        ChartLayerPoint::new(220.0, 120.0),
+        ChartLayerPoint::new(340.0, 120.0),
+        ChartLayerPoint::new(420.0, 180.0),
+        ChartLayerPoint::new(480.0, 300.0),
+        ChartLayerPoint::new(620.0, 360.0),
+        ChartLayerPoint::new(780.0, 360.0),
+    ]
+}
+
+fn metro_line_b() -> Vec<ChartLayerPoint> {
+    vec![
+        ChartLayerPoint::new(80.0, 240.0),
+        ChartLayerPoint::new(220.0, 240.0),
+        ChartLayerPoint::new(420.0, 180.0),
+        ChartLayerPoint::new(520.0, 180.0),
+        ChartLayerPoint::new(700.0, 240.0),
+        ChartLayerPoint::new(840.0, 240.0),
+    ]
+}
+
+fn metro_line_c() -> Vec<ChartLayerPoint> {
+    vec![
+        ChartLayerPoint::new(140.0, 360.0),
+        ChartLayerPoint::new(300.0, 360.0),
+        ChartLayerPoint::new(480.0, 300.0),
+        ChartLayerPoint::new(520.0, 180.0),
+        ChartLayerPoint::new(620.0, 120.0),
+        ChartLayerPoint::new(760.0, 120.0),
     ]
 }
 

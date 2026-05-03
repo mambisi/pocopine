@@ -10,6 +10,7 @@ mod cartesian;
 pub mod error;
 pub mod events;
 pub mod geometry;
+pub mod layered;
 pub mod legend;
 pub mod line;
 pub mod path;
@@ -29,6 +30,13 @@ pub use bar::{
 pub use error::{ChartError, ChartResult};
 pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
 pub use geometry::{ChartMargins, ChartRect, Point};
+pub use layered::{
+    render_layer_chart, ChartLayerGuide, ChartLayerIcon, ChartLayerLabel, ChartLayerLine,
+    ChartLayerMarker, ChartLayerPoint, ChartLayerReferenceDot, LayerChartRender, PineChartGuide,
+    PineChartIcon, PineChartLabel, PineChartLayer, PineChartLine, PineChartMarker,
+    PineChartReferenceDot, PineLayerChart, SvgLayerGuide, SvgLayerIcon, SvgLayerLabel,
+    SvgLayerLine, SvgLayerMarker, SvgLayerReferenceDot,
+};
 pub use legend::{LegendItem, PineChartLegend};
 pub use line::{
     line_legend_items, nearest_line_sample, nearest_line_sample_at, ChartLineSeries, ChartPoint,
@@ -50,7 +58,15 @@ pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 pub fn register_all() {
     PineAreaChart::register();
     PineBarChart::register();
+    PineChartGuide::register();
+    PineChartIcon::register();
+    PineChartLabel::register();
+    PineChartLayer::register();
     PineChartLegend::register();
+    PineChartLine::register();
+    PineChartMarker::register();
+    PineChartReferenceDot::register();
+    PineLayerChart::register();
     PineChartResponsive::register();
     PineLineChart::register();
     PinePieChart::register();

@@ -56,9 +56,13 @@ Do not use CSS `z-index` to reorder SVG children. It will not produce a real
 per-mark layer order inside the chart. If two whole charts need to overlap, put
 `z-index` on the outer chart container instead.
 
-## Future Custom Layers
+## Composable Layers
 
-Pine Charts does not expose a numeric `z_index` prop yet. That API should wait
-for a composable chart root that can accept arbitrary marks and reorder them
-without relying on fragile template insertion order. Until then, built-in
-components keep an opinionated, stable paint order.
+Use `pine-layer-chart` when an app needs custom composition. It accepts child
+components such as `pine-chart-layer`, `pine-chart-line`,
+`pine-chart-reference-dot`, `pine-chart-label`, and `pine-chart-icon`, then
+renders them through the same stable SVG paint-order buckets documented above.
+
+Pine Charts still does not expose a numeric `z_index` prop. The framework keeps
+an opinionated bucketed order because it is portable across browsers and avoids
+pretending that CSS z-index works inside SVG.
