@@ -1,0 +1,13 @@
+[package]
+name = "pocopine-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Event envelopes, cursors, and backends for pocopine live features."
+
+[dependencies]
+pocopine-observe = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+tracing = { workspace = true }
