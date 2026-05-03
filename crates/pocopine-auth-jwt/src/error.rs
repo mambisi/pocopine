@@ -22,10 +22,6 @@ pub enum JwtAuthError {
     /// empty algorithm whitelist, `none` algorithm in whitelist.
     InvalidConfig { reason: String },
 
-    /// No credential present in any configured source. Treated as
-    /// "anonymous" by the auth middleware.
-    Missing,
-
     /// Token present but malformed — wrong segment count, header
     /// not parseable, or base64 decode failed.
     Malformed { reason: &'static str },
@@ -64,7 +60,6 @@ impl JwtAuthError {
     pub fn kind(&self) -> &'static str {
         match self {
             JwtAuthError::InvalidConfig { .. } => "invalid_config",
-            JwtAuthError::Missing => "missing",
             JwtAuthError::Malformed { .. } => "malformed",
             JwtAuthError::AlgorithmRejected { .. } => "algorithm_rejected",
             JwtAuthError::KeyResolutionFailed { .. } => "key_resolution_failed",
@@ -84,7 +79,6 @@ impl fmt::Display for JwtAuthError {
             JwtAuthError::InvalidConfig { reason } => {
                 write!(f, "invalid jwt config: {reason}")
             }
-            JwtAuthError::Missing => f.write_str("missing token"),
             JwtAuthError::Malformed { reason } => {
                 write!(f, "malformed token: {reason}")
             }

@@ -63,24 +63,46 @@ impl Algorithm {
     }
 }
 
-/// HMAC secret bytes. Wrapped to suppress `Debug` / `Display` and
-/// zero on drop — credentials shouldn't accidentally land in logs
-/// or core dumps.
+/// HMAC secret bytes. Wrapped to suppress `Debug` / `Display`, and
+/// best-effort zeroed when the last shared reference is dropped.
+///
+/// Credentials shouldn't accidentally land in logs or core dumps.
+/// The zeroing is best-effort — Rust doesn't guarantee no copies
+/// of the bytes exist elsewhere (e.g. inside `jsonwebtoken`'s
+/// internal HMAC state during verification). Treat this as defense-
+/// in-depth, not a hardware-grade secret store.
 #[derive(Clone)]
-pub struct SecretBytes(Arc<Vec<u8>>);
+pub struct SecretBytes(Arc<ZeroingBytes>);
+
+struct ZeroingBytes(Vec<u8>);
+
+impl Drop for ZeroingBytes {
+    fn drop(&mut self) {
+        // Volatile-write zeros over the buffer so optimizers don't
+        // elide the wipe on the assumption the memory's about to
+        // be freed. `core::ptr::write_volatile` is the standard
+        // pattern for this; equivalent to `zeroize` crate's basic
+        // policy without the dep.
+        for byte in self.0.iter_mut() {
+            unsafe {
+                core::ptr::write_volatile(byte, 0);
+            }
+        }
+    }
+}
 
 impl SecretBytes {
-    /// Build from a byte buffer. The buffer is copied into the
+    /// Build from a byte buffer. The buffer is moved into an
     /// `Arc`-shared interior so callers can't retain a separate
     /// view that survives drop-zeroing.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
-        Self(Arc::new(bytes.into()))
+        Self(Arc::new(ZeroingBytes(bytes.into())))
     }
 
     /// View of the secret. Limit the call site to the verification
     /// step; never log the result.
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+        &self.0 .0
     }
 }
 
