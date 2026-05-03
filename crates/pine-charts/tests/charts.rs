@@ -4,7 +4,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use pine_charts::{
-    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, LegendItem,
+    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLineSeries, ChartPoint, ChartScatterSeries,
+    LegendItem,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::JsCast;
@@ -260,6 +261,112 @@ async fn multi_line_chart_renders_series_metadata_and_hover() {
     assert_eq!(
         tooltip.get_attribute("aria-label").as_deref(),
         Some("Target: x 1, y 0")
+    );
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-scatter-chart class="segment-scatter"
+                      label="Segments"
+                      x_label="Size"
+                      y_label="Retention"
+                      width="100"
+                      height="100"
+                      margin_top="0"
+                      margin_right="0"
+                      margin_bottom="0"
+                      margin_left="0"
+                      point_radius="5"
+                      pp-bind:series="series"></pine-scatter-chart>
+</div>
+"#)]
+struct ScatterChartFixture {
+    series: Vec<ChartScatterSeries>,
+}
+
+impl Default for ScatterChartFixture {
+    fn default() -> Self {
+        Self {
+            series: vec![
+                ChartScatterSeries::new(
+                    "Segment A",
+                    vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+                ),
+                ChartScatterSeries::new(
+                    "Segment B",
+                    vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)],
+                ),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl ScatterChartFixture {}
+
+#[wasm_bindgen_test]
+async fn scatter_chart_renders_points_axes_and_hover() {
+    let host = mount_fixture::<ScatterChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".pine-scatter-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(
+        chart.get_attribute("aria-label").as_deref(),
+        Some("Segments")
+    );
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let points = host
+        .query_selector_all(".pine-chart-scatter-point")
+        .unwrap();
+    assert_eq!(points.length(), 4);
+    let first = points.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(first.get_attribute("cx").as_deref(), Some("0"));
+    assert_eq!(first.get_attribute("cy").as_deref(), Some("100"));
+    assert_eq!(first.get_attribute("r").as_deref(), Some("5"));
+    assert_eq!(
+        first.get_attribute("data-series").as_deref(),
+        Some("Segment A")
+    );
+
+    let axis_labels = host.query_selector_all(".pine-chart-axis-label").unwrap();
+    assert_eq!(axis_labels.length(), 2);
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let rect = svg.get_bounding_client_rect();
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_client_x((rect.left() + 95.0).round() as i32);
+    init.set_client_y((rect.top() + 95.0).round() as i32);
+    svg.dispatch_event(
+        &web_sys::PointerEvent::new_with_event_init_dict("pointermove", &init).unwrap(),
+    )
+    .unwrap();
+    settle().await;
+
+    let marker = host
+        .query_selector(".pine-chart-hover-marker")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        marker.get_attribute("data-series").as_deref(),
+        Some("Segment B")
+    );
+    assert_eq!(marker.get_attribute("data-x").as_deref(), Some("1"));
+    assert_eq!(marker.get_attribute("data-y").as_deref(), Some("0"));
+
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("aria-label").as_deref(),
+        Some("Segment B: x 1, y 0")
     );
 
     host.remove();

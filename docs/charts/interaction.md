@@ -1,8 +1,8 @@
 # Interaction
 
-The first interaction layer is intentionally narrow: `PineLineChart` and
-`PineAreaChart` support nearest-point hover state. They render SVG crosshair
-lines, an SVG marker, and an HTML tooltip container.
+The first interaction layer is intentionally narrow: `PineLineChart`,
+`PineScatterChart`, and `PineAreaChart` support nearest-point hover state. They
+render SVG crosshair lines, an SVG marker, and an HTML tooltip container.
 
 ## Contract
 

@@ -37,6 +37,17 @@
   <pine-chart-legend label="Weekly metric legend"
                      pp-bind:items="line_legend"></pine-chart-legend>
 
+  <pine-scatter-chart label="Cohort spread"
+                      pp-bind:series="scatter_series"
+                      x_label="Size"
+                      y_label="Rate"
+                      point_radius="4.5"
+                      width="720"
+                      height="320"></pine-scatter-chart>
+
+  <pine-chart-legend label="Cohort spread legend"
+                     pp-bind:items="scatter_legend"></pine-chart-legend>
+
   <pine-area-chart label="Trend area"
                    pp-bind:series="area_series"
                    x_label="Week"

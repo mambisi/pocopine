@@ -69,6 +69,7 @@
     }
 
     .pine-line-chart,
+    .pine-scatter-chart,
     .pine-area-chart,
     .pine-bar-chart {
       display: block;
@@ -85,6 +86,11 @@
 
     .pine-area-chart {
       color: #16a085;
+      position: relative;
+    }
+
+    .pine-scatter-chart {
+      color: #5b6ee1;
       position: relative;
     }
 
@@ -134,6 +140,8 @@
     .pine-chart-line[data-series="Actual"],
     .pine-chart-area[data-series="Actual"],
     .pine-chart-marker[data-series="Actual"],
+    .pine-chart-point[data-series="Segment A"],
+    .pine-chart-hover-marker[data-series="Segment A"],
     .pine-chart-hover-marker[data-series="Actual"] {
       color: #1d6fd8;
     }
@@ -141,6 +149,7 @@
     .pine-chart-line[data-series="API"],
     .pine-chart-area[data-series="API"],
     .pine-chart-marker[data-series="API"],
+    .pine-chart-point[data-series="API"],
     .pine-chart-hover-marker[data-series="API"] {
       color: #16a085;
     }
@@ -148,10 +157,13 @@
     .pine-chart-line[data-series="Target"],
     .pine-chart-area[data-series="Target"],
     .pine-chart-marker[data-series="Target"],
+    .pine-chart-point[data-series="Segment B"],
+    .pine-chart-hover-marker[data-series="Segment B"],
     .pine-chart-hover-marker[data-series="Target"],
     .pine-chart-line[data-series="Render"],
     .pine-chart-area[data-series="Render"],
     .pine-chart-marker[data-series="Render"],
+    .pine-chart-point[data-series="Render"],
     .pine-chart-hover-marker[data-series="Render"] {
       color: #d96c2c;
     }
@@ -174,6 +186,13 @@
       fill: white;
       stroke: currentColor;
       stroke-width: 2;
+    }
+
+    .pine-chart-point {
+      fill: currentColor;
+      opacity: 0.82;
+      stroke: white;
+      stroke-width: 1.5;
     }
 
     .pine-chart-crosshair {
@@ -271,8 +290,13 @@
       background: #1d6fd8;
     }
 
+    .pine-chart-legend-marker[data-series="Segment A"] {
+      background: #1d6fd8;
+    }
+
     .pine-chart-legend-marker[data-series="Referral"],
     .pine-chart-legend-marker[data-series="Target"],
+    .pine-chart-legend-marker[data-series="Segment B"],
     .pine-chart-legend-marker[data-series="Render"] {
       background: #d96c2c;
     }
