@@ -4,15 +4,23 @@
 //! OIDC-shaped provider (or pocopine's own credential flow) can
 //! plug into via a declarative [`JwtConfig`].
 //!
-//! Provider-specific presets (`firebase`, `clerk`, `auth0`,
-//! `supabase`) are **deliberately not bundled in this crate**.
-//! Each preset belongs to a follow-up that ships *with* an
-//! integration test against real provider tokens — until then,
-//! every config field (JWKS URL, issuer string, audience, claim
-//! paths) is just a transcription from public docs and may be
-//! subtly wrong. Wrong presets are worse than no presets.
+//! Provider-specific presets implement the [`Provider`] trait
+//! (RFC-074 §5.2). One in-tree preset ships today —
+//! [`providers::Firebase`] — paired with a recorded-token
+//! integration test (RFC-074 §5.3.1). Other vendors ship in their
+//! own `pocopine-auth-jwt-<vendor>` crates following the same
+//! convention; see `docs/auth-jwt-providers.md`.
 //!
-//! Until those land, configure the verifier directly:
+//! ```ignore
+//! use pocopine_auth_jwt::{JwtVerifier, providers::Firebase};
+//!
+//! let verifier = JwtVerifier::from_provider(
+//!     Firebase::new("my-project-id"),
+//! )?;
+//! ```
+//!
+//! For custom OIDC issuers without a preset, configure the
+//! verifier directly:
 //!
 //! ```ignore
 //! use std::time::Duration;
@@ -55,6 +63,10 @@ pub mod issuer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod jwks;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod provider;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod providers;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod verifier;
 
 pub use config::{
@@ -64,5 +76,7 @@ pub use error::JwtAuthError;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use issuer::{IssuedClaims, JwtIssuer};
+#[cfg(not(target_arch = "wasm32"))]
+pub use provider::Provider;
 #[cfg(not(target_arch = "wasm32"))]
 pub use verifier::JwtVerifier;

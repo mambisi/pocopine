@@ -27,6 +27,10 @@ looks the way it does — the code itself tells you *what*.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.
+- [`auth-jwt-providers.md`](./auth-jwt-providers.md) — contract
+  for adding a JWT identity provider preset (in-tree or
+  community-maintained), with the mandatory integration-test
+  shape and the bundled-providers list.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
