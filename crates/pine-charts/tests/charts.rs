@@ -1150,7 +1150,7 @@ async fn line_chart_recomputes_when_bound_points_change() {
     host.remove();
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
   <pine-line-chart class="empty-chart"
@@ -1162,12 +1162,6 @@ async fn line_chart_recomputes_when_bound_points_change() {
 "#)]
 struct EmptyChartFixture {
     points: Vec<ChartPoint>,
-}
-
-impl Default for EmptyChartFixture {
-    fn default() -> Self {
-        Self { points: Vec::new() }
-    }
 }
 
 #[handlers]
