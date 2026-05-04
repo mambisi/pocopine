@@ -456,7 +456,7 @@ pub struct PineChartLayer {
 #[handlers]
 impl PineChartLayer {
     fn on_setup(&mut self) {
-        LAYER.provide(normalize_layer(&self.name));
+        LAYER.provide(self.name.trim().into());
     }
 }
 
@@ -1202,10 +1202,11 @@ fn render_icons(icons: &[ChartLayerIcon]) -> ChartResult<Vec<SvgLayerIcon>> {
             let x = finite("icon.x", icon.x)?;
             let y = finite("icon.y", icon.y)?;
             let scale = positive_or_default("icon.scale", icon.scale, DEFAULT_ICON_SCALE)?;
+            let (kind, path_d) = icon_resolution(&icon.kind);
             Ok(SvgLayerIcon {
                 key: key_or_index("icon", &icon.key, index),
-                kind: icon_kind(&icon.kind).into(),
-                path_d: icon_path_d(&icon.kind).into(),
+                kind: kind.into(),
+                path_d: path_d.into(),
                 transform: format!("translate({x} {y}) scale({scale})"),
                 fill: color_or(&icon.fill, "currentColor"),
             })
@@ -1237,23 +1238,17 @@ fn component_key(prefix: &str, authored_key: &str) -> String {
 }
 
 fn layer_or_context(layer: &str, fallback: &str) -> String {
-    if !layer.trim().is_empty() {
-        return layer.trim().into();
-    }
-
-    LAYER.inject().unwrap_or_else(|| fallback.into())
+    layer_or_empty(layer)
+        .or_else(|| LAYER.inject().and_then(|layer| layer_or_empty(&layer)))
+        .unwrap_or_else(|| fallback.into())
 }
 
-fn normalize_layer(layer: &str) -> String {
-    match layer.trim() {
-        "reference-foreground" | "foreground" => "reference-foreground".into(),
-        "reference-background" | "background" => "reference-background".into(),
-        "annotations" | "annotation" => "annotations".into(),
-        "labels" | "label" => "labels".into(),
-        "markers" | "marker" => "markers".into(),
-        "grid" => "grid".into(),
-        "series" => "series".into(),
-        _ => layer.trim().into(),
+fn layer_or_empty(layer: &str) -> Option<String> {
+    let layer = layer.trim();
+    if layer.is_empty() {
+        None
+    } else {
+        Some(layer.into())
     }
 }
 
@@ -1315,17 +1310,10 @@ fn text_anchor(value: &str) -> &'static str {
     }
 }
 
-fn icon_kind(value: &str) -> &'static str {
+fn icon_resolution(value: &str) -> (&'static str, &'static str) {
     match value.trim() {
-        "plane" => "plane",
-        _ => "custom",
-    }
-}
-
-fn icon_path_d(value: &str) -> &'static str {
-    match value.trim() {
-        "plane" => PLANE_ICON_PATH,
-        _ => "",
+        "plane" => ("plane", PLANE_ICON_PATH),
+        _ => ("custom", ""),
     }
 }
 
@@ -1463,6 +1451,29 @@ mod tests {
                 value: "annotations".into(),
             }
         );
+    }
+
+    #[test]
+    fn layered_chart_keeps_unknown_icons_unrendered() {
+        let render = render_layer_chart(
+            300.0,
+            180.0,
+            LayerChartInputs {
+                icons: &[ChartLayerIcon {
+                    key: "ship".into(),
+                    kind: "spaceship".into(),
+                    x: 20.0,
+                    y: 20.0,
+                    scale: 0.1,
+                    fill: "#18212f".into(),
+                }],
+                ..LayerChartInputs::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(render.icons[0].kind, "custom");
+        assert_eq!(render.icons[0].path_d, "");
     }
 
     #[test]
