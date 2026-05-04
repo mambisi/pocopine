@@ -28,3 +28,7 @@ pocopine-events = { workspace = true }
 pocopine-logging = { workspace = true }
 pocopine-server = { path = "../../crates/pocopine-server" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
