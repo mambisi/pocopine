@@ -2,9 +2,10 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
-    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, x_axis_label,
-    y_axis_label, CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields,
-    CategoricalGuideUpdate, ChartStateFields, PlotEdgeFields,
+    expanded_domain, grid_lines_for_y, optional_domain, plot_rect_from_edges,
+    pointer_event_svg_point, step_key, tick_labels_for_y, x_axis_label, y_axis_label,
+    CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields, CategoricalGuideUpdate,
+    ChartStateFields, PlotEdgeFields,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
@@ -426,7 +427,7 @@ fn stacked_bars(
     Ok(bars)
 }
 
-fn bar_aria_label(category: &str, series: &str, value: f64) -> String {
+pub(crate) fn bar_aria_label(category: &str, series: &str, value: f64) -> String {
     if series.is_empty() || series == "Series 1" {
         format!("{category}: {}", format_tick(value))
     } else {
@@ -442,23 +443,7 @@ fn display_series_label(series: &str) -> String {
     }
 }
 
-fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| {
-            SvgLine::new(
-                format!("y-grid-{index}-{}", format_tick(tick.value)),
-                plot.x,
-                tick.position,
-                plot.right(),
-                tick.position,
-            )
-        })
-        .collect()
-}
-
-fn category_tick_labels(
+pub(crate) fn category_tick_labels(
     categories: &[String],
     scale: BandScale,
     plot: ChartRect,
@@ -479,24 +464,6 @@ fn category_tick_labels(
                 line_x2: x,
                 line_y2: plot.bottom() + 6.0,
             })
-        })
-        .collect()
-}
-
-fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| SvgTickLabel {
-            key: format!("y-tick-{index}-{}", format_tick(tick.value)),
-            value: tick.value,
-            label: format_tick(tick.value),
-            x: plot.x - 8.0,
-            y: tick.position + 4.0,
-            line_x1: plot.x - 6.0,
-            line_y1: tick.position,
-            line_x2: plot.x,
-            line_y2: tick.position,
         })
         .collect()
 }
@@ -551,16 +518,7 @@ fn stacked_domain(domain: Option<(f64, f64)>, data: &NormalizedBarData) -> Chart
     expanded_domain(min, max)
 }
 
-fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
-    if start != end {
-        return Ok((start, end));
-    }
-
-    let pad = if start == 0.0 { 1.0 } else { start.abs() * 0.1 };
-    Ok((start - pad, end + pad))
-}
-
-fn baseline_value(domain: (f64, f64)) -> f64 {
+pub(crate) fn baseline_value(domain: (f64, f64)) -> f64 {
     let lo = domain.0.min(domain.1);
     let hi = domain.0.max(domain.1);
     0.0_f64.clamp(lo, hi)

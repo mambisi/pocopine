@@ -2,10 +2,12 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-use crate::bar::ChartBar;
+use crate::bar::{baseline_value, bar_aria_label, category_tick_labels, ChartBar};
 use crate::cartesian::{
-    optional_domain, plot_rect_from_edges, x_axis_label, y_axis_label, CartesianLayout,
+    expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y, x_axis_label,
+    y_axis_label,
 };
+use crate::legend::series_label_or_default;
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
 use crate::line::{
@@ -496,10 +498,6 @@ impl PineCartesianChart {
         )
     }
 
-    #[allow(dead_code)]
-    fn plot_rect(&self) -> ChartRect {
-        plot_rect_from_edges(self.plot_x, self.plot_y, self.plot_right, self.plot_bottom)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -816,11 +814,10 @@ pub fn render_cartesian_chart(
         return render_categorical_chart(options, line_series, bar_series);
     }
 
-    let renderable_lines = line_series
+    let renderable_lines: Vec<&CartesianLineSeriesConfig> = line_series
         .iter()
         .filter(|series| !series.points.is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
+        .collect();
     let line_series = renderable_lines
         .iter()
         .map(|series| ChartLineSeries::new(series.label.clone(), series.points.clone()))
@@ -848,14 +845,14 @@ fn render_from_geometry(
     grid: Option<&CartesianGridConfig>,
     x_axis: Option<&CartesianAxisConfig>,
     y_axis: Option<&CartesianAxisConfig>,
-    series_config: &[CartesianLineSeriesConfig],
+    series_config: &[&CartesianLineSeriesConfig],
 ) -> CartesianChartRender {
     let rendered_series = geometry
         .series
         .iter()
         .enumerate()
         .map(|(index, series)| {
-            let config = &series_config[index];
+            let config = series_config[index];
             CartesianLineSeriesRender {
                 key: config.key.clone(),
                 label: series.label.clone(),
@@ -875,7 +872,7 @@ fn render_from_geometry(
             series
                 .samples
                 .iter()
-                .map(move |sample| marker_from_sample(sample, &series_config[index]))
+                .map(move |sample| marker_from_sample(sample, series_config[index]))
         })
         .collect();
 
@@ -961,7 +958,7 @@ fn render_categorical_chart(
             Vec::new()
         },
         x_tick_labels: if options.x_axis.is_some() {
-            categorical_tick_labels(&categories, x_scale, plot)
+            category_tick_labels(&categories, x_scale, plot)
         } else {
             Vec::new()
         },
@@ -1033,10 +1030,10 @@ fn categorical_categories(
         .ok_or(ChartError::EmptySeries)?;
 
     for series in bar_series.iter().filter(|series| !series.data.is_empty()) {
-        validate_categories(&series_label(&series.label, 0), &categories, &series.data)?;
+        validate_categories(&series_label_or_default(&series.label, 0), &categories, &series.data)?;
     }
     for series in line_series.iter().filter(|series| !series.data.is_empty()) {
-        validate_categories(&series_label(&series.label, 0), &categories, &series.data)?;
+        validate_categories(&series_label_or_default(&series.label, 0), &categories, &series.data)?;
     }
 
     Ok(categories)
@@ -1121,7 +1118,7 @@ fn render_categorical_bars(
             let y = value_y.min(baseline_y);
             let height = (baseline_y - value_y).abs();
             let x = series_scale.position(series_index).unwrap_or(category_x);
-            let series_label = series_label(&series.label, series_index);
+            let series_label = series_label_or_default(&series.label, series_index);
             bars.push(CartesianBarRender {
                 key: format!("{}-bar-{category_index}-{series_index}", series.key),
                 label: category_label.clone(),
@@ -1155,7 +1152,7 @@ fn render_categorical_lines(
         .filter(|series| !series.data.is_empty() || !series.points.is_empty())
         .enumerate()
     {
-        let series_label = series_label(&config.label, series_index);
+        let series_label = series_label_or_default(&config.label, series_index);
         let samples = if !config.data.is_empty() {
             categorical_data_samples(config, &series_label, categories, category_scale, y_scale)?
         } else {
@@ -1208,7 +1205,7 @@ fn categorical_data_samples(
                 y,
                 x_label: categories[index].clone(),
                 y_label: format_tick(value),
-                aria_label: category_sample_aria_label(series_label, &categories[index], value),
+                aria_label: bar_aria_label(&categories[index], series_label, value),
             })
         })
         .collect()
@@ -1241,7 +1238,7 @@ fn categorical_point_samples(
                 y,
                 x_label: x_label.clone(),
                 y_label: format_tick(data_y),
-                aria_label: category_sample_aria_label(series_label, &x_label, data_y),
+                aria_label: bar_aria_label(&x_label, series_label, data_y),
             })
         })
         .collect()
@@ -1278,65 +1275,6 @@ fn categorical_x_grid(categories: &[String], scale: BandScale, plot: ChartRect) 
         .collect()
 }
 
-fn categorical_tick_labels(
-    categories: &[String],
-    scale: BandScale,
-    plot: ChartRect,
-) -> Vec<SvgTickLabel> {
-    categories
-        .iter()
-        .enumerate()
-        .filter_map(|(index, label)| {
-            let x = scale.center(index)?;
-            Some(SvgTickLabel {
-                key: format!("x-tick-{index}-{label}"),
-                value: index as f64,
-                label: label.clone(),
-                x,
-                y: plot.bottom() + 18.0,
-                line_x1: x,
-                line_y1: plot.bottom(),
-                line_x2: x,
-                line_y2: plot.bottom() + 6.0,
-            })
-        })
-        .collect()
-}
-
-fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| {
-            SvgLine::new(
-                format!("y-grid-{index}-{}", format_tick(tick.value)),
-                plot.x,
-                tick.position,
-                plot.right(),
-                tick.position,
-            )
-        })
-        .collect()
-}
-
-fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
-    ticks
-        .iter()
-        .enumerate()
-        .map(|(index, tick)| SvgTickLabel {
-            key: format!("y-tick-{index}-{}", format_tick(tick.value)),
-            value: tick.value,
-            label: format_tick(tick.value),
-            x: plot.x - 8.0,
-            y: tick.position + 4.0,
-            line_x1: plot.x - 6.0,
-            line_y1: tick.position,
-            line_x2: plot.x,
-            line_y2: tick.position,
-        })
-        .collect()
-}
-
 fn domain_or_y_extent(
     domain: Option<(f64, f64)>,
     values: impl IntoIterator<Item = f64>,
@@ -1361,45 +1299,6 @@ fn domain_or_y_extent(
     }
 
     expanded_domain(min, max)
-}
-
-fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
-    if start != end {
-        return Ok((start, end));
-    }
-
-    let pad = if start == 0.0 { 1.0 } else { start.abs() * 0.1 };
-    Ok((start - pad, end + pad))
-}
-
-fn baseline_value(domain: (f64, f64)) -> f64 {
-    let lo = domain.0.min(domain.1);
-    let hi = domain.0.max(domain.1);
-    0.0_f64.clamp(lo, hi)
-}
-
-fn series_label(label: &str, index: usize) -> String {
-    if label.is_empty() {
-        format!("Series {}", index + 1)
-    } else {
-        label.into()
-    }
-}
-
-fn bar_aria_label(category: &str, series: &str, value: f64) -> String {
-    if series.is_empty() || series == "Series 1" {
-        format!("{category}: {}", format_tick(value))
-    } else {
-        format!("{series}, {category}: {}", format_tick(value))
-    }
-}
-
-fn category_sample_aria_label(series: &str, category: &str, value: f64) -> String {
-    if series.is_empty() || series == "Series 1" {
-        format!("{category}: {}", format_tick(value))
-    } else {
-        format!("{series}, {category}: {}", format_tick(value))
-    }
 }
 
 fn marker_from_sample(
@@ -1457,30 +1356,6 @@ fn positive_or_default(value: f64, default: f64) -> f64 {
     } else {
         default
     }
-}
-
-#[allow(dead_code)]
-fn layout_for_series(
-    width: f64,
-    height: f64,
-    margins: ChartMargins,
-    x_domain: Option<(f64, f64)>,
-    y_domain: Option<(f64, f64)>,
-    series: &[CartesianLineSeriesConfig],
-) -> ChartResult<CartesianLayout> {
-    CartesianLayout::new(
-        width,
-        height,
-        margins,
-        x_domain,
-        y_domain,
-        series
-            .iter()
-            .flat_map(|series| series.points.iter().map(|point| point.x)),
-        series
-            .iter()
-            .flat_map(|series| series.points.iter().map(|point| point.y)),
-    )
 }
 
 #[cfg(test)]

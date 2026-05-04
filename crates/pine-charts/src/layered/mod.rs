@@ -386,17 +386,12 @@ impl PineLayerChart {
                 self.svg_guides = render.guides;
                 self.svg_lines = render.lines;
                 self.svg_markers = render.markers;
-                self.svg_reference_background_dots = render
-                    .reference_dots
-                    .iter()
-                    .filter(|dot| dot.layer == "reference-background")
-                    .cloned()
-                    .collect();
-                self.svg_reference_foreground_dots = render
+                let (foreground, background): (Vec<_>, Vec<_>) = render
                     .reference_dots
                     .into_iter()
-                    .filter(|dot| dot.layer == "reference-foreground")
-                    .collect();
+                    .partition(|dot| dot.layer == "reference-foreground");
+                self.svg_reference_background_dots = background;
+                self.svg_reference_foreground_dots = foreground;
                 self.svg_labels = render.labels;
                 self.svg_icons = render.icons;
                 self.error.clear();
@@ -488,7 +483,7 @@ impl PineChartGuide {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_guide(&self.component_key));
+        update_root(|root| root.remove_guide(&self.component_key));
     }
 
     #[watch(x1)]
@@ -566,7 +561,7 @@ impl PineChartLine {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_line(&self.component_key));
+        update_root(|root| root.remove_line(&self.component_key));
     }
 
     #[watch(label)]
@@ -653,7 +648,7 @@ impl PineChartMarker {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_marker(&self.component_key));
+        update_root(|root| root.remove_marker(&self.component_key));
     }
 
     #[watch(label)]
@@ -761,7 +756,7 @@ impl PineChartReferenceDot {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_reference_dot(&self.component_key));
+        update_root(|root| root.remove_reference_dot(&self.component_key));
     }
 
     #[watch(label)]
@@ -878,7 +873,7 @@ impl PineChartLabel {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_label(&self.component_key));
+        update_root(|root| root.remove_label(&self.component_key));
     }
 
     #[watch(text)]
@@ -989,7 +984,7 @@ impl PineChartIcon {
     }
 
     fn on_unmount(&mut self) {
-        remove_from_root(|root| root.remove_icon(&self.component_key));
+        update_root(|root| root.remove_icon(&self.component_key));
     }
 
     #[watch(kind)]
@@ -1210,12 +1205,6 @@ fn render_icons(icons: &[ChartLayerIcon]) -> ChartResult<Vec<SvgLayerIcon>> {
 }
 
 fn update_root(f: impl FnOnce(&mut PineLayerChart)) {
-    if let Some(root) = ROOT.inject() {
-        root.update(f);
-    }
-}
-
-fn remove_from_root(f: impl FnOnce(&mut PineLayerChart)) {
     if let Some(root) = ROOT.inject() {
         root.update(f);
     }

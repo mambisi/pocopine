@@ -464,7 +464,7 @@ fn grid_lines_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
         .collect()
 }
 
-fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
+pub(crate) fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
     ticks
         .iter()
         .enumerate()
@@ -498,7 +498,7 @@ fn tick_labels_for_x(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel
         .collect()
 }
 
-fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
+pub(crate) fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
     ticks
         .iter()
         .enumerate()
@@ -540,7 +540,7 @@ fn domain_or_extent(
     expanded_domain(min, max)
 }
 
-fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
+pub(crate) fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
     if start != end {
         return Ok((start, end));
     }
