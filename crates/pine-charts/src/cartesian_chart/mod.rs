@@ -2,14 +2,14 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-use crate::bar::{baseline_value, bar_aria_label, category_tick_labels, ChartBar};
+use crate::bar::{bar_aria_label, baseline_value, category_tick_labels, ChartBar};
 use crate::cartesian::{
     expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y, x_axis_label,
     y_axis_label,
 };
-use crate::legend::series_label_or_default;
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
+use crate::legend::series_label_or_default;
 use crate::line::{
     ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions, LineChartSample,
 };
@@ -497,7 +497,6 @@ impl PineCartesianChart {
             self.margin_left,
         )
     }
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1030,10 +1029,18 @@ fn categorical_categories(
         .ok_or(ChartError::EmptySeries)?;
 
     for series in bar_series.iter().filter(|series| !series.data.is_empty()) {
-        validate_categories(&series_label_or_default(&series.label, 0), &categories, &series.data)?;
+        validate_categories(
+            &series_label_or_default(&series.label, 0),
+            &categories,
+            &series.data,
+        )?;
     }
     for series in line_series.iter().filter(|series| !series.data.is_empty()) {
-        validate_categories(&series_label_or_default(&series.label, 0), &categories, &series.data)?;
+        validate_categories(
+            &series_label_or_default(&series.label, 0),
+            &categories,
+            &series.data,
+        )?;
     }
 
     Ok(categories)
