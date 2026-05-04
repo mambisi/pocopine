@@ -2,18 +2,26 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
-use crate::cartesian::{optional_domain, plot_rect_from_edges, CartesianLayout};
-use crate::error::{ChartError, ChartResult};
+use crate::bar::ChartBar;
+use crate::cartesian::{
+    optional_domain, plot_rect_from_edges, x_axis_label, y_axis_label, CartesianLayout,
+};
+use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
 use crate::line::{
     ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions, LineChartSample,
 };
-use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
+use crate::path::line_path;
+use crate::scale::{BandScale, LinearScale};
+use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 const DEFAULT_WIDTH: f64 = 640.0;
 const DEFAULT_HEIGHT: f64 = 320.0;
 const DEFAULT_STROKE_WIDTH: f64 = 3.0;
 const DEFAULT_MARKER_RADIUS: f64 = 3.0;
+const DEFAULT_PADDING_INNER: f64 = 0.2;
+const DEFAULT_PADDING_OUTER: f64 = 0.1;
+const DEFAULT_SERIES_PADDING_INNER: f64 = 0.1;
 
 create_context!(ROOT: Handle<PineCartesianChart>);
 
@@ -49,6 +57,15 @@ pub struct CartesianLineSeriesConfig {
     pub show_markers: bool,
     pub marker_radius: f64,
     pub points: Vec<ChartPoint>,
+    pub data: Vec<ChartBar>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CartesianBarSeriesConfig {
+    pub key: String,
+    pub label: String,
+    pub color: String,
+    pub data: Vec<ChartBar>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -73,6 +90,21 @@ pub struct CartesianMarkerRender {
     pub aria_label: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CartesianBarRender {
+    pub key: String,
+    pub label: String,
+    pub category_label: String,
+    pub series_label: String,
+    pub value: f64,
+    pub aria_label: String,
+    pub color: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CartesianChartRender {
     pub view_box: String,
@@ -85,6 +117,7 @@ pub struct CartesianChartRender {
     pub y_axis_label: SvgAxisLabel,
     pub x_axis: SvgLine,
     pub y_axis: SvgLine,
+    pub bars: Vec<CartesianBarRender>,
     pub line_series: Vec<CartesianLineSeriesRender>,
     pub markers: Vec<CartesianMarkerRender>,
 }
@@ -96,6 +129,9 @@ pub struct CartesianChartOptions<'a> {
     pub margins: ChartMargins,
     pub x_domain: Option<(f64, f64)>,
     pub y_domain: Option<(f64, f64)>,
+    pub padding_inner: f64,
+    pub padding_outer: f64,
+    pub series_padding_inner: f64,
     pub grid: Option<&'a CartesianGridConfig>,
     pub x_axis: Option<&'a CartesianAxisConfig>,
     pub y_axis: Option<&'a CartesianAxisConfig>,
@@ -103,7 +139,7 @@ pub struct CartesianChartOptions<'a> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineCartesianChart.poco", role = "panel")]
-#[slot(default, accepts = [PineChartGrid, PineXAxis, PineYAxis, PineLineSeries])]
+#[slot(default, accepts = [PineChartGrid, PineXAxis, PineYAxis, PineLineSeries, PineBarSeries])]
 pub struct PineCartesianChart {
     #[prop]
     pub label: String,
@@ -127,12 +163,20 @@ pub struct PineCartesianChart {
     pub y_min: Option<f64>,
     #[prop]
     pub y_max: Option<f64>,
+    #[prop]
+    pub padding_inner: f64,
+    #[prop]
+    pub padding_outer: f64,
+    #[prop]
+    pub series_padding_inner: f64,
     pub state: String,
     pub view_box: String,
     pub grid: Option<CartesianGridConfig>,
     pub x_axis_config: Option<CartesianAxisConfig>,
     pub y_axis_config: Option<CartesianAxisConfig>,
     pub series: Vec<CartesianLineSeriesConfig>,
+    pub bar_series: Vec<CartesianBarSeriesConfig>,
+    pub bars: Vec<CartesianBarRender>,
     pub line_series: Vec<CartesianLineSeriesRender>,
     pub markers: Vec<CartesianMarkerRender>,
     pub plot_x: f64,
@@ -152,6 +196,7 @@ pub struct PineCartesianChart {
     pub show_grid: bool,
     pub show_x_axis: bool,
     pub show_y_axis: bool,
+    pub show_bars: bool,
     pub show_markers: bool,
     pub error: String,
     pub ready: bool,
@@ -174,12 +219,17 @@ impl Default for PineCartesianChart {
             x_max: None,
             y_min: None,
             y_max: None,
+            padding_inner: DEFAULT_PADDING_INNER,
+            padding_outer: DEFAULT_PADDING_OUTER,
+            series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
             state: "empty".into(),
             view_box: format!("0 0 {DEFAULT_WIDTH} {DEFAULT_HEIGHT}"),
             grid: None,
             x_axis_config: None,
             y_axis_config: None,
             series: Vec::new(),
+            bar_series: Vec::new(),
+            bars: Vec::new(),
             line_series: Vec::new(),
             markers: Vec::new(),
             plot_x: 0.0,
@@ -199,6 +249,7 @@ impl Default for PineCartesianChart {
             show_grid: false,
             show_x_axis: false,
             show_y_axis: false,
+            show_bars: false,
             show_markers: false,
             error: String::new(),
             ready: false,
@@ -242,6 +293,21 @@ impl PineCartesianChart {
 
     #[watch(margin_left)]
     fn on_margin_left(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(padding_inner)]
+    fn on_padding_inner(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(padding_outer)]
+    fn on_padding_outer(&mut self, _: f64, _: Option<f64>) {
+        self.recompute();
+    }
+
+    #[watch(series_padding_inner)]
+    fn on_series_padding_inner(&mut self, _: f64, _: Option<f64>) {
         self.recompute();
     }
 }
@@ -306,6 +372,25 @@ impl PineCartesianChart {
         self.recompute();
     }
 
+    pub fn upsert_bar_series(&mut self, series: CartesianBarSeriesConfig) {
+        let key = series.key.clone();
+        if let Some(existing) = self
+            .bar_series
+            .iter_mut()
+            .find(|existing| existing.key == key)
+        {
+            *existing = series;
+        } else {
+            self.bar_series.push(series);
+        }
+        self.recompute();
+    }
+
+    pub fn remove_bar_series(&mut self, key: &str) {
+        self.bar_series.retain(|series| series.key != key);
+        self.recompute();
+    }
+
     fn recompute(&mut self) {
         let options = CartesianChartOptions {
             width: self.width,
@@ -313,12 +398,15 @@ impl PineCartesianChart {
             margins: self.margins(),
             x_domain: optional_domain(self.x_min, self.x_max),
             y_domain: optional_domain(self.y_min, self.y_max),
+            padding_inner: self.padding_inner,
+            padding_outer: self.padding_outer,
+            series_padding_inner: self.series_padding_inner,
             grid: self.grid.as_ref(),
             x_axis: self.x_axis_config.as_ref(),
             y_axis: self.y_axis_config.as_ref(),
         };
 
-        match render_cartesian_chart(options, &self.series) {
+        match render_cartesian_chart(options, &self.series, &self.bar_series) {
             Ok(render) => {
                 self.view_box = render.view_box;
                 self.plot_x = render.plot.x;
@@ -333,6 +421,7 @@ impl PineCartesianChart {
                 self.y_axis_label = render.y_axis_label;
                 self.x_axis = render.x_axis;
                 self.y_axis = render.y_axis;
+                self.bars = render.bars;
                 self.line_series = render.line_series;
                 self.markers = render.markers;
                 self.show_grid = !self.x_grid.is_empty() || !self.y_grid.is_empty();
@@ -348,6 +437,7 @@ impl PineCartesianChart {
                     .as_ref()
                     .map(|axis| axis.label.clone())
                     .unwrap_or_default();
+                self.show_bars = !self.bars.is_empty();
                 self.show_markers = !self.markers.is_empty();
                 self.error.clear();
                 self.state = "ready".into();
@@ -375,6 +465,7 @@ impl PineCartesianChart {
     }
 
     fn clear_render(&mut self) {
+        self.bars.clear();
         self.line_series.clear();
         self.markers.clear();
         self.x_grid.clear();
@@ -392,6 +483,7 @@ impl PineCartesianChart {
         self.show_grid = false;
         self.show_x_axis = false;
         self.show_y_axis = false;
+        self.show_bars = false;
         self.show_markers = false;
     }
 
@@ -560,6 +652,8 @@ pub struct PineLineSeries {
     pub marker_radius: f64,
     #[prop]
     pub points: Vec<ChartPoint>,
+    #[prop]
+    pub data: Vec<ChartBar>,
     pub component_key: String,
 }
 
@@ -573,6 +667,7 @@ impl Default for PineLineSeries {
             show_markers: false,
             marker_radius: DEFAULT_MARKER_RADIUS,
             points: Vec::new(),
+            data: Vec::new(),
             component_key: String::new(),
         }
     }
@@ -618,6 +713,11 @@ impl PineLineSeries {
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
         self.sync();
     }
+
+    #[watch(data)]
+    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
+        self.sync();
+    }
 }
 
 impl PineLineSeries {
@@ -631,6 +731,73 @@ impl PineLineSeries {
                 show_markers: self.show_markers,
                 marker_radius: self.marker_radius,
                 points: self.points.clone(),
+                data: self.data.clone(),
+            });
+        });
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[component(template = "PineBarSeries.poco", role = "visual")]
+pub struct PineBarSeries {
+    #[prop]
+    pub key: String,
+    #[prop]
+    pub label: String,
+    #[prop]
+    pub color: String,
+    #[prop]
+    pub data: Vec<ChartBar>,
+    pub component_key: String,
+}
+
+impl Default for PineBarSeries {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            label: String::new(),
+            color: "currentColor".into(),
+            data: Vec::new(),
+            component_key: String::new(),
+        }
+    }
+}
+
+#[handlers]
+impl PineBarSeries {
+    fn on_setup(&mut self) {
+        ensure_component_key(&mut self.component_key, "bar-series", &self.key);
+        self.sync();
+    }
+
+    fn on_unmount(&mut self) {
+        update_root(|root| root.remove_bar_series(&self.component_key));
+    }
+
+    #[watch(label)]
+    fn on_label(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(color)]
+    fn on_color(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(data)]
+    fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
+        self.sync();
+    }
+}
+
+impl PineBarSeries {
+    fn sync(&self) {
+        update_root(|root| {
+            root.upsert_bar_series(CartesianBarSeriesConfig {
+                key: self.component_key.clone(),
+                label: self.label.clone(),
+                color: color_or_current(&self.color),
+                data: self.data.clone(),
             });
         });
     }
@@ -638,13 +805,23 @@ impl PineLineSeries {
 
 pub fn render_cartesian_chart(
     options: CartesianChartOptions<'_>,
-    series: &[CartesianLineSeriesConfig],
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
 ) -> ChartResult<CartesianChartRender> {
-    if series.is_empty() || series.iter().any(|series| series.points.is_empty()) {
+    if !has_renderable_series(line_series, bar_series) {
         return Err(ChartError::EmptySeries);
     }
 
-    let line_series = series
+    if uses_categorical_x(line_series, bar_series) {
+        return render_categorical_chart(options, line_series, bar_series);
+    }
+
+    let renderable_lines = line_series
+        .iter()
+        .filter(|series| !series.points.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let line_series = renderable_lines
         .iter()
         .map(|series| ChartLineSeries::new(series.label.clone(), series.points.clone()))
         .collect::<Vec<_>>();
@@ -662,7 +839,7 @@ pub fn render_cartesian_chart(
         options.grid,
         options.x_axis,
         options.y_axis,
-        series,
+        &renderable_lines,
     ))
 }
 
@@ -727,8 +904,501 @@ fn render_from_geometry(
         y_axis_label: geometry.y_axis_label,
         x_axis: geometry.x_axis,
         y_axis: geometry.y_axis,
+        bars: Vec::new(),
         line_series: rendered_series,
         markers,
+    }
+}
+
+fn render_categorical_chart(
+    options: CartesianChartOptions<'_>,
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
+) -> ChartResult<CartesianChartRender> {
+    let categories = categorical_categories(line_series, bar_series)?;
+    let width = finite("width", options.width)?;
+    let height = finite("height", options.height)?;
+    let plot = ChartRect::from_outer(width, height, options.margins)?;
+    let y_domain = categorical_y_domain(options.y_domain, line_series, bar_series)?;
+    let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
+    let x_scale = BandScale::new(
+        categories.len(),
+        (plot.x, plot.right()),
+        options.padding_inner,
+        options.padding_outer,
+    )?;
+    let baseline = baseline_value(y_domain);
+    let baseline_y = y_scale.map(baseline)?;
+    let y_ticks = y_scale.ticks(5);
+    let grid = options.grid.cloned().unwrap_or(CartesianGridConfig {
+        key: String::new(),
+        x: false,
+        y: false,
+    });
+
+    let bars = render_categorical_bars(
+        bar_series,
+        &categories,
+        x_scale,
+        y_scale,
+        baseline_y,
+        options.series_padding_inner,
+    )?;
+    let (line_series, markers) =
+        render_categorical_lines(line_series, &categories, x_scale, y_scale)?;
+
+    Ok(CartesianChartRender {
+        view_box: format!("0 0 {width} {height}"),
+        plot,
+        x_grid: if grid.x {
+            categorical_x_grid(&categories, x_scale, plot)
+        } else {
+            Vec::new()
+        },
+        y_grid: if grid.y {
+            grid_lines_for_y(&y_ticks, plot)
+        } else {
+            Vec::new()
+        },
+        x_tick_labels: if options.x_axis.is_some() {
+            categorical_tick_labels(&categories, x_scale, plot)
+        } else {
+            Vec::new()
+        },
+        y_tick_labels: if options.y_axis.is_some() {
+            tick_labels_for_y(&y_ticks, plot)
+        } else {
+            Vec::new()
+        },
+        x_axis_label: x_axis_label(plot, height),
+        y_axis_label: y_axis_label(plot),
+        x_axis: SvgLine::new(
+            "x-axis".into(),
+            plot.x,
+            baseline_y,
+            plot.right(),
+            baseline_y,
+        ),
+        y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
+        bars,
+        line_series,
+        markers,
+    })
+}
+
+fn has_renderable_series(
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
+) -> bool {
+    line_series
+        .iter()
+        .any(|series| !series.points.is_empty() || !series.data.is_empty())
+        || bar_series.iter().any(|series| !series.data.is_empty())
+}
+
+fn uses_categorical_x(
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
+) -> bool {
+    bar_series.iter().any(|series| !series.data.is_empty())
+        || line_series.iter().any(|series| !series.data.is_empty())
+}
+
+fn categorical_categories(
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
+) -> ChartResult<Vec<String>> {
+    let categories = bar_series
+        .iter()
+        .find(|series| !series.data.is_empty())
+        .map(|series| {
+            series
+                .data
+                .iter()
+                .map(|bar| bar.label.clone())
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            line_series
+                .iter()
+                .find(|series| !series.data.is_empty())
+                .map(|series| {
+                    series
+                        .data
+                        .iter()
+                        .map(|bar| bar.label.clone())
+                        .collect::<Vec<_>>()
+                })
+        })
+        .ok_or(ChartError::EmptySeries)?;
+
+    for series in bar_series.iter().filter(|series| !series.data.is_empty()) {
+        validate_categories(&series_label(&series.label, 0), &categories, &series.data)?;
+    }
+    for series in line_series.iter().filter(|series| !series.data.is_empty()) {
+        validate_categories(&series_label(&series.label, 0), &categories, &series.data)?;
+    }
+
+    Ok(categories)
+}
+
+fn validate_categories(series: &str, categories: &[String], data: &[ChartBar]) -> ChartResult<()> {
+    if data.len() != categories.len() {
+        let expected = categories
+            .get(data.len())
+            .or_else(|| categories.last())
+            .cloned()
+            .unwrap_or_default();
+        return Err(ChartError::MismatchedSeries {
+            series: series.into(),
+            expected,
+            actual: String::new(),
+        });
+    }
+
+    for (bar, expected) in data.iter().zip(categories.iter()) {
+        if bar.label != *expected {
+            return Err(ChartError::MismatchedSeries {
+                series: series.into(),
+                expected: expected.clone(),
+                actual: bar.label.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn categorical_y_domain(
+    domain: Option<(f64, f64)>,
+    line_series: &[CartesianLineSeriesConfig],
+    bar_series: &[CartesianBarSeriesConfig],
+) -> ChartResult<(f64, f64)> {
+    let include_zero = bar_series.iter().any(|series| !series.data.is_empty());
+    let values = bar_series
+        .iter()
+        .flat_map(|series| series.data.iter().map(|bar| bar.value))
+        .chain(
+            line_series
+                .iter()
+                .flat_map(|series| series.data.iter().map(|bar| bar.value)),
+        )
+        .chain(
+            line_series
+                .iter()
+                .flat_map(|series| series.points.iter().map(|point| point.y)),
+        );
+
+    domain_or_y_extent(domain, values, include_zero)
+}
+
+fn render_categorical_bars(
+    bar_series: &[CartesianBarSeriesConfig],
+    categories: &[String],
+    category_scale: BandScale,
+    y_scale: LinearScale,
+    baseline_y: f64,
+    series_padding_inner: f64,
+) -> ChartResult<Vec<CartesianBarRender>> {
+    let renderable = bar_series
+        .iter()
+        .filter(|series| !series.data.is_empty())
+        .collect::<Vec<_>>();
+    let mut bars = Vec::with_capacity(categories.len() * renderable.len());
+
+    for (category_index, category_label) in categories.iter().enumerate() {
+        let category_x = category_scale.position(category_index).unwrap_or_default();
+        let series_scale = BandScale::new(
+            renderable.len(),
+            (category_x, category_x + category_scale.bandwidth()),
+            series_padding_inner,
+            0.0,
+        )?;
+
+        for (series_index, series) in renderable.iter().enumerate() {
+            let value = finite("bar.value", series.data[category_index].value)?;
+            let value_y = y_scale.map(value)?;
+            let y = value_y.min(baseline_y);
+            let height = (baseline_y - value_y).abs();
+            let x = series_scale.position(series_index).unwrap_or(category_x);
+            let series_label = series_label(&series.label, series_index);
+            bars.push(CartesianBarRender {
+                key: format!("{}-bar-{category_index}-{series_index}", series.key),
+                label: category_label.clone(),
+                category_label: category_label.clone(),
+                series_label: series_label.clone(),
+                value,
+                aria_label: bar_aria_label(category_label, &series_label, value),
+                color: color_or_current(&series.color),
+                x,
+                y,
+                width: series_scale.bandwidth(),
+                height,
+            });
+        }
+    }
+
+    Ok(bars)
+}
+
+fn render_categorical_lines(
+    line_series: &[CartesianLineSeriesConfig],
+    categories: &[String],
+    category_scale: BandScale,
+    y_scale: LinearScale,
+) -> ChartResult<(Vec<CartesianLineSeriesRender>, Vec<CartesianMarkerRender>)> {
+    let mut rendered = Vec::new();
+    let mut markers = Vec::new();
+
+    for (series_index, config) in line_series
+        .iter()
+        .filter(|series| !series.data.is_empty() || !series.points.is_empty())
+        .enumerate()
+    {
+        let series_label = series_label(&config.label, series_index);
+        let samples = if !config.data.is_empty() {
+            categorical_data_samples(config, &series_label, categories, category_scale, y_scale)?
+        } else {
+            categorical_point_samples(config, &series_label, categories, category_scale, y_scale)?
+        };
+        let line_d = line_path(samples.iter().map(|sample| crate::geometry::Point {
+            x: sample.x,
+            y: sample.y,
+        }))?;
+        rendered.push(CartesianLineSeriesRender {
+            key: config.key.clone(),
+            label: series_label.clone(),
+            line_d,
+            color: color_or_current(&config.color),
+            stroke_width: positive_or_default(config.stroke_width, DEFAULT_STROKE_WIDTH),
+        });
+        if config.show_markers {
+            markers.extend(
+                samples
+                    .iter()
+                    .map(|sample| marker_from_sample(sample, config)),
+            );
+        }
+    }
+
+    Ok((rendered, markers))
+}
+
+fn categorical_data_samples(
+    config: &CartesianLineSeriesConfig,
+    series_label: &str,
+    categories: &[String],
+    category_scale: BandScale,
+    y_scale: LinearScale,
+) -> ChartResult<Vec<LineChartSample>> {
+    config
+        .data
+        .iter()
+        .enumerate()
+        .map(|(index, bar)| {
+            let value = finite("line.value", bar.value)?;
+            let x = category_scale.center(index).unwrap_or_default();
+            let y = y_scale.map(value)?;
+            Ok(LineChartSample {
+                key: format!("{}-point-{index}-{}", config.key, bar.label),
+                series_label: series_label.into(),
+                data_x: index as f64,
+                data_y: value,
+                x,
+                y,
+                x_label: categories[index].clone(),
+                y_label: format_tick(value),
+                aria_label: category_sample_aria_label(series_label, &categories[index], value),
+            })
+        })
+        .collect()
+}
+
+fn categorical_point_samples(
+    config: &CartesianLineSeriesConfig,
+    series_label: &str,
+    categories: &[String],
+    category_scale: BandScale,
+    y_scale: LinearScale,
+) -> ChartResult<Vec<LineChartSample>> {
+    config
+        .points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let data_x = finite("point.x", point.x)?;
+            let data_y = finite("point.y", point.y)?;
+            let x = categorical_point_x(data_x, categories.len(), category_scale)?;
+            let y = y_scale.map(data_y)?;
+            let label_index = data_x.round().clamp(0.0, categories.len() as f64 - 1.0) as usize;
+            let x_label = categories.get(label_index).cloned().unwrap_or_default();
+            Ok(LineChartSample {
+                key: format!("{}-point-{index}-{}", config.key, format_tick(data_x)),
+                series_label: series_label.into(),
+                data_x,
+                data_y,
+                x,
+                y,
+                x_label: x_label.clone(),
+                y_label: format_tick(data_y),
+                aria_label: category_sample_aria_label(series_label, &x_label, data_y),
+            })
+        })
+        .collect()
+}
+
+fn categorical_point_x(
+    value: f64,
+    category_count: usize,
+    category_scale: BandScale,
+) -> ChartResult<f64> {
+    if category_count <= 1 {
+        return Ok(category_scale.center(0).unwrap_or_default());
+    }
+
+    let first = category_scale.center(0).unwrap_or_default();
+    let last = category_scale.center(category_count - 1).unwrap_or(first);
+    LinearScale::new((0.0, category_count as f64 - 1.0), (first, last))?.map(value)
+}
+
+fn categorical_x_grid(categories: &[String], scale: BandScale, plot: ChartRect) -> Vec<SvgLine> {
+    categories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, label)| {
+            let x = scale.center(index)?;
+            Some(SvgLine::new(
+                format!("x-grid-{index}-{label}"),
+                x,
+                plot.y,
+                x,
+                plot.bottom(),
+            ))
+        })
+        .collect()
+}
+
+fn categorical_tick_labels(
+    categories: &[String],
+    scale: BandScale,
+    plot: ChartRect,
+) -> Vec<SvgTickLabel> {
+    categories
+        .iter()
+        .enumerate()
+        .filter_map(|(index, label)| {
+            let x = scale.center(index)?;
+            Some(SvgTickLabel {
+                key: format!("x-tick-{index}-{label}"),
+                value: index as f64,
+                label: label.clone(),
+                x,
+                y: plot.bottom() + 18.0,
+                line_x1: x,
+                line_y1: plot.bottom(),
+                line_x2: x,
+                line_y2: plot.bottom() + 6.0,
+            })
+        })
+        .collect()
+}
+
+fn grid_lines_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgLine> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| {
+            SvgLine::new(
+                format!("y-grid-{index}-{}", format_tick(tick.value)),
+                plot.x,
+                tick.position,
+                plot.right(),
+                tick.position,
+            )
+        })
+        .collect()
+}
+
+fn tick_labels_for_y(ticks: &[crate::Tick], plot: ChartRect) -> Vec<SvgTickLabel> {
+    ticks
+        .iter()
+        .enumerate()
+        .map(|(index, tick)| SvgTickLabel {
+            key: format!("y-tick-{index}-{}", format_tick(tick.value)),
+            value: tick.value,
+            label: format_tick(tick.value),
+            x: plot.x - 8.0,
+            y: tick.position + 4.0,
+            line_x1: plot.x - 6.0,
+            line_y1: tick.position,
+            line_x2: plot.x,
+            line_y2: tick.position,
+        })
+        .collect()
+}
+
+fn domain_or_y_extent(
+    domain: Option<(f64, f64)>,
+    values: impl IntoIterator<Item = f64>,
+    include_zero: bool,
+) -> ChartResult<(f64, f64)> {
+    if let Some((start, end)) = domain {
+        return expanded_domain(finite("domain.start", start)?, finite("domain.end", end)?);
+    }
+
+    let mut min = if include_zero { 0.0 } else { f64::INFINITY };
+    let mut max = if include_zero { 0.0 } else { f64::NEG_INFINITY };
+    let mut saw_value = include_zero;
+    for value in values {
+        let value = finite("domain.value", value)?;
+        min = min.min(value);
+        max = max.max(value);
+        saw_value = true;
+    }
+
+    if !saw_value {
+        return Err(ChartError::EmptySeries);
+    }
+
+    expanded_domain(min, max)
+}
+
+fn expanded_domain(start: f64, end: f64) -> ChartResult<(f64, f64)> {
+    if start != end {
+        return Ok((start, end));
+    }
+
+    let pad = if start == 0.0 { 1.0 } else { start.abs() * 0.1 };
+    Ok((start - pad, end + pad))
+}
+
+fn baseline_value(domain: (f64, f64)) -> f64 {
+    let lo = domain.0.min(domain.1);
+    let hi = domain.0.max(domain.1);
+    0.0_f64.clamp(lo, hi)
+}
+
+fn series_label(label: &str, index: usize) -> String {
+    if label.is_empty() {
+        format!("Series {}", index + 1)
+    } else {
+        label.into()
+    }
+}
+
+fn bar_aria_label(category: &str, series: &str, value: f64) -> String {
+    if series.is_empty() || series == "Series 1" {
+        format!("{category}: {}", format_tick(value))
+    } else {
+        format!("{series}, {category}: {}", format_tick(value))
+    }
+}
+
+fn category_sample_aria_label(series: &str, category: &str, value: f64) -> String {
+    if series.is_empty() || series == "Series 1" {
+        format!("{category}: {}", format_tick(value))
+    } else {
+        format!("{series}, {category}: {}", format_tick(value))
     }
 }
 
@@ -831,6 +1501,7 @@ mod tests {
                 ChartPoint::new(5.0, 20.0),
                 ChartPoint::new(10.0, 15.0),
             ],
+            data: Vec::new(),
         }];
 
         let grid = CartesianGridConfig::default();
@@ -849,20 +1520,78 @@ mod tests {
                 margins: ChartMargins::ZERO,
                 x_domain: None,
                 y_domain: None,
+                padding_inner: DEFAULT_PADDING_INNER,
+                padding_outer: DEFAULT_PADDING_OUTER,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
                 grid: Some(&grid),
                 x_axis: Some(&x_axis),
                 y_axis: Some(&y_axis),
             },
             &series,
+            &[],
         )
         .unwrap();
 
         assert_eq!(render.view_box, "0 0 100 100");
         assert_eq!(render.line_series[0].key, "actual");
         assert_eq!(render.line_series[0].line_d, "M0,100 L50,0 L100,50");
+        assert!(render.bars.is_empty());
         assert_eq!(render.markers.len(), 3);
         assert!(!render.x_grid.is_empty());
         assert!(!render.x_tick_labels.is_empty());
+    }
+
+    #[test]
+    fn cartesian_chart_composes_bar_and_line_series_on_categories() {
+        let bars = vec![CartesianBarSeriesConfig {
+            key: "actual".into(),
+            label: "Actual".into(),
+            color: "#16a085".into(),
+            data: vec![ChartBar::new("W1", 10.0), ChartBar::new("W2", 20.0)],
+        }];
+        let lines = vec![CartesianLineSeriesConfig {
+            key: "target".into(),
+            label: "Target".into(),
+            color: "#1d6fd8".into(),
+            stroke_width: 2.0,
+            show_markers: true,
+            marker_radius: 4.0,
+            points: Vec::new(),
+            data: vec![ChartBar::new("W1", 12.0), ChartBar::new("W2", 18.0)],
+        }];
+
+        let render = render_cartesian_chart(
+            CartesianChartOptions {
+                width: 100.0,
+                height: 100.0,
+                margins: ChartMargins::ZERO,
+                x_domain: None,
+                y_domain: None,
+                padding_inner: 0.0,
+                padding_outer: 0.0,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
+                grid: Some(&CartesianGridConfig::default()),
+                x_axis: Some(&CartesianAxisConfig {
+                    key: "x".into(),
+                    label: "Week".into(),
+                }),
+                y_axis: Some(&CartesianAxisConfig {
+                    key: "y".into(),
+                    label: "Metric".into(),
+                }),
+            },
+            &lines,
+            &bars,
+        )
+        .unwrap();
+
+        assert_eq!(render.bars.len(), 2);
+        assert_eq!(render.bars[0].category_label, "W1");
+        assert_eq!(render.bars[0].series_label, "Actual");
+        assert_eq!(render.line_series[0].label, "Target");
+        assert_eq!(render.markers.len(), 2);
+        assert_eq!(render.x_tick_labels[0].label, "W1");
+        assert_eq!(render.x_tick_labels[1].label, "W2");
     }
 
     #[test]
@@ -874,10 +1603,14 @@ mod tests {
                 margins: ChartMargins::ZERO,
                 x_domain: None,
                 y_domain: None,
+                padding_inner: DEFAULT_PADDING_INNER,
+                padding_outer: DEFAULT_PADDING_OUTER,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
                 grid: None,
                 x_axis: None,
                 y_axis: None,
             },
+            &[],
             &[],
         )
         .unwrap_err();

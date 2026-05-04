@@ -326,6 +326,53 @@ impl Default for ComposedCartesianFixture {
 #[handlers]
 impl ComposedCartesianFixture {}
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r##"
+<div>
+  <pine-cartesian-chart class="combo-chart"
+                        label="Combo revenue"
+                        width="100"
+                        height="100"
+                        margin_top="0"
+                        margin_right="0"
+                        margin_bottom="0"
+                        margin_left="0"
+                        padding_inner="0"
+                        padding_outer="0">
+    <pine-chart-grid></pine-chart-grid>
+    <pine-x-axis label="Week"></pine-x-axis>
+    <pine-y-axis label="Sales"></pine-y-axis>
+    <pine-bar-series key="actual"
+                     label="Actual"
+                     color="#16a085"
+                     pp-bind:data="actual"></pine-bar-series>
+    <pine-line-series key="target"
+                      label="Target"
+                      color="#1d6fd8"
+                      stroke_width="3"
+                      show_markers="true"
+                      marker_radius="4"
+                      pp-bind:data="target"></pine-line-series>
+  </pine-cartesian-chart>
+</div>
+"##)]
+struct ComboCartesianFixture {
+    actual: Vec<ChartBar>,
+    target: Vec<ChartBar>,
+}
+
+impl Default for ComboCartesianFixture {
+    fn default() -> Self {
+        Self {
+            actual: vec![ChartBar::new("W1", 10.0), ChartBar::new("W2", 20.0)],
+            target: vec![ChartBar::new("W1", 12.0), ChartBar::new("W2", 18.0)],
+        }
+    }
+}
+
+#[handlers]
+impl ComboCartesianFixture {}
+
 #[wasm_bindgen_test]
 async fn layered_chart_composes_child_marks_into_one_svg_tree() {
     let host = mount_fixture::<LayeredChartFixture>();
@@ -450,7 +497,7 @@ async fn cartesian_chart_composes_grid_axes_and_line_series() {
     assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 100 100"));
     assert_eq!(
         direct_svg_layers(&svg),
-        vec!["grid", "axes", "series", "markers"]
+        vec!["grid", "axes", "bars", "series", "markers"]
     );
 
     let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
@@ -478,6 +525,59 @@ async fn cartesian_chart_composes_grid_axes_and_line_series() {
         .unwrap()
         .unwrap();
     assert_eq!(y_label.text_content().as_deref(), Some("Sales"));
+}
+
+#[wasm_bindgen_test]
+async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
+    let host = mount_fixture::<ComboCartesianFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".combo-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+
+    let svg = host
+        .query_selector("svg.pine-cartesian-chart-svg")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        direct_svg_layers(&svg),
+        vec!["grid", "axes", "bars", "series", "markers"]
+    );
+
+    let bars = host.query_selector_all(".pine-chart-bar").unwrap();
+    assert_eq!(bars.length(), 2);
+    let first_bar = bars.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first_bar.get_attribute("data-category").as_deref(),
+        Some("W1")
+    );
+    assert_eq!(
+        first_bar.get_attribute("data-series").as_deref(),
+        Some("Actual")
+    );
+    assert_eq!(first_bar.get_attribute("fill").as_deref(), Some("#16a085"));
+    assert_eq!(
+        first_bar.get_attribute("aria-label").as_deref(),
+        Some("Actual, W1: 10")
+    );
+
+    let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
+    assert_eq!(line.get_attribute("d").as_deref(), Some("M25,40 L75,10"));
+    assert_eq!(line.get_attribute("stroke").as_deref(), Some("#1d6fd8"));
+    assert_eq!(line.get_attribute("data-series").as_deref(), Some("Target"));
+
+    let markers = host.query_selector_all(".pine-chart-marker").unwrap();
+    assert_eq!(markers.length(), 2);
+    let first_marker = markers.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first_marker.get_attribute("aria-label").as_deref(),
+        Some("Target, W1: 12")
+    );
+
+    let ticks = host.query_selector_all(".pine-chart-tick-x text").unwrap();
+    assert_eq!(ticks.length(), 2);
+    assert_eq!(ticks.get(0).unwrap().text_content().as_deref(), Some("W1"));
+    assert_eq!(ticks.get(1).unwrap().text_content().as_deref(), Some("W2"));
 }
 
 #[wasm_bindgen_test]
