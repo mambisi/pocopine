@@ -88,64 +88,46 @@ async fn publish_live_draft(draft: pocopine_events::EventResult<pocopine_events:
 
 #[pocopine::server(public)]
 pub async fn list_posts() -> ServerResult<Vec<Post>> {
-    #[cfg(pocopine_host)]
-    {
-        let mut posts = posts()
-            .lock()
-            .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
-            .clone();
-        posts.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| b.id.cmp(&a.id)));
-        Ok(posts)
-    }
-
-    #[cfg(pocopine_browser)]
-    unreachable!("wasm server function body is replaced by the generated client stub")
+    let mut posts = posts()
+        .lock()
+        .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
+        .clone();
+    posts.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| b.id.cmp(&a.id)));
+    Ok(posts)
 }
 
 #[pocopine::server(public)]
 pub async fn create_post(draft: PostDraft) -> ServerResult<Post> {
-    #[cfg(pocopine_host)]
-    {
-        let title = draft.title.trim();
-        let body = draft.body.trim();
-        if title.is_empty() || body.is_empty() {
-            return Err(ServerError::App("title and body are required".to_string()));
-        }
-
-        let next_id = NEXT_POST_ID.fetch_add(1, Ordering::Relaxed);
-        let post = Post {
-            id: format!("post_{next_id}"),
-            title: title.to_string(),
-            body: body.to_string(),
-            version: next_id,
-        };
-
-        posts()
-            .lock()
-            .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
-            .push(post.clone());
-        publish_posts_invalidation(pocopine::live::LiveOp::Upsert, post.id.clone()).await;
-        Ok(post)
+    let title = draft.title.trim();
+    let body = draft.body.trim();
+    if title.is_empty() || body.is_empty() {
+        return Err(ServerError::App("title and body are required".to_string()));
     }
 
-    #[cfg(pocopine_browser)]
-    unreachable!("wasm server function body is replaced by the generated client stub")
+    let next_id = NEXT_POST_ID.fetch_add(1, Ordering::Relaxed);
+    let post = Post {
+        id: format!("post_{next_id}"),
+        title: title.to_string(),
+        body: body.to_string(),
+        version: next_id,
+    };
+
+    posts()
+        .lock()
+        .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
+        .push(post.clone());
+    publish_posts_invalidation(pocopine::live::LiveOp::Upsert, post.id.clone()).await;
+    Ok(post)
 }
 
 #[pocopine::server(public)]
 pub async fn reset_posts() -> ServerResult<()> {
-    #[cfg(pocopine_host)]
-    {
-        posts()
-            .lock()
-            .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
-            .clear();
-        publish_posts_invalidation(pocopine::live::LiveOp::Reset, "posts").await;
-        Ok(())
-    }
-
-    #[cfg(pocopine_browser)]
-    unreachable!("wasm server function body is replaced by the generated client stub")
+    posts()
+        .lock()
+        .map_err(|_| ServerError::App("posts store lock poisoned".to_string()))?
+        .clear();
+    publish_posts_invalidation(pocopine::live::LiveOp::Reset, "posts").await;
+    Ok(())
 }
 
 #[derive(Default, Serialize, Deserialize)]
