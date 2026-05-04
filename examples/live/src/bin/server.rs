@@ -1,4 +1,4 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use live_example::{
@@ -29,5 +29,5 @@ async fn main() -> std::io::Result<()> {
     serve(router, addr).await
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(pocopine_browser)]
 fn main() {}

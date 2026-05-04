@@ -1,7 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 use {
     pocopine_events::{EventBackend, MemoryEventBackend},
     std::sync::{
@@ -24,14 +24,14 @@ pub struct PostDraft {
     pub body: String,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 static POSTS: OnceLock<Mutex<Vec<Post>>> = OnceLock::new();
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 static NEXT_POST_ID: AtomicU64 = AtomicU64::new(3);
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 static LIVE_BACKEND: OnceLock<MemoryEventBackend> = OnceLock::new();
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 fn posts() -> &'static Mutex<Vec<Post>> {
     POSTS.get_or_init(|| {
         Mutex::new(vec![
@@ -51,12 +51,12 @@ fn posts() -> &'static Mutex<Vec<Post>> {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 pub fn live_backend() -> MemoryEventBackend {
     LIVE_BACKEND.get_or_init(MemoryEventBackend::new).clone()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 async fn publish_posts_invalidation(op: pocopine::live::LiveOp, key: impl Into<String>) {
     let collection_draft = pocopine::live::LiveInvalidation::new("posts", op)
         .keys([key.into()])
@@ -71,7 +71,7 @@ async fn publish_posts_invalidation(op: pocopine::live::LiveOp, key: impl Into<S
     publish_live_draft(query_draft).await;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(pocopine_host)]
 async fn publish_live_draft(draft: pocopine_events::EventResult<pocopine_events::EventDraft>) {
     let Ok(draft) = draft else {
         return;
@@ -88,7 +88,7 @@ async fn publish_live_draft(draft: pocopine_events::EventResult<pocopine_events:
 
 #[pocopine::server(public)]
 pub async fn list_posts() -> ServerResult<Vec<Post>> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(pocopine_host)]
     {
         let mut posts = posts()
             .lock()
@@ -98,13 +98,13 @@ pub async fn list_posts() -> ServerResult<Vec<Post>> {
         Ok(posts)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(pocopine_browser)]
     unreachable!("wasm server function body is replaced by the generated client stub")
 }
 
 #[pocopine::server(public)]
 pub async fn create_post(draft: PostDraft) -> ServerResult<Post> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(pocopine_host)]
     {
         let title = draft.title.trim();
         let body = draft.body.trim();
@@ -128,13 +128,13 @@ pub async fn create_post(draft: PostDraft) -> ServerResult<Post> {
         Ok(post)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(pocopine_browser)]
     unreachable!("wasm server function body is replaced by the generated client stub")
 }
 
 #[pocopine::server(public)]
 pub async fn reset_posts() -> ServerResult<()> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(pocopine_host)]
     {
         posts()
             .lock()
@@ -144,7 +144,7 @@ pub async fn reset_posts() -> ServerResult<()> {
         Ok(())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(pocopine_browser)]
     unreachable!("wasm server function body is replaced by the generated client stub")
 }
 
@@ -167,7 +167,7 @@ impl LiveBoard {
         self.status = "live stream opening".to_string();
         self.reload();
 
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(pocopine_browser)]
         {
             let handle = this::<Self>();
             let refresh_handle = handle.clone();
