@@ -45,7 +45,8 @@ namespace correctness, paint order, responsive sizing, and validation.
 - `pine-chart-marker`: point marker rendered above series paths.
 - `pine-chart-reference-dot`: larger background or foreground reference mark.
 - `pine-chart-label`: positioned SVG text with optional rotation.
-- `pine-chart-icon`: annotation icon. `kind="plane"` is built in for now.
+- `pine-chart-icon`: annotation icon. Built-in icon paths are rendered from
+  chart state; `kind="plane"` is available for now.
 
 ## Layers
 
@@ -62,6 +63,10 @@ Layer names map to SVG paint-order buckets:
 SVG does not support CSS `z-index` for children inside one `<svg>`. Use
 `pine-chart-layer` or the `layer` prop on `pine-chart-reference-dot` instead of
 CSS z-index.
+
+`pine-chart-reference-dot` only accepts `reference-background`/`background` and
+`reference-foreground`/`foreground`. Unsupported reference-dot layers make the
+chart invalid instead of silently painting in the wrong bucket.
 
 ## Data
 
