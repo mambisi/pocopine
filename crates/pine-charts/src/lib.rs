@@ -39,8 +39,8 @@ pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use layered::{
     render_layer_chart, ChartLayerGuide, ChartLayerIcon, ChartLayerLabel, ChartLayerLine,
-    ChartLayerMarker, ChartLayerPoint, ChartLayerReferenceDot, LayerChartRender, PineChartGuide,
-    PineChartIcon, PineChartLabel, PineChartLayer, PineChartLine, PineChartMarker,
+    ChartLayerMarker, ChartLayerPoint, ChartLayerReferenceDot, LayerChartInputs, LayerChartRender,
+    PineChartGuide, PineChartIcon, PineChartLabel, PineChartLayer, PineChartLine, PineChartMarker,
     PineChartReferenceDot, PineLayerChart, SvgLayerGuide, SvgLayerIcon, SvgLayerLabel,
     SvgLayerLine, SvgLayerMarker, SvgLayerReferenceDot,
 };

@@ -12,6 +12,7 @@ const DEFAULT_LINE_WIDTH: f64 = 3.0;
 const DEFAULT_MARKER_RADIUS: f64 = 4.0;
 const DEFAULT_REFERENCE_RADIUS: f64 = 12.0;
 const DEFAULT_ICON_SCALE: f64 = 0.12;
+const PLANE_ICON_PATH: &str = "M194.67321 0 70.641958 53.625c-10.38227-6.92107-34.20058-21.27539-38.90545-23.44898-39.4400301-18.22079-36.9454001 14.73107-20.34925 24.6052 4.53917 2.70065 27.72352 17.17823 43.47345 26.37502l17.90625 133.9375 22.21875 13.15625 11.531252-120.9375 71.53125 36.6875 3.84375 39.21875 14.53125 8.625 11.09375-42.40625.125.0625 30.8125-31.53125-14.875-8-35.625 16.90625-68.28125-42.4375L217.36071 12.25 194.67321 0z";
 
 create_context!(ROOT: Handle<PineLayerChart>);
 create_context!(LAYER: String);
@@ -202,8 +203,19 @@ pub struct SvgLayerLabel {
 pub struct SvgLayerIcon {
     pub key: String,
     pub kind: String,
+    pub path_d: String,
     pub transform: String,
     pub fill: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayerChartInputs<'a> {
+    pub guides: &'a [ChartLayerGuide],
+    pub lines: &'a [ChartLayerLine],
+    pub markers: &'a [ChartLayerMarker],
+    pub reference_dots: &'a [ChartLayerReferenceDot],
+    pub labels: &'a [ChartLayerLabel],
+    pub icons: &'a [ChartLayerIcon],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -374,12 +386,14 @@ impl PineLayerChart {
         match render_layer_chart(
             self.width,
             self.height,
-            &self.guides,
-            &self.lines,
-            &self.markers,
-            &self.reference_dots,
-            &self.labels,
-            &self.icons,
+            LayerChartInputs {
+                guides: &self.guides,
+                lines: &self.lines,
+                markers: &self.markers,
+                reference_dots: &self.reference_dots,
+                labels: &self.labels,
+                icons: &self.icons,
+            },
         ) {
             Ok(render) => {
                 self.view_box = render.view_box;
@@ -1031,16 +1045,10 @@ impl PineChartIcon {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn render_layer_chart(
     width: f64,
     height: f64,
-    guides: &[ChartLayerGuide],
-    lines: &[ChartLayerLine],
-    markers: &[ChartLayerMarker],
-    reference_dots: &[ChartLayerReferenceDot],
-    labels: &[ChartLayerLabel],
-    icons: &[ChartLayerIcon],
+    inputs: LayerChartInputs<'_>,
 ) -> ChartResult<LayerChartRender> {
     let width = finite("width", width)?;
     let height = finite("height", height)?;
@@ -1050,12 +1058,12 @@ pub fn render_layer_chart(
 
     Ok(LayerChartRender {
         view_box: format!("0 0 {width} {height}"),
-        guides: render_guides(guides)?,
-        lines: render_lines(lines)?,
-        markers: render_markers(markers)?,
-        reference_dots: render_reference_dots(reference_dots)?,
-        labels: render_labels(labels)?,
-        icons: render_icons(icons)?,
+        guides: render_guides(inputs.guides)?,
+        lines: render_lines(inputs.lines)?,
+        markers: render_markers(inputs.markers)?,
+        reference_dots: render_reference_dots(inputs.reference_dots)?,
+        labels: render_labels(inputs.labels)?,
+        icons: render_icons(inputs.icons)?,
     })
 }
 
@@ -1149,7 +1157,7 @@ fn render_reference_dots(
                 fill: color_or_current(&dot.fill),
                 stroke: color_or(&dot.stroke, "none"),
                 stroke_width: non_negative("reference_dot.stroke_width", dot.stroke_width)?,
-                layer: reference_layer(&dot.layer).into(),
+                layer: reference_layer(&dot.layer)?.into(),
                 aria_label: format!("{label}: x {x}, y {y}"),
             })
         })
@@ -1197,6 +1205,7 @@ fn render_icons(icons: &[ChartLayerIcon]) -> ChartResult<Vec<SvgLayerIcon>> {
             Ok(SvgLayerIcon {
                 key: key_or_index("icon", &icon.key, index),
                 kind: icon_kind(&icon.kind).into(),
+                path_d: icon_path_d(&icon.kind).into(),
                 transform: format!("translate({x} {y}) scale({scale})"),
                 fill: color_or(&icon.fill, "currentColor"),
             })
@@ -1287,10 +1296,14 @@ fn color_or(value: &str, fallback: &str) -> String {
     }
 }
 
-fn reference_layer(value: &str) -> &'static str {
+fn reference_layer(value: &str) -> ChartResult<&'static str> {
     match value.trim() {
-        "reference-foreground" | "foreground" => "reference-foreground",
-        _ => "reference-background",
+        "reference-foreground" | "foreground" => Ok("reference-foreground"),
+        "reference-background" | "background" | "" => Ok("reference-background"),
+        value => Err(ChartError::InvalidOption {
+            field: "reference_dot.layer",
+            value: value.into(),
+        }),
     }
 }
 
@@ -1306,6 +1319,13 @@ fn icon_kind(value: &str) -> &'static str {
     match value.trim() {
         "plane" => "plane",
         _ => "custom",
+    }
+}
+
+fn icon_path_d(value: &str) -> &'static str {
+    match value.trim() {
+        "plane" => PLANE_ICON_PATH,
+        _ => "",
     }
 }
 
@@ -1342,64 +1362,66 @@ mod tests {
         let render = render_layer_chart(
             300.0,
             180.0,
-            &[ChartLayerGuide {
-                key: "midline".into(),
-                x1: 0.0,
-                y1: 90.0,
-                x2: 300.0,
-                y2: 90.0,
-            }],
-            &[ChartLayerLine {
-                key: "line-a".into(),
-                label: "A".into(),
-                color: "#1aa300".into(),
-                stroke_width: 12.0,
-                points: vec![
-                    ChartLayerPoint::new(0.0, 140.0),
-                    ChartLayerPoint::new(120.0, 30.0),
-                ],
-            }],
-            &[ChartLayerMarker {
-                key: "stop".into(),
-                label: "Stop".into(),
-                x: 120.0,
-                y: 30.0,
-                radius: 8.0,
-                fill: "#1aa300".into(),
-                stroke: "#fff".into(),
-                stroke_width: 2.0,
-            }],
-            &[ChartLayerReferenceDot {
-                key: "hub".into(),
-                label: "Hub".into(),
-                x: 120.0,
-                y: 30.0,
-                radius: 18.0,
-                fill: "#ff242e".into(),
-                stroke: "#fff".into(),
-                stroke_width: 3.0,
-                layer: "reference-foreground".into(),
-            }],
-            &[ChartLayerLabel {
-                key: "hub-label".into(),
-                text: "Hub".into(),
-                x: 120.0,
-                y: 30.0,
-                dx: 8.0,
-                dy: -12.0,
-                angle: -65.0,
-                fill: "#18212f".into(),
-                text_anchor: "start".into(),
-                font_weight: "700".into(),
-            }],
-            &[ChartLayerIcon {
-                key: "airport".into(),
-                kind: "plane".into(),
-                x: 20.0,
-                y: 20.0,
-                scale: 0.1,
-                fill: "#18212f".into(),
-            }],
+            LayerChartInputs {
+                guides: &[ChartLayerGuide {
+                    key: "midline".into(),
+                    x1: 0.0,
+                    y1: 90.0,
+                    x2: 300.0,
+                    y2: 90.0,
+                }],
+                lines: &[ChartLayerLine {
+                    key: "line-a".into(),
+                    label: "A".into(),
+                    color: "#1aa300".into(),
+                    stroke_width: 12.0,
+                    points: vec![
+                        ChartLayerPoint::new(0.0, 140.0),
+                        ChartLayerPoint::new(120.0, 30.0),
+                    ],
+                }],
+                markers: &[ChartLayerMarker {
+                    key: "stop".into(),
+                    label: "Stop".into(),
+                    x: 120.0,
+                    y: 30.0,
+                    radius: 8.0,
+                    fill: "#1aa300".into(),
+                    stroke: "#fff".into(),
+                    stroke_width: 2.0,
+                }],
+                reference_dots: &[ChartLayerReferenceDot {
+                    key: "hub".into(),
+                    label: "Hub".into(),
+                    x: 120.0,
+                    y: 30.0,
+                    radius: 18.0,
+                    fill: "#ff242e".into(),
+                    stroke: "#fff".into(),
+                    stroke_width: 3.0,
+                    layer: "reference-foreground".into(),
+                }],
+                labels: &[ChartLayerLabel {
+                    key: "hub-label".into(),
+                    text: "Hub".into(),
+                    x: 120.0,
+                    y: 30.0,
+                    dx: 8.0,
+                    dy: -12.0,
+                    angle: -65.0,
+                    fill: "#18212f".into(),
+                    text_anchor: "start".into(),
+                    font_weight: "700".into(),
+                }],
+                icons: &[ChartLayerIcon {
+                    key: "airport".into(),
+                    kind: "plane".into(),
+                    x: 20.0,
+                    y: 20.0,
+                    scale: 0.1,
+                    fill: "#18212f".into(),
+                }],
+            },
         )
         .unwrap();
 
@@ -1409,11 +1431,43 @@ mod tests {
         assert_eq!(render.reference_dots[0].layer, "reference-foreground");
         assert_eq!(render.labels[0].transform, "rotate(-65 128 18)");
         assert_eq!(render.icons[0].kind, "plane");
+        assert_eq!(render.icons[0].path_d, PLANE_ICON_PATH);
+    }
+
+    #[test]
+    fn layered_chart_rejects_reference_dots_in_unsupported_layers() {
+        let error = render_layer_chart(
+            300.0,
+            180.0,
+            LayerChartInputs {
+                reference_dots: &[ChartLayerReferenceDot {
+                    key: "hub".into(),
+                    label: "Hub".into(),
+                    x: 120.0,
+                    y: 30.0,
+                    radius: 18.0,
+                    fill: "#ff242e".into(),
+                    stroke: "#fff".into(),
+                    stroke_width: 3.0,
+                    layer: "annotations".into(),
+                }],
+                ..LayerChartInputs::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChartError::InvalidOption {
+                field: "reference_dot.layer",
+                value: "annotations".into(),
+            }
+        );
     }
 
     #[test]
     fn layered_chart_rejects_invalid_size() {
-        let error = render_layer_chart(0.0, 100.0, &[], &[], &[], &[], &[], &[]).unwrap_err();
+        let error = render_layer_chart(0.0, 100.0, LayerChartInputs::default()).unwrap_err();
         assert_eq!(
             error,
             ChartError::InvalidSize {
