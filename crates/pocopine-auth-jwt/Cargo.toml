@@ -25,3 +25,8 @@ tracing = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 base64 = "0.22"
+# Provider integration tests synthesize an RSA keypair + JWKS at
+# test time so we don't carry binary fixtures. ~1.5s per run; a
+# follow-up could share fixtures across providers if it gets slow.
+rsa = "0.9"
+rand = "0.8"
