@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 mod data;
 
-pub use data::query::{create_post, list_posts, reset_posts, Post, PostDraft};
+pub use data::query::{
+    create_post, list_posts, reset_posts, Post, PostDraft, POSTS_COLLECTION, POSTS_LIST_QUERY_TAG,
+};
 
 #[cfg(pocopine_host)]
 pub use data::query::{__create_post_route, __list_posts_route, __reset_posts_route, live_backend};
@@ -35,7 +37,7 @@ impl LiveBoard {
             let error_handle = handle;
 
             if let Err(err) = pocopine::live::LiveRefresh::scoped()
-                .query_tag("posts:list", move |_event| {
+                .query_tag(POSTS_LIST_QUERY_TAG, move |_event| {
                     refresh_handle.update(|s| {
                         s.event_count += 1;
                         s.status = "live event received".to_string();

@@ -10,6 +10,9 @@ use {
     },
 };
 
+pub const POSTS_COLLECTION: &str = "posts";
+pub const POSTS_LIST_QUERY_TAG: &str = "posts:list";
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Post {
     pub id: String,
@@ -58,15 +61,15 @@ pub fn live_backend() -> MemoryEventBackend {
 
 #[cfg(pocopine_host)]
 async fn publish_posts_invalidation(op: pocopine::live::LiveOp, key: impl Into<String>) {
-    let collection_draft = pocopine::live::LiveInvalidation::new("posts", op)
+    let collection_draft = pocopine::live::LiveInvalidation::new(POSTS_COLLECTION, op)
         .keys([key.into()])
-        .query_tags(["posts:list"])
+        .query_tags([POSTS_LIST_QUERY_TAG])
         .into_draft();
 
     publish_live_draft(collection_draft).await;
 
-    let query_draft = pocopine::live::query_tag_topic("posts:list")
-        .and_then(|topic| pocopine::live::query_invalidated(topic, ["posts:list"]));
+    let query_draft = pocopine::live::query_tag_topic(POSTS_LIST_QUERY_TAG)
+        .and_then(|topic| pocopine::live::query_invalidated(topic, [POSTS_LIST_QUERY_TAG]));
 
     publish_live_draft(query_draft).await;
 }

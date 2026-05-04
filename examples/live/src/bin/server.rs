@@ -3,6 +3,7 @@
 async fn main() -> std::io::Result<()> {
     use live_example::{
         __create_post_route, __list_posts_route, __reset_posts_route, live_backend,
+        POSTS_COLLECTION, POSTS_LIST_QUERY_TAG,
     };
     use pocopine::live::{collection_topic, query_tag_topic, routes, LiveHub};
     use pocopine_logging::init_default;
@@ -10,8 +11,8 @@ async fn main() -> std::io::Result<()> {
 
     init_default().map_err(std::io::Error::other)?;
 
-    let posts_topic = collection_topic("posts").map_err(std::io::Error::other)?;
-    let posts_list_topic = query_tag_topic("posts:list").map_err(std::io::Error::other)?;
+    let posts_topic = collection_topic(POSTS_COLLECTION).map_err(std::io::Error::other)?;
+    let posts_list_topic = query_tag_topic(POSTS_LIST_QUERY_TAG).map_err(std::io::Error::other)?;
     let live_hub = LiveHub::new(live_backend())
         .allow_topics([posts_topic.clone(), posts_list_topic.clone()])
         .default_topics([posts_topic, posts_list_topic]);
