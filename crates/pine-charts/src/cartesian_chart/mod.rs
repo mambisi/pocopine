@@ -19,10 +19,6 @@ use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 const DEFAULT_WIDTH: f64 = 640.0;
 const DEFAULT_HEIGHT: f64 = 320.0;
-const DEFAULT_MARGIN_TOP: f64 = 16.0;
-const DEFAULT_MARGIN_RIGHT: f64 = 16.0;
-const DEFAULT_MARGIN_BOTTOM: f64 = 32.0;
-const DEFAULT_MARGIN_LEFT: f64 = 40.0;
 const DEFAULT_STROKE_WIDTH: f64 = 3.0;
 const DEFAULT_MARKER_RADIUS: f64 = 3.0;
 const DEFAULT_PADDING_INNER: f64 = 0.2;
@@ -212,14 +208,15 @@ pub struct PineCartesianChart {
 
 impl Default for PineCartesianChart {
     fn default() -> Self {
+        let margins = ChartMargins::default();
         Self {
             label: "Cartesian chart".into(),
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
-            margin_top: DEFAULT_MARGIN_TOP,
-            margin_right: DEFAULT_MARGIN_RIGHT,
-            margin_bottom: DEFAULT_MARGIN_BOTTOM,
-            margin_left: DEFAULT_MARGIN_LEFT,
+            margin_top: margins.top,
+            margin_right: margins.right,
+            margin_bottom: margins.bottom,
+            margin_left: margins.left,
             x_min: None,
             x_max: None,
             y_min: None,
