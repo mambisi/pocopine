@@ -1281,6 +1281,7 @@ fn with_stream_metadata(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod protocol_tests {
     use super::*;
 
