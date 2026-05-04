@@ -14,12 +14,12 @@ pub struct ChartDemo {
     pub pie_shape: String,
     pub line_series: Vec<ChartLineSeries>,
     pub line_legend: Vec<LegendItem>,
-    pub line_primary_label: String,
-    pub line_primary_color: String,
-    pub line_primary_points: Vec<ChartPoint>,
-    pub line_secondary_label: String,
-    pub line_secondary_color: String,
-    pub line_secondary_points: Vec<ChartPoint>,
+    pub combo_bar_label: String,
+    pub combo_bar_color: String,
+    pub combo_bar_data: Vec<ChartBar>,
+    pub combo_line_label: String,
+    pub combo_line_color: String,
+    pub combo_line_data: Vec<ChartBar>,
     pub metro_line_a: Vec<ChartLayerPoint>,
     pub metro_line_b: Vec<ChartLayerPoint>,
     pub metro_line_c: Vec<ChartLayerPoint>,
@@ -51,12 +51,12 @@ impl Default for ChartDemo {
             bar_mode: "grouped".into(),
             pie_shape: "pie".into(),
             line_legend: line_legend_items(&line_series),
-            line_primary_label: line_series[0].label.clone(),
-            line_primary_color: "#1d6fd8".into(),
-            line_primary_points: line_series[0].data.clone(),
-            line_secondary_label: line_series[1].label.clone(),
-            line_secondary_color: "#d96c2c".into(),
-            line_secondary_points: line_series[1].data.clone(),
+            combo_bar_label: line_series[0].label.clone(),
+            combo_bar_color: "#16a085".into(),
+            combo_bar_data: bars_from_points(&line_series[0].data),
+            combo_line_label: line_series[1].label.clone(),
+            combo_line_color: "#d96c2c".into(),
+            combo_line_data: bars_from_points(&line_series[1].data),
             line_series,
             metro_line_a: metro_line_a(),
             metro_line_b: metro_line_b(),
@@ -88,7 +88,7 @@ impl ChartDemo {
         let pie_data = growth_pie_data();
         self.dataset = "growth".into();
         self.line_legend = line_legend_items(&line_series);
-        self.update_composed_line(&line_series, "#1d6fd8", "#d96c2c");
+        self.update_combo_chart(&line_series, "#16a085", "#d96c2c");
         self.line_series = line_series;
         self.area_legend = area_legend_items(&area_series);
         self.area_series = area_series;
@@ -109,7 +109,7 @@ impl ChartDemo {
         let pie_data = latency_pie_data();
         self.dataset = "latency".into();
         self.line_legend = line_legend_items(&line_series);
-        self.update_composed_line(&line_series, "#16a085", "#d96c2c");
+        self.update_combo_chart(&line_series, "#16a085", "#d96c2c");
         self.line_series = line_series;
         self.area_legend = area_legend_items(&area_series);
         self.area_series = area_series;
@@ -156,16 +156,21 @@ impl ChartDemo {
 }
 
 impl ChartDemo {
-    fn update_composed_line(&mut self, series: &[ChartLineSeries], first: &str, second: &str) {
+    fn update_combo_chart(
+        &mut self,
+        series: &[ChartLineSeries],
+        bar_color: &str,
+        line_color: &str,
+    ) {
         if let Some(primary) = series.first() {
-            self.line_primary_label = primary.label.clone();
-            self.line_primary_points = primary.data.clone();
-            self.line_primary_color = first.into();
+            self.combo_bar_label = primary.label.clone();
+            self.combo_bar_data = bars_from_points(&primary.data);
+            self.combo_bar_color = bar_color.into();
         }
         if let Some(secondary) = series.get(1) {
-            self.line_secondary_label = secondary.label.clone();
-            self.line_secondary_points = secondary.data.clone();
-            self.line_secondary_color = second.into();
+            self.combo_line_label = secondary.label.clone();
+            self.combo_line_data = bars_from_points(&secondary.data);
+            self.combo_line_color = line_color.into();
         }
     }
 
@@ -182,6 +187,14 @@ impl ChartDemo {
             self.pie_center_value = pie_total_label(&self.pie_data);
         }
     }
+}
+
+fn bars_from_points(points: &[ChartPoint]) -> Vec<ChartBar> {
+    points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| ChartBar::new(format!("W{}", index + 1), point.y))
+        .collect()
 }
 
 fn growth_points() -> Vec<ChartPoint> {

@@ -29,6 +29,9 @@ their strokes:
 
 Bar charts currently use `grid`, `axes`, then `series`.
 
+Composable Cartesian combo charts use `grid`, `axes`, `bars`, `series`, then
+optional `markers`, so line strokes and point markers paint above bars.
+
 ## Radial Order
 
 Pie and donut charts use:

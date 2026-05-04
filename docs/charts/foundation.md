@@ -58,8 +58,9 @@ formatting inside components.
 
 Line and area charts share one internal Cartesian layout path for numeric
 domains, plot rectangles, linear scales, ticks, grid lines, axis lines, and hover
-placement. That keeps future Cartesian primitives from copying chart math while
-still letting each component own its SVG structure and styling hooks.
+placement. The composable Cartesian root also owns a categorical band-axis path
+for bar/line combos. That keeps future Cartesian primitives from copying chart
+math while still letting each component own its SVG structure and styling hooks.
 
 This module is intentionally crate-private for now. Public components should
 expose stable chart-specific props first; once several primitives need the same

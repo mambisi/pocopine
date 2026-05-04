@@ -95,6 +95,24 @@
               pp-text="y_label"></text>
       </g>
     </g>
+    <g pp-show="ready && show_bars"
+       class="pine-chart-bars"
+       data-layer="bars">
+      <template pp-for="bar in bars" pp-key="bar.key">
+        <rect class="pine-chart-bar"
+              :x="bar.x"
+              :y="bar.y"
+              :width="bar.width"
+              :height="bar.height"
+              :fill="bar.color"
+              role="option"
+              :aria-label="bar.aria_label"
+              :data-key="bar.key"
+              :data-category="bar.category_label"
+              :data-series="bar.series_label"
+              :data-value="bar.value"></rect>
+      </template>
+    </g>
     <g pp-show="ready"
        class="pine-chart-lines"
        data-layer="series"

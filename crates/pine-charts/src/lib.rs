@@ -29,9 +29,10 @@ pub use bar::{
     PineBarChart, SvgBar,
 };
 pub use cartesian_chart::{
-    render_cartesian_chart, CartesianAxisConfig, CartesianChartOptions, CartesianChartRender,
-    CartesianGridConfig, CartesianLineSeriesConfig, CartesianLineSeriesRender,
-    CartesianMarkerRender, PineCartesianChart, PineChartGrid, PineLineSeries, PineXAxis, PineYAxis,
+    render_cartesian_chart, CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig,
+    CartesianChartOptions, CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
+    CartesianLineSeriesRender, CartesianMarkerRender, PineBarSeries, PineCartesianChart,
+    PineChartGrid, PineLineSeries, PineXAxis, PineYAxis,
 };
 pub use error::{ChartError, ChartResult};
 pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
@@ -64,6 +65,7 @@ pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 pub fn register_all() {
     PineAreaChart::register();
     PineBarChart::register();
+    PineBarSeries::register();
     PineCartesianChart::register();
     PineChartGuide::register();
     PineChartGrid::register();
