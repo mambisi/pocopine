@@ -118,9 +118,8 @@ fn on_click(&self) {
 ```
 
 `self.plugin::<T>()` is the required form and panics with the same missing
-service message as the lifecycle extractor. `self.optional_plugin::<T>()` and
-`self.plugins().get::<T>()` are the optional forms. `self.ctx().plugins()` is
-available when a method wants to pass a component context to helper code.
+service message as the lifecycle extractor. `self.plugins().get::<T>()` is the
+optional form.
 
 ### Component-Owned Capability Opt-In
 

@@ -79,9 +79,8 @@ pub use lifecycle::{
 pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
 pub use plugin::{
-    optional_plugin, require_plugin, ComponentCtx, ComponentEvent, ComponentMounted,
-    ComponentPluginExt, ComponentReady, ComponentSetup, ComponentUnmounted, ForComponent, Hook,
-    Plugin, Plugins,
+    ComponentEvent, ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup,
+    ComponentUnmounted, ForComponent, Hook, Plugin, Plugins,
 };
 pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,

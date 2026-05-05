@@ -245,9 +245,8 @@ fn on_click(&self) {
 ```
 
 `self.plugin::<T>()` is the required form and panics with the same missing
-service message as the lifecycle extractor. `self.optional_plugin::<T>()` and
-`self.plugins().get::<T>()` are the optional forms. `self.ctx().plugins()` is
-available when a method wants to pass a component context to helper code.
+service message as the lifecycle extractor. `self.plugins().get::<T>()` is the
+optional form.
 
 Reusable component families should usually own their integration through these
 extractors. For example, a CTA tracking plugin provides `CtaTracking` once, and
@@ -381,9 +380,8 @@ The first slice ships:
 - `App::hook_plugin`;
 - `App::hook_component_plugin`;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
-- `self.plugin::<T>()`, `self.optional_plugin::<T>()`, `self.plugins()`, and
-  `self.ctx()` component-owned plugin accessors for ordinary component methods
-  and DOM event handlers;
+- `self.plugin::<T>()` and `self.plugins().get::<T>()` component-owned plugin
+  accessors for ordinary component methods and DOM event handlers;
 - `Hook<E>` framework-event dispatch;
 - `Hook<ForComponent<C, E>>` component-filtered dispatch;
 - `ComponentSetup` / `ComponentMounted` / `ComponentReady` /
