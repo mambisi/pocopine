@@ -102,7 +102,7 @@ impl AppPluginCtaButton {
     }
 
     pub fn track_click(&self) {
-        if let Some(cta) = optional_plugin::<CtaTracking>() {
+        if let Some(cta) = self.plugins().get::<CtaTracking>() {
             cta.click("cta");
         }
     }
