@@ -78,7 +78,10 @@ pub use lifecycle::{
 };
 pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
-pub use plugin::{ComponentMounted, ComponentUnmounted, Hook, Plugin};
+pub use plugin::{
+    ComponentEvent, ComponentMounted, ComponentReady, ComponentSetup, ComponentUnmounted,
+    ForComponent, Hook, Plugin,
+};
 pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,
 };
@@ -88,11 +91,11 @@ pub use reactive::{
     SIGNAL_SCOPE,
 };
 pub use registry::{
-    assert_registry_clean, mark_registered, register_component, register_component_as,
-    register_component_prefixed, register_component_with_mount, registered_component_names,
-    registry_errors, render_boot_error, verify_registry, ComponentCtor, ComponentEntry,
-    ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError, RegistryErrorKind,
-    COMPONENT_ENTRIES,
+    assert_registry_clean, canonical_component_name, mark_registered, register_component,
+    register_component_as, register_component_prefixed, register_component_with_mount,
+    registered_component_names, registry_errors, render_boot_error, verify_registry, ComponentCtor,
+    ComponentEntry, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
+    RegistryErrorKind, COMPONENT_ENTRIES,
 };
 pub use router::{navigate, register_route};
 pub use scope::{

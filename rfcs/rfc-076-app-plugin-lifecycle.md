@@ -238,9 +238,21 @@ The optional extractor returns `None` when the service is not installed.
 Runtime services can implement typed hook traits for framework events:
 
 ```rust
+impl Hook<ComponentSetup> for Analytics {
+    fn call(&self, event: ComponentSetup) {
+        self.track_component_setup(event.component);
+    }
+}
+
 impl Hook<ComponentMounted> for Analytics {
     fn call(&self, event: ComponentMounted) {
         self.track_component_mount(event.component, event.duration_ms);
+    }
+}
+
+impl Hook<ComponentReady> for Analytics {
+    fn call(&self, event: ComponentReady) {
+        self.track_component_ready(event.component);
     }
 }
 
@@ -257,15 +269,40 @@ Installers opt into those dispatch paths explicitly:
 impl AppPlugin for AnalyticsPlugin {
     fn install(self, app: App) -> App {
         app.provide_plugin(Analytics::new(self.config))
+            .hook_plugin::<Analytics, ComponentSetup>()
             .hook_plugin::<Analytics, ComponentMounted>()
+            .hook_plugin::<Analytics, ComponentReady>()
             .hook_plugin::<Analytics, ComponentUnmounted>()
     }
 }
 ```
 
+Component-specific hooks use a typed wrapper:
+
+```rust
+impl Hook<ForComponent<CheckoutPage, ComponentMounted>> for Analytics {
+    fn call(&self, event: ForComponent<CheckoutPage, ComponentMounted>) {
+        self.track_checkout_mount(event.duration_ms);
+    }
+}
+
+impl AppPlugin for AnalyticsPlugin {
+    fn install(self, app: App) -> App {
+        app.provide_plugin(Analytics::new(self.config))
+            .hook_component_plugin::<Analytics, CheckoutPage, ComponentMounted>()
+    }
+}
+```
+
+The component filter is type-level at the plugin boundary. Core still emits a
+canonical component name internally, and `hook_component_plugin` performs the
+match before invoking `Hook<ForComponent<C, E>>`.
+
 The first framework events are:
 
+- `ComponentSetup { component, scope_id }`;
 - `ComponentMounted { component, scope_id, duration_ms }`;
+- `ComponentReady { component, scope_id }`;
 - `ComponentUnmounted { component, scope_id }`.
 
 Core emits these from the compiled mount/release path. Plugins decide whether
@@ -292,9 +329,12 @@ The first slice ships:
 - `App::plugin`;
 - `App::provide_plugin`;
 - `App::hook_plugin`;
+- `App::hook_component_plugin`;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
 - `Hook<E>` framework-event dispatch;
-- `ComponentMounted` / `ComponentUnmounted` events;
+- `Hook<ForComponent<C, E>>` component-filtered dispatch;
+- `ComponentSetup` / `ComponentMounted` / `ComponentReady` /
+  `ComponentUnmounted` events;
 - hidden `App::component_static` for `app!{}` manifest metadata;
 - `pocopine::AppPlugin` and prelude re-exports;
 - `app! { plugins: [...] }`;

@@ -225,7 +225,8 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         return;
     };
     let has_ready = scope.state.borrow().has_on_ready();
-    if !has_ready {
+    let has_plugin_ready = crate::plugin::has_hooks::<crate::plugin::ComponentReady>();
+    if !has_ready && !has_plugin_ready {
         return;
     }
     let el_owned = el.clone();
@@ -233,6 +234,13 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         let Some(scope) = Scope::find(scope_id) else {
             return;
         };
+        crate::plugin::emit(crate::plugin::ComponentReady {
+            component: component_name_for(&el_owned),
+            scope_id,
+        });
+        if !has_ready {
+            return;
+        }
         let ctx = crate::lifecycle::LifecycleContext::__new(
             &el_owned,
             scope_id,
@@ -294,6 +302,7 @@ fn mount_component(
     // Apply static props BEFORE building the proxy so trigger doesn't fire
     // before any effect subscribes.
     apply_static_props(el, &scope);
+    fire_component_setup_plugin_hooks(tag, scope.id);
     // RFC-030: fire `on_setup` — the component's pre-children-walk
     // hook where fields can be initialised from injected context.
     // Runs with CURRENT_SCOPE_ID bound so `inject` / `this` resolve.
@@ -340,7 +349,11 @@ fn mount_component(
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
-        set_private(&root, COMPONENT_NAME_KEY, &JsValue::from_str(tag));
+        set_private(
+            &root,
+            COMPONENT_NAME_KEY,
+            &JsValue::from_str(&canonical_component_name(tag)),
+        );
         set_private(
             &root,
             MOUNT_START_MS_KEY,
@@ -463,6 +476,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         crate::context::set_parent(scope.id, parent_id);
     }
     apply_static_props(el, &scope);
+    fire_component_setup_plugin_hooks(tag, scope.id);
     if scope.state.borrow().has_setup() {
         let setup_ctx = crate::lifecycle::LifecycleContext::__new(
             el,
@@ -514,7 +528,11 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         &JsValue::from_f64(scope.id.0 as f64),
     );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
-    set_private(&user_root, COMPONENT_NAME_KEY, &JsValue::from_str(tag));
+    set_private(
+        &user_root,
+        COMPONENT_NAME_KEY,
+        &JsValue::from_str(&canonical_component_name(tag)),
+    );
     set_private(
         &user_root,
         MOUNT_START_MS_KEY,
@@ -1518,11 +1536,29 @@ fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
     });
 }
 
+fn fire_component_setup_plugin_hooks(tag: &str, scope_id: ScopeId) {
+    crate::plugin::emit(crate::plugin::ComponentSetup {
+        component: canonical_component_name(tag),
+        scope_id,
+    });
+}
+
 fn component_name_for(el: &Element) -> String {
-    get_private(el, COMPONENT_NAME_KEY)
-        .and_then(|value| value.as_string())
-        .or_else(|| el.parent_element().map(|parent| parent.local_name()))
-        .unwrap_or_else(|| el.local_name())
+    if let Some(component) = get_private(el, COMPONENT_NAME_KEY).and_then(|value| value.as_string())
+    {
+        return component;
+    }
+    let fallback = el
+        .parent_element()
+        .map(|parent| parent.local_name())
+        .unwrap_or_else(|| el.local_name());
+    canonical_component_name(&fallback)
+}
+
+fn canonical_component_name(name: &str) -> String {
+    crate::registry::canonical_component_name(name)
+        .unwrap_or(name)
+        .to_string()
 }
 
 fn get_private(el: &Element, key: &str) -> Option<JsValue> {

@@ -357,6 +357,21 @@ pub fn mount_template_for(name: &str) -> Option<ComponentMountFn> {
     })
 }
 
+pub fn canonical_component_name(name: &str) -> Option<&'static str> {
+    REGISTRY.with(|r| {
+        let reg = r.borrow();
+        if let Some(entry) = reg.canonical.get(name) {
+            return Some(entry.canonical);
+        }
+        if let Some(&(canon, _)) = reg.aliases.get(name) {
+            if let Some(entry) = reg.canonical.get(canon) {
+                return Some(entry.canonical);
+            }
+        }
+        None
+    })
+}
+
 /// Snapshot of every collision recorded so far.
 pub fn registry_errors() -> Vec<RegistryError> {
     REGISTRY.with(|r| r.borrow().errors.clone())
