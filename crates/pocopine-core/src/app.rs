@@ -280,6 +280,7 @@ impl App {
             devtools,
         } = self;
         let boot_start_ms = js_sys::Date::now();
+        clear_existing_boot_errors();
         if let Err(errors) = plugins.validate() {
             crate::plugin::render_plugin_boot_error(&errors);
             return;
@@ -384,6 +385,10 @@ impl App {
     /// mounts it onto `host`. Returns a [`SubtreeHandle`] whose
     /// `unmount()` tears down the scope tree + lifecycle hooks
     /// + DOM cleanly.
+    ///
+    /// Subtree mounts inherit plugins from the most recent [`App::run`].
+    /// If no app has run, `Plugin<T>` extractors observe an empty registry
+    /// and `Option<Plugin<T>>` extractors return `None`.
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
         mount::mount_child_component(host, C::NAME);
@@ -391,6 +396,22 @@ impl App {
         SubtreeHandle {
             host: host.clone(),
             active: true,
+        }
+    }
+}
+
+fn clear_existing_boot_errors() {
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Ok(nodes) = doc.query_selector_all("[data-pocopine-boot-error]") else {
+        return;
+    };
+    for i in 0..nodes.length() {
+        let Some(node) = nodes.item(i) else {
+            continue;
+        };
+        if let Some(el) = node.dyn_ref::<Element>() {
+            el.remove();
         }
     }
 }

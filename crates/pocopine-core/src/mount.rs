@@ -234,10 +234,12 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         let Some(scope) = Scope::find(scope_id) else {
             return;
         };
-        crate::plugin::emit(crate::plugin::ComponentReady {
-            component: component_name_for(&el_owned),
-            scope_id,
-        });
+        if has_plugin_ready {
+            crate::plugin::emit(crate::plugin::ComponentReady {
+                component: component_name_for(&el_owned),
+                scope_id,
+            });
+        }
         if !has_ready {
             return;
         }
@@ -1514,6 +1516,9 @@ fn set_private(el: &Element, key: &str, value: &JsValue) {
 }
 
 fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
+    if !crate::plugin::has_hooks::<crate::plugin::ComponentMounted>() {
+        return;
+    }
     if get_private(el, COMPONENT_MOUNT_EVENT_FIRED_KEY)
         .map(|v| v.is_truthy())
         .unwrap_or(false)
@@ -1537,6 +1542,9 @@ fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
 }
 
 fn fire_component_setup_plugin_hooks(tag: &str, scope_id: ScopeId) {
+    if !crate::plugin::has_hooks::<crate::plugin::ComponentSetup>() {
+        return;
+    }
     crate::plugin::emit(crate::plugin::ComponentSetup {
         component: canonical_component_name(tag),
         scope_id,
@@ -1548,11 +1556,11 @@ fn component_name_for(el: &Element) -> String {
     {
         return component;
     }
-    let fallback = el
-        .parent_element()
-        .map(|parent| parent.local_name())
-        .unwrap_or_else(|| el.local_name());
-    canonical_component_name(&fallback)
+    debug_assert!(
+        get_private(el, COMPONENT_NAME_KEY).is_some(),
+        "mounted component root missing private component name"
+    );
+    canonical_component_name(&el.local_name())
 }
 
 fn canonical_component_name(name: &str) -> String {

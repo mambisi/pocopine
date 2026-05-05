@@ -96,6 +96,8 @@ This is now a blocking foundation for:
 - No async plugin installation in the first slice.
 - No dependency injection container for plugins.
 - No plugin priority system beyond explicit app order.
+- No unhook/removal API; installed services and hooks live for the active app
+  lifetime.
 - No lifecycle hook for every component mount; component lifecycle remains the
   `#[handlers]` / runtime lifecycle surface.
 - No network exporter or vendor-specific observability package in this RFC.
@@ -153,7 +155,7 @@ impl pocopine::AppPlugin for ObservabilityPlugin {
 Reusable plugins should override `name()` with a stable crate-level name. Core
 uses it for duplicate-service diagnostics, missing-service boot errors, logs,
 devtools, and future ordering checks. App-local closures keep the default Rust
-type name.
+type name, and that closure type name is what appears in diagnostics.
 
 ### 5.2 Builder order
 
@@ -228,6 +230,9 @@ component filter when present.
 
 This RFC deliberately does not add declarative plugin dependencies or
 topological sorting. The app's plugin order remains the only ordering rule.
+Hooks for the same event dispatch in registration order: app plugin install
+order first, then each plugin's internal `hook_plugin` /
+`hook_component_plugin` call order.
 
 If a plugin installs a hook and that hook panics, it follows the existing hook
 behavior. This RFC does not introduce hook isolation. Integrations that need
@@ -285,6 +290,11 @@ fn on_click(&self) {
 `self.plugin::<T>()` is the required form and panics with the same missing
 service message as the lifecycle extractor. `self.plugins().get::<T>()` is the
 optional form.
+
+Plugin lookups read the active app plugin registry. They are meaningful after
+`App::run()` has activated plugins. A subtree mounted before any app has run
+observes an empty registry: required lookups panic and optional lookups return
+`None`.
 
 Reusable component families should usually own their integration through these
 extractors. For example, a CTA tracking plugin provides `CtaTracking` once, and
@@ -405,6 +415,10 @@ Route events include the current URL path and, when matching succeeds, the
 static route pattern. Observability integrations should prefer the route
 pattern for aggregate analytics and treat raw paths as potentially
 identifying.
+
+`AppBootCompleted.duration_ms` measures synchronous boot through root mount and
+post-mount scheduling. It excludes the deferred execution time of
+`after_mount` callbacks.
 
 ## 6. Privacy and Reliability
 

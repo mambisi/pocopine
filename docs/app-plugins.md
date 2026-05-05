@@ -79,8 +79,8 @@ hooks.
 `name()` is optional, but reusable plugin crates should override it with a
 stable name. Core uses the name in duplicate-service panics, boot diagnostics,
 devtools, logs, and future ordering checks. Closures default to their Rust type
-name, which is useful enough for app-local plugins but noisy for published
-integrations.
+name, and that closure type name is what appears in diagnostics. That is
+useful enough for app-local plugins but noisy for published integrations.
 
 ## Runtime Services
 
@@ -134,6 +134,12 @@ fn on_click(&self) {
 `self.plugin::<T>()` is the required form and panics with the same missing
 service message as the lifecycle extractor. `self.plugins().get::<T>()` is the
 optional form.
+
+These lookups read the active app plugin registry. They are meaningful after
+`App::run()` has activated plugins, including inside lifecycle hooks, DOM
+event handlers, and subtree mounts created after app boot. If a test or host
+page calls `App::mount_subtree::<C>()` before any app has run, required plugin
+lookups panic and optional lookups return `None`.
 
 ### Component-Owned Capability Opt-In
 
@@ -307,6 +313,11 @@ App::new()
     .run();
 ```
 
+Hooks for the same event run in registration order. For direct builder code,
+that is the order `hook_plugin` / `hook_component_plugin` calls are made. For
+multiple installed plugins, it follows app plugin installation order and then
+each plugin's internal hook registration order.
+
 ## Lifecycle Order
 
 Direct `App` builder calls run in the order the app writes them:
@@ -406,6 +417,10 @@ when one exists. Observability plugins should prefer `route_pattern` for
 aggregate analytics and treat `path` as potentially identifying, because apps
 often encode IDs in route segments.
 
+`AppBootCompleted.duration_ms` measures synchronous boot through root mount and
+post-mount scheduling. It does not include execution time for deferred
+`after_mount` callbacks.
+
 ## `app!` Macro Order
 
 Compiled apps can install plugins through `plugins: [...]`:
@@ -461,6 +476,9 @@ Plugins should not:
 Plugin installation is synchronous. If a plugin needs async setup, it should
 spawn its own task or install a lifecycle hook that starts the work at the right
 time.
+
+There is no unhook/removal API. Installed plugin services and hooks live for
+the active app lifetime; dynamic plugin loading and unloading are out of scope.
 
 ## Observability Shape
 

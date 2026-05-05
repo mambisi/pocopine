@@ -443,6 +443,7 @@ pub fn render_boot_error(errors: &[RegistryError]) {
     let Ok(banner) = doc.create_element("div") else {
         return;
     };
+    let _ = banner.set_attribute("data-pocopine-boot-error", "registry");
     let _ = banner.set_attribute(
         "style",
         "position:fixed;inset:0;background:#1b1b1f;color:#f5f5f7;\
