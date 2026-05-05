@@ -58,6 +58,9 @@ const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
 const WALKED_KEY: &str = "__pp_walked";
+const COMPONENT_NAME_KEY: &str = "__pp_component_name";
+const MOUNT_START_MS_KEY: &str = "__pp_mount_start_ms";
+const COMPONENT_MOUNT_EVENT_FIRED_KEY: &str = "__pp_component_mount_event_fired";
 /// Stamped on row clones whose scope + row-instance state has
 /// been torn down synchronously by the RFC 054 bulk-clear path.
 /// `release_subtree` checks this first and returns immediately,
@@ -184,6 +187,7 @@ pub fn fire_mount_post_order(el: &Element, scope_id: ScopeId) {
     let Some(scope) = Scope::find(scope_id) else {
         return;
     };
+    fire_component_mounted_plugin_hooks(el, scope_id);
     let has_mount = scope.state.borrow().has_on_mount();
     if !has_mount {
         return;
@@ -257,6 +261,7 @@ fn mount_component(
     if get_private(el, "__pp_mounted").is_some() {
         return;
     }
+    let mount_start_ms = js_sys::Date::now();
 
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
@@ -335,6 +340,12 @@ fn mount_component(
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
+        set_private(&root, COMPONENT_NAME_KEY, &JsValue::from_str(tag));
+        set_private(
+            &root,
+            MOUNT_START_MS_KEY,
+            &JsValue::from_f64(mount_start_ms),
+        );
         let _ = root.remove_attribute("data-pp-scope-id");
 
         // Fallthrough (RFC-010).
@@ -430,6 +441,7 @@ pub fn mount_child_component_with_slots(
 /// template root isn't a simple `<tag><slot></slot></tag>` wrapper)
 /// — caller falls back to the normal mount path.
 fn try_mount_component_as(el: &Element, tag: &str) -> bool {
+    let mount_start_ms = js_sys::Date::now();
     let user_root = match find_single_child_element_skipping_slot_templates(el) {
         Some(e) => e,
         None => {
@@ -502,6 +514,12 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         &JsValue::from_f64(scope.id.0 as f64),
     );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
+    set_private(&user_root, COMPONENT_NAME_KEY, &JsValue::from_str(tag));
+    set_private(
+        &user_root,
+        MOUNT_START_MS_KEY,
+        &JsValue::from_f64(mount_start_ms),
+    );
     let _ = user_root.remove_attribute("data-pp-scope-id");
 
     let plan_root = pp_as_render_root(&user_root);
@@ -1454,6 +1472,10 @@ fn release_subtree_inner(node: &Node) {
                         scope.state.borrow_mut().unmount(unmount_ctx);
                     });
                 }
+                crate::plugin::emit(crate::plugin::ComponentUnmounted {
+                    component: component_name_for(&el),
+                    scope_id,
+                });
                 Scope::remove(scope_id);
                 crate::lifecycle::__clear_mount_epoch(scope_id);
             }
@@ -1471,6 +1493,36 @@ fn release_subtree_inner(node: &Node) {
 
 fn set_private(el: &Element, key: &str, value: &JsValue) {
     let _ = Reflect::set(el.as_ref(), &key.into(), value);
+}
+
+fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
+    if get_private(el, COMPONENT_MOUNT_EVENT_FIRED_KEY)
+        .map(|v| v.is_truthy())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    set_private(el, COMPONENT_MOUNT_EVENT_FIRED_KEY, &JsValue::TRUE);
+    let start_ms = get_private(el, MOUNT_START_MS_KEY)
+        .and_then(|value| value.as_f64())
+        .unwrap_or_else(js_sys::Date::now);
+    let elapsed = js_sys::Date::now() - start_ms;
+    crate::plugin::emit(crate::plugin::ComponentMounted {
+        component: component_name_for(el),
+        scope_id,
+        duration_ms: if elapsed.is_finite() && elapsed >= 0.0 {
+            elapsed
+        } else {
+            0.0
+        },
+    });
+}
+
+fn component_name_for(el: &Element) -> String {
+    get_private(el, COMPONENT_NAME_KEY)
+        .and_then(|value| value.as_string())
+        .or_else(|| el.parent_element().map(|parent| parent.local_name()))
+        .unwrap_or_else(|| el.local_name())
 }
 
 fn get_private(el: &Element, key: &str) -> Option<JsValue> {

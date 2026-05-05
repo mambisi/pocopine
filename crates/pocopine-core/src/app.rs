@@ -90,6 +90,7 @@ pub struct App {
     routes: Vec<&'static str>,
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
+    plugins: crate::plugin::PluginRegistry,
     devtools: bool,
 }
 
@@ -120,6 +121,30 @@ impl App {
     /// this over asking applications to patch core startup logic.
     pub fn plugin<P: AppPlugin>(self, plugin: P) -> Self {
         plugin.install(self)
+    }
+
+    /// Provide a typed runtime service to component lifecycle hooks and
+    /// framework plugin hooks.
+    ///
+    /// Components extract this service with `Plugin<T>` or
+    /// `Option<Plugin<T>>` from `on_setup`, `on_mount`, `on_ready`, and
+    /// `on_unmount`.
+    pub fn provide_plugin<T: 'static>(mut self, service: T) -> Self {
+        self.plugins.provide(service);
+        self
+    }
+
+    /// Dispatch framework event `E` to the installed plugin service `T`.
+    ///
+    /// `T` must have been provided with [`Self::provide_plugin`] and must
+    /// implement [`crate::Hook<E>`].
+    pub fn hook_plugin<T, E>(mut self) -> Self
+    where
+        T: crate::plugin::Hook<E> + 'static,
+        E: Clone + 'static,
+    {
+        self.plugins.hook_plugin::<T, E>();
+        self
     }
 
     /// Register a route. `pattern` is a path with optional `:name`
@@ -213,6 +238,16 @@ impl App {
     /// when collisions exist the boot error surface is rendered and
     /// no further mount work runs.
     pub fn run(self) {
+        let Self {
+            components: _,
+            stores: _,
+            routes,
+            before_mount,
+            after_mount,
+            plugins,
+            devtools,
+        } = self;
+        crate::plugin::activate(plugins);
         if let Err(errors) = crate::registry::verify_registry() {
             crate::registry::render_boot_error(&errors);
             return;
@@ -222,7 +257,7 @@ impl App {
         // the preset atoms live earlier in the cascade and
         // component styles still win on specificity ties.
         crate::animate::install();
-        for f in self.before_mount {
+        for f in before_mount {
             f();
         }
         // RFC 061 Phase 2 — discover the [pp-app] root and mount
@@ -241,16 +276,16 @@ impl App {
             render_missing_pp_app_root();
             return;
         }
-        if !self.routes.is_empty() {
+        if !routes.is_empty() {
             router::init();
         }
         #[cfg(feature = "devtools")]
-        if self.devtools {
+        if devtools {
             crate::devtools::install();
         }
         #[cfg(not(feature = "devtools"))]
-        let _ = self.devtools;
-        let after = self.after_mount;
+        let _ = devtools;
+        let after = after_mount;
         if !after.is_empty() {
             spawn_local(async move {
                 let _ = js_sys::Promise::resolve(&JsValue::NULL);
@@ -291,6 +326,7 @@ impl App {
     pub fn mount_subtree<C: Component>(host: &Element) -> SubtreeHandle {
         C::register();
         mount::mount_child_component(host, C::NAME);
+        mount::finalize_compiled_subtree(host);
         SubtreeHandle {
             host: host.clone(),
             active: true,
