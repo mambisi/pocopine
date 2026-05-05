@@ -105,7 +105,8 @@ pub struct AppBootStarted {
 }
 
 /// Emitted once initial app boot has mounted the root and scheduled
-/// post-mount work.
+/// post-mount work. `duration_ms` covers synchronous boot only; deferred
+/// `after_mount` callbacks are not included.
 #[derive(Clone, Debug)]
 pub struct AppBootCompleted {
     pub duration_ms: f64,

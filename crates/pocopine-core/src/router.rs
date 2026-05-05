@@ -226,15 +226,18 @@ pub fn route_proxy() -> JsValue {
 fn mount_current() {
     ensure_route_scope();
 
-    let start_ms = js_sys::Date::now();
+    let has_route_hooks = has_route_plugin_hooks();
+    let start_ms = has_route_hooks.then(js_sys::Date::now);
     let Some(win) = web_sys::window() else {
-        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-            path: String::new(),
-            route_pattern: None,
-            component: None,
-            reason: "missing_window".to_string(),
-            duration_ms: 0.0,
-        });
+        if has_route_hooks {
+            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                path: String::new(),
+                route_pattern: None,
+                component: None,
+                reason: "missing_window".to_string(),
+                duration_ms: 0.0,
+            });
+        }
         return;
     };
     let loc = win.location();
@@ -242,12 +245,14 @@ fn mount_current() {
     let search = loc.search().unwrap_or_default();
 
     // Match.
-    let (component_name, route_pattern, params) = match_route(&path);
-    crate::plugin::emit(crate::plugin::RouteNavigationStarted {
-        path: path.clone(),
-        route_pattern: route_pattern.clone(),
-        component: component_name.map(str::to_string),
-    });
+    let (component_name, route_pattern, params) = match_route(&path, has_route_hooks);
+    if has_route_hooks {
+        crate::plugin::emit(crate::plugin::RouteNavigationStarted {
+            path: path.clone(),
+            route_pattern: route_pattern.clone(),
+            component: component_name.map(str::to_string),
+        });
+    }
 
     // Update the route state and trigger subscribers (bindings reading
     // `$route.*` re-run).
@@ -273,12 +278,14 @@ fn mount_current() {
     crate::devtools::hooks::fire_route_change(&path, &params);
 
     let Some(name) = component_name else {
-        crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-            path,
-            route_pattern,
-            component: None,
-            duration_ms: elapsed_since(start_ms),
-        });
+        if has_route_hooks {
+            crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+                path,
+                route_pattern,
+                component: None,
+                duration_ms: elapsed_since(start_ms),
+            });
+        }
         return;
     };
 
@@ -287,23 +294,27 @@ fn mount_current() {
     // scope cleanup via `mount::release_subtree`.
     let outlet = OUTLET.with(|o| o.borrow().clone());
     let Some(outlet) = outlet else {
-        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-            path,
-            route_pattern,
-            component: Some(name.to_string()),
-            reason: "missing_outlet".to_string(),
-            duration_ms: elapsed_since(start_ms),
-        });
+        if has_route_hooks {
+            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                path,
+                route_pattern,
+                component: Some(name.to_string()),
+                reason: "missing_outlet".to_string(),
+                duration_ms: elapsed_since(start_ms),
+            });
+        }
         return;
     };
     let Some(doc) = win.document() else {
-        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-            path,
-            route_pattern,
-            component: Some(name.to_string()),
-            reason: "missing_document".to_string(),
-            duration_ms: elapsed_since(start_ms),
-        });
+        if has_route_hooks {
+            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                path,
+                route_pattern,
+                component: Some(name.to_string()),
+                reason: "missing_document".to_string(),
+                duration_ms: elapsed_since(start_ms),
+            });
+        }
         return;
     };
 
@@ -311,13 +322,15 @@ fn mount_current() {
     let el = match doc.create_element(name) {
         Ok(e) => e,
         Err(_) => {
-            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                path,
-                route_pattern,
-                component: Some(name.to_string()),
-                reason: "create_element_failed".to_string(),
-                duration_ms: elapsed_since(start_ms),
-            });
+            if has_route_hooks {
+                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                    path,
+                    route_pattern,
+                    component: Some(name.to_string()),
+                    reason: "create_element_failed".to_string(),
+                    duration_ms: elapsed_since(start_ms),
+                });
+            }
             return;
         }
     };
@@ -332,17 +345,20 @@ fn mount_current() {
     // the macro-emitted entries.
     mount::mount_child_component(&el, name);
     mount::finalize_compiled_subtree(&el);
-    crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-        path,
-        route_pattern,
-        component: Some(name.to_string()),
-        duration_ms: elapsed_since(start_ms),
-    });
+    if has_route_hooks {
+        crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+            path,
+            route_pattern,
+            component: Some(name.to_string()),
+            duration_ms: elapsed_since(start_ms),
+        });
+    }
 }
 
 /// Find the first matching route's component name + params.
 fn match_route(
     path: &str,
+    include_pattern: bool,
 ) -> (
     Option<&'static str>,
     Option<String>,
@@ -355,7 +371,7 @@ fn match_route(
             if let Some(params) = route.match_path(path) {
                 return (
                     Some(route.component_name),
-                    Some(route.pattern.clone()),
+                    include_pattern.then(|| route.pattern.clone()),
                     params,
                 );
             }
@@ -364,7 +380,7 @@ fn match_route(
             if let Some(params) = route.match_path(path) {
                 return (
                     Some(route.component_name),
-                    Some(route.pattern.clone()),
+                    include_pattern.then(|| route.pattern.clone()),
                     params,
                 );
             }
@@ -373,7 +389,14 @@ fn match_route(
     })
 }
 
-fn elapsed_since(start_ms: f64) -> f64 {
+fn has_route_plugin_hooks() -> bool {
+    crate::plugin::has_hooks::<crate::plugin::RouteNavigationStarted>()
+        || crate::plugin::has_hooks::<crate::plugin::RouteNavigationCompleted>()
+        || crate::plugin::has_hooks::<crate::plugin::RouteNavigationFailed>()
+}
+
+fn elapsed_since(start_ms: Option<f64>) -> f64 {
+    let Some(start_ms) = start_ms else { return 0.0 };
     let elapsed = js_sys::Date::now() - start_ms;
     if elapsed.is_finite() && elapsed >= 0.0 {
         elapsed
