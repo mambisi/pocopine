@@ -15,11 +15,20 @@ validation.
                    label="Actual"
                    color="#16a085"
                    pp-bind:data="actual"></pine-bar-series>
+  <pine-area-series key="band"
+                    label="Trend band"
+                    fill="#1d6fd833"
+                    color="#1d6fd8"
+                    pp-bind:points="band"></pine-area-series>
   <pine-line-series key="target"
                     label="Target"
                     color="#1d6fd8"
                     show_markers="true"
                     pp-bind:data="target"></pine-line-series>
+  <pine-scatter-series key="samples"
+                       label="Samples"
+                       color="#5b6ee1"
+                       pp-bind:points="samples"></pine-scatter-series>
 </pine-cartesian-chart>
 ```
 
@@ -36,6 +45,9 @@ namespace handling, responsive sizing, scales, and paint order in one place.
 - `pine-line-series`: registers one line series from numeric `Vec<ChartPoint>`
   or categorical `Vec<ChartBar>`.
 - `pine-bar-series`: registers one categorical bar series from `Vec<ChartBar>`.
+- `pine-area-series`: registers one numeric area series from `Vec<ChartPoint>`.
+- `pine-scatter-series`: registers one numeric scatter series from
+  `Vec<ChartPoint>`.
 
 `pine-line-chart` and `pine-bar-chart` remain the presets for simple dashboards. Use
 `pine-cartesian-chart` when the chart needs explicit child composition or when a
@@ -76,9 +88,12 @@ let target = vec![
 ];
 ```
 
-## Current Scope
+Area and scatter children use numeric `ChartPoint` data. In a categorical combo
+chart, their `x` values are treated as zero-based category positions, so
+`ChartPoint::new(0.0, value)` lands on the first category and
+`ChartPoint::new(1.5, value)` lands halfway between the second and third
+category centers.
 
-This phase supports numeric line charts and categorical bar/line combo charts.
-Area, scatter, references, and annotations should join this root in follow-up
-phases so the preset components and the composable root share the same geometry
-contracts.
+Reference marks and free-form annotations still belong to `pine-layer-chart`.
+Use the Cartesian root when the chart needs shared axes and scales; use the
+layered root when the app needs absolute SVG composition.

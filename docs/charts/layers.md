@@ -29,8 +29,10 @@ their strokes:
 
 Bar charts currently use `grid`, `axes`, then `series`.
 
-Composable Cartesian combo charts use `grid`, `axes`, `bars`, `series`, then
-optional `markers`, so line strokes and point markers paint above bars.
+Composable Cartesian combo charts use `grid`, `axes`, `bars`, `area`,
+`series`, `points`, then optional `markers`, so area fills stay behind line
+strokes, scatter points paint above lines, and line markers can still sit on
+top.
 
 ## Radial Order
 

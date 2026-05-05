@@ -1,0 +1,4 @@
+<root class="pine-chart-definition pine-scatter-series-definition"
+      hidden
+      aria-hidden="true"
+      :data-key="component_key"></root>
