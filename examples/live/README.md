@@ -19,3 +19,7 @@ refreshes the other through the SSE stream.
 This example uses `MemoryEventBackend`, so it is intentionally
 single-process. Switch the hub construction to the Redis backend when the
 app needs multiple server processes.
+
+The tutorial for wiring this pattern into an app lives in
+[`docs/live.md`](../../docs/live.md). Keep that tutorial, this example,
+and `tests/live_refresh.rs` updated together when the live API changes.
