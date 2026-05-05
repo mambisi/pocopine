@@ -29,10 +29,11 @@ their strokes:
 
 Bar charts currently use `grid`, `axes`, then `series`.
 
-Composable Cartesian combo charts use `grid`, `axes`, `bars`, `area`,
-`series`, `points`, then optional `markers`, so area fills stay behind line
-strokes, scatter points paint above lines, and line markers can still sit on
-top.
+Composable Cartesian combo charts use `grid`, `axes`,
+`reference-background`, `bars`, `area`, `series`, `points`, optional
+`markers`, `reference-foreground`, then `labels`. Background references can sit
+behind data marks, area fills stay behind line strokes, scatter points paint
+above lines, and foreground references plus labels stay readable.
 
 ## Radial Order
 

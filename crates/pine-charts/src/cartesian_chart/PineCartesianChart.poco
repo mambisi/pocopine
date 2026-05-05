@@ -95,6 +95,37 @@
               pp-text="y_label"></text>
       </g>
     </g>
+    <g pp-show="ready && show_reference_background"
+       class="pine-chart-reference pine-chart-reference-background"
+       data-layer="reference-background">
+      <template pp-for="line in reference_background_lines" pp-key="line.key">
+        <line class="pine-chart-reference-line"
+              :x1="line.x1"
+              :y1="line.y1"
+              :x2="line.x2"
+              :y2="line.y2"
+              :stroke="line.color"
+              :stroke-width="line.stroke_width"
+              :stroke-dasharray="line.stroke_dasharray"
+              stroke-linecap="round"
+              vector-effect="non-scaling-stroke"
+              :data-label="line.label"
+              :aria-label="line.aria_label"></line>
+      </template>
+      <template pp-for="dot in reference_background_dots" pp-key="dot.key">
+        <circle class="pine-chart-reference-dot"
+                :cx="dot.x"
+                :cy="dot.y"
+                :r="dot.radius"
+                :fill="dot.fill"
+                :stroke="dot.stroke"
+                :stroke-width="dot.stroke_width"
+                :data-x="dot.data_x"
+                :data-y="dot.data_y"
+                :data-label="dot.label"
+                :aria-label="dot.aria_label"></circle>
+      </template>
+    </g>
     <g pp-show="ready && show_bars"
        class="pine-chart-bars"
        data-layer="bars">
@@ -184,6 +215,53 @@
                 :data-y="marker.data_y"
                 :data-series="marker.series_label"
                 :aria-label="marker.aria_label"></circle>
+      </template>
+    </g>
+    <g pp-show="ready && show_reference_foreground"
+       class="pine-chart-reference pine-chart-reference-foreground"
+       data-layer="reference-foreground">
+      <template pp-for="line in reference_foreground_lines" pp-key="line.key">
+        <line class="pine-chart-reference-line"
+              :x1="line.x1"
+              :y1="line.y1"
+              :x2="line.x2"
+              :y2="line.y2"
+              :stroke="line.color"
+              :stroke-width="line.stroke_width"
+              :stroke-dasharray="line.stroke_dasharray"
+              stroke-linecap="round"
+              vector-effect="non-scaling-stroke"
+              :data-label="line.label"
+              :aria-label="line.aria_label"></line>
+      </template>
+      <template pp-for="dot in reference_foreground_dots" pp-key="dot.key">
+        <circle class="pine-chart-reference-dot"
+                :cx="dot.x"
+                :cy="dot.y"
+                :r="dot.radius"
+                :fill="dot.fill"
+                :stroke="dot.stroke"
+                :stroke-width="dot.stroke_width"
+                :data-x="dot.data_x"
+                :data-y="dot.data_y"
+                :data-label="dot.label"
+                :aria-label="dot.aria_label"></circle>
+      </template>
+    </g>
+    <g pp-show="ready && show_reference_labels"
+       class="pine-chart-reference-labels"
+       data-layer="labels">
+      <template pp-for="label in svg_reference_labels" pp-key="label.key">
+        <text class="pine-chart-reference-label"
+              :x="label.x"
+              :y="label.y"
+              :fill="label.fill"
+              :text-anchor="label.text_anchor"
+              :font-weight="label.font_weight"
+              :transform="label.transform"
+              :data-x="label.data_x"
+              :data-y="label.data_y"
+              pp-text="label.text"></text>
       </template>
     </g>
   </svg>

@@ -21,6 +21,7 @@ const DEFAULT_WIDTH: f64 = 640.0;
 const DEFAULT_HEIGHT: f64 = 320.0;
 const DEFAULT_STROKE_WIDTH: f64 = 3.0;
 const DEFAULT_MARKER_RADIUS: f64 = 3.0;
+const DEFAULT_REFERENCE_RADIUS: f64 = 6.0;
 const DEFAULT_PADDING_INNER: f64 = 0.2;
 const DEFAULT_PADDING_OUTER: f64 = 0.1;
 const DEFAULT_SERIES_PADDING_INNER: f64 = 0.1;
@@ -89,6 +90,45 @@ pub struct CartesianScatterSeriesConfig {
     pub points: Vec<ChartPoint>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceLineConfig {
+    pub key: String,
+    pub label: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub color: String,
+    pub stroke_width: f64,
+    pub stroke_dasharray: String,
+    pub layer: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceDotConfig {
+    pub key: String,
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    pub fill: String,
+    pub stroke: String,
+    pub stroke_width: f64,
+    pub layer: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceLabelConfig {
+    pub key: String,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub dx: f64,
+    pub dy: f64,
+    pub angle: f64,
+    pub fill: String,
+    pub text_anchor: String,
+    pub font_weight: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CartesianLineSeriesRender {
     pub key: String,
@@ -150,6 +190,51 @@ pub struct CartesianScatterPointRender {
     pub aria_label: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceLineRender {
+    pub key: String,
+    pub label: String,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    pub color: String,
+    pub stroke_width: f64,
+    pub stroke_dasharray: String,
+    pub layer: String,
+    pub aria_label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceDotRender {
+    pub key: String,
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub data_x: f64,
+    pub data_y: f64,
+    pub radius: f64,
+    pub fill: String,
+    pub stroke: String,
+    pub stroke_width: f64,
+    pub layer: String,
+    pub aria_label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CartesianReferenceLabelRender {
+    pub key: String,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub data_x: f64,
+    pub data_y: f64,
+    pub fill: String,
+    pub text_anchor: String,
+    pub font_weight: String,
+    pub transform: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CartesianChartRender {
     pub view_box: String,
@@ -167,6 +252,9 @@ pub struct CartesianChartRender {
     pub line_series: Vec<CartesianLineSeriesRender>,
     pub scatter_points: Vec<CartesianScatterPointRender>,
     pub markers: Vec<CartesianMarkerRender>,
+    pub reference_lines: Vec<CartesianReferenceLineRender>,
+    pub reference_dots: Vec<CartesianReferenceDotRender>,
+    pub reference_labels: Vec<CartesianReferenceLabelRender>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,9 +272,20 @@ pub struct CartesianChartOptions<'a> {
     pub y_axis: Option<&'a CartesianAxisConfig>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CartesianChartInputs<'a> {
+    pub line_series: &'a [CartesianLineSeriesConfig],
+    pub bar_series: &'a [CartesianBarSeriesConfig],
+    pub area_series: &'a [CartesianAreaSeriesConfig],
+    pub scatter_series: &'a [CartesianScatterSeriesConfig],
+    pub reference_lines: &'a [CartesianReferenceLineConfig],
+    pub reference_dots: &'a [CartesianReferenceDotConfig],
+    pub reference_labels: &'a [CartesianReferenceLabelConfig],
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineCartesianChart.poco", role = "panel")]
-#[slot(default, accepts = [PineChartGrid, PineXAxis, PineYAxis, PineLineSeries, PineBarSeries, PineAreaSeries, PineScatterSeries])]
+#[slot(default, accepts = [PineChartGrid, PineXAxis, PineYAxis, PineLineSeries, PineBarSeries, PineAreaSeries, PineScatterSeries, PineCartesianReferenceLine, PineCartesianReferenceDot, PineCartesianReferenceLabel])]
 pub struct PineCartesianChart {
     #[prop]
     pub label: String,
@@ -225,11 +324,19 @@ pub struct PineCartesianChart {
     pub bar_series: Vec<CartesianBarSeriesConfig>,
     pub area_series: Vec<CartesianAreaSeriesConfig>,
     pub scatter_series: Vec<CartesianScatterSeriesConfig>,
+    pub reference_lines: Vec<CartesianReferenceLineConfig>,
+    pub reference_dots: Vec<CartesianReferenceDotConfig>,
+    pub reference_labels: Vec<CartesianReferenceLabelConfig>,
     pub bars: Vec<CartesianBarRender>,
     pub areas: Vec<CartesianAreaSeriesRender>,
     pub line_series: Vec<CartesianLineSeriesRender>,
     pub scatter_points: Vec<CartesianScatterPointRender>,
     pub markers: Vec<CartesianMarkerRender>,
+    pub reference_background_lines: Vec<CartesianReferenceLineRender>,
+    pub reference_foreground_lines: Vec<CartesianReferenceLineRender>,
+    pub reference_background_dots: Vec<CartesianReferenceDotRender>,
+    pub reference_foreground_dots: Vec<CartesianReferenceDotRender>,
+    pub svg_reference_labels: Vec<CartesianReferenceLabelRender>,
     pub plot_x: f64,
     pub plot_y: f64,
     pub plot_right: f64,
@@ -251,6 +358,9 @@ pub struct PineCartesianChart {
     pub show_areas: bool,
     pub show_scatter: bool,
     pub show_markers: bool,
+    pub show_reference_background: bool,
+    pub show_reference_foreground: bool,
+    pub show_reference_labels: bool,
     pub error: String,
     pub ready: bool,
     pub empty: bool,
@@ -284,11 +394,19 @@ impl Default for PineCartesianChart {
             bar_series: Vec::new(),
             area_series: Vec::new(),
             scatter_series: Vec::new(),
+            reference_lines: Vec::new(),
+            reference_dots: Vec::new(),
+            reference_labels: Vec::new(),
             bars: Vec::new(),
             areas: Vec::new(),
             line_series: Vec::new(),
             scatter_points: Vec::new(),
             markers: Vec::new(),
+            reference_background_lines: Vec::new(),
+            reference_foreground_lines: Vec::new(),
+            reference_background_dots: Vec::new(),
+            reference_foreground_dots: Vec::new(),
+            svg_reference_labels: Vec::new(),
             plot_x: 0.0,
             plot_y: 0.0,
             plot_right: 0.0,
@@ -310,6 +428,9 @@ impl Default for PineCartesianChart {
             show_areas: false,
             show_scatter: false,
             show_markers: false,
+            show_reference_background: false,
+            show_reference_foreground: false,
+            show_reference_labels: false,
             error: String::new(),
             ready: false,
             empty: true,
@@ -488,6 +609,63 @@ impl PineCartesianChart {
         self.recompute();
     }
 
+    pub fn upsert_reference_line(&mut self, line: CartesianReferenceLineConfig) {
+        let key = line.key.clone();
+        if let Some(existing) = self
+            .reference_lines
+            .iter_mut()
+            .find(|existing| existing.key == key)
+        {
+            *existing = line;
+        } else {
+            self.reference_lines.push(line);
+        }
+        self.recompute();
+    }
+
+    pub fn remove_reference_line(&mut self, key: &str) {
+        self.reference_lines.retain(|line| line.key != key);
+        self.recompute();
+    }
+
+    pub fn upsert_reference_dot(&mut self, dot: CartesianReferenceDotConfig) {
+        let key = dot.key.clone();
+        if let Some(existing) = self
+            .reference_dots
+            .iter_mut()
+            .find(|existing| existing.key == key)
+        {
+            *existing = dot;
+        } else {
+            self.reference_dots.push(dot);
+        }
+        self.recompute();
+    }
+
+    pub fn remove_reference_dot(&mut self, key: &str) {
+        self.reference_dots.retain(|dot| dot.key != key);
+        self.recompute();
+    }
+
+    pub fn upsert_reference_label(&mut self, label: CartesianReferenceLabelConfig) {
+        let key = label.key.clone();
+        if let Some(existing) = self
+            .reference_labels
+            .iter_mut()
+            .find(|existing| existing.key == key)
+        {
+            *existing = label;
+        } else {
+            self.reference_labels.push(label);
+        }
+        self.recompute();
+    }
+
+    pub fn remove_reference_label(&mut self, key: &str) {
+        self.reference_labels.retain(|label| label.key != key);
+        self.recompute();
+    }
+
     fn recompute(&mut self) {
         let options = CartesianChartOptions {
             width: self.width,
@@ -505,10 +683,15 @@ impl PineCartesianChart {
 
         match render_cartesian_chart(
             options,
-            &self.series,
-            &self.bar_series,
-            &self.area_series,
-            &self.scatter_series,
+            CartesianChartInputs {
+                line_series: &self.series,
+                bar_series: &self.bar_series,
+                area_series: &self.area_series,
+                scatter_series: &self.scatter_series,
+                reference_lines: &self.reference_lines,
+                reference_dots: &self.reference_dots,
+                reference_labels: &self.reference_labels,
+            },
         ) {
             Ok(render) => {
                 self.view_box = render.view_box;
@@ -529,6 +712,19 @@ impl PineCartesianChart {
                 self.line_series = render.line_series;
                 self.scatter_points = render.scatter_points;
                 self.markers = render.markers;
+                let (foreground_lines, background_lines): (Vec<_>, Vec<_>) = render
+                    .reference_lines
+                    .into_iter()
+                    .partition(|line| line.layer == "reference-foreground");
+                let (foreground_dots, background_dots): (Vec<_>, Vec<_>) = render
+                    .reference_dots
+                    .into_iter()
+                    .partition(|dot| dot.layer == "reference-foreground");
+                self.reference_background_lines = background_lines;
+                self.reference_foreground_lines = foreground_lines;
+                self.reference_background_dots = background_dots;
+                self.reference_foreground_dots = foreground_dots;
+                self.svg_reference_labels = render.reference_labels;
                 self.show_grid = !self.x_grid.is_empty() || !self.y_grid.is_empty();
                 self.show_x_axis = self.x_axis_config.is_some();
                 self.show_y_axis = self.y_axis_config.is_some();
@@ -546,6 +742,11 @@ impl PineCartesianChart {
                 self.show_areas = !self.areas.is_empty();
                 self.show_scatter = !self.scatter_points.is_empty();
                 self.show_markers = !self.markers.is_empty();
+                self.show_reference_background = !self.reference_background_lines.is_empty()
+                    || !self.reference_background_dots.is_empty();
+                self.show_reference_foreground = !self.reference_foreground_lines.is_empty()
+                    || !self.reference_foreground_dots.is_empty();
+                self.show_reference_labels = !self.svg_reference_labels.is_empty();
                 self.error.clear();
                 self.state = "ready".into();
                 self.ready = true;
@@ -577,6 +778,11 @@ impl PineCartesianChart {
         self.line_series.clear();
         self.scatter_points.clear();
         self.markers.clear();
+        self.reference_background_lines.clear();
+        self.reference_foreground_lines.clear();
+        self.reference_background_dots.clear();
+        self.reference_foreground_dots.clear();
+        self.svg_reference_labels.clear();
         self.x_grid.clear();
         self.y_grid.clear();
         self.x_tick_labels.clear();
@@ -596,6 +802,9 @@ impl PineCartesianChart {
         self.show_areas = false;
         self.show_scatter = false;
         self.show_markers = false;
+        self.show_reference_background = false;
+        self.show_reference_foreground = false;
+        self.show_reference_labels = false;
     }
 
     fn margins(&self) -> ChartMargins {
@@ -1068,36 +1277,368 @@ impl PineScatterSeries {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[component(template = "PineCartesianReferenceLine.poco", role = "visual")]
+pub struct PineCartesianReferenceLine {
+    #[prop]
+    pub key: String,
+    #[prop]
+    pub label: String,
+    #[prop]
+    pub x: Option<f64>,
+    #[prop]
+    pub y: Option<f64>,
+    #[prop]
+    pub color: String,
+    #[prop]
+    pub stroke_width: f64,
+    #[prop]
+    pub stroke_dasharray: String,
+    #[prop]
+    pub layer: String,
+    pub component_key: String,
+}
+
+impl Default for PineCartesianReferenceLine {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            label: String::new(),
+            x: None,
+            y: None,
+            color: "currentColor".into(),
+            stroke_width: 1.0,
+            stroke_dasharray: String::new(),
+            layer: "reference-background".into(),
+            component_key: String::new(),
+        }
+    }
+}
+
+#[handlers]
+impl PineCartesianReferenceLine {
+    fn on_setup(&mut self) {
+        ensure_component_key(&mut self.component_key, "reference-line", &self.key);
+        self.sync();
+    }
+
+    fn on_unmount(&mut self) {
+        update_root(|root| root.remove_reference_line(&self.component_key));
+    }
+
+    #[watch(label)]
+    fn on_label(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(x)]
+    fn on_x(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
+        self.sync();
+    }
+
+    #[watch(y)]
+    fn on_y(&mut self, _: Option<f64>, _: Option<Option<f64>>) {
+        self.sync();
+    }
+
+    #[watch(color)]
+    fn on_color(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(stroke_width)]
+    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(stroke_dasharray)]
+    fn on_stroke_dasharray(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(layer)]
+    fn on_layer(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+}
+
+impl PineCartesianReferenceLine {
+    fn sync(&self) {
+        update_root(|root| {
+            root.upsert_reference_line(CartesianReferenceLineConfig {
+                key: self.component_key.clone(),
+                label: self.label.clone(),
+                x: self.x,
+                y: self.y,
+                color: color_or_current(&self.color),
+                stroke_width: self.stroke_width,
+                stroke_dasharray: self.stroke_dasharray.clone(),
+                layer: self.layer.clone(),
+            });
+        });
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[component(template = "PineCartesianReferenceDot.poco", role = "visual")]
+pub struct PineCartesianReferenceDot {
+    #[prop]
+    pub key: String,
+    #[prop]
+    pub label: String,
+    #[prop]
+    pub x: f64,
+    #[prop]
+    pub y: f64,
+    #[prop]
+    pub radius: f64,
+    #[prop]
+    pub fill: String,
+    #[prop]
+    pub stroke: String,
+    #[prop]
+    pub stroke_width: f64,
+    #[prop]
+    pub layer: String,
+    pub component_key: String,
+}
+
+impl Default for PineCartesianReferenceDot {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            label: String::new(),
+            x: 0.0,
+            y: 0.0,
+            radius: DEFAULT_REFERENCE_RADIUS,
+            fill: "currentColor".into(),
+            stroke: "none".into(),
+            stroke_width: 0.0,
+            layer: "reference-foreground".into(),
+            component_key: String::new(),
+        }
+    }
+}
+
+#[handlers]
+impl PineCartesianReferenceDot {
+    fn on_setup(&mut self) {
+        ensure_component_key(&mut self.component_key, "reference-dot", &self.key);
+        self.sync();
+    }
+
+    fn on_unmount(&mut self) {
+        update_root(|root| root.remove_reference_dot(&self.component_key));
+    }
+
+    #[watch(label)]
+    fn on_label(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(x)]
+    fn on_x(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(y)]
+    fn on_y(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(radius)]
+    fn on_radius(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(fill)]
+    fn on_fill(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(stroke)]
+    fn on_stroke(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(stroke_width)]
+    fn on_stroke_width(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(layer)]
+    fn on_layer(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+}
+
+impl PineCartesianReferenceDot {
+    fn sync(&self) {
+        update_root(|root| {
+            root.upsert_reference_dot(CartesianReferenceDotConfig {
+                key: self.component_key.clone(),
+                label: self.label.clone(),
+                x: self.x,
+                y: self.y,
+                radius: self.radius,
+                fill: color_or_current(&self.fill),
+                stroke: color_or(&self.stroke, "none"),
+                stroke_width: self.stroke_width,
+                layer: self.layer.clone(),
+            });
+        });
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[component(template = "PineCartesianReferenceLabel.poco", role = "visual")]
+pub struct PineCartesianReferenceLabel {
+    #[prop]
+    pub key: String,
+    #[prop]
+    pub text: String,
+    #[prop]
+    pub x: f64,
+    #[prop]
+    pub y: f64,
+    #[prop]
+    pub dx: f64,
+    #[prop]
+    pub dy: f64,
+    #[prop]
+    pub angle: f64,
+    #[prop]
+    pub fill: String,
+    #[prop]
+    pub text_anchor: String,
+    #[prop]
+    pub font_weight: String,
+    pub component_key: String,
+}
+
+impl Default for PineCartesianReferenceLabel {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            text: String::new(),
+            x: 0.0,
+            y: 0.0,
+            dx: 0.0,
+            dy: 0.0,
+            angle: 0.0,
+            fill: "currentColor".into(),
+            text_anchor: "middle".into(),
+            font_weight: "600".into(),
+            component_key: String::new(),
+        }
+    }
+}
+
+#[handlers]
+impl PineCartesianReferenceLabel {
+    fn on_setup(&mut self) {
+        ensure_component_key(&mut self.component_key, "reference-label", &self.key);
+        self.sync();
+    }
+
+    fn on_unmount(&mut self) {
+        update_root(|root| root.remove_reference_label(&self.component_key));
+    }
+
+    #[watch(text)]
+    fn on_text(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(x)]
+    fn on_x(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(y)]
+    fn on_y(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(dx)]
+    fn on_dx(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(dy)]
+    fn on_dy(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(angle)]
+    fn on_angle(&mut self, _: f64, _: Option<f64>) {
+        self.sync();
+    }
+
+    #[watch(fill)]
+    fn on_fill(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(text_anchor)]
+    fn on_text_anchor(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+
+    #[watch(font_weight)]
+    fn on_font_weight(&mut self, _: String, _: Option<String>) {
+        self.sync();
+    }
+}
+
+impl PineCartesianReferenceLabel {
+    fn sync(&self) {
+        update_root(|root| {
+            root.upsert_reference_label(CartesianReferenceLabelConfig {
+                key: self.component_key.clone(),
+                text: self.text.clone(),
+                x: self.x,
+                y: self.y,
+                dx: self.dx,
+                dy: self.dy,
+                angle: self.angle,
+                fill: color_or_current(&self.fill),
+                text_anchor: self.text_anchor.clone(),
+                font_weight: self.font_weight.clone(),
+            });
+        });
+    }
+}
+
 pub fn render_cartesian_chart(
     options: CartesianChartOptions<'_>,
-    line_series: &[CartesianLineSeriesConfig],
-    bar_series: &[CartesianBarSeriesConfig],
-    area_series: &[CartesianAreaSeriesConfig],
-    scatter_series: &[CartesianScatterSeriesConfig],
+    inputs: CartesianChartInputs<'_>,
 ) -> ChartResult<CartesianChartRender> {
-    if !has_renderable_series(line_series, bar_series, area_series, scatter_series) {
+    if !has_renderable_series(
+        inputs.line_series,
+        inputs.bar_series,
+        inputs.area_series,
+        inputs.scatter_series,
+    ) {
         return Err(ChartError::EmptySeries);
     }
 
-    if uses_categorical_x(line_series, bar_series) {
-        return render_categorical_chart(
-            options,
-            line_series,
-            bar_series,
-            area_series,
-            scatter_series,
-        );
+    if uses_categorical_x(inputs.line_series, inputs.bar_series) {
+        return render_categorical_chart(options, inputs);
     }
 
-    let renderable_lines: Vec<&CartesianLineSeriesConfig> = line_series
+    let renderable_lines: Vec<&CartesianLineSeriesConfig> = inputs
+        .line_series
         .iter()
         .filter(|series| !series.points.is_empty())
         .collect();
-    let renderable_areas: Vec<&CartesianAreaSeriesConfig> = area_series
+    let renderable_areas: Vec<&CartesianAreaSeriesConfig> = inputs
+        .area_series
         .iter()
         .filter(|series| !series.points.is_empty())
         .collect();
-    let renderable_scatters: Vec<&CartesianScatterSeriesConfig> = scatter_series
+    let renderable_scatters: Vec<&CartesianScatterSeriesConfig> = inputs
+        .scatter_series
         .iter()
         .filter(|series| !series.points.is_empty())
         .collect();
@@ -1129,10 +1670,25 @@ pub fn render_cartesian_chart(
         options.grid,
         options.x_axis,
         options.y_axis,
-        &renderable_lines,
-        &renderable_areas,
-        &renderable_scatters,
+        GeometryRenderInputs {
+            line_config: &renderable_lines,
+            area_config: &renderable_areas,
+            scatter_config: &renderable_scatters,
+            reference_lines: inputs.reference_lines,
+            reference_dots: inputs.reference_dots,
+            reference_labels: inputs.reference_labels,
+        },
     )
+}
+
+#[derive(Clone, Copy)]
+struct GeometryRenderInputs<'a> {
+    line_config: &'a [&'a CartesianLineSeriesConfig],
+    area_config: &'a [&'a CartesianAreaSeriesConfig],
+    scatter_config: &'a [&'a CartesianScatterSeriesConfig],
+    reference_lines: &'a [CartesianReferenceLineConfig],
+    reference_dots: &'a [CartesianReferenceDotConfig],
+    reference_labels: &'a [CartesianReferenceLabelConfig],
 }
 
 fn render_from_geometry(
@@ -1140,17 +1696,15 @@ fn render_from_geometry(
     grid: Option<&CartesianGridConfig>,
     x_axis: Option<&CartesianAxisConfig>,
     y_axis: Option<&CartesianAxisConfig>,
-    line_config: &[&CartesianLineSeriesConfig],
-    area_config: &[&CartesianAreaSeriesConfig],
-    scatter_config: &[&CartesianScatterSeriesConfig],
+    inputs: GeometryRenderInputs<'_>,
 ) -> ChartResult<CartesianChartRender> {
     let mut cursor = 0;
-    let line_end = cursor + line_config.len();
+    let line_end = cursor + inputs.line_config.len();
     let rendered_series = geometry.series[cursor..line_end]
         .iter()
         .enumerate()
         .map(|(index, series)| {
-            let config = line_config[index];
+            let config = inputs.line_config[index];
             CartesianLineSeriesRender {
                 key: config.key.clone(),
                 label: series.label.clone(),
@@ -1165,21 +1719,21 @@ fn render_from_geometry(
     let markers = geometry.series[..line_end]
         .iter()
         .enumerate()
-        .filter(|(index, _)| line_config[*index].show_markers)
+        .filter(|(index, _)| inputs.line_config[*index].show_markers)
         .flat_map(|(index, series)| {
             series
                 .samples
                 .iter()
-                .map(move |sample| marker_from_sample(sample, line_config[index]))
+                .map(move |sample| marker_from_sample(sample, inputs.line_config[index]))
         })
         .collect();
 
-    let area_end = cursor + area_config.len();
+    let area_end = cursor + inputs.area_config.len();
     let areas = geometry.series[cursor..area_end]
         .iter()
         .enumerate()
         .map(|(index, series)| {
-            let config = area_config[index];
+            let config = inputs.area_config[index];
             Ok(CartesianAreaSeriesRender {
                 key: config.key.clone(),
                 label: series.label.clone(),
@@ -1206,9 +1760,25 @@ fn render_from_geometry(
             series
                 .samples
                 .iter()
-                .map(move |sample| scatter_point_from_sample(sample, scatter_config[index]))
+                .map(move |sample| scatter_point_from_sample(sample, inputs.scatter_config[index]))
         })
         .collect();
+    let rendered_reference_lines = render_reference_lines(
+        inputs.reference_lines,
+        geometry.plot,
+        |value| geometry.x_scale.map(value),
+        |value| geometry.y_scale.map(value),
+    )?;
+    let rendered_reference_dots = render_reference_dots(
+        inputs.reference_dots,
+        |value| geometry.x_scale.map(value),
+        |value| geometry.y_scale.map(value),
+    )?;
+    let rendered_reference_labels = render_reference_labels(
+        inputs.reference_labels,
+        |value| geometry.x_scale.map(value),
+        |value| geometry.y_scale.map(value),
+    )?;
 
     let grid = grid.cloned().unwrap_or(CartesianGridConfig {
         key: String::new(),
@@ -1240,26 +1810,26 @@ fn render_from_geometry(
         line_series: rendered_series,
         scatter_points,
         markers,
+        reference_lines: rendered_reference_lines,
+        reference_dots: rendered_reference_dots,
+        reference_labels: rendered_reference_labels,
     })
 }
 
 fn render_categorical_chart(
     options: CartesianChartOptions<'_>,
-    line_series: &[CartesianLineSeriesConfig],
-    bar_series: &[CartesianBarSeriesConfig],
-    area_series: &[CartesianAreaSeriesConfig],
-    scatter_series: &[CartesianScatterSeriesConfig],
+    inputs: CartesianChartInputs<'_>,
 ) -> ChartResult<CartesianChartRender> {
-    let categories = categorical_categories(line_series, bar_series)?;
+    let categories = categorical_categories(inputs.line_series, inputs.bar_series)?;
     let width = finite("width", options.width)?;
     let height = finite("height", options.height)?;
     let plot = ChartRect::from_outer(width, height, options.margins)?;
     let y_domain = categorical_y_domain(
         options.y_domain,
-        line_series,
-        bar_series,
-        area_series,
-        scatter_series,
+        inputs.line_series,
+        inputs.bar_series,
+        inputs.area_series,
+        inputs.scatter_series,
     )?;
     let y_scale = LinearScale::new(y_domain, (plot.bottom(), plot.y))?;
     let x_scale = BandScale::new(
@@ -1278,7 +1848,7 @@ fn render_categorical_chart(
     });
 
     let bars = render_categorical_bars(
-        bar_series,
+        inputs.bar_series,
         &categories,
         x_scale,
         y_scale,
@@ -1286,10 +1856,26 @@ fn render_categorical_chart(
         options.series_padding_inner,
     )?;
     let (line_series, markers) =
-        render_categorical_lines(line_series, &categories, x_scale, y_scale)?;
-    let areas = render_categorical_areas(area_series, &categories, x_scale, y_scale, plot)?;
+        render_categorical_lines(inputs.line_series, &categories, x_scale, y_scale)?;
+    let areas = render_categorical_areas(inputs.area_series, &categories, x_scale, y_scale, plot)?;
     let scatter_points =
-        render_categorical_scatter_points(scatter_series, &categories, x_scale, y_scale)?;
+        render_categorical_scatter_points(inputs.scatter_series, &categories, x_scale, y_scale)?;
+    let rendered_reference_lines = render_reference_lines(
+        inputs.reference_lines,
+        plot,
+        |value| categorical_point_x(value, categories.len(), x_scale),
+        |value| y_scale.map(value),
+    )?;
+    let rendered_reference_dots = render_reference_dots(
+        inputs.reference_dots,
+        |value| categorical_point_x(value, categories.len(), x_scale),
+        |value| y_scale.map(value),
+    )?;
+    let rendered_reference_labels = render_reference_labels(
+        inputs.reference_labels,
+        |value| categorical_point_x(value, categories.len(), x_scale),
+        |value| y_scale.map(value),
+    )?;
 
     Ok(CartesianChartRender {
         view_box: format!("0 0 {width} {height}"),
@@ -1329,6 +1915,9 @@ fn render_categorical_chart(
         line_series,
         scatter_points,
         markers,
+        reference_lines: rendered_reference_lines,
+        reference_dots: rendered_reference_dots,
+        reference_labels: rendered_reference_labels,
     })
 }
 
@@ -1628,6 +2217,125 @@ fn render_categorical_scatter_points(
     Ok(points)
 }
 
+fn render_reference_lines(
+    lines: &[CartesianReferenceLineConfig],
+    plot: ChartRect,
+    mut map_x: impl FnMut(f64) -> ChartResult<f64>,
+    mut map_y: impl FnMut(f64) -> ChartResult<f64>,
+) -> ChartResult<Vec<CartesianReferenceLineRender>> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let layer = reference_layer(&line.layer, "reference_line.layer")?;
+            let label = label_or_key(&line.label, &line.key, index);
+            let (x1, y1, x2, y2, axis, value) = match (line.x, line.y) {
+                (Some(x), None) => {
+                    let value = finite("reference_line.x", x)?;
+                    let x = map_x(value)?;
+                    (x, plot.y, x, plot.bottom(), "x", value)
+                }
+                (None, Some(y)) => {
+                    let value = finite("reference_line.y", y)?;
+                    let y = map_y(value)?;
+                    (plot.x, y, plot.right(), y, "y", value)
+                }
+                (Some(_), Some(_)) => {
+                    return Err(ChartError::InvalidOption {
+                        field: "reference_line.axis",
+                        value: "x and y".into(),
+                    });
+                }
+                (None, None) => {
+                    return Err(ChartError::InvalidOption {
+                        field: "reference_line.axis",
+                        value: "missing".into(),
+                    });
+                }
+            };
+
+            Ok(CartesianReferenceLineRender {
+                key: key_or_index("reference-line", &line.key, index),
+                label: label.clone(),
+                x1,
+                y1,
+                x2,
+                y2,
+                color: color_or_current(&line.color),
+                stroke_width: positive_or_default(line.stroke_width, 1.0),
+                stroke_dasharray: line.stroke_dasharray.trim().into(),
+                layer: layer.into(),
+                aria_label: format!("{label}: {axis} {value}"),
+            })
+        })
+        .collect()
+}
+
+fn render_reference_dots(
+    dots: &[CartesianReferenceDotConfig],
+    mut map_x: impl FnMut(f64) -> ChartResult<f64>,
+    mut map_y: impl FnMut(f64) -> ChartResult<f64>,
+) -> ChartResult<Vec<CartesianReferenceDotRender>> {
+    dots.iter()
+        .enumerate()
+        .map(|(index, dot)| {
+            let data_x = finite("reference_dot.x", dot.x)?;
+            let data_y = finite("reference_dot.y", dot.y)?;
+            let label = label_or_key(&dot.label, &dot.key, index);
+            Ok(CartesianReferenceDotRender {
+                key: key_or_index("reference-dot", &dot.key, index),
+                label: label.clone(),
+                x: map_x(data_x)?,
+                y: map_y(data_y)?,
+                data_x,
+                data_y,
+                radius: positive_or_default(dot.radius, DEFAULT_REFERENCE_RADIUS),
+                fill: color_or_current(&dot.fill),
+                stroke: color_or(&dot.stroke, "none"),
+                stroke_width: non_negative(dot.stroke_width),
+                layer: reference_layer(&dot.layer, "reference_dot.layer")?.into(),
+                aria_label: format!("{label}: x {data_x}, y {data_y}"),
+            })
+        })
+        .collect()
+}
+
+fn render_reference_labels(
+    labels: &[CartesianReferenceLabelConfig],
+    mut map_x: impl FnMut(f64) -> ChartResult<f64>,
+    mut map_y: impl FnMut(f64) -> ChartResult<f64>,
+) -> ChartResult<Vec<CartesianReferenceLabelRender>> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let data_x = finite("reference_label.x", label.x)?;
+            let data_y = finite("reference_label.y", label.y)?;
+            let dx = finite("reference_label.dx", label.dx)?;
+            let dy = finite("reference_label.dy", label.dy)?;
+            let angle = finite("reference_label.angle", label.angle)?;
+            let x = map_x(data_x)? + dx;
+            let y = map_y(data_y)? + dy;
+            Ok(CartesianReferenceLabelRender {
+                key: key_or_index("reference-label", &label.key, index),
+                text: label.text.clone(),
+                x,
+                y,
+                data_x,
+                data_y,
+                fill: color_or_current(&label.fill),
+                text_anchor: text_anchor(&label.text_anchor).into(),
+                font_weight: if label.font_weight.trim().is_empty() {
+                    "600".into()
+                } else {
+                    label.font_weight.trim().into()
+                },
+                transform: rotation_transform(angle, x, y),
+            })
+        })
+        .collect()
+}
+
 fn categorical_data_samples(
     config: &CartesianLineSeriesConfig,
     series_label: &str,
@@ -1823,9 +2531,13 @@ fn component_key(prefix: &str, authored_key: &str) -> String {
 }
 
 fn color_or_current(value: &str) -> String {
+    color_or(value, "currentColor")
+}
+
+fn color_or(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        "currentColor".into()
+        fallback.into()
     } else {
         trimmed.into()
     }
@@ -1836,6 +2548,57 @@ fn positive_or_default(value: f64, default: f64) -> f64 {
         value
     } else {
         default
+    }
+}
+
+fn non_negative(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn reference_layer(value: &str, field: &'static str) -> ChartResult<&'static str> {
+    match value.trim() {
+        "reference-foreground" | "foreground" => Ok("reference-foreground"),
+        "reference-background" | "background" | "" => Ok("reference-background"),
+        value => Err(ChartError::InvalidOption {
+            field,
+            value: value.into(),
+        }),
+    }
+}
+
+fn text_anchor(value: &str) -> &'static str {
+    match value.trim() {
+        "start" => "start",
+        "end" => "end",
+        _ => "middle",
+    }
+}
+
+fn rotation_transform(angle: f64, x: f64, y: f64) -> String {
+    if angle.abs() <= f64::EPSILON {
+        String::new()
+    } else {
+        format!("rotate({angle} {x} {y})")
+    }
+}
+
+fn label_or_key(label: &str, key: &str, index: usize) -> String {
+    if label.trim().is_empty() {
+        key_or_index("item", key, index)
+    } else {
+        label.trim().into()
+    }
+}
+
+fn key_or_index(prefix: &str, key: &str, index: usize) -> String {
+    if key.trim().is_empty() {
+        format!("{prefix}-{index}")
+    } else {
+        key.trim().into()
     }
 }
 
@@ -1883,10 +2646,10 @@ mod tests {
                 x_axis: Some(&x_axis),
                 y_axis: Some(&y_axis),
             },
-            &series,
-            &[],
-            &[],
-            &[],
+            CartesianChartInputs {
+                line_series: &series,
+                ..CartesianChartInputs::default()
+            },
         )
         .unwrap();
 
@@ -1938,10 +2701,11 @@ mod tests {
                     label: "Metric".into(),
                 }),
             },
-            &lines,
-            &bars,
-            &[],
-            &[],
+            CartesianChartInputs {
+                line_series: &lines,
+                bar_series: &bars,
+                ..CartesianChartInputs::default()
+            },
         )
         .unwrap();
 
@@ -1986,10 +2750,11 @@ mod tests {
                 x_axis: None,
                 y_axis: None,
             },
-            &[],
-            &[],
-            &areas,
-            &scatters,
+            CartesianChartInputs {
+                area_series: &areas,
+                scatter_series: &scatters,
+                ..CartesianChartInputs::default()
+            },
         )
         .unwrap();
 
@@ -2001,6 +2766,89 @@ mod tests {
         assert_eq!(render.scatter_points[0].x, 50.0);
         assert_eq!(render.scatter_points[0].y, 50.0);
         assert!(render.line_series.is_empty());
+    }
+
+    #[test]
+    fn cartesian_chart_maps_reference_marks_through_shared_scales() {
+        let series = vec![CartesianLineSeriesConfig {
+            key: "actual".into(),
+            label: "Actual".into(),
+            color: "#1d6fd8".into(),
+            stroke_width: 2.0,
+            show_markers: false,
+            marker_radius: 3.0,
+            points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
+            data: Vec::new(),
+        }];
+        let reference_lines = vec![CartesianReferenceLineConfig {
+            key: "goal".into(),
+            label: "Goal".into(),
+            x: None,
+            y: Some(5.0),
+            color: "#667085".into(),
+            stroke_width: 1.5,
+            stroke_dasharray: "4 4".into(),
+            layer: "reference-background".into(),
+        }];
+        let reference_dots = vec![CartesianReferenceDotConfig {
+            key: "release".into(),
+            label: "Release".into(),
+            x: 5.0,
+            y: 5.0,
+            radius: 7.0,
+            fill: "#d96c2c".into(),
+            stroke: "#ffffff".into(),
+            stroke_width: 2.0,
+            layer: "reference-foreground".into(),
+        }];
+        let reference_labels = vec![CartesianReferenceLabelConfig {
+            key: "release-label".into(),
+            text: "Release".into(),
+            x: 5.0,
+            y: 5.0,
+            dx: 0.0,
+            dy: -8.0,
+            angle: 0.0,
+            fill: "#18212f".into(),
+            text_anchor: "middle".into(),
+            font_weight: "700".into(),
+        }];
+
+        let render = render_cartesian_chart(
+            CartesianChartOptions {
+                width: 100.0,
+                height: 100.0,
+                margins: ChartMargins::ZERO,
+                x_domain: None,
+                y_domain: None,
+                padding_inner: DEFAULT_PADDING_INNER,
+                padding_outer: DEFAULT_PADDING_OUTER,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
+                grid: None,
+                x_axis: None,
+                y_axis: None,
+            },
+            CartesianChartInputs {
+                line_series: &series,
+                reference_lines: &reference_lines,
+                reference_dots: &reference_dots,
+                reference_labels: &reference_labels,
+                ..CartesianChartInputs::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(render.reference_lines.len(), 1);
+        assert_eq!(render.reference_lines[0].x1, 0.0);
+        assert_eq!(render.reference_lines[0].y1, 50.0);
+        assert_eq!(render.reference_lines[0].x2, 100.0);
+        assert_eq!(render.reference_lines[0].layer, "reference-background");
+        assert_eq!(render.reference_dots[0].x, 50.0);
+        assert_eq!(render.reference_dots[0].y, 50.0);
+        assert_eq!(render.reference_dots[0].layer, "reference-foreground");
+        assert_eq!(render.reference_labels[0].x, 50.0);
+        assert_eq!(render.reference_labels[0].y, 42.0);
+        assert_eq!(render.reference_labels[0].text, "Release");
     }
 
     #[test]
@@ -2019,10 +2867,7 @@ mod tests {
                 x_axis: None,
                 y_axis: None,
             },
-            &[],
-            &[],
-            &[],
-            &[],
+            CartesianChartInputs::default(),
         )
         .unwrap_err();
 

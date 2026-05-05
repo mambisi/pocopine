@@ -15,6 +15,10 @@ validation.
                    label="Actual"
                    color="#16a085"
                    pp-bind:data="actual"></pine-bar-series>
+  <pine-cartesian-reference-line key="goal"
+                                 label="Goal"
+                                 y="16"
+                                 stroke_dasharray="4 4"></pine-cartesian-reference-line>
   <pine-area-series key="band"
                     label="Trend band"
                     fill="#1d6fd833"
@@ -29,6 +33,15 @@ validation.
                        label="Samples"
                        color="#5b6ee1"
                        pp-bind:points="samples"></pine-scatter-series>
+  <pine-cartesian-reference-dot key="release"
+                                label="Release"
+                                x="2"
+                                y="18"></pine-cartesian-reference-dot>
+  <pine-cartesian-reference-label key="release-label"
+                                  text="Release"
+                                  x="2"
+                                  y="18"
+                                  dy="-10"></pine-cartesian-reference-label>
 </pine-cartesian-chart>
 ```
 
@@ -48,6 +61,11 @@ namespace handling, responsive sizing, scales, and paint order in one place.
 - `pine-area-series`: registers one numeric area series from `Vec<ChartPoint>`.
 - `pine-scatter-series`: registers one numeric scatter series from
   `Vec<ChartPoint>`.
+- `pine-cartesian-reference-line`: registers one horizontal or vertical
+  reference line in data space. Set exactly one of `x` or `y`.
+- `pine-cartesian-reference-dot`: registers one reference point in data space.
+- `pine-cartesian-reference-label`: registers one text label anchored in data
+  space.
 
 `pine-line-chart` and `pine-bar-chart` remain the presets for simple dashboards. Use
 `pine-cartesian-chart` when the chart needs explicit child composition or when a
@@ -94,6 +112,11 @@ chart, their `x` values are treated as zero-based category positions, so
 `ChartPoint::new(1.5, value)` lands halfway between the second and third
 category centers.
 
-Reference marks and free-form annotations still belong to `pine-layer-chart`.
-Use the Cartesian root when the chart needs shared axes and scales; use the
-layered root when the app needs absolute SVG composition.
+Reference dots and labels follow the same coordinate rule. Reference lines use
+the mapped `x` position for vertical lines or the mapped `y` position for
+horizontal lines. Lines and dots accept `layer="reference-background"` or
+`layer="reference-foreground"`; labels always paint in the final label layer.
+
+Free-form annotations still belong to `pine-layer-chart`. Use the Cartesian
+root when the chart needs shared axes and scales; use the layered root when the
+app needs absolute SVG composition.

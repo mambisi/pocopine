@@ -30,11 +30,14 @@ pub use bar::{
 };
 pub use cartesian_chart::{
     render_cartesian_chart, CartesianAreaSeriesConfig, CartesianAreaSeriesRender,
-    CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig, CartesianChartOptions,
-    CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
-    CartesianLineSeriesRender, CartesianMarkerRender, CartesianScatterPointRender,
-    CartesianScatterSeriesConfig, PineAreaSeries, PineBarSeries, PineCartesianChart, PineChartGrid,
-    PineLineSeries, PineScatterSeries, PineXAxis, PineYAxis,
+    CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig, CartesianChartInputs,
+    CartesianChartOptions, CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
+    CartesianLineSeriesRender, CartesianMarkerRender, CartesianReferenceDotConfig,
+    CartesianReferenceDotRender, CartesianReferenceLabelConfig, CartesianReferenceLabelRender,
+    CartesianReferenceLineConfig, CartesianReferenceLineRender, CartesianScatterPointRender,
+    CartesianScatterSeriesConfig, PineAreaSeries, PineBarSeries, PineCartesianChart,
+    PineCartesianReferenceDot, PineCartesianReferenceLabel, PineCartesianReferenceLine,
+    PineChartGrid, PineLineSeries, PineScatterSeries, PineXAxis, PineYAxis,
 };
 pub use error::{ChartError, ChartResult};
 pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
@@ -70,6 +73,9 @@ pub fn register_all() {
     PineBarChart::register();
     PineBarSeries::register();
     PineCartesianChart::register();
+    PineCartesianReferenceDot::register();
+    PineCartesianReferenceLabel::register();
+    PineCartesianReferenceLine::register();
     PineChartGuide::register();
     PineChartGrid::register();
     PineChartIcon::register();

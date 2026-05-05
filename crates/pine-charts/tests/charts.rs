@@ -264,7 +264,7 @@ impl LineChartFixture {}
                         angle="-65"
                         fill="#18212f"
                         text_anchor="start"
-                        font_weight="700"></pine-chart-label>
+                        font_weight="bold"></pine-chart-label>
     </pine-chart-layer>
   </pine-layer-chart>
 </div>
@@ -353,6 +353,13 @@ impl ComposedCartesianFixture {}
                       show_markers="true"
                       marker_radius="4"
                       pp-bind:data="target"></pine-line-series>
+    <pine-cartesian-reference-line key="goal"
+                                   label="Goal"
+                                   y="16"
+                                   color="#667085"
+                                   stroke_width="1.5"
+                                   stroke_dasharray="4 4"
+                                   layer="reference-background"></pine-cartesian-reference-line>
     <pine-area-series key="forecast"
                       label="Forecast"
                       fill="#1d6fd833"
@@ -364,6 +371,22 @@ impl ComposedCartesianFixture {}
                          color="#d96c2c"
                          point_radius="6"
                          pp-bind:points="samples"></pine-scatter-series>
+    <pine-cartesian-reference-dot key="release"
+                                  label="Release"
+                                  x="1"
+                                  y="18"
+                                  radius="7"
+                                  fill="#5b6ee1"
+                                  stroke="#ffffff"
+                                  stroke_width="2"
+                                  layer="reference-foreground"></pine-cartesian-reference-dot>
+    <pine-cartesian-reference-label key="release-label"
+                                    text="Release"
+                                    x="1"
+                                    y="18"
+                                    dy="-8"
+                                    fill="#18212f"
+                                    font_weight="bold"></pine-cartesian-reference-label>
   </pine-cartesian-chart>
 </div>
 "##)]
@@ -512,7 +535,18 @@ async fn cartesian_chart_composes_grid_axes_and_line_series() {
     assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 100 100"));
     assert_eq!(
         direct_svg_layers(&svg),
-        vec!["grid", "axes", "bars", "area", "series", "points", "markers"]
+        vec![
+            "grid",
+            "axes",
+            "reference-background",
+            "bars",
+            "area",
+            "series",
+            "points",
+            "markers",
+            "reference-foreground",
+            "labels",
+        ]
     );
 
     let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
@@ -556,7 +590,18 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
         .unwrap();
     assert_eq!(
         direct_svg_layers(&svg),
-        vec!["grid", "axes", "bars", "area", "series", "points", "markers"]
+        vec![
+            "grid",
+            "axes",
+            "reference-background",
+            "bars",
+            "area",
+            "series",
+            "points",
+            "markers",
+            "reference-foreground",
+            "labels",
+        ]
     );
 
     let bars = host.query_selector_all(".pine-chart-bar").unwrap();
@@ -574,6 +619,22 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
     assert_eq!(
         first_bar.get_attribute("aria-label").as_deref(),
         Some("Actual, W1: 10")
+    );
+
+    let reference_line = host
+        .query_selector(".pine-chart-reference-background .pine-chart-reference-line")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference_line.get_attribute("x1").as_deref(), Some("0"));
+    assert_eq!(reference_line.get_attribute("y1").as_deref(), Some("20"));
+    assert_eq!(reference_line.get_attribute("x2").as_deref(), Some("100"));
+    assert_eq!(
+        reference_line.get_attribute("stroke-dasharray").as_deref(),
+        Some("4 4")
+    );
+    assert_eq!(
+        reference_line.get_attribute("aria-label").as_deref(),
+        Some("Goal: y 16")
     );
 
     let area = host.query_selector(".pine-chart-area").unwrap().unwrap();
@@ -606,6 +667,30 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
     assert_eq!(
         point.get_attribute("aria-label").as_deref(),
         Some("Samples, W2: 14")
+    );
+
+    let reference_dot = host
+        .query_selector(".pine-chart-reference-foreground .pine-chart-reference-dot")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference_dot.get_attribute("cx").as_deref(), Some("75"));
+    assert_eq!(reference_dot.get_attribute("cy").as_deref(), Some("10"));
+    assert_eq!(reference_dot.get_attribute("r").as_deref(), Some("7"));
+    assert_eq!(
+        reference_dot.get_attribute("aria-label").as_deref(),
+        Some("Release: x 1, y 18")
+    );
+
+    let reference_label = host
+        .query_selector(".pine-chart-reference-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference_label.text_content().as_deref(), Some("Release"));
+    assert_eq!(reference_label.get_attribute("x").as_deref(), Some("75"));
+    assert_eq!(reference_label.get_attribute("y").as_deref(), Some("2"));
+    assert_eq!(
+        reference_label.get_attribute("font-weight").as_deref(),
+        Some("bold")
     );
 
     let markers = host.query_selector_all(".pine-chart-marker").unwrap();

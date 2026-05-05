@@ -22,6 +22,9 @@ pub struct ChartDemo {
     pub combo_line_data: Vec<ChartBar>,
     pub combo_area_points: Vec<ChartPoint>,
     pub combo_scatter_points: Vec<ChartPoint>,
+    pub combo_goal: Option<f64>,
+    pub combo_latest_x: f64,
+    pub combo_latest_y: f64,
     pub metro_line_a: Vec<ChartLayerPoint>,
     pub metro_line_b: Vec<ChartLayerPoint>,
     pub metro_line_c: Vec<ChartLayerPoint>,
@@ -61,6 +64,9 @@ impl Default for ChartDemo {
             combo_line_data: bars_from_points(&line_series[1].data),
             combo_area_points: combo_area_points(&line_series[0].data),
             combo_scatter_points: combo_scatter_points(&line_series[0].data),
+            combo_goal: combo_goal(&line_series[1].data),
+            combo_latest_x: latest_x(&line_series[0].data),
+            combo_latest_y: latest_y(&line_series[0].data),
             line_series,
             metro_line_a: metro_line_a(),
             metro_line_b: metro_line_b(),
@@ -179,6 +185,11 @@ impl ChartDemo {
         if let Some(primary) = series.first() {
             self.combo_area_points = combo_area_points(&primary.data);
             self.combo_scatter_points = combo_scatter_points(&primary.data);
+            self.combo_latest_x = latest_x(&primary.data);
+            self.combo_latest_y = latest_y(&primary.data);
+        }
+        if let Some(secondary) = series.get(1) {
+            self.combo_goal = combo_goal(&secondary.data);
         }
     }
 
@@ -219,6 +230,18 @@ fn combo_scatter_points(points: &[ChartPoint]) -> Vec<ChartPoint> {
         .filter(|(index, _)| index % 3 == 1)
         .map(|(_, point)| ChartPoint::new(point.x, point.y * 1.05))
         .collect()
+}
+
+fn combo_goal(points: &[ChartPoint]) -> Option<f64> {
+    points.last().map(|point| point.y)
+}
+
+fn latest_x(points: &[ChartPoint]) -> f64 {
+    points.last().map(|point| point.x).unwrap_or_default()
+}
+
+fn latest_y(points: &[ChartPoint]) -> f64 {
+    points.last().map(|point| point.y).unwrap_or_default()
 }
 
 fn growth_points() -> Vec<ChartPoint> {

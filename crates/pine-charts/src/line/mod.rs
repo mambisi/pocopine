@@ -12,6 +12,7 @@ use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items};
 use crate::path::line_path;
+use crate::scale::LinearScale;
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -75,6 +76,8 @@ pub struct LineChartGeometry {
     pub line_d: String,
     pub series: Vec<LineChartSeriesRender>,
     pub plot: ChartRect,
+    pub x_scale: LinearScale,
+    pub y_scale: LinearScale,
     pub samples: Vec<LineChartSample>,
     pub x_ticks: Vec<crate::Tick>,
     pub y_ticks: Vec<crate::Tick>,
@@ -165,6 +168,8 @@ impl LineChartGeometry {
             line_d,
             series,
             plot: layout.plot,
+            x_scale: layout.x_scale,
+            y_scale: layout.y_scale,
             samples,
             x_grid: layout.x_grid,
             y_grid: layout.y_grid,

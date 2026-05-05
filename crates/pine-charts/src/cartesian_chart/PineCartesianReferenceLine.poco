@@ -1,0 +1,4 @@
+<root class="pine-chart-definition pine-cartesian-reference-line-definition"
+      hidden
+      aria-hidden="true"
+      :data-key="component_key"></root>
