@@ -226,13 +226,28 @@ pub fn route_proxy() -> JsValue {
 fn mount_current() {
     ensure_route_scope();
 
-    let Some(win) = web_sys::window() else { return };
+    let start_ms = js_sys::Date::now();
+    let Some(win) = web_sys::window() else {
+        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+            path: String::new(),
+            route_pattern: None,
+            component: None,
+            reason: "missing_window".to_string(),
+            duration_ms: 0.0,
+        });
+        return;
+    };
     let loc = win.location();
     let path = loc.pathname().unwrap_or_else(|_| "/".into());
     let search = loc.search().unwrap_or_default();
 
     // Match.
-    let (component_name, params) = match_route(&path);
+    let (component_name, route_pattern, params) = match_route(&path);
+    crate::plugin::emit(crate::plugin::RouteNavigationStarted {
+        path: path.clone(),
+        route_pattern: route_pattern.clone(),
+        component: component_name.map(str::to_string),
+    });
 
     // Update the route state and trigger subscribers (bindings reading
     // `$route.*` re-run).
@@ -257,19 +272,54 @@ fn mount_current() {
     #[cfg(feature = "devtools")]
     crate::devtools::hooks::fire_route_change(&path, &params);
 
-    let Some(name) = component_name else { return };
+    let Some(name) = component_name else {
+        crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+            path,
+            route_pattern,
+            component: None,
+            duration_ms: elapsed_since(start_ms),
+        });
+        return;
+    };
 
     // Paint into the outlet. `replace_children` removes the previous
     // page's subtree, which the MutationObserver turns into effect +
     // scope cleanup via `mount::release_subtree`.
     let outlet = OUTLET.with(|o| o.borrow().clone());
-    let Some(outlet) = outlet else { return };
-    let Some(doc) = win.document() else { return };
+    let Some(outlet) = outlet else {
+        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+            path,
+            route_pattern,
+            component: Some(name.to_string()),
+            reason: "missing_outlet".to_string(),
+            duration_ms: elapsed_since(start_ms),
+        });
+        return;
+    };
+    let Some(doc) = win.document() else {
+        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+            path,
+            route_pattern,
+            component: Some(name.to_string()),
+            reason: "missing_document".to_string(),
+            duration_ms: elapsed_since(start_ms),
+        });
+        return;
+    };
 
     // Build `<name key="value" ...>`; the mount handles the mount.
     let el = match doc.create_element(name) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => {
+            crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                path,
+                route_pattern,
+                component: Some(name.to_string()),
+                reason: "create_element_failed".to_string(),
+                duration_ms: elapsed_since(start_ms),
+            });
+            return;
+        }
     };
     for (k, v) in &params {
         let _ = el.set_attribute(k, v);
@@ -282,25 +332,54 @@ fn mount_current() {
     // the macro-emitted entries.
     mount::mount_child_component(&el, name);
     mount::finalize_compiled_subtree(&el);
+    crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+        path,
+        route_pattern,
+        component: Some(name.to_string()),
+        duration_ms: elapsed_since(start_ms),
+    });
 }
 
 /// Find the first matching route's component name + params.
-fn match_route(path: &str) -> (Option<&'static str>, HashMap<String, String>) {
+fn match_route(
+    path: &str,
+) -> (
+    Option<&'static str>,
+    Option<String>,
+    HashMap<String, String>,
+) {
     ROUTES.with(|r| {
         let routes = r.borrow();
         // Specific routes first; wildcards as a fallback.
         for route in routes.iter().filter(|r| !r.is_wildcard()) {
             if let Some(params) = route.match_path(path) {
-                return (Some(route.component_name), params);
+                return (
+                    Some(route.component_name),
+                    Some(route.pattern.clone()),
+                    params,
+                );
             }
         }
         for route in routes.iter().filter(|r| r.is_wildcard()) {
             if let Some(params) = route.match_path(path) {
-                return (Some(route.component_name), params);
+                return (
+                    Some(route.component_name),
+                    Some(route.pattern.clone()),
+                    params,
+                );
             }
         }
-        (None, HashMap::new())
+        (None, None, HashMap::new())
     })
+}
+
+fn elapsed_since(start_ms: f64) -> f64 {
+    let elapsed = js_sys::Date::now() - start_ms;
+    if elapsed.is_finite() && elapsed >= 0.0 {
+        elapsed
+    } else {
+        0.0
+    }
 }
 
 fn parse_query(search: &str) -> HashMap<String, String> {

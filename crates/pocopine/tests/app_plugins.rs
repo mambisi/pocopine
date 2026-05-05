@@ -141,6 +141,40 @@ impl Hook<ComponentUnmounted> for TestAnalytics {
     }
 }
 
+struct DuplicateService;
+
+struct DuplicateProvider {
+    name: &'static str,
+}
+
+impl AppPlugin for DuplicateProvider {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn install(self, app: App) -> App {
+        app.provide_plugin(DuplicateService)
+    }
+}
+
+struct MissingHookService;
+
+impl Hook<ComponentMounted> for MissingHookService {
+    fn call(&self, _: ComponentMounted) {}
+}
+
+struct MissingHookPlugin;
+
+impl AppPlugin for MissingHookPlugin {
+    fn name(&self) -> &'static str {
+        "missing-hook-plugin"
+    }
+
+    fn install(self, app: App) -> App {
+        app.hook_plugin::<MissingHookService, ComponentMounted>()
+    }
+}
+
 #[derive(Clone)]
 struct HookRecorder {
     events: Rc<RefCell<Vec<String>>>,
@@ -181,6 +215,82 @@ impl Hook<ForComponent<AppPluginHookTarget, ComponentReady>> for HookRecorder {
 }
 
 #[derive(Clone)]
+struct AppEventRecorder {
+    events: Rc<RefCell<Vec<String>>>,
+}
+
+impl AppEventRecorder {
+    fn new(events: Rc<RefCell<Vec<String>>>) -> Self {
+        Self { events }
+    }
+
+    fn record(&self, event: impl Into<String>) {
+        self.events.borrow_mut().push(event.into());
+    }
+}
+
+impl Hook<AppBootStarted> for AppEventRecorder {
+    fn call(&self, event: AppBootStarted) {
+        self.record(format!(
+            "boot-start:{}:{}",
+            event.component_count, event.route_count
+        ));
+    }
+}
+
+impl Hook<AppBootCompleted> for AppEventRecorder {
+    fn call(&self, event: AppBootCompleted) {
+        assert!(
+            event.duration_ms >= 0.0,
+            "app boot duration should be non-negative"
+        );
+        self.record("boot-completed");
+    }
+}
+
+impl Hook<AppBootFailed> for AppEventRecorder {
+    fn call(&self, event: AppBootFailed) {
+        self.record(format!("boot-failed:{}", event.reason));
+    }
+}
+
+impl Hook<RouteNavigationStarted> for AppEventRecorder {
+    fn call(&self, event: RouteNavigationStarted) {
+        self.record(format!(
+            "route-start:{}:{}:{}",
+            event.path,
+            event.route_pattern.unwrap_or_default(),
+            event.component.unwrap_or_default(),
+        ));
+    }
+}
+
+impl Hook<RouteNavigationCompleted> for AppEventRecorder {
+    fn call(&self, event: RouteNavigationCompleted) {
+        assert!(
+            event.duration_ms >= 0.0,
+            "route navigation duration should be non-negative"
+        );
+        self.record(format!(
+            "route-completed:{}:{}:{}",
+            event.path,
+            event.route_pattern.unwrap_or_default(),
+            event.component.unwrap_or_default(),
+        ));
+    }
+}
+
+impl Hook<RouteNavigationFailed> for AppEventRecorder {
+    fn call(&self, event: RouteNavigationFailed) {
+        assert!(
+            event.duration_ms >= 0.0,
+            "failed route navigation duration should be non-negative"
+        );
+        self.record(format!("route-failed:{}:{}", event.path, event.reason));
+    }
+}
+
+#[derive(Clone)]
 struct CtaTracking {
     events: Rc<RefCell<Vec<String>>>,
 }
@@ -209,6 +319,24 @@ fn take_events() -> Vec<&'static str> {
 
 fn doc() -> web_sys::Document {
     window().unwrap().document().unwrap()
+}
+
+fn current_path_and_search() -> String {
+    let location = window().unwrap().location();
+    format!(
+        "{}{}",
+        location.pathname().unwrap_or_else(|_| "/".to_string()),
+        location.search().unwrap_or_default()
+    )
+}
+
+fn replace_url(path: &str) {
+    window()
+        .unwrap()
+        .history()
+        .unwrap()
+        .replace_state_with_url(&JsValue::NULL, "", Some(path))
+        .unwrap();
 }
 
 fn app_host(inner_html: &str) -> web_sys::Element {
@@ -270,6 +398,24 @@ fn component_hook_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
 
 fn cta_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
     move |app: App| app.provide_plugin(CtaTracking::new(events))
+}
+
+fn boot_event_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
+    move |app: App| {
+        app.provide_plugin(AppEventRecorder::new(events))
+            .hook_plugin::<AppEventRecorder, AppBootStarted>()
+            .hook_plugin::<AppEventRecorder, AppBootCompleted>()
+            .hook_plugin::<AppEventRecorder, AppBootFailed>()
+    }
+}
+
+fn route_event_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
+    move |app: App| {
+        app.provide_plugin(AppEventRecorder::new(events))
+            .hook_plugin::<AppEventRecorder, RouteNavigationStarted>()
+            .hook_plugin::<AppEventRecorder, RouteNavigationCompleted>()
+            .hook_plugin::<AppEventRecorder, RouteNavigationFailed>()
+    }
 }
 
 #[wasm_bindgen_test(async)]
@@ -382,6 +528,101 @@ async fn reusable_components_can_opt_into_plugin_capabilities() {
     handle.unmount();
     host.remove();
     app_root.remove();
+}
+
+#[wasm_bindgen_test]
+#[should_panic(expected = "first provider: `first-plugin`, second provider: `second-plugin`")]
+fn duplicate_plugin_services_name_their_providers() {
+    let _ = App::new()
+        .plugin(DuplicateProvider {
+            name: "first-plugin",
+        })
+        .plugin(DuplicateProvider {
+            name: "second-plugin",
+        });
+}
+
+#[wasm_bindgen_test]
+fn missing_hook_service_renders_plugin_boot_error() {
+    App::new().plugin(MissingHookPlugin).run();
+
+    let banner = doc()
+        .query_selector("[data-pocopine-boot-error=\"plugin\"]")
+        .unwrap()
+        .expect("missing hook service should render plugin boot error");
+    let text = banner.text_content().unwrap_or_default();
+    assert!(
+        text.contains("missing-hook-plugin"),
+        "diagnostic should name the plugin that installed the invalid hook"
+    );
+    assert!(
+        text.contains("MissingHookService"),
+        "diagnostic should name the missing service type"
+    );
+
+    banner.remove();
+}
+
+#[wasm_bindgen_test]
+fn app_boot_hooks_fire_on_success() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let host = app_host("");
+
+    App::new().plugin(boot_event_plugin(events.clone())).run();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &["boot-start:0:0".to_string(), "boot-completed".to_string()]
+    );
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+fn app_boot_failed_hook_fires_for_missing_pp_app_root() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+
+    App::new().plugin(boot_event_plugin(events.clone())).run();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            "boot-start:0:0".to_string(),
+            "boot-failed:missing_pp_app_root".to_string(),
+        ]
+    );
+    if let Some(banner) = doc()
+        .query_selector("[data-pocopine-boot-error=\"missing-pp-app\"]")
+        .unwrap()
+    {
+        banner.remove();
+    }
+}
+
+#[wasm_bindgen_test]
+fn route_navigation_hooks_fire_for_matched_routes() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let original = current_path_and_search();
+    let host = app_host("<pp-outlet></pp-outlet>");
+
+    App::new()
+        .route::<AppPluginDirectHome>("/plugin-route-events")
+        .plugin(route_event_plugin(events.clone()))
+        .run();
+    events.borrow_mut().clear();
+
+    pocopine::navigate("/plugin-route-events");
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            "route-start:/plugin-route-events:/plugin-route-events:app-plugin-direct-home"
+                .to_string(),
+            "route-completed:/plugin-route-events:/plugin-route-events:app-plugin-direct-home"
+                .to_string(),
+        ]
+    );
+    replace_url(&original);
+    host.remove();
 }
 
 #[wasm_bindgen_test]

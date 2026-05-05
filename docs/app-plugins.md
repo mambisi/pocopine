@@ -19,6 +19,10 @@ A plugin is a builder transform:
 
 ```rust
 pub trait AppPlugin {
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn install(self, app: App) -> App;
 }
 ```
@@ -50,6 +54,10 @@ pub struct Observability {
 }
 
 impl pocopine::AppPlugin for ObservabilityPlugin {
+    fn name(&self) -> &'static str {
+        "pocopine-observability"
+    }
+
     fn install(self, app: pocopine::App) -> pocopine::App {
         let _ = pocopine::logging::init_console_logging(
             pocopine::logging::ConsoleLoggingConfig::json(),
@@ -67,6 +75,12 @@ impl pocopine::AppPlugin for ObservabilityPlugin {
 The important point: `install` runs while the app builder is still being
 assembled. It can do immediate global setup and can also attach later lifecycle
 hooks.
+
+`name()` is optional, but reusable plugin crates should override it with a
+stable name. Core uses the name in duplicate-service panics, boot diagnostics,
+devtools, logs, and future ordering checks. Closures default to their Rust type
+name, which is useful enough for app-local plugins but noisy for published
+integrations.
 
 ## Runtime Services
 
@@ -185,7 +199,7 @@ pocopine::app! {
 Use `Plugin<T>` instead of `Option<Plugin<T>>` only when the component cannot
 work without that app capability.
 
-## Framework Hooks
+## Framework Hooks And Diagnostics
 
 Runtime services can also subscribe to app-wide framework lifecycle events by
 implementing `Hook<E>`. This is for global/default behavior such as automatic
@@ -256,7 +270,7 @@ is not the primary extension path for reusable component families like CTA
 buttons; those components should prefer `Option<Plugin<T>>` and own their
 plugin opt-in locally.
 
-This gives plugins three integration paths:
+This gives plugins four integration paths:
 
 - component authors pull `Plugin<T>` when their hook needs the service;
 - reusable components pull `Option<Plugin<T>>` when an integration is optional;
@@ -264,6 +278,34 @@ This gives plugins three integration paths:
   global/default behavior;
 - component-specific integrations use `Hook<ForComponent<C, E>>` and
   `hook_component_plugin` for app-specific overrides.
+
+Plugin hook services are validated before the first mount. A hook registered
+with `hook_plugin::<Analytics, ComponentMounted>()` may be declared before or
+after `provide_plugin(Analytics::new(...))`, but by `App::run()` every required
+service must be installed. If not, core renders a fixed boot error and logs a
+message naming:
+
+- the plugin that installed the hook;
+- the missing service type;
+- the event type;
+- the component type for `hook_component_plugin`.
+
+Duplicate services also fail immediately and name both providers:
+
+```text
+plugin service `Analytics` is already installed
+(first provider: `pocopine-observability`, second provider: `app`)
+```
+
+This keeps plugin ordering explicit. The framework does not infer dependency
+graphs yet; install plugins in the order the app wants:
+
+```rust
+App::new()
+    .plugin(logging_plugin())
+    .plugin(analytics_plugin())
+    .run();
+```
 
 ## Lifecycle Order
 
@@ -282,16 +324,87 @@ route. This is deliberate: direct builder code is ordinary Rust builder order.
 
 After `run()` starts, the runtime order is:
 
-1. verify the component registry;
-2. install built-in animation styles;
-3. run `before_mount` hooks;
-4. mount the `[pp-app]` subtree;
-5. initialize router and devtools;
-6. schedule `after_mount` hooks on the next microtask.
+1. validate plugin hook/service wiring;
+2. activate plugin services and emit `AppBootStarted`;
+3. verify the component registry;
+4. install built-in animation styles;
+5. run `before_mount` hooks;
+6. mount the `[pp-app]` subtree;
+7. initialize router and devtools;
+8. schedule `after_mount` hooks on the next microtask;
+9. emit `AppBootCompleted`.
 
-Global integrations that must observe boot failures should run in plugin
-`install`, not in `before_mount`, because registry verification happens before
-`before_mount`.
+Core emits `AppBootFailed` for boot failures that happen after plugins are
+valid and active, such as registry conflicts or a missing `[pp-app]` root.
+Plugin validation failures happen before activation, so invalid plugin wiring
+renders the plugin boot error instead of dispatching hook events through a
+known-bad plugin graph.
+
+## Framework Event Surface
+
+The first frontend framework events are:
+
+```rust
+AppBootStarted {
+    component_count,
+    route_count,
+}
+
+AppBootCompleted {
+    duration_ms,
+}
+
+AppBootFailed {
+    reason,
+}
+
+ComponentSetup {
+    component,
+    scope_id,
+}
+
+ComponentMounted {
+    component,
+    scope_id,
+    duration_ms,
+}
+
+ComponentReady {
+    component,
+    scope_id,
+}
+
+ComponentUnmounted {
+    component,
+    scope_id,
+}
+
+RouteNavigationStarted {
+    path,
+    route_pattern,
+    component,
+}
+
+RouteNavigationCompleted {
+    path,
+    route_pattern,
+    component,
+    duration_ms,
+}
+
+RouteNavigationFailed {
+    path,
+    route_pattern,
+    component,
+    reason,
+    duration_ms,
+}
+```
+
+Route events include both the current URL path and the matched route pattern
+when one exists. Observability plugins should prefer `route_pattern` for
+aggregate analytics and treat `path` as potentially identifying, because apps
+often encode IDs in route segments.
 
 ## `app!` Macro Order
 
@@ -359,6 +472,8 @@ Observability is the reference use case:
 - `hook_plugin` should attach automatic app-wide component handling;
 - `hook_component_plugin` should attach page- or component-specific telemetry
   overrides without string filters in the hook implementation;
+- `hook_plugin` should subscribe to `AppBoot*` and `RouteNavigation*` events
+  for boot and navigation telemetry;
 - component hooks can extract `Plugin<Observability>` for app-authored events;
 - reusable components can extract `Option<Plugin<Observability>>` to
   participate when observability is installed and remain portable when it is
@@ -385,6 +500,10 @@ The dedicated app-plugin tests assert:
 - direct builder plugins can install lifecycle hooks;
 - `app!` plugins see static component and route metadata before mount;
 - plugin-installed `before_mount` and `after_mount` hooks run in runtime order;
+- plugin names appear in duplicate-service diagnostics;
+- missing hook services render a plugin boot error before mount;
+- app boot hooks fire on successful and failed boot;
+- route navigation hooks fire for matched routes;
 - `Plugin<T>` panics clearly when required services are missing;
 - `Option<Plugin<T>>` returns `None` when optional services are missing;
 - reusable components can use `self.plugins().get::<T>()` from ordinary event

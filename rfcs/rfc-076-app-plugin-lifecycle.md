@@ -18,6 +18,10 @@ The initial API is intentionally small:
 
 ```rust
 pub trait AppPlugin {
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn install(self, app: App) -> App;
 }
 
@@ -82,6 +86,9 @@ This is now a blocking foundation for:
   builder.
 - Let macro-installed plugins inspect the static component and route manifest
   before mount starts.
+- Attach plugin/provider metadata to diagnostics without introducing a plugin
+  dependency solver.
+- Validate hook/service wiring before the first mount.
 
 ## 4. Non-goals
 
@@ -101,6 +108,10 @@ This is now a blocking foundation for:
 
 ```rust
 pub trait AppPlugin {
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn install(self, app: App) -> App;
 }
 ```
@@ -129,11 +140,20 @@ pub struct ObservabilityPlugin {
 }
 
 impl pocopine::AppPlugin for ObservabilityPlugin {
+    fn name(&self) -> &'static str {
+        "pocopine-observability"
+    }
+
     fn install(self, app: pocopine::App) -> pocopine::App {
         app.before_mount(move || install_observability(self.service_name))
     }
 }
 ```
+
+Reusable plugins should override `name()` with a stable crate-level name. Core
+uses it for duplicate-service diagnostics, missing-service boot errors, logs,
+devtools, and future ordering checks. App-local closures keep the default Rust
+type name.
 
 ### 5.2 Builder order
 
@@ -159,11 +179,14 @@ For macro apps, plugin order is deterministic and manifest-aware:
 3. record generated routes from `routes: [...]`
 4. install plugins from `plugins: [...]` in list order
 5. run the authoritative static registry walk
-6. verify registry
-7. run `before_mount`
-8. mount `[pp-app]`
-9. initialize router/devtools
-10. schedule `after_mount`
+6. validate plugin hook/service wiring
+7. activate plugins and emit `AppBootStarted`
+8. verify registry
+9. run `before_mount`
+10. mount `[pp-app]`
+11. initialize router/devtools
+12. schedule `after_mount`
+13. emit `AppBootCompleted`
 
 This lets plugins inspect `registered_components()` and
 `registered_routes()` before mount while preserving RFC 060's rule that
@@ -186,10 +209,25 @@ App::new()
 
 The actual registration still happens through `run_with_registry(&REGISTRY)`.
 
-### 5.5 Failure semantics
+### 5.5 Failure semantics and diagnostics
 
 Plugin installation is synchronous and may panic like ordinary app startup
 code. The framework does not catch plugin panics in this RFC.
+
+`App::provide_plugin<T>` records the provider name. Installing the same service
+type twice is a configuration error and panics immediately with both provider
+names.
+
+`App::hook_plugin::<T, E>` and
+`App::hook_component_plugin::<T, C, E>` record the service requirement they add.
+`App::run()` validates those requirements before activating plugins. A hook may
+be registered before or after the corresponding `provide_plugin`, but by boot
+time every required service must exist. Missing services render a fixed plugin
+boot error and log a diagnostic that names the plugin, service, event, and
+component filter when present.
+
+This RFC deliberately does not add declarative plugin dependencies or
+topological sorting. The app's plugin order remains the only ordering rule.
 
 If a plugin installs a hook and that hook panics, it follows the existing hook
 behavior. This RFC does not introduce hook isolation. Integrations that need
@@ -349,13 +387,24 @@ prefer `Option<Plugin<T>>` and opt in from the component hook itself.
 
 The first framework events are:
 
+- `AppBootStarted { component_count, route_count }`;
+- `AppBootCompleted { duration_ms }`;
+- `AppBootFailed { reason }`;
 - `ComponentSetup { component, scope_id }`;
 - `ComponentMounted { component, scope_id, duration_ms }`;
 - `ComponentReady { component, scope_id }`;
-- `ComponentUnmounted { component, scope_id }`.
+- `ComponentUnmounted { component, scope_id }`;
+- `RouteNavigationStarted { path, route_pattern, component }`;
+- `RouteNavigationCompleted { path, route_pattern, component, duration_ms }`;
+- `RouteNavigationFailed { path, route_pattern, component, reason, duration_ms }`.
 
 Core emits these from the compiled mount/release path. Plugins decide whether
 to subscribe.
+
+Route events include the current URL path and, when matching succeeds, the
+static route pattern. Observability integrations should prefer the route
+pattern for aggregate analytics and treat raw paths as potentially
+identifying.
 
 ## 6. Privacy and Reliability
 
@@ -374,11 +423,14 @@ weaken the event privacy contract.
 The first slice ships:
 
 - `pocopine_core::AppPlugin`;
+- `AppPlugin::name`;
 - blanket `AppPlugin` implementation for `FnOnce(App) -> App`;
 - `App::plugin`;
 - `App::provide_plugin`;
 - `App::hook_plugin`;
 - `App::hook_component_plugin`;
+- duplicate-service diagnostics with plugin/provider names;
+- boot-time hook/service validation and plugin boot errors;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
 - `self.plugin::<T>()` and `self.plugins().get::<T>()` component-owned plugin
   accessors for ordinary component methods and DOM event handlers;
@@ -386,6 +438,7 @@ The first slice ships:
 - `Hook<ForComponent<C, E>>` component-filtered dispatch;
 - `ComponentSetup` / `ComponentMounted` / `ComponentReady` /
   `ComponentUnmounted` events;
+- `AppBoot*` and `RouteNavigation*` events;
 - hidden `App::component_static` for `app!{}` manifest metadata;
 - `pocopine::AppPlugin` and prelude re-exports;
 - `app! { plugins: [...] }`;

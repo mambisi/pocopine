@@ -23,6 +23,8 @@ thread_local! {
     static ACTIVE_PLUGINS: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::default());
 }
 
+const APP_PROVIDER: &str = "app";
+
 /// Runtime handle for a service installed by an app plugin.
 ///
 /// Component lifecycle hooks receive this through the standard extractor
@@ -93,6 +95,55 @@ impl<C: Component + ?Sized> ComponentPluginExt for C {}
 /// Typed framework event hook implemented by runtime plugin services.
 pub trait Hook<E>: 'static {
     fn call(&self, event: E);
+}
+
+/// Emitted once app boot starts after plugin validation succeeds.
+#[derive(Clone, Debug)]
+pub struct AppBootStarted {
+    pub component_count: usize,
+    pub route_count: usize,
+}
+
+/// Emitted once initial app boot has mounted the root and scheduled
+/// post-mount work.
+#[derive(Clone, Debug)]
+pub struct AppBootCompleted {
+    pub duration_ms: f64,
+}
+
+/// Emitted when app boot fails after plugin validation succeeds.
+#[derive(Clone, Debug)]
+pub struct AppBootFailed {
+    pub reason: String,
+}
+
+/// Emitted before the router tries to paint the current URL.
+#[derive(Clone, Debug)]
+pub struct RouteNavigationStarted {
+    pub path: String,
+    pub route_pattern: Option<String>,
+    pub component: Option<String>,
+}
+
+/// Emitted after the router paints a matched route or resolves an
+/// unmatched path.
+#[derive(Clone, Debug)]
+pub struct RouteNavigationCompleted {
+    pub path: String,
+    pub route_pattern: Option<String>,
+    pub component: Option<String>,
+    pub duration_ms: f64,
+}
+
+/// Emitted when route matching succeeds but the router cannot paint
+/// the route.
+#[derive(Clone, Debug)]
+pub struct RouteNavigationFailed {
+    pub path: String,
+    pub route_pattern: Option<String>,
+    pub component: Option<String>,
+    pub reason: String,
+    pub duration_ms: f64,
 }
 
 /// Component-scoped framework event.
@@ -227,27 +278,94 @@ impl ComponentEvent for ComponentUnmounted {
     }
 }
 
+struct PluginService {
+    service: Rc<dyn Any>,
+    provider: &'static str,
+}
+
+struct HookRequirement {
+    plugin: &'static str,
+    service: &'static str,
+    service_type: TypeId,
+    event: &'static str,
+    component: Option<&'static str>,
+}
+
+/// Boot-time plugin validation error.
+///
+/// The runtime records which plugin installed each hook. Before mounting the
+/// app it verifies that every hook's required service has also been provided,
+/// so misconfigured plugin ordering fails at boot with a concrete diagnostic
+/// instead of failing later on the first matching event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginValidationError {
+    pub plugin: &'static str,
+    pub service: &'static str,
+    pub event: &'static str,
+    pub component: Option<&'static str>,
+}
+
+impl fmt::Display for PluginValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.component {
+            Some(component) => write!(
+                f,
+                "plugin `{}` registered a hook for component `{}` and event `{}` \
+                 requiring service `{}`, but that service was not provided",
+                self.plugin, component, self.event, self.service
+            ),
+            None => write!(
+                f,
+                "plugin `{}` registered a hook for event `{}` requiring service `{}`, \
+                 but that service was not provided",
+                self.plugin, self.event, self.service
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct PluginRegistry {
-    services: HashMap<TypeId, Rc<dyn Any>>,
+    services: HashMap<TypeId, PluginService>,
     hooks: HashMap<TypeId, Vec<HookDispatch>>,
+    requirements: Vec<HookRequirement>,
 }
 
 impl PluginRegistry {
-    pub(crate) fn provide<T: 'static>(&mut self, service: T) {
-        let previous = self.services.insert(TypeId::of::<T>(), Rc::new(service));
-        assert!(
-            previous.is_none(),
-            "plugin service `{}` is already installed",
-            type_name::<T>(),
+    pub(crate) fn provide<T: 'static>(&mut self, service: T, provider: Option<&'static str>) {
+        let service_type = TypeId::of::<T>();
+        let provider = provider.unwrap_or(APP_PROVIDER);
+        if let Some(previous) = self.services.get(&service_type) {
+            panic!(
+                "plugin service `{}` is already installed (first provider: `{}`, \
+                 second provider: `{}`)",
+                type_name::<T>(),
+                previous.provider,
+                provider,
+            );
+        }
+        self.services.insert(
+            service_type,
+            PluginService {
+                service: Rc::new(service),
+                provider,
+            },
         );
     }
 
-    pub(crate) fn hook_plugin<T, E>(&mut self)
+    pub(crate) fn hook_plugin<T, E>(&mut self, plugin: Option<&'static str>)
     where
         T: Hook<E> + 'static,
         E: Clone + 'static,
     {
+        let plugin = plugin.unwrap_or(APP_PROVIDER);
+        self.requirements.push(HookRequirement {
+            plugin,
+            service: type_name::<T>(),
+            service_type: TypeId::of::<T>(),
+            event: type_name::<E>(),
+            component: None,
+        });
         self.hooks
             .entry(TypeId::of::<E>())
             .or_default()
@@ -271,12 +389,20 @@ impl PluginRegistry {
             }));
     }
 
-    pub(crate) fn hook_component_plugin<T, C, E>(&mut self)
+    pub(crate) fn hook_component_plugin<T, C, E>(&mut self, plugin: Option<&'static str>)
     where
         T: Hook<ForComponent<C, E>> + 'static,
         C: Component + 'static,
         E: ComponentEvent,
     {
+        let plugin = plugin.unwrap_or(APP_PROVIDER);
+        self.requirements.push(HookRequirement {
+            plugin,
+            service: type_name::<T>(),
+            service_type: TypeId::of::<T>(),
+            event: type_name::<E>(),
+            component: Some(C::NAME),
+        });
         self.hooks
             .entry(TypeId::of::<E>())
             .or_default()
@@ -306,10 +432,29 @@ impl PluginRegistry {
             }));
     }
 
+    pub(crate) fn validate(&self) -> Result<(), Vec<PluginValidationError>> {
+        let errors: Vec<_> = self
+            .requirements
+            .iter()
+            .filter(|requirement| !self.services.contains_key(&requirement.service_type))
+            .map(|requirement| PluginValidationError {
+                plugin: requirement.plugin,
+                service: requirement.service,
+                event: requirement.event,
+                component: requirement.component,
+            })
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     fn plugin<T: 'static>(&self) -> Option<Plugin<T>> {
         self.services
             .get(&TypeId::of::<T>())
-            .and_then(|service| service.clone().downcast::<T>().ok())
+            .and_then(|service| service.service.clone().downcast::<T>().ok())
             .map(|service| Plugin { service })
     }
 
@@ -365,4 +510,54 @@ pub(crate) fn required_plugin<T: 'static>() -> Plugin<T> {
             type_name::<T>(),
         )
     })
+}
+
+pub(crate) fn render_plugin_boot_error(errors: &[PluginValidationError]) {
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Some(body) = doc.body() else { return };
+    if let Ok(Some(existing)) = body.query_selector("[data-pocopine-boot-error=\"plugin\"]") {
+        existing.remove();
+    }
+    let Ok(banner) = doc.create_element("div") else {
+        return;
+    };
+    let _ = banner.set_attribute("data-pocopine-boot-error", "plugin");
+    let _ = banner.set_attribute(
+        "style",
+        "position:fixed;inset:0;background:#1b1b1f;color:#f5f5f7;\
+         font-family:ui-monospace,monospace;padding:24px;overflow:auto;\
+         z-index:2147483647;",
+    );
+    let mut html = String::from(
+        "<h2 style=\"margin:0 0 12px 0;color:#ff6b6b;\">pocopine: \
+         app plugin configuration is invalid</h2>\
+         <p style=\"margin:0 0 16px 0;\">The runtime refused to mount \
+         because one or more plugin hooks require services that were not \
+         installed.</p><ul style=\"margin:0;padding-left:20px;\">",
+    );
+    for err in errors {
+        html.push_str("<li style=\"margin-bottom:8px;\">");
+        html.push_str(&html_escape(&err.to_string()));
+        html.push_str("</li>");
+    }
+    html.push_str("</ul>");
+    banner.set_inner_html(&html);
+    let _ = body.append_child(&banner);
+    web_sys::console::error_1(
+        &format!(
+            "pocopine: app plugin configuration has {} error(s); refusing to mount",
+            errors.len()
+        )
+        .into(),
+    );
+    for err in errors {
+        web_sys::console::error_1(&err.to_string().into());
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

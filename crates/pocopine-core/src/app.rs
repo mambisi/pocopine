@@ -67,6 +67,10 @@ type Hook = Box<dyn FnOnce()>;
 /// a separate crate can expose a plugin value, and applications opt into it
 /// from their entrypoint.
 pub trait AppPlugin {
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn install(self, app: App) -> App;
 }
 
@@ -91,6 +95,7 @@ pub struct App {
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
     plugins: crate::plugin::PluginRegistry,
+    installing_plugin: Option<&'static str>,
     devtools: bool,
 }
 
@@ -119,8 +124,12 @@ impl App {
     /// The plugin runs while the builder is still being assembled, before
     /// registry verification and mount work. External crates should prefer
     /// this over asking applications to patch core startup logic.
-    pub fn plugin<P: AppPlugin>(self, plugin: P) -> Self {
-        plugin.install(self)
+    pub fn plugin<P: AppPlugin>(mut self, plugin: P) -> Self {
+        let name = plugin.name();
+        let previous = self.installing_plugin.replace(name);
+        let mut app = plugin.install(self);
+        app.installing_plugin = previous;
+        app
     }
 
     /// Provide a typed runtime service to component lifecycle hooks and
@@ -132,7 +141,7 @@ impl App {
     /// components: the app installs one capability, and every component that
     /// knows how to use it can opt in without being listed by the plugin.
     pub fn provide_plugin<T: 'static>(mut self, service: T) -> Self {
-        self.plugins.provide(service);
+        self.plugins.provide(service, self.installing_plugin);
         self
     }
 
@@ -145,7 +154,7 @@ impl App {
         T: crate::plugin::Hook<E> + 'static,
         E: Clone + 'static,
     {
-        self.plugins.hook_plugin::<T, E>();
+        self.plugins.hook_plugin::<T, E>(self.installing_plugin);
         self
     }
 
@@ -164,7 +173,8 @@ impl App {
         C: Component + 'static,
         E: crate::plugin::ComponentEvent,
     {
-        self.plugins.hook_component_plugin::<T, C, E>();
+        self.plugins
+            .hook_component_plugin::<T, C, E>(self.installing_plugin);
         self
     }
 
@@ -260,16 +270,29 @@ impl App {
     /// no further mount work runs.
     pub fn run(self) {
         let Self {
-            components: _,
+            components,
             stores: _,
             routes,
             before_mount,
             after_mount,
             plugins,
+            installing_plugin: _,
             devtools,
         } = self;
+        let boot_start_ms = js_sys::Date::now();
+        if let Err(errors) = plugins.validate() {
+            crate::plugin::render_plugin_boot_error(&errors);
+            return;
+        }
         crate::plugin::activate(plugins);
+        crate::plugin::emit(crate::plugin::AppBootStarted {
+            component_count: components.len(),
+            route_count: routes.len(),
+        });
         if let Err(errors) = crate::registry::verify_registry() {
+            crate::plugin::emit(crate::plugin::AppBootFailed {
+                reason: "component_registry".to_string(),
+            });
             crate::registry::render_boot_error(&errors);
             return;
         }
@@ -285,15 +308,24 @@ impl App {
         // there. Whole-body mounting is gone; apps that want
         // multiple roots use `mount_subtree::<C>` instead.
         let Some(window) = web_sys::window() else {
+            crate::plugin::emit(crate::plugin::AppBootFailed {
+                reason: "missing_window".to_string(),
+            });
             return;
         };
         let Some(document) = window.document() else {
+            crate::plugin::emit(crate::plugin::AppBootFailed {
+                reason: "missing_document".to_string(),
+            });
             return;
         };
         let pp_app = document.query_selector("[pp-app]").ok().flatten();
         if let Some(host) = pp_app {
             mount_pp_app_subtree(&host);
         } else {
+            crate::plugin::emit(crate::plugin::AppBootFailed {
+                reason: "missing_pp_app_root".to_string(),
+            });
             render_missing_pp_app_root();
             return;
         }
@@ -315,6 +347,14 @@ impl App {
                 }
             });
         }
+        let elapsed = js_sys::Date::now() - boot_start_ms;
+        crate::plugin::emit(crate::plugin::AppBootCompleted {
+            duration_ms: if elapsed.is_finite() && elapsed >= 0.0 {
+                elapsed
+            } else {
+                0.0
+            },
+        });
     }
 
     /// Snapshot of the registered component names. Debug utility only —
