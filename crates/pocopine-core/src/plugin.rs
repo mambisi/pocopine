@@ -82,7 +82,10 @@ pub trait ComponentEvent: Clone + 'static {
 ///
 /// A service implements `Hook<ForComponent<MyComponent, ComponentMounted>>`
 /// and installs it with `App::hook_component_plugin::<Service,
-/// MyComponent, ComponentMounted>()`.
+/// MyComponent, ComponentMounted>()`. This is for app-specific overrides where
+/// the plugin intentionally targets a known component. Reusable component
+/// behavior should normally be owned by the component through `Plugin<T>` or
+/// `Option<Plugin<T>>` extraction.
 pub struct ForComponent<C, E> {
     event: E,
     _component: PhantomData<fn() -> C>,
@@ -318,6 +321,24 @@ where
 
 pub(crate) fn has_hooks<E: 'static>() -> bool {
     ACTIVE_PLUGINS.with(|plugins| plugins.borrow().has_hooks::<E>())
+}
+
+/// Return the installed plugin service `T`, if the app provided it.
+///
+/// Lifecycle methods should usually use the `Option<Plugin<T>>` extractor.
+/// Ordinary component methods and DOM event handlers can call this helper
+/// directly because they do not receive a [`crate::LifecycleContext`].
+pub fn optional_plugin<T: 'static>() -> Option<Plugin<T>> {
+    active_plugin::<T>()
+}
+
+/// Return the installed plugin service `T`, or panic with install guidance.
+///
+/// Lifecycle methods should usually use the `Plugin<T>` extractor. Ordinary
+/// component methods and DOM event handlers can call this helper directly when
+/// the service is required.
+pub fn require_plugin<T: 'static>() -> Plugin<T> {
+    required_plugin::<T>()
 }
 
 pub(crate) fn active_plugin<T: 'static>() -> Option<Plugin<T>> {

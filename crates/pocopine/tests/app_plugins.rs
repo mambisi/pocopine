@@ -13,10 +13,10 @@ use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine::App;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
-use web_sys::window;
+use web_sys::{window, HtmlElement};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -85,6 +85,28 @@ struct AppPluginHookOther {}
 
 #[handlers]
 impl AppPluginHookOther {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "app-plugin-cta-button",
+    template_inline = r#"<button class="app-plugin-cta" @click="track_click">CTA</button>"#
+)]
+struct AppPluginCtaButton {}
+
+#[handlers]
+impl AppPluginCtaButton {
+    pub fn on_ready(&self, cta: Option<Plugin<CtaTracking>>) {
+        if let Some(cta) = cta {
+            cta.impression("cta");
+        }
+    }
+
+    pub fn track_click(&self) {
+        if let Some(cta) = optional_plugin::<CtaTracking>() {
+            cta.click("cta");
+        }
+    }
+}
 
 struct MissingPlugin;
 
@@ -158,6 +180,25 @@ impl Hook<ForComponent<AppPluginHookTarget, ComponentReady>> for HookRecorder {
     }
 }
 
+#[derive(Clone)]
+struct CtaTracking {
+    events: Rc<RefCell<Vec<String>>>,
+}
+
+impl CtaTracking {
+    fn new(events: Rc<RefCell<Vec<String>>>) -> Self {
+        Self { events }
+    }
+
+    fn impression(&self, id: &str) {
+        self.events.borrow_mut().push(format!("impression:{id}"));
+    }
+
+    fn click(&self, id: &str) {
+        self.events.borrow_mut().push(format!("click:{id}"));
+    }
+}
+
 fn push(event: &'static str) {
     EVENTS.with(|events| events.borrow_mut().push(event));
 }
@@ -225,6 +266,10 @@ fn component_hook_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
             .hook_component_plugin::<HookRecorder, AppPluginHookTarget, ComponentMounted>()
             .hook_component_plugin::<HookRecorder, AppPluginHookTarget, ComponentReady>()
     }
+}
+
+fn cta_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
+    move |app: App| app.provide_plugin(CtaTracking::new(events))
 }
 
 #[wasm_bindgen_test(async)]
@@ -306,6 +351,36 @@ async fn component_hooks_can_be_global_or_filtered_by_component_type() {
 
     target_host.remove();
     other_host.remove();
+    app_root.remove();
+}
+
+#[wasm_bindgen_test(async)]
+async fn reusable_components_can_opt_into_plugin_capabilities() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let app_root = app_host("");
+
+    App::new().plugin(cta_plugin(events.clone())).run();
+
+    let host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&host).unwrap();
+    let handle = App::mount_subtree::<AppPluginCtaButton>(&host);
+    next_microtask().await;
+
+    let button = host
+        .query_selector(".app-plugin-cta")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap();
+    button.click();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &["impression:cta".to_string(), "click:cta".to_string(),]
+    );
+
+    handle.unmount();
+    host.remove();
     app_root.remove();
 }
 

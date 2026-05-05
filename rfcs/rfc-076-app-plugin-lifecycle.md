@@ -233,9 +233,43 @@ fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
 
 The optional extractor returns `None` when the service is not installed.
 
+Ordinary component methods and DOM event handlers do not receive a lifecycle
+context, so they use `optional_plugin::<T>()` or `require_plugin::<T>()`
+instead of extractor parameters.
+
+Reusable component families should usually own their integration through these
+extractors. For example, a CTA tracking plugin provides `CtaTracking` once, and
+every CTA button instance can opt in without the app enumerating button
+component types:
+
+```rust
+pub fn firebase_cta_tracking(config: FirebaseConfig) -> impl AppPlugin {
+    move |app: App| app.provide_plugin(CtaTracking::new(config))
+}
+
+#[handlers]
+impl CtaButton {
+    pub fn on_ready(&self, cta: Option<Plugin<CtaTracking>>) {
+        if let Some(cta) = cta {
+            cta.impression(&self.analytics_id);
+        }
+    }
+
+    pub fn on_click(&self) {
+        if let Some(cta) = optional_plugin::<CtaTracking>() {
+            cta.click(&self.analytics_id);
+        }
+    }
+}
+```
+
+Use `Plugin<T>` when the component requires the app capability to function.
+Use `Option<Plugin<T>>` when the component remains reusable without it.
+
 ### 5.7 Framework event hooks
 
-Runtime services can implement typed hook traits for framework events:
+Runtime services can implement typed hook traits for app-wide framework events.
+This is for global/default behavior such as automatic lifecycle telemetry:
 
 ```rust
 impl Hook<ComponentSetup> for Analytics {
@@ -277,7 +311,9 @@ impl AppPlugin for AnalyticsPlugin {
 }
 ```
 
-Component-specific hooks use a typed wrapper:
+Component-specific hooks use a typed wrapper. This path is for app-specific
+overrides or special cases where the plugin intentionally targets one known
+component type:
 
 ```rust
 impl Hook<ForComponent<CheckoutPage, ComponentMounted>> for Analytics {
@@ -296,7 +332,9 @@ impl AppPlugin for AnalyticsPlugin {
 
 The component filter is type-level at the plugin boundary. Core still emits a
 canonical component name internally, and `hook_component_plugin` performs the
-match before invoking `Hook<ForComponent<C, E>>`.
+match before invoking `Hook<ForComponent<C, E>>`. Reusable component families
+should not depend on this path as their primary integration model; they should
+prefer `Option<Plugin<T>>` and opt in from the component hook itself.
 
 The first framework events are:
 
@@ -331,6 +369,8 @@ The first slice ships:
 - `App::hook_plugin`;
 - `App::hook_component_plugin`;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
+- `optional_plugin::<T>()` and `require_plugin::<T>()` helpers for ordinary
+  component methods and DOM event handlers;
 - `Hook<E>` framework-event dispatch;
 - `Hook<ForComponent<C, E>>` component-filtered dispatch;
 - `ComponentSetup` / `ComponentMounted` / `ComponentReady` /
