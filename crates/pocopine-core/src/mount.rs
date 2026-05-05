@@ -225,7 +225,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         return;
     };
     let has_ready = scope.state.borrow().has_on_ready();
-    let has_plugin_ready = crate::plugin::has_hooks::<crate::plugin::ComponentReady>();
+    let has_plugin_ready = crate::plugin::has_component_ready_hooks();
     if !has_ready && !has_plugin_ready {
         return;
     }
@@ -271,7 +271,6 @@ fn mount_component(
     if get_private(el, "__pp_mounted").is_some() {
         return;
     }
-    let mount_start_ms = js_sys::Date::now();
 
     // RFC-019 — `pp-as` hoists the user's single child element as
     // the rendered root, discarding the template's wrapper. Only
@@ -280,6 +279,8 @@ fn mount_component(
     if el.has_attribute("pp-as") && try_mount_component_as(el, tag) {
         return;
     }
+    let plugin_hooks = crate::plugin::component_hook_activity();
+    let mount_start_ms = plugin_hooks.needs_mount_start.then(js_sys::Date::now);
 
     let Some(scope) = instantiate(tag) else {
         return;
@@ -351,16 +352,20 @@ fn mount_component(
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
-        set_private(
-            &root,
-            COMPONENT_NAME_KEY,
-            &JsValue::from_str(&canonical_component_name(tag)),
-        );
-        set_private(
-            &root,
-            MOUNT_START_MS_KEY,
-            &JsValue::from_f64(mount_start_ms),
-        );
+        if plugin_hooks.needs_component_name {
+            set_private(
+                &root,
+                COMPONENT_NAME_KEY,
+                &JsValue::from_str(&canonical_component_name(tag)),
+            );
+        }
+        if let Some(mount_start_ms) = mount_start_ms {
+            set_private(
+                &root,
+                MOUNT_START_MS_KEY,
+                &JsValue::from_f64(mount_start_ms),
+            );
+        }
         let _ = root.remove_attribute("data-pp-scope-id");
 
         // Fallthrough (RFC-010).
@@ -456,7 +461,8 @@ pub fn mount_child_component_with_slots(
 /// template root isn't a simple `<tag><slot></slot></tag>` wrapper)
 /// — caller falls back to the normal mount path.
 fn try_mount_component_as(el: &Element, tag: &str) -> bool {
-    let mount_start_ms = js_sys::Date::now();
+    let plugin_hooks = crate::plugin::component_hook_activity();
+    let mount_start_ms = plugin_hooks.needs_mount_start.then(js_sys::Date::now);
     let user_root = match find_single_child_element_skipping_slot_templates(el) {
         Some(e) => e,
         None => {
@@ -530,16 +536,20 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         &JsValue::from_f64(scope.id.0 as f64),
     );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
-    set_private(
-        &user_root,
-        COMPONENT_NAME_KEY,
-        &JsValue::from_str(&canonical_component_name(tag)),
-    );
-    set_private(
-        &user_root,
-        MOUNT_START_MS_KEY,
-        &JsValue::from_f64(mount_start_ms),
-    );
+    if plugin_hooks.needs_component_name {
+        set_private(
+            &user_root,
+            COMPONENT_NAME_KEY,
+            &JsValue::from_str(&canonical_component_name(tag)),
+        );
+    }
+    if let Some(mount_start_ms) = mount_start_ms {
+        set_private(
+            &user_root,
+            MOUNT_START_MS_KEY,
+            &JsValue::from_f64(mount_start_ms),
+        );
+    }
     let _ = user_root.remove_attribute("data-pp-scope-id");
 
     let plan_root = pp_as_render_root(&user_root);
@@ -1492,10 +1502,12 @@ fn release_subtree_inner(node: &Node) {
                         scope.state.borrow_mut().unmount(unmount_ctx);
                     });
                 }
-                crate::plugin::emit(crate::plugin::ComponentUnmounted {
-                    component: component_name_for(&el),
-                    scope_id,
-                });
+                if crate::plugin::has_component_unmounted_hooks() {
+                    crate::plugin::emit(crate::plugin::ComponentUnmounted {
+                        component: component_name_for(&el),
+                        scope_id,
+                    });
+                }
                 Scope::remove(scope_id);
                 crate::lifecycle::__clear_mount_epoch(scope_id);
             }
@@ -1516,7 +1528,7 @@ fn set_private(el: &Element, key: &str, value: &JsValue) {
 }
 
 fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
-    if !crate::plugin::has_hooks::<crate::plugin::ComponentMounted>() {
+    if !crate::plugin::has_component_mounted_hooks() {
         return;
     }
     if get_private(el, COMPONENT_MOUNT_EVENT_FIRED_KEY)
@@ -1542,7 +1554,7 @@ fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
 }
 
 fn fire_component_setup_plugin_hooks(tag: &str, scope_id: ScopeId) {
-    if !crate::plugin::has_hooks::<crate::plugin::ComponentSetup>() {
+    if !crate::plugin::has_component_setup_hooks() {
         return;
     }
     crate::plugin::emit(crate::plugin::ComponentSetup {
@@ -1560,7 +1572,7 @@ fn component_name_for(el: &Element) -> String {
         get_private(el, COMPONENT_NAME_KEY).is_some(),
         "mounted component root missing private component name"
     );
-    canonical_component_name(&el.local_name())
+    "<unknown>".to_string()
 }
 
 fn canonical_component_name(name: &str) -> String {

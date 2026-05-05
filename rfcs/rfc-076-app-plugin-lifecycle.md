@@ -445,6 +445,9 @@ The first slice ships:
 - `App::hook_component_plugin`;
 - duplicate-service diagnostics with plugin/provider names;
 - boot-time hook/service validation and plugin boot errors;
+- cached hook-activity bits so plugin-free component mount/unmount paths avoid
+  plugin-only metadata stamps, `Date.now()` calls, and component-name
+  allocations;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
 - `self.plugin::<T>()` and `self.plugins().get::<T>()` component-owned plugin
   accessors for ordinary component methods and DOM event handlers;

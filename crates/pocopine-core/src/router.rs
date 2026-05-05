@@ -226,7 +226,7 @@ pub fn route_proxy() -> JsValue {
 fn mount_current() {
     ensure_route_scope();
 
-    let has_route_hooks = has_route_plugin_hooks();
+    let has_route_hooks = crate::plugin::has_route_navigation_hooks();
     let start_ms = has_route_hooks.then(js_sys::Date::now);
     let Some(win) = web_sys::window() else {
         if has_route_hooks {
@@ -387,12 +387,6 @@ fn match_route(
         }
         (None, None, HashMap::new())
     })
-}
-
-fn has_route_plugin_hooks() -> bool {
-    crate::plugin::has_hooks::<crate::plugin::RouteNavigationStarted>()
-        || crate::plugin::has_hooks::<crate::plugin::RouteNavigationCompleted>()
-        || crate::plugin::has_hooks::<crate::plugin::RouteNavigationFailed>()
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
