@@ -7,7 +7,7 @@
 //! [`Hook<E>`].
 
 use std::any::{type_name, Any, TypeId};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -21,9 +21,32 @@ type HookDispatch = Rc<dyn Fn(&PluginRegistry, &dyn Any)>;
 
 thread_local! {
     static ACTIVE_PLUGINS: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::default());
+    static ACTIVE_HOOK_MASK: Cell<HookMask> = const { Cell::new(0) };
 }
 
 const APP_PROVIDER: &str = "app";
+type HookMask = u16;
+
+const HOOK_APP_BOOT_STARTED: HookMask = 1 << 0;
+const HOOK_APP_BOOT_COMPLETED: HookMask = 1 << 1;
+const HOOK_APP_BOOT_FAILED: HookMask = 1 << 2;
+const HOOK_ROUTE_NAVIGATION_STARTED: HookMask = 1 << 3;
+const HOOK_ROUTE_NAVIGATION_COMPLETED: HookMask = 1 << 4;
+const HOOK_ROUTE_NAVIGATION_FAILED: HookMask = 1 << 5;
+const HOOK_COMPONENT_SETUP: HookMask = 1 << 6;
+const HOOK_COMPONENT_MOUNTED: HookMask = 1 << 7;
+const HOOK_COMPONENT_READY: HookMask = 1 << 8;
+const HOOK_COMPONENT_UNMOUNTED: HookMask = 1 << 9;
+const HOOK_COMPONENT_NAME_EVENTS: HookMask =
+    HOOK_COMPONENT_MOUNTED | HOOK_COMPONENT_READY | HOOK_COMPONENT_UNMOUNTED;
+const HOOK_ROUTE_NAVIGATION_EVENTS: HookMask =
+    HOOK_ROUTE_NAVIGATION_STARTED | HOOK_ROUTE_NAVIGATION_COMPLETED | HOOK_ROUTE_NAVIGATION_FAILED;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ComponentHookActivity {
+    pub(crate) needs_component_name: bool,
+    pub(crate) needs_mount_start: bool,
+}
 
 /// Runtime handle for a service installed by an app plugin.
 ///
@@ -470,18 +493,55 @@ impl PluginRegistry {
         }
     }
 
-    fn has_hooks<E: 'static>(&self) -> bool {
+    fn has_stored_hooks<E: 'static>(&self) -> bool {
         self.hooks
             .get(&TypeId::of::<E>())
             .map(|hooks| !hooks.is_empty())
             .unwrap_or(false)
     }
+
+    fn hook_mask(&self) -> HookMask {
+        let mut mask = 0;
+        if self.has_stored_hooks::<AppBootStarted>() {
+            mask |= HOOK_APP_BOOT_STARTED;
+        }
+        if self.has_stored_hooks::<AppBootCompleted>() {
+            mask |= HOOK_APP_BOOT_COMPLETED;
+        }
+        if self.has_stored_hooks::<AppBootFailed>() {
+            mask |= HOOK_APP_BOOT_FAILED;
+        }
+        if self.has_stored_hooks::<RouteNavigationStarted>() {
+            mask |= HOOK_ROUTE_NAVIGATION_STARTED;
+        }
+        if self.has_stored_hooks::<RouteNavigationCompleted>() {
+            mask |= HOOK_ROUTE_NAVIGATION_COMPLETED;
+        }
+        if self.has_stored_hooks::<RouteNavigationFailed>() {
+            mask |= HOOK_ROUTE_NAVIGATION_FAILED;
+        }
+        if self.has_stored_hooks::<ComponentSetup>() {
+            mask |= HOOK_COMPONENT_SETUP;
+        }
+        if self.has_stored_hooks::<ComponentMounted>() {
+            mask |= HOOK_COMPONENT_MOUNTED;
+        }
+        if self.has_stored_hooks::<ComponentReady>() {
+            mask |= HOOK_COMPONENT_READY;
+        }
+        if self.has_stored_hooks::<ComponentUnmounted>() {
+            mask |= HOOK_COMPONENT_UNMOUNTED;
+        }
+        mask
+    }
 }
 
 pub(crate) fn activate(registry: PluginRegistry) {
+    let hook_mask = registry.hook_mask();
     ACTIVE_PLUGINS.with(|plugins| {
         *plugins.borrow_mut() = registry;
     });
+    ACTIVE_HOOK_MASK.with(|mask| mask.set(hook_mask));
 }
 
 pub(crate) fn emit<E>(event: E)
@@ -493,8 +553,38 @@ where
     });
 }
 
-pub(crate) fn has_hooks<E: 'static>() -> bool {
-    ACTIVE_PLUGINS.with(|plugins| plugins.borrow().has_hooks::<E>())
+pub(crate) fn component_hook_activity() -> ComponentHookActivity {
+    ACTIVE_HOOK_MASK.with(|active| {
+        let active = active.get();
+        ComponentHookActivity {
+            needs_component_name: active & HOOK_COMPONENT_NAME_EVENTS != 0,
+            needs_mount_start: active & HOOK_COMPONENT_MOUNTED != 0,
+        }
+    })
+}
+
+pub(crate) fn has_component_setup_hooks() -> bool {
+    active_hook_mask_contains(HOOK_COMPONENT_SETUP)
+}
+
+pub(crate) fn has_component_mounted_hooks() -> bool {
+    active_hook_mask_contains(HOOK_COMPONENT_MOUNTED)
+}
+
+pub(crate) fn has_component_ready_hooks() -> bool {
+    active_hook_mask_contains(HOOK_COMPONENT_READY)
+}
+
+pub(crate) fn has_component_unmounted_hooks() -> bool {
+    active_hook_mask_contains(HOOK_COMPONENT_UNMOUNTED)
+}
+
+pub(crate) fn has_route_navigation_hooks() -> bool {
+    active_hook_mask_contains(HOOK_ROUTE_NAVIGATION_EVENTS)
+}
+
+fn active_hook_mask_contains(mask: HookMask) -> bool {
+    ACTIVE_HOOK_MASK.with(|active| active.get() & mask != 0)
 }
 
 pub(crate) fn active_plugin<T: 'static>() -> Option<Plugin<T>> {

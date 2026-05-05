@@ -503,6 +503,11 @@ Core emits framework events. The app or plugin decides where those events go.
 That keeps vendor dependencies out of core while giving application code one
 stable place to opt in.
 
+The runtime caches installed framework hooks into a small bitmask at
+`App::run()` activation. Component mount/unmount hot paths use that bitmask to
+avoid plugin-only DOM metadata stamps, `Date.now()` calls, and component-name
+allocations when no matching hook is installed.
+
 ## Testing Contract
 
 Any plugin-facing change should keep these tests green:
@@ -522,6 +527,8 @@ The dedicated app-plugin tests assert:
 - missing hook services render a plugin boot error before mount;
 - app boot hooks fire on successful and failed boot;
 - route navigation hooks fire for matched routes;
+- plugin-free component mounts do not stamp plugin-only component-name or
+  mount-timing metadata;
 - `Plugin<T>` panics clearly when required services are missing;
 - `Option<Plugin<T>>` returns `None` when optional services are missing;
 - reusable components can use `self.plugins().get::<T>()` from ordinary event

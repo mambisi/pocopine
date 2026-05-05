@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use js_sys::Promise;
+use js_sys::{Promise, Reflect};
 use pocopine::prelude::*;
 use pocopine::App;
 use serde::{Deserialize, Serialize};
@@ -339,6 +339,17 @@ fn replace_url(path: &str) {
         .unwrap();
 }
 
+fn remove_pp_app_roots() {
+    let roots = doc().query_selector_all("[pp-app]").unwrap();
+    for i in 0..roots.length() {
+        if let Some(root) = roots.item(i) {
+            if let Ok(el) = root.dyn_into::<web_sys::Element>() {
+                el.remove();
+            }
+        }
+    }
+}
+
 fn app_host(inner_html: &str) -> web_sys::Element {
     let host = doc().create_element("div").unwrap();
     host.set_attribute("pp-app", "").unwrap();
@@ -531,6 +542,36 @@ async fn reusable_components_can_opt_into_plugin_capabilities() {
 }
 
 #[wasm_bindgen_test]
+fn plugin_free_mount_does_not_stamp_plugin_metadata() {
+    let app_root = app_host("");
+    App::new().run();
+
+    let host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&host).unwrap();
+    let handle = App::mount_subtree::<AppPluginDirectHome>(&host);
+    let root = host
+        .first_element_child()
+        .expect("mounted component should render a root");
+
+    assert!(
+        Reflect::get(root.as_ref(), &JsValue::from_str("__pp_component_name"))
+            .unwrap()
+            .is_undefined(),
+        "plugin-free mounts should not stamp component names for plugin events"
+    );
+    assert!(
+        Reflect::get(root.as_ref(), &JsValue::from_str("__pp_mount_start_ms"))
+            .unwrap()
+            .is_undefined(),
+        "plugin-free mounts should not stamp mount timing for plugin events"
+    );
+
+    handle.unmount();
+    host.remove();
+    app_root.remove();
+}
+
+#[wasm_bindgen_test]
 #[should_panic(expected = "first provider: `first-plugin`, second provider: `second-plugin`")]
 fn duplicate_plugin_services_name_their_providers() {
     let _ = App::new()
@@ -580,6 +621,7 @@ fn app_boot_hooks_fire_on_success() {
 #[wasm_bindgen_test]
 fn app_boot_failed_hook_fires_for_missing_pp_app_root() {
     let events = Rc::new(RefCell::new(Vec::new()));
+    remove_pp_app_roots();
 
     App::new().plugin(boot_event_plugin(events.clone())).run();
 
