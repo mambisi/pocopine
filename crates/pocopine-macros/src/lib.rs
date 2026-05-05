@@ -4079,17 +4079,20 @@ struct AppRouteEntry {
     component: syn::Path,
 }
 
-/// Parsed body of the `app!{}` macro: explicit component list +
-/// route list. Per RFC 060 §8 Q1's chosen mechanism (Option b1):
+/// Parsed body of the `app!{}` macro: explicit component list,
+/// optional plugin list, and route list. Per RFC 060 §8 Q1's
+/// chosen mechanism (Option b1):
 /// users list every reachable component explicitly so the macro
 /// can emit a `phf::phf_map!` literal at expansion time.
 struct AppMacroInput {
+    plugins: Vec<Expr>,
     components: Vec<AppComponentEntry>,
     routes: Vec<AppRouteEntry>,
 }
 
 impl Parse for AppMacroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut plugins: Option<Vec<Expr>> = None;
         let mut components: Option<Vec<AppComponentEntry>> = None;
         let mut routes: Option<Vec<AppRouteEntry>> = None;
 
@@ -4101,6 +4104,12 @@ impl Parse for AppMacroInput {
             let _ = input.parse::<Token![,]>();
 
             match key.to_string().as_str() {
+                "plugins" => {
+                    if plugins.is_some() {
+                        return Err(syn::Error::new(key.span(), "duplicate `plugins:`"));
+                    }
+                    plugins = Some(parse_plugins_array(value)?);
+                }
                 "components" => {
                     if components.is_some() {
                         return Err(syn::Error::new(key.span(), "duplicate `components:`"));
@@ -4116,7 +4125,7 @@ impl Parse for AppMacroInput {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown `app!{{}}` section `{other}` — expected `components:` or `routes:`"),
+                        format!("unknown `app!{{}}` section `{other}` — expected `plugins:`, `components:`, or `routes:`"),
                     ));
                 }
             }
@@ -4129,9 +4138,24 @@ impl Parse for AppMacroInput {
             )
         })?;
         let routes = routes.unwrap_or_default();
+        let plugins = plugins.unwrap_or_default();
 
-        Ok(AppMacroInput { components, routes })
+        Ok(AppMacroInput {
+            plugins,
+            components,
+            routes,
+        })
     }
+}
+
+fn parse_plugins_array(value: Expr) -> syn::Result<Vec<Expr>> {
+    let Expr::Array(arr) = value else {
+        return Err(syn::Error::new_spanned(
+            &value,
+            "`plugins` expects an array literal — `plugins: [observability_plugin()]`",
+        ));
+    };
+    Ok(arr.elems.into_iter().collect())
 }
 
 fn parse_components_array(value: Expr) -> syn::Result<Vec<AppComponentEntry>> {
@@ -4251,6 +4275,9 @@ fn parse_routes_array(value: Expr) -> syn::Result<Vec<AppRouteEntry>> {
 ///             pine::PineButton,
 ///             (CustomNamed, "custom-tag"),  // override for `#[component(name = "...")]`
 ///         ],
+///         plugins: [
+///             my_observability_plugin(),
+///         ],
 ///         routes: [
 ///             ("/", Home),
 ///             ("/about", About),
@@ -4321,6 +4348,13 @@ pub fn app(input: TokenStream) -> TokenStream {
     let phf_arms = entries.map(|(key, vtable)| {
         quote! { #key => #vtable, }
     });
+    let component_names = parsed.components.iter().map(|c| match c {
+        AppComponentEntry::Bare(path) => {
+            let last = path.segments.last().expect("path has at least one segment");
+            kebab_case(&last.ident.to_string())
+        }
+        AppComponentEntry::Explicit(_, lit) => lit.value(),
+    });
 
     // Use `route_static` (record-only) so `C::register()` doesn't
     // fire here — `run_with_registry` is the one and only
@@ -4329,6 +4363,12 @@ pub fn app(input: TokenStream) -> TokenStream {
         let pattern = &r.pattern;
         let component = &r.component;
         quote! { .route_static::<#component>(#pattern) }
+    });
+    let component_static_calls = component_names.map(|name| {
+        quote! { .component_static(#name) }
+    });
+    let plugin_calls = parsed.plugins.iter().map(|plugin| {
+        quote! { .plugin(#plugin) }
     });
 
     let out = quote! {
@@ -4341,7 +4381,9 @@ pub fn app(input: TokenStream) -> TokenStream {
             };
 
             ::pocopine::App::new()
+                #(#component_static_calls)*
                 #(#route_calls)*
+                #(#plugin_calls)*
                 .run_with_registry(&REGISTRY);
         }
     };

@@ -83,3 +83,4 @@ Conventions:
 | 072 | [Offline sync protocol](./rfc-072-offline-sync-protocol.md) | Draft |
 | 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |
 | 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Draft |
+| 076 | [App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md) | Draft |
