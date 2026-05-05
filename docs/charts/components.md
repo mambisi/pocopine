@@ -10,7 +10,7 @@ SVG compositions: child tags register lines, guides, markers, labels, and
 annotations into one root-owned SVG.
 `PineCartesianChart` provides the compound surface for Cartesian charts: child
 tags register grid, axes, bar series, line series, area series, and scatter
-series into one root-owned SVG.
+series plus reference lines, dots, and labels into one root-owned SVG.
 
 Use `PineChartResponsive` when a chart should follow its parent size. The
 responsive container measures its content box and writes concrete `width` and
