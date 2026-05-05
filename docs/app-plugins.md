@@ -112,9 +112,21 @@ Runtime services can also subscribe to framework lifecycle events by
 implementing `Hook<E>`:
 
 ```rust
+impl Hook<ComponentSetup> for Analytics {
+    fn call(&self, event: ComponentSetup) {
+        self.track_component_setup(event.component);
+    }
+}
+
 impl Hook<ComponentMounted> for Analytics {
     fn call(&self, event: ComponentMounted) {
         self.track_component_mount(event.component, event.duration_ms);
+    }
+}
+
+impl Hook<ComponentReady> for Analytics {
+    fn call(&self, event: ComponentReady) {
+        self.track_component_ready(event.component);
     }
 }
 
@@ -131,17 +143,43 @@ The installer wires those implementations into the app:
 impl AppPlugin for AnalyticsPlugin {
     fn install(self, app: App) -> App {
         app.provide_plugin(Analytics::new(self.config))
+            .hook_plugin::<Analytics, ComponentSetup>()
             .hook_plugin::<Analytics, ComponentMounted>()
+            .hook_plugin::<Analytics, ComponentReady>()
             .hook_plugin::<Analytics, ComponentUnmounted>()
     }
 }
 ```
 
+Plugins can also subscribe to one component type without string filters in the
+hook body. The service implements `Hook<ForComponent<C, E>>` and the installer
+uses `hook_component_plugin`:
+
+```rust
+impl Hook<ForComponent<CheckoutPage, ComponentMounted>> for Analytics {
+    fn call(&self, event: ForComponent<CheckoutPage, ComponentMounted>) {
+        self.track_checkout_mount(event.duration_ms);
+    }
+}
+
+impl AppPlugin for AnalyticsPlugin {
+    fn install(self, app: App) -> App {
+        app.provide_plugin(Analytics::new(self.config))
+            .hook_component_plugin::<Analytics, CheckoutPage, ComponentMounted>()
+    }
+}
+```
+
+The runtime still emits one canonical component name. `ForComponent<C, E>` is
+the typed filter: the hook only fires when the emitted component is `C`.
+
 This gives plugins two integration paths:
 
 - component authors pull `Plugin<T>` when their hook needs the service;
 - the framework dispatches typed events to `Hook<E>` implementations for
-  automatic integration.
+  automatic integration;
+- component-specific integrations use `Hook<ForComponent<C, E>>` and
+  `hook_component_plugin`.
 
 ## Lifecycle Order
 
@@ -234,7 +272,9 @@ Observability is the reference use case:
 - `install` should initialize the chosen subscriber/exporter and any analytics
   client that must exist before boot errors;
 - `provide_plugin` should store the runtime observability service;
-- `hook_plugin` should attach automatic component mount/unmount handling;
+- `hook_plugin` should attach automatic app-wide component handling;
+- `hook_component_plugin` should attach page- or component-specific telemetry
+  without string filters in the hook implementation;
 - component hooks can extract `Plugin<Observability>` for app-authored events;
 - event privacy still follows
   [`RFC 069`](../rfcs/rfc-069-observability.md).
@@ -260,5 +300,6 @@ The dedicated app-plugin tests assert:
 - plugin-installed `before_mount` and `after_mount` hooks run in runtime order;
 - `Plugin<T>` panics clearly when required services are missing;
 - `Option<Plugin<T>>` returns `None` when optional services are missing;
-- `Hook<ComponentMounted>` and `Hook<ComponentUnmounted>` receive framework
-  lifecycle events.
+- `Hook<ComponentSetup>`, `Hook<ComponentMounted>`, `Hook<ComponentReady>`,
+  and `Hook<ComponentUnmounted>` receive framework lifecycle events;
+- `Hook<ForComponent<C, E>>` only fires for the selected component type.

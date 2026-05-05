@@ -147,6 +147,21 @@ impl App {
         self
     }
 
+    /// Dispatch framework event `E` for component `C` to plugin service `T`.
+    ///
+    /// The service implements `Hook<ForComponent<C, E>>`, so the component
+    /// filter is carried in the type system and the runtime performs the
+    /// component-name match before invoking the hook.
+    pub fn hook_component_plugin<T, C, E>(mut self) -> Self
+    where
+        T: crate::plugin::Hook<crate::plugin::ForComponent<C, E>> + 'static,
+        C: Component + 'static,
+        E: crate::plugin::ComponentEvent,
+    {
+        self.plugins.hook_component_plugin::<T, C, E>();
+        self
+    }
+
     /// Register a route. `pattern` is a path with optional `:name`
     /// segments (`"/blog/:id"`) or the 404 fallback `"*"`. `C` must be
     /// a `#[component]` whose tag name is the kebab-case of its ident.

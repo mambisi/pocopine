@@ -66,6 +66,26 @@ impl AppPluginObservedHome {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "app-plugin-hook-target",
+    template_inline = r#"<div class="app-plugin-hook-target">target</div>"#
+)]
+struct AppPluginHookTarget {}
+
+#[handlers]
+impl AppPluginHookTarget {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "app-plugin-hook-other",
+    template_inline = r#"<div class="app-plugin-hook-other">other</div>"#
+)]
+struct AppPluginHookOther {}
+
+#[handlers]
+impl AppPluginHookOther {}
+
 struct MissingPlugin;
 
 #[derive(Clone)]
@@ -96,6 +116,45 @@ impl Hook<ComponentMounted> for TestAnalytics {
 impl Hook<ComponentUnmounted> for TestAnalytics {
     fn call(&self, event: ComponentUnmounted) {
         self.record(format!("unmounted:{}", event.component));
+    }
+}
+
+#[derive(Clone)]
+struct HookRecorder {
+    events: Rc<RefCell<Vec<String>>>,
+}
+
+impl HookRecorder {
+    fn new(events: Rc<RefCell<Vec<String>>>) -> Self {
+        Self { events }
+    }
+
+    fn record(&self, event: impl Into<String>) {
+        self.events.borrow_mut().push(event.into());
+    }
+}
+
+impl Hook<ComponentSetup> for HookRecorder {
+    fn call(&self, event: ComponentSetup) {
+        self.record(format!("setup:{}", event.component));
+    }
+}
+
+impl Hook<ComponentReady> for HookRecorder {
+    fn call(&self, event: ComponentReady) {
+        self.record(format!("ready:{}", event.component));
+    }
+}
+
+impl Hook<ForComponent<AppPluginHookTarget, ComponentMounted>> for HookRecorder {
+    fn call(&self, event: ForComponent<AppPluginHookTarget, ComponentMounted>) {
+        self.record(format!("target-mounted:{}", event.component));
+    }
+}
+
+impl Hook<ForComponent<AppPluginHookTarget, ComponentReady>> for HookRecorder {
+    fn call(&self, event: ForComponent<AppPluginHookTarget, ComponentReady>) {
+        self.record(format!("target-ready:{}", event.component));
     }
 }
 
@@ -158,6 +217,16 @@ fn analytics_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
     }
 }
 
+fn component_hook_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
+    move |app: App| {
+        app.provide_plugin(HookRecorder::new(events))
+            .hook_plugin::<HookRecorder, ComponentSetup>()
+            .hook_plugin::<HookRecorder, ComponentReady>()
+            .hook_component_plugin::<HookRecorder, AppPluginHookTarget, ComponentMounted>()
+            .hook_component_plugin::<HookRecorder, AppPluginHookTarget, ComponentReady>()
+    }
+}
+
 #[wasm_bindgen_test(async)]
 async fn app_builder_plugin_installs_lifecycle_hooks() {
     let _ = take_events();
@@ -199,6 +268,44 @@ async fn plugin_extractor_and_framework_hooks_use_provided_service() {
     );
 
     host.remove();
+    app_root.remove();
+}
+
+#[wasm_bindgen_test(async)]
+async fn component_hooks_can_be_global_or_filtered_by_component_type() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let app_root = app_host("");
+
+    App::new()
+        .plugin(component_hook_plugin(events.clone()))
+        .run();
+
+    let target_host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&target_host).unwrap();
+    let target = App::mount_subtree::<AppPluginHookTarget>(&target_host);
+
+    let other_host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&other_host).unwrap();
+    let other = App::mount_subtree::<AppPluginHookOther>(&other_host);
+
+    next_microtask().await;
+    target.unmount();
+    other.unmount();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            "setup:app-plugin-hook-target".to_string(),
+            "target-mounted:app-plugin-hook-target".to_string(),
+            "setup:app-plugin-hook-other".to_string(),
+            "ready:app-plugin-hook-target".to_string(),
+            "target-ready:app-plugin-hook-target".to_string(),
+            "ready:app-plugin-hook-other".to_string(),
+        ]
+    );
+
+    target_host.remove();
+    other_host.remove();
     app_root.remove();
 }
 
