@@ -42,6 +42,13 @@ const HOOK_COMPONENT_NAME_EVENTS: HookMask =
 const HOOK_ROUTE_NAVIGATION_EVENTS: HookMask =
     HOOK_ROUTE_NAVIGATION_STARTED | HOOK_ROUTE_NAVIGATION_COMPLETED | HOOK_ROUTE_NAVIGATION_FAILED;
 
+/// Per-mount snapshot of which plugin-side stamps the runtime needs to
+/// produce. Sampled once from `ACTIVE_HOOK_MASK` at the top of a mount so
+/// `mount_component` and `try_mount_component_as` skip both the JS-FFI
+/// `Date.now()` call and the `COMPONENT_NAME_KEY` allocation when no
+/// observer is listening. `needs_component_name` covers any event that
+/// reads the stamp later (mounted, ready, unmounted); `needs_mount_start`
+/// covers only `ComponentMounted`'s `duration_ms`.
 #[derive(Clone, Copy)]
 pub(crate) struct ComponentHookActivity {
     pub(crate) needs_component_name: bool,
@@ -116,12 +123,20 @@ pub trait ComponentPluginExt: Component {
 impl<C: Component + ?Sized> ComponentPluginExt for C {}
 
 /// Typed framework event hook implemented by runtime plugin services.
+///
+/// `call` takes the event by value: every subscriber receives its own
+/// copy via the dispatcher's `event.clone()`. Framework events are
+/// designed so the clone is cheap — fields are `&'static str` (registry
+/// names, route patterns, failure reasons) or primitives wherever
+/// possible, so `Clone` collapses to a memcpy. Author-defined event
+/// types should follow the same rule when high-frequency dispatch
+/// matters.
 pub trait Hook<E>: 'static {
     fn call(&self, event: E);
 }
 
 /// Emitted once app boot starts after plugin validation succeeds.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct AppBootStarted {
     pub component_count: usize,
     pub route_count: usize,
@@ -130,23 +145,31 @@ pub struct AppBootStarted {
 /// Emitted once initial app boot has mounted the root and scheduled
 /// post-mount work. `duration_ms` covers synchronous boot only; deferred
 /// `after_mount` callbacks are not included.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct AppBootCompleted {
     pub duration_ms: f64,
 }
 
 /// Emitted when app boot fails after plugin validation succeeds.
-#[derive(Clone, Debug)]
+///
+/// `reason` is a stable identifier from a closed set of `&'static str`
+/// values produced by the runtime: `"component_registry"`,
+/// `"missing_window"`, `"missing_document"`, `"missing_pp_app_root"`.
+#[derive(Copy, Clone, Debug)]
 pub struct AppBootFailed {
-    pub reason: String,
+    pub reason: &'static str,
 }
 
 /// Emitted before the router tries to paint the current URL.
+///
+/// `path` is read from `window.location.pathname` and is therefore
+/// owned. `route_pattern` and `component` reference the static route
+/// registry.
 #[derive(Clone, Debug)]
 pub struct RouteNavigationStarted {
     pub path: String,
-    pub route_pattern: Option<String>,
-    pub component: Option<String>,
+    pub route_pattern: Option<&'static str>,
+    pub component: Option<&'static str>,
 }
 
 /// Emitted after the router paints a matched route or resolves an
@@ -154,19 +177,20 @@ pub struct RouteNavigationStarted {
 #[derive(Clone, Debug)]
 pub struct RouteNavigationCompleted {
     pub path: String,
-    pub route_pattern: Option<String>,
-    pub component: Option<String>,
+    pub route_pattern: Option<&'static str>,
+    pub component: Option<&'static str>,
     pub duration_ms: f64,
 }
 
 /// Emitted when route matching succeeds but the router cannot paint
-/// the route.
+/// the route. `reason` is a stable identifier: `"missing_window"`,
+/// `"missing_outlet"`, `"missing_document"`, `"create_element_failed"`.
 #[derive(Clone, Debug)]
 pub struct RouteNavigationFailed {
     pub path: String,
-    pub route_pattern: Option<String>,
-    pub component: Option<String>,
-    pub reason: String,
+    pub route_pattern: Option<&'static str>,
+    pub component: Option<&'static str>,
+    pub reason: &'static str,
     pub duration_ms: f64,
 }
 
@@ -176,7 +200,7 @@ pub struct RouteNavigationFailed {
 /// hooks. The runtime keeps the matching private so authors register
 /// `Hook<ForComponent<C, E>>` instead of string-comparing component names.
 pub trait ComponentEvent: Clone + 'static {
-    fn component(&self) -> &str;
+    fn component(&self) -> &'static str;
 
     fn scope_id(&self) -> ScopeId;
 }
@@ -233,38 +257,38 @@ impl<C, E: fmt::Debug> fmt::Debug for ForComponent<C, E> {
 
 /// Emitted after a component scope has been created and before the
 /// component's `on_setup` hook runs.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct ComponentSetup {
-    pub component: String,
+    pub component: &'static str,
     pub scope_id: ScopeId,
 }
 
 /// Emitted after a component subtree has been mounted and finalized.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct ComponentMounted {
-    pub component: String,
+    pub component: &'static str,
     pub scope_id: ScopeId,
     pub duration_ms: f64,
 }
 
 /// Emitted on the component ready microtask before the component's
 /// `on_ready` hook runs.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct ComponentReady {
-    pub component: String,
+    pub component: &'static str,
     pub scope_id: ScopeId,
 }
 
 /// Emitted just before a component scope is removed.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct ComponentUnmounted {
-    pub component: String,
+    pub component: &'static str,
     pub scope_id: ScopeId,
 }
 
 impl ComponentEvent for ComponentSetup {
-    fn component(&self) -> &str {
-        &self.component
+    fn component(&self) -> &'static str {
+        self.component
     }
 
     fn scope_id(&self) -> ScopeId {
@@ -273,8 +297,8 @@ impl ComponentEvent for ComponentSetup {
 }
 
 impl ComponentEvent for ComponentMounted {
-    fn component(&self) -> &str {
-        &self.component
+    fn component(&self) -> &'static str {
+        self.component
     }
 
     fn scope_id(&self) -> ScopeId {
@@ -283,8 +307,8 @@ impl ComponentEvent for ComponentMounted {
 }
 
 impl ComponentEvent for ComponentReady {
-    fn component(&self) -> &str {
-        &self.component
+    fn component(&self) -> &'static str {
+        self.component
     }
 
     fn scope_id(&self) -> ScopeId {
@@ -293,8 +317,8 @@ impl ComponentEvent for ComponentReady {
 }
 
 impl ComponentEvent for ComponentUnmounted {
-    fn component(&self) -> &str {
-        &self.component
+    fn component(&self) -> &'static str {
+        self.component
     }
 
     fn scope_id(&self) -> ScopeId {
@@ -536,6 +560,11 @@ impl PluginRegistry {
     }
 }
 
+/// Install `registry` as the active plugin set and refresh the hook
+/// bitmask cache. The mask is sampled once here and is **not**
+/// recomputed afterwards — the runtime has no public API for
+/// installing hooks after `App::run`, and the mount/unmount fast paths
+/// assume the cache stays in sync with `ACTIVE_PLUGINS`.
 pub(crate) fn activate(registry: PluginRegistry) {
     let hook_mask = registry.hook_mask();
     ACTIVE_PLUGINS.with(|plugins| {
@@ -544,6 +573,18 @@ pub(crate) fn activate(registry: PluginRegistry) {
     ACTIVE_HOOK_MASK.with(|mask| mask.set(hook_mask));
 }
 
+/// Dispatch `event` to every registered hook for `E`.
+///
+/// Hot-path callers gate on a bitmask predicate (`has_*_hooks`) before
+/// calling this so that plugin-free apps pay only a `Cell::get`. Once a
+/// hook is known to exist, this function does one HashMap lookup to
+/// find the dispatch vec — the lookup is redundant with the bitmask
+/// check (the bitmask is computed from the same map at activation
+/// time), but eliminating it would require a parallel `[Vec<…>; N]`
+/// array indexed by event id, duplicating the registration data and
+/// adding a sealed `FrameworkEvent` trait. The single hash lookup is
+/// only paid when at least one plugin is installed, so the duplication
+/// isn't worth it.
 pub(crate) fn emit<E>(event: E)
 where
     E: Clone + 'static,
@@ -553,6 +594,7 @@ where
     });
 }
 
+#[inline]
 pub(crate) fn component_hook_activity() -> ComponentHookActivity {
     ACTIVE_HOOK_MASK.with(|active| {
         let active = active.get();
@@ -563,26 +605,32 @@ pub(crate) fn component_hook_activity() -> ComponentHookActivity {
     })
 }
 
+#[inline]
 pub(crate) fn has_component_setup_hooks() -> bool {
     active_hook_mask_contains(HOOK_COMPONENT_SETUP)
 }
 
+#[inline]
 pub(crate) fn has_component_mounted_hooks() -> bool {
     active_hook_mask_contains(HOOK_COMPONENT_MOUNTED)
 }
 
+#[inline]
 pub(crate) fn has_component_ready_hooks() -> bool {
     active_hook_mask_contains(HOOK_COMPONENT_READY)
 }
 
+#[inline]
 pub(crate) fn has_component_unmounted_hooks() -> bool {
     active_hook_mask_contains(HOOK_COMPONENT_UNMOUNTED)
 }
 
+#[inline]
 pub(crate) fn has_route_navigation_hooks() -> bool {
     active_hook_mask_contains(HOOK_ROUTE_NAVIGATION_EVENTS)
 }
 
+#[inline]
 fn active_hook_mask_contains(mask: HookMask) -> bool {
     ACTIVE_HOOK_MASK.with(|active| active.get() & mask != 0)
 }

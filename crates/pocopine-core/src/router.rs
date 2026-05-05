@@ -44,13 +44,13 @@ enum Segment {
 
 #[derive(Clone, Debug)]
 pub struct Route {
-    pub pattern: String,
+    pub pattern: &'static str,
     segments: Vec<Segment>,
     pub component_name: &'static str,
 }
 
 impl Route {
-    fn parse(pattern: &str, component_name: &'static str) -> Self {
+    fn parse(pattern: &'static str, component_name: &'static str) -> Self {
         let segments = if pattern == "*" {
             vec![Segment::Wildcard]
         } else {
@@ -67,7 +67,7 @@ impl Route {
                 .collect()
         };
         Route {
-            pattern: pattern.to_string(),
+            pattern,
             segments,
             component_name,
         }
@@ -154,9 +154,9 @@ thread_local! {
 }
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
-pub fn register_route(pattern: String, component_name: &'static str) {
+pub fn register_route(pattern: &'static str, component_name: &'static str) {
     ROUTES.with(|r| {
-        let route = Route::parse(&pattern, component_name);
+        let route = Route::parse(pattern, component_name);
         r.borrow_mut().push(route);
     });
 }
@@ -234,7 +234,7 @@ fn mount_current() {
                 path: String::new(),
                 route_pattern: None,
                 component: None,
-                reason: "missing_window".to_string(),
+                reason: "missing_window",
                 duration_ms: 0.0,
             });
         }
@@ -249,8 +249,8 @@ fn mount_current() {
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationStarted {
             path: path.clone(),
-            route_pattern: route_pattern.clone(),
-            component: component_name.map(str::to_string),
+            route_pattern,
+            component: component_name,
         });
     }
 
@@ -298,8 +298,8 @@ fn mount_current() {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path,
                 route_pattern,
-                component: Some(name.to_string()),
-                reason: "missing_outlet".to_string(),
+                component: Some(name),
+                reason: "missing_outlet",
                 duration_ms: elapsed_since(start_ms),
             });
         }
@@ -310,8 +310,8 @@ fn mount_current() {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                 path,
                 route_pattern,
-                component: Some(name.to_string()),
-                reason: "missing_document".to_string(),
+                component: Some(name),
+                reason: "missing_document",
                 duration_ms: elapsed_since(start_ms),
             });
         }
@@ -326,8 +326,8 @@ fn mount_current() {
                 crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                     path,
                     route_pattern,
-                    component: Some(name.to_string()),
-                    reason: "create_element_failed".to_string(),
+                    component: Some(name),
+                    reason: "create_element_failed",
                     duration_ms: elapsed_since(start_ms),
                 });
             }
@@ -349,7 +349,7 @@ fn mount_current() {
         crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
             path,
             route_pattern,
-            component: Some(name.to_string()),
+            component: Some(name),
             duration_ms: elapsed_since(start_ms),
         });
     }
@@ -361,7 +361,7 @@ fn match_route(
     include_pattern: bool,
 ) -> (
     Option<&'static str>,
-    Option<String>,
+    Option<&'static str>,
     HashMap<String, String>,
 ) {
     ROUTES.with(|r| {
@@ -371,7 +371,7 @@ fn match_route(
             if let Some(params) = route.match_path(path) {
                 return (
                     Some(route.component_name),
-                    include_pattern.then(|| route.pattern.clone()),
+                    include_pattern.then_some(route.pattern),
                     params,
                 );
             }
@@ -380,7 +380,7 @@ fn match_route(
             if let Some(params) = route.match_path(path) {
                 return (
                     Some(route.component_name),
-                    include_pattern.then(|| route.pattern.clone()),
+                    include_pattern.then_some(route.pattern),
                     params,
                 );
             }

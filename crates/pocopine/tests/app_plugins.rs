@@ -553,12 +553,11 @@ fn plugin_free_mount_does_not_stamp_plugin_metadata() {
         .first_element_child()
         .expect("mounted component should render a root");
 
-    assert!(
-        Reflect::get(root.as_ref(), &JsValue::from_str("__pp_component_name"))
-            .unwrap()
-            .is_undefined(),
-        "plugin-free mounts should not stamp component names for plugin events"
-    );
+    // Component names live in a thread-local side-table (keyed by
+    // `ScopeId`) and are only populated when `needs_component_name`
+    // is set; the timing stamp stays in the DOM and is the only
+    // surface visible from outside the crate. Asserting its absence
+    // is enough to prove the gated stamping path skips work.
     assert!(
         Reflect::get(root.as_ref(), &JsValue::from_str("__pp_mount_start_ms"))
             .unwrap()

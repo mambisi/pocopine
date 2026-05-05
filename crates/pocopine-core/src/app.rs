@@ -185,7 +185,7 @@ impl App {
     /// `<pp-outlet>` with captured params passed through as attributes.
     pub fn route<C: Component>(mut self, pattern: &'static str) -> Self {
         C::register();
-        router::register_route(pattern.to_string(), C::NAME);
+        router::register_route(pattern, C::NAME);
         self.routes.push(pattern);
         self
     }
@@ -199,7 +199,7 @@ impl App {
     /// route to a component the registry never registered.
     #[doc(hidden)]
     pub fn route_static<C: Component>(mut self, pattern: &'static str) -> Self {
-        router::register_route(pattern.to_string(), C::NAME);
+        router::register_route(pattern, C::NAME);
         self.routes.push(pattern);
         self
     }
@@ -209,6 +209,14 @@ impl App {
     /// calling its register function. This gives plugins a complete component
     /// manifest before [`Self::run_with_registry`] performs the authoritative
     /// registry walk.
+    ///
+    /// The recorded name is **manifest visibility, not registration** —
+    /// plugins reading [`Self::registered_components`] will see entries
+    /// from this method even though the underlying component is not yet
+    /// in the runtime registry. Only [`Self::run_with_registry`]
+    /// (driven by the macro's static `phf::Map`) and the eager
+    /// [`Self::register`] / [`Self::route`] paths actually register a
+    /// component for mount.
     #[doc(hidden)]
     pub fn component_static(mut self, name: &'static str) -> Self {
         self.components.push(name);
@@ -292,7 +300,7 @@ impl App {
         });
         if let Err(errors) = crate::registry::verify_registry() {
             crate::plugin::emit(crate::plugin::AppBootFailed {
-                reason: "component_registry".to_string(),
+                reason: "component_registry",
             });
             crate::registry::render_boot_error(&errors);
             return;
@@ -310,13 +318,13 @@ impl App {
         // multiple roots use `mount_subtree::<C>` instead.
         let Some(window) = web_sys::window() else {
             crate::plugin::emit(crate::plugin::AppBootFailed {
-                reason: "missing_window".to_string(),
+                reason: "missing_window",
             });
             return;
         };
         let Some(document) = window.document() else {
             crate::plugin::emit(crate::plugin::AppBootFailed {
-                reason: "missing_document".to_string(),
+                reason: "missing_document",
             });
             return;
         };
@@ -325,7 +333,7 @@ impl App {
             mount_pp_app_subtree(&host);
         } else {
             crate::plugin::emit(crate::plugin::AppBootFailed {
-                reason: "missing_pp_app_root".to_string(),
+                reason: "missing_pp_app_root",
             });
             render_missing_pp_app_root();
             return;
