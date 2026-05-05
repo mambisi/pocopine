@@ -353,12 +353,25 @@ impl ComposedCartesianFixture {}
                       show_markers="true"
                       marker_radius="4"
                       pp-bind:data="target"></pine-line-series>
+    <pine-area-series key="forecast"
+                      label="Forecast"
+                      fill="#1d6fd833"
+                      color="#1d6fd8"
+                      stroke_width="2"
+                      pp-bind:points="forecast"></pine-area-series>
+    <pine-scatter-series key="samples"
+                         label="Samples"
+                         color="#d96c2c"
+                         point_radius="6"
+                         pp-bind:points="samples"></pine-scatter-series>
   </pine-cartesian-chart>
 </div>
 "##)]
 struct ComboCartesianFixture {
     actual: Vec<ChartBar>,
     target: Vec<ChartBar>,
+    forecast: Vec<ChartPoint>,
+    samples: Vec<ChartPoint>,
 }
 
 impl Default for ComboCartesianFixture {
@@ -366,6 +379,8 @@ impl Default for ComboCartesianFixture {
         Self {
             actual: vec![ChartBar::new("W1", 10.0), ChartBar::new("W2", 20.0)],
             target: vec![ChartBar::new("W1", 12.0), ChartBar::new("W2", 18.0)],
+            forecast: vec![ChartPoint::new(0.0, 8.0), ChartPoint::new(1.0, 16.0)],
+            samples: vec![ChartPoint::new(0.5, 14.0)],
         }
     }
 }
@@ -497,7 +512,7 @@ async fn cartesian_chart_composes_grid_axes_and_line_series() {
     assert_eq!(svg.get_attribute("viewBox").as_deref(), Some("0 0 100 100"));
     assert_eq!(
         direct_svg_layers(&svg),
-        vec!["grid", "axes", "bars", "series", "markers"]
+        vec!["grid", "axes", "bars", "area", "series", "points", "markers"]
     );
 
     let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
@@ -541,7 +556,7 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
         .unwrap();
     assert_eq!(
         direct_svg_layers(&svg),
-        vec!["grid", "axes", "bars", "series", "markers"]
+        vec!["grid", "axes", "bars", "area", "series", "points", "markers"]
     );
 
     let bars = host.query_selector_all(".pine-chart-bar").unwrap();
@@ -561,10 +576,37 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
         Some("Actual, W1: 10")
     );
 
-    let line = host.query_selector(".pine-chart-line").unwrap().unwrap();
+    let area = host.query_selector(".pine-chart-area").unwrap().unwrap();
+    assert_eq!(
+        area.get_attribute("d").as_deref(),
+        Some("M25,100 L25,60 L75,20 L75,100Z")
+    );
+    assert_eq!(area.get_attribute("fill").as_deref(), Some("#1d6fd833"));
+    assert_eq!(
+        area.get_attribute("data-series").as_deref(),
+        Some("Forecast")
+    );
+
+    let line = host
+        .query_selector(".pine-chart-lines .pine-chart-line")
+        .unwrap()
+        .unwrap();
     assert_eq!(line.get_attribute("d").as_deref(), Some("M25,40 L75,10"));
     assert_eq!(line.get_attribute("stroke").as_deref(), Some("#1d6fd8"));
     assert_eq!(line.get_attribute("data-series").as_deref(), Some("Target"));
+
+    let point = host
+        .query_selector(".pine-chart-scatter-point")
+        .unwrap()
+        .unwrap();
+    assert_eq!(point.get_attribute("cx").as_deref(), Some("50"));
+    assert_eq!(point.get_attribute("cy").as_deref(), Some("30"));
+    assert_eq!(point.get_attribute("r").as_deref(), Some("6"));
+    assert_eq!(point.get_attribute("fill").as_deref(), Some("#d96c2c"));
+    assert_eq!(
+        point.get_attribute("aria-label").as_deref(),
+        Some("Samples, W2: 14")
+    );
 
     let markers = host.query_selector_all(".pine-chart-marker").unwrap();
     assert_eq!(markers.length(), 2);

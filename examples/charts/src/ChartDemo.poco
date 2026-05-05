@@ -49,6 +49,12 @@
                        pp-bind:label="combo_bar_label"
                        pp-bind:color="combo_bar_color"
                        pp-bind:data="combo_bar_data"></pine-bar-series>
+      <pine-area-series key="band"
+                        label="Trend band"
+                        fill="#1d6fd833"
+                        color="#1d6fd8"
+                        stroke_width="2"
+                        pp-bind:points="combo_area_points"></pine-area-series>
       <pine-line-series key="target"
                         pp-bind:label="combo_line_label"
                         pp-bind:color="combo_line_color"
@@ -56,6 +62,11 @@
                         show_markers="true"
                         marker_radius="3"
                         pp-bind:data="combo_line_data"></pine-line-series>
+      <pine-scatter-series key="samples"
+                           label="Samples"
+                           color="#5b6ee1"
+                           point_radius="4"
+                           pp-bind:points="combo_scatter_points"></pine-scatter-series>
     </pine-cartesian-chart>
   </pine-chart-responsive>
 

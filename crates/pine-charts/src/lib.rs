@@ -29,10 +29,12 @@ pub use bar::{
     PineBarChart, SvgBar,
 };
 pub use cartesian_chart::{
-    render_cartesian_chart, CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig,
-    CartesianChartOptions, CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
-    CartesianLineSeriesRender, CartesianMarkerRender, PineBarSeries, PineCartesianChart,
-    PineChartGrid, PineLineSeries, PineXAxis, PineYAxis,
+    render_cartesian_chart, CartesianAreaSeriesConfig, CartesianAreaSeriesRender,
+    CartesianAxisConfig, CartesianBarRender, CartesianBarSeriesConfig, CartesianChartOptions,
+    CartesianChartRender, CartesianGridConfig, CartesianLineSeriesConfig,
+    CartesianLineSeriesRender, CartesianMarkerRender, CartesianScatterPointRender,
+    CartesianScatterSeriesConfig, PineAreaSeries, PineBarSeries, PineCartesianChart, PineChartGrid,
+    PineLineSeries, PineScatterSeries, PineXAxis, PineYAxis,
 };
 pub use error::{ChartError, ChartResult};
 pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
@@ -64,6 +66,7 @@ pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 /// Register every Pine Charts custom-element tag.
 pub fn register_all() {
     PineAreaChart::register();
+    PineAreaSeries::register();
     PineBarChart::register();
     PineBarSeries::register();
     PineCartesianChart::register();
@@ -82,6 +85,7 @@ pub fn register_all() {
     PineLineChart::register();
     PinePieChart::register();
     PineScatterChart::register();
+    PineScatterSeries::register();
     PineXAxis::register();
     PineYAxis::register();
 }

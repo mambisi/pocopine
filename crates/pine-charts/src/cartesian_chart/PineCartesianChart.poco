@@ -113,6 +113,29 @@
               :data-value="bar.value"></rect>
       </template>
     </g>
+    <g pp-show="ready && show_areas"
+       class="pine-chart-areas"
+       data-layer="area"
+       aria-hidden="true">
+      <template pp-for="series in areas" pp-key="series.key">
+        <path class="pine-chart-area"
+              :d="series.area_d"
+              :fill="series.fill"
+              stroke="none"
+              :data-series="series.label"></path>
+      </template>
+      <template pp-for="series in areas" pp-key="series.key">
+        <path class="pine-chart-line pine-chart-area-line"
+              :d="series.line_d"
+              fill="none"
+              :stroke="series.color"
+              :stroke-width="series.stroke_width"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              vector-effect="non-scaling-stroke"
+              :data-series="series.label"></path>
+      </template>
+    </g>
     <g pp-show="ready"
        class="pine-chart-lines"
        data-layer="series"
@@ -127,6 +150,23 @@
               stroke-linejoin="round"
               vector-effect="non-scaling-stroke"
               :data-series="series.label"></path>
+      </template>
+    </g>
+    <g pp-show="ready && show_scatter"
+       class="pine-chart-points pine-chart-scatter-points"
+       data-layer="points">
+      <template pp-for="point in scatter_points" pp-key="point.key">
+        <circle class="pine-chart-point pine-chart-scatter-point"
+                :cx="point.x"
+                :cy="point.y"
+                :r="point.radius"
+                :fill="point.color"
+                role="option"
+                :aria-label="point.aria_label"
+                :data-key="point.key"
+                :data-x="point.data_x"
+                :data-y="point.data_y"
+                :data-series="point.series_label"></circle>
       </template>
     </g>
     <g pp-show="ready && show_markers"

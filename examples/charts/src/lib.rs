@@ -20,6 +20,8 @@ pub struct ChartDemo {
     pub combo_line_label: String,
     pub combo_line_color: String,
     pub combo_line_data: Vec<ChartBar>,
+    pub combo_area_points: Vec<ChartPoint>,
+    pub combo_scatter_points: Vec<ChartPoint>,
     pub metro_line_a: Vec<ChartLayerPoint>,
     pub metro_line_b: Vec<ChartLayerPoint>,
     pub metro_line_c: Vec<ChartLayerPoint>,
@@ -57,6 +59,8 @@ impl Default for ChartDemo {
             combo_line_label: line_series[1].label.clone(),
             combo_line_color: "#d96c2c".into(),
             combo_line_data: bars_from_points(&line_series[1].data),
+            combo_area_points: combo_area_points(&line_series[0].data),
+            combo_scatter_points: combo_scatter_points(&line_series[0].data),
             line_series,
             metro_line_a: metro_line_a(),
             metro_line_b: metro_line_b(),
@@ -172,6 +176,10 @@ impl ChartDemo {
             self.combo_line_data = bars_from_points(&secondary.data);
             self.combo_line_color = line_color.into();
         }
+        if let Some(primary) = series.first() {
+            self.combo_area_points = combo_area_points(&primary.data);
+            self.combo_scatter_points = combo_scatter_points(&primary.data);
+        }
     }
 
     fn update_pie_center(&mut self) {
@@ -194,6 +202,22 @@ fn bars_from_points(points: &[ChartPoint]) -> Vec<ChartBar> {
         .iter()
         .enumerate()
         .map(|(index, point)| ChartBar::new(format!("W{}", index + 1), point.y))
+        .collect()
+}
+
+fn combo_area_points(points: &[ChartPoint]) -> Vec<ChartPoint> {
+    points
+        .iter()
+        .map(|point| ChartPoint::new(point.x, point.y * 0.82))
+        .collect()
+}
+
+fn combo_scatter_points(points: &[ChartPoint]) -> Vec<ChartPoint> {
+    points
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % 3 == 1)
+        .map(|(_, point)| ChartPoint::new(point.x, point.y * 1.05))
         .collect()
 }
 
