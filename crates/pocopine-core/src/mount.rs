@@ -58,7 +58,6 @@ const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
 const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
 const WALKED_KEY: &str = "__pp_walked";
-const COMPONENT_NAME_KEY: &str = "__pp_component_name";
 const MOUNT_START_MS_KEY: &str = "__pp_mount_start_ms";
 const COMPONENT_MOUNT_EVENT_FIRED_KEY: &str = "__pp_component_mount_event_fired";
 /// Stamped on row clones whose scope + row-instance state has
@@ -90,6 +89,13 @@ struct CapturedSlot {
 
 thread_local! {
     static LIGHT_DOM_SLOTS: RefCell<HashMap<ScopeId, HashMap<String, CapturedSlot>>> =
+        RefCell::new(HashMap::new());
+    /// Side-table of `ScopeId -> &'static str` populated when at least
+    /// one of `ComponentMounted`, `ComponentReady`, or
+    /// `ComponentUnmounted` is hooked. Lets plugin events carry a
+    /// `&'static str` component name without a per-emit `Reflect::get`
+    /// + `as_string` round-trip.
+    static COMPONENT_NAMES: RefCell<HashMap<ScopeId, &'static str>> =
         RefCell::new(HashMap::new());
 }
 
@@ -236,7 +242,7 @@ pub fn fire_ready_next_tick(el: &Element, scope_id: ScopeId) {
         };
         if has_plugin_ready {
             crate::plugin::emit(crate::plugin::ComponentReady {
-                component: component_name_for(&el_owned),
+                component: component_name_for(scope_id),
                 scope_id,
             });
         }
@@ -352,20 +358,7 @@ fn mount_component(
     if let Some(root) = first_element_child(el) {
         set_private(&root, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
         set_private(&root, SCOPE_PROXY_KEY, &proxy);
-        if plugin_hooks.needs_component_name {
-            set_private(
-                &root,
-                COMPONENT_NAME_KEY,
-                &JsValue::from_str(&canonical_component_name(tag)),
-            );
-        }
-        if let Some(mount_start_ms) = mount_start_ms {
-            set_private(
-                &root,
-                MOUNT_START_MS_KEY,
-                &JsValue::from_f64(mount_start_ms),
-            );
-        }
+        stamp_plugin_metadata(&root, tag, scope.id, plugin_hooks, mount_start_ms);
         let _ = root.remove_attribute("data-pp-scope-id");
 
         // Fallthrough (RFC-010).
@@ -536,20 +529,7 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
         &JsValue::from_f64(scope.id.0 as f64),
     );
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
-    if plugin_hooks.needs_component_name {
-        set_private(
-            &user_root,
-            COMPONENT_NAME_KEY,
-            &JsValue::from_str(&canonical_component_name(tag)),
-        );
-    }
-    if let Some(mount_start_ms) = mount_start_ms {
-        set_private(
-            &user_root,
-            MOUNT_START_MS_KEY,
-            &JsValue::from_f64(mount_start_ms),
-        );
-    }
+    stamp_plugin_metadata(&user_root, tag, scope.id, plugin_hooks, mount_start_ms);
     let _ = user_root.remove_attribute("data-pp-scope-id");
 
     let plan_root = pp_as_render_root(&user_root);
@@ -1504,10 +1484,13 @@ fn release_subtree_inner(node: &Node) {
                 }
                 if crate::plugin::has_component_unmounted_hooks() {
                     crate::plugin::emit(crate::plugin::ComponentUnmounted {
-                        component: component_name_for(&el),
+                        component: component_name_for(scope_id),
                         scope_id,
                     });
                 }
+                COMPONENT_NAMES.with(|names| {
+                    names.borrow_mut().remove(&scope_id);
+                });
                 Scope::remove(scope_id);
                 crate::lifecycle::__clear_mount_epoch(scope_id);
             }
@@ -1543,7 +1526,7 @@ fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
         .unwrap_or_else(js_sys::Date::now);
     let elapsed = js_sys::Date::now() - start_ms;
     crate::plugin::emit(crate::plugin::ComponentMounted {
-        component: component_name_for(el),
+        component: component_name_for(scope_id),
         scope_id,
         duration_ms: if elapsed.is_finite() && elapsed >= 0.0 {
             elapsed
@@ -1551,6 +1534,24 @@ fn fire_component_mounted_plugin_hooks(el: &Element, scope_id: ScopeId) {
             0.0
         },
     });
+}
+
+fn stamp_plugin_metadata(
+    root: &Element,
+    tag: &str,
+    scope_id: ScopeId,
+    plugin_hooks: crate::plugin::ComponentHookActivity,
+    mount_start_ms: Option<f64>,
+) {
+    if plugin_hooks.needs_component_name {
+        let canonical = canonical_component_name(tag);
+        COMPONENT_NAMES.with(|names| {
+            names.borrow_mut().insert(scope_id, canonical);
+        });
+    }
+    if let Some(start_ms) = mount_start_ms {
+        set_private(root, MOUNT_START_MS_KEY, &JsValue::from_f64(start_ms));
+    }
 }
 
 fn fire_component_setup_plugin_hooks(tag: &str, scope_id: ScopeId) {
@@ -1563,22 +1564,27 @@ fn fire_component_setup_plugin_hooks(tag: &str, scope_id: ScopeId) {
     });
 }
 
-fn component_name_for(el: &Element) -> String {
-    if let Some(component) = get_private(el, COMPONENT_NAME_KEY).and_then(|value| value.as_string())
-    {
-        return component;
-    }
-    debug_assert!(
-        get_private(el, COMPONENT_NAME_KEY).is_some(),
-        "mounted component root missing private component name"
-    );
-    "<unknown>".to_string()
+// Resolves the canonical component name for plugin events. The
+// side-table is populated whenever any of `HOOK_COMPONENT_NAME_EVENTS`
+// (mounted, ready, unmounted) is active, and the readers below are all
+// gated on the same bitmask — so the `<unknown>` fallback is
+// unreachable in practice and exists only as a release-mode guard
+// against an invariant break.
+fn component_name_for(scope_id: ScopeId) -> &'static str {
+    COMPONENT_NAMES.with(|names| {
+        if let Some(&name) = names.borrow().get(&scope_id) {
+            return name;
+        }
+        debug_assert!(
+            false,
+            "component name side-table missing entry for scope {scope_id:?}"
+        );
+        "<unknown>"
+    })
 }
 
-fn canonical_component_name(name: &str) -> String {
-    crate::registry::canonical_component_name(name)
-        .unwrap_or(name)
-        .to_string()
+fn canonical_component_name(name: &str) -> &'static str {
+    crate::registry::canonical_component_name(name).unwrap_or("<unknown>")
 }
 
 fn get_private(el: &Element, key: &str) -> Option<JsValue> {
