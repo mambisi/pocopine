@@ -15,6 +15,7 @@
 //!         .register::<Counter>()
 //!         .register::<TodoList>()
 //!         .store::<Preferences>()
+//!         .plugin(my_observability_plugin())
 //!         .before_mount(|| web_sys::console::log_1(&"booting".into()))
 //!         .run();
 //! }
@@ -58,6 +59,26 @@ pub trait Component {
 
 type Hook = Box<dyn FnOnce()>;
 
+/// App-level extension point.
+///
+/// Plugins receive the in-progress [`App`] builder and return it after
+/// installing lifecycle hooks, stores, devtools, logging, analytics, or other
+/// app-level wiring. This keeps optional integrations out of `pocopine-core`:
+/// a separate crate can expose a plugin value, and applications opt into it
+/// from their entrypoint.
+pub trait AppPlugin {
+    fn install(self, app: App) -> App;
+}
+
+impl<F> AppPlugin for F
+where
+    F: FnOnce(App) -> App,
+{
+    fn install(self, app: App) -> App {
+        self(app)
+    }
+}
+
 /// Application-level wiring and lifecycle.
 ///
 /// Construct with [`App::new`], chain `.register::<T>()` / `.store::<S>()`
@@ -92,6 +113,15 @@ impl App {
         self
     }
 
+    /// Install an app-level plugin.
+    ///
+    /// The plugin runs while the builder is still being assembled, before
+    /// registry verification and mount work. External crates should prefer
+    /// this over asking applications to patch core startup logic.
+    pub fn plugin<P: AppPlugin>(self, plugin: P) -> Self {
+        plugin.install(self)
+    }
+
     /// Register a route. `pattern` is a path with optional `:name`
     /// segments (`"/blog/:id"`) or the 404 fallback `"*"`. `C` must be
     /// a `#[component]` whose tag name is the kebab-case of its ident.
@@ -115,6 +145,17 @@ impl App {
     pub fn route_static<C: Component>(mut self, pattern: &'static str) -> Self {
         router::register_route(pattern.to_string(), C::NAME);
         self.routes.push(pattern);
+        self
+    }
+
+    /// **Internal — invoked by the `app!{}` macro; do not call directly.**
+    /// Records a component name from the macro's static registry without
+    /// calling its register function. This gives plugins a complete component
+    /// manifest before [`Self::run_with_registry`] performs the authoritative
+    /// registry walk.
+    #[doc(hidden)]
+    pub fn component_static(mut self, name: &'static str) -> Self {
+        self.components.push(name);
         self
     }
 

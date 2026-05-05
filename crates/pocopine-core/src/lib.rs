@@ -54,7 +54,7 @@ pub mod tick;
 pub mod timers;
 pub mod watch;
 
-pub use app::{App, Component, SubtreeHandle};
+pub use app::{App, AppPlugin, Component, SubtreeHandle};
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
