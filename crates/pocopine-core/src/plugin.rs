@@ -62,6 +62,69 @@ impl<T: 'static> Plugin<T> {
     }
 }
 
+/// Component-owned view of app plugin services.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ComponentCtx;
+
+impl ComponentCtx {
+    pub fn plugins(&self) -> Plugins {
+        Plugins
+    }
+
+    pub fn plugin<T: 'static>(&self) -> Plugin<T> {
+        require_plugin::<T>()
+    }
+
+    pub fn optional_plugin<T: 'static>(&self) -> Option<Plugin<T>> {
+        optional_plugin::<T>()
+    }
+}
+
+/// App plugin service lookup handle for component methods.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Plugins;
+
+impl Plugins {
+    pub fn get<T: 'static>(&self) -> Option<Plugin<T>> {
+        optional_plugin::<T>()
+    }
+
+    pub fn optional<T: 'static>(&self) -> Option<Plugin<T>> {
+        optional_plugin::<T>()
+    }
+
+    pub fn require<T: 'static>(&self) -> Plugin<T> {
+        require_plugin::<T>()
+    }
+}
+
+/// Convenience methods available on every pocopine component.
+///
+/// The blanket implementation keeps these methods out of macro-generated
+/// inherent impls, so a component can still define its own method with the same
+/// name if it needs to. In normal app code, importing the prelude lets handler
+/// methods call `self.plugin::<T>()`, `self.optional_plugin::<T>()`, or
+/// `self.plugins().get::<T>()`.
+pub trait ComponentPluginExt: Component {
+    fn ctx(&self) -> ComponentCtx {
+        ComponentCtx
+    }
+
+    fn plugins(&self) -> Plugins {
+        self.ctx().plugins()
+    }
+
+    fn plugin<T: 'static>(&self) -> Plugin<T> {
+        self.ctx().plugin::<T>()
+    }
+
+    fn optional_plugin<T: 'static>(&self) -> Option<Plugin<T>> {
+        self.ctx().optional_plugin::<T>()
+    }
+}
+
+impl<C: Component + ?Sized> ComponentPluginExt for C {}
+
 /// Typed framework event hook implemented by runtime plugin services.
 pub trait Hook<E>: 'static {
     fn call(&self, event: E);
@@ -326,8 +389,9 @@ pub(crate) fn has_hooks<E: 'static>() -> bool {
 /// Return the installed plugin service `T`, if the app provided it.
 ///
 /// Lifecycle methods should usually use the `Option<Plugin<T>>` extractor.
-/// Ordinary component methods and DOM event handlers can call this helper
-/// directly because they do not receive a [`crate::LifecycleContext`].
+/// Component methods and DOM event handlers usually call
+/// `self.optional_plugin::<T>()` or `self.plugins().get::<T>()`; this helper is
+/// the lower-level function behind those methods.
 pub fn optional_plugin<T: 'static>() -> Option<Plugin<T>> {
     active_plugin::<T>()
 }
@@ -335,8 +399,9 @@ pub fn optional_plugin<T: 'static>() -> Option<Plugin<T>> {
 /// Return the installed plugin service `T`, or panic with install guidance.
 ///
 /// Lifecycle methods should usually use the `Plugin<T>` extractor. Ordinary
-/// component methods and DOM event handlers can call this helper directly when
-/// the service is required.
+/// component methods and DOM event handlers usually call `self.plugin::<T>()`
+/// or `self.plugins().require::<T>()`; this helper is the lower-level function
+/// behind those methods.
 pub fn require_plugin<T: 'static>() -> Plugin<T> {
     required_plugin::<T>()
 }

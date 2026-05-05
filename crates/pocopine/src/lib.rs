@@ -25,14 +25,14 @@ pub use pocopine_core::{
     spawn_latest, spawn_latest_for_scope, spawn_scoped, store, swap_list_indices_inline, this,
     trigger_scope, verify_registry, watch, watch_field, watch_field_scoped, watch_scope_field,
     watch_scope_field_now, watch_scope_field_scoped, watch_scoped, App, AppPlugin, Body, Component,
-    ComponentEvent, ComponentMountFn, ComponentMounted, ComponentReady, ComponentSetup,
-    ComponentState, ComponentUnmounted, ComponentVTable, Computed, ContextKey, ContextMarker, Doc,
-    DomEventName, EffectId, EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl,
-    Inject, IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle, MountEpoch,
-    NearestParent, Parent, ParentId, Plugin, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
-    TypedEl, Win,
+    ComponentCtx, ComponentEvent, ComponentMountFn, ComponentMounted, ComponentPluginExt,
+    ComponentReady, ComponentSetup, ComponentState, ComponentUnmounted, ComponentVTable, Computed,
+    ContextKey, ContextMarker, Doc, DomEventName, EffectId, EffectOptions, El, Elapsed, Emit,
+    ForComponent, Handle, Hook, HostEl, Inject, IsTeleported, LifecycleContext, LifecyclePhase,
+    ListenerHandle, MountEpoch, NearestParent, Parent, ParentId, Plugin, Plugins, Refs,
+    RegisteredComponent, RegistryError, RegistryErrorKind, RwSignal, Scope, ScopeId, ScopePath,
+    ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle,
+    TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -85,11 +85,11 @@ pub mod prelude {
         inject_key, job, on, on_cleanup, on_emit, optional_plugin, prepend_list_inline, protected,
         remove_list_at_inline, require_plugin, rw_signal, signal, spawn, spawn_for_scope,
         spawn_latest, spawn_latest_for_scope, spawn_scoped, store, this, watch, App, AppPlugin,
-        AuthUser, Component, ComponentEvent, ComponentMounted, ComponentReady, ComponentSetup,
-        ComponentState, ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit,
-        ForComponent, Handle, Hook, Inject, JobError, JobResult, NearestParent, Parent, Permission,
-        Plugin, Principal, Role, RwSignal, Scope, ScopeId, ServerError, ServerResult, Setter,
-        Signal, Store,
+        AuthUser, Component, ComponentCtx, ComponentEvent, ComponentMounted, ComponentPluginExt,
+        ComponentReady, ComponentSetup, ComponentState, ComponentUnmounted, Computed, ContextKey,
+        ContextMarker, Emit, ForComponent, Handle, Hook, Inject, JobError, JobResult,
+        NearestParent, Parent, Permission, Plugin, Plugins, Principal, Role, RwSignal, Scope,
+        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

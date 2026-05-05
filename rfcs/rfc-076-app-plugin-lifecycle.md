@@ -233,9 +233,21 @@ fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
 
 The optional extractor returns `None` when the service is not installed.
 
-Ordinary component methods and DOM event handlers do not receive a lifecycle
-context, so they use `optional_plugin::<T>()` or `require_plugin::<T>()`
-instead of extractor parameters.
+Ordinary component methods and DOM event handlers make the component own the
+lookup:
+
+```rust
+fn on_click(&self) {
+    if let Some(analytics) = self.plugins().get::<Analytics>() {
+        analytics.track("clicked");
+    }
+}
+```
+
+`self.plugin::<T>()` is the required form and panics with the same missing
+service message as the lifecycle extractor. `self.optional_plugin::<T>()` and
+`self.plugins().get::<T>()` are the optional forms. `self.ctx().plugins()` is
+available when a method wants to pass a component context to helper code.
 
 Reusable component families should usually own their integration through these
 extractors. For example, a CTA tracking plugin provides `CtaTracking` once, and
@@ -256,7 +268,7 @@ impl CtaButton {
     }
 
     pub fn on_click(&self) {
-        if let Some(cta) = optional_plugin::<CtaTracking>() {
+        if let Some(cta) = self.plugins().get::<CtaTracking>() {
             cta.click(&self.analytics_id);
         }
     }
@@ -369,8 +381,9 @@ The first slice ships:
 - `App::hook_plugin`;
 - `App::hook_component_plugin`;
 - `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
-- `optional_plugin::<T>()` and `require_plugin::<T>()` helpers for ordinary
-  component methods and DOM event handlers;
+- `self.plugin::<T>()`, `self.optional_plugin::<T>()`, `self.plugins()`, and
+  `self.ctx()` component-owned plugin accessors for ordinary component methods
+  and DOM event handlers;
 - `Hook<E>` framework-event dispatch;
 - `Hook<ForComponent<C, E>>` component-filtered dispatch;
 - `ComponentSetup` / `ComponentMounted` / `ComponentReady` /

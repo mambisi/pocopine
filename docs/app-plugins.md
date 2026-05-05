@@ -106,19 +106,21 @@ fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
 
 `Option<Plugin<T>>` returns `None` when the service is not installed.
 
-Ordinary component methods and DOM event handlers do not receive a lifecycle
-context, so they use helper functions instead:
+Ordinary component methods and DOM event handlers should make the component own
+the lookup:
 
 ```rust
 fn on_click(&self) {
-    if let Some(analytics) = optional_plugin::<Analytics>() {
+    if let Some(analytics) = self.plugins().get::<Analytics>() {
         analytics.track("clicked");
     }
 }
 ```
 
-Use `require_plugin::<T>()` in ordinary methods only when missing `T` is a
-programming error.
+`self.plugin::<T>()` is the required form and panics with the same missing
+service message as the lifecycle extractor. `self.optional_plugin::<T>()` and
+`self.plugins().get::<T>()` are the optional forms. `self.ctx().plugins()` is
+available when a method wants to pass a component context to helper code.
 
 ### Component-Owned Capability Opt-In
 
@@ -164,7 +166,7 @@ impl CtaButton {
     }
 
     pub fn on_click(&self) {
-        if let Some(cta) = optional_plugin::<CtaTracking>() {
+        if let Some(cta) = self.plugins().get::<CtaTracking>() {
             cta.click(&self.analytics_id);
         }
     }
@@ -386,7 +388,7 @@ The dedicated app-plugin tests assert:
 - plugin-installed `before_mount` and `after_mount` hooks run in runtime order;
 - `Plugin<T>` panics clearly when required services are missing;
 - `Option<Plugin<T>>` returns `None` when optional services are missing;
-- reusable components can use `optional_plugin::<T>()` from ordinary event
+- reusable components can use `self.plugins().get::<T>()` from ordinary event
   handlers;
 - `Hook<ComponentSetup>`, `Hook<ComponentMounted>`, `Hook<ComponentReady>`,
   and `Hook<ComponentUnmounted>` receive framework lifecycle events;
