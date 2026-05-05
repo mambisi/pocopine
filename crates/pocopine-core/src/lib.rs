@@ -33,6 +33,7 @@ pub mod magics;
 pub mod model_runtime;
 pub mod mount;
 pub mod path;
+pub mod plugin;
 pub mod profiler;
 pub mod reactive;
 pub mod refs;
@@ -72,11 +73,12 @@ pub use extractors::{Inject, NearestParent, Parent};
 pub use handle::{this, Handle};
 pub use handler::{FromHandlerArg, HandlerDispatch};
 pub use lifecycle::{
-    Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, MountEpoch, ParentId, Refs,
-    ScopePath, TagName, TeleportHost, TypedEl, Win,
+    Body, Doc, El, Elapsed, HostEl, IsTeleported, LifecycleContext, LifecyclePhase, MountEpoch,
+    ParentId, Refs, ScopePath, TagName, TeleportHost, TypedEl, Win,
 };
 pub use magics::dispatch_event;
 pub use model_runtime::{with_write_origin, WriteOrigin};
+pub use plugin::{ComponentMounted, ComponentUnmounted, Hook, Plugin};
 pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,
 };

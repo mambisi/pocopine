@@ -448,6 +448,18 @@ impl<'a> From<LifecycleContext<'a>> for Elapsed {
     }
 }
 
+impl<'a, T: 'static> From<LifecycleContext<'a>> for crate::plugin::Plugin<T> {
+    fn from(_: LifecycleContext<'a>) -> Self {
+        crate::plugin::required_plugin::<T>()
+    }
+}
+
+impl<'a, T: 'static> From<LifecycleContext<'a>> for Option<crate::plugin::Plugin<T>> {
+    fn from(_: LifecycleContext<'a>) -> Self {
+        crate::plugin::active_plugin::<T>()
+    }
+}
+
 // Fallibility: authors impl `From<LifecycleContext>` for
 // `Option<TheirType>` directly when they want the non-panicking
 // variant. No catch_unwind blanket — wasm-hostile and magics too

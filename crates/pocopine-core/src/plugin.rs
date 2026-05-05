@@ -1,0 +1,174 @@
+//! App plugin runtime services and lifecycle hook dispatch.
+//!
+//! `AppPlugin` installs configuration on the [`crate::App`] builder.
+//! This module stores the runtime services those installers provide,
+//! exposes them to component lifecycle hooks through [`Plugin<T>`],
+//! and dispatches framework lifecycle events to services that implement
+//! [`Hook<E>`].
+
+use std::any::{type_name, Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::rc::Rc;
+
+use crate::reactive::ScopeId;
+
+type HookDispatch = Rc<dyn Fn(&PluginRegistry, &dyn Any)>;
+
+thread_local! {
+    static ACTIVE_PLUGINS: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::default());
+}
+
+/// Runtime handle for a service installed by an app plugin.
+///
+/// Component lifecycle hooks receive this through the standard extractor
+/// pipeline:
+///
+/// ```ignore
+/// fn on_ready(&self, analytics: Plugin<Analytics>) {
+///     analytics.track("ready");
+/// }
+/// ```
+///
+/// Use `Option<Plugin<T>>` for reusable components where the plugin is
+/// optional.
+pub struct Plugin<T: 'static> {
+    service: Rc<T>,
+}
+
+impl<T: 'static> Clone for Plugin<T> {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+        }
+    }
+}
+
+impl<T: 'static> Deref for Plugin<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.service.as_ref()
+    }
+}
+
+impl<T: 'static> Plugin<T> {
+    pub fn get(&self) -> &T {
+        self.service.as_ref()
+    }
+}
+
+/// Typed framework event hook implemented by runtime plugin services.
+pub trait Hook<E>: 'static {
+    fn call(&self, event: E);
+}
+
+/// Emitted after a component subtree has been mounted and finalized.
+#[derive(Clone, Debug)]
+pub struct ComponentMounted {
+    pub component: String,
+    pub scope_id: ScopeId,
+    pub duration_ms: f64,
+}
+
+/// Emitted just before a component scope is removed.
+#[derive(Clone, Debug)]
+pub struct ComponentUnmounted {
+    pub component: String,
+    pub scope_id: ScopeId,
+}
+
+#[derive(Default)]
+pub(crate) struct PluginRegistry {
+    services: HashMap<TypeId, Rc<dyn Any>>,
+    hooks: HashMap<TypeId, Vec<HookDispatch>>,
+}
+
+impl PluginRegistry {
+    pub(crate) fn provide<T: 'static>(&mut self, service: T) {
+        let previous = self.services.insert(TypeId::of::<T>(), Rc::new(service));
+        assert!(
+            previous.is_none(),
+            "plugin service `{}` is already installed",
+            type_name::<T>(),
+        );
+    }
+
+    pub(crate) fn hook_plugin<T, E>(&mut self)
+    where
+        T: Hook<E> + 'static,
+        E: Clone + 'static,
+    {
+        self.hooks
+            .entry(TypeId::of::<E>())
+            .or_default()
+            .push(Rc::new(|registry, event| {
+                let event = event
+                    .downcast_ref::<E>()
+                    .expect("plugin hook dispatched with the wrong event type")
+                    .clone();
+                let service = registry.plugin::<T>().unwrap_or_else(|| {
+                    panic!(
+                        "plugin hook for event `{}` requires plugin service `{}`, \
+                         but that service is not installed. Install it with \
+                         `App::provide_plugin(...)` before `App::hook_plugin::<{}, {}>()`.",
+                        type_name::<E>(),
+                        type_name::<T>(),
+                        type_name::<T>(),
+                        type_name::<E>(),
+                    )
+                });
+                service.get().call(event);
+            }));
+    }
+
+    fn plugin<T: 'static>(&self) -> Option<Plugin<T>> {
+        self.services
+            .get(&TypeId::of::<T>())
+            .and_then(|service| service.clone().downcast::<T>().ok())
+            .map(|service| Plugin { service })
+    }
+
+    fn emit<E>(&self, event: E)
+    where
+        E: Clone + 'static,
+    {
+        if let Some(hooks) = self.hooks.get(&TypeId::of::<E>()) {
+            for hook in hooks {
+                hook(self, &event);
+            }
+        }
+    }
+}
+
+pub(crate) fn activate(registry: PluginRegistry) {
+    ACTIVE_PLUGINS.with(|plugins| {
+        *plugins.borrow_mut() = registry;
+    });
+}
+
+pub(crate) fn emit<E>(event: E)
+where
+    E: Clone + 'static,
+{
+    ACTIVE_PLUGINS.with(|plugins| {
+        plugins.borrow().emit(event);
+    });
+}
+
+pub(crate) fn active_plugin<T: 'static>() -> Option<Plugin<T>> {
+    ACTIVE_PLUGINS.with(|plugins| plugins.borrow().plugin::<T>())
+}
+
+pub(crate) fn required_plugin<T: 'static>() -> Plugin<T> {
+    active_plugin::<T>().unwrap_or_else(|| {
+        panic!(
+            "plugin service `{}` is not installed. Install it from an app \
+             plugin with `App::provide_plugin(...)`, or use \
+             `Option<Plugin<{}>>` for reusable components where the plugin is optional.",
+            type_name::<T>(),
+            type_name::<T>(),
+        )
+    })
+}

@@ -7,6 +7,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use js_sys::Promise;
 use pocopine::prelude::*;
@@ -42,6 +43,61 @@ struct AppPluginMacroHome {}
 
 #[handlers]
 impl AppPluginMacroHome {}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "app-plugin-observed-home",
+    template_inline = r#"<div class="app-plugin-observed-home">observed</div>"#
+)]
+struct AppPluginObservedHome {}
+
+#[handlers]
+impl AppPluginObservedHome {
+    pub fn on_ready(
+        &self,
+        analytics: Plugin<TestAnalytics>,
+        missing: Option<Plugin<MissingPlugin>>,
+    ) {
+        assert!(
+            missing.is_none(),
+            "Option<Plugin<T>> should be None when the plugin is not installed"
+        );
+        analytics.record("ready");
+    }
+}
+
+struct MissingPlugin;
+
+#[derive(Clone)]
+struct TestAnalytics {
+    events: Rc<RefCell<Vec<String>>>,
+}
+
+impl TestAnalytics {
+    fn new(events: Rc<RefCell<Vec<String>>>) -> Self {
+        Self { events }
+    }
+
+    fn record(&self, event: impl Into<String>) {
+        self.events.borrow_mut().push(event.into());
+    }
+}
+
+impl Hook<ComponentMounted> for TestAnalytics {
+    fn call(&self, event: ComponentMounted) {
+        assert!(
+            event.duration_ms >= 0.0,
+            "component mount duration should be non-negative"
+        );
+        self.record(format!("mounted:{}", event.component));
+    }
+}
+
+impl Hook<ComponentUnmounted> for TestAnalytics {
+    fn call(&self, event: ComponentUnmounted) {
+        self.record(format!("unmounted:{}", event.component));
+    }
+}
 
 fn push(event: &'static str) {
     EVENTS.with(|events| events.borrow_mut().push(event));
@@ -94,6 +150,14 @@ fn macro_plugin(app: App) -> App {
         .after_mount(|| push("macro:after"))
 }
 
+fn analytics_plugin(events: Rc<RefCell<Vec<String>>>) -> impl AppPlugin {
+    move |app: App| {
+        app.provide_plugin(TestAnalytics::new(events))
+            .hook_plugin::<TestAnalytics, ComponentMounted>()
+            .hook_plugin::<TestAnalytics, ComponentUnmounted>()
+    }
+}
+
 #[wasm_bindgen_test(async)]
 async fn app_builder_plugin_installs_lifecycle_hooks() {
     let _ = take_events();
@@ -110,6 +174,40 @@ async fn app_builder_plugin_installs_lifecycle_hooks() {
         vec!["direct:install", "direct:before", "direct:after"]
     );
     host.remove();
+}
+
+#[wasm_bindgen_test(async)]
+async fn plugin_extractor_and_framework_hooks_use_provided_service() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let app_root = app_host("");
+
+    App::new().plugin(analytics_plugin(events.clone())).run();
+
+    let host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&host).unwrap();
+    let handle = App::mount_subtree::<AppPluginObservedHome>(&host);
+    next_microtask().await;
+    handle.unmount();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            "mounted:app-plugin-observed-home".to_string(),
+            "ready".to_string(),
+            "unmounted:app-plugin-observed-home".to_string(),
+        ]
+    );
+
+    host.remove();
+    app_root.remove();
+}
+
+#[wasm_bindgen_test]
+#[should_panic(expected = "is not installed")]
+fn required_plugin_extractor_panics_when_missing() {
+    let el = doc().create_element("div").unwrap();
+    let ctx = pocopine::LifecycleContext::__new(&el, ScopeId(0), pocopine::LifecyclePhase::Ready);
+    let _: Plugin<MissingPlugin> = ctx.into();
 }
 
 #[wasm_bindgen_test(async)]

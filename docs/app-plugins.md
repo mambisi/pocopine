@@ -45,19 +45,21 @@ pub struct ObservabilityPlugin {
     pub service_name: &'static str,
 }
 
+pub struct Observability {
+    pub service_name: &'static str,
+}
+
 impl pocopine::AppPlugin for ObservabilityPlugin {
     fn install(self, app: pocopine::App) -> pocopine::App {
         let _ = pocopine::logging::init_console_logging(
             pocopine::logging::ConsoleLoggingConfig::json(),
         );
 
-        app.before_mount(move || {
-            tracing::info!(
-                target: "pocopine.log",
-                service = self.service_name,
-                "frontend mount starting"
-            );
+        app.provide_plugin(Observability {
+            service_name: self.service_name,
         })
+        .hook_plugin::<Observability, pocopine::ComponentMounted>()
+        .hook_plugin::<Observability, pocopine::ComponentUnmounted>()
     }
 }
 ```
@@ -65,6 +67,81 @@ impl pocopine::AppPlugin for ObservabilityPlugin {
 The important point: `install` runs while the app builder is still being
 assembled. It can do immediate global setup and can also attach later lifecycle
 hooks.
+
+## Runtime Services
+
+`AppPlugin` is the install-time object. Components should not receive the
+installer. They receive the runtime service the installer provides:
+
+```rust
+impl pocopine::AppPlugin for AnalyticsPlugin {
+    fn install(self, app: pocopine::App) -> pocopine::App {
+        app.provide_plugin(Analytics::new(self.config))
+    }
+}
+```
+
+Component lifecycle hooks extract provided services through `Plugin<T>`:
+
+```rust
+fn on_ready(&self, analytics: Plugin<Analytics>) {
+    analytics.track("home_ready");
+}
+```
+
+`Plugin<T>` is the required form. If the app did not install `T`, extraction
+panics with a clear message naming the missing service and telling the author
+to either install it with `App::provide_plugin(...)` or use the optional form.
+
+Reusable components should prefer the optional form when the integration is not
+mandatory:
+
+```rust
+fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
+    if let Some(analytics) = analytics {
+        analytics.track("closed");
+    }
+}
+```
+
+`Option<Plugin<T>>` returns `None` when the service is not installed.
+
+## Framework Hooks
+
+Runtime services can also subscribe to framework lifecycle events by
+implementing `Hook<E>`:
+
+```rust
+impl Hook<ComponentMounted> for Analytics {
+    fn call(&self, event: ComponentMounted) {
+        self.track_component_mount(event.component, event.duration_ms);
+    }
+}
+
+impl Hook<ComponentUnmounted> for Analytics {
+    fn call(&self, event: ComponentUnmounted) {
+        self.track_component_unmount(event.component);
+    }
+}
+```
+
+The installer wires those implementations into the app:
+
+```rust
+impl AppPlugin for AnalyticsPlugin {
+    fn install(self, app: App) -> App {
+        app.provide_plugin(Analytics::new(self.config))
+            .hook_plugin::<Analytics, ComponentMounted>()
+            .hook_plugin::<Analytics, ComponentUnmounted>()
+    }
+}
+```
+
+This gives plugins two integration paths:
+
+- component authors pull `Plugin<T>` when their hook needs the service;
+- the framework dispatches typed events to `Hook<E>` implementations for
+  automatic integration.
 
 ## Lifecycle Order
 
@@ -156,9 +233,9 @@ Observability is the reference use case:
 
 - `install` should initialize the chosen subscriber/exporter and any analytics
   client that must exist before boot errors;
-- `before_mount` can emit "mount starting" or attach DOM-independent runtime
-  hooks;
-- `after_mount` can emit "mounted" or start work that needs the mounted app;
+- `provide_plugin` should store the runtime observability service;
+- `hook_plugin` should attach automatic component mount/unmount handling;
+- component hooks can extract `Plugin<Observability>` for app-authored events;
 - event privacy still follows
   [`RFC 069`](../rfcs/rfc-069-observability.md).
 
@@ -180,4 +257,8 @@ The dedicated app-plugin tests assert:
 
 - direct builder plugins can install lifecycle hooks;
 - `app!` plugins see static component and route metadata before mount;
-- plugin-installed `before_mount` and `after_mount` hooks run in runtime order.
+- plugin-installed `before_mount` and `after_mount` hooks run in runtime order;
+- `Plugin<T>` panics clearly when required services are missing;
+- `Option<Plugin<T>>` returns `None` when optional services are missing;
+- `Hook<ComponentMounted>` and `Hook<ComponentUnmounted>` receive framework
+  lifecycle events.

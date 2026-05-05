@@ -196,6 +196,81 @@ behavior. This RFC does not introduce hook isolation. Integrations that need
 failure isolation, such as analytics sinks, must provide it inside their own
 crate.
 
+### 5.6 Runtime services and lifecycle extractors
+
+`AppPlugin` is the install-time shape. If components need to use the plugin,
+the installer provides a runtime service:
+
+```rust
+impl AppPlugin for AnalyticsPlugin {
+    fn install(self, app: App) -> App {
+        app.provide_plugin(Analytics::new(self.config))
+    }
+}
+```
+
+Component lifecycle methods extract that service with `Plugin<T>`:
+
+```rust
+fn on_ready(&self, analytics: Plugin<Analytics>) {
+    analytics.track("ready");
+}
+```
+
+`Plugin<T>` is required. If the service is missing, extraction panics with a
+message that names the missing type and tells the author to install it through
+`App::provide_plugin(...)` or use the optional form.
+
+Reusable components use `Option<Plugin<T>>`:
+
+```rust
+fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
+    if let Some(analytics) = analytics {
+        analytics.track("closed");
+    }
+}
+```
+
+The optional extractor returns `None` when the service is not installed.
+
+### 5.7 Framework event hooks
+
+Runtime services can implement typed hook traits for framework events:
+
+```rust
+impl Hook<ComponentMounted> for Analytics {
+    fn call(&self, event: ComponentMounted) {
+        self.track_component_mount(event.component, event.duration_ms);
+    }
+}
+
+impl Hook<ComponentUnmounted> for Analytics {
+    fn call(&self, event: ComponentUnmounted) {
+        self.track_component_unmount(event.component);
+    }
+}
+```
+
+Installers opt into those dispatch paths explicitly:
+
+```rust
+impl AppPlugin for AnalyticsPlugin {
+    fn install(self, app: App) -> App {
+        app.provide_plugin(Analytics::new(self.config))
+            .hook_plugin::<Analytics, ComponentMounted>()
+            .hook_plugin::<Analytics, ComponentUnmounted>()
+    }
+}
+```
+
+The first framework events are:
+
+- `ComponentMounted { component, scope_id, duration_ms }`;
+- `ComponentUnmounted { component, scope_id }`.
+
+Core emits these from the compiled mount/release path. Plugins decide whether
+to subscribe.
+
 ## 6. Privacy and Reliability
 
 Plugins are powerful by design: they can install logging, analytics, network
@@ -215,10 +290,16 @@ The first slice ships:
 - `pocopine_core::AppPlugin`;
 - blanket `AppPlugin` implementation for `FnOnce(App) -> App`;
 - `App::plugin`;
+- `App::provide_plugin`;
+- `App::hook_plugin`;
+- `Plugin<T>` and `Option<Plugin<T>>` lifecycle extractors;
+- `Hook<E>` framework-event dispatch;
+- `ComponentMounted` / `ComponentUnmounted` events;
 - hidden `App::component_static` for `app!{}` manifest metadata;
 - `pocopine::AppPlugin` and prelude re-exports;
 - `app! { plugins: [...] }`;
-- wasm tests for direct builder plugins and macro plugins.
+- wasm tests for direct builder plugins, macro plugins, plugin extractors, and
+  framework hook dispatch.
 
 Later slices can add convenience plugins in separate crates, beginning with
 observability.
