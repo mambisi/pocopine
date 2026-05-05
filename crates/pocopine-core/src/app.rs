@@ -128,7 +128,9 @@ impl App {
     ///
     /// Components extract this service with `Plugin<T>` or
     /// `Option<Plugin<T>>` from `on_setup`, `on_mount`, `on_ready`, and
-    /// `on_unmount`.
+    /// `on_unmount`. This is the primary extension path for reusable
+    /// components: the app installs one capability, and every component that
+    /// knows how to use it can opt in without being listed by the plugin.
     pub fn provide_plugin<T: 'static>(mut self, service: T) -> Self {
         self.plugins.provide(service);
         self
@@ -151,7 +153,11 @@ impl App {
     ///
     /// The service implements `Hook<ForComponent<C, E>>`, so the component
     /// filter is carried in the type system and the runtime performs the
-    /// component-name match before invoking the hook.
+    /// component-name match before invoking the hook. Use this for
+    /// app-specific overrides or special cases where the plugin intentionally
+    /// targets a known component type. Reusable component families should
+    /// normally opt into a provided capability with `Plugin<T>` or
+    /// `Option<Plugin<T>>` instead.
     pub fn hook_component_plugin<T, C, E>(mut self) -> Self
     where
         T: crate::plugin::Hook<crate::plugin::ForComponent<C, E>> + 'static,

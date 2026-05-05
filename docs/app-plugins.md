@@ -106,10 +106,89 @@ fn on_unmount(&mut self, analytics: Option<Plugin<Analytics>>) {
 
 `Option<Plugin<T>>` returns `None` when the service is not installed.
 
+Ordinary component methods and DOM event handlers do not receive a lifecycle
+context, so they use helper functions instead:
+
+```rust
+fn on_click(&self) {
+    if let Some(analytics) = optional_plugin::<Analytics>() {
+        analytics.track("clicked");
+    }
+}
+```
+
+Use `require_plugin::<T>()` in ordinary methods only when missing `T` is a
+programming error.
+
+### Component-Owned Capability Opt-In
+
+Reusable components should usually extend plugin capabilities from their own
+hooks. The plugin installs the capability once; every component instance that
+knows how to use it opts in locally.
+
+```rust
+pub struct CtaTracking {
+    sink: FirebaseSink,
+}
+
+impl CtaTracking {
+    pub fn new(config: FirebaseConfig) -> Self {
+        Self {
+            sink: FirebaseSink::new(config),
+        }
+    }
+
+    pub fn impression(&self, id: &str) {
+        self.sink.track("cta_impression", id);
+    }
+
+    pub fn click(&self, id: &str) {
+        self.sink.track("cta_click", id);
+    }
+}
+
+pub fn firebase_cta_tracking(config: FirebaseConfig) -> impl AppPlugin {
+    move |app: App| app.provide_plugin(CtaTracking::new(config))
+}
+```
+
+The button component owns the opt-in:
+
+```rust
+#[handlers]
+impl CtaButton {
+    pub fn on_ready(&self, cta: Option<Plugin<CtaTracking>>) {
+        if let Some(cta) = cta {
+            cta.impression(&self.analytics_id);
+        }
+    }
+
+    pub fn on_click(&self) {
+        if let Some(cta) = optional_plugin::<CtaTracking>() {
+            cta.click(&self.analytics_id);
+        }
+    }
+}
+```
+
+The app does not enumerate every button:
+
+```rust
+pocopine::app! {
+    components: [AppShell, PricingPage, CtaButton],
+    plugins: [firebase_cta_tracking(firebase_config)],
+    routes: [("/", PricingPage)],
+}
+```
+
+Use `Plugin<T>` instead of `Option<Plugin<T>>` only when the component cannot
+work without that app capability.
+
 ## Framework Hooks
 
-Runtime services can also subscribe to framework lifecycle events by
-implementing `Hook<E>`:
+Runtime services can also subscribe to app-wide framework lifecycle events by
+implementing `Hook<E>`. This is for global/default behavior such as automatic
+mount telemetry:
 
 ```rust
 impl Hook<ComponentSetup> for Analytics {
@@ -151,9 +230,9 @@ impl AppPlugin for AnalyticsPlugin {
 }
 ```
 
-Plugins can also subscribe to one component type without string filters in the
-hook body. The service implements `Hook<ForComponent<C, E>>` and the installer
-uses `hook_component_plugin`:
+Plugins can also attach an override or special case to one known component type
+without string filters in the hook body. The service implements
+`Hook<ForComponent<C, E>>` and the installer uses `hook_component_plugin`:
 
 ```rust
 impl Hook<ForComponent<CheckoutPage, ComponentMounted>> for Analytics {
@@ -171,15 +250,19 @@ impl AppPlugin for AnalyticsPlugin {
 ```
 
 The runtime still emits one canonical component name. `ForComponent<C, E>` is
-the typed filter: the hook only fires when the emitted component is `C`.
+the typed filter: the hook only fires when the emitted component is `C`. This
+is not the primary extension path for reusable component families like CTA
+buttons; those components should prefer `Option<Plugin<T>>` and own their
+plugin opt-in locally.
 
-This gives plugins two integration paths:
+This gives plugins three integration paths:
 
 - component authors pull `Plugin<T>` when their hook needs the service;
+- reusable components pull `Option<Plugin<T>>` when an integration is optional;
 - the framework dispatches typed events to `Hook<E>` implementations for
-  automatic integration;
+  global/default behavior;
 - component-specific integrations use `Hook<ForComponent<C, E>>` and
-  `hook_component_plugin`.
+  `hook_component_plugin` for app-specific overrides.
 
 ## Lifecycle Order
 
@@ -274,8 +357,11 @@ Observability is the reference use case:
 - `provide_plugin` should store the runtime observability service;
 - `hook_plugin` should attach automatic app-wide component handling;
 - `hook_component_plugin` should attach page- or component-specific telemetry
-  without string filters in the hook implementation;
+  overrides without string filters in the hook implementation;
 - component hooks can extract `Plugin<Observability>` for app-authored events;
+- reusable components can extract `Option<Plugin<Observability>>` to
+  participate when observability is installed and remain portable when it is
+  not;
 - event privacy still follows
   [`RFC 069`](../rfcs/rfc-069-observability.md).
 
@@ -300,6 +386,8 @@ The dedicated app-plugin tests assert:
 - plugin-installed `before_mount` and `after_mount` hooks run in runtime order;
 - `Plugin<T>` panics clearly when required services are missing;
 - `Option<Plugin<T>>` returns `None` when optional services are missing;
+- reusable components can use `optional_plugin::<T>()` from ordinary event
+  handlers;
 - `Hook<ComponentSetup>`, `Hook<ComponentMounted>`, `Hook<ComponentReady>`,
   and `Hook<ComponentUnmounted>` receive framework lifecycle events;
 - `Hook<ForComponent<C, E>>` only fires for the selected component type.
