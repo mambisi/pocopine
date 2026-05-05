@@ -84,3 +84,4 @@ Conventions:
 | 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |
 | 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Draft |
 | 076 | [App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md) | Draft |
+| 077 | [Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md) | Draft |
