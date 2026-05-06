@@ -1698,9 +1698,27 @@ fn render_from_geometry(
     y_axis: Option<&CartesianAxisConfig>,
     inputs: GeometryRenderInputs<'_>,
 ) -> ChartResult<CartesianChartRender> {
-    let mut cursor = 0;
-    let line_end = cursor + inputs.line_config.len();
-    let rendered_series = geometry.series[cursor..line_end]
+    let line_end = inputs.line_config.len();
+    let area_start = line_end;
+    let area_end = area_start + inputs.area_config.len();
+    let scatter_start = area_end;
+    let scatter_end = scatter_start + inputs.scatter_config.len();
+    if geometry.series.len() != scatter_end {
+        return Err(ChartError::InvalidOption {
+            field: "cartesian.series_order",
+            value: format!(
+                "expected {} derived series, got {}",
+                scatter_end,
+                geometry.series.len()
+            ),
+        });
+    }
+
+    let line_geometry = &geometry.series[..line_end];
+    let area_geometry = &geometry.series[area_start..area_end];
+    let scatter_geometry = &geometry.series[scatter_start..scatter_end];
+
+    let rendered_series = line_geometry
         .iter()
         .enumerate()
         .map(|(index, series)| {
@@ -1714,9 +1732,8 @@ fn render_from_geometry(
             }
         })
         .collect::<Vec<_>>();
-    cursor = line_end;
 
-    let markers = geometry.series[..line_end]
+    let markers = line_geometry
         .iter()
         .enumerate()
         .filter(|(index, _)| inputs.line_config[*index].show_markers)
@@ -1728,8 +1745,7 @@ fn render_from_geometry(
         })
         .collect();
 
-    let area_end = cursor + inputs.area_config.len();
-    let areas = geometry.series[cursor..area_end]
+    let areas = area_geometry
         .iter()
         .enumerate()
         .map(|(index, series)| {
@@ -1751,9 +1767,8 @@ fn render_from_geometry(
             })
         })
         .collect::<ChartResult<Vec<_>>>()?;
-    cursor = area_end;
 
-    let scatter_points = geometry.series[cursor..]
+    let scatter_points = scatter_geometry
         .iter()
         .enumerate()
         .flat_map(|(index, series)| {
@@ -2243,13 +2258,13 @@ fn render_reference_lines(
                 (Some(_), Some(_)) => {
                     return Err(ChartError::InvalidOption {
                         field: "reference_line.axis",
-                        value: "x and y".into(),
+                        value: "expected exactly one of x or y, got both".into(),
                     });
                 }
                 (None, None) => {
                     return Err(ChartError::InvalidOption {
                         field: "reference_line.axis",
-                        value: "missing".into(),
+                        value: "expected exactly one of x or y, got neither".into(),
                     });
                 }
             };
@@ -2561,8 +2576,8 @@ fn non_negative(value: f64) -> f64 {
 
 fn reference_layer(value: &str, field: &'static str) -> ChartResult<&'static str> {
     match value.trim() {
-        "reference-foreground" | "foreground" => Ok("reference-foreground"),
-        "reference-background" | "background" | "" => Ok("reference-background"),
+        "reference-foreground" => Ok("reference-foreground"),
+        "reference-background" | "" => Ok("reference-background"),
         value => Err(ChartError::InvalidOption {
             field,
             value: value.into(),
@@ -2765,6 +2780,7 @@ mod tests {
         assert_eq!(render.scatter_points[0].series_label, "Samples");
         assert_eq!(render.scatter_points[0].x, 50.0);
         assert_eq!(render.scatter_points[0].y, 50.0);
+        assert_eq!(render.scatter_points[0].aria_label, "Samples: x 5, y 5");
         assert!(render.line_series.is_empty());
     }
 
@@ -2849,6 +2865,115 @@ mod tests {
         assert_eq!(render.reference_labels[0].x, 50.0);
         assert_eq!(render.reference_labels[0].y, 42.0);
         assert_eq!(render.reference_labels[0].text, "Release");
+    }
+
+    #[test]
+    fn cartesian_chart_rejects_reference_line_without_exactly_one_axis() {
+        let series = vec![CartesianLineSeriesConfig {
+            key: "actual".into(),
+            label: "Actual".into(),
+            color: "#1d6fd8".into(),
+            stroke_width: 2.0,
+            show_markers: false,
+            marker_radius: 3.0,
+            points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
+            data: Vec::new(),
+        }];
+        let reference_lines = vec![CartesianReferenceLineConfig {
+            key: "bad".into(),
+            label: "Bad".into(),
+            x: Some(1.0),
+            y: Some(2.0),
+            color: "#667085".into(),
+            stroke_width: 1.0,
+            stroke_dasharray: String::new(),
+            layer: "reference-background".into(),
+        }];
+
+        let error = render_cartesian_chart(
+            CartesianChartOptions {
+                width: 100.0,
+                height: 100.0,
+                margins: ChartMargins::ZERO,
+                x_domain: None,
+                y_domain: None,
+                padding_inner: DEFAULT_PADDING_INNER,
+                padding_outer: DEFAULT_PADDING_OUTER,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
+                grid: None,
+                x_axis: None,
+                y_axis: None,
+            },
+            CartesianChartInputs {
+                line_series: &series,
+                reference_lines: &reference_lines,
+                ..CartesianChartInputs::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChartError::InvalidOption {
+                field: "reference_line.axis",
+                value: "expected exactly one of x or y, got both".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn cartesian_chart_rejects_short_reference_layer_aliases() {
+        let series = vec![CartesianLineSeriesConfig {
+            key: "actual".into(),
+            label: "Actual".into(),
+            color: "#1d6fd8".into(),
+            stroke_width: 2.0,
+            show_markers: false,
+            marker_radius: 3.0,
+            points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
+            data: Vec::new(),
+        }];
+        let reference_dots = vec![CartesianReferenceDotConfig {
+            key: "dot".into(),
+            label: "Dot".into(),
+            x: 1.0,
+            y: 2.0,
+            radius: 6.0,
+            fill: "#d96c2c".into(),
+            stroke: "none".into(),
+            stroke_width: 0.0,
+            layer: "foreground".into(),
+        }];
+
+        let error = render_cartesian_chart(
+            CartesianChartOptions {
+                width: 100.0,
+                height: 100.0,
+                margins: ChartMargins::ZERO,
+                x_domain: None,
+                y_domain: None,
+                padding_inner: DEFAULT_PADDING_INNER,
+                padding_outer: DEFAULT_PADDING_OUTER,
+                series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
+                grid: None,
+                x_axis: None,
+                y_axis: None,
+            },
+            CartesianChartInputs {
+                line_series: &series,
+                reference_dots: &reference_dots,
+                ..CartesianChartInputs::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChartError::InvalidOption {
+                field: "reference_dot.layer",
+                value: "foreground".into(),
+            }
+        );
     }
 
     #[test]

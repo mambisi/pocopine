@@ -117,6 +117,11 @@ the mapped `x` position for vertical lines or the mapped `y` position for
 horizontal lines. Lines and dots accept `layer="reference-background"` or
 `layer="reference-foreground"`; labels always paint in the final label layer.
 
+The compound root recomputes when a child series or reference component changes.
+For live charts, prefer updating the bound data vector in one state write, such
+as `pp-bind:points`, instead of driving many individual child prop writes in the
+same tick.
+
 Free-form annotations still belong to `pine-layer-chart`. Use the Cartesian
 root when the chart needs shared axes and scales; use the layered root when the
 app needs absolute SVG composition.
