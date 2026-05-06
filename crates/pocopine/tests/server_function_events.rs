@@ -92,6 +92,21 @@ fn server_function_event_plugin(events: EventLog) -> impl ServerPlugin {
     }
 }
 
+/// Same as `server_function_event_plugin` but without
+/// `request_event_layer()` — pins the macro's fallback path that
+/// self-allocates a `request_id` when the HTTP layer hasn't stamped
+/// one in extensions.
+fn server_function_event_plugin_without_layer(events: EventLog) -> impl ServerPlugin {
+    move |server: Server| {
+        server
+            .provide_plugin(events)
+            .hook_plugin::<EventLog, ServerFunctionStarted>()
+            .hook_plugin::<EventLog, ServerFunctionCompleted>()
+            .hook_plugin::<EventLog, ServerFunctionRejected>()
+            .hook_plugin::<EventLog, ServerFunctionFailed>()
+    }
+}
+
 #[derive(Clone)]
 struct StubProvider;
 
@@ -342,4 +357,75 @@ async fn guarded_call_with_good_token_emits_started_then_completed() {
     let no_failed = log.iter().any(|e| matches!(e, Event::Failed(_)));
     assert!(!no_rejected, "no rejection on authorized call: {log:?}");
     assert!(!no_failed, "no failure on successful call: {log:?}");
+}
+
+#[tokio::test]
+async fn server_function_events_self_allocate_request_id_without_http_layer() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+
+    let events = EventLog::default();
+    // Build a Server WITHOUT request_event_layer so the macro's
+    // RequestId fallback path runs.
+    let router = Server::new(build_public_router())
+        .plugin(server_function_event_plugin_without_layer(events.clone()))
+        .try_finalize()
+        .expect("plugin validation succeeds");
+
+    // Two independent calls — each should produce its own
+    // started/completed pair with a unique request_id, since
+    // there's no HTTP layer to share an id with.
+    let r1 = send(
+        &router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/_pocopine/echo")
+            .header("content-type", "application/json")
+            .body(Body::from("[\"first\"]"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r1.status(), 200);
+
+    let r2 = send(
+        &router,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/_pocopine/echo")
+            .header("content-type", "application/json")
+            .body(Body::from("[\"second\"]"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r2.status(), 200);
+
+    let log = events.snapshot();
+    let starts: Vec<u64> = log
+        .iter()
+        .filter_map(|e| match e {
+            Event::Started(s) => Some(s.request_id),
+            _ => None,
+        })
+        .collect();
+    let completes: Vec<u64> = log
+        .iter()
+        .filter_map(|e| match e {
+            Event::Completed(c) => Some(c.request_id),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(starts.len(), 2, "expected 2 starts: {log:?}");
+    assert_eq!(completes.len(), 2, "expected 2 completes: {log:?}");
+
+    // Each call's start/complete share a request_id…
+    assert_eq!(
+        starts, completes,
+        "started/completed must share request_id within a single call: {log:?}"
+    );
+    // …and the two calls don't collide.
+    assert_ne!(
+        starts[0], starts[1],
+        "two independent calls must allocate distinct request_ids: {log:?}"
+    );
 }

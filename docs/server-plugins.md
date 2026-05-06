@@ -149,6 +149,57 @@ earlier fire earlier; within one plugin, `hook_plugin` calls fire in
 source order. This is currently a guarantee — if it ever changes the
 RFC will call it out.
 
+## Layer ordering
+
+`Server::layer(layer)` calls axum's `Router::layer` under the hood,
+which only wraps routes that exist at the call site. Routes added
+later — by another plugin's `Server::route` / `Server::router_mut`
+call, or by code that runs after `.layer(...)` — silently bypass the
+layer.
+
+Install layers after routes:
+
+```rust
+Server::new(my_app::__routes(Router::new()))
+    .plugin(adds_health_endpoints())          // adds /healthz
+    .layer(request_event_layer())             // wraps user + health routes
+    .plugin(observability_plugin(config))
+    .serve(addr).await
+```
+
+Within a single plugin's `install` fn, the same rule applies: call
+`route` / `router_mut` first, then `layer`. The `RouterAuthExt::with_auth`
+extension on `axum::Router` has the identical caveat documented in
+its rustdoc — same axum constraint.
+
+## active_plugin cost
+
+`active_plugin::<T>()` reads the process-global plugin registry
+behind an `RwLock` and returns an `Arc<T>` clone. Each call:
+
+- one `RwLock::read` (~10 ns under no contention),
+- one `Arc::clone` of the registry,
+- one `HashMap::get` keyed by `TypeId`,
+- one `Arc::clone` of the service.
+
+That's fine for one-off lookups (process startup, hook closures), but
+calling it on every request from a hot route handler accumulates four
+atomic operations per request that you don't need. Two patterns avoid
+the per-request cost:
+
+- **Stash on app state.** Look up the plugin once when building the
+  router and clone its `Arc` into your axum `State`. Handlers extract
+  `State<Arc<T>>` and reach the service through normal axum DI.
+- **Read from a request-scoped extension.** A plugin can install a
+  short layer that calls `active_plugin::<T>()` once per request,
+  inserts the handle into request extensions, and downstream
+  handlers extract via `Extension<ServerPluginHandle<T>>`. Same
+  cost as today's auth middleware.
+
+Typed hook closures registered via `hook_plugin` already capture the
+service via `T` in the dispatch closure — they don't pay the per-call
+lookup, so observability/telemetry plugins are free.
+
 ## What plugins can't do (yet)
 
 - Async install (`install` is sync). Plugins that need to pre-warm
