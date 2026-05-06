@@ -230,3 +230,50 @@ async fn legacy_serve_helper_uses_server_builder_under_the_hood() {
     let err = result.expect_err("invalid address must fail");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
+
+#[tokio::test]
+async fn validation_failure_clears_previous_server_plugin_registry() {
+    let _lock = registry_lock();
+    pocopine_server::__reset_for_test();
+
+    // Server #1 succeeds and activates a registry that holds an
+    // EventLog service. `try_finalize` is the install path the
+    // tests use to activate without binding a listener.
+    let events1 = EventLog::default();
+    let _router1 = Server::new(Router::new())
+        .plugin(boot_event_plugin(events1.clone()))
+        .try_finalize()
+        .expect("server #1 plugin validation succeeds");
+
+    // Sanity: server #1's service is reachable.
+    assert!(
+        pocopine_server::active_plugin::<EventLog>().is_some(),
+        "after a successful try_finalize, EventLog must resolve"
+    );
+
+    // Server #2 has a hook for a service that was never provided
+    // — validation fails. The reset must drop server #1's registry
+    // so the server-wide active state cannot leak.
+    let result = Server::new(Router::new())
+        .plugin(MissingHookPlugin)
+        .try_finalize();
+    assert!(result.is_err(), "missing hook service must fail validation");
+
+    // Plugin context from server #1 must be gone.
+    assert!(
+        pocopine_server::active_plugin::<EventLog>().is_none(),
+        "validation failure must reset the active registry; \
+         stale EventLog from server #1 leaked"
+    );
+
+    // And server #1's hooks must not fire on a post-failure emit.
+    pocopine_server::emit(ServerListening {
+        addr: "0.0.0.0:0".to_string(),
+    });
+    assert!(
+        events1.snapshot().is_empty(),
+        "stale ServerListening hook from server #1 fired after \
+         validation failure: {:?}",
+        events1.snapshot()
+    );
+}

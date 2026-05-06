@@ -290,6 +290,16 @@ impl App {
         let boot_start_ms = js_sys::Date::now();
         clear_existing_boot_errors();
         if let Err(errors) = plugins.validate() {
+            // Defensive reset: an earlier successful App::run on the
+            // same wasm runtime would have activated its own
+            // registry. Returning here without clearing would leave
+            // those services and hooks active, so a subsequent
+            // App::mount_subtree call (or a stray Plugin<T>
+            // extractor) would resolve against stale plugin context
+            // even though the framework has refused to mount this
+            // app. Drop the previous registry first so failure is
+            // observable as "no plugins" rather than "old plugins".
+            crate::plugin::activate(crate::plugin::PluginRegistry::default());
             crate::plugin::render_plugin_boot_error(&errors);
             return;
         }

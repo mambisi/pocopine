@@ -98,8 +98,14 @@ This is now a blocking foundation for:
 - No plugin priority system beyond explicit app order.
 - No unhook/removal API; installed services and hooks live for the active app
   lifetime.
-- No lifecycle hook for every component mount; component lifecycle remains the
-  `#[handlers]` / runtime lifecycle surface.
+- No new author-authored component lifecycle methods. Components keep their
+  existing `#[handlers]` surface (`on_setup` / `on_mount` / `on_ready` /
+  `on_unmount`) — RFC 076 does **not** introduce new `on_X` methods that
+  components have to implement. The runtime does dispatch typed
+  `Component{Setup,Mounted,Ready,Unmounted}` events to plugin observers
+  through `Hook<E>`, but those events fire from the runtime *to* plugins,
+  not as new lifecycle methods on the component itself; component authors
+  see no API change.
 - No network exporter or vendor-specific observability package in this RFC.
 
 ## 5. Design

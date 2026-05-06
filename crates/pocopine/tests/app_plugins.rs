@@ -694,3 +694,74 @@ async fn app_macro_plugins_see_static_manifest_before_mount() {
     );
     host.remove();
 }
+
+#[wasm_bindgen_test(async)]
+async fn validation_failure_clears_previous_app_plugin_registry() {
+    // App #1 succeeds and activates a registry that holds
+    // TestAnalytics + ComponentMounted/ComponentUnmounted hooks.
+    let app1_events = Rc::new(RefCell::new(Vec::new()));
+    let host1 = app_host("");
+    App::new()
+        .plugin(analytics_plugin(app1_events.clone()))
+        .run();
+
+    // Sanity: app #1's registry resolves Plugin<TestAnalytics>.
+    {
+        let el = doc().create_element("div").unwrap();
+        let ctx =
+            pocopine::LifecycleContext::__new(&el, ScopeId(0), pocopine::LifecyclePhase::Ready);
+        let resolved: Option<Plugin<TestAnalytics>> = ctx.into();
+        assert!(
+            resolved.is_some(),
+            "after a successful App::run, Plugin<TestAnalytics> must resolve"
+        );
+    }
+    host1.remove();
+
+    // App #2 has a hook for a service that was never provided —
+    // validation must fail.
+    let host2 = app_host("");
+    App::new().plugin(MissingHookPlugin).run();
+
+    // The framework refused to mount; the active registry must
+    // now be empty so app #1's plugin context cannot leak into
+    // anything that runs after the failure.
+    {
+        let el = doc().create_element("div").unwrap();
+        let ctx =
+            pocopine::LifecycleContext::__new(&el, ScopeId(0), pocopine::LifecyclePhase::Ready);
+        let resolved: Option<Plugin<TestAnalytics>> = ctx.into();
+        assert!(
+            resolved.is_none(),
+            "validation failure must reset the active registry; \
+             stale Plugin<TestAnalytics> from a previous app leaked"
+        );
+    }
+
+    // App #1's `mounted:` / `unmounted:` hooks must not fire on a
+    // post-failure subtree mount either — they were dropped along
+    // with the registry. Use a component that doesn't extract any
+    // `Plugin<T>` so the test exercises the global hook dispatch
+    // without depending on any specific plugin service surviving.
+    let mount_host = doc().create_element("div").unwrap();
+    doc().body().unwrap().append_child(&mount_host).unwrap();
+    let handle = App::mount_subtree::<AppPluginDirectHome>(&mount_host);
+    next_microtask().await;
+    handle.unmount();
+
+    assert!(
+        app1_events.borrow().is_empty(),
+        "stale ComponentMounted/Unmounted hooks from a previous app fired \
+         after validation failure: {:?}",
+        app1_events.borrow()
+    );
+
+    mount_host.remove();
+    host2.remove();
+    if let Some(banner) = doc()
+        .query_selector("[data-pocopine-boot-error=\"plugin\"]")
+        .unwrap()
+    {
+        banner.remove();
+    }
+}

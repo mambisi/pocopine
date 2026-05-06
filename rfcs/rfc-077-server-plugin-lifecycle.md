@@ -287,7 +287,7 @@ same redaction rules as frontend route events.
 ### 5.5 Server functions
 
 The generated `#[server]` route code already emits tracing events for guards,
-body read/parse failures, completion, and failures. RFC 077 should add a typed
+body read/parse failures, completion, and failures. RFC 077 adds a typed
 server hook bridge without weakening the existing tracing contract:
 
 - keep `pocopine.trace` / `pocopine.log` emissions;
@@ -297,6 +297,53 @@ server hook bridge without weakening the existing tracing contract:
 
 This lets observability plugins choose either in-process hooks, tracing
 subscribers, or both.
+
+#### 5.5.1 How macro-generated handlers reach the registry
+
+`#[server]` route handlers are static axum handlers — they take a
+`Request`, return a response, and have no per-instance state. There's no
+opportunity to thread an `&Server` reference into them. RFC 077 solves
+this by storing the active registry as a process-global behind a
+`LazyLock<RwLock<Arc<PluginRegistry>>>`, and exposing the operations
+the macro needs as **public free functions** in
+`pocopine_server::plugin`:
+
+- `pocopine_server::has_*_hooks()` — `AtomicU16::load` against the cached
+  hook bitmask. Cheap enough to call before constructing each event.
+- `pocopine_server::emit::<E>(event)` — looks up the dispatch vec for
+  `TypeId::of::<E>()` and runs every registered closure.
+- `pocopine_server::next_request_id()` — fallback when no `RequestId`
+  is in extensions.
+- `pocopine_server::active_plugin::<T>()` — for any code that wants the
+  service handle directly.
+
+The macro emits direct calls to these:
+
+```rust
+if ::pocopine_server::has_server_function_started_hooks() {
+    ::pocopine_server::emit(::pocopine_server::ServerFunctionStarted {
+        function: #fn_name_str,
+        request_id: __pocopine_request_id,
+    });
+}
+```
+
+`Server::serve` (or `try_finalize`) is the only API that mutates the
+registry — it calls `pocopine_server::plugin::activate(registry)`,
+which atomically swaps the registry behind the `RwLock` and stores
+the new bitmask under `Release` ordering. After that point the
+registry is read-only for the lifetime of the process; no
+`Arc<ServerPluginRegistry>` is ever layered into request extensions
+or axum `State`, because none is needed.
+
+The **one** piece of state that flows via extensions is the
+correlation [`RequestId`]. `request_event_layer` stamps it on the
+request before downstream handlers see it; the macro reads
+`parts.extensions.get::<RequestId>()` and falls back to
+`next_request_id()` when the layer wasn't installed. This keeps
+HTTP-layer events and server-function events on the same id without
+forcing `request_event_layer` to be installed for typed server
+function events to fire.
 
 ### 5.6 Compatibility
 

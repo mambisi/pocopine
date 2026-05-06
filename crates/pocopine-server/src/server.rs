@@ -203,12 +203,16 @@ impl Server {
     /// through [`Self::serve`].
     ///
     /// On validation failure this function logs each missing-service
-    /// diagnostic to `pocopine.log` and returns
-    /// [`std::io::ErrorKind::InvalidInput`] without touching the
-    /// active plugin registry. The previous registry (if any) stays
-    /// installed — the caller is responsible for resetting it via
-    /// [`__reset_for_test`] when running multiple finalize attempts
-    /// in one process (i.e. only in tests).
+    /// diagnostic to `pocopine.log`, resets the active plugin
+    /// registry to empty, and returns
+    /// [`std::io::ErrorKind::InvalidInput`]. The reset is defensive:
+    /// in long-running processes that try to bind a server twice
+    /// (the first succeeding, the second failing) the previous
+    /// registry's services would otherwise stay live, and any
+    /// remaining `pocopine_server::active_plugin` lookup would
+    /// resolve against stale state even though the framework
+    /// refused to bind. Failed boot is observable as "no plugins"
+    /// rather than "old plugins."
     #[doc(hidden)]
     pub fn try_finalize(self) -> std::io::Result<Router> {
         let Self {
@@ -217,6 +221,7 @@ impl Server {
 
         if let Err(errors) = plugins.validate() {
             log_plugin_validation_errors(&errors);
+            plugin::activate(PluginRegistry::default());
             return Err(plugin_validation_error(&errors));
         }
 
