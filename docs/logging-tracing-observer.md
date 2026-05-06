@@ -79,6 +79,84 @@ The browser layer maps tracing levels to the matching browser console call:
 | `INFO` | `console.info` |
 | `DEBUG` / `TRACE` | `console.debug` |
 
+`ConsoleLoggingConfig::debug()` writes a compact text line.
+`ConsoleLoggingConfig::json()` writes a structured console object with
+`level`, `target`, `message`, and `fields`, which is usually easier to inspect
+in browser DevTools.
+
+## Frontend observability plugin
+
+Apps can install framework observability without editing `pocopine-core` by
+using the logging app plugin:
+
+```rust
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    pocopine::app! {
+        components: [AppShell, HomePage, ReportPage],
+        plugins: [
+            pocopine::logging::frontend_observability(),
+        ],
+        routes: [
+            ("/", HomePage),
+            ("/report/:id", ReportPage),
+        ],
+    };
+}
+```
+
+The default plugin installs JSON browser console logging and translates typed
+framework lifecycle hooks into `ObservedEvent`s:
+
+| Framework hook | Observed event |
+|---|---|
+| `AppBootStarted` | `frontend_app_started` trace |
+| `AppBootCompleted` | `frontend_app_boot_completed` trace |
+| `AppBootFailed` | `frontend_app_boot_failed` log |
+| `RouteNavigationCompleted` | `route_view` analytics event |
+| `RouteNavigationFailed` | `route_navigation_failed` log |
+| `ComponentMounted` | `component_view` analytics event |
+| `ComponentUnmounted` | `component_unmounted` trace |
+| `ServerFunctionClientCompleted` | `server_function_client_completed` trace |
+| `ServerFunctionClientFailed` | `server_function_client_failed` log |
+
+Route events report the route pattern, such as `/report/:id`, not the concrete
+path. Server-function client events strip query strings and fragments from the
+request URL. Raw route params, DOM text, request arguments, and response bodies
+are not exported.
+
+For tests or apps that initialize their own subscriber, disable the console
+subscriber and keep only the lifecycle hooks:
+
+```rust
+let plugin = pocopine::logging::frontend_observability_with_config(
+    pocopine::logging::FrontendObservabilityConfig::default()
+        .without_console_logging()
+        .with_service("admin-ui")
+        .with_environment("staging"),
+);
+```
+
+The plugin also provides `Plugin<FrontendObservability>` to components:
+
+```rust
+use pocopine::logging::FrontendObservability;
+use pocopine::observe::{FieldPrivacy, ObservedEvent};
+
+#[handlers]
+impl ReportPage {
+    pub fn opened(&self) {
+        self.plugin::<FrontendObservability>().emit(
+            ObservedEvent::analytics("report_opened")
+                .field("source", "cta", FieldPrivacy::Public),
+        );
+    }
+}
+```
+
+Use `Option<Plugin<FrontendObservability>>` in reusable components when the
+component should work whether or not the app installed observability.
+
 ### Why `target` matters
 
 `ConsoleLoggingConfig::debug()` filters to targets that start with

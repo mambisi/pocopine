@@ -35,9 +35,10 @@ pub use pocopine_core::{
     RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
     RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetError, RouteToken, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
-    Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
-    TypedEl, Win,
+    RouteTargetError, RouteToken, RwSignal, Scope, ScopeId, ScopePath, ServerError,
+    ServerFunctionClientCompleted, ServerFunctionClientFailed, ServerFunctionClientStarted,
+    ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle,
+    TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -99,7 +100,8 @@ pub mod prelude {
         RouteGuardDecision, RouteLoader, RouteNavigationCompleted, RouteNavigationFailed,
         RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
         RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
-        ServerError, ServerResult, Setter, Signal, Store,
+        ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
+        ServerFunctionClientStarted, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

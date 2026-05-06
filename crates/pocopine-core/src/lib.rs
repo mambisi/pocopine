@@ -87,7 +87,8 @@ pub use plugin::{
     AppBootCompleted, AppBootFailed, AppBootStarted, ComponentEvent, ComponentMounted,
     ComponentPluginExt, ComponentReady, ComponentSetup, ComponentUnmounted, ForComponent, Hook,
     Plugin, PluginValidationError, Plugins, RouteNavigationCompleted, RouteNavigationFailed,
-    RouteNavigationStarted,
+    RouteNavigationStarted, ServerFunctionClientCompleted, ServerFunctionClientFailed,
+    ServerFunctionClientStarted,
 };
 pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,

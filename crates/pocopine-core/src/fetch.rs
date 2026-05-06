@@ -351,8 +351,14 @@ where
     freeze_middleware_chain();
     let options = options.with_active_context();
 
-    let body = serde_json::to_string(args)
-        .map_err(|e| ServerError::Network(format!("serialize args: {e}")))?;
+    let observe = FetchObservation::new(url);
+    let body = match serde_json::to_string(args) {
+        Ok(body) => body,
+        Err(err) => {
+            observe.failed("serialize");
+            return Err(ServerError::Network(format!("serialize args: {err}")));
+        }
+    };
 
     let request = FetchRequest {
         url: url.to_string(),
@@ -368,14 +374,30 @@ where
         index: 0,
         middlewares,
     };
-    let response = next.run(request).await?;
+    let response = match next.run(request).await {
+        Ok(response) => response,
+        Err(err) => {
+            observe.failed(server_error_kind(&err));
+            return Err(err);
+        }
+    };
 
     if !(200..300).contains(&response.status) {
+        observe.failed("http_status");
         return Err(ServerError::Network(format!("HTTP {}", response.status)));
     }
 
-    let outer: ServerResult<R> = serde_json::from_str(&response.body)
-        .map_err(|e| ServerError::Network(format!("parse response: {e}")))?;
+    let outer: ServerResult<R> = match serde_json::from_str(&response.body) {
+        Ok(outer) => outer,
+        Err(err) => {
+            observe.failed("parse_response");
+            return Err(ServerError::Network(format!("parse response: {err}")));
+        }
+    };
+    match &outer {
+        Ok(_) => observe.completed(response.status),
+        Err(err) => observe.failed(server_error_kind(err)),
+    }
     outer
 }
 
@@ -433,6 +455,83 @@ async fn perform_fetch(request: FetchRequest) -> Result<FetchResponse, ServerErr
         .ok_or_else(|| ServerError::Network("body was not a string".into()))?;
 
     Ok(FetchResponse { status, body })
+}
+
+struct FetchObservation {
+    route: Option<String>,
+    start_ms: Option<f64>,
+}
+
+impl FetchObservation {
+    fn new(url: &str) -> Self {
+        if !crate::plugin::has_server_function_client_hooks() {
+            return Self {
+                route: None,
+                start_ms: None,
+            };
+        }
+        let route = public_url_path(url);
+        crate::plugin::emit(crate::plugin::ServerFunctionClientStarted {
+            route: route.clone(),
+        });
+        Self {
+            route: Some(route),
+            start_ms: Some(js_sys::Date::now()),
+        }
+    }
+
+    fn completed(&self, status_code: u16) {
+        let Some(route) = self.route.as_ref() else {
+            return;
+        };
+        crate::plugin::emit(crate::plugin::ServerFunctionClientCompleted {
+            route: route.clone(),
+            duration_ms: self.elapsed_ms(),
+            status_code,
+        });
+    }
+
+    fn failed(&self, error_kind: &'static str) {
+        let Some(route) = self.route.as_ref() else {
+            return;
+        };
+        crate::plugin::emit(crate::plugin::ServerFunctionClientFailed {
+            route: route.clone(),
+            duration_ms: self.elapsed_ms(),
+            error_kind,
+        });
+    }
+
+    fn elapsed_ms(&self) -> f64 {
+        let Some(start_ms) = self.start_ms else {
+            return 0.0;
+        };
+        let elapsed = js_sys::Date::now() - start_ms;
+        if elapsed.is_finite() && elapsed >= 0.0 {
+            elapsed
+        } else {
+            0.0
+        }
+    }
+}
+
+fn server_error_kind(err: &ServerError) -> &'static str {
+    match err {
+        ServerError::App(_) => "app",
+        ServerError::Unauthorized(_) => "unauthorized",
+        ServerError::Forbidden(_) => "forbidden",
+        ServerError::BadRequest(_) => "bad_request",
+        ServerError::Network(_) => "network",
+    }
+}
+
+fn public_url_path(url: &str) -> String {
+    let without_query = url.split_once('?').map(|(path, _)| path).unwrap_or(url);
+    without_query
+        .split_once('#')
+        .map(|(path, _)| path)
+        .unwrap_or(without_query)
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -528,5 +627,11 @@ mod tests {
         let options = FetchOptions::default();
         assert!(!options.replay_safe);
         assert!(options.abort_signal.is_none());
+    }
+
+    #[test]
+    fn strips_query_and_fragment_from_observed_urls() {
+        assert_eq!(public_url_path("/api/search?q=secret#frag"), "/api/search");
+        assert_eq!(public_url_path("/api/save"), "/api/save");
     }
 }
