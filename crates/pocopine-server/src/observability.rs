@@ -22,13 +22,14 @@
 //! plugins via `Server::route` or `Server::router_mut`) silently
 //! bypass the layer and emit no events.
 //!
-//! Apps that don't install any HTTP-event hook pay only an atomic
-//! load per request — the layer short-circuits before allocating
-//! anything for the event. The middleware always stamps a
-//! [`RequestId`] into request extensions even when no HTTP hooks
-//! are wired, so downstream `#[server]` route handlers can inherit
-//! the same correlation id; the stamp is a single map insert and
-//! costs less than the relaxed atomic load that gates the events.
+//! Apps with no HTTP-event hooks **and** no `ServerFunction*` hooks
+//! pay only two relaxed atomic loads per request — the layer
+//! short-circuits before allocating a `RequestId` or inserting
+//! anything into request extensions. The
+//! [`RequestId`] stamp lights up as soon as *either* HTTP hooks or
+//! `ServerFunction*` hooks become active, since the
+//! `#[server]` macro reads the stamp out of extensions to share a
+//! correlation id with the HTTP layer.
 
 use std::time::Instant;
 
@@ -65,15 +66,24 @@ pub fn request_event_layer() -> impl Layer<
 }
 
 async fn request_event_middleware(mut request: Request, next: Next) -> Response {
-    // Stamp the correlation id before checking HTTP hooks: the
-    // `#[server]` macro reads this from request extensions, so
-    // server-function events can share an id with the HTTP layer
-    // even when only ServerFunction* hooks are wired (no HTTP
-    // observer).
+    let has_http_hooks = plugin::has_http_request_hooks();
+    let has_server_fn_hooks = plugin::has_server_function_hooks();
+
+    // Stamp the correlation id when *any* downstream observer
+    // could read it: HTTP layer hooks consume it directly,
+    // `#[server]` macro readers consume it via request extensions
+    // when ServerFunction* hooks are registered. With neither set,
+    // the stamp would be wasted work — skip it so plugin-free apps
+    // that nonetheless install the layer pay only the two atomic
+    // loads above.
+    if !has_http_hooks && !has_server_fn_hooks {
+        return next.run(request).await;
+    }
+
     let request_id = plugin::next_request_id();
     request.extensions_mut().insert(RequestId(request_id));
 
-    if !plugin::has_http_request_hooks() {
+    if !has_http_hooks {
         return next.run(request).await;
     }
 

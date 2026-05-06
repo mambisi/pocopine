@@ -57,6 +57,23 @@ where
 }
 
 /// Host-side builder. Wraps an axum [`Router`] until `serve` time.
+///
+/// **One active `Server` per process.** Plugin services and hooks
+/// live in a process-global registry (see
+/// [`crate::plugin`]). Calling [`Self::serve`] (or
+/// [`Self::try_finalize`]) overwrites whatever registry was
+/// previously installed. If a second `Server` finalizes while a
+/// first is still serving, the first's `active_plugin::<T>()`
+/// lookups and `hook_plugin` dispatches start resolving against the
+/// second's registry — services it never provided will panic on
+/// dispatch, hooks it registered go silent.
+///
+/// Real apps run a single HTTP listener per process and don't hit
+/// this. Test harnesses that build multiple `Server`s in one
+/// process must use [`crate::__reset_for_test`] between activations.
+/// Multi-tenant patterns that genuinely need concurrent independent
+/// plugin sets should compose into one `Server` (one router, one
+/// plugin chain) rather than running two builders.
 pub struct Server {
     router: Router,
     plugins: PluginRegistry,
@@ -233,9 +250,14 @@ impl Server {
     /// running until the listener is closed.
     ///
     /// If validation fails (a hook references a service that was
-    /// never provided) the listener is never bound, an
-    /// [`ServerBootFailed`] event is emitted, and the function
-    /// returns `io::Error` of kind `InvalidInput`.
+    /// never provided) the listener is never bound and the function
+    /// returns `io::Error` of kind `InvalidInput`. **No
+    /// [`ServerBootFailed`] is emitted** for validation failures —
+    /// the registry is reset to empty before any potential emit, so
+    /// hooks the failing plugin chain registered cannot observe
+    /// their own validation rejection. The `io::Error` is the only
+    /// signal. [`ServerBootFailed`] still fires for runtime failures
+    /// after validation has succeeded (`address_parse`, `bind`).
     pub async fn serve(self, addr: &str) -> std::io::Result<()> {
         let router = self.try_finalize()?;
 

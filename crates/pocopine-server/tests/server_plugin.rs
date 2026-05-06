@@ -172,14 +172,16 @@ async fn server_serve_address_parse_failure_emits_boot_failed() {
 }
 
 #[tokio::test]
-async fn missing_hook_service_returns_invalid_input_and_emits_boot_failed() {
+async fn missing_hook_service_returns_invalid_input_without_event() {
     let _lock = registry_lock();
     pocopine_server::__reset_for_test();
     let events = EventLog::default();
 
-    // Note: the missing-hook plugin is installed BEFORE the
-    // recorder so its hook for HttpRequestStarted is recorded first
-    // and validation fails on the recorder's services check.
+    // The missing-hook plugin is installed alongside the recorder.
+    // Validation runs before any hook fires; the registry is reset
+    // to empty before any potential emit, so the recorder must not
+    // observe `ServerBootFailed` — the `io::Error` is the only
+    // signal of plugin-validation failure.
     let result = Server::new(Router::new())
         .plugin(boot_event_plugin(events.clone()))
         .plugin(MissingHookPlugin)
@@ -198,14 +200,11 @@ async fn missing_hook_service_returns_invalid_input_and_emits_boot_failed() {
         "diagnostic should name the missing service: {message}"
     );
 
-    // Validation runs before any boot event fires, but the
-    // boot-failed hook is still wired by the recorder plugin —
-    // however, validation reset the registry to empty, so no
-    // boot-failed event can be observed by the recorder. This is
-    // intentional: the std::io::Error already names the failure
-    // and a hooked observer would be silenced anyway by validation
-    // dropping its own service.
-    assert!(events.snapshot().is_empty());
+    assert!(
+        events.snapshot().is_empty(),
+        "plugin-validation failure must NOT emit ServerBootFailed: {:?}",
+        events.snapshot()
+    );
 }
 
 #[test]
