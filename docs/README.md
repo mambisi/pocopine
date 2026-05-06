@@ -24,6 +24,10 @@ looks the way it does — the code itself tells you *what*.
 - [`app-plugins.md`](./app-plugins.md) — app plugin architecture:
   install-time setup, lifecycle hook ordering, `app! { plugins: [...] }`,
   and the ownership boundary for observability/live/auth integrations.
+- [`server-plugins.md`](./server-plugins.md) — host-side plugin
+  lifecycle: `Server` builder, `request_event_layer`, server-function
+  typed hooks, validation diagnostics, and the privacy invariant on
+  framework events.
 - [`live.md`](./live.md) — live invalidation tutorial: SSE streams,
   collection/query refresh callbacks, server topic policies, and the
   example/test files that must stay in sync with live API changes.

@@ -1,0 +1,161 @@
+# Server plugins
+
+`pocopine-server` ships a host-side plugin lifecycle that mirrors the
+frontend `App` plugin shape from RFC-076. A `ServerPlugin` value installs
+tower middleware, plugin-provided services, and lifecycle event hooks
+around an axum `Router`. Apps opt into optional integrations
+(observability, logging, devtools, deploy adapters) by name in their
+`main` instead of editing core startup code.
+
+## Quickstart
+
+```rust
+use pocopine_server::axum::Router;
+use pocopine_server::{request_event_layer, static_files, Server};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let router = Router::new()
+        .nest_service("/", static_files("pkg"));
+    let router = my_app::__routes(router);
+
+    Server::new(router)
+        .layer(request_event_layer())   // emit HTTP request events
+        .plugin(my_observability::server(config()))
+        .serve("0.0.0.0:3000")
+        .await
+}
+```
+
+Plain `pocopine_server::serve(router, addr)` still works as a one-line
+wrapper — `Server::new(router).serve(addr)` under the hood — so existing
+apps don't need to migrate.
+
+## Writing a plugin
+
+Implement `ServerPlugin` (or pass a closure) and return the builder
+after installing layers, services, and hooks:
+
+```rust
+use pocopine_server::{Server, ServerHook, ServerPlugin, ServerFunctionCompleted};
+
+struct ObservabilityPlugin { config: Config }
+
+impl ServerPlugin for ObservabilityPlugin {
+    fn name(&self) -> &'static str {
+        "my-observability-server"
+    }
+
+    fn install(self, server: Server) -> Server {
+        server
+            .provide_plugin(Observability::new(self.config))
+            .hook_plugin::<Observability, ServerFunctionCompleted>()
+    }
+}
+
+impl ServerHook<ServerFunctionCompleted> for Observability {
+    fn call(&self, event: ServerFunctionCompleted) {
+        self.metrics.record(event.function, event.duration_ms);
+    }
+}
+```
+
+A free function that takes `Server -> Server` is also a `ServerPlugin`
+via a blanket impl — useful for short closures.
+
+## Services
+
+`Server::provide_plugin::<T>(service)` installs a `T: Send + Sync +
+'static` value as a process-global service. It's stored as `Arc<T>`
+internally so concurrent request handlers and event hooks can each hold
+a clone without coordinating.
+
+Look up the service from anywhere with `pocopine_server::active_plugin::<T>()`.
+
+Duplicate provides for the same `T` panic at install time and name both
+providers in the diagnostic — designed to fail loud, not silently
+overwrite.
+
+## Hooks
+
+Implement `ServerHook<E>` on a service type and register the dispatch
+with `Server::hook_plugin::<T, E>()`:
+
+```rust
+impl ServerHook<HttpRequestCompleted> for Observability {
+    fn call(&self, event: HttpRequestCompleted) { ... }
+}
+
+server.hook_plugin::<Observability, HttpRequestCompleted>()
+```
+
+Each event is `Clone + Send + Sync + 'static`. Hooks fire synchronously
+on the request task — fan out to a background task via a channel if you
+need to do network I/O.
+
+## Lifecycle events
+
+| Event | Source | Fires |
+|---|---|---|
+| `ServerBootStarted` | `Server::serve` | After plugin validation succeeds, before bind |
+| `ServerListening` | `Server::serve` | Once the listener is bound and ready |
+| `ServerBootFailed` | `Server::serve` | Boot failed (`address_parse`, `bind`, `plugin_validation`) |
+| `HttpRequestStarted` | `request_event_layer` | After axum matched the route |
+| `HttpRequestCompleted` | `request_event_layer` | Status known and `< 500` |
+| `HttpRequestFailed` | `request_event_layer` | Response status `>= 500` |
+| `ServerFunctionStarted` | `#[server]` macro | Top of route handler, before guard/body |
+| `ServerFunctionCompleted` | `#[server]` macro | User handler returned `Ok` |
+| `ServerFunctionRejected` | `#[server]` macro | Guard / body-read / body-parse rejected |
+| `ServerFunctionFailed` | `#[server]` macro | User handler returned `Err` |
+
+`HttpRequest*` and `ServerFunction*` events share a `request_id` when
+the HTTP layer is installed — the layer stamps `RequestId` into request
+extensions and the macro reads it. Without the HTTP layer, server
+functions allocate their own `request_id`, so `ServerFunction*` events
+remain correlated within a single call but won't share an id with
+external HTTP traces.
+
+Privacy invariant: framework events never carry headers, cookies, query
+strings, or request/response bodies. Observability plugins derive
+size/error-class fields if they need them.
+
+## Validation
+
+`Server::serve` validates plugin configuration before binding the
+listener:
+
+- Every hook registered with `hook_plugin::<T, E>` must have a matching
+  `provide_plugin::<T>(service)` somewhere in the install chain.
+- Missing services produce one `tracing::error!` per missing entry on
+  the `pocopine.log` target and an `io::Error` of kind `InvalidInput`
+  from `serve` — the listener is never bound.
+- Duplicate `provide_plugin::<T>` calls panic immediately, naming both
+  the first and second provider so plugin ordering bugs surface at
+  install time, not the first event.
+
+## Server-function 401/403 status codes
+
+`#[server]` returns a 200 response carrying a JSON-encoded `Result` —
+the `status` field on `ServerFunctionRejected` reports the *semantic*
+status code (`401` for `ServerError::Unauthorized`, `403` for
+`ServerError::Forbidden`, `400` for `ServerError::BadRequest`) so
+observability plugins can classify auth rejections distinctly from
+the wire transport, which is always 200.
+
+## Hook ordering
+
+Hooks for a given event fire in registration order. Plugins installed
+earlier fire earlier; within one plugin, `hook_plugin` calls fire in
+source order. This is currently a guarantee — if it ever changes the
+RFC will call it out.
+
+## What plugins can't do (yet)
+
+- Async install (`install` is sync). Plugins that need to pre-warm
+  network state should spawn a `tokio::task` from inside `install`.
+- Hot-swap services or hooks after `Server::serve` has been called.
+  The active plugin set is sampled once at serve time — there's no
+  public API for runtime mutation, and the per-request fast paths
+  assume the bitmask cache stays stable.
+- Dynamic plugin loading from shared libraries. Plugins are linked into
+  the binary at compile time.

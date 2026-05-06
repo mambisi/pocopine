@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented (Phases 1-3); Phase 4 deferred |
 | **Author** | pocopine team |
 | **Created** | 2026-05-05 |
 | **Related** | [`rfc-066-server-function-auth.md`](./rfc-066-server-function-auth.md), [`rfc-067-redis-background-jobs.md`](./rfc-067-redis-background-jobs.md), [`rfc-069-observability.md`](./rfc-069-observability.md), [`rfc-076-app-plugin-lifecycle.md`](./rfc-076-app-plugin-lifecycle.md) |
@@ -341,44 +341,74 @@ The first server plugin implementation must therefore enforce:
 
 ## 7. Phased Plan
 
-### Phase 1 - Server builder and compatibility
+### Phase 1 - Server builder and compatibility ✅
 
-- Add `Server` and `ServerPlugin`.
-- Implement `serve(router, addr)` as a wrapper.
-- Add plugin service registry with metadata and validation.
-- Add `ServerBootStarted`, `ServerListening`, and `ServerBootFailed` hooks.
-- Add unit tests for duplicate providers, missing services, and serve wrapper
-  compatibility.
+- ✅ Added `Server` and `ServerPlugin` (`crates/pocopine-server/src/server.rs`).
+- ✅ Reimplemented `serve(router, addr)` as a wrapper around `Server::new(router).serve(addr)`.
+- ✅ Plugin service registry (`crates/pocopine-server/src/plugin.rs`) with provider
+  metadata, duplicate-provider panics, and pre-bind validation.
+- ✅ `ServerBootStarted`, `ServerListening`, and `ServerBootFailed` hooks.
+- ✅ Tests in `crates/pocopine-server/tests/server_plugin.rs`.
 
-### Phase 2 - Observability HTTP layer
+### Phase 2 - Observability HTTP layer ✅
 
-- Add opt-in request telemetry layer.
-- Emit `HttpRequestStarted`, `HttpRequestCompleted`, and
-  `HttpRequestFailed`.
-- Use axum matched paths when available.
-- Add tests that assert no cookies, auth headers, or bodies enter events.
+- ✅ Opt-in `request_event_layer()` exposed from `pocopine_server` —
+  observability plugins install it via `Server::layer(...)`.
+- ✅ Emits `HttpRequestStarted`, `HttpRequestCompleted`, and
+  `HttpRequestFailed`. The layer also stamps a [`RequestId`] into request
+  extensions so server-function events can inherit the same correlation id.
+- ✅ Uses axum's `MatchedPath` for `route_pattern` when available.
+- ✅ Tests in `crates/pocopine-server/tests/server_request_events.rs` assert
+  matched/unmatched routing, 5xx classification, and that no headers / cookies
+  / query strings / bodies enter framework events.
 
-### Phase 3 - Server function typed hooks
+### Phase 3 - Server function typed hooks ✅
 
-- Extend macro-generated server routes to emit typed events beside current
-  tracing events.
-- Cover guard rejection, body read/parse failure, success, and app failure.
-- Reuse existing `server_auth` integration tests as the capture harness.
+- ✅ `#[server]` macro emits `ServerFunctionStarted`,
+  `ServerFunctionCompleted`, `ServerFunctionRejected`, and
+  `ServerFunctionFailed` beside the existing tracing events.
+- ✅ Started fires before guard / body work; rejected covers guard rejection,
+  body read failure, body parse failure (each with a stable `reason` and the
+  appropriate semantic `status`); completed/failed split on user-handler `Ok`
+  vs `Err`.
+- ✅ `request_id` is read from `RequestId` in request extensions when present
+  (set by `request_event_layer`), so HTTP-layer and server-function events
+  share an id end-to-end. Falls back to a fresh id when no HTTP layer ran.
+- ✅ Tests in `crates/pocopine/tests/server_function_events.rs`.
 
-### Phase 4 - Jobs bridge
+### Phase 4 - Jobs bridge — deferred
 
-- Decide whether jobs need typed hooks or whether tracing events plus
-  observability subscribers are sufficient.
-- If typed hooks are added, keep them in `pocopine-jobs` and expose a server
-  plugin that forwards them into the shared observability service.
+The job runtime in `pocopine-jobs` already emits structured tracing events
+(`pocopine.trace` / `pocopine.log` targets per RFC-069). The first slice of
+this RFC ships server-side typed hooks for HTTP requests and `#[server]`
+calls; jobs can be subscribed via tracing subscribers in observability
+plugins. Promoting them to typed `JobStarted` / `JobCompleted` /
+`JobRetryScheduled` / `JobDeadLettered` events should land in a follow-up
+RFC if a downstream plugin demonstrates it needs in-process behavior (retry
+shaping, dead-letter side effects) that tracing subscribers can't express.
 
-## 8. Open Questions
+## 8. Open Questions — resolved
 
-1. Should `Server::serve` accept `impl ToSocketAddrs`, `SocketAddr`, or keep
-   `&str` for compatibility and simplicity?
-2. Should server plugin services be extractable from axum request handlers, or
-   should request handlers use axum `State` / `Extension` directly?
-3. Should typed server hooks be sync like frontend hooks, or should they return
-   futures for exporters that need async work?
-4. How much router mutation should plugins be allowed to perform before
-   `Server::serve`?
+1. ~~Should `Server::serve` accept `impl ToSocketAddrs`, `SocketAddr`, or keep
+   `&str`?~~ **Resolved**: `&str`. Matches the legacy `serve(router, addr)`
+   signature so the wrapper relationship is one-line. Apps that need
+   `SocketAddr` directly can stringify (`addr.to_string()`); apps that need
+   `ToSocketAddrs` resolution can pre-resolve before passing in.
+2. ~~Should server plugin services be extractable from axum request handlers,
+   or should handlers use axum `State` / `Extension` directly?~~ **Resolved**:
+   handlers continue to use axum `State` / `Extension`. Plugin services are
+   accessed via `pocopine_server::active_plugin::<T>()` from anywhere in
+   process — used by typed-hook closures and any code that wants the
+   service handle. Mixing two state mechanisms in route handlers would
+   conflict with axum's well-established type-driven extraction.
+3. ~~Should typed server hooks be sync, or return futures for async exporters?~~
+   **Resolved**: sync. Mirrors the frontend `Hook<E>` shape. Async exporters
+   that need a runtime should fan out to a background task via a channel
+   inside the hook body — the hook is just a fast notification, not the
+   place to do network I/O.
+4. ~~How much router mutation should plugins perform before
+   `Server::serve`?~~ **Resolved**: plugins use `Server::layer`,
+   `Server::route`, and `Server::router_mut` as escape hatch for arbitrary
+   `Router -> Router` transforms. The full axum API stays accessible — the
+   builder doesn't try to gate which middleware are "OK" for plugins to
+   install.
