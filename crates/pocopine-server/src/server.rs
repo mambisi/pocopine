@@ -116,6 +116,23 @@ impl Server {
 
     /// Wrap the router in a tower layer. Mirrors
     /// [`axum::Router::layer`].
+    ///
+    /// **Install after routes.** axum's `Router::layer` only wraps
+    /// routes that exist at the call site — routes added by later
+    /// plugins (via [`Self::route`] or [`Self::router_mut`]) silently
+    /// bypass this layer. If a plugin both installs middleware and
+    /// adds routes, install middleware last:
+    ///
+    /// ```ignore
+    /// Server::new(my_app::__routes(Router::new()))
+    ///     .plugin(plugin_that_adds_health_routes())
+    ///     .layer(request_event_layer())   // wraps user routes + health routes
+    ///     .serve(addr).await
+    /// ```
+    ///
+    /// The same caveat applies to plugins that compose internally:
+    /// install layers in their `install` fn after any `route`/
+    /// `router_mut` calls.
     pub fn layer<L>(mut self, layer: L) -> Self
     where
         L: Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
@@ -133,6 +150,27 @@ impl Server {
     /// Add a route to the underlying router. Useful when a plugin
     /// installs framework-internal endpoints like `/healthz` or
     /// `/readyz`.
+    ///
+    /// `Server` holds a stateless `Router` (`Router<()>`), so
+    /// `method_router` must be `MethodRouter<()>`. Plugins that need
+    /// per-handler state should bind it on the method router with
+    /// [`axum::routing::MethodRouter::with_state`] before passing it
+    /// here:
+    ///
+    /// ```ignore
+    /// use pocopine_server::axum::routing::get;
+    ///
+    /// let metrics = Arc::new(MetricsService::new());
+    /// server.route(
+    ///     "/metrics",
+    ///     get(scrape_metrics).with_state(metrics),
+    /// )
+    /// ```
+    ///
+    /// For routes that need full router-level state composition
+    /// (`Router::with_state`, nested routers with their own state,
+    /// etc.) use [`Self::router_mut`] for an arbitrary
+    /// `Router -> Router` transform.
     pub fn route(mut self, path: &str, method_router: axum::routing::MethodRouter<()>) -> Self {
         self.router = self.router.route(path, method_router);
         self
@@ -156,9 +194,21 @@ impl Server {
     }
 
     /// Validate the plugin registry, activate it, and return the
-    /// underlying axum router. Doc-hidden — used by tests that drive
-    /// the router with `tower::ServiceExt::oneshot` without binding
-    /// a listener.
+    /// underlying axum router.
+    ///
+    /// **Doc-hidden test seam.** Used by tests that drive the router
+    /// with `tower::ServiceExt::oneshot` without binding a listener.
+    /// The signature is not part of the stable surface and may change
+    /// in a future patch release; plugin authors should always go
+    /// through [`Self::serve`].
+    ///
+    /// On validation failure this function logs each missing-service
+    /// diagnostic to `pocopine.log` and returns
+    /// [`std::io::ErrorKind::InvalidInput`] without touching the
+    /// active plugin registry. The previous registry (if any) stays
+    /// installed — the caller is responsible for resetting it via
+    /// [`__reset_for_test`] when running multiple finalize attempts
+    /// in one process (i.e. only in tests).
     #[doc(hidden)]
     pub fn try_finalize(self) -> std::io::Result<Router> {
         let Self {
@@ -167,12 +217,6 @@ impl Server {
 
         if let Err(errors) = plugins.validate() {
             log_plugin_validation_errors(&errors);
-            plugin::activate(PluginRegistry::default());
-            if plugin::has_server_boot_failed_hooks() {
-                plugin::emit(ServerBootFailed {
-                    reason: "plugin_validation",
-                });
-            }
             return Err(plugin_validation_error(&errors));
         }
 

@@ -408,14 +408,39 @@ impl PluginRegistry {
 /// afterwards — the runtime has no public API for installing hooks
 /// after `Server::serve`, and the per-request fast paths assume the
 /// cache stays in sync with the registry.
+///
+/// Write order is registry-first, mask-second. The reverse order
+/// would briefly let `has_*_hooks()` return `true` while the
+/// registry still held the previous (now-stale) hook closures — at
+/// best a no-op (the previous closures dispatch on the previous
+/// services), at worst a panic if those services were already
+/// dropped by the new registry replacing them. With registry first,
+/// the worst case is the opposite window: mask still reads `0` for
+/// a few instructions while the new registry is in place — emit
+/// silently no-ops, which is safe. `activate` runs once before
+/// `Server::serve` binds the listener, so neither window is
+/// observable in production; the ordering matters only for tests
+/// that reset and re-activate within a single process.
 pub(crate) fn activate(registry: PluginRegistry) {
     let hook_mask = registry.hook_mask();
     *REGISTRY.write().expect("plugin registry lock poisoned") = Arc::new(registry);
     ACTIVE_HOOK_MASK.store(hook_mask, Ordering::Release);
 }
 
-/// Reset the plugin registry to an empty state. Intended for tests
-/// that activate the registry repeatedly within a single process.
+/// **Test-only.** Reset the plugin registry to an empty state.
+///
+/// Intended for integration tests that activate the registry
+/// repeatedly within a single process. Calling this from production
+/// code silently nukes every registered service and hook on the
+/// host — every typed observer goes dark, every `active_plugin::<T>`
+/// returns `None`, and the next request continues against an empty
+/// registry. The double underscore + `doc(hidden)` is the only
+/// signal that this is not part of the supported surface; treat the
+/// symbol the way you'd treat `core::mem::transmute`.
+///
+/// The frontend `pocopine_core::plugin` exposes the same shape for
+/// the equivalent reason; the two helpers are intentionally
+/// symmetric.
 #[doc(hidden)]
 pub fn __reset_for_test() {
     *REGISTRY.write().expect("plugin registry lock poisoned") = Arc::new(PluginRegistry::default());
@@ -424,11 +449,23 @@ pub fn __reset_for_test() {
 
 /// Dispatch `event` to every registered hook for `E`.
 ///
-/// Hot-path callers gate on a bitmask predicate (`has_*_hooks`)
-/// before calling this, so plugin-free servers pay only an atomic
-/// load. Once a hook is known to exist, this function takes one
-/// `RwLock::read` and one HashMap lookup — both only when at least
-/// one observer is listening.
+/// **Callers must gate.** This function does *not* check the hook
+/// bitmask itself — it always reads the active registry under
+/// `RwLock`, clones the `Arc<PluginRegistry>`, and runs a
+/// `HashMap::get` keyed by `TypeId::of::<E>()`. For framework events
+/// fired on hot paths, the macro-generated and middleware emit
+/// sites first call the corresponding `has_*_hooks()` predicate so
+/// plugin-free servers pay nothing more than a relaxed atomic load.
+/// External crates that emit their own event types should follow
+/// the same pattern: store an [`AtomicBool`] (or a bitmask of
+/// their own) at activate time, gate on it before constructing the
+/// event, and only call this function when an observer is known to
+/// exist.
+///
+/// Once a hook is known to exist, the function takes one
+/// `RwLock::read`, two `Arc::clone`s (registry + service), and one
+/// HashMap lookup — all amortized over the actual hook work, which
+/// is usually I/O-bound (logging, network exporter, etc.).
 pub fn emit<E>(event: E)
 where
     E: Clone + Send + Sync + 'static,
@@ -507,6 +544,20 @@ fn active_hook_mask_contains(mask: HookMask) -> bool {
 
 /// Look up the active service of type `T`. Returns `None` if no
 /// plugin has provided one.
+///
+/// Each call performs an `RwLock::read`, two `Arc::clone`s, and a
+/// `HashMap::get` keyed by [`TypeId`] — fine for one-shot lookups
+/// (process startup, hook closures) but measurable when called from
+/// hot per-request handlers. For high-traffic routes, fetch the
+/// handle once during router construction and clone its `Arc` into
+/// axum [`State`](axum::extract::State), or use a short middleware
+/// layer that caches the lookup in request extensions for the rest
+/// of the request to consume via [`Extension`](axum::extract::Extension).
+/// `docs/server-plugins.md` walks through both patterns.
+///
+/// Hook closures registered via [`crate::Server::hook_plugin`] do
+/// **not** pay this cost — the dispatch closure captures `T`
+/// directly, so each emit goes straight to the service handle.
 pub fn active_plugin<T: Send + Sync + 'static>() -> Option<ServerPluginHandle<T>> {
     let registry = REGISTRY
         .read()
