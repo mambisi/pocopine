@@ -27,7 +27,27 @@ pub use tower;
 pub use tower_http;
 pub use tracing;
 
-use std::net::SocketAddr;
+mod observability;
+pub mod plugin;
+mod server;
+
+pub use observability::request_event_layer;
+pub use plugin::{
+    active_plugin, emit, has_http_request_completed_hooks, has_http_request_failed_hooks,
+    has_http_request_hooks, has_http_request_started_hooks, has_server_boot_failed_hooks,
+    has_server_boot_started_hooks, has_server_function_completed_hooks,
+    has_server_function_failed_hooks, has_server_function_hooks,
+    has_server_function_rejected_hooks, has_server_function_started_hooks,
+    has_server_listening_hooks, next_request_id, HttpRequestCompleted, HttpRequestFailed,
+    HttpRequestStarted, PluginValidationError, RequestId, ServerBootFailed, ServerBootStarted,
+    ServerFunctionCompleted, ServerFunctionFailed, ServerFunctionRejected, ServerFunctionStarted,
+    ServerHook, ServerListening, ServerPluginHandle,
+};
+pub use server::{Server, ServerPlugin};
+
+#[doc(hidden)]
+pub use plugin::__reset_for_test;
+
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -207,13 +227,12 @@ impl RouterAuthExt for Router {
 }
 
 /// Bind `router` to `addr` and serve forever.
+///
+/// Compatibility wrapper around [`Server::new(router).serve(addr)`].
+/// New code should prefer the builder so plugins can install
+/// services, hooks, and tower layers before bind.
 pub async fn serve(router: Router, addr: &str) -> std::io::Result<()> {
-    let addr: SocketAddr = addr
-        .parse()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(target: "pocopine.log", %addr, "pocopine server listening");
-    axum::serve(listener, router).await
+    Server::new(router).serve(addr).await
 }
 
 #[cfg(test)]

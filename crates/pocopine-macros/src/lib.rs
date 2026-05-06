@@ -3182,11 +3182,10 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         ))
     };
 
-    let parts_binding = if policy.guard.is_some() {
-        quote! { let (parts, body) = request.into_parts(); }
-    } else {
-        quote! { let (_parts, body) = request.into_parts(); }
-    };
+    // Always destructure the request into parts so the
+    // server-function plugin event can read the framework-stamped
+    // RequestId (set by `request_event_layer`).
+    let parts_binding = quote! { let (parts, body) = request.into_parts(); };
     let guard_prologue = match policy.guard.as_ref() {
         Some(guard_path) => quote! {
             let ctx = ::pocopine_server::auth::RequestContext::from_parts(
@@ -3207,6 +3206,12 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::pocopine::ServerError::BadRequest(_) => "bad_request",
                     ::pocopine::ServerError::Network(_) => "network",
                 };
+                let __pocopine_status = match &__pocopine_error {
+                    ::pocopine::ServerError::Unauthorized(_) => 401,
+                    ::pocopine::ServerError::Forbidden(_) => 403,
+                    ::pocopine::ServerError::BadRequest(_) => 400,
+                    _ => 500,
+                };
                 ::pocopine_server::tracing::warn!(
                     target: "pocopine.log",
                     function = #fn_name_str,
@@ -3216,6 +3221,16 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     error = %__pocopine_error,
                     "server function guard rejected request"
                 );
+                if ::pocopine_server::has_server_function_rejected_hooks() {
+                    ::pocopine_server::emit(
+                        ::pocopine_server::ServerFunctionRejected {
+                            function: #fn_name_str,
+                            request_id: __pocopine_request_id,
+                            status: __pocopine_status,
+                            reason: __pocopine_error_kind,
+                        },
+                    );
+                }
                 let result = ::core::result::Result::Err(__pocopine_error);
                 return ::pocopine_server::axum::Json(result);
             }
@@ -3234,6 +3249,19 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 async move {
                     let __pocopine_started = ::std::time::Instant::now();
                     #parts_binding
+                    let __pocopine_request_id: u64 = parts
+                        .extensions
+                        .get::<::pocopine_server::RequestId>()
+                        .map(|id| id.0)
+                        .unwrap_or_else(|| ::pocopine_server::next_request_id());
+                    if ::pocopine_server::has_server_function_started_hooks() {
+                        ::pocopine_server::emit(
+                            ::pocopine_server::ServerFunctionStarted {
+                                function: #fn_name_str,
+                                request_id: __pocopine_request_id,
+                            },
+                        );
+                    }
                     #guard_prologue
                     let body_limit = ::pocopine_server::server_function_body_limit();
                     let body_bytes = match ::pocopine_server::axum::body::to_bytes(
@@ -3256,6 +3284,16 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 error = %__pocopine_error,
                                 "server function request body read failed"
                             );
+                            if ::pocopine_server::has_server_function_rejected_hooks() {
+                                ::pocopine_server::emit(
+                                    ::pocopine_server::ServerFunctionRejected {
+                                        function: #fn_name_str,
+                                        request_id: __pocopine_request_id,
+                                        status: 400,
+                                        reason: "bad_request",
+                                    },
+                                );
+                            }
                             let result = ::core::result::Result::Err(__pocopine_error);
                             return ::pocopine_server::axum::Json(result);
                         }
@@ -3280,6 +3318,16 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     error = "request body parse failed",
                                     "server function request body parse failed"
                                 );
+                                if ::pocopine_server::has_server_function_rejected_hooks() {
+                                    ::pocopine_server::emit(
+                                        ::pocopine_server::ServerFunctionRejected {
+                                            function: #fn_name_str,
+                                            request_id: __pocopine_request_id,
+                                            status: 400,
+                                            reason: "bad_request",
+                                        },
+                                    );
+                                }
                                 let result = ::core::result::Result::Err(__pocopine_error);
                                 return ::pocopine_server::axum::Json(result);
                             }
@@ -3287,6 +3335,8 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let result = #fn_ident( #(#arg_idents),* ).await;
                     let __pocopine_duration_ms =
                         __pocopine_started.elapsed().as_millis() as u64;
+                    let __pocopine_duration_ms_f64 =
+                        __pocopine_started.elapsed().as_secs_f64() * 1_000.0;
                     match &result {
                         ::core::result::Result::Ok(_) => {
                             ::pocopine_server::tracing::info!(
@@ -3297,6 +3347,15 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 body_bytes = __pocopine_body_bytes,
                                 "server function completed"
                             );
+                            if ::pocopine_server::has_server_function_completed_hooks() {
+                                ::pocopine_server::emit(
+                                    ::pocopine_server::ServerFunctionCompleted {
+                                        function: #fn_name_str,
+                                        request_id: __pocopine_request_id,
+                                        duration_ms: __pocopine_duration_ms_f64,
+                                    },
+                                );
+                            }
                         }
                         ::core::result::Result::Err(err) => {
                             let __pocopine_error_kind = match err {
@@ -3316,6 +3375,16 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 error = %err,
                                 "server function failed"
                             );
+                            if ::pocopine_server::has_server_function_failed_hooks() {
+                                ::pocopine_server::emit(
+                                    ::pocopine_server::ServerFunctionFailed {
+                                        function: #fn_name_str,
+                                        request_id: __pocopine_request_id,
+                                        error_class: __pocopine_error_kind,
+                                        duration_ms: __pocopine_duration_ms_f64,
+                                    },
+                                );
+                            }
                         }
                     }
                     ::pocopine_server::axum::Json(result)
