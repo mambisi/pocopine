@@ -99,7 +99,7 @@ need to do network I/O.
 |---|---|---|
 | `ServerBootStarted` | `Server::serve` | After plugin validation succeeds, before bind |
 | `ServerListening` | `Server::serve` | Once the listener is bound and ready |
-| `ServerBootFailed` | `Server::serve` | Boot failed (`address_parse`, `bind`, `plugin_validation`) |
+| `ServerBootFailed` | `Server::serve` | Runtime boot failure after validation succeeded (`address_parse`, `bind`). **Plugin-validation failures do not fire this event** — see "Validation" below. |
 | `HttpRequestStarted` | `request_event_layer` | After axum matched the route |
 | `HttpRequestCompleted` | `request_event_layer` | Status known and `< 500` |
 | `HttpRequestFailed` | `request_event_layer` | Response status `>= 500` |
@@ -132,6 +132,16 @@ listener:
 - Duplicate `provide_plugin::<T>` calls panic immediately, naming both
   the first and second provider so plugin ordering bugs surface at
   install time, not the first event.
+
+Validation failures **do not emit `ServerBootFailed`.** The registry
+is reset to empty before any potential emit so a failing plugin
+chain cannot observe its own rejection, and the framework is "no
+plugins active" from that point until a successful future
+activation (or `__reset_for_test` followed by another). The
+`io::Error` returned by `serve` is the only signal.
+`ServerBootFailed` is reserved for runtime failures *after*
+validation has succeeded — bind-side errors like `address_parse`
+and `bind`, where some hooks may already be live.
 
 ## Server-function 401/403 status codes
 
@@ -196,9 +206,15 @@ the per-request cost:
   handlers extract via `Extension<ServerPluginHandle<T>>`. Same
   cost as today's auth middleware.
 
-Typed hook closures registered via `hook_plugin` already capture the
-service via `T` in the dispatch closure — they don't pay the per-call
-lookup, so observability/telemetry plugins are free.
+Typed hook closures registered via `hook_plugin` capture the type
+parameter `T` but **still resolve the concrete service through the
+registry on each dispatch**. The cost is one `HashMap::get` (keyed
+by `TypeId::of::<T>()`) and one `Arc::clone` per emit; the
+registry's `RwLock` read is already held when `emit` enters, so
+hooks don't pay it again. For typical observability volume
+(hundreds to low-thousands of emits per second) this is in the
+noise; for very hot custom events, profile before assuming hooks
+are free.
 
 ## What plugins can't do (yet)
 
@@ -210,3 +226,30 @@ lookup, so observability/telemetry plugins are free.
   assume the bitmask cache stays stable.
 - Dynamic plugin loading from shared libraries. Plugins are linked into
   the binary at compile time.
+
+## One active server per process
+
+The plugin registry — services, hooks, and the bitmask that gates
+emit sites — lives in a process-global. A second `Server::serve`
+call inside the same process replaces the first server's registry,
+so the first server's `active_plugin::<T>()` lookups and
+`hook_plugin` dispatches start resolving against the second
+server's plugins:
+
+- Services the new server didn't provide return `None` from
+  `active_plugin`, or panic from `Plugin<T>` extractors.
+- Hooks the old server registered are silently dropped.
+
+Real applications run a single HTTP listener per process and don't
+hit this. The patterns that do:
+
+- **Tests that build multiple `Server`s in one process.** Use
+  `pocopine_server::__reset_for_test()` between activations to
+  return the registry to a clean state, mirroring the helper used
+  in the framework's own integration tests.
+- **Multi-tenant deployments that expected to run two listeners
+  with independent plugin sets.** Don't — compose them into one
+  `Server` (one router with merged routes, one plugin chain). If
+  per-tenant plugin isolation becomes a real need, the right path
+  is a follow-up RFC that moves registry identity into request
+  state rather than a process-global.

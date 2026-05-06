@@ -125,9 +125,14 @@ pub struct ServerListening {
 
 /// Emitted when boot fails after plugin validation succeeds — bind
 /// failure, address parse failure, or another listener-side error.
-/// `reason` is a stable identifier (`"address_parse"`, `"bind"`,
-/// etc.) for filtering; the full error is on the returned
-/// `io::Error` and in the `pocopine.log` tracing record.
+/// `reason` is a stable identifier (`"address_parse"`, `"bind"`)
+/// for filtering; the full error is on the returned `io::Error` and
+/// in the `pocopine.log` tracing record.
+///
+/// **Validation failures do not fire this event.** See
+/// [`crate::Server::serve`] for the rationale: the registry is
+/// reset before any potential emit, so a failing plugin chain
+/// cannot observe its own rejection.
 #[derive(Clone, Debug)]
 pub struct ServerBootFailed {
     pub reason: &'static str,
@@ -409,6 +414,18 @@ impl PluginRegistry {
 /// after `Server::serve`, and the per-request fast paths assume the
 /// cache stays in sync with the registry.
 ///
+/// **Process-global; last writer wins.** A second
+/// [`crate::Server::serve`] call (whether from a parallel test, a
+/// nested re-bind, or a multi-tenant pattern that runs two
+/// concurrent HTTP listeners in the same process) silently
+/// replaces the previous registry. The first server's
+/// [`active_plugin`] lookups will resolve against the new registry,
+/// and any of its still-pending hook dispatches will look up
+/// services in a registry the new server never populated. See the
+/// rustdoc on [`crate::Server`] for the supported patterns
+/// (one server per process, or compose into one builder); test
+/// harnesses use [`__reset_for_test`] between activations.
+///
 /// Write order is registry-first, mask-second. The reverse order
 /// would briefly let `has_*_hooks()` return `true` while the
 /// registry still held the previous (now-stale) hook closures — at
@@ -555,9 +572,12 @@ fn active_hook_mask_contains(mask: HookMask) -> bool {
 /// of the request to consume via [`Extension`](axum::extract::Extension).
 /// `docs/server-plugins.md` walks through both patterns.
 ///
-/// Hook closures registered via [`crate::Server::hook_plugin`] do
-/// **not** pay this cost — the dispatch closure captures `T`
-/// directly, so each emit goes straight to the service handle.
+/// Hook closures registered via [`crate::Server::hook_plugin`] pay
+/// the **same** lookup cost on every emit — the registration
+/// closure captures the type parameter `T` but resolves the
+/// concrete service through the registry on each dispatch. The
+/// cost is one `HashMap::get` and one `Arc::clone` per emit; the
+/// `RwLock` is already held by [`emit`] so it is not paid twice.
 pub fn active_plugin<T: Send + Sync + 'static>() -> Option<ServerPluginHandle<T>> {
     let registry = REGISTRY
         .read()
