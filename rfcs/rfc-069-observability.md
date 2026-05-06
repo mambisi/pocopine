@@ -63,7 +63,10 @@ ships:
 - host/server initialization through `tracing-subscriber`;
 - compact, pretty, and JSON server formats;
 - `RUST_LOG` / explicit filter support;
-- wasm browser console subscriber.
+- wasm browser console subscriber;
+- wasm frontend observability app plugin that subscribes to core lifecycle
+  hooks and emits stable `ObservedEvent`s without adding exporter dependencies
+  to `pocopine-core`.
 
 `pocopine-analytics` owns analytics and telemetry dispatch. The first slice
 ships:
@@ -82,6 +85,11 @@ Runtime crates must not install global subscribers or exporters. They may emit
 `tracing` spans/events and may construct typed `ObservedEvent`s for stable
 framework events.
 
+Frontend framework lifecycle instrumentation is installed through the app plugin
+surface. Core emits typed hooks such as `AppBoot*`, `RouteNavigation*`,
+`ComponentMounted`, `ComponentUnmounted`, and `ServerFunctionClient*`; the
+logging plugin converts those hooks into `ObservedEvent`s.
+
 The final application binary or wasm entrypoint installs logging and analytics:
 
 ```rust
@@ -98,6 +106,18 @@ let analytics = pocopine::analytics::AnalyticsClient::new()
 analytics.emit(
     pocopine::analytics::route_view("/settings")
 );
+```
+
+```rust
+pocopine::app! {
+    components: [AppShell, Home],
+    plugins: [
+        pocopine::logging::frontend_observability(),
+    ],
+    routes: [
+        ("/", Home),
+    ],
+};
 ```
 
 ### 3.3 Vendor adapters

@@ -37,10 +37,16 @@ const HOOK_COMPONENT_SETUP: HookMask = 1 << 6;
 const HOOK_COMPONENT_MOUNTED: HookMask = 1 << 7;
 const HOOK_COMPONENT_READY: HookMask = 1 << 8;
 const HOOK_COMPONENT_UNMOUNTED: HookMask = 1 << 9;
+const HOOK_SERVER_FUNCTION_CLIENT_STARTED: HookMask = 1 << 10;
+const HOOK_SERVER_FUNCTION_CLIENT_COMPLETED: HookMask = 1 << 11;
+const HOOK_SERVER_FUNCTION_CLIENT_FAILED: HookMask = 1 << 12;
 const HOOK_COMPONENT_NAME_EVENTS: HookMask =
     HOOK_COMPONENT_MOUNTED | HOOK_COMPONENT_READY | HOOK_COMPONENT_UNMOUNTED;
 const HOOK_ROUTE_NAVIGATION_EVENTS: HookMask =
     HOOK_ROUTE_NAVIGATION_STARTED | HOOK_ROUTE_NAVIGATION_COMPLETED | HOOK_ROUTE_NAVIGATION_FAILED;
+const HOOK_SERVER_FUNCTION_CLIENT_EVENTS: HookMask = HOOK_SERVER_FUNCTION_CLIENT_STARTED
+    | HOOK_SERVER_FUNCTION_CLIENT_COMPLETED
+    | HOOK_SERVER_FUNCTION_CLIENT_FAILED;
 
 /// Per-mount snapshot of which plugin-side stamps the runtime needs to
 /// produce. Sampled once from `ACTIVE_HOOK_MASK` at the top of a mount so
@@ -192,6 +198,36 @@ pub struct RouteNavigationFailed {
     pub component: Option<&'static str>,
     pub reason: &'static str,
     pub duration_ms: f64,
+}
+
+/// Emitted before the browser client sends a generated `#[server]`
+/// function request.
+///
+/// `route` is the public request path with any query string or fragment
+/// stripped. Request arguments and response bodies are never included.
+#[derive(Clone, Debug)]
+pub struct ServerFunctionClientStarted {
+    pub route: String,
+}
+
+/// Emitted after a generated `#[server]` client request succeeds.
+#[derive(Clone, Debug)]
+pub struct ServerFunctionClientCompleted {
+    pub route: String,
+    pub duration_ms: f64,
+    pub status_code: u16,
+}
+
+/// Emitted after a generated `#[server]` client request fails before
+/// returning an application value.
+///
+/// `error_kind` is a stable coarse reason such as `"serialize"`,
+/// `"fetch"`, `"http_status"`, or `"unauthorized"`.
+#[derive(Clone, Debug)]
+pub struct ServerFunctionClientFailed {
+    pub route: String,
+    pub duration_ms: f64,
+    pub error_kind: &'static str,
 }
 
 /// Component-scoped framework event.
@@ -556,6 +592,15 @@ impl PluginRegistry {
         if self.has_stored_hooks::<ComponentUnmounted>() {
             mask |= HOOK_COMPONENT_UNMOUNTED;
         }
+        if self.has_stored_hooks::<ServerFunctionClientStarted>() {
+            mask |= HOOK_SERVER_FUNCTION_CLIENT_STARTED;
+        }
+        if self.has_stored_hooks::<ServerFunctionClientCompleted>() {
+            mask |= HOOK_SERVER_FUNCTION_CLIENT_COMPLETED;
+        }
+        if self.has_stored_hooks::<ServerFunctionClientFailed>() {
+            mask |= HOOK_SERVER_FUNCTION_CLIENT_FAILED;
+        }
         mask
     }
 }
@@ -628,6 +673,11 @@ pub(crate) fn has_component_unmounted_hooks() -> bool {
 #[inline]
 pub(crate) fn has_route_navigation_hooks() -> bool {
     active_hook_mask_contains(HOOK_ROUTE_NAVIGATION_EVENTS)
+}
+
+#[inline]
+pub(crate) fn has_server_function_client_hooks() -> bool {
+    active_hook_mask_contains(HOOK_SERVER_FUNCTION_CLIENT_EVENTS)
 }
 
 #[inline]

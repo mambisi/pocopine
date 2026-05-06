@@ -2648,6 +2648,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "observability-frontend"
+version = "0.1.0"
+dependencies = [
+ "phf 0.13.1",
+ "pocopine",
+ "serde",
+ "tracing",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "observability-smoke"
 version = "0.1.0"
 dependencies = [
@@ -3282,9 +3293,11 @@ dependencies = [
 name = "pocopine-logging"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "pocopine-core",
  "pocopine-observe",
  "tracing",
  "tracing-opentelemetry",

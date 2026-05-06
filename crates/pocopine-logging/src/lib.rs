@@ -385,6 +385,16 @@ pub use server::OtlpConfig;
 mod web {
     use std::fmt;
 
+    use js_sys::{Object, Reflect};
+    use pocopine_core::{
+        App, AppBootCompleted, AppBootFailed, AppBootStarted, AppPlugin, ComponentMounted,
+        ComponentReady, ComponentSetup, ComponentUnmounted, Hook, RouteNavigationCompleted,
+        RouteNavigationFailed, RouteNavigationStarted, ServerFunctionClientCompleted,
+        ServerFunctionClientFailed, ServerFunctionClientStarted,
+    };
+    use pocopine_observe::{
+        emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent,
+    };
     use tracing::field::{Field, Visit};
     use tracing::{Event, Level, Metadata, Subscriber};
     use tracing_subscriber::layer::{Context, Layer};
@@ -392,10 +402,17 @@ mod web {
     use tracing_subscriber::util::SubscriberInitExt;
     use wasm_bindgen::JsValue;
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ConsoleLogFormat {
+        Text,
+        Json,
+    }
+
     #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ConsoleLoggingConfig {
         pub max_level: Level,
         pub target_prefix: Option<String>,
+        pub format: ConsoleLogFormat,
     }
 
     impl ConsoleLoggingConfig {
@@ -403,11 +420,25 @@ mod web {
             Self {
                 max_level: Level::DEBUG,
                 target_prefix: Some("pocopine".to_owned()),
+                format: ConsoleLogFormat::Text,
+            }
+        }
+
+        pub fn json() -> Self {
+            Self {
+                max_level: Level::DEBUG,
+                target_prefix: Some("pocopine".to_owned()),
+                format: ConsoleLogFormat::Json,
             }
         }
 
         pub fn with_max_level(mut self, max_level: Level) -> Self {
             self.max_level = max_level;
+            self
+        }
+
+        pub fn with_format(mut self, format: ConsoleLogFormat) -> Self {
+            self.format = format;
             self
         }
 
@@ -474,18 +505,21 @@ mod web {
             let metadata = event.metadata();
             let mut visitor = FieldVisitor::default();
             event.record(&mut visitor);
-            let message = format!(
-                "{} {} {}",
-                metadata.level(),
-                metadata.target(),
-                visitor.finish()
-            );
-            let value = JsValue::from_str(message.trim_end());
-            match *metadata.level() {
-                Level::ERROR => web_sys::console::error_1(&value),
-                Level::WARN => web_sys::console::warn_1(&value),
-                Level::INFO => web_sys::console::info_1(&value),
-                Level::DEBUG | Level::TRACE => web_sys::console::debug_1(&value),
+
+            match self.config.format {
+                ConsoleLogFormat::Text => {
+                    let message = format!(
+                        "{} {} {}",
+                        metadata.level(),
+                        metadata.target(),
+                        visitor.finish_text()
+                    );
+                    write_console(*metadata.level(), &JsValue::from_str(message.trim_end()));
+                }
+                ConsoleLogFormat::Json => {
+                    let value = visitor.into_console_object(metadata);
+                    write_console(*metadata.level(), &value);
+                }
             }
         }
     }
@@ -493,30 +527,504 @@ mod web {
     #[derive(Default)]
     struct FieldVisitor {
         message: Option<String>,
-        fields: Vec<String>,
+        fields: Vec<ConsoleField>,
     }
 
     impl FieldVisitor {
-        fn finish(self) -> String {
-            let mut out = self.message.unwrap_or_default();
-            for field in self.fields {
+        fn finish_text(&self) -> String {
+            let mut out = self.message.clone().unwrap_or_default();
+            for field in &self.fields {
                 if !out.is_empty() {
                     out.push(' ');
                 }
-                out.push_str(&field);
+                out.push_str(&field.name);
+                out.push('=');
+                out.push_str(&field.value.to_field_text());
             }
             out
+        }
+
+        fn into_console_object(self, metadata: &Metadata<'_>) -> JsValue {
+            let object = Object::new();
+            set_property(
+                &object,
+                "level",
+                JsValue::from_str(&metadata.level().to_string()),
+            );
+            set_property(&object, "target", JsValue::from_str(metadata.target()));
+            if let Some(message) = self.message {
+                set_property(&object, "message", JsValue::from_str(&message));
+            }
+
+            let fields = Object::new();
+            for field in self.fields {
+                set_property(&fields, &field.name, field.value.into_js_value());
+            }
+            set_property(&object, "fields", fields.into());
+            object.into()
+        }
+
+        fn record_value(&mut self, field: &Field, value: ConsoleFieldValue) {
+            if field.name() == "message" {
+                self.message = Some(value.to_message_text());
+            } else {
+                self.fields.push(ConsoleField {
+                    name: field.name().to_owned(),
+                    value,
+                });
+            }
         }
     }
 
     impl Visit for FieldVisitor {
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.record_value(field, ConsoleFieldValue::Bool(value));
+        }
+
+        fn record_f64(&mut self, field: &Field, value: f64) {
+            self.record_value(field, ConsoleFieldValue::F64(value));
+        }
+
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.record_value(field, ConsoleFieldValue::I64(value));
+        }
+
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.record_value(field, ConsoleFieldValue::U64(value));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.record_value(field, ConsoleFieldValue::String(value.to_owned()));
+        }
+
         fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            let rendered = format!("{value:?}");
-            if field.name() == "message" {
-                self.message = Some(rendered);
-            } else {
-                self.fields.push(format!("{}={rendered}", field.name()));
+            self.record_value(field, ConsoleFieldValue::Debug(format!("{value:?}")));
+        }
+    }
+
+    struct ConsoleField {
+        name: String,
+        value: ConsoleFieldValue,
+    }
+
+    enum ConsoleFieldValue {
+        Bool(bool),
+        F64(f64),
+        I64(i64),
+        U64(u64),
+        String(String),
+        Debug(String),
+    }
+
+    impl ConsoleFieldValue {
+        fn to_field_text(&self) -> String {
+            match self {
+                Self::Bool(value) => value.to_string(),
+                Self::F64(value) => value.to_string(),
+                Self::I64(value) => value.to_string(),
+                Self::U64(value) => value.to_string(),
+                Self::String(value) => format!("{value:?}"),
+                Self::Debug(value) => value.clone(),
             }
+        }
+
+        fn to_message_text(&self) -> String {
+            match self {
+                Self::String(value) | Self::Debug(value) => value.clone(),
+                _ => self.to_field_text(),
+            }
+        }
+
+        fn into_js_value(self) -> JsValue {
+            match self {
+                Self::Bool(value) => JsValue::from_bool(value),
+                Self::F64(value) => JsValue::from_f64(value),
+                Self::I64(value) => js_value_from_i64(value),
+                Self::U64(value) => js_value_from_u64(value),
+                Self::String(value) | Self::Debug(value) => JsValue::from_str(&value),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct FrontendObservabilityConfig {
+        pub console_logging: Option<ConsoleLoggingConfig>,
+        pub service: Option<String>,
+        pub environment: Option<String>,
+        pub component_setup: bool,
+        pub component_ready: bool,
+    }
+
+    impl FrontendObservabilityConfig {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn with_console_logging(mut self, config: ConsoleLoggingConfig) -> Self {
+            self.console_logging = Some(config);
+            self
+        }
+
+        pub fn without_console_logging(mut self) -> Self {
+            self.console_logging = None;
+            self
+        }
+
+        pub fn with_service(mut self, service: impl Into<String>) -> Self {
+            self.service = Some(service.into());
+            self
+        }
+
+        pub fn with_environment(mut self, environment: impl Into<String>) -> Self {
+            self.environment = Some(environment.into());
+            self
+        }
+
+        pub fn with_component_setup(mut self, enabled: bool) -> Self {
+            self.component_setup = enabled;
+            self
+        }
+
+        pub fn with_component_ready(mut self, enabled: bool) -> Self {
+            self.component_ready = enabled;
+            self
+        }
+    }
+
+    impl Default for FrontendObservabilityConfig {
+        fn default() -> Self {
+            Self {
+                console_logging: Some(ConsoleLoggingConfig::json()),
+                service: None,
+                environment: None,
+                component_setup: false,
+                component_ready: false,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct FrontendObservabilityPlugin {
+        config: FrontendObservabilityConfig,
+    }
+
+    impl FrontendObservabilityPlugin {
+        pub fn new(config: FrontendObservabilityConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    pub fn frontend_observability() -> FrontendObservabilityPlugin {
+        FrontendObservabilityPlugin::new(FrontendObservabilityConfig::default())
+    }
+
+    pub fn frontend_observability_with_config(
+        config: FrontendObservabilityConfig,
+    ) -> FrontendObservabilityPlugin {
+        FrontendObservabilityPlugin::new(config)
+    }
+
+    impl AppPlugin for FrontendObservabilityPlugin {
+        fn name(&self) -> &'static str {
+            "pocopine.logging.frontend_observability"
+        }
+
+        fn install(self, app: App) -> App {
+            let FrontendObservabilityConfig {
+                console_logging,
+                service,
+                environment,
+                component_setup,
+                component_ready,
+            } = self.config;
+
+            if let Some(console_config) = console_logging {
+                if let Err(err) = init_console_logging(console_config) {
+                    web_sys::console::warn_1(&JsValue::from_str(&format!(
+                        "pocopine: frontend observability could not initialize console logging: {err}"
+                    )));
+                }
+            }
+
+            let mut app = app
+                .provide_plugin(FrontendObservability {
+                    service,
+                    environment,
+                })
+                .hook_plugin::<FrontendObservability, AppBootStarted>()
+                .hook_plugin::<FrontendObservability, AppBootCompleted>()
+                .hook_plugin::<FrontendObservability, AppBootFailed>()
+                .hook_plugin::<FrontendObservability, RouteNavigationStarted>()
+                .hook_plugin::<FrontendObservability, RouteNavigationCompleted>()
+                .hook_plugin::<FrontendObservability, RouteNavigationFailed>()
+                .hook_plugin::<FrontendObservability, ServerFunctionClientStarted>()
+                .hook_plugin::<FrontendObservability, ServerFunctionClientCompleted>()
+                .hook_plugin::<FrontendObservability, ServerFunctionClientFailed>()
+                .hook_plugin::<FrontendObservability, ComponentMounted>()
+                .hook_plugin::<FrontendObservability, ComponentUnmounted>();
+
+            if component_setup {
+                app = app.hook_plugin::<FrontendObservability, ComponentSetup>();
+            }
+            if component_ready {
+                app = app.hook_plugin::<FrontendObservability, ComponentReady>();
+            }
+            app
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct FrontendObservability {
+        service: Option<String>,
+        environment: Option<String>,
+    }
+
+    impl FrontendObservability {
+        pub fn emit(&self, event: ObservedEvent) {
+            let event = self.with_base_context(event);
+            emit_tracing(&event);
+        }
+
+        fn with_base_context(&self, mut event: ObservedEvent) -> ObservedEvent {
+            if event.context.service.is_none() {
+                event.context.service = self.service.clone();
+            }
+            if event.context.environment.is_none() {
+                event.context.environment = self.environment.clone();
+            }
+            event
+        }
+
+        fn context(&self) -> ObserveContext {
+            ObserveContext {
+                service: self.service.clone(),
+                environment: self.environment.clone(),
+                ..ObserveContext::default()
+            }
+        }
+
+        fn context_with_component(&self, component: &str) -> ObserveContext {
+            self.context().with_component(component)
+        }
+
+        fn context_with_route(&self, route: &str) -> ObserveContext {
+            self.context().with_route(route)
+        }
+    }
+
+    impl Hook<AppBootStarted> for FrontendObservability {
+        fn call(&self, event: AppBootStarted) {
+            self.emit(
+                ObservedEvent::trace("frontend_app_started")
+                    .context(self.context())
+                    .field(
+                        "component_count",
+                        event.component_count as u64,
+                        FieldPrivacy::Public,
+                    )
+                    .field(
+                        "route_count",
+                        event.route_count as u64,
+                        FieldPrivacy::Public,
+                    ),
+            );
+        }
+    }
+
+    impl Hook<AppBootCompleted> for FrontendObservability {
+        fn call(&self, event: AppBootCompleted) {
+            self.emit(
+                ObservedEvent::trace("frontend_app_boot_completed")
+                    .context(self.context())
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<AppBootFailed> for FrontendObservability {
+        fn call(&self, event: AppBootFailed) {
+            self.emit(
+                ObservedEvent::log("frontend_app_boot_failed")
+                    .priority(EventPriority::High)
+                    .context(self.context())
+                    .field("reason", event.reason, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<RouteNavigationStarted> for FrontendObservability {
+        fn call(&self, event: RouteNavigationStarted) {
+            let mut observed = ObservedEvent::trace("route_navigation_started").field(
+                "matched",
+                event.route_pattern.is_some(),
+                FieldPrivacy::Public,
+            );
+            if let Some(route) = event.route_pattern {
+                observed = observed.context(self.context_with_route(route)).field(
+                    "route",
+                    route,
+                    FieldPrivacy::Public,
+                );
+            } else {
+                observed = observed.context(self.context());
+            }
+            if let Some(component) = event.component {
+                observed = observed.field("component", component, FieldPrivacy::Public);
+            }
+            self.emit(observed);
+        }
+    }
+
+    impl Hook<RouteNavigationCompleted> for FrontendObservability {
+        fn call(&self, event: RouteNavigationCompleted) {
+            match (event.route_pattern, event.component) {
+                (Some(route), Some(component)) => self.emit(
+                    ObservedEvent::analytics("route_view")
+                        .context(self.context_with_route(route))
+                        .field("route", route, FieldPrivacy::Public)
+                        .field("component", component, FieldPrivacy::Public)
+                        .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+                ),
+                _ => self.emit(
+                    ObservedEvent::trace("route_navigation_completed")
+                        .context(self.context())
+                        .field("matched", false, FieldPrivacy::Public)
+                        .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+                ),
+            }
+        }
+    }
+
+    impl Hook<RouteNavigationFailed> for FrontendObservability {
+        fn call(&self, event: RouteNavigationFailed) {
+            let mut observed = ObservedEvent::log("route_navigation_failed")
+                .priority(EventPriority::High)
+                .field("reason", event.reason, FieldPrivacy::Public)
+                .field("duration_ms", event.duration_ms, FieldPrivacy::Public);
+            if let Some(route) = event.route_pattern {
+                observed = observed.context(self.context_with_route(route)).field(
+                    "route",
+                    route,
+                    FieldPrivacy::Public,
+                );
+            } else {
+                observed = observed.context(self.context());
+            }
+            if let Some(component) = event.component {
+                observed = observed.field("component", component, FieldPrivacy::Public);
+            }
+            self.emit(observed);
+        }
+    }
+
+    impl Hook<ServerFunctionClientStarted> for FrontendObservability {
+        fn call(&self, event: ServerFunctionClientStarted) {
+            self.emit(
+                ObservedEvent::trace("server_function_client_started")
+                    .context(self.context_with_route(&event.route))
+                    .field("route", event.route, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<ServerFunctionClientCompleted> for FrontendObservability {
+        fn call(&self, event: ServerFunctionClientCompleted) {
+            self.emit(
+                ObservedEvent::trace("server_function_client_completed")
+                    .context(self.context_with_route(&event.route))
+                    .field("route", event.route, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
+                    .field(
+                        "status_code",
+                        event.status_code as u64,
+                        FieldPrivacy::Public,
+                    ),
+            );
+        }
+    }
+
+    impl Hook<ServerFunctionClientFailed> for FrontendObservability {
+        fn call(&self, event: ServerFunctionClientFailed) {
+            self.emit(
+                ObservedEvent::log("server_function_client_failed")
+                    .priority(EventPriority::High)
+                    .context(self.context_with_route(&event.route))
+                    .field("route", event.route, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public)
+                    .field("error_kind", event.error_kind, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<ComponentSetup> for FrontendObservability {
+        fn call(&self, event: ComponentSetup) {
+            self.emit(
+                ObservedEvent::trace("component_setup")
+                    .priority(EventPriority::Low)
+                    .context(self.context_with_component(event.component))
+                    .field("component", event.component, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<ComponentMounted> for FrontendObservability {
+        fn call(&self, event: ComponentMounted) {
+            self.emit(
+                ObservedEvent::analytics("component_view")
+                    .context(self.context_with_component(event.component))
+                    .field("component", event.component, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<ComponentReady> for FrontendObservability {
+        fn call(&self, event: ComponentReady) {
+            self.emit(
+                ObservedEvent::trace("component_ready")
+                    .priority(EventPriority::Low)
+                    .context(self.context_with_component(event.component))
+                    .field("component", event.component, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl Hook<ComponentUnmounted> for FrontendObservability {
+        fn call(&self, event: ComponentUnmounted) {
+            self.emit(
+                ObservedEvent::trace("component_unmounted")
+                    .context(self.context_with_component(event.component))
+                    .field("component", event.component, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    fn write_console(level: Level, value: &JsValue) {
+        match level {
+            Level::ERROR => web_sys::console::error_1(value),
+            Level::WARN => web_sys::console::warn_1(value),
+            Level::INFO => web_sys::console::info_1(value),
+            Level::DEBUG | Level::TRACE => web_sys::console::debug_1(value),
+        }
+    }
+
+    fn set_property(object: &Object, name: &str, value: JsValue) {
+        let _ = Reflect::set(object, &JsValue::from_str(name), &value);
+    }
+
+    fn js_value_from_i64(value: i64) -> JsValue {
+        if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value) {
+            JsValue::from_f64(value as f64)
+        } else {
+            JsValue::from_str(&value.to_string())
+        }
+    }
+
+    fn js_value_from_u64(value: u64) -> JsValue {
+        if value <= MAX_SAFE_INTEGER as u64 {
+            JsValue::from_f64(value as f64)
+        } else {
+            JsValue::from_str(&value.to_string())
         }
     }
 
@@ -533,7 +1041,14 @@ mod web {
             Level::TRACE => 5,
         }
     }
+
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    const MIN_SAFE_INTEGER: i64 = -MAX_SAFE_INTEGER;
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{init_console_logging, ConsoleLoggingConfig, InitLoggingError};
+pub use web::{
+    frontend_observability, frontend_observability_with_config, init_console_logging,
+    ConsoleLogFormat, ConsoleLoggingConfig, FrontendObservability, FrontendObservabilityConfig,
+    FrontendObservabilityPlugin, InitLoggingError,
+};

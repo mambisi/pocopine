@@ -1,0 +1,17 @@
+[package]
+name = "observability-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pocopine = { path = "../../crates/pocopine", features = ["logging"] }
+phf = { version = "0.13", features = ["macros"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+wasm-bindgen = { workspace = true }

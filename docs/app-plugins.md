@@ -410,12 +410,32 @@ RouteNavigationFailed {
     reason,
     duration_ms,
 }
+
+ServerFunctionClientStarted {
+    route,
+}
+
+ServerFunctionClientCompleted {
+    route,
+    duration_ms,
+    status_code,
+}
+
+ServerFunctionClientFailed {
+    route,
+    duration_ms,
+    error_kind,
+}
 ```
 
 Route events include both the current URL path and the matched route pattern
 when one exists. Observability plugins should prefer `route_pattern` for
 aggregate analytics and treat `path` as potentially identifying, because apps
 often encode IDs in route segments.
+
+Server-function client events include the public request path with query
+strings and fragments stripped. They never include serialized arguments,
+response bodies, headers, or cookies.
 
 `AppBootCompleted.duration_ms` measures synchronous boot through root mount and
 post-mount scheduling. It does not include execution time for deferred
@@ -492,6 +512,8 @@ Observability is the reference use case:
   overrides without string filters in the hook implementation;
 - `hook_plugin` should subscribe to `AppBoot*` and `RouteNavigation*` events
   for boot and navigation telemetry;
+- `hook_plugin` should subscribe to `ServerFunctionClient*` events for
+  browser-side generated `#[server]` request telemetry;
 - component hooks can extract `Plugin<Observability>` for app-authored events;
 - reusable components can extract `Option<Plugin<Observability>>` to
   participate when observability is installed and remain portable when it is
