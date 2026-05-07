@@ -5,6 +5,8 @@
 //! plugins before the listener binds, and boot events fire in the
 //! documented order.
 
+// `pocopine-server` is host-only; this test must follow.
+#![cfg(not(target_arch = "wasm32"))]
 // `registry_lock` deliberately holds a `MutexGuard` across `.await`
 // to serialize tests that share the process-global plugin registry.
 // The lock has zero contention because tests are linearized; the

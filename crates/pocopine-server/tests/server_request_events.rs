@@ -6,6 +6,8 @@
 //! status code, and no headers, cookies, query strings, or bodies
 //! enter framework events.
 
+// `pocopine-server` is host-only; this test must follow.
+#![cfg(not(target_arch = "wasm32"))]
 // See `server_plugin.rs` for the rationale.
 #![allow(clippy::await_holding_lock)]
 
