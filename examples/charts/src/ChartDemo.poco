@@ -87,7 +87,7 @@
                                       pp-bind:y="combo_latest_y"
                                       dy="-12"
                                       fill="#18212f"
-                                      font_weight="bold"></pine-cartesian-reference-label>
+                                      font_weight="700"></pine-cartesian-reference-label>
     </pine-cartesian-chart>
   </pine-chart-responsive>
 
@@ -141,11 +141,11 @@
         <pine-chart-icon key="airport-east" kind="plane" x="770" y="82" scale="0.075" fill="#18212f"></pine-chart-icon>
       </pine-chart-layer>
       <pine-chart-layer name="labels">
-        <pine-chart-label key="airport-label" text="Airport" x="100" y="120" dx="8" dy="-24" angle="-65" fill="#19a974" text_anchor="start" font_weight="bold"></pine-chart-label>
-        <pine-chart-label key="central-label" text="Central" x="420" y="180" dx="14" dy="-24" angle="-65" fill="#18212f" text_anchor="start" font_weight="bold"></pine-chart-label>
-        <pine-chart-label key="museum-label" text="Museum" x="480" y="300" dx="-12" dy="42" angle="-65" fill="#18212f" text_anchor="end" font_weight="bold"></pine-chart-label>
-        <pine-chart-label key="republic-label" text="Republic" x="520" y="180" dx="12" dy="-24" angle="-65" fill="#18212f" text_anchor="start" font_weight="bold"></pine-chart-label>
-        <pine-chart-label key="east-gate-label" text="East Gate" x="840" y="240" dx="8" dy="-24" angle="-65" fill="#f2c230" text_anchor="start" font_weight="bold"></pine-chart-label>
+        <pine-chart-label key="airport-label" text="Airport" x="100" y="120" dx="8" dy="-24" angle="-65" fill="#19a974" text_anchor="start" font_weight="700"></pine-chart-label>
+        <pine-chart-label key="central-label" text="Central" x="420" y="180" dx="14" dy="-24" angle="-65" fill="#18212f" text_anchor="start" font_weight="700"></pine-chart-label>
+        <pine-chart-label key="museum-label" text="Museum" x="480" y="300" dx="-12" dy="42" angle="-65" fill="#18212f" text_anchor="end" font_weight="700"></pine-chart-label>
+        <pine-chart-label key="republic-label" text="Republic" x="520" y="180" dx="12" dy="-24" angle="-65" fill="#18212f" text_anchor="start" font_weight="700"></pine-chart-label>
+        <pine-chart-label key="east-gate-label" text="East Gate" x="840" y="240" dx="8" dy="-24" angle="-65" fill="#f2c230" text_anchor="start" font_weight="700"></pine-chart-label>
       </pine-chart-layer>
     </pine-layer-chart>
   </pine-chart-responsive>
