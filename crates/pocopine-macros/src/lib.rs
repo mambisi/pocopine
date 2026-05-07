@@ -938,6 +938,56 @@ pub(crate) fn kebab_case(ident: &str) -> String {
     out
 }
 
+#[derive(Clone, Copy)]
+enum StaticPropKindCode {
+    Auto,
+    String,
+    Bool,
+    Number,
+}
+
+fn static_prop_kind_for_type(ty: &Type) -> proc_macro2::TokenStream {
+    match classify_static_prop_type(ty) {
+        StaticPropKindCode::Auto => quote! { ::pocopine::__private::StaticPropKind::Auto },
+        StaticPropKindCode::String => quote! { ::pocopine::__private::StaticPropKind::String },
+        StaticPropKindCode::Bool => quote! { ::pocopine::__private::StaticPropKind::Bool },
+        StaticPropKindCode::Number => quote! { ::pocopine::__private::StaticPropKind::Number },
+    }
+}
+
+fn classify_static_prop_type(ty: &Type) -> StaticPropKindCode {
+    let Some(segment) = type_path_last_segment(ty) else {
+        return StaticPropKindCode::Auto;
+    };
+    let ident = segment.ident.to_string();
+    if ident == "Option" {
+        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+            if let Some(inner) = args.args.iter().find_map(|arg| match arg {
+                syn::GenericArgument::Type(inner) => Some(inner),
+                _ => None,
+            }) {
+                return classify_static_prop_type(inner);
+            }
+        }
+        return StaticPropKindCode::Auto;
+    }
+
+    match ident.as_str() {
+        "String" => StaticPropKindCode::String,
+        "bool" => StaticPropKindCode::Bool,
+        "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+        | "u64" | "u128" | "usize" => StaticPropKindCode::Number,
+        _ => StaticPropKindCode::Auto,
+    }
+}
+
+fn type_path_last_segment(ty: &Type) -> Option<&syn::PathSegment> {
+    match ty {
+        Type::Path(path) if path.qself.is_none() => path.path.segments.last(),
+        _ => None,
+    }
+}
+
 #[proc_macro_attribute]
 pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = match ComponentArgs::parse.parse(attr) {
@@ -1113,6 +1163,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // attribute.
     let mut field_idents: Vec<syn::Ident> = Vec::new();
     let mut field_names: Vec<String> = Vec::new();
+    let mut field_types: Vec<Type> = Vec::new();
     let mut field_is_prop: Vec<bool> = Vec::new();
     let mut field_is_model: Vec<bool> = Vec::new();
     let mut field_model_names: Vec<Option<String>> = Vec::new();
@@ -1302,7 +1353,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             });
         }
         let rust_name = ident.to_string().trim_start_matches("r#").to_string();
-        let _ = field_ty;
+        field_types.push(field_ty);
         field_names.push(rust_name.clone());
         field_idents.push(ident);
         field_is_prop.push(is_prop);
@@ -1450,6 +1501,27 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { let _ = key; false }
     } else {
         quote! { matches!(key, #(#prop_field_names)|*) }
+    };
+
+    let static_prop_kind_arms = field_names
+        .iter()
+        .zip(field_is_prop.iter())
+        .zip(field_types.iter())
+        .filter_map(|((name, is_prop), ty)| {
+            if !*is_prop {
+                return None;
+            }
+            let kind = static_prop_kind_for_type(ty);
+            Some(quote! { #name => #kind, })
+        })
+        .chain(flatten_leaf_names.iter().copied().map(|leaf| {
+            quote! { #leaf => ::pocopine::__private::StaticPropKind::Auto, }
+        }));
+    let static_prop_kind_body = quote! {
+        match key {
+            #(#static_prop_kind_arms)*
+            _ => ::pocopine::__private::StaticPropKind::Auto,
+        }
     };
 
     let model_field_names: Vec<&String> = field_names
@@ -2040,6 +2112,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn is_prop(&self, key: &str) -> bool {
                 #is_prop_body
+            }
+            fn static_prop_kind(&self, key: &str) -> ::pocopine::__private::StaticPropKind {
+                #static_prop_kind_body
             }
             fn is_model(&self, key: &str) -> bool {
                 #is_model_body

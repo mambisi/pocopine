@@ -113,8 +113,8 @@ pub mod __private {
         spawn_scoped as runtime_spawn_scoped, store_scope, task::TaskHandle, track,
         with_write_origin, BindingKind, Component, ComponentMountFn, ComponentState,
         ComponentVTable, FromHandlerArg, Handle, HandlerDispatch, LifecycleContext, Scope,
-        StaticBinOp, StaticBinding, StaticExpr, StaticListener, StaticLiteral, StaticRowPlan,
-        Store, WriteOrigin,
+        StaticBinOp, StaticBinding, StaticExpr, StaticListener, StaticLiteral, StaticPropKind,
+        StaticRowPlan, Store, WriteOrigin,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use pocopine_jobs as jobs;
