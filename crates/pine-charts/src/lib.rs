@@ -14,6 +14,7 @@ pub mod geometry;
 pub mod layered;
 pub mod legend;
 pub mod line;
+mod marks;
 pub mod path;
 pub mod pie;
 pub mod responsive;
