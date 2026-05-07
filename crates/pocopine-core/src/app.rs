@@ -139,15 +139,45 @@ pub enum RouteRejection {
     Custom { reason: &'static str },
 }
 
+/// Where in the navigation pipeline a [`RouteRejection`]
+/// originated. Drives the stable identifiers fired in
+/// `RouteNavigationFailed` so observers can tell guard-side and
+/// loader-side rejections apart (RFC-078 §5.10.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RejectionSource {
+    /// Synchronous guard (`RouteConfig::guard`) returned `Reject`
+    /// or `Redirect`.
+    Guard,
+    /// Async loader (`RouteConfig::loader`) returned an `Err`
+    /// that mapped to a `RouteRejection`.
+    Loader,
+}
+
 impl RouteRejection {
-    pub(crate) fn reason(&self) -> &'static str {
-        match self {
-            RouteRejection::Unauthorized => "guard_unauthorized",
-            RouteRejection::Forbidden(_) => "guard_forbidden",
-            RouteRejection::Blocked(_) => "guard_blocked",
-            RouteRejection::NotFound => "guard_not_found",
-            RouteRejection::Server(_) => "guard_server_error",
-            RouteRejection::Custom { reason } => reason,
+    /// Stable closed-set `reason` identifier for this rejection
+    /// **as observed from `source`**. The same `RouteRejection`
+    /// produces `"guard_unauthorized"` when a guard fired it and
+    /// `"loader_unauthorized"` when a loader fired it; observability
+    /// pipelines that aggregate by `reason` can split traffic by
+    /// origin without parsing the rejection enum.
+    pub(crate) fn reason(&self, source: RejectionSource) -> &'static str {
+        match (source, self) {
+            (RejectionSource::Guard, RouteRejection::Unauthorized) => "guard_unauthorized",
+            (RejectionSource::Loader, RouteRejection::Unauthorized) => "loader_unauthorized",
+            (RejectionSource::Guard, RouteRejection::Forbidden(_)) => "guard_forbidden",
+            (RejectionSource::Loader, RouteRejection::Forbidden(_)) => "loader_forbidden",
+            (RejectionSource::Guard, RouteRejection::Blocked(_)) => "guard_blocked",
+            (RejectionSource::Loader, RouteRejection::Blocked(_)) => "loader_blocked",
+            (RejectionSource::Guard, RouteRejection::NotFound) => "guard_not_found",
+            (RejectionSource::Loader, RouteRejection::NotFound) => "loader_not_found",
+            (RejectionSource::Guard, RouteRejection::Server(_)) => "guard_server_error",
+            (RejectionSource::Loader, RouteRejection::Server(_)) => "loader_server_error",
+            // Custom rejections own their reason string; both
+            // sources surface the user-supplied identifier
+            // verbatim. Apps that want a source-distinguished
+            // custom reason should encode the source into their
+            // chosen identifier.
+            (_, RouteRejection::Custom { reason }) => reason,
         }
     }
 }
@@ -407,8 +437,8 @@ impl<T: 'static> std::ops::Deref for Loader<T> {
 }
 
 impl<T: 'static> From<LifecycleContext<'_>> for Loader<T> {
-    fn from(_: LifecycleContext<'_>) -> Self {
-        match crate::router::take_pending_loader_data::<T>() {
+    fn from(ctx: LifecycleContext<'_>) -> Self {
+        match crate::router::take_pending_loader_data::<T>(ctx.scope_id) {
             Some(loader) => loader,
             None => panic!(
                 "Loader<{}>: no loader data is available for the mounting \
@@ -423,16 +453,20 @@ impl<T: 'static> From<LifecycleContext<'_>> for Loader<T> {
 }
 
 impl<T: 'static> From<LifecycleContext<'_>> for Option<Loader<T>> {
-    fn from(_: LifecycleContext<'_>) -> Self {
-        crate::router::take_pending_loader_data::<T>()
+    fn from(ctx: LifecycleContext<'_>) -> Self {
+        crate::router::take_pending_loader_data::<T>(ctx.scope_id)
     }
 }
 
-/// Internal: wrap a typed loader closure in a [`Loader<T>`] from
-/// raw `Box<dyn Any>` data. Called by the router pending-slot
-/// machinery; `pub(crate)` because it's an internal seam, not API.
-pub(crate) fn loader_from_any<T: 'static>(boxed: Box<dyn Any>) -> Result<Loader<T>, Box<dyn Any>> {
-    boxed.downcast::<T>().map(|t| Loader { data: Rc::new(*t) })
+impl<T: 'static> Loader<T> {
+    /// Internal — construct a `Loader<T>` from an already-shared
+    /// `Rc<T>`. Used by the router's per-scope slot path so a
+    /// second extractor on the same mount shares the existing
+    /// `Rc` rather than re-allocating.
+    #[doc(hidden)]
+    pub fn __from_rc(data: Rc<T>) -> Self {
+        Self { data }
+    }
 }
 
 /// Route-local configuration for component `C`.
@@ -649,19 +683,19 @@ mod route_config_tests {
     }
 
     #[test]
-    fn loader_from_any_downcasts_correctly() {
-        let boxed: Box<dyn Any> = Box::new("hello".to_string());
-        let loader = loader_from_any::<String>(boxed).expect("downcast");
+    fn loader_from_rc_constructs_loader_from_shared_rc() {
+        // The router migrates the one-shot pending value into a
+        // per-scope `Rc` slot on first read; subsequent extractors
+        // construct `Loader<T>` directly from that shared `Rc`
+        // through `Loader::__from_rc`.
+        let rc: Rc<String> = Rc::new("hello".to_string());
+        let strong_count_before = Rc::strong_count(&rc);
+        let loader = Loader::<String>::__from_rc(rc.clone());
         assert_eq!(*loader.get(), "hello");
-        // `Loader<T>` derefs to `&T`.
+        // Loader holds its own clone of the Rc.
+        assert!(Rc::strong_count(&rc) > strong_count_before);
+        // Deref to `&T`.
         assert_eq!(loader.len(), 5);
-    }
-
-    #[test]
-    fn loader_from_any_returns_box_on_type_mismatch() {
-        let boxed: Box<dyn Any> = Box::new(42_u32);
-        let result = loader_from_any::<String>(boxed);
-        assert!(result.is_err(), "type mismatch must surface as Err");
     }
 
     #[test]
@@ -684,6 +718,73 @@ mod route_config_tests {
         let app = App::new();
         assert!(app.route_error_component.is_none());
         assert!(app.not_found_component.is_none());
+    }
+
+    #[test]
+    fn rejection_reason_distinguishes_guard_and_loader_source() {
+        // Same rejection variant emits a different stable
+        // identifier depending on whether a guard or a loader
+        // produced it. RFC §5.10.7: closed-set reasons let
+        // observability split traffic by origin without parsing
+        // the rejection enum.
+        assert_eq!(
+            RouteRejection::Unauthorized.reason(RejectionSource::Guard),
+            "guard_unauthorized"
+        );
+        assert_eq!(
+            RouteRejection::Unauthorized.reason(RejectionSource::Loader),
+            "loader_unauthorized"
+        );
+        assert_eq!(
+            RouteRejection::Forbidden("policy_x").reason(RejectionSource::Guard),
+            "guard_forbidden"
+        );
+        assert_eq!(
+            RouteRejection::Forbidden("policy_x").reason(RejectionSource::Loader),
+            "loader_forbidden"
+        );
+        assert_eq!(
+            RouteRejection::NotFound.reason(RejectionSource::Guard),
+            "guard_not_found"
+        );
+        assert_eq!(
+            RouteRejection::NotFound.reason(RejectionSource::Loader),
+            "loader_not_found"
+        );
+        assert_eq!(
+            RouteRejection::Server("db_down").reason(RejectionSource::Guard),
+            "guard_server_error"
+        );
+        assert_eq!(
+            RouteRejection::Server("db_down").reason(RejectionSource::Loader),
+            "loader_server_error"
+        );
+        assert_eq!(
+            RouteRejection::Blocked("ab_test").reason(RejectionSource::Guard),
+            "guard_blocked"
+        );
+        assert_eq!(
+            RouteRejection::Blocked("ab_test").reason(RejectionSource::Loader),
+            "loader_blocked"
+        );
+    }
+
+    #[test]
+    fn rejection_reason_custom_passes_user_string_through() {
+        // Custom rejections own their reason string verbatim;
+        // both sources surface the user-supplied identifier so
+        // apps can encode whatever taxonomy they need.
+        let custom = RouteRejection::Custom {
+            reason: "tenant_quota_exceeded",
+        };
+        assert_eq!(
+            custom.reason(RejectionSource::Guard),
+            "tenant_quota_exceeded"
+        );
+        assert_eq!(
+            custom.reason(RejectionSource::Loader),
+            "tenant_quota_exceeded"
+        );
     }
 
     #[test]
@@ -837,25 +938,31 @@ impl App {
     }
 
     /// Register a route. `pattern` is a path with optional `:name`
-    /// segments (`"/blog/:id"`) or the 404 fallback `"*"`. `C` must be
-    /// a `#[component]` whose tag name is the kebab-case of its ident.
-    /// Matching routes paint their component into the
-    /// `<pp-outlet>` with captured params passed through as attributes.
-    pub fn route<C: Component>(mut self, pattern: &'static str) -> Self {
-        C::register();
-        router::register_route(pattern, C::NAME);
-        self.routes.push(pattern);
-        self.record_component_name(C::NAME);
-        self
+    /// segments (`"/blog/:id"`) or the 404 fallback `"*"`. `C` must
+    /// be a `#[component]` that implements [`RouteComponent`];
+    /// `C::config()` supplies any guards / loaders the route should
+    /// honour. Matching routes paint the component into the
+    /// `<pp-outlet>` with captured params passed through as
+    /// attributes.
+    ///
+    /// Components that don't need guards or loaders impl
+    /// `RouteComponent` with a one-line empty body —
+    /// `impl RouteComponent for MyComponent {}` — and inherit the
+    /// default empty `RouteConfig`. The bound exists specifically to
+    /// guarantee that a component declaring guards
+    /// (e.g. `require_auth`) cannot silently be mounted unguarded
+    /// by the wrong builder method.
+    pub fn route<C: RouteComponent>(self, pattern: &'static str) -> Self {
+        self.route_with::<C>(pattern, C::config())
     }
 
-    /// Register a component route using its [`RouteComponent`] config.
+    /// Source-compatible alias for [`Self::route`].
     ///
-    /// This is the source-compatible staging name for RFC 078. After
-    /// the route config fields are populated and call sites migrate,
-    /// this path can become the main [`Self::route`] implementation.
+    /// Both resolve `C::config()` and register through `route_with`.
+    /// Kept for app code that adopted the explicit name during the
+    /// RFC-078 staging window.
     pub fn route_component<C: RouteComponent>(self, pattern: &'static str) -> Self {
-        self.route_with::<C>(pattern, C::config())
+        self.route::<C>(pattern)
     }
 
     /// Register a route with explicit route-local configuration.
@@ -945,10 +1052,18 @@ impl App {
     /// is the authoritative registry, and skipping the eager
     /// `register()` keeps it that way. Direct user calls would
     /// route to a component the registry never registered.
+    ///
+    /// Resolves `C::config()` so guards / loaders declared on
+    /// route components flow through both the macro path and
+    /// direct-builder path identically. The `RouteComponent` bound
+    /// matches [`Self::route`] — every component used in
+    /// `app!{ routes: [...] }` must implement `RouteComponent`
+    /// (default empty body is fine).
     #[doc(hidden)]
-    pub fn route_static<C: Component>(mut self, pattern: &'static str) -> Self {
-        router::register_route(pattern, C::NAME);
+    pub fn route_static<C: RouteComponent>(mut self, pattern: &'static str) -> Self {
+        router::register_route_with_config(pattern, C::NAME, C::config().into_runtime());
         self.routes.push(pattern);
+        self.record_component_name(C::NAME);
         self
     }
 
@@ -1054,6 +1169,13 @@ impl App {
             router::set_route_rejection_handlers(Vec::new());
             router::set_route_error_component(None);
             router::set_not_found_component(None);
+            // Same reasoning for fetch middleware: a plugin may
+            // have called `fetch::install_middleware` in its
+            // `install` fn before validation discovered the
+            // missing service. Refused-to-mount apps must not
+            // leave privileged middleware live — clear it and
+            // freeze so subsequent install attempts panic.
+            crate::fetch::clear_and_freeze();
             crate::plugin::render_plugin_boot_error(&errors);
             return;
         }

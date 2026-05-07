@@ -178,6 +178,20 @@ pub fn __reset_middleware_chain_for_test() {
     FROZEN.with(|cell| cell.set(false));
 }
 
+/// Drop every installed middleware **and** freeze the chain.
+/// Called from [`crate::App::run`] when plugin validation fails:
+/// a plugin may have called [`install_middleware`] from inside its
+/// `install` fn before the framework discovered the validation
+/// error, and a refused-to-mount app must not leave that
+/// privileged code path live for the next `fetch::call`. After
+/// this runs, any further `install_middleware` panics — the
+/// remediation path is to fix the plugin configuration and
+/// restart the runtime, not silently retry installing.
+pub(crate) fn clear_and_freeze() {
+    MIDDLEWARES.with(|cell| cell.borrow_mut().clear());
+    FROZEN.with(|cell| cell.set(true));
+}
+
 fn snapshot_chain() -> Rc<Vec<Rc<dyn FetchMiddleware>>> {
     MIDDLEWARES.with(|cell| Rc::new(cell.borrow().clone()))
 }
@@ -328,5 +342,25 @@ mod tests {
             req.headers,
             vec![("authorization".into(), "Bearer t".into())]
         );
+    }
+
+    #[test]
+    fn clear_and_freeze_drops_middlewares_and_locks_chain() {
+        // RFC-078 §5.10.3: refused-to-mount apps must not leave
+        // privileged middleware live for the next `fetch::call`.
+        // `App::run`'s validation-failure branch calls this helper
+        // after a plugin had a chance to install middleware in its
+        // `install` fn but before plugin validation flagged a
+        // missing service.
+        reset();
+        install_middleware(|req: FetchRequest, next: FetchNext| async move { next.run(req).await });
+        assert_eq!(snapshot_chain().len(), 1);
+
+        clear_and_freeze();
+        assert_eq!(snapshot_chain().len(), 0, "middlewares should be dropped");
+        assert!(FROZEN.with(|cell| cell.get()), "chain must stay frozen");
+
+        // Reset for any subsequent test in this binary.
+        reset();
     }
 }

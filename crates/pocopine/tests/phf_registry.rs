@@ -143,6 +143,8 @@ struct PhfUnregisteredByRouteStatic {}
 #[handlers]
 impl PhfUnregisteredByRouteStatic {}
 
+impl pocopine::RouteComponent for PhfUnregisteredByRouteStatic {}
+
 /// **High-priority Codex fix.** `App::route_static::<C>` must
 /// record the route without eagerly calling `C::register()`. If
 /// it called `C::register()`, the `app!{}` macro could appear
