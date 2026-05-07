@@ -37,6 +37,10 @@ use crate::mount;
 use crate::reactive::trigger_scope;
 use crate::scope::{ComponentState, Scope};
 
+mod return_to;
+
+pub use return_to::ReturnTo;
+
 // ─── route parsing ──────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]

@@ -103,7 +103,7 @@ pub use registry::{
     ComponentEntry, ComponentMountFn, ComponentVTable, RegisteredComponent, RegistryError,
     RegistryErrorKind, COMPONENT_ENTRIES,
 };
-pub use router::{navigate, register_route};
+pub use router::{navigate, register_route, ReturnTo};
 pub use scope::{
     append_list_inline, current_scope_id, invalidate_field, invalidate_field_cache,
     patch_list_at_inline, patch_list_indices_inline, prepend_list_inline, remove_list_at_inline,

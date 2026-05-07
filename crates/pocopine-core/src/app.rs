@@ -103,6 +103,10 @@ impl RouteTarget {
         Self::new(path).expect("route targets must be app-local paths")
     }
 
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     pub(crate) fn into_path(self) -> String {
         self.0
     }
