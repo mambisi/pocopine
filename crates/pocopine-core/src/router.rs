@@ -29,6 +29,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
+use crate::app::{RouteContext, RouteGuard, RouteGuardDecision};
 use crate::mount;
 use crate::reactive::trigger_scope;
 use crate::scope::{ComponentState, Scope};
@@ -42,15 +43,20 @@ enum Segment {
     Wildcard,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Route {
     pub pattern: &'static str,
     segments: Vec<Segment>,
     pub component_name: &'static str,
+    config: RouteRuntimeConfig,
 }
 
 impl Route {
-    fn parse(pattern: &'static str, component_name: &'static str) -> Self {
+    fn parse(
+        pattern: &'static str,
+        component_name: &'static str,
+        config: RouteRuntimeConfig,
+    ) -> Self {
         let segments = if pattern == "*" {
             vec![Segment::Wildcard]
         } else {
@@ -70,6 +76,7 @@ impl Route {
             pattern,
             segments,
             component_name,
+            config,
         }
     }
 
@@ -100,6 +107,19 @@ impl Route {
         }
         Some(params)
     }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct RouteRuntimeConfig {
+    pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
+}
+
+#[derive(Clone)]
+struct RouteMatch {
+    component_name: &'static str,
+    route_pattern: Option<&'static str>,
+    params: HashMap<String, String>,
+    config: RouteRuntimeConfig,
 }
 
 // ─── synthetic `$route` scope ───────────────────────────────────────
@@ -155,8 +175,16 @@ thread_local! {
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
 pub fn register_route(pattern: &'static str, component_name: &'static str) {
+    register_route_with_config(pattern, component_name, RouteRuntimeConfig::default());
+}
+
+pub(crate) fn register_route_with_config(
+    pattern: &'static str,
+    component_name: &'static str,
+    config: RouteRuntimeConfig,
+) {
     ROUTES.with(|r| {
-        let route = Route::parse(pattern, component_name);
+        let route = Route::parse(pattern, component_name, config);
         r.borrow_mut().push(route);
     });
 }
@@ -245,7 +273,13 @@ fn mount_current() {
     let search = loc.search().unwrap_or_default();
 
     // Match.
-    let (component_name, route_pattern, params) = match_route(&path, has_route_hooks);
+    let matched = match_route(&path, has_route_hooks);
+    let component_name = matched.as_ref().map(|m| m.component_name);
+    let route_pattern = matched.as_ref().and_then(|m| m.route_pattern);
+    let params = matched
+        .as_ref()
+        .map(|m| m.params.clone())
+        .unwrap_or_default();
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationStarted {
             path: path.clone(),
@@ -254,9 +288,46 @@ fn mount_current() {
         });
     }
 
+    let query = parse_query(&search);
+
+    if let Some(matched) = &matched {
+        if let Some(decision) = evaluate_guards(matched, &path, &query) {
+            match decision {
+                RouteGuardDecision::Allow => {}
+                RouteGuardDecision::Redirect(target) => {
+                    if has_route_hooks {
+                        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                            path: path.clone(),
+                            route_pattern,
+                            component: Some(matched.component_name),
+                            reason: "guard_redirected",
+                            duration_ms: elapsed_since(start_ms),
+                        });
+                    }
+                    let target = target.into_path();
+                    if target != path {
+                        navigate(&target);
+                    }
+                    return;
+                }
+                RouteGuardDecision::Reject(rejection) => {
+                    if has_route_hooks {
+                        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                            path,
+                            route_pattern,
+                            component: Some(matched.component_name),
+                            reason: rejection.reason(),
+                            duration_ms: elapsed_since(start_ms),
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     // Update the route state and trigger subscribers (bindings reading
     // `$route.*` re-run).
-    let query = parse_query(&search);
     ROUTE_STATE_RC.with(|cell| {
         if let Some(s) = cell.get() {
             let mut st = s.borrow_mut();
@@ -356,37 +427,55 @@ fn mount_current() {
 }
 
 /// Find the first matching route's component name + params.
-fn match_route(
-    path: &str,
-    include_pattern: bool,
-) -> (
-    Option<&'static str>,
-    Option<&'static str>,
-    HashMap<String, String>,
-) {
+fn match_route(path: &str, include_pattern: bool) -> Option<RouteMatch> {
     ROUTES.with(|r| {
         let routes = r.borrow();
         // Specific routes first; wildcards as a fallback.
         for route in routes.iter().filter(|r| !r.is_wildcard()) {
             if let Some(params) = route.match_path(path) {
-                return (
-                    Some(route.component_name),
-                    include_pattern.then_some(route.pattern),
+                return Some(RouteMatch {
+                    component_name: route.component_name,
+                    route_pattern: include_pattern.then_some(route.pattern),
                     params,
-                );
+                    config: route.config.clone(),
+                });
             }
         }
         for route in routes.iter().filter(|r| r.is_wildcard()) {
             if let Some(params) = route.match_path(path) {
-                return (
-                    Some(route.component_name),
-                    include_pattern.then_some(route.pattern),
+                return Some(RouteMatch {
+                    component_name: route.component_name,
+                    route_pattern: include_pattern.then_some(route.pattern),
                     params,
-                );
+                    config: route.config.clone(),
+                });
             }
         }
-        (None, None, HashMap::new())
+        None
     })
+}
+
+fn evaluate_guards(
+    matched: &RouteMatch,
+    path: &str,
+    query: &HashMap<String, String>,
+) -> Option<RouteGuardDecision> {
+    if matched.config.guards.is_empty() {
+        return None;
+    }
+    let ctx = RouteContext {
+        path,
+        params: &matched.params,
+        query,
+        matched_pattern: matched.route_pattern,
+    };
+    for guard in &matched.config.guards {
+        match guard.decide(&ctx) {
+            RouteGuardDecision::Allow => {}
+            other => return Some(other),
+        }
+    }
+    Some(RouteGuardDecision::Allow)
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
@@ -450,10 +539,14 @@ fn hex_nib(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{RouteRejection, RouteTarget};
+    use std::cell::Cell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
 
     #[test]
     fn literal_match() {
-        let r = Route::parse("/about", "about");
+        let r = Route::parse("/about", "about", RouteRuntimeConfig::default());
         assert!(r.match_path("/about").is_some());
         assert!(r.match_path("/").is_none());
         assert!(r.match_path("/about/extra").is_none());
@@ -461,14 +554,18 @@ mod tests {
 
     #[test]
     fn param_capture() {
-        let r = Route::parse("/blog/:id", "blog");
+        let r = Route::parse("/blog/:id", "blog", RouteRuntimeConfig::default());
         let caps = r.match_path("/blog/42").unwrap();
         assert_eq!(caps.get("id"), Some(&"42".to_string()));
     }
 
     #[test]
     fn mixed_segments() {
-        let r = Route::parse("/users/:uid/posts/:pid", "post");
+        let r = Route::parse(
+            "/users/:uid/posts/:pid",
+            "post",
+            RouteRuntimeConfig::default(),
+        );
         let caps = r.match_path("/users/7/posts/99").unwrap();
         assert_eq!(caps.get("uid"), Some(&"7".to_string()));
         assert_eq!(caps.get("pid"), Some(&"99".to_string()));
@@ -476,14 +573,14 @@ mod tests {
 
     #[test]
     fn wildcard_matches_anything() {
-        let r = Route::parse("*", "not-found");
+        let r = Route::parse("*", "not-found", RouteRuntimeConfig::default());
         assert!(r.match_path("/").is_some());
         assert!(r.match_path("/nope/anywhere").is_some());
     }
 
     #[test]
     fn root_path() {
-        let r = Route::parse("/", "home");
+        let r = Route::parse("/", "home", RouteRuntimeConfig::default());
         assert!(r.match_path("/").is_some());
         assert!(r.match_path("/about").is_none());
     }
@@ -493,5 +590,60 @@ mod tests {
         let q = parse_query("?name=Ada&hello=world%20%26%20mars");
         assert_eq!(q.get("name"), Some(&"Ada".to_string()));
         assert_eq!(q.get("hello"), Some(&"world & mars".to_string()));
+    }
+
+    #[test]
+    fn guard_context_contains_route_match_data() {
+        let guard: Rc<dyn RouteGuard> = Rc::new(|ctx: &RouteContext<'_>| {
+            assert_eq!(ctx.path, "/users/7");
+            assert_eq!(ctx.params.get("uid"), Some(&"7".to_string()));
+            assert_eq!(ctx.query.get("tab"), Some(&"profile".to_string()));
+            assert_eq!(ctx.matched_pattern, Some("/users/:uid"));
+            RouteGuardDecision::Redirect(RouteTarget::path("/login"))
+        });
+        let mut params = HashMap::new();
+        params.insert("uid".to_string(), "7".to_string());
+        let mut query = HashMap::new();
+        query.insert("tab".to_string(), "profile".to_string());
+        let matched = RouteMatch {
+            component_name: "user-page",
+            route_pattern: Some("/users/:uid"),
+            params,
+            config: RouteRuntimeConfig {
+                guards: vec![guard],
+            },
+        };
+
+        assert_eq!(
+            evaluate_guards(&matched, "/users/7", &query),
+            Some(RouteGuardDecision::Redirect(RouteTarget::path("/login")))
+        );
+    }
+
+    #[test]
+    fn guards_stop_at_first_rejection() {
+        let second_guard_called = Rc::new(Cell::new(false));
+        let first_guard: Rc<dyn RouteGuard> = Rc::new(|_: &RouteContext<'_>| {
+            RouteGuardDecision::Reject(RouteRejection::Unauthorized)
+        });
+        let second_guard_called_for_guard = Rc::clone(&second_guard_called);
+        let second_guard: Rc<dyn RouteGuard> = Rc::new(move |_: &RouteContext<'_>| {
+            second_guard_called_for_guard.set(true);
+            RouteGuardDecision::Allow
+        });
+        let matched = RouteMatch {
+            component_name: "admin",
+            route_pattern: Some("/admin"),
+            params: HashMap::new(),
+            config: RouteRuntimeConfig {
+                guards: vec![first_guard, second_guard],
+            },
+        };
+
+        assert_eq!(
+            evaluate_guards(&matched, "/admin", &HashMap::new()),
+            Some(RouteGuardDecision::Reject(RouteRejection::Unauthorized))
+        );
+        assert!(!second_guard_called.get());
     }
 }

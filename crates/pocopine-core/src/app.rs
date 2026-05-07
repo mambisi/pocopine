@@ -24,7 +24,9 @@
 //! `Counter::register()` and `pocopine::run()` still work for
 //! ad-hoc use — the trait is what `App` calls under the hood.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
@@ -73,16 +75,118 @@ pub trait RouteComponent: Component {
     }
 }
 
+/// Route context visible to sync guards.
+pub struct RouteContext<'a> {
+    pub path: &'a str,
+    pub params: &'a HashMap<String, String>,
+    pub query: &'a HashMap<String, String>,
+    pub matched_pattern: Option<&'static str>,
+}
+
+/// Concrete client-side route target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteTarget(String);
+
+impl RouteTarget {
+    pub fn new(path: impl Into<String>) -> Result<Self, RouteTargetError> {
+        let path = path.into();
+        if path.is_empty() {
+            return Err(RouteTargetError::Empty);
+        }
+        if !is_app_local_route_target(&path) {
+            return Err(RouteTargetError::NotAppLocalPath);
+        }
+        Ok(Self(path))
+    }
+
+    pub fn path(path: impl Into<String>) -> Self {
+        Self::new(path).expect("route targets must be app-local paths")
+    }
+
+    pub(crate) fn into_path(self) -> String {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteTargetError {
+    Empty,
+    NotAppLocalPath,
+}
+
+fn is_app_local_route_target(path: &str) -> bool {
+    path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
+}
+
+/// Reason a route cannot continue through the normal mount path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteRejection {
+    Unauthorized,
+    Forbidden(&'static str),
+    Blocked(&'static str),
+    NotFound,
+    Server(&'static str),
+    Custom { reason: &'static str },
+}
+
+impl RouteRejection {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self {
+            RouteRejection::Unauthorized => "guard_unauthorized",
+            RouteRejection::Forbidden(_) => "guard_forbidden",
+            RouteRejection::Blocked(_) => "guard_blocked",
+            RouteRejection::NotFound => "guard_not_found",
+            RouteRejection::Server(_) => "guard_server_error",
+            RouteRejection::Custom { reason } => reason,
+        }
+    }
+}
+
+/// Decision returned by a sync route guard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteGuardDecision {
+    Allow,
+    Reject(RouteRejection),
+    Redirect(RouteTarget),
+}
+
+/// Sync guard evaluated before a route component mounts.
+pub trait RouteGuard: 'static {
+    fn decide(&self, ctx: &RouteContext<'_>) -> RouteGuardDecision;
+}
+
+impl<F> RouteGuard for F
+where
+    F: for<'a> Fn(&RouteContext<'a>) -> RouteGuardDecision + 'static,
+{
+    fn decide(&self, ctx: &RouteContext<'_>) -> RouteGuardDecision {
+        self(ctx)
+    }
+}
+
 /// Route-local configuration for component `C`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub struct RouteConfig<C: Component> {
+    pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
     _component: PhantomData<fn() -> C>,
 }
 
 impl<C: Component> RouteConfig<C> {
     pub fn new() -> Self {
         Self {
+            guards: Vec::new(),
             _component: PhantomData,
+        }
+    }
+
+    pub fn guard(mut self, guard: impl RouteGuard) -> Self {
+        self.guards.push(Rc::new(guard));
+        self
+    }
+
+    pub(crate) fn into_runtime(self) -> router::RouteRuntimeConfig {
+        router::RouteRuntimeConfig {
+            guards: self.guards,
         }
     }
 }
@@ -90,6 +194,61 @@ impl<C: Component> RouteConfig<C> {
 impl<C: Component> Default for RouteConfig<C> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod route_config_tests {
+    use super::*;
+
+    struct TestRoute;
+
+    impl Component for TestRoute {
+        const NAME: &'static str = "test-route";
+
+        fn register() {}
+    }
+
+    impl RouteComponent for TestRoute {}
+
+    #[test]
+    fn route_component_default_config_has_no_guards() {
+        let config = TestRoute::config();
+        assert!(config.guards.is_empty());
+    }
+
+    #[test]
+    fn route_config_stores_sync_guards() {
+        let config = RouteConfig::<TestRoute>::new()
+            .guard(|_: &RouteContext<'_>| RouteGuardDecision::Reject(RouteRejection::Blocked("x")));
+        assert_eq!(config.guards.len(), 1);
+
+        let params = HashMap::new();
+        let query = HashMap::new();
+        let ctx = RouteContext {
+            path: "/test",
+            params: &params,
+            query: &query,
+            matched_pattern: Some("/test"),
+        };
+        assert_eq!(
+            config.guards[0].decide(&ctx),
+            RouteGuardDecision::Reject(RouteRejection::Blocked("x"))
+        );
+    }
+
+    #[test]
+    fn route_target_accepts_only_app_local_paths() {
+        assert_eq!(RouteTarget::path("/login").into_path(), "/login");
+        assert_eq!(
+            RouteTarget::new("https://example.com/login"),
+            Err(RouteTargetError::NotAppLocalPath)
+        );
+        assert_eq!(
+            RouteTarget::new("//example.com/login"),
+            Err(RouteTargetError::NotAppLocalPath)
+        );
+        assert_eq!(RouteTarget::new(""), Err(RouteTargetError::Empty));
     }
 }
 
@@ -245,10 +404,10 @@ impl App {
     pub fn route_with<C: Component>(
         mut self,
         pattern: &'static str,
-        _config: RouteConfig<C>,
+        config: RouteConfig<C>,
     ) -> Self {
         C::register();
-        router::register_route(pattern, C::NAME);
+        router::register_route_with_config(pattern, C::NAME, config.into_runtime());
         self.routes.push(pattern);
         self
     }
