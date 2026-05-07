@@ -258,9 +258,6 @@ pub struct RouteContext<'a> {
     pub params: &'a HashMap<String, String>,
     pub query: &'a HashMap<String, String>,
     pub matched_pattern: Option<&'static str>,
-    /// Safe path-only return target for plugins that want to
-    /// preserve navigation intent after handling a rejection.
-    pub fn return_to(&self) -> ReturnTo;
 }
 ```
 
@@ -284,7 +281,7 @@ failures. This is the replacement for auth-shaped `App::login_route`
 and `App::login_redirect_param` methods.
 
 ```rust
-pub trait RouteRejectionHandler: Send + Sync + 'static {
+pub trait RouteRejectionHandler: 'static {
     /// Return `Some(action)` when this handler owns the rejection.
     /// Return `None` to let the next handler decide.
     fn handle(
@@ -299,13 +296,11 @@ pub struct RouteRejectionContext<'a> {
     pub params: &'a HashMap<String, String>,
     pub query: &'a HashMap<String, String>,
     pub matched_pattern: Option<&'static str>,
-    pub return_to: ReturnTo,
 }
 
 #[derive(Clone, Debug)]
 pub enum RouteRejectionAction {
     Redirect(RouteTarget),
-    Paint(RouteErrorSurface),
     AbortNavigation,
 }
 
@@ -317,9 +312,12 @@ impl App {
 }
 ```
 
-Handlers run in plugin install order. The first handler that returns
-`Some(action)` owns the rejection. If no handler accepts it, the core
-fallback paints generic, non-leaking UI for `Unauthorized`,
+Handlers are client-local for the same reason as guards: they often
+capture app state or plugin services backed by `Rc`. They run in plugin
+install order. The first handler that returns `Some(action)` owns the
+rejection. If no handler accepts it, the current fallback aborts the
+navigation and emits a stable failure reason. The later error-surface
+phase adds generic, non-leaking painted UI for `Unauthorized`,
 `Forbidden`, `NotFound`, and `Server`. This makes route rejection
 extensible without making the base `App` permanently carry auth
 concepts.

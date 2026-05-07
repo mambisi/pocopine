@@ -29,7 +29,10 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
-use crate::app::{RouteContext, RouteGuard, RouteGuardDecision};
+use crate::app::{
+    RouteContext, RouteGuard, RouteGuardDecision, RouteRejection, RouteRejectionAction,
+    RouteRejectionContext, RouteRejectionHandler,
+};
 use crate::mount;
 use crate::reactive::trigger_scope;
 use crate::scope::{ComponentState, Scope};
@@ -171,6 +174,8 @@ thread_local! {
     static ROUTE_STATE_RC: OnceCell<Rc<RefCell<RouteState>>> =
         const { OnceCell::new() };
     static INITIALISED: Cell<bool> = const { Cell::new(false) };
+    static ROUTE_REJECTION_HANDLERS: RefCell<Vec<Rc<dyn RouteRejectionHandler>>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
@@ -186,6 +191,12 @@ pub(crate) fn register_route_with_config(
     ROUTES.with(|r| {
         let route = Route::parse(pattern, component_name, config);
         r.borrow_mut().push(route);
+    });
+}
+
+pub(crate) fn set_route_rejection_handlers(handlers: Vec<Rc<dyn RouteRejectionHandler>>) {
+    ROUTE_REJECTION_HANDLERS.with(|registered| {
+        *registered.borrow_mut() = handlers;
     });
 }
 
@@ -311,6 +322,28 @@ fn mount_current() {
                     return;
                 }
                 RouteGuardDecision::Reject(rejection) => {
+                    if let Some(action) = handle_route_rejection(matched, &path, &query, &rejection)
+                    {
+                        match action {
+                            RouteRejectionAction::Redirect(target) => {
+                                if has_route_hooks {
+                                    crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                                        path: path.clone(),
+                                        route_pattern,
+                                        component: Some(matched.component_name),
+                                        reason: "guard_redirected",
+                                        duration_ms: elapsed_since(start_ms),
+                                    });
+                                }
+                                let target = target.into_path();
+                                if target != path {
+                                    navigate(&target);
+                                }
+                                return;
+                            }
+                            RouteRejectionAction::AbortNavigation => {}
+                        }
+                    }
                     if has_route_hooks {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path,
@@ -476,6 +509,28 @@ fn evaluate_guards(
         }
     }
     Some(RouteGuardDecision::Allow)
+}
+
+fn handle_route_rejection(
+    matched: &RouteMatch,
+    path: &str,
+    query: &HashMap<String, String>,
+    rejection: &RouteRejection,
+) -> Option<RouteRejectionAction> {
+    let ctx = RouteRejectionContext {
+        path,
+        params: &matched.params,
+        query,
+        matched_pattern: matched.route_pattern,
+    };
+    ROUTE_REJECTION_HANDLERS.with(|registered| {
+        for handler in registered.borrow().iter() {
+            if let Some(action) = handler.handle(&ctx, rejection) {
+                return Some(action);
+            }
+        }
+        None
+    })
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
@@ -645,5 +700,50 @@ mod tests {
             Some(RouteGuardDecision::Reject(RouteRejection::Unauthorized))
         );
         assert!(!second_guard_called.get());
+    }
+
+    #[test]
+    fn route_rejection_handlers_run_until_action() {
+        let first_called = Rc::new(Cell::new(false));
+        let second_called = Rc::new(Cell::new(false));
+        let first_called_for_handler = Rc::clone(&first_called);
+        let second_called_for_handler = Rc::clone(&second_called);
+        let first: Rc<dyn RouteRejectionHandler> =
+            Rc::new(move |_: &RouteRejectionContext<'_>, _: &RouteRejection| {
+                first_called_for_handler.set(true);
+                None
+            });
+        let second: Rc<dyn RouteRejectionHandler> = Rc::new(
+            move |ctx: &RouteRejectionContext<'_>, rejection: &RouteRejection| {
+                second_called_for_handler.set(true);
+                assert_eq!(ctx.path, "/admin");
+                assert_eq!(ctx.params.get("section"), Some(&"users".to_string()));
+                assert_eq!(ctx.query.get("tab"), Some(&"active".to_string()));
+                assert_eq!(ctx.matched_pattern, Some("/admin/:section"));
+                assert_eq!(rejection, &RouteRejection::Unauthorized);
+                Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
+            },
+        );
+        set_route_rejection_handlers(vec![first, second]);
+
+        let mut params = HashMap::new();
+        params.insert("section".to_string(), "users".to_string());
+        let mut query = HashMap::new();
+        query.insert("tab".to_string(), "active".to_string());
+        let matched = RouteMatch {
+            component_name: "admin",
+            route_pattern: Some("/admin/:section"),
+            params,
+            config: RouteRuntimeConfig::default(),
+        };
+
+        assert_eq!(
+            handle_route_rejection(&matched, "/admin", &query, &RouteRejection::Unauthorized),
+            Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
+        );
+        assert!(first_called.get());
+        assert!(second_called.get());
+
+        set_route_rejection_handlers(Vec::new());
     }
 }

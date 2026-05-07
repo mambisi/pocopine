@@ -33,8 +33,9 @@ pub use pocopine_core::{
     Plugin, PluginValidationError, Plugins, Refs, RegisteredComponent, RegistryError,
     RegistryErrorKind, RouteComponent, RouteConfig, RouteContext, RouteGuard, RouteGuardDecision,
     RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
-    RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
-    Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
+    RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
+    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
     TypedEl, Win,
 };
 #[doc(inline)]
@@ -94,8 +95,9 @@ pub mod prelude {
         Inject, JobError, JobResult, NearestParent, Parent, Permission, Plugin,
         PluginValidationError, Plugins, Principal, Role, RouteComponent, RouteConfig, RouteContext,
         RouteGuard, RouteGuardDecision, RouteNavigationCompleted, RouteNavigationFailed,
-        RouteNavigationStarted, RouteRejection, RouteTarget, RouteTargetError, RwSignal, Scope,
-        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+        RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
+        ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

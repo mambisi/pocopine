@@ -164,6 +164,44 @@ where
     }
 }
 
+/// Context passed to route rejection handlers.
+pub struct RouteRejectionContext<'a> {
+    pub path: &'a str,
+    pub params: &'a HashMap<String, String>,
+    pub query: &'a HashMap<String, String>,
+    pub matched_pattern: Option<&'static str>,
+}
+
+/// Action a route rejection handler can take for a rejected navigation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteRejectionAction {
+    Redirect(RouteTarget),
+    AbortNavigation,
+}
+
+/// App/plugin extension point for rejected route navigations.
+pub trait RouteRejectionHandler: 'static {
+    fn handle(
+        &self,
+        ctx: &RouteRejectionContext<'_>,
+        rejection: &RouteRejection,
+    ) -> Option<RouteRejectionAction>;
+}
+
+impl<F> RouteRejectionHandler for F
+where
+    F: for<'a> Fn(&RouteRejectionContext<'a>, &RouteRejection) -> Option<RouteRejectionAction>
+        + 'static,
+{
+    fn handle(
+        &self,
+        ctx: &RouteRejectionContext<'_>,
+        rejection: &RouteRejection,
+    ) -> Option<RouteRejectionAction> {
+        self(ctx, rejection)
+    }
+}
+
 /// Route-local configuration for component `C`.
 #[derive(Clone)]
 pub struct RouteConfig<C: Component> {
@@ -250,6 +288,44 @@ mod route_config_tests {
         );
         assert_eq!(RouteTarget::new(""), Err(RouteTargetError::Empty));
     }
+
+    #[test]
+    fn app_records_route_rejection_handlers() {
+        let app = App::new().route_rejection_handler(
+            |_: &RouteRejectionContext<'_>, _: &RouteRejection| {
+                Some(RouteRejectionAction::AbortNavigation)
+            },
+        );
+
+        assert_eq!(app.route_rejection_handlers.len(), 1);
+    }
+
+    #[test]
+    fn route_rejection_handler_closure_can_redirect() {
+        let handler = |ctx: &RouteRejectionContext<'_>, rejection: &RouteRejection| {
+            assert_eq!(ctx.path, "/admin");
+            assert_eq!(ctx.params.get("section"), Some(&"users".to_string()));
+            assert_eq!(ctx.query.get("tab"), Some(&"active".to_string()));
+            assert_eq!(ctx.matched_pattern, Some("/admin/:section"));
+            assert_eq!(rejection, &RouteRejection::Unauthorized);
+            Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
+        };
+        let mut params = HashMap::new();
+        params.insert("section".to_string(), "users".to_string());
+        let mut query = HashMap::new();
+        query.insert("tab".to_string(), "active".to_string());
+        let ctx = RouteRejectionContext {
+            path: "/admin",
+            params: &params,
+            query: &query,
+            matched_pattern: Some("/admin/:section"),
+        };
+
+        assert_eq!(
+            handler.handle(&ctx, &RouteRejection::Unauthorized),
+            Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
+        );
+    }
 }
 
 type Hook = Box<dyn FnOnce()>;
@@ -289,6 +365,7 @@ pub struct App {
     routes: Vec<&'static str>,
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
+    route_rejection_handlers: Vec<Rc<dyn RouteRejectionHandler>>,
     plugins: crate::plugin::PluginRegistry,
     installing_plugin: Option<&'static str>,
     devtools: bool,
@@ -412,6 +489,15 @@ impl App {
         self
     }
 
+    /// Install a generic route rejection handler.
+    ///
+    /// Plugins should use this instead of extending the base [`App`]
+    /// with auth-specific methods such as login-route configuration.
+    pub fn route_rejection_handler<H: RouteRejectionHandler>(mut self, handler: H) -> Self {
+        self.route_rejection_handlers.push(Rc::new(handler));
+        self
+    }
+
     /// **Internal — invoked by the `app!{}` macro; do not call
     /// directly.** Records a route without eagerly calling
     /// `C::register()`. Safe only when paired with
@@ -505,6 +591,7 @@ impl App {
             routes,
             before_mount,
             after_mount,
+            route_rejection_handlers,
             plugins,
             installing_plugin: _,
             devtools,
@@ -522,10 +609,12 @@ impl App {
             // app. Drop the previous registry first so failure is
             // observable as "no plugins" rather than "old plugins".
             crate::plugin::activate(crate::plugin::PluginRegistry::default());
+            router::set_route_rejection_handlers(Vec::new());
             crate::plugin::render_plugin_boot_error(&errors);
             return;
         }
         crate::plugin::activate(plugins);
+        router::set_route_rejection_handlers(route_rejection_handlers);
         crate::plugin::emit(crate::plugin::AppBootStarted {
             component_count: components.len(),
             route_count: routes.len(),
