@@ -56,8 +56,8 @@ pub mod timers;
 pub mod watch;
 
 pub use app::{
-    App, AppPlugin, Component, RouteComponent, RouteConfig, RouteContext, RouteGuard,
-    RouteGuardDecision, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+    App, AppPlugin, Component, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface,
+    RouteGuard, RouteGuardDecision, RouteRejection, RouteRejectionAction, RouteRejectionContext,
     RouteRejectionHandler, RouteTarget, RouteTargetError, SubtreeHandle,
 };
 pub use computed::{computed, Computed};

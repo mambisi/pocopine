@@ -176,7 +176,46 @@ pub struct RouteRejectionContext<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteRejectionAction {
     Redirect(RouteTarget),
+    Paint(RouteErrorSurface),
     AbortNavigation,
+}
+
+/// Generic route error surface painted when route control stops.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteErrorSurface {
+    pub title: &'static str,
+    pub message: &'static str,
+}
+
+impl RouteErrorSurface {
+    pub const fn new(title: &'static str, message: &'static str) -> Self {
+        Self { title, message }
+    }
+
+    pub(crate) fn for_rejection(rejection: &RouteRejection) -> Self {
+        match rejection {
+            RouteRejection::Unauthorized => Self::new(
+                "Authentication required",
+                "Sign in to continue to this route.",
+            ),
+            RouteRejection::Forbidden(_) => {
+                Self::new("Access denied", "You do not have access to this route.")
+            }
+            RouteRejection::Blocked(_) => Self::new(
+                "Route unavailable",
+                "This route is not available right now.",
+            ),
+            RouteRejection::NotFound => Self::new("Route not found", "No route matched this URL."),
+            RouteRejection::Server(_) => Self::new(
+                "Route unavailable",
+                "This route could not be loaded right now.",
+            ),
+            RouteRejection::Custom { .. } => Self::new(
+                "Route unavailable",
+                "This route is not available right now.",
+            ),
+        }
+    }
 }
 
 /// App/plugin extension point for rejected route navigations.
@@ -324,6 +363,21 @@ mod route_config_tests {
         assert_eq!(
             handler.handle(&ctx, &RouteRejection::Unauthorized),
             Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
+        );
+    }
+
+    #[test]
+    fn route_error_surface_uses_generic_messages() {
+        assert_eq!(
+            RouteErrorSurface::for_rejection(&RouteRejection::Forbidden("secret policy name")),
+            RouteErrorSurface::new("Access denied", "You do not have access to this route.")
+        );
+        assert_eq!(
+            RouteErrorSurface::for_rejection(&RouteRejection::Server("database exploded")),
+            RouteErrorSurface::new(
+                "Route unavailable",
+                "This route could not be loaded right now."
+            )
         );
     }
 }
