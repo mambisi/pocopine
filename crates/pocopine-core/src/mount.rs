@@ -48,7 +48,7 @@ use web_sys::{DocumentFragment, Element, Event, EventTarget, HtmlTemplateElement
 
 use crate::reactive::{release, EffectId, ScopeId};
 use crate::registry::instantiate;
-use crate::scope::Scope;
+use crate::scope::{Scope, StaticPropKind};
 use crate::slot_scope::SlotScope;
 use crate::templates::{is_registered, template_for};
 
@@ -766,16 +766,29 @@ fn apply_static_props(el: &Element, scope: &Scope) {
             continue;
         }
         let field = normalize_prop_name(&name);
-        if !scope.state.borrow().is_prop(&field) {
-            continue;
-        }
+        let prop_kind = {
+            let state = scope.state.borrow();
+            if !state.is_prop(&field) {
+                continue;
+            }
+            state.static_prop_kind(&field)
+        };
         let raw = a.value();
-        let js = coerce_attr_value(&raw);
+        let js = coerce_static_attr_value(&raw, prop_kind);
         crate::model_runtime::with_scope_write(
             scope.id,
             crate::model_runtime::WriteOrigin::SetupSeed,
             || scope.state.borrow_mut().set(&field, js),
         );
+    }
+}
+
+fn coerce_static_attr_value(raw: &str, kind: StaticPropKind) -> JsValue {
+    match kind {
+        StaticPropKind::String => JsValue::from_str(raw),
+        StaticPropKind::Auto | StaticPropKind::Bool | StaticPropKind::Number => {
+            coerce_attr_value(raw)
+        }
     }
 }
 
