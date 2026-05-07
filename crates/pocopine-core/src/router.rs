@@ -196,6 +196,14 @@ thread_local! {
     /// while the loader was in flight, so the result is dropped
     /// rather than painted (RFC-078 §5.10.5).
     static ROUTE_TOKEN: Cell<u64> = const { Cell::new(0) };
+    /// `App::route_error_component<C>()` recorded component name,
+    /// painted by `paint_route_error` when set instead of the
+    /// built-in HTML banner.
+    static ROUTE_ERROR_COMPONENT: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// `App::not_found_component<C>()` recorded component name,
+    /// mounted by `finish_route_mount` when no route (and no
+    /// wildcard) matched.
+    static NOT_FOUND_COMPONENT: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 /// Monotonic identity of a navigation attempt. Two
@@ -298,6 +306,20 @@ pub(crate) fn set_route_rejection_handlers(handlers: Vec<Rc<dyn RouteRejectionHa
     ROUTE_REJECTION_HANDLERS.with(|registered| {
         *registered.borrow_mut() = handlers;
     });
+}
+
+/// Configure the component the router mounts when a rejection
+/// reaches the fallback. `None` reverts to the built-in
+/// `RouteErrorSurface` HTML banner. Called from `App::run`.
+pub(crate) fn set_route_error_component(name: Option<&'static str>) {
+    ROUTE_ERROR_COMPONENT.with(|cell| cell.set(name));
+}
+
+/// Configure the component the router mounts when no route
+/// matches. `None` keeps the prior behaviour (route-state update
+/// only). Called from `App::run`.
+pub(crate) fn set_not_found_component(name: Option<&'static str>) {
+    NOT_FOUND_COMPONENT.with(|cell| cell.set(name));
 }
 
 /// Tell the router where to mount pages. Called from the mount when
@@ -622,6 +644,22 @@ fn finish_route_mount(
     crate::devtools::hooks::fire_route_change(path, params);
 
     let Some(name) = component_name else {
+        // No registered route matched. If the app configured a
+        // dedicated 404 component (the lower-friction alternative
+        // to a `*` wildcard route), mount it here. Otherwise the
+        // outlet is left in its prior state — guards / loader
+        // never ran because the route doesn't exist.
+        if let Some(fallback) = NOT_FOUND_COMPONENT.with(|cell| cell.get()) {
+            if mount_component_into_outlet(fallback) && has_route_hooks {
+                crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
+                    path: path.to_string(),
+                    route_pattern: None,
+                    component: Some(fallback),
+                    duration_ms: elapsed_since(start_ms),
+                });
+                return;
+            }
+        }
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
                 path: path.to_string(),
@@ -843,6 +881,22 @@ fn handle_route_rejection(
 }
 
 fn paint_route_error_surface(surface: &RouteErrorSurface) {
+    // App-configured override wins. Mount the user's component
+    // through the normal route-mount path so it has a full
+    // `#[component]` surface (template, handlers, lifecycle).
+    if let Some(name) = ROUTE_ERROR_COMPONENT.with(|cell| cell.get()) {
+        if mount_component_into_outlet(name) {
+            return;
+        }
+    }
+    paint_default_route_error_surface(surface);
+}
+
+/// Build the built-in minimal HTML banner. Used when
+/// [`ROUTE_ERROR_COMPONENT`] hasn't been configured (or its mount
+/// failed), so the framework still surfaces *something* on a
+/// route rejection rather than leaving stale UI on screen.
+fn paint_default_route_error_surface(surface: &RouteErrorSurface) {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
     let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
@@ -874,6 +928,30 @@ fn paint_route_error_surface(surface: &RouteErrorSurface) {
     let _ = root.append_child(&title);
     let _ = root.append_child(&message);
     outlet.replace_children_with_node_1(root.as_ref());
+}
+
+/// Mount a registered component by name into the current outlet,
+/// replacing whatever was there. Returns `true` when the mount
+/// succeeded; `false` means the platform/document/outlet wasn't
+/// available or the element couldn't be created — the caller
+/// should fall back to whatever its non-override path is.
+fn mount_component_into_outlet(name: &'static str) -> bool {
+    let Some(win) = web_sys::window() else {
+        return false;
+    };
+    let Some(doc) = win.document() else {
+        return false;
+    };
+    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
+        return false;
+    };
+    let Ok(el) = doc.create_element(name) else {
+        return false;
+    };
+    outlet.replace_children_with_node_1(el.as_ref());
+    mount::mount_child_component(&el, name);
+    mount::finalize_compiled_subtree(&el);
+    true
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
