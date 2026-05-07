@@ -21,12 +21,16 @@ pub struct Home {}
 #[handlers]
 impl Home {}
 
+impl RouteComponent for Home {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct About {}
 
 #[handlers]
 impl About {}
+
+impl RouteComponent for About {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component]
@@ -46,12 +50,16 @@ impl BlogPost {
     }
 }
 
+impl RouteComponent for BlogPost {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct NotFound {}
 
 #[handlers]
 impl NotFound {}
+
+impl RouteComponent for NotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {

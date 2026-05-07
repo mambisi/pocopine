@@ -9,3 +9,5 @@ pub struct NotFound {}
 
 #[handlers]
 impl NotFound {}
+
+impl RouteComponent for NotFound {}

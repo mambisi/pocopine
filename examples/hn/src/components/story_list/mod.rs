@@ -93,6 +93,8 @@ impl StoryList {
     }
 }
 
+impl RouteComponent for StoryList {}
+
 fn story_to_view(s: Story) -> StoryView {
     let url = s.url.clone().unwrap_or_default();
     let external = !url.is_empty();

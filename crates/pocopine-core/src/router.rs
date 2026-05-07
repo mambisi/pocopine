@@ -816,9 +816,18 @@ fn finish_route_mount(
 /// Run the rejection chain for a guard- or loader-produced
 /// `RouteRejection` and apply the resulting action (Redirect /
 /// Paint / AbortNavigation). Used by both the synchronous guard
-/// path and the asynchronous loader-error path; `source`
-/// distinguishes the two so emitted events carry stable
-/// closed-set reasons (`guard_*` vs `loader_*`).
+/// path and the asynchronous loader-error path.
+///
+/// Per RFC-078 §5.10.7 the emitted `RouteNavigationFailed` event
+/// carries the **rejection's** stable identifier — derived from
+/// the variant + `source` — *regardless* of which action the
+/// installed handler chose. A loader `Unauthorized` rejection
+/// emits `loader_unauthorized` whether the handler painted a
+/// surface, redirected to `/login`, or aborted; the action shape
+/// is irrelevant to the closed-set reason taxonomy. Only the
+/// synchronous `RouteGuardDecision::Redirect` path emits
+/// `guard_redirected`, since that's a guard outcome with no
+/// underlying rejection variant to reference.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_route_rejection(
     matched: &RouteMatch,
@@ -833,49 +842,26 @@ fn dispatch_route_rejection(
     let action = handle_route_rejection(matched, path, query, rejection).unwrap_or_else(|| {
         RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(rejection))
     });
-    let redirect_reason = match source {
-        RejectionSource::Guard => "guard_redirected",
-        RejectionSource::Loader => "loader_redirected",
-    };
+    if has_route_hooks {
+        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+            path: path.to_string(),
+            route_pattern,
+            component: Some(matched.component_name),
+            reason: rejection.reason(source),
+            duration_ms: elapsed_since(start_ms),
+        });
+    }
     match action {
         RouteRejectionAction::Redirect(target) => {
-            if has_route_hooks {
-                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                    path: path.to_string(),
-                    route_pattern,
-                    component: Some(matched.component_name),
-                    reason: redirect_reason,
-                    duration_ms: elapsed_since(start_ms),
-                });
-            }
             let target = target.into_path();
             if target != path {
                 navigate(&target);
             }
         }
         RouteRejectionAction::Paint(surface) => {
-            if has_route_hooks {
-                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                    path: path.to_string(),
-                    route_pattern,
-                    component: Some(matched.component_name),
-                    reason: rejection.reason(source),
-                    duration_ms: elapsed_since(start_ms),
-                });
-            }
             paint_route_error_surface(&surface);
         }
-        RouteRejectionAction::AbortNavigation => {
-            if has_route_hooks {
-                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                    path: path.to_string(),
-                    route_pattern,
-                    component: Some(matched.component_name),
-                    reason: rejection.reason(source),
-                    duration_ms: elapsed_since(start_ms),
-                });
-            }
-        }
+        RouteRejectionAction::AbortNavigation => {}
     }
 }
 
