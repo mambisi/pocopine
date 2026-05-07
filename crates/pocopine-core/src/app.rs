@@ -761,10 +761,12 @@ impl App {
     }
 
     /// Register a component. Delegates to the trait method and records the
-    /// runtime name for introspection.
+    /// runtime name for introspection. Idempotent — calling
+    /// `register::<C>` after `route::<C>(...)` (or vice versa) leaves
+    /// `C::NAME` in the manifest exactly once.
     pub fn register<C: Component>(mut self) -> Self {
         C::register();
-        self.components.push(C::NAME);
+        self.record_component_name(C::NAME);
         self
     }
 
@@ -843,6 +845,7 @@ impl App {
         C::register();
         router::register_route(pattern, C::NAME);
         self.routes.push(pattern);
+        self.record_component_name(C::NAME);
         self
     }
 
@@ -870,7 +873,19 @@ impl App {
         C::register();
         router::register_route_with_config(pattern, C::NAME, config.into_runtime());
         self.routes.push(pattern);
+        self.record_component_name(C::NAME);
         self
+    }
+
+    /// Push `name` into the component manifest if not already
+    /// present. Routes silently call this so route-only direct-
+    /// builder apps (`App::new().route::<C>(...).run()`) report
+    /// the right `component_count` in `AppBootStarted` and surface
+    /// the right names through `App::registered_components()`.
+    fn record_component_name(&mut self, name: &'static str) {
+        if !self.components.contains(&name) {
+            self.components.push(name);
+        }
     }
 
     /// Install a generic route rejection handler.
@@ -952,7 +967,7 @@ impl App {
     /// component for mount.
     #[doc(hidden)]
     pub fn component_static(mut self, name: &'static str) -> Self {
-        self.components.push(name);
+        self.record_component_name(name);
         self
     }
 

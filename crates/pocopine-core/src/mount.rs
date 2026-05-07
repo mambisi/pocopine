@@ -193,21 +193,35 @@ pub fn fire_mount_post_order(el: &Element, scope_id: ScopeId) {
     let Some(scope) = Scope::find(scope_id) else {
         return;
     };
-    fire_component_mounted_plugin_hooks(el, scope_id);
     let has_mount = scope.state.borrow().has_on_mount();
-    if !has_mount {
-        return;
+    if has_mount {
+        let ctx = crate::lifecycle::LifecycleContext::__new(
+            el,
+            scope_id,
+            crate::lifecycle::LifecyclePhase::Mount,
+        );
+        crate::scope::with_current_scope_id(scope_id, || {
+            scope.state.borrow_mut().mount(ctx);
+        });
+        crate::scope::invalidate_field_cache(scope_id);
+        crate::reactive::trigger_scope(scope_id);
     }
-    let ctx = crate::lifecycle::LifecycleContext::__new(
-        el,
-        scope_id,
-        crate::lifecycle::LifecyclePhase::Mount,
-    );
-    crate::scope::with_current_scope_id(scope_id, || {
-        scope.state.borrow_mut().mount(ctx);
-    });
-    crate::scope::invalidate_field_cache(scope_id);
-    crate::reactive::trigger_scope(scope_id);
+    // Emit the plugin `ComponentMounted` event AFTER the user's
+    // `on_mount` body and the post-mount field-cache invalidation
+    // / trigger sweep. Two reasons:
+    //
+    // 1. `duration_ms` should reflect the full user-visible cost
+    //    of mounting, including any work the component does in its
+    //    own `on_mount` (DB lookups, deferred rendering, focus
+    //    side-effects). Emitting first would silently exclude that
+    //    work from observability metrics.
+    // 2. Observers reading `ComponentMounted` should be able to
+    //    assume the component is fully ready — its lifecycle has
+    //    actually run, not just "the framework is about to call it".
+    //    Plugins that schedule follow-up work for a mounted scope
+    //    (analytics tags, timer registration, etc.) need this
+    //    ordering to read coherent state.
+    fire_component_mounted_plugin_hooks(el, scope_id);
 }
 
 /// Schedule the component-level `on_ready` lifecycle hook for

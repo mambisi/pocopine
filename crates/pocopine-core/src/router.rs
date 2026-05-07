@@ -244,12 +244,11 @@ fn is_token_current(token: RouteToken) -> bool {
     ROUTE_TOKEN.with(|cell| cell.get() == token.0)
 }
 
-/// Public companion to [`is_token_current`] for use by
+/// Crate-internal companion to [`is_token_current`] used by
 /// [`crate::app::LoaderContext::is_navigation_active`]. Loader
 /// closures don't construct `RouteToken` directly; the router
 /// stamps the value into their context.
-#[doc(hidden)]
-pub fn route_token_is_current(token: RouteToken) -> bool {
+pub(crate) fn route_token_is_current(token: RouteToken) -> bool {
     is_token_current(token)
 }
 
@@ -449,6 +448,16 @@ fn clear_outlet() {
 
 fn mount_current() {
     ensure_route_scope();
+
+    // Defense in depth: drop any leftover loader data from a
+    // prior navigation that didn't reach `finish_route_mount`
+    // (early `missing_window` / `missing_outlet` returns, panics
+    // mid-mount, etc). The success path also clears in
+    // `finish_route_mount` after setup; clearing both here and
+    // there makes "every navigation starts with an empty slot"
+    // an enforced invariant rather than a contract that depends
+    // on every code path remembering to clear.
+    clear_pending_loader_data();
 
     // Mark this navigation. Any loader spawned by an earlier
     // `mount_current` captured the previous token at start; when it
