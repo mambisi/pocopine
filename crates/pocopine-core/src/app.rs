@@ -665,6 +665,28 @@ mod route_config_tests {
     }
 
     #[test]
+    fn app_records_route_error_component() {
+        let app = App::new().route_error_component::<TestRoute>();
+        assert_eq!(app.route_error_component, Some(TestRoute::NAME));
+    }
+
+    #[test]
+    fn app_records_not_found_component() {
+        let app = App::new().not_found_component::<TestRoute>();
+        assert_eq!(app.not_found_component, Some(TestRoute::NAME));
+    }
+
+    #[test]
+    fn app_overrides_default_to_none_for_route_error_and_not_found() {
+        // Without configuration both slots are `None` so the router
+        // falls back to its built-in surfaces (HTML banner for the
+        // error, no-op for the 404).
+        let app = App::new();
+        assert!(app.route_error_component.is_none());
+        assert!(app.not_found_component.is_none());
+    }
+
+    #[test]
     fn route_error_surface_uses_generic_messages() {
         assert_eq!(
             RouteErrorSurface::for_rejection(&RouteRejection::Forbidden("secret policy name")),
@@ -718,6 +740,16 @@ pub struct App {
     before_mount: Vec<Hook>,
     after_mount: Vec<Hook>,
     route_rejection_handlers: Vec<Rc<dyn RouteRejectionHandler>>,
+    /// Component painted when a [`RouteRejection`] reaches the
+    /// fallback (no rejection handler returned `Some(action)`).
+    /// `None` falls back to the built-in
+    /// [`paint_route_error_surface`](router::paint_route_error_surface)
+    /// HTML banner.
+    route_error_component: Option<&'static str>,
+    /// Component painted when no route matches the URL and no
+    /// wildcard route is registered. `None` keeps the prior
+    /// behaviour (route-state updates, no component paint).
+    not_found_component: Option<&'static str>,
     plugins: crate::plugin::PluginRegistry,
     installing_plugin: Option<&'static str>,
     devtools: bool,
@@ -850,6 +882,47 @@ impl App {
         self
     }
 
+    /// Configure the component the router mounts when a
+    /// [`RouteRejection`] reaches the fallback (no installed
+    /// [`RouteRejectionHandler`] returned `Some(action)`).
+    ///
+    /// Without this configuration the router paints the built-in
+    /// minimal [`RouteErrorSurface`] HTML banner — intentionally
+    /// plain so production apps notice and override it. Setting a
+    /// component lets the app paint branded error UI; the
+    /// component is mounted into the outlet just like a normal
+    /// route component, so it can use the full template / handler
+    /// surface.
+    ///
+    /// Apps that want to read the rejection variant inside the
+    /// error component can do so by registering a
+    /// [`RouteRejectionHandler`] that captures the rejection into
+    /// reactive state before falling through; the router does not
+    /// pass rejection metadata into the error component
+    /// implicitly (closed-set reasons only, per RFC-078 §5.10.7).
+    pub fn route_error_component<C: Component>(mut self) -> Self {
+        C::register();
+        self.route_error_component = Some(C::NAME);
+        self
+    }
+
+    /// Configure the component the router mounts when no
+    /// registered route matches the URL **and** no `*` wildcard
+    /// route is registered. With a wildcard route in place the
+    /// wildcard wins (its guards / loader / config still run);
+    /// this slot is the lower-friction alternative for apps that
+    /// don't want to dedicate a routing slot to 404s.
+    ///
+    /// Without this configuration unmatched URLs leave the outlet
+    /// in its previous state — the route-state is updated and any
+    /// `$route.*` bindings re-evaluate, but no new component
+    /// mounts.
+    pub fn not_found_component<C: Component>(mut self) -> Self {
+        C::register();
+        self.not_found_component = Some(C::NAME);
+        self
+    }
+
     /// **Internal — invoked by the `app!{}` macro; do not call
     /// directly.** Records a route without eagerly calling
     /// `C::register()`. Safe only when paired with
@@ -944,6 +1017,8 @@ impl App {
             before_mount,
             after_mount,
             route_rejection_handlers,
+            route_error_component,
+            not_found_component,
             plugins,
             installing_plugin: _,
             devtools,
@@ -962,11 +1037,15 @@ impl App {
             // observable as "no plugins" rather than "old plugins".
             crate::plugin::activate(crate::plugin::PluginRegistry::default());
             router::set_route_rejection_handlers(Vec::new());
+            router::set_route_error_component(None);
+            router::set_not_found_component(None);
             crate::plugin::render_plugin_boot_error(&errors);
             return;
         }
         crate::plugin::activate(plugins);
         router::set_route_rejection_handlers(route_rejection_handlers);
+        router::set_route_error_component(route_error_component);
+        router::set_not_found_component(not_found_component);
         crate::plugin::emit(crate::plugin::AppBootStarted {
             component_count: components.len(),
             route_count: routes.len(),
