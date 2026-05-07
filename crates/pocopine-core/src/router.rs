@@ -30,12 +30,12 @@ use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
 use crate::app::{
-    loader_from_any, Loader, LoaderContext, RouteContext, RouteErrorSurface, RouteGuard,
+    Loader, LoaderContext, RejectionSource, RouteContext, RouteErrorSurface, RouteGuard,
     RouteGuardDecision, RouteLoader, RouteRejection, RouteRejectionAction, RouteRejectionContext,
     RouteRejectionHandler,
 };
 use crate::mount;
-use crate::reactive::trigger_scope;
+use crate::reactive::{trigger_scope, ScopeId};
 use crate::scope::{ComponentState, Scope};
 
 mod return_to;
@@ -184,12 +184,22 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
     /// Loader-produced data sitting between "router resolved the
     /// loader" and "the just-mounted component reads it via
-    /// `Loader<T>` extractor". Sequential by construction —
-    /// the router never has more than one route mounting at a time.
-    /// The slot is taken by the first matching extractor; mismatched
-    /// or absent reads panic.
-    static PENDING_LOADER_DATA: RefCell<Option<Box<dyn std::any::Any>>> =
+    /// `Loader<T>` extractor". The router populates this slot once
+    /// per navigation; the first lifecycle hook to extract a
+    /// `Loader<T>` migrates the value into a per-scope slot
+    /// (`LOADER_SLOTS`) keyed by the mounting component's
+    /// [`ScopeId`]. Once migrated the data is shared by `Rc` and
+    /// stays alive for the rest of the route's mount. Cleared on
+    /// every `mount_current` entry as defense-in-depth.
+    static PENDING_LOADER_DATA: RefCell<Option<Rc<dyn std::any::Any>>> =
         const { RefCell::new(None) };
+    /// Per-mount loader-data slots — one entry per route component
+    /// that consumed a loader result. Keyed by `ScopeId` so the
+    /// slot survives every lifecycle hook on the component (setup,
+    /// mount, ready, unmount) and is dropped when the scope tears
+    /// down via [`release_loader_slot`].
+    static LOADER_SLOTS: RefCell<std::collections::HashMap<ScopeId, Rc<dyn std::any::Any>>> =
+        RefCell::new(std::collections::HashMap::new());
     /// Monotonic id incremented at every `mount_current`. Loaders
     /// capture the value at spawn and compare against the current
     /// value when they resolve; mismatch means navigation moved on
@@ -253,22 +263,50 @@ pub(crate) fn route_token_is_current(token: RouteToken) -> bool {
 }
 
 /// Stash a router-produced loader result for the next component
-/// mount. The pending slot is overwritten if a previous result
-/// was never consumed (e.g. mount aborted before setup ran).
+/// mount. Stored as `Rc` so the value can survive multiple
+/// extractor reads during the component's mount. The pending slot
+/// is overwritten if a previous result was never consumed (e.g.
+/// mount aborted before setup ran); the per-scope `LOADER_SLOTS`
+/// entries are independent and live until each scope's teardown.
 pub(crate) fn put_pending_loader_data(data: Box<dyn std::any::Any>) {
-    PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(data));
+    let rc: Rc<dyn std::any::Any> = Rc::from(data);
+    PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(rc));
 }
 
-/// Take and downcast the pending loader data. Returns `None` when
-/// the slot is empty (component mounted via `mount_subtree`,
-/// not via the router); panics when a value is present but its
-/// type doesn't match `T` — that indicates a mismatch between
+/// Resolve loader data for the lifecycle hook running under
+/// `scope_id`. Returns `None` when no loader populated a slot for
+/// this mount (component mounted via `mount_subtree`, route had no
+/// loader). Subsequent calls within the same mount return the
+/// **same** data — RFC §5.4's per-mount lifetime contract — by
+/// migrating the one-shot pending value into a per-scope `Rc`
+/// slot on the first read.
+///
+/// Panics when stored loader data exists but its type doesn't
+/// match `T`. That indicates a mismatch between
 /// `RouteConfig::loader(...)` and the component's `Loader<T>`
 /// extractor and is always a programmer bug.
-pub(crate) fn take_pending_loader_data<T: 'static>() -> Option<Loader<T>> {
-    let boxed = PENDING_LOADER_DATA.with(|cell| cell.borrow_mut().take())?;
-    match loader_from_any::<T>(boxed) {
-        Ok(loader) => Some(loader),
+pub(crate) fn take_pending_loader_data<T: 'static>(scope_id: ScopeId) -> Option<Loader<T>> {
+    // Per-scope slot wins: any subsequent extractor on the same
+    // scope clones the existing `Rc` rather than racing the
+    // pending one-shot.
+    if let Some(rc) = LOADER_SLOTS.with(|map| map.borrow().get(&scope_id).cloned()) {
+        return Some(loader_from_rc::<T>(rc));
+    }
+
+    // Otherwise migrate from the one-shot pending slot. The first
+    // lifecycle hook (typically `on_setup`) hits this branch; any
+    // later hook on the same scope hits the per-scope branch
+    // above.
+    let pending = PENDING_LOADER_DATA.with(|cell| cell.borrow_mut().take())?;
+    LOADER_SLOTS.with(|map| {
+        map.borrow_mut().insert(scope_id, pending.clone());
+    });
+    Some(loader_from_rc::<T>(pending))
+}
+
+fn loader_from_rc<T: 'static>(rc: Rc<dyn std::any::Any>) -> Loader<T> {
+    match Rc::downcast::<T>(rc) {
+        Ok(data) => Loader::__from_rc(data),
         Err(_) => panic!(
             "Loader<{}>: pending loader data did not match the extractor's \
              type. Check the loader closure registered on `RouteConfig::loader` \
@@ -280,9 +318,21 @@ pub(crate) fn take_pending_loader_data<T: 'static>() -> Option<Loader<T>> {
 
 /// Drop any pending loader data. Called when the router decides
 /// not to mount (rejection, navigation aborted) so the slot
-/// doesn't leak across navigations.
+/// doesn't leak across navigations. Does **not** affect per-scope
+/// slots — those are managed by [`release_loader_slot`] when each
+/// scope tears down.
 pub(crate) fn clear_pending_loader_data() {
     PENDING_LOADER_DATA.with(|cell| cell.borrow_mut().take());
+}
+
+/// Drop the per-scope loader slot for `scope_id`. Called from
+/// `mount.rs` when a route component's scope is being torn down,
+/// so the loader data the component held lives for exactly the
+/// component's mount and no longer.
+pub fn release_loader_slot(scope_id: ScopeId) {
+    LOADER_SLOTS.with(|map| {
+        map.borrow_mut().remove(&scope_id);
+    });
 }
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
@@ -530,6 +580,7 @@ fn mount_current() {
                         &query,
                         route_pattern,
                         &rejection,
+                        RejectionSource::Guard,
                         has_route_hooks,
                         start_ms,
                     );
@@ -584,6 +635,10 @@ fn mount_current() {
                         // Loader-produced rejection: dispatch through
                         // the same chain guard rejections use so a
                         // single auth handler covers both surfaces.
+                        // The rejection itself is identical, but the
+                        // `RouteNavigationFailed` event carries a
+                        // loader-side reason ("loader_unauthorized"
+                        // etc.) so observability can split the two.
                         let rejection = err.to_rejection();
                         clear_pending_loader_data();
                         dispatch_route_rejection(
@@ -592,6 +647,7 @@ fn mount_current() {
                             &query_for_async,
                             route_pattern,
                             &rejection,
+                            RejectionSource::Loader,
                             has_route_hooks,
                             start_ms,
                         );
@@ -760,19 +816,27 @@ fn finish_route_mount(
 /// Run the rejection chain for a guard- or loader-produced
 /// `RouteRejection` and apply the resulting action (Redirect /
 /// Paint / AbortNavigation). Used by both the synchronous guard
-/// path and the asynchronous loader-error path.
+/// path and the asynchronous loader-error path; `source`
+/// distinguishes the two so emitted events carry stable
+/// closed-set reasons (`guard_*` vs `loader_*`).
+#[allow(clippy::too_many_arguments)]
 fn dispatch_route_rejection(
     matched: &RouteMatch,
     path: &str,
     query: &HashMap<String, String>,
     route_pattern: Option<&'static str>,
     rejection: &RouteRejection,
+    source: RejectionSource,
     has_route_hooks: bool,
     start_ms: Option<f64>,
 ) {
     let action = handle_route_rejection(matched, path, query, rejection).unwrap_or_else(|| {
         RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(rejection))
     });
+    let redirect_reason = match source {
+        RejectionSource::Guard => "guard_redirected",
+        RejectionSource::Loader => "loader_redirected",
+    };
     match action {
         RouteRejectionAction::Redirect(target) => {
             if has_route_hooks {
@@ -780,7 +844,7 @@ fn dispatch_route_rejection(
                     path: path.to_string(),
                     route_pattern,
                     component: Some(matched.component_name),
-                    reason: "guard_redirected",
+                    reason: redirect_reason,
                     duration_ms: elapsed_since(start_ms),
                 });
             }
@@ -795,7 +859,7 @@ fn dispatch_route_rejection(
                     path: path.to_string(),
                     route_pattern,
                     component: Some(matched.component_name),
-                    reason: rejection.reason(),
+                    reason: rejection.reason(source),
                     duration_ms: elapsed_since(start_ms),
                 });
             }
@@ -807,7 +871,7 @@ fn dispatch_route_rejection(
                     path: path.to_string(),
                     route_pattern,
                     component: Some(matched.component_name),
-                    reason: rejection.reason(),
+                    reason: rejection.reason(source),
                     duration_ms: elapsed_since(start_ms),
                 });
             }

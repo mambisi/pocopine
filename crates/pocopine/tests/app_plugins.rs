@@ -34,6 +34,8 @@ struct AppPluginDirectHome {}
 #[handlers]
 impl AppPluginDirectHome {}
 
+impl RouteComponent for AppPluginDirectHome {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "app-plugin-macro-home",
@@ -43,6 +45,8 @@ struct AppPluginMacroHome {}
 
 #[handlers]
 impl AppPluginMacroHome {}
+
+impl RouteComponent for AppPluginMacroHome {}
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(

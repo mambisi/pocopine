@@ -40,6 +40,8 @@ struct PapHome {}
 #[handlers]
 impl PapHome {}
 
+impl pocopine::RouteComponent for PapHome {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "pap-subtree",
