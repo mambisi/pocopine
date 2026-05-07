@@ -105,7 +105,7 @@ async fn request_event_middleware(mut request: Request, next: Next) -> Response 
     }
 
     let response = next.run(request).await;
-    let duration_ms = elapsed_ms(started);
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
     let status = response.status().as_u16();
 
     if status >= 500 {
@@ -131,11 +131,6 @@ async fn request_event_middleware(mut request: Request, next: Next) -> Response 
     }
 
     response
-}
-
-fn elapsed_ms(started: Instant) -> f64 {
-    let elapsed = started.elapsed();
-    elapsed.as_secs_f64() * 1_000.0
 }
 
 fn classify_5xx(status: u16) -> &'static str {
