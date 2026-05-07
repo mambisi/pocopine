@@ -35,8 +35,8 @@ pub use pocopine_core::{
     RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
     RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
+    RouteTargetError, RouteToken, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
+    Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
     TypedEl, Win,
 };
 #[doc(inline)]

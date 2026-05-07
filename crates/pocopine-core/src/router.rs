@@ -190,6 +190,59 @@ thread_local! {
     /// or absent reads panic.
     static PENDING_LOADER_DATA: RefCell<Option<Box<dyn std::any::Any>>> =
         const { RefCell::new(None) };
+    /// Monotonic id incremented at every `mount_current`. Loaders
+    /// capture the value at spawn and compare against the current
+    /// value when they resolve; mismatch means navigation moved on
+    /// while the loader was in flight, so the result is dropped
+    /// rather than painted (RFC-078 §5.10.5).
+    static ROUTE_TOKEN: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Monotonic identity of a navigation attempt. Two
+/// [`RouteToken`] values that compare equal denote the same
+/// navigation; any difference means navigation moved on between
+/// capture and check, and any in-flight loader's result must be
+/// discarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteToken(u64);
+
+impl RouteToken {
+    /// Capture the router's currently active navigation token.
+    /// Loaders typically don't need to call this directly — the
+    /// async spawn already captures the current token at start
+    /// time; [`LoaderContext::is_navigation_active`] is the
+    /// supported way to check from loader code.
+    pub fn current() -> Self {
+        ROUTE_TOKEN.with(|cell| RouteToken(cell.get()))
+    }
+}
+
+/// Internal — bumps the router's monotonic token. Called once at
+/// the top of every `mount_current` so any in-flight loader
+/// captured under the previous token can recognise it has been
+/// superseded.
+fn bump_route_token() -> RouteToken {
+    ROUTE_TOKEN.with(|cell| {
+        let next = cell.get().wrapping_add(1);
+        cell.set(next);
+        RouteToken(next)
+    })
+}
+
+/// Internal — true when `token` is still the router's current
+/// navigation. Used by spawned loaders to short-circuit and by the
+/// post-resolve check to drop stale results.
+fn is_token_current(token: RouteToken) -> bool {
+    ROUTE_TOKEN.with(|cell| cell.get() == token.0)
+}
+
+/// Public companion to [`is_token_current`] for use by
+/// [`crate::app::LoaderContext::is_navigation_active`]. Loader
+/// closures don't construct `RouteToken` directly; the router
+/// stamps the value into their context.
+#[doc(hidden)]
+pub fn route_token_is_current(token: RouteToken) -> bool {
+    is_token_current(token)
 }
 
 /// Stash a router-produced loader result for the next component
@@ -375,6 +428,14 @@ fn clear_outlet() {
 fn mount_current() {
     ensure_route_scope();
 
+    // Mark this navigation. Any loader spawned by an earlier
+    // `mount_current` captured the previous token at start; when it
+    // resolves it'll find this new value and drop its result. The
+    // token bump is the cheapest possible signal — actual abort of
+    // an in-flight `fetch::call` will land with Slice G when the
+    // middleware chain plumbs `AbortSignal` end-to-end.
+    let nav_token = bump_route_token();
+
     let has_route_hooks = crate::plugin::has_route_navigation_hooks();
     let start_ms = has_route_hooks.then(js_sys::Date::now);
     let Some(win) = web_sys::window() else {
@@ -457,6 +518,7 @@ fn mount_current() {
                 params: params.clone(),
                 query: query.clone(),
                 matched_pattern: route_pattern,
+                navigation_token: nav_token,
             };
             update_route_state(&path, &params, query.clone());
             let matched_for_async = matched.clone();
@@ -465,6 +527,16 @@ fn mount_current() {
             let query_for_async = query.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let result = loader.run(loader_ctx).await;
+                if !is_token_current(nav_token) {
+                    // Navigation moved on while the loader was in
+                    // flight. Drop the result rather than paint
+                    // stale data over whatever the new navigation
+                    // mounted; emitting a `RouteNavigationFailed`
+                    // event would be misleading because the new
+                    // navigation is healthy and already running.
+                    clear_pending_loader_data();
+                    return;
+                }
                 match result {
                     Ok(data) => {
                         put_pending_loader_data(data);
@@ -1018,5 +1090,37 @@ mod tests {
         assert!(second_called.get());
 
         set_route_rejection_handlers(Vec::new());
+    }
+
+    #[test]
+    fn route_token_advances_on_each_bump() {
+        let before = RouteToken::current();
+        let bumped = bump_route_token();
+        assert_ne!(before, bumped);
+        assert!(is_token_current(bumped));
+        assert!(!is_token_current(before));
+    }
+
+    #[test]
+    fn route_token_is_current_only_for_latest() {
+        // Two consecutive navigations: each bump produces a fresh
+        // token, and only the latest is "current". The earlier
+        // token's loader (if any) finds itself stale on resolve.
+        let first = bump_route_token();
+        assert!(is_token_current(first));
+        let second = bump_route_token();
+        assert_ne!(first, second);
+        assert!(is_token_current(second));
+        assert!(!is_token_current(first));
+    }
+
+    #[test]
+    fn route_token_is_copy_and_eq() {
+        let t = bump_route_token();
+        let copy = t;
+        assert_eq!(t, copy);
+        // PartialEq is value-based, not pointer-based.
+        let again = RouteToken::current();
+        assert_eq!(t, again);
     }
 }

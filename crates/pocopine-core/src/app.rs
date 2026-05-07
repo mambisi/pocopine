@@ -257,12 +257,31 @@ where
 /// future can outlive the synchronous call that constructed the
 /// context. The router clones the matched route's `params` /
 /// `query` map at navigation time and passes the result through.
+///
+/// `navigation_token` records the [`RouteToken`] that was current
+/// when the loader started; long-running loaders can poll
+/// [`Self::is_navigation_active`] to short-circuit work once the
+/// router has moved on (RFC-078 §5.10.5). The router itself drops
+/// any result returned under a stale token, so honoring this is
+/// only an optimisation — correctness of the painted view does
+/// not depend on the loader checking.
 #[derive(Clone, Debug)]
 pub struct LoaderContext {
     pub path: String,
     pub params: HashMap<String, String>,
     pub query: HashMap<String, String>,
     pub matched_pattern: Option<&'static str>,
+    pub navigation_token: crate::router::RouteToken,
+}
+
+impl LoaderContext {
+    /// `true` when the navigation that started this loader is
+    /// still the router's current one. Returning `false` means the
+    /// user navigated away while the loader was in flight; the
+    /// loader can early-exit (its result will be dropped anyway).
+    pub fn is_navigation_active(&self) -> bool {
+        crate::router::route_token_is_current(self.navigation_token)
+    }
 }
 
 /// Failure modes a route loader can return.
