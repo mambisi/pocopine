@@ -301,7 +301,17 @@ pub struct RouteRejectionContext<'a> {
 #[derive(Clone, Debug)]
 pub enum RouteRejectionAction {
     Redirect(RouteTarget),
+    Paint(RouteErrorSurface),
     AbortNavigation,
+}
+
+pub struct RouteErrorSurface {
+    pub title: &'static str,
+    pub message: &'static str,
+}
+
+impl RouteErrorSurface {
+    pub const fn new(title: &'static str, message: &'static str) -> Self;
 }
 
 impl App {
@@ -315,12 +325,11 @@ impl App {
 Handlers are client-local for the same reason as guards: they often
 capture app state or plugin services backed by `Rc`. They run in plugin
 install order. The first handler that returns `Some(action)` owns the
-rejection. If no handler accepts it, the current fallback aborts the
-navigation and emits a stable failure reason. The later error-surface
-phase adds generic, non-leaking painted UI for `Unauthorized`,
-`Forbidden`, `NotFound`, and `Server`. This makes route rejection
-extensible without making the base `App` permanently carry auth
-concepts.
+rejection. If no handler accepts it, the core fallback paints generic,
+non-leaking UI for `Unauthorized`, `Forbidden`, `NotFound`, and
+`Server`, and emits a stable failure reason. This makes route
+rejection extensible without making the base `App` permanently carry
+auth concepts.
 
 ### 5.1.2 `Predicate` (auth's domain)
 
@@ -746,7 +755,10 @@ App::new()
     .plugin(auth_plugin().login_route("/signin"))
     .route_rejection_handler(|ctx, rejection| match rejection {
         RouteRejection::Forbidden(_) => Some(RouteRejectionAction::Paint(
-            RouteErrorSurface::component::<RequestAccess>(),
+            RouteErrorSurface::new(
+                "Access requested",
+                "Your account needs access before this route can open.",
+            ),
         )),
         _ => None,
     })

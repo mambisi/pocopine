@@ -31,11 +31,11 @@ pub use pocopine_core::{
     EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl, Inject, IsTeleported,
     LifecycleContext, LifecyclePhase, ListenerHandle, MountEpoch, NearestParent, Parent, ParentId,
     Plugin, PluginValidationError, Plugins, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, RouteComponent, RouteConfig, RouteContext, RouteGuard, RouteGuardDecision,
-    RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
-    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
+    RegistryErrorKind, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
+    RouteGuardDecision, RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted,
+    RouteRejection, RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
+    RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult,
+    Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
     TypedEl, Win,
 };
 #[doc(inline)]
@@ -94,10 +94,10 @@ pub mod prelude {
         ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, ForComponent, Handle, Hook,
         Inject, JobError, JobResult, NearestParent, Parent, Permission, Plugin,
         PluginValidationError, Plugins, Principal, Role, RouteComponent, RouteConfig, RouteContext,
-        RouteGuard, RouteGuardDecision, RouteNavigationCompleted, RouteNavigationFailed,
-        RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
-        RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
-        ServerError, ServerResult, Setter, Signal, Store,
+        RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteNavigationCompleted,
+        RouteNavigationFailed, RouteNavigationStarted, RouteRejection, RouteRejectionAction,
+        RouteRejectionContext, RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal,
+        Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

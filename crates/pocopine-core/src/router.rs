@@ -30,8 +30,8 @@ use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
 use crate::app::{
-    RouteContext, RouteGuard, RouteGuardDecision, RouteRejection, RouteRejectionAction,
-    RouteRejectionContext, RouteRejectionHandler,
+    RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
 };
 use crate::mount;
 use crate::reactive::trigger_scope;
@@ -322,38 +322,55 @@ fn mount_current() {
                     return;
                 }
                 RouteGuardDecision::Reject(rejection) => {
-                    if let Some(action) = handle_route_rejection(matched, &path, &query, &rejection)
-                    {
-                        match action {
-                            RouteRejectionAction::Redirect(target) => {
-                                if has_route_hooks {
-                                    crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                                        path: path.clone(),
-                                        route_pattern,
-                                        component: Some(matched.component_name),
-                                        reason: "guard_redirected",
-                                        duration_ms: elapsed_since(start_ms),
-                                    });
-                                }
-                                let target = target.into_path();
-                                if target != path {
-                                    navigate(&target);
-                                }
-                                return;
+                    let action = handle_route_rejection(matched, &path, &query, &rejection)
+                        .unwrap_or_else(|| {
+                            RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(
+                                &rejection,
+                            ))
+                        });
+                    match action {
+                        RouteRejectionAction::Redirect(target) => {
+                            if has_route_hooks {
+                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                                    path: path.clone(),
+                                    route_pattern,
+                                    component: Some(matched.component_name),
+                                    reason: "guard_redirected",
+                                    duration_ms: elapsed_since(start_ms),
+                                });
                             }
-                            RouteRejectionAction::AbortNavigation => {}
+                            let target = target.into_path();
+                            if target != path {
+                                navigate(&target);
+                            }
+                            return;
+                        }
+                        RouteRejectionAction::Paint(surface) => {
+                            if has_route_hooks {
+                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                                    path: path.clone(),
+                                    route_pattern,
+                                    component: Some(matched.component_name),
+                                    reason: rejection.reason(),
+                                    duration_ms: elapsed_since(start_ms),
+                                });
+                            }
+                            paint_route_error_surface(&surface);
+                            return;
+                        }
+                        RouteRejectionAction::AbortNavigation => {
+                            if has_route_hooks {
+                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                                    path,
+                                    route_pattern,
+                                    component: Some(matched.component_name),
+                                    reason: rejection.reason(),
+                                    duration_ms: elapsed_since(start_ms),
+                                });
+                            }
+                            return;
                         }
                     }
-                    if has_route_hooks {
-                        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                            path,
-                            route_pattern,
-                            component: Some(matched.component_name),
-                            reason: rejection.reason(),
-                            duration_ms: elapsed_since(start_ms),
-                        });
-                    }
-                    return;
                 }
             }
         }
@@ -531,6 +548,40 @@ fn handle_route_rejection(
         }
         None
     })
+}
+
+fn paint_route_error_surface(surface: &RouteErrorSurface) {
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
+        return;
+    };
+    let Ok(root) = doc.create_element("div") else {
+        return;
+    };
+    let _ = root.set_attribute("data-pocopine-route-error", "");
+    let _ = root.set_attribute(
+        "style",
+        "padding:24px;border:1px solid #d0d5dd;border-radius:8px;\
+         font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;\
+         color:#101828;background:#fff;",
+    );
+    let Ok(title) = doc.create_element("h2") else {
+        return;
+    };
+    let _ = title.set_attribute("style", "margin:0 0 8px 0;font-size:20px;line-height:1.3;");
+    title.set_text_content(Some(surface.title));
+    let Ok(message) = doc.create_element("p") else {
+        return;
+    };
+    let _ = message.set_attribute(
+        "style",
+        "margin:0;color:#475467;font-size:14px;line-height:1.5;",
+    );
+    message.set_text_content(Some(surface.message));
+    let _ = root.append_child(&title);
+    let _ = root.append_child(&message);
+    outlet.replace_children_with_node_1(root.as_ref());
 }
 
 fn elapsed_since(start_ms: Option<f64>) -> f64 {
