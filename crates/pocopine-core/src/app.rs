@@ -459,12 +459,7 @@ impl<T: 'static> From<LifecycleContext<'_>> for Option<Loader<T>> {
 }
 
 impl<T: 'static> Loader<T> {
-    /// Internal — construct a `Loader<T>` from an already-shared
-    /// `Rc<T>`. Used by the router's per-scope slot path so a
-    /// second extractor on the same mount shares the existing
-    /// `Rc` rather than re-allocating.
-    #[doc(hidden)]
-    pub fn __from_rc(data: Rc<T>) -> Self {
+    pub(crate) fn from_rc(data: Rc<T>) -> Self {
         Self { data }
     }
 }
@@ -687,10 +682,10 @@ mod route_config_tests {
         // The router migrates the one-shot pending value into a
         // per-scope `Rc` slot on first read; subsequent extractors
         // construct `Loader<T>` directly from that shared `Rc`
-        // through `Loader::__from_rc`.
+        // through `Loader::from_rc`.
         let rc: Rc<String> = Rc::new("hello".to_string());
         let strong_count_before = Rc::strong_count(&rc);
-        let loader = Loader::<String>::__from_rc(rc.clone());
+        let loader = Loader::<String>::from_rc(rc.clone());
         assert_eq!(*loader.get(), "hello");
         // Loader holds its own clone of the Rc.
         assert!(Rc::strong_count(&rc) > strong_count_before);
