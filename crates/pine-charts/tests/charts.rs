@@ -264,7 +264,7 @@ impl LineChartFixture {}
                         angle="-65"
                         fill="#18212f"
                         text_anchor="start"
-                        font_weight="bold"></pine-chart-label>
+                        font_weight="700"></pine-chart-label>
     </pine-chart-layer>
   </pine-layer-chart>
 </div>
@@ -386,7 +386,7 @@ impl ComposedCartesianFixture {}
                                     y="18"
                                     dy="-8"
                                     fill="#18212f"
-                                    font_weight="bold"></pine-cartesian-reference-label>
+                                    font_weight="700"></pine-cartesian-reference-label>
   </pine-cartesian-chart>
 </div>
 "##)]
@@ -690,7 +690,7 @@ async fn cartesian_chart_composes_bar_and_line_series_on_one_axis() {
     assert_eq!(reference_label.get_attribute("y").as_deref(), Some("2"));
     assert_eq!(
         reference_label.get_attribute("font-weight").as_deref(),
-        Some("bold")
+        Some("700")
     );
 
     let markers = host.query_selector_all(".pine-chart-marker").unwrap();
