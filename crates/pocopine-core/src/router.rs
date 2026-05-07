@@ -266,6 +266,69 @@ pub fn route_proxy() -> JsValue {
     })
 }
 
+/// Re-run guards on the current route without changing history.
+///
+/// Plugins (notably `pocopine-auth-client`) **must** call this when
+/// the source of truth for an authorization predicate changes —
+/// canonical example: an auth plugin's `AuthSession` flips on
+/// sign-in / sign-out / token expiry. The router re-matches the
+/// current path, re-evaluates the guard chain, and:
+///
+/// - **`Allow`** → no-op. The currently mounted component stays.
+///   Callers that need a forward navigation after sign-in (e.g.
+///   "redirect to `/dashboard` post-login") should issue a separate
+///   [`navigate`] call.
+/// - **`Redirect`** / **`Reject`** → the outlet is cleared
+///   synchronously so any PII in the now-rejected component leaves
+///   the DOM **before** the rejection chain paints its outcome,
+///   then the full mount flow re-runs through [`mount_current`] so
+///   handlers, error surface, and `RouteNavigationFailed` events
+///   fire exactly as they would on a fresh navigation.
+///
+/// No-op when the current path doesn't match any registered route
+/// (no guards to re-evaluate) or when the platform is unavailable.
+/// See RFC-078 §5.10.6 for the contract.
+pub fn reevaluate_current() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let location = window.location();
+    let path = location.pathname().unwrap_or_else(|_| "/".into());
+    let search = location.search().unwrap_or_default();
+
+    let Some(matched) = match_route(&path, false) else {
+        return;
+    };
+    let query = parse_query(&search);
+
+    let Some(decision) = evaluate_guards(&matched, &path, &query) else {
+        return;
+    };
+
+    match decision {
+        RouteGuardDecision::Allow => {
+            // Identity change made the user MORE privileged or the
+            // route was already permissive. Existing mount is still
+            // valid; re-mounting would tear down legitimate state.
+        }
+        RouteGuardDecision::Redirect(_) | RouteGuardDecision::Reject(_) => {
+            // Drop the rejected component synchronously so PII it
+            // rendered cannot survive the next event-loop turn —
+            // the rejection chain paints its outcome AFTER the
+            // outlet is empty.
+            clear_outlet();
+            mount_current();
+        }
+    }
+}
+
+fn clear_outlet() {
+    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
+        return;
+    };
+    outlet.set_inner_html("");
+}
+
 fn mount_current() {
     ensure_route_scope();
 
