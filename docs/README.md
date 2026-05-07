@@ -24,6 +24,11 @@ looks the way it does — the code itself tells you *what*.
 - [`app-plugins.md`](./app-plugins.md) — app plugin architecture:
   install-time setup, lifecycle hook ordering, `app! { plugins: [...] }`,
   and the ownership boundary for observability/live/auth integrations.
+- [`route-guards-and-loaders.md`](./route-guards-and-loaders.md) —
+  client-side route guards, async loaders, fetch middleware, and the
+  rejection-handler chain. Covers `ReturnTo` validation,
+  `reevaluate_current` for sign-out, and the privacy invariants from
+  RFC-078 §5.10.
 - [`server-plugins.md`](./server-plugins.md) — host-side plugin
   lifecycle: `Server` builder, `request_event_layer`, server-function
   typed hooks, validation diagnostics, and the privacy invariant on
