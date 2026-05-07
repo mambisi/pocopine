@@ -24,9 +24,15 @@
 //! `Counter::register()` and `pocopine::run()` still work for
 //! ad-hoc use — the trait is what `App` calls under the hood.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::rc::Rc;
+
+use crate::lifecycle::LifecycleContext;
+use crate::server::ServerError;
 
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
@@ -245,10 +251,176 @@ where
     }
 }
 
+/// Owned per-navigation context handed to a route loader.
+///
+/// All fields are owned (`String` / `HashMap`) so the loader's
+/// future can outlive the synchronous call that constructed the
+/// context. The router clones the matched route's `params` /
+/// `query` map at navigation time and passes the result through.
+#[derive(Clone, Debug)]
+pub struct LoaderContext {
+    pub path: String,
+    pub params: HashMap<String, String>,
+    pub query: HashMap<String, String>,
+    pub matched_pattern: Option<&'static str>,
+}
+
+/// Failure modes a route loader can return.
+///
+/// `Unauthorized` and `Forbidden` flow through the existing
+/// [`RouteRejection`] chain — the loader doesn't have to know
+/// that the auth plugin is the eventual handler. `NotFound` and
+/// `Server` likewise dispatch through the rejection chain so apps
+/// can wire a single error surface that handles both
+/// guard-rejection and loader-failure.
+///
+/// `From<ServerError>` lets a loader body call `?` on a
+/// `#[server]` invocation and surface the right router signal
+/// automatically.
+#[derive(Debug)]
+pub enum LoaderError {
+    Unauthorized,
+    Forbidden(String),
+    NotFound(String),
+    Server(ServerError),
+}
+
+impl From<ServerError> for LoaderError {
+    fn from(err: ServerError) -> Self {
+        match err {
+            ServerError::Unauthorized(_) => LoaderError::Unauthorized,
+            ServerError::Forbidden(reason) => LoaderError::Forbidden(reason),
+            // App / BadRequest / Network all collapse into Server
+            // for routing purposes — the loader closure is free to
+            // pre-translate them to NotFound/Forbidden if it has
+            // app-specific knowledge.
+            other => LoaderError::Server(other),
+        }
+    }
+}
+
+impl LoaderError {
+    /// Convert a loader failure into the matching route rejection.
+    /// The dynamic message string is **dropped** at this boundary;
+    /// per RFC-078 §5.10.7 the rejection chain operates on stable
+    /// closed-set identifiers, never on user-visible error
+    /// strings. Apps that need to surface the original message
+    /// should consume `LoaderError` directly through a custom
+    /// route-error component (see [`RouteErrorSurface`]).
+    pub fn to_rejection(&self) -> RouteRejection {
+        match self {
+            LoaderError::Unauthorized => RouteRejection::Unauthorized,
+            LoaderError::Forbidden(_) => RouteRejection::Forbidden("loader_forbidden"),
+            LoaderError::NotFound(_) => RouteRejection::NotFound,
+            LoaderError::Server(_) => RouteRejection::Server("loader_server_error"),
+        }
+    }
+}
+
+/// Pinned future returned by [`RouteLoader::run`]. Erases the
+/// concrete loader output type into `Box<dyn Any>` so the router
+/// can drive every route's loader through a uniform call site;
+/// the [`Loader<T>`] extractor downcasts the contents inside the
+/// component's lifecycle hook.
+pub type RouteLoaderFuture = Pin<Box<dyn Future<Output = Result<Box<dyn Any>, LoaderError>>>>;
+
+/// Trait-erased route loader stored in the route registry.
+///
+/// `RouteConfig::loader(...)` accepts any closure returning a
+/// future of `Result<T, LoaderError>` and wraps it into this
+/// trait object.
+pub trait RouteLoader: 'static {
+    fn run(&self, ctx: LoaderContext) -> RouteLoaderFuture;
+}
+
+struct LoaderClosure<F, T> {
+    f: F,
+    _t: PhantomData<fn() -> T>,
+}
+
+impl<F, Fut, T> RouteLoader for LoaderClosure<F, T>
+where
+    F: Fn(LoaderContext) -> Fut + 'static,
+    Fut: Future<Output = Result<T, LoaderError>> + 'static,
+    T: 'static,
+{
+    fn run(&self, ctx: LoaderContext) -> RouteLoaderFuture {
+        let fut = (self.f)(ctx);
+        Box::pin(async move { fut.await.map(|t| Box::new(t) as Box<dyn Any>) })
+    }
+}
+
+/// Loader-produced data extracted in a component lifecycle hook.
+///
+/// Mirrors the [`crate::plugin::Plugin<T>`] shape: held as an
+/// `Rc<T>`, dereferences to `&T`, populated by the router into a
+/// thread-local pending slot just before the component mounts and
+/// taken by the [`From<LifecycleContext>`] impl during setup.
+///
+/// `Option<Loader<T>>` is supported for components that may also
+/// be mounted via `App::mount_subtree` (no router, no loader);
+/// required `Loader<T>` panics if the slot is empty or the stored
+/// value's type doesn't match `T`.
+pub struct Loader<T: 'static> {
+    data: Rc<T>,
+}
+
+impl<T: 'static> Clone for Loader<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+        }
+    }
+}
+
+impl<T: 'static> Loader<T> {
+    pub fn get(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T: 'static> std::ops::Deref for Loader<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T: 'static> From<LifecycleContext<'_>> for Loader<T> {
+    fn from(_: LifecycleContext<'_>) -> Self {
+        match crate::router::take_pending_loader_data::<T>() {
+            Some(loader) => loader,
+            None => panic!(
+                "Loader<{}>: no loader data is available for the mounting \
+                 component. Either the route has no `RouteConfig::loader(...)` \
+                 or the component is being mounted via `App::mount_subtree` \
+                 (in which case use `Option<Loader<{}>>`).",
+                std::any::type_name::<T>(),
+                std::any::type_name::<T>(),
+            ),
+        }
+    }
+}
+
+impl<T: 'static> From<LifecycleContext<'_>> for Option<Loader<T>> {
+    fn from(_: LifecycleContext<'_>) -> Self {
+        crate::router::take_pending_loader_data::<T>()
+    }
+}
+
+/// Internal: wrap a typed loader closure in a [`Loader<T>`] from
+/// raw `Box<dyn Any>` data. Called by the router pending-slot
+/// machinery; `pub(crate)` because it's an internal seam, not API.
+pub(crate) fn loader_from_any<T: 'static>(boxed: Box<dyn Any>) -> Result<Loader<T>, Box<dyn Any>> {
+    boxed.downcast::<T>().map(|t| Loader { data: Rc::new(*t) })
+}
+
 /// Route-local configuration for component `C`.
 #[derive(Clone)]
 pub struct RouteConfig<C: Component> {
     pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
+    pub(crate) loader: Option<Rc<dyn RouteLoader>>,
     _component: PhantomData<fn() -> C>,
 }
 
@@ -256,6 +428,7 @@ impl<C: Component> RouteConfig<C> {
     pub fn new() -> Self {
         Self {
             guards: Vec::new(),
+            loader: None,
             _component: PhantomData,
         }
     }
@@ -265,9 +438,40 @@ impl<C: Component> RouteConfig<C> {
         self
     }
 
+    /// Attach an async loader to this route. The router runs the
+    /// loader after guards Allow and before the component mounts;
+    /// the produced `T` is read by a [`Loader<T>`] extractor in
+    /// the component's lifecycle hook.
+    ///
+    /// **Only one loader per route.** Calling `loader` a second
+    /// time panics at config-build time — multiple parallel
+    /// fetches should compose inside a single loader body
+    /// (`try_join!` returning a struct).
+    pub fn loader<F, Fut, T>(mut self, loader: F) -> Self
+    where
+        F: Fn(LoaderContext) -> Fut + 'static,
+        Fut: Future<Output = Result<T, LoaderError>> + 'static,
+        T: 'static,
+    {
+        if self.loader.is_some() {
+            panic!(
+                "RouteConfig::loader called twice — only one loader per \
+                 route is supported. Compose multiple async fetches inside \
+                 a single loader body (`tokio::try_join!` returning a struct \
+                 of all the data the route needs)."
+            );
+        }
+        self.loader = Some(Rc::new(LoaderClosure {
+            f: loader,
+            _t: PhantomData,
+        }));
+        self
+    }
+
     pub(crate) fn into_runtime(self) -> router::RouteRuntimeConfig {
         router::RouteRuntimeConfig {
             guards: self.guards,
+            loader: self.loader,
         }
     }
 }
@@ -368,6 +572,77 @@ mod route_config_tests {
             handler.handle(&ctx, &RouteRejection::Unauthorized),
             Some(RouteRejectionAction::Redirect(RouteTarget::path("/login")))
         );
+    }
+
+    #[test]
+    fn loader_error_from_server_error_maps_unauthorized() {
+        let err: LoaderError = ServerError::Unauthorized("token expired".into()).into();
+        assert!(matches!(err, LoaderError::Unauthorized));
+
+        let err: LoaderError = ServerError::Forbidden("missing role".into()).into();
+        assert!(matches!(err, LoaderError::Forbidden(reason) if reason == "missing role"));
+
+        let err: LoaderError = ServerError::App("kaboom".into()).into();
+        assert!(matches!(err, LoaderError::Server(_)));
+
+        let err: LoaderError = ServerError::BadRequest("nope".into()).into();
+        assert!(matches!(err, LoaderError::Server(_)));
+    }
+
+    #[test]
+    fn loader_error_to_rejection_drops_dynamic_messages() {
+        // §5.10.7: rejection-chain reasons are stable closed-set
+        // identifiers, never user-visible error strings. The
+        // mapping enforces that — dynamic messages stay inside the
+        // `LoaderError` value the app gets via a custom error
+        // surface but never reach the rejection chain.
+        assert_eq!(
+            LoaderError::Unauthorized.to_rejection(),
+            RouteRejection::Unauthorized
+        );
+        assert_eq!(
+            LoaderError::Forbidden("policy:account_locked".into()).to_rejection(),
+            RouteRejection::Forbidden("loader_forbidden")
+        );
+        assert_eq!(
+            LoaderError::NotFound("user 42".into()).to_rejection(),
+            RouteRejection::NotFound
+        );
+        assert_eq!(
+            LoaderError::Server(ServerError::App("db down".into())).to_rejection(),
+            RouteRejection::Server("loader_server_error")
+        );
+    }
+
+    #[test]
+    fn route_config_loader_records_one_loader() {
+        let config = RouteConfig::<TestRoute>::new()
+            .loader(|_ctx: LoaderContext| async move { Ok::<_, LoaderError>(42_u32) });
+        assert!(config.loader.is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "RouteConfig::loader called twice")]
+    fn route_config_loader_panics_on_duplicate_registration() {
+        let _ = RouteConfig::<TestRoute>::new()
+            .loader(|_: LoaderContext| async move { Ok::<_, LoaderError>(1_u32) })
+            .loader(|_: LoaderContext| async move { Ok::<_, LoaderError>(2_u32) });
+    }
+
+    #[test]
+    fn loader_from_any_downcasts_correctly() {
+        let boxed: Box<dyn Any> = Box::new("hello".to_string());
+        let loader = loader_from_any::<String>(boxed).expect("downcast");
+        assert_eq!(*loader.get(), "hello");
+        // `Loader<T>` derefs to `&T`.
+        assert_eq!(loader.len(), 5);
+    }
+
+    #[test]
+    fn loader_from_any_returns_box_on_type_mismatch() {
+        let boxed: Box<dyn Any> = Box::new(42_u32);
+        let result = loader_from_any::<String>(boxed);
+        assert!(result.is_err(), "type mismatch must surface as Err");
     }
 
     #[test]
