@@ -29,14 +29,15 @@ pub use pocopine_core::{
     ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
     ComponentUnmounted, ComponentVTable, Computed, ContextKey, ContextMarker, Doc, DomEventName,
     EffectId, EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl, Inject,
-    IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle, MountEpoch, NearestParent,
-    Parent, ParentId, Plugin, PluginValidationError, Plugins, Refs, RegisteredComponent,
-    RegistryError, RegistryErrorKind, ReturnTo, RouteComponent, RouteConfig, RouteContext,
-    RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteNavigationCompleted,
-    RouteNavigationFailed, RouteNavigationStarted, RouteRejection, RouteRejectionAction,
-    RouteRejectionContext, RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope,
-    ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle,
-    SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle, Loader, LoaderContext,
+    LoaderError, MountEpoch, NearestParent, Parent, ParentId, Plugin, PluginValidationError,
+    Plugins, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, ReturnTo, RouteComponent,
+    RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
+    RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
+    RouteTargetError, RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter,
+    Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost,
+    TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -92,12 +93,13 @@ pub mod prelude {
         AppBootFailed, AppBootStarted, AppPlugin, AuthUser, Component, ComponentEvent,
         ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
         ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, ForComponent, Handle, Hook,
-        Inject, JobError, JobResult, NearestParent, Parent, Permission, Plugin,
-        PluginValidationError, Plugins, Principal, ReturnTo, Role, RouteComponent, RouteConfig,
-        RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteNavigationCompleted,
-        RouteNavigationFailed, RouteNavigationStarted, RouteRejection, RouteRejectionAction,
-        RouteRejectionContext, RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal,
-        Scope, ScopeId, ServerError, ServerResult, Setter, Signal, Store,
+        Inject, JobError, JobResult, Loader, LoaderContext, LoaderError, NearestParent, Parent,
+        Permission, Plugin, PluginValidationError, Plugins, Principal, ReturnTo, Role,
+        RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
+        RouteGuardDecision, RouteLoader, RouteNavigationCompleted, RouteNavigationFailed,
+        RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+        RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
+        ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

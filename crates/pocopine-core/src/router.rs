@@ -30,8 +30,9 @@ use wasm_bindgen::JsValue;
 use web_sys::{Element, Event};
 
 use crate::app::{
-    RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler,
+    loader_from_any, Loader, LoaderContext, RouteContext, RouteErrorSurface, RouteGuard,
+    RouteGuardDecision, RouteLoader, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+    RouteRejectionHandler,
 };
 use crate::mount;
 use crate::reactive::trigger_scope;
@@ -119,6 +120,7 @@ impl Route {
 #[derive(Clone, Default)]
 pub(crate) struct RouteRuntimeConfig {
     pub(crate) guards: Vec<Rc<dyn RouteGuard>>,
+    pub(crate) loader: Option<Rc<dyn RouteLoader>>,
 }
 
 #[derive(Clone)]
@@ -180,6 +182,47 @@ thread_local! {
     static INITIALISED: Cell<bool> = const { Cell::new(false) };
     static ROUTE_REJECTION_HANDLERS: RefCell<Vec<Rc<dyn RouteRejectionHandler>>> =
         const { RefCell::new(Vec::new()) };
+    /// Loader-produced data sitting between "router resolved the
+    /// loader" and "the just-mounted component reads it via
+    /// `Loader<T>` extractor". Sequential by construction —
+    /// the router never has more than one route mounting at a time.
+    /// The slot is taken by the first matching extractor; mismatched
+    /// or absent reads panic.
+    static PENDING_LOADER_DATA: RefCell<Option<Box<dyn std::any::Any>>> =
+        const { RefCell::new(None) };
+}
+
+/// Stash a router-produced loader result for the next component
+/// mount. The pending slot is overwritten if a previous result
+/// was never consumed (e.g. mount aborted before setup ran).
+pub(crate) fn put_pending_loader_data(data: Box<dyn std::any::Any>) {
+    PENDING_LOADER_DATA.with(|cell| *cell.borrow_mut() = Some(data));
+}
+
+/// Take and downcast the pending loader data. Returns `None` when
+/// the slot is empty (component mounted via `mount_subtree`,
+/// not via the router); panics when a value is present but its
+/// type doesn't match `T` — that indicates a mismatch between
+/// `RouteConfig::loader(...)` and the component's `Loader<T>`
+/// extractor and is always a programmer bug.
+pub(crate) fn take_pending_loader_data<T: 'static>() -> Option<Loader<T>> {
+    let boxed = PENDING_LOADER_DATA.with(|cell| cell.borrow_mut().take())?;
+    match loader_from_any::<T>(boxed) {
+        Ok(loader) => Some(loader),
+        Err(_) => panic!(
+            "Loader<{}>: pending loader data did not match the extractor's \
+             type. Check the loader closure registered on `RouteConfig::loader` \
+             returns the same type the component's `Loader<T>` extractor reads.",
+            std::any::type_name::<T>(),
+        ),
+    }
+}
+
+/// Drop any pending loader data. Called when the router decides
+/// not to mount (rejection, navigation aborted) so the slot
+/// doesn't leak across navigations.
+pub(crate) fn clear_pending_loader_data() {
+    PENDING_LOADER_DATA.with(|cell| cell.borrow_mut().take());
 }
 
 /// Register a route. Called from `App::route::<C>(pattern)`.
@@ -389,66 +432,93 @@ fn mount_current() {
                     return;
                 }
                 RouteGuardDecision::Reject(rejection) => {
-                    let action = handle_route_rejection(matched, &path, &query, &rejection)
-                        .unwrap_or_else(|| {
-                            RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(
-                                &rejection,
-                            ))
-                        });
-                    match action {
-                        RouteRejectionAction::Redirect(target) => {
-                            if has_route_hooks {
-                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                                    path: path.clone(),
-                                    route_pattern,
-                                    component: Some(matched.component_name),
-                                    reason: "guard_redirected",
-                                    duration_ms: elapsed_since(start_ms),
-                                });
-                            }
-                            let target = target.into_path();
-                            if target != path {
-                                navigate(&target);
-                            }
-                            return;
-                        }
-                        RouteRejectionAction::Paint(surface) => {
-                            if has_route_hooks {
-                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                                    path: path.clone(),
-                                    route_pattern,
-                                    component: Some(matched.component_name),
-                                    reason: rejection.reason(),
-                                    duration_ms: elapsed_since(start_ms),
-                                });
-                            }
-                            paint_route_error_surface(&surface);
-                            return;
-                        }
-                        RouteRejectionAction::AbortNavigation => {
-                            if has_route_hooks {
-                                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                                    path,
-                                    route_pattern,
-                                    component: Some(matched.component_name),
-                                    reason: rejection.reason(),
-                                    duration_ms: elapsed_since(start_ms),
-                                });
-                            }
-                            return;
-                        }
-                    }
+                    dispatch_route_rejection(
+                        matched,
+                        &path,
+                        &query,
+                        route_pattern,
+                        &rejection,
+                        has_route_hooks,
+                        start_ms,
+                    );
+                    return;
                 }
             }
         }
+
+        // Guards passed (or there are no guards). If a loader is
+        // registered for this route, defer the rest of the mount
+        // until the loader resolves; the loader path runs through
+        // `spawn_local` so the synchronous fast path is still
+        // available for routes without loaders.
+        if let Some(loader) = matched.config.loader.clone() {
+            let loader_ctx = LoaderContext {
+                path: path.clone(),
+                params: params.clone(),
+                query: query.clone(),
+                matched_pattern: route_pattern,
+            };
+            update_route_state(&path, &params, query.clone());
+            let matched_for_async = matched.clone();
+            let path_for_async = path.clone();
+            let params_for_async = params.clone();
+            let query_for_async = query.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = loader.run(loader_ctx).await;
+                match result {
+                    Ok(data) => {
+                        put_pending_loader_data(data);
+                        finish_route_mount(
+                            Some(matched_for_async.component_name),
+                            route_pattern,
+                            &path_for_async,
+                            &params_for_async,
+                            has_route_hooks,
+                            start_ms,
+                        );
+                    }
+                    Err(err) => {
+                        // Loader-produced rejection: dispatch through
+                        // the same chain guard rejections use so a
+                        // single auth handler covers both surfaces.
+                        let rejection = err.to_rejection();
+                        clear_pending_loader_data();
+                        dispatch_route_rejection(
+                            &matched_for_async,
+                            &path_for_async,
+                            &query_for_async,
+                            route_pattern,
+                            &rejection,
+                            has_route_hooks,
+                            start_ms,
+                        );
+                    }
+                }
+            });
+            return;
+        }
     }
 
-    // Update the route state and trigger subscribers (bindings reading
-    // `$route.*` re-run).
+    update_route_state(&path, &params, query);
+    finish_route_mount(
+        component_name,
+        route_pattern,
+        &path,
+        &params,
+        has_route_hooks,
+        start_ms,
+    );
+}
+
+fn update_route_state(
+    path: &str,
+    params: &HashMap<String, String>,
+    query: HashMap<String, String>,
+) {
     ROUTE_STATE_RC.with(|cell| {
         if let Some(s) = cell.get() {
             let mut st = s.borrow_mut();
-            st.path = path.clone();
+            st.path = path.to_string();
             st.params = params.clone();
             st.query = query;
         }
@@ -458,17 +528,31 @@ fn mount_current() {
             trigger_scope(scope.id);
         }
     });
+}
 
+/// Synchronous tail of the navigation pipeline shared by the
+/// no-loader path (called inline from `mount_current`) and the
+/// loader path (called from inside `spawn_local` after the loader
+/// resolves successfully). Paints the matched component into the
+/// outlet.
+fn finish_route_mount(
+    component_name: Option<&'static str>,
+    route_pattern: Option<&'static str>,
+    path: &str,
+    params: &HashMap<String, String>,
+    has_route_hooks: bool,
+    start_ms: Option<f64>,
+) {
     // Devtools hook — fires on every resolved route change, even
     // when there's no matching component (404). The router panel
     // uses this to build its recent-history view.
     #[cfg(feature = "devtools")]
-    crate::devtools::hooks::fire_route_change(&path, &params);
+    crate::devtools::hooks::fire_route_change(path, params);
 
     let Some(name) = component_name else {
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-                path,
+                path: path.to_string(),
                 route_pattern,
                 component: None,
                 duration_ms: elapsed_since(start_ms),
@@ -477,32 +561,34 @@ fn mount_current() {
         return;
     };
 
+    let Some(win) = web_sys::window() else { return };
     // Paint into the outlet. `replace_children` removes the previous
     // page's subtree, which the MutationObserver turns into effect +
     // scope cleanup via `mount::release_subtree`.
-    let outlet = OUTLET.with(|o| o.borrow().clone());
-    let Some(outlet) = outlet else {
+    let Some(outlet) = OUTLET.with(|o| o.borrow().clone()) else {
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                path,
+                path: path.to_string(),
                 route_pattern,
                 component: Some(name),
                 reason: "missing_outlet",
                 duration_ms: elapsed_since(start_ms),
             });
         }
+        clear_pending_loader_data();
         return;
     };
     let Some(doc) = win.document() else {
         if has_route_hooks {
             crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                path,
+                path: path.to_string(),
                 route_pattern,
                 component: Some(name),
                 reason: "missing_document",
                 duration_ms: elapsed_since(start_ms),
             });
         }
+        clear_pending_loader_data();
         return;
     };
 
@@ -512,17 +598,18 @@ fn mount_current() {
         Err(_) => {
             if has_route_hooks {
                 crate::plugin::emit(crate::plugin::RouteNavigationFailed {
-                    path,
+                    path: path.to_string(),
                     route_pattern,
                     component: Some(name),
                     reason: "create_element_failed",
                     duration_ms: elapsed_since(start_ms),
                 });
             }
+            clear_pending_loader_data();
             return;
         }
     };
-    for (k, v) in &params {
+    for (k, v) in params {
         let _ = el.set_attribute(k, v);
     }
     outlet.replace_children_with_node_1(el.as_ref());
@@ -533,13 +620,79 @@ fn mount_current() {
     // the macro-emitted entries.
     mount::mount_child_component(&el, name);
     mount::finalize_compiled_subtree(&el);
+
+    // The component's `Loader<T>` extractor (if any) consumed the
+    // pending slot during setup; for routes without a loader the
+    // slot was never populated. Either way, drop any leftover so
+    // the next navigation starts fresh — defensive against
+    // `Option<Loader<T>>` extractors that opt out of consuming.
+    clear_pending_loader_data();
+
     if has_route_hooks {
         crate::plugin::emit(crate::plugin::RouteNavigationCompleted {
-            path,
+            path: path.to_string(),
             route_pattern,
             component: Some(name),
             duration_ms: elapsed_since(start_ms),
         });
+    }
+}
+
+/// Run the rejection chain for a guard- or loader-produced
+/// `RouteRejection` and apply the resulting action (Redirect /
+/// Paint / AbortNavigation). Used by both the synchronous guard
+/// path and the asynchronous loader-error path.
+fn dispatch_route_rejection(
+    matched: &RouteMatch,
+    path: &str,
+    query: &HashMap<String, String>,
+    route_pattern: Option<&'static str>,
+    rejection: &RouteRejection,
+    has_route_hooks: bool,
+    start_ms: Option<f64>,
+) {
+    let action = handle_route_rejection(matched, path, query, rejection).unwrap_or_else(|| {
+        RouteRejectionAction::Paint(RouteErrorSurface::for_rejection(rejection))
+    });
+    match action {
+        RouteRejectionAction::Redirect(target) => {
+            if has_route_hooks {
+                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                    path: path.to_string(),
+                    route_pattern,
+                    component: Some(matched.component_name),
+                    reason: "guard_redirected",
+                    duration_ms: elapsed_since(start_ms),
+                });
+            }
+            let target = target.into_path();
+            if target != path {
+                navigate(&target);
+            }
+        }
+        RouteRejectionAction::Paint(surface) => {
+            if has_route_hooks {
+                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                    path: path.to_string(),
+                    route_pattern,
+                    component: Some(matched.component_name),
+                    reason: rejection.reason(),
+                    duration_ms: elapsed_since(start_ms),
+                });
+            }
+            paint_route_error_surface(&surface);
+        }
+        RouteRejectionAction::AbortNavigation => {
+            if has_route_hooks {
+                crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                    path: path.to_string(),
+                    route_pattern,
+                    component: Some(matched.component_name),
+                    reason: rejection.reason(),
+                    duration_ms: elapsed_since(start_ms),
+                });
+            }
+        }
     }
 }
 
@@ -784,6 +937,7 @@ mod tests {
             params,
             config: RouteRuntimeConfig {
                 guards: vec![guard],
+                loader: None,
             },
         };
 
@@ -810,6 +964,7 @@ mod tests {
             params: HashMap::new(),
             config: RouteRuntimeConfig {
                 guards: vec![first_guard, second_guard],
+                loader: None,
             },
         };
 
