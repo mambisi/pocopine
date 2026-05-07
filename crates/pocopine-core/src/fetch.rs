@@ -112,6 +112,8 @@ impl FetchNext {
 pub type FetchMiddlewareFuture =
     Pin<Box<dyn Future<Output = Result<FetchResponse, ServerError>> + 'static>>;
 
+type MiddlewareChain = Rc<Vec<Rc<dyn FetchMiddleware>>>;
+
 /// Trait-erased fetch middleware. Closures of the right shape
 /// implement this via the blanket impl below; plugins that need
 /// state typically use a `Rc<MyService>` adapter.
@@ -139,6 +141,10 @@ thread_local! {
     /// seam where untrusted code could install itself after the
     /// trust boundary closed.
     static FROZEN: Cell<bool> = const { Cell::new(false) };
+    /// Captured once at the open→frozen transition so per-call
+    /// dispatch clones an `Rc` instead of cloning the `Vec`.
+    static MIDDLEWARE_SNAPSHOT: RefCell<Option<MiddlewareChain>> =
+        const { RefCell::new(None) };
 }
 
 /// Install a middleware. Must run before the first
@@ -166,7 +172,12 @@ pub fn install_middleware<M: FetchMiddleware>(middleware: M) {
 /// not a stable surface plugins call themselves.
 #[doc(hidden)]
 pub fn freeze_middleware_chain() {
-    FROZEN.with(|cell| cell.set(true));
+    let was_frozen = FROZEN.with(|cell| cell.replace(true));
+    if !was_frozen {
+        MIDDLEWARE_SNAPSHOT.with(|snap| {
+            *snap.borrow_mut() = Some(Rc::new(MIDDLEWARES.with(|cell| cell.borrow().clone())));
+        });
+    }
 }
 
 /// Reset the middleware chain to an empty, unfrozen state. Test
@@ -176,6 +187,7 @@ pub fn freeze_middleware_chain() {
 pub fn __reset_middleware_chain_for_test() {
     MIDDLEWARES.with(|cell| cell.borrow_mut().clear());
     FROZEN.with(|cell| cell.set(false));
+    MIDDLEWARE_SNAPSHOT.with(|snap| *snap.borrow_mut() = None);
 }
 
 /// Drop every installed middleware **and** freeze the chain.
@@ -190,9 +202,15 @@ pub fn __reset_middleware_chain_for_test() {
 pub(crate) fn clear_and_freeze() {
     MIDDLEWARES.with(|cell| cell.borrow_mut().clear());
     FROZEN.with(|cell| cell.set(true));
+    MIDDLEWARE_SNAPSHOT.with(|snap| *snap.borrow_mut() = Some(Rc::new(Vec::new())));
 }
 
-fn snapshot_chain() -> Rc<Vec<Rc<dyn FetchMiddleware>>> {
+fn snapshot_chain() -> MiddlewareChain {
+    if let Some(snap) = MIDDLEWARE_SNAPSHOT.with(|cell| cell.borrow().clone()) {
+        return snap;
+    }
+    // Pre-freeze callers (test-only). The real `call` path always
+    // freezes first, so production never hits this branch.
     MIDDLEWARES.with(|cell| Rc::new(cell.borrow().clone()))
 }
 

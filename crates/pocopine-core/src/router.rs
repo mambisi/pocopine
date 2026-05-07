@@ -306,7 +306,7 @@ pub(crate) fn take_pending_loader_data<T: 'static>(scope_id: ScopeId) -> Option<
 
 fn loader_from_rc<T: 'static>(rc: Rc<dyn std::any::Any>) -> Loader<T> {
     match Rc::downcast::<T>(rc) {
-        Ok(data) => Loader::__from_rc(data),
+        Ok(data) => Loader::from_rc(data),
         Err(_) => panic!(
             "Loader<{}>: pending loader data did not match the extractor's \
              type. Check the loader closure registered on `RouteConfig::loader` \
@@ -329,7 +329,7 @@ pub(crate) fn clear_pending_loader_data() {
 /// `mount.rs` when a route component's scope is being torn down,
 /// so the loader data the component held lives for exactly the
 /// component's mount and no longer.
-pub fn release_loader_slot(scope_id: ScopeId) {
+pub(crate) fn release_loader_slot(scope_id: ScopeId) {
     LOADER_SLOTS.with(|map| {
         map.borrow_mut().remove(&scope_id);
     });
