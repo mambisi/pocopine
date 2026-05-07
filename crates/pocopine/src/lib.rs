@@ -31,9 +31,10 @@ pub use pocopine_core::{
     EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl, Inject, IsTeleported,
     LifecycleContext, LifecyclePhase, ListenerHandle, MountEpoch, NearestParent, Parent, ParentId,
     Plugin, PluginValidationError, Plugins, Refs, RegisteredComponent, RegistryError,
-    RegistryErrorKind, RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted,
-    RwSignal, Scope, ScopeId, ScopePath, ServerError, ServerResult, Setter, Signal, SignalId,
-    Store, StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
+    RegistryErrorKind, RouteComponent, RouteConfig, RouteNavigationCompleted,
+    RouteNavigationFailed, RouteNavigationStarted, RwSignal, Scope, ScopeId, ScopePath,
+    ServerError, ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle,
+    TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -90,9 +91,9 @@ pub mod prelude {
         ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
         ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, ForComponent, Handle, Hook,
         Inject, JobError, JobResult, NearestParent, Parent, Permission, Plugin,
-        PluginValidationError, Plugins, Principal, Role, RouteNavigationCompleted,
-        RouteNavigationFailed, RouteNavigationStarted, RwSignal, Scope, ScopeId, ServerError,
-        ServerResult, Setter, Signal, Store,
+        PluginValidationError, Plugins, Principal, Role, RouteComponent, RouteConfig,
+        RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RwSignal, Scope,
+        ScopeId, ServerError, ServerResult, Setter, Signal, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

@@ -24,6 +24,8 @@
 //! `Counter::register()` and `pocopine::run()` still work for
 //! ad-hoc use — the trait is what `App` calls under the hood.
 
+use std::marker::PhantomData;
+
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::Element;
@@ -54,6 +56,40 @@ pub trait Component {
         _scope_id: crate::reactive::ScopeId,
         _proxy: &wasm_bindgen::JsValue,
     ) {
+    }
+}
+
+/// Component that can be mounted by the client router.
+///
+/// Route-local configuration lives here so guards/loaders stay next
+/// to the component that consumes them. RFC 078 lands this trait
+/// before the guard/loader fields are populated.
+pub trait RouteComponent: Component {
+    fn config() -> RouteConfig<Self>
+    where
+        Self: Sized,
+    {
+        RouteConfig::new()
+    }
+}
+
+/// Route-local configuration for component `C`.
+#[derive(Clone, Copy, Debug)]
+pub struct RouteConfig<C: Component> {
+    _component: PhantomData<fn() -> C>,
+}
+
+impl<C: Component> RouteConfig<C> {
+    pub fn new() -> Self {
+        Self {
+            _component: PhantomData,
+        }
+    }
+}
+
+impl<C: Component> Default for RouteConfig<C> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -184,6 +220,33 @@ impl App {
     /// Matching routes paint their component into the
     /// `<pp-outlet>` with captured params passed through as attributes.
     pub fn route<C: Component>(mut self, pattern: &'static str) -> Self {
+        C::register();
+        router::register_route(pattern, C::NAME);
+        self.routes.push(pattern);
+        self
+    }
+
+    /// Register a component route using its [`RouteComponent`] config.
+    ///
+    /// This is the source-compatible staging name for RFC 078. After
+    /// the route config fields are populated and call sites migrate,
+    /// this path can become the main [`Self::route`] implementation.
+    pub fn route_component<C: RouteComponent>(self, pattern: &'static str) -> Self {
+        self.route_with::<C>(pattern, C::config())
+    }
+
+    /// Register a route with explicit route-local configuration.
+    ///
+    /// This is the additive RFC 078 entrypoint used while the existing
+    /// `route::<C>` API remains source-compatible. Once guards/loaders
+    /// are implemented and call sites migrate, `route::<C:
+    /// RouteComponent>` can become the primary shorthand for
+    /// `route_with(pattern, C::config())`.
+    pub fn route_with<C: Component>(
+        mut self,
+        pattern: &'static str,
+        _config: RouteConfig<C>,
+    ) -> Self {
         C::register();
         router::register_route(pattern, C::NAME);
         self.routes.push(pattern);
