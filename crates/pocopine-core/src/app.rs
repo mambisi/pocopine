@@ -1046,6 +1046,11 @@ impl App {
         router::set_route_rejection_handlers(route_rejection_handlers);
         router::set_route_error_component(route_error_component);
         router::set_not_found_component(not_found_component);
+        // Close the fetch-middleware install seam — RFC-078 §5.10.3
+        // requires plugin install to run before the first
+        // `App::run` so middleware can't be slipped in after the
+        // trust boundary closed. This is the canonical close point.
+        crate::fetch::freeze_middleware_chain();
         crate::plugin::emit(crate::plugin::AppBootStarted {
             component_count: components.len(),
             route_count: routes.len(),
