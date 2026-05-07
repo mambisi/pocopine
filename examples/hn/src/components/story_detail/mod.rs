@@ -56,6 +56,8 @@ impl StoryDetail {
     }
 }
 
+impl RouteComponent for StoryDetail {}
+
 /// Convert wire-shape `ItemNode` (HN Algolia) to the client-side
 /// `Comment` display shape. Filters out dead / deleted nodes and
 /// pre-formats the age so the template stays declarative.

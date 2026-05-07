@@ -76,6 +76,8 @@ pub struct Home {}
 #[handlers]
 impl Home {}
 
+impl RouteComponent for Home {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct Contact {
@@ -123,12 +125,16 @@ impl Contact {
     }
 }
 
+impl RouteComponent for Contact {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component]
 pub struct NotFound {}
 
 #[handlers]
 impl NotFound {}
+
+impl RouteComponent for NotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {
