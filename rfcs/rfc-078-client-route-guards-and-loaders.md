@@ -205,7 +205,7 @@ auth, principals, or any specific deny semantics:
 
 ```rust
 // pocopine-core::router::guard
-pub trait RouteGuard: Send + Sync + 'static {
+pub trait RouteGuard: 'static {
     fn decide(&self, ctx: &RouteContext) -> RouteGuardDecision;
 }
 
@@ -234,6 +234,25 @@ pub enum RouteRejection {
     Custom { reason: &'static str },
 }
 
+pub struct RouteTarget(String);
+
+impl RouteTarget {
+    /// Fallible constructor for app-local redirect targets.
+    /// Accepts `/path`, `/path?query`, and `/path#hash`; rejects
+    /// empty values, protocol-relative URLs (`//host/path`), external
+    /// URLs, and backslash-shaped browser URL ambiguity.
+    pub fn new(path: impl Into<String>) -> Result<Self, RouteTargetError>;
+
+    /// Ergonomic constructor for static, trusted app-local targets.
+    /// Panics on invalid input.
+    pub fn path(path: impl Into<String>) -> Self;
+}
+
+pub enum RouteTargetError {
+    Empty,
+    NotAppLocalPath,
+}
+
 pub struct RouteContext<'a> {
     pub path: &'a str,
     pub params: &'a HashMap<String, String>,
@@ -245,11 +264,13 @@ pub struct RouteContext<'a> {
 }
 ```
 
-`RouteGuard` is intentionally **sync**. Async guard work belongs in
-a loader — loaders already have cancellation, structured error
-returns (`LoaderError`), and an async context. A guard's job is to
-make a fast in-memory decision (predicate against an in-memory
-`AuthSession`, feature-flag check, A/B paint, etc.).
+`RouteGuard` is intentionally **sync** and client-local. It does not
+require `Send + Sync`, because browser-side guards often capture
+`Rc`-backed app state or local signals. Async guard work belongs in a
+loader — loaders already have cancellation, structured error returns
+(`LoaderError`), and an async context. A guard's job is to make a
+fast in-memory decision (predicate against an in-memory `AuthSession`,
+feature-flag check, A/B paint, etc.).
 
 The router does not import any auth types. It calls `decide` and
 acts on the outcome. `RouteRejection` is intentionally generic:

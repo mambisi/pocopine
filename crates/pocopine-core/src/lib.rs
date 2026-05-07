@@ -55,7 +55,10 @@ pub mod tick;
 pub mod timers;
 pub mod watch;
 
-pub use app::{App, AppPlugin, Component, RouteComponent, RouteConfig, SubtreeHandle};
+pub use app::{
+    App, AppPlugin, Component, RouteComponent, RouteConfig, RouteContext, RouteGuard,
+    RouteGuardDecision, RouteRejection, RouteTarget, RouteTargetError, SubtreeHandle,
+};
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
