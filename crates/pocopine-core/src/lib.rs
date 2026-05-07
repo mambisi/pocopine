@@ -57,7 +57,8 @@ pub mod watch;
 
 pub use app::{
     App, AppPlugin, Component, RouteComponent, RouteConfig, RouteContext, RouteGuard,
-    RouteGuardDecision, RouteRejection, RouteTarget, RouteTargetError, SubtreeHandle,
+    RouteGuardDecision, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+    RouteRejectionHandler, RouteTarget, RouteTargetError, SubtreeHandle,
 };
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
