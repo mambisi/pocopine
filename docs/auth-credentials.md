@@ -186,8 +186,13 @@ impl PasswordCredentials for AppUser {
         // Whatever your app uses as the login key — return that.
         &self.email
     }
-    fn password_hash(&self) -> &str {
-        &self.password_hash
+    fn password_hash(&self) -> Option<&str> {
+        // `Option<&str>` so the same trait works for users who
+        // have **no** password (OAuth-only / passkey-only). See
+        // the "Multiple credential types per user" section
+        // below. Pure password-only apps just wrap their column
+        // in `Some(...)`.
+        Some(&self.password_hash)
     }
 
     /// Project to the `AuthUser` shape the framework hands to
@@ -225,7 +230,7 @@ pub struct ChatUser {
 impl PasswordCredentials for ChatUser {
     fn id(&self) -> &str { &self.id }
     fn login_id(&self) -> &str { &self.phone }
-    fn password_hash(&self) -> &str { &self.password_hash }
+    fn password_hash(&self) -> Option<&str> { Some(&self.password_hash) }
     fn to_auth_user(&self) -> AuthUser {
         AuthUser::new(&self.id)
             .with_name(&self.display_name)
@@ -247,7 +252,7 @@ pub struct SocialUser {
 impl PasswordCredentials for SocialUser {
     fn id(&self) -> &str { &self.id }
     fn login_id(&self) -> &str { &self.handle }
-    fn password_hash(&self) -> &str { &self.password_hash }
+    fn password_hash(&self) -> Option<&str> { Some(&self.password_hash) }
     fn to_auth_user(&self) -> AuthUser {
         AuthUser::new(&self.id)
             .with_name(&self.display_handle)
@@ -257,6 +262,70 @@ impl PasswordCredentials for SocialUser {
 ```
 
 Same trait, three different shapes.
+
+## Multiple credential types per user
+
+Real apps usually link more than one auth method to a single
+account: email + password **and** Google OAuth **and** phone OTP,
+all → the same `users.id`. Firebase Auth, Auth0, Clerk all model
+this as "one user, many identities."
+
+`pocopine-auth-credentials` is **one credential type** in that
+mix — specifically the password one. Future sibling crates ship
+parallel traits and routes for the others:
+
+| Future crate | Trait | Mints / verifies |
+|---|---|---|
+| `pocopine-auth-oauth-google` | `GoogleOAuthCredentials` | OAuth2 with Google |
+| `pocopine-auth-oauth-firebase` | `FirebaseCredentials` | Firebase ID tokens |
+| `pocopine-auth-passkey` | `PasskeyCredentials` | WebAuthn |
+| `pocopine-auth-otp` | `PhoneOtpCredentials` | SMS OTP |
+
+Apps that link multiple methods implement multiple traits on the
+**same** `AppUser` struct (or composing struct). Their `users`
+table grows columns / link tables for each provider:
+
+```sql
+CREATE TABLE app_users (
+    id                TEXT PRIMARY KEY,
+    login_id          TEXT NOT NULL UNIQUE,
+    password_hash     TEXT,                 -- nullable: NULL for OAuth-only users
+    google_oauth_sub  TEXT UNIQUE,          -- non-null if Google linked
+    firebase_uid      TEXT UNIQUE,          -- non-null if Firebase linked
+    -- ... etc
+);
+```
+
+The `PasswordCredentials::password_hash()` method returns
+`Option<&str>` for exactly this reason. A user who signed up via
+Google OAuth has `password_hash = NULL` in their row; their
+`password_hash()` returns `None`. The login handler treats that
+the same as "user not found":
+
+```
+login("alice@example.com", "anything")
+    ↓
+find_by_login_id("alice@example.com") → Some(user), but password_hash() → None
+    ↓
+fall through to the dummy hash, run argon2 verify
+    ↓
+return InvalidCredentials (401)
+```
+
+A timing/CPU/shape probe sees the same response regardless of
+whether the input fell into "no such user," "OAuth-only account,"
+or "wrong password." All three branches hit argon2 against the
+dummy hash before returning the closed-set
+`invalid_credentials`. Defense against
+"is-this-email-a-google-account?" enumeration is implicit in the
+trait shape — apps don't have to remember to filter
+`password_hash IS NOT NULL` in their SQL; the framework does the
+right thing if they just return the row.
+
+When the OAuth / passkey / OTP crates ship, an account-linking
+flow will let users add a password to a previously-passwordless
+account (and vice versa). That's a separate plugin — out of
+scope for the current PR, but the trait shape is ready.
 
 The framework reads `password_hash()` exactly twice per login
 (once to verify, once nowhere — the value never escapes); it

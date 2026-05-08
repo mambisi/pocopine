@@ -435,6 +435,40 @@ async fn signup_login_round_trip_keyed_on_username_with_case_folding() {
 }
 
 #[tokio::test]
+async fn login_against_passwordless_user_returns_invalid_credentials() {
+    pocopine_server::__reset_for_test();
+    // Multi-credential model: a user who signed up via OAuth /
+    // passkey has a record with `password_hash = None`. Hitting
+    // the password login route for that account must return the
+    // same `InvalidCredentials` shape as "no such user" — no
+    // probe-based distinction.
+    let store = TestUserStore::default();
+    store.seed_passwordless("alice@example.com");
+    let app = Server::new(axum::Router::new())
+        .plugin(Credentials::new(
+            fixed_secret(),
+            store,
+            TestTokenStore::default(),
+        ))
+        .try_finalize()
+        .expect("server finalize");
+
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/login",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "any-password",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let body = body_to_json(resp.into_body()).await;
+    assert_eq!(body["error"], "invalid_credentials");
+}
+
+#[tokio::test]
 async fn signup_keyed_on_username_rejects_invalid_chars() {
     pocopine_server::__reset_for_test();
     let app = Server::new(axum::Router::new())
