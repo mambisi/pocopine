@@ -65,8 +65,23 @@ Example:
 
 ## Composition Boundary
 
-Axes and grid are currently part of each chart component instead of separate
-child components. That is deliberate for the first SVG pass: HTML custom elements
-inside SVG have namespace and slotting edge cases, so the first stable component
-keeps the SVG tree self-contained. Once that path is proven in examples, the
-same generated guide data can be exposed to composable axis and grid components.
+Preset charts (`pine-line-chart`, `pine-scatter-chart`, `pine-area-chart`, and
+`pine-bar-chart`) still own their generated axes and grid. That keeps the common
+case compact: set `x_label` / `y_label`, bind data, and style the emitted hooks.
+(`pine-pie-chart` is radial and has no axes or grid.)
+
+`pine-cartesian-chart` exposes guide ownership as child components:
+
+```html
+<pine-cartesian-chart label="Revenue">
+  <pine-chart-grid></pine-chart-grid>
+  <pine-x-axis label="Week"></pine-x-axis>
+  <pine-y-axis label="Revenue"></pine-y-axis>
+  <!-- series and reference children -->
+</pine-cartesian-chart>
+```
+
+Those child tags are definitions, not nested SVG nodes. They register intent with
+the nearest Cartesian root, and the root still renders one valid SVG tree. This
+preserves namespace correctness, shared scales, responsive sizing, and paint
+order while letting applications opt into or omit guides explicitly.
