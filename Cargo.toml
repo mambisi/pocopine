@@ -10,6 +10,7 @@ members = [
     "crates/pocopine-analytics",
     "crates/pocopine-auth",
     "crates/pocopine-auth-client",
+    "crates/pocopine-auth-credentials",
     "crates/pocopine-auth-jwt",
     "crates/pocopine-cli",
     "crates/pocopine-core",
@@ -58,6 +59,7 @@ repository = "https://github.com/mambisi/pocopine"
 pocopine-analytics = { path = "crates/pocopine-analytics", version = "0.1.0" }
 pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
 pocopine-auth-client = { path = "crates/pocopine-auth-client", version = "0.1.0" }
+pocopine-auth-credentials = { path = "crates/pocopine-auth-credentials", version = "0.1.0" }
 pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }
@@ -67,6 +69,7 @@ pocopine-live = { path = "crates/pocopine-live", version = "0.1.0" }
 pocopine-logging = { path = "crates/pocopine-logging", version = "0.1.0" }
 pocopine-macros = { path = "crates/pocopine-macros", version = "0.1.0" }
 pocopine-observe = { path = "crates/pocopine-observe", version = "0.1.0" }
+pocopine-server = { path = "crates/pocopine-server", version = "0.1.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
