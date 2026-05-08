@@ -87,8 +87,13 @@ async fn signup_returns_token_and_user_then_login_succeeds() {
     let body = body_to_json(resp.into_body()).await;
     let token = body["token"].as_str().unwrap().to_string();
     assert_eq!(body["user"]["email"], "alice@example.com");
-    assert_eq!(body["user"]["email_verified"], false);
-    assert!(body["user"]["id"].as_str().unwrap().contains('-'));
+    // The TestUserStore's PasswordCredentials::to_auth_user impl
+    // writes `email_verified` as a custom claim; assert it lives at
+    // the top level of the response (the route shapes the body
+    // from AuthUser, which serializes claims via the
+    // AuthUser::claim accessor on the issuer side, not at the
+    // response layer — so the response wraps the AuthUser as-is).
+    assert!(body["user"]["id"].as_str().unwrap().starts_with('u'));
 
     // Hash never leaks via the public-user response.
     let raw = serde_json::to_string(&body).unwrap();

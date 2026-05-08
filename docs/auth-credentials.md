@@ -3,8 +3,11 @@
 Email + password sign-up / login / logout for pocopine apps. The
 `pocopine-auth-credentials` crate ships:
 
-- `User` record (argon2id-hashed password, roles, permissions,
-  metadata).
+- `PasswordCredentials` trait — apps implement it on **their own**
+  user/account record (Postgres row, custom struct, anything). The
+  crate doesn't define a `User` type; it just reads `id()`,
+  `email()`, `password_hash()`, and a `to_auth_user()` projection
+  off whatever the app gives it.
 - `UserStore` / `TokenStore` traits — implement against your database.
 - `Argon2Params` (OWASP defaults + min-validation) and the
   argon2id wrapper.
@@ -15,15 +18,21 @@ Email + password sign-up / login / logout for pocopine apps. The
   `JwtVerifier::custom(...)` so the auth middleware on the same
   Router accepts the tokens this builder issues.
 
-What the crate **does not** ship: a default in-memory store. Apps
-implement `UserStore`/`TokenStore` against their database. The
-in-memory shape is a footgun (data lost every restart, no shared
-state across processes), and we'd rather you spend ten minutes on
-the real thing than ship a tryout backend you'll forget to swap.
+What the crate **does not** ship:
+
+- A `User` struct. The framework doesn't own user identity — apps
+  do. Many apps need one user table that spans password + OAuth +
+  passkey + magic-link auth, with the password hash being one
+  column among many. Bundling our own `User` would force a
+  parallel record they'd have to keep in sync.
+- A default in-memory store. The in-memory shape is a footgun
+  (data lost every restart, no shared state across processes),
+  and we'd rather you spend ten minutes on the real thing than
+  ship a tryout backend you'll forget to swap.
 
 This page walks Postgres + [`sqlx`](https://docs.rs/sqlx) end to
 end. SQLite, MySQL, Redis, or any other backend works the same way
-— implement the same two traits.
+— implement the same trait + storage contract.
 
 ## At a glance
 
@@ -65,13 +74,14 @@ client → POST /_pocopine/auth/logout        ─┘     │
                                                    │
                                                    ▼
                                        UserStore::find_by_email
-                                       UserStore::create / update
-                                       TokenStore::put / take    (PR-3 email flows)
+                                       UserStore::create(email, hash) → MyUser
+                                       PasswordCredentials::password_hash()
+                                       PasswordCredentials::to_auth_user() → AuthUser
                                        argon2id hash / verify
                                        JwtIssuer::sign  →  HS256 session token
                                                    │
                                                    ▼
-                                       Returns {token, user}
+                                       Returns {token, user: AuthUser}
                                        Frontend calls
                                        AuthSession::sign_in(token, principal)
                                        (BearerMiddleware reads it on subsequent calls)
@@ -81,33 +91,93 @@ every other request → axum middleware → JwtVerifier::custom(creds.verifier_c
                                           → #[server(guard = ...)] sees a real user
 ```
 
-## Step 1 — implement `UserStore` against Postgres
+## Step 1 — define your user type
+
+Whatever your app's `User` row looks like, add a `PasswordCredentials`
+impl. The trait has four methods, all reads:
+
+```rust
+use pocopine_auth::{AuthUser, Role};
+use pocopine_auth_credentials::PasswordCredentials;
+use serde_json::json;
+
+pub struct AppUser {
+    pub id: String,
+    pub email: String,
+    pub email_verified: bool,
+    pub password_hash: String,
+    pub roles: Vec<String>,
+    pub display_name: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    // ... whatever else lives on your real `users` table.
+}
+
+impl PasswordCredentials for AppUser {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn email(&self) -> &str {
+        &self.email
+    }
+    fn password_hash(&self) -> &str {
+        &self.password_hash
+    }
+
+    /// Project to the `AuthUser` shape the framework hands to
+    /// `JwtIssuer` (for the JWT claim set) and to the
+    /// signup/login response body.
+    fn to_auth_user(&self) -> AuthUser {
+        let mut user = AuthUser::new(&self.id).with_email(&self.email);
+        if let Some(name) = &self.display_name {
+            user = user.with_name(name);
+        }
+        for role in &self.roles {
+            user = user.with_role(Role::named(role));
+        }
+        // Surface anything else through the `claims` map. The
+        // verifier on the server side reads them back via
+        // `ClaimMap::oidc()` extended with the paths you care
+        // about; on the wasm side they round-trip through
+        // `AuthUser::claim("...")`.
+        user.with_claim("email_verified", json!(self.email_verified))
+    }
+}
+```
+
+The framework reads `password_hash()` exactly twice per login
+(once to verify, once nowhere — the value never escapes); it
+reads the others on signup and on login to build the response and
+the JWT. Anything you don't surface in `to_auth_user()` simply
+isn't visible to the framework — the rest of your row stays your
+business.
+
+## Step 2 — implement `UserStore` against Postgres
 
 Schema:
 
 ```sql
-CREATE TABLE auth_users (
+CREATE TABLE app_users (
     id                TEXT PRIMARY KEY,
     email             TEXT NOT NULL UNIQUE,
     email_verified    BOOLEAN NOT NULL DEFAULT FALSE,
     password_hash     TEXT NOT NULL,
+    display_name      TEXT,
     roles             JSONB NOT NULL DEFAULT '[]',
-    permissions       JSONB NOT NULL DEFAULT '[]',
-    metadata          JSONB NOT NULL DEFAULT '{}',
-    created_at_ms     BIGINT NOT NULL,
-    updated_at_ms     BIGINT NOT NULL
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX auth_users_email_lower_idx
-    ON auth_users (LOWER(email));
+CREATE INDEX app_users_email_lower_idx
+    ON app_users (LOWER(email));
 ```
 
-The trait:
+The trait — three methods to implement (`find_by_email`,
+`find_by_id`, `create`):
 
 ```rust
 use async_trait::async_trait;
-use pocopine_auth_credentials::{StoreError, User, UserStore};
+use pocopine_auth_credentials::{StoreError, UserStore};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 pub struct PgUserStore {
     pub pool: PgPool,
@@ -115,117 +185,51 @@ pub struct PgUserStore {
 
 #[async_trait]
 impl UserStore for PgUserStore {
-    async fn find_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT * FROM auth_users WHERE LOWER(email) = LOWER($1)",
+    type User = AppUser;
+
+    async fn find_by_email(&self, email: &str) -> Result<Option<AppUser>, StoreError> {
+        sqlx::query_as::<_, AppUser>(
+            "SELECT * FROM app_users WHERE LOWER(email) = LOWER($1)",
         )
         .bind(email)
         .fetch_optional(&self.pool)
         .await
-        .map_err(box_error)?;
-        Ok(row.map(UserRow::into_user))
+        .map_err(|e| Box::new(e) as StoreError)
     }
 
-    async fn find_by_id(&self, id: &str) -> Result<Option<User>, StoreError> {
-        let row = sqlx::query_as::<_, UserRow>("SELECT * FROM auth_users WHERE id = $1")
+    async fn find_by_id(&self, id: &str) -> Result<Option<AppUser>, StoreError> {
+        sqlx::query_as::<_, AppUser>("SELECT * FROM app_users WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(box_error)?;
-        Ok(row.map(UserRow::into_user))
+            .map_err(|e| Box::new(e) as StoreError)
     }
 
-    async fn create(&self, user: User) -> Result<(), StoreError> {
-        let result = sqlx::query(
-            "INSERT INTO auth_users
-                (id, email, email_verified, password_hash, roles,
-                 permissions, metadata, created_at_ms, updated_at_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    async fn create(
+        &self,
+        email: &str,
+        password_hash: String,
+    ) -> Result<AppUser, StoreError> {
+        // The store decides id format. UUIDv7 is the recommended
+        // default — sortable by creation time, collision-resistant.
+        let id = Uuid::now_v7().to_string();
+        let user = sqlx::query_as::<_, AppUser>(
+            "INSERT INTO app_users (id, email, email_verified, password_hash)
+             VALUES ($1, LOWER($2), FALSE, $3)
+             RETURNING *",
         )
-        .bind(&user.id)
-        .bind(&user.email)
-        .bind(user.email_verified)
-        .bind(&user.password_hash)
-        .bind(serde_json::to_value(&user.roles).unwrap())
-        .bind(serde_json::to_value(&user.permissions).unwrap())
-        .bind(serde_json::to_value(&user.metadata).unwrap())
-        .bind(user.created_at_ms as i64)
-        .bind(user.updated_at_ms as i64)
-        .execute(&self.pool)
-        .await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-                Err(box_error(sqlx::Error::Database(db)))
-            }
-            Err(err) => Err(box_error(err)),
-        }
-    }
-
-    async fn update(&self, user: User) -> Result<(), StoreError> {
-        sqlx::query(
-            "UPDATE auth_users
-                SET email = $2, email_verified = $3, password_hash = $4,
-                    roles = $5, permissions = $6, metadata = $7,
-                    updated_at_ms = $8
-              WHERE id = $1",
-        )
-        .bind(&user.id)
-        .bind(&user.email)
-        .bind(user.email_verified)
-        .bind(&user.password_hash)
-        .bind(serde_json::to_value(&user.roles).unwrap())
-        .bind(serde_json::to_value(&user.permissions).unwrap())
-        .bind(serde_json::to_value(&user.metadata).unwrap())
-        .bind(user.updated_at_ms as i64)
-        .execute(&self.pool)
+        .bind(&id)
+        .bind(email)
+        .bind(&password_hash)
+        .fetch_one(&self.pool)
         .await
-        .map_err(box_error)?;
-        Ok(())
-    }
-
-    async fn delete(&self, id: &str) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM auth_users WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(box_error)?;
-        Ok(())
+        .map_err(|e| Box::new(e) as StoreError)?;
+        Ok(user)
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct UserRow {
-    id: String,
-    email: String,
-    email_verified: bool,
-    password_hash: String,
-    roles: serde_json::Value,
-    permissions: serde_json::Value,
-    metadata: serde_json::Value,
-    created_at_ms: i64,
-    updated_at_ms: i64,
-}
-
-impl UserRow {
-    fn into_user(self) -> User {
-        let mut user = User::new(self.id, self.email, self.password_hash, self.created_at_ms as u64);
-        user.email_verified = self.email_verified;
-        user.updated_at_ms = self.updated_at_ms as u64;
-        user.roles = serde_json::from_value(self.roles).unwrap_or_default();
-        user.permissions = serde_json::from_value(self.permissions).unwrap_or_default();
-        user.metadata = serde_json::from_value(self.metadata).unwrap_or_default();
-        user
-    }
-}
-
-fn box_error<E>(err: E) -> StoreError
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    Box::new(err)
-}
+// You'll typically derive sqlx::FromRow on AppUser, or hand-roll
+// a `FromRow` impl that handles the JSONB columns. See sqlx docs.
 ```
 
 A few non-obvious things to keep in mind:
@@ -233,16 +237,22 @@ A few non-obvious things to keep in mind:
 - **Case-insensitive email lookup.** Index on `LOWER(email)` and
   query through `LOWER(...)`. The credentials crate folds at signup
   time, but defenders shouldn't rely on call-site casing.
-- **Unique violation on signup.** The crate translates a `create`
-  error into `CredentialsError::EmailTaken → 409` when the email
-  already exists. Map your DB's unique-constraint failure to the
-  boxed error variant; the framework decides the HTTP status.
-- **Nothing in the error message reaches the wire.** `CredentialsError::Storage`
-  becomes `500 {"error": "storage_error"}` — the closed-set
-  identifier — and the original error is logged via `tracing` at
-  `pocopine.log`.
+- **Unique violation on signup.** The crate translates *any* error
+  from `create` into `CredentialsError::EmailTaken → 409`. The
+  original error is logged via `tracing` at `pocopine.log` so you
+  can tell duplicate-email apart from a connection drop in your
+  logs even though both surface the same closed-set HTTP reason.
+- **Nothing in the error message reaches the wire.** The body is
+  `{"error": "email_taken"}` — closed-set identifier — and the
+  detail is in the log line. RFC-077 §6 invariant.
+- **`to_auth_user` runs once per authenticated request.** The JWT
+  carries the projected fields; the verifier on the other side
+  rebuilds an `AuthUser` from the claims, so anything you forget
+  to project doesn't get to the request handler. Keep this method
+  cheap — it's per-request after sign-in too if the session
+  cookie path is used.
 
-## Step 2 — implement `TokenStore` against Postgres
+## Step 3 — implement `TokenStore` against Postgres
 
 The `TokenStore` is for ephemeral password-reset / email-verification
 tokens. It's not used by the routes that ship in this slice
@@ -285,7 +295,7 @@ impl TokenStore for PgTokenStore {
         .bind(record.expires_at_ms as i64)
         .execute(&self.pool)
         .await
-        .map_err(box_error)?;
+        .map_err(|e| Box::new(e) as StoreError)?;
         Ok(())
     }
 
@@ -305,7 +315,7 @@ impl TokenStore for PgTokenStore {
         .bind(&token_hash[..])
         .fetch_optional(&self.pool)
         .await
-        .map_err(box_error)?;
+        .map_err(|e| Box::new(e) as StoreError)?;
 
         let Some((user_id, kind_str, exp_ms)) = row else {
             return Ok(None);
@@ -325,7 +335,7 @@ impl TokenStore for PgTokenStore {
             .bind(now_ms as i64)
             .execute(&self.pool)
             .await
-            .map_err(box_error)?;
+            .map_err(|e| Box::new(e) as StoreError)?;
         Ok(result.rows_affected() as usize)
     }
 }
@@ -352,7 +362,7 @@ RETURNING` is the idiomatic shape; with Redis, `WATCH/MULTI/EXEC`
 or a Lua script. Don't read-then-delete in two round trips — that's
 the replay vector RFC-074 §6.1 calls out by name.
 
-## Step 3 — wire it up
+## Step 4 — wire it up
 
 ```rust
 use pocopine_auth_credentials::Credentials;
@@ -404,9 +414,12 @@ required values; everything else is a builder method:
 | `.with_argon_params(Argon2Params)` | OWASP m=64MiB / t=3 / p=4 | Argon2id cost. Validated against `owasp_minimum()` (m=19MiB / t=2 / p=1). |
 | `.with_issuer(name)` | `"pocopine"` | `iss` claim. |
 | `.with_audience(name)` | `"pocopine"` | `aud` claim. |
-| `.with_id_generator(closure)` | millis-prefix + UUIDv7 | Replace the default user-id scheme. |
 | `.with_password_validator(closure)` | min 8 chars | NIST SP 800-63B-style checks, HIBP, anything you want. |
 | `.with_cookie_name(cow)` | `pocopine_session` | Used by the cookie token source on the verifier side. |
+
+The user-id scheme is the **store's** decision — `UserStore::create`
+returns the constructed user, so the store picks the format
+(UUIDv7, snowflake, ULID, sequential, …) that matches its database.
 
 The `.verifier_config()` method always returns a fresh `JwtConfig`
 matching the current builder state. Calling it twice is fine — it
@@ -416,11 +429,11 @@ doesn't lock builder state.
 
 | Concern | Owned by |
 |---|---|
-| Plaintext-password storage | **Framework** — only `password_hash` lives in `User`. Argon2id PHC strings, never reversed. |
+| Plaintext-password storage | **Framework** — only the argon2id PHC string ever touches the store; the framework never logs or serializes it. |
 | User-enumeration via response timing | **Framework** — constant-time login (always runs `verify_password` against a pre-baked dummy hash on miss). |
 | User-enumeration via response shape | **You (PR-3)** — the email-flow `/password/reset/request` route returns `200 {}` regardless of whether the address matches. |
 | Token replay | **Framework** — reset/verify tokens are stored as their SHA-256 hash, single-use via `take`. |
-| `password_hash` leak via logs | **Framework** — `User`'s `Debug` impl redacts. The signup/login response builds a `PublicUser` projection that excludes the hash. |
+| `password_hash` leak via logs | **Framework** — the response body builds an `AuthUser` projection that excludes the hash. **You** make sure your `AppUser`'s `Debug` impl redacts the hash too. |
 | Argon2 misuse | **Framework** — `Argon2Params::validate` rejects below OWASP minimum at builder time. |
 | Session-token forgery | **Framework** — HS256 with the same `SecretBytes` on both sides; algorithm is pinned in `verifier_config`. |
 | CSRF on `/login` etc. | **You** — install your CSRF middleware on the router. |
@@ -439,6 +452,9 @@ Per RFC-074 §6 these are firm boundaries. Production checklist:
    is the seam if you need denylists).
 5. Treat `with_argon_params` overrides as security-critical config;
    never lower below `Argon2Params::owasp_minimum()`.
+6. Custom `Debug` on your user record that redacts `password_hash`.
+   The framework does this for the types it owns; your row type is
+   yours to harden.
 
 ## Pairs with `pocopine-auth-client`
 
@@ -451,11 +467,13 @@ walkthrough — you'll usually wire both sides in the same change.
 ## Out of scope (deferred, per RFC-074 PR sequence)
 
 - Email flows: `EmailSender` trait, `/password/reset/{request,confirm}`,
-  `/email/verify/{request,confirm}` ship in PR-3.
+  `/email/verify/{request,confirm}` ship in PR-3. PR-3 will add
+  `update_password_hash` and `set_email_verified` methods to
+  `UserStore` (default-no-op for apps that don't need them).
 - HIBP / breach checks ship in `pocopine-auth-credentials-hibp`.
 - A `/me` route is under consideration for PR-4 (apps frequently
   add their own).
-- A bundled Postgres / SQLite / Redis adapter crate. Open to
+- Bundled Postgres / SQLite / Redis adapter crates. Open to
   contributions — the test fixture in
   `crates/pocopine-auth-credentials/tests/common/mod.rs` shows the
   exact trait shape an adapter would implement.
