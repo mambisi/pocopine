@@ -42,6 +42,7 @@ use crate::server::{Result as ServerResult, ServerError};
 /// a middleware before forwarding (`next.run(request)`) lets a
 /// plugin add headers, rewrite the URL, sign the body, etc.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct FetchRequest {
     pub url: String,
     pub method: String,
@@ -55,7 +56,7 @@ pub struct FetchRequest {
     /// the call replay-safe (`#[server(idempotent)]`). Auth middleware
     /// may retry these after token refresh; it must fail closed for
     /// the default `false` case.
-    pub replay_safe: bool,
+    pub(crate) replay_safe: bool,
 }
 
 impl FetchRequest {
@@ -309,9 +310,10 @@ where
 
 /// Options for [`call_with_options`].
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct FetchOptions {
-    pub abort_signal: Option<AbortSignal>,
-    pub replay_safe: bool,
+    pub(crate) abort_signal: Option<AbortSignal>,
+    pub(crate) replay_safe: bool,
 }
 
 impl FetchOptions {

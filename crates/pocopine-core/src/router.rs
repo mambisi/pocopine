@@ -548,9 +548,9 @@ fn mount_current() {
     // on every code path remembering to clear.
     clear_pending_loader_data();
 
-    // Mark this navigation. Any loader spawned by an earlier
-    // `mount_current` captured the previous token at start; when it
-    // resolves it'll find this new value and drop its result.
+    // Mark this navigation. The abort above stops loader-owned
+    // fetches on the wire; this token bump is the residual stale-result
+    // fence for any previous loader that still resolves.
     let nav_token = bump_route_token();
 
     let has_route_hooks = crate::plugin::has_route_navigation_hooks();

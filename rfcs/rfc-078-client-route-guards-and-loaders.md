@@ -838,16 +838,18 @@ pub struct LoaderContext<'a> {
     pub path: &'a str,
     pub params: &'a HashMap<String, String>,
     pub query: &'a HashMap<String, String>,
-    /// Abort signal for this navigation. Loaders pass it into
-    /// `fetch::call(request.with_signal(ctx.abort_signal()))`
-    /// so the underlying `window.fetch` is cancelled on
-    /// supersession.
-    pub fn abort_signal(&self) -> AbortSignal;
+    /// Abort signal for this navigation, when the browser supplied
+    /// one. Generated `#[server]` calls inherit it automatically
+    /// while the loader future is being polled.
+    pub fn abort_signal(&self) -> Option<AbortSignal>;
 }
 
+#[non_exhaustive]
 pub struct FetchRequest {
     // ... existing fields ...
     pub abort_signal: Option<AbortSignal>,
+    // Private; middleware reads this through `is_replay_safe()`.
+    replay_safe: bool,
 }
 ```
 
