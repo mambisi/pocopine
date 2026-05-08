@@ -43,6 +43,16 @@ looks the way it does — the code itself tells you *what*.
   for adding a JWT identity provider preset (in-tree or
   community-maintained), with the mandatory integration-test
   shape and the bundled-providers list.
+- [`auth-credentials.md`](./auth-credentials.md) — first-party
+  email + password tutorial: implement `UserStore`/`TokenStore`
+  against your database (Postgres + `sqlx` walkthrough),
+  plug `Credentials` in as a `ServerPlugin`, pair the issuer
+  with `JwtVerifier::custom`. The crate ships only the trait
+  shapes — no bundled in-memory backend.
+- [`auth-client.md`](./auth-client.md) — wasm-side tutorial:
+  install the bearer fetch middleware, wire `auth_plugin()` to
+  install `AuthSession` + `Unauthorized → /login` redirect, and
+  build route guards from `Predicate` values via `predicate_guard`.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
