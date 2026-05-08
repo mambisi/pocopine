@@ -648,6 +648,16 @@ Per RFC-074 §6 these are firm boundaries. Production checklist:
    The framework does this for the types it owns; your row type is
    yours to harden.
 
+## Phone OTP without waiting for the official crate
+
+The future `pocopine-auth-otp` crate will ship phone OTP as a
+`ServerPlugin` alongside this credentials plugin. Until it lands,
+the `auth-phone-otp-tutorial.md` walks through the full DIY
+pattern using the same primitives this crate uses (Twilio +
+Postgres + `JwtIssuer`), with the same JWT shape so your
+verifier middleware accepts both password-issued and OTP-issued
+tokens. Apps that need phone OTP today don't need to wait.
+
 ## Pairs with `pocopine-auth-client`
 
 The wasm-side companion (`pocopine-auth-client`) is what calls the
