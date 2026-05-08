@@ -159,6 +159,8 @@
   </pine-chart-responsive>
 
   <pine-chart-legend label="Cohort spread legend"
+                     interactive="true"
+                     @pp:chart:legend-toggle="toggle_scatter_series"
                      pp-bind:items="scatter_legend"></pine-chart-legend>
 
   <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
@@ -170,6 +172,8 @@
   </pine-chart-responsive>
 
   <pine-chart-legend label="Trend area legend"
+                     interactive="true"
+                     @pp:chart:legend-toggle="toggle_area_series"
                      pp-bind:items="area_legend"></pine-chart-legend>
 
   <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
@@ -181,6 +185,8 @@
   </pine-chart-responsive>
 
   <pine-chart-legend label="Distribution legend"
+                     interactive="true"
+                     @pp:chart:legend-toggle="toggle_bar_series"
                      pp-bind:items="bar_legend"></pine-chart-legend>
 
   <pine-chart-responsive class="chart-panel chart-panel--radial"
@@ -198,5 +204,6 @@
 
   <pine-chart-legend label="Channel share legend"
                      interactive="true"
+                     @pp:chart:legend-toggle="toggle_pie_slice"
                      pp-bind:items="pie_legend"></pine-chart-legend>
 </root>

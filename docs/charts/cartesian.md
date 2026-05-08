@@ -71,6 +71,11 @@ namespace handling, responsive sizing, scales, and paint order in one place.
 `pine-cartesian-chart` when the chart needs explicit child composition or when a
 chart should mix bars, lines, areas, scatters, references, and annotations.
 
+Each series child accepts `visible`. Hidden children stay mounted and keep their
+app-authored props, but they do not contribute domains, axes, paths, bars, or
+points. Use this with interactive legends when a dashboard needs controlled
+filtering without letting the chart own application state.
+
 ## Data
 
 Line-only numeric charts use the same `ChartPoint` type as `pine-line-chart`:

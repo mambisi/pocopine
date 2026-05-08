@@ -41,6 +41,7 @@ legend items toggle their own `active` state, expose `data-active`, and emit
 
 ```rust
 use pine_charts::LegendToggle;
+use pocopine::prelude::JsValue;
 ```
 
 Payload fields:
@@ -53,3 +54,20 @@ Payload fields:
 The legend intentionally does not hide chart series by itself. Applications use
 the event to decide whether toggling should filter data, dim marks, open a
 drilldown, or do nothing.
+
+For the common controlled-filtering case, update chart data with the visibility
+helpers, then rebuild legend items from that same data:
+
+```rust
+use pine_charts::{line_legend_items, set_line_series_visible, LegendToggle};
+use pocopine::prelude::JsValue;
+
+pub fn toggle_series(&mut self, event: JsValue) {
+    let Some(event) = LegendToggle::from_event_value(event) else {
+        return;
+    };
+    if set_line_series_visible(&mut self.series, &event.key, event.active) {
+        self.legend = line_legend_items(&self.series);
+    }
+}
+```

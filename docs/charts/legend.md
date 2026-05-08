@@ -73,6 +73,40 @@ The component renders an HTML list with stable styling hooks:
 Interactive items also expose `aria-pressed`. Toggling emits
 `pp:chart:legend-toggle`; the chart does not filter itself.
 
+## Controlled Visibility
+
+Series and pie slices have an explicit `visible` field. Chart renderers skip
+items where `visible == false`, and the legend helpers mirror that state through
+`LegendItem.active`. Use the toggle event to update the same app-owned data:
+
+```rust
+use pine_charts::{
+    line_legend_items, set_line_series_visible, ChartLineSeries, LegendItem,
+    LegendToggle,
+};
+use pocopine::prelude::JsValue;
+
+pub struct Metrics {
+    series: Vec<ChartLineSeries>,
+    legend_items: Vec<LegendItem>,
+}
+
+impl Metrics {
+    pub fn toggle_series(&mut self, event: JsValue) {
+        let Some(event) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_line_series_visible(&mut self.series, &event.key, event.active) {
+            self.legend_items = line_legend_items(&self.series);
+        }
+    }
+}
+```
+
+Matching helpers exist for area, scatter, bar, and pie data:
+`set_area_series_visible`, `set_scatter_series_visible`,
+`set_bar_series_visible`, and `set_pie_slice_visible`.
+
 Markers do not ship with framework colors. Applications map `data-series` to
 their palette:
 

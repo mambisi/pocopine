@@ -37,13 +37,26 @@ impl LegendItem {
         label: impl Into<String>,
         series: impl Into<String>,
     ) -> Self {
+        Self::with_series_active(key, label, series, true)
+    }
+
+    pub fn with_series_active(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        series: impl Into<String>,
+        active: bool,
+    ) -> Self {
         Self {
             key: key.into(),
             label: label.into(),
             series: series.into(),
-            active: true,
+            active,
         }
     }
+}
+
+pub(crate) const fn default_visible() -> bool {
+    true
 }
 
 pub(crate) fn series_label_or_default(label: &str, index: usize) -> String {
@@ -54,18 +67,19 @@ pub(crate) fn series_label_or_default(label: &str, index: usize) -> String {
     }
 }
 
-pub(crate) fn series_legend_items(
+pub(crate) fn series_legend_items_with_visibility(
     key_prefix: &str,
-    labels: impl IntoIterator<Item = String>,
+    labels: impl IntoIterator<Item = (String, bool)>,
 ) -> Vec<LegendItem> {
     labels
         .into_iter()
         .enumerate()
-        .map(|(index, label)| {
-            LegendItem::with_series(
+        .map(|(index, (label, active))| {
+            LegendItem::with_series_active(
                 format!("{key_prefix}-{index}-{label}"),
                 label.clone(),
                 label,
+                active,
             )
         })
         .collect()
@@ -153,9 +167,12 @@ mod tests {
 
     #[test]
     fn helper_builds_series_legend_items() {
-        let items = series_legend_items(
+        let items = series_legend_items_with_visibility(
             "line-series",
-            ["Actual".to_owned(), series_label_or_default("", 1)],
+            [
+                ("Actual".to_owned(), true),
+                (series_label_or_default("", 1), true),
+            ],
         );
 
         assert_eq!(items.len(), 2);
@@ -164,6 +181,19 @@ mod tests {
         assert_eq!(items[0].series, "Actual");
         assert_eq!(items[1].key, "line-series-1-Series 2");
         assert_eq!(items[1].label, "Series 2");
+        assert!(items[1].active);
+    }
+
+    #[test]
+    fn helper_preserves_series_visibility() {
+        let items = series_legend_items_with_visibility(
+            "line-series",
+            [("Actual".to_owned(), false), ("Target".to_owned(), true)],
+        );
+
+        assert_eq!(items[0].key, "line-series-0-Actual");
+        assert!(!items[0].active);
+        assert_eq!(items[1].key, "line-series-1-Target");
         assert!(items[1].active);
     }
 

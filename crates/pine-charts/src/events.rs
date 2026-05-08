@@ -87,3 +87,17 @@ pub struct LegendToggle {
     pub series: String,
     pub active: bool,
 }
+
+impl LegendToggle {
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_event_value(event: wasm_bindgen::JsValue) -> Option<Self> {
+        let detail =
+            js_sys::Reflect::get(&event, &wasm_bindgen::JsValue::from_str("detail")).ok()?;
+        pocopine::__private::serde_wasm_bindgen::from_value(detail).ok()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_event_value(_: wasm_bindgen::JsValue) -> Option<Self> {
+        None
+    }
+}
