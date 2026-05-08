@@ -41,6 +41,8 @@ struct ObsPluginSecretPage {
 #[handlers]
 impl ObsPluginSecretPage {}
 
+impl RouteComponent for ObsPluginSecretPage {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-plugin-custom",
