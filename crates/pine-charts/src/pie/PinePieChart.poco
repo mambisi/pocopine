@@ -23,7 +23,7 @@
        @pointermove="on_pointer_move"
        @pointerleave="clear_hover">
     <g class="pine-chart-pie-slices" data-layer="series">
-      <template pp-for="slice in slices" pp-key="slice.key">
+      <template pp-for="slice in painted_slices" pp-key="slice.key">
         <path class="pine-chart-pie-slice"
               :d="slice.d"
               role="option"
