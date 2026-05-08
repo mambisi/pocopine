@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (open questions resolved 2026-05-07; extensibility redesign applied) |
+| **Status** | Accepted (core primitives implemented; `pocopine-auth-client` follow-up pending) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-07 |
 | **Related** | [`rfc-003-router.md`](./rfc-003-router.md), [`rfc-076-app-plugin-lifecycle.md`](./rfc-076-app-plugin-lifecycle.md), [`rfc-077-server-plugin-lifecycle.md`](./rfc-077-server-plugin-lifecycle.md), [`rfc-074-auth-credentials-and-provider-trait.md`](./rfc-074-auth-credentials-and-provider-trait.md) |
@@ -158,7 +158,8 @@ honest about what's "auth concern" vs "router concern."
 - Loader data has **per-mount lifetime** — cleared when the route's
   component unmounts, no built-in cache. Caching/SWR ships separately
   as a plugin or explicit route option.
-- Cancellation: navigating away from an in-flight loader aborts it.
+- Cancellation: navigating away from an in-flight loader aborts its
+  browser fetches and drops stale results.
 - Compose with RFC-076's plugin lifecycle — the auth plugin
   registers guards, route-rejection handlers, loaders, and fetch
   middleware through `AppPlugin` install paths, not auth-shaped
@@ -1066,12 +1067,11 @@ The auth plugin's middleware **MUST** follow these rules:
 3. **Replay-safe gate.** Replay only fires for requests the
    framework knows are safe to retry. The default safe set:
    - `#[server]` functions explicitly marked
-     `#[server(idempotent)]`. RFC-078 requires RFC-066 (server-
-     function auth and access policy) to add this attribute as a
-     follow-up; until it does, the replay-safe set is **empty**
-     and the auth middleware MUST propagate the original
-     `Err(Unauthorized)` upward without retry. (This is a
-     deliberate fail-closed default.)
+     `#[server(idempotent)]`. RFC-078 adds this marker to generated
+     client stubs so middleware can inspect `FetchRequest::replay_safe`.
+     Until `pocopine-auth-client` consumes the marker, Unauthorized
+     propagates upward without retry. (This is a deliberate
+     fail-closed default.)
    - GET-style server functions, when RFC-066 grows them.
    For non-replay-safe requests, the middleware does **NOT**
    replay; it propagates `Err(Unauthorized)` upward, the loader
@@ -1195,7 +1195,7 @@ through the default UI or through plugin event consumers.
 
 ## 6. Phased Plan
 
-### Phase 1 — Generic route primitives + auth `Predicate`
+### Phase 1 — Generic route primitives + auth `Predicate` (implemented)
 
 - Add `RouteGuard` trait, `RouteGuardDecision` enum, and the
   `RouteContext` carrying `path`, `params`, `query`,
@@ -1216,7 +1216,7 @@ through the default UI or through plugin event consumers.
 - (Client-side `Predicate`-as-`RouteGuard` blanket impl ships in
   `pocopine-auth-client` later, not in this RFC.)
 
-### Phase 2 — Client route guards + rejection extension dispatch
+### Phase 2 — Client route guards + rejection extension dispatch (implemented)
 
 - Add `RouteComponent` and `RouteConfig<C>`.
 - `App::route::<C: RouteComponent>(...)` calls
@@ -1237,7 +1237,7 @@ through the default UI or through plugin event consumers.
   characters.
 - `router::reevaluate_current()` primitive (§5.10.6).
 
-### Phase 3 — Client route loaders + abort plumbing
+### Phase 3 — Client route loaders + abort plumbing (core implemented; auth-client handler pending)
 
 - `RouteConfig::loader(...)` records a single async loader (panic
   on second registration for the same route).
@@ -1255,9 +1255,11 @@ through the default UI or through plugin event consumers.
 - `pocopine-auth-client` installs its auth-owned rejection handler
   via `AppPlugin`: login route, return-intent parameter, validation
   strictness, modal/external-provider variants, and post-login
-  policy all live on the plugin builder.
+  policy all live on the plugin builder. This is delegated to the
+  auth-client follow-up because the generic router/fetch primitives
+  are now present.
 
-### Phase 4 — Fetch middleware chain + replay contract
+### Phase 4 — Fetch middleware chain + replay contract (core implemented)
 
 - `pocopine_core::fetch::install_middleware`. Chain freezes at
   first `App::run` / `fetch::call`; later install panics
@@ -1265,25 +1267,25 @@ through the default UI or through plugin event consumers.
 - Macro-generated `#[server]` stub passes through the chain.
 - Middleware contract: `Result<FetchResponse, ServerError>`, `Err`
   short-circuits.
-- `#[server(idempotent)]` attribute (RFC-066 follow-up) so the
-  framework knows which requests are replay-safe (§5.10.4).
-  Until that attribute lands, the auth replay-safe set is empty
-  and Unauthorized always propagates.
+- `#[server(idempotent)]` attribute so the framework knows which
+  generated server-function client requests are replay-safe
+  (§5.10.4). Until `pocopine-auth-client` consumes it, Unauthorized
+  still propagates.
 - `RouteNavigationFailed` events use the closed-set reasons
   from §5.10.7.
 
-### Phase 5 — Documentation + integration tests
+### Phase 5 — Documentation + integration tests (core implemented; auth-client integration pending)
 
 - `docs/route-guards-and-loaders.md` walking through the four
   phases AND the security model with a "client guards are not
   authorization" callout at the top.
 - wasm tests covering: guard outcomes; loader success/failure
   paths; fetch middleware ordering; the `Unauthorized`
-  route-rejection flow; the auth-plugin return-intent round trip
-  including every rejection case from §5.10.2; abort propagation
-  (request cancelled when navigation supersedes); session-epoch
-  rejection on post-sign-out responses; replay-safe vs
-  not-replay-safe Unauthorized behavior.
+  route-rejection flow; abort propagation (request cancelled when
+  navigation supersedes); and `#[server(idempotent)]` replay-safe
+  request marking. The auth-plugin return-intent round trip,
+  session-epoch rejection on post-sign-out responses, and replay
+  consumption belong to the `pocopine-auth-client` follow-up.
 - Update RFC-074 / RFC-076 to point at this RFC for the
   `Predicate` trait and the `RouteGuard` primitive.
 

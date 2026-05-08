@@ -41,6 +41,8 @@ features = [
     "AddEventListenerOptions",
     "Animation",
     "AnimationEvent",
+    "AbortController",
+    "AbortSignal",
     "Attr",
     "Clipboard",
     "ClipboardEvent",

@@ -206,6 +206,12 @@ thread_local! {
     /// while the loader was in flight, so the result is dropped
     /// rather than painted (RFC-078 §5.10.5).
     static ROUTE_TOKEN: Cell<u64> = const { Cell::new(0) };
+    /// Abort controller for the currently in-flight route loader.
+    /// Navigation supersession aborts this before the token advances
+    /// so loader-owned `fetch::call` requests stop in the browser,
+    /// not just at the Rust result boundary.
+    static ACTIVE_LOADER_ABORT: RefCell<Option<(RouteToken, web_sys::AbortController)>> =
+        const { RefCell::new(None) };
     /// `App::route_error_component<C>()` recorded component name,
     /// painted by `paint_route_error` when set instead of the
     /// built-in HTML banner.
@@ -260,6 +266,34 @@ fn is_token_current(token: RouteToken) -> bool {
 /// stamps the value into their context.
 pub(crate) fn route_token_is_current(token: RouteToken) -> bool {
     is_token_current(token)
+}
+
+fn begin_loader_abort(token: RouteToken) -> Option<web_sys::AbortSignal> {
+    let controller = web_sys::AbortController::new().ok()?;
+    let signal = controller.signal();
+    ACTIVE_LOADER_ABORT.with(|cell| {
+        *cell.borrow_mut() = Some((token, controller));
+    });
+    Some(signal)
+}
+
+fn abort_active_loader() {
+    if let Some((_, controller)) = ACTIVE_LOADER_ABORT.with(|cell| cell.borrow_mut().take()) {
+        controller.abort();
+    }
+}
+
+fn clear_active_loader_abort(token: RouteToken) {
+    ACTIVE_LOADER_ABORT.with(|cell| {
+        let should_clear = cell
+            .borrow()
+            .as_ref()
+            .map(|(active_token, _)| *active_token == token)
+            .unwrap_or(false);
+        if should_clear {
+            cell.borrow_mut().take();
+        }
+    });
 }
 
 /// Stash a router-produced loader result for the next component
@@ -499,6 +533,11 @@ fn clear_outlet() {
 fn mount_current() {
     ensure_route_scope();
 
+    // Abort any loader request from the previous navigation before
+    // advancing the token. The stale-result check below still guards
+    // correctness, but this stops browser fetches on the wire.
+    abort_active_loader();
+
     // Defense in depth: drop any leftover loader data from a
     // prior navigation that didn't reach `finish_route_mount`
     // (early `missing_window` / `missing_outlet` returns, panics
@@ -511,10 +550,7 @@ fn mount_current() {
 
     // Mark this navigation. Any loader spawned by an earlier
     // `mount_current` captured the previous token at start; when it
-    // resolves it'll find this new value and drop its result. The
-    // token bump is the cheapest possible signal — actual abort of
-    // an in-flight `fetch::call` will land with Slice G when the
-    // middleware chain plumbs `AbortSignal` end-to-end.
+    // resolves it'll find this new value and drop its result.
     let nav_token = bump_route_token();
 
     let has_route_hooks = crate::plugin::has_route_navigation_hooks();
@@ -595,12 +631,14 @@ fn mount_current() {
         // `spawn_local` so the synchronous fast path is still
         // available for routes without loaders.
         if let Some(loader) = matched.config.loader.clone() {
+            let abort_signal = begin_loader_abort(nav_token);
             let loader_ctx = LoaderContext {
                 path: path.clone(),
                 params: params.clone(),
                 query: query.clone(),
                 matched_pattern: route_pattern,
                 navigation_token: nav_token,
+                abort_signal,
             };
             update_route_state(&path, &params, query.clone());
             let matched_for_async = matched.clone();
@@ -619,6 +657,7 @@ fn mount_current() {
                     clear_pending_loader_data();
                     return;
                 }
+                clear_active_loader_abort(nav_token);
                 match result {
                     Ok(data) => {
                         put_pending_loader_data(data);

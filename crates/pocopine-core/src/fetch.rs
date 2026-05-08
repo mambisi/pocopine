@@ -27,11 +27,12 @@ use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 
 use serde::{de::DeserializeOwned, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, Response};
+use web_sys::{AbortSignal, Request, RequestInit, Response};
 
 use crate::server::{Result as ServerResult, ServerError};
 
@@ -46,6 +47,15 @@ pub struct FetchRequest {
     pub method: String,
     pub body: String,
     pub headers: Vec<(String, String)>,
+    /// Browser abort signal for this request. Route loaders populate
+    /// this automatically while their future is being polled so
+    /// navigation supersession cancels the underlying `window.fetch`.
+    pub abort_signal: Option<AbortSignal>,
+    /// `true` when the generated server-function stub has declared
+    /// the call replay-safe (`#[server(idempotent)]`). Auth middleware
+    /// may retry these after token refresh; it must fail closed for
+    /// the default `false` case.
+    pub replay_safe: bool,
 }
 
 impl FetchRequest {
@@ -62,6 +72,13 @@ impl FetchRequest {
         } else {
             self.headers.push((name, value));
         }
+    }
+
+    /// Whether middleware may replay this request after refreshing
+    /// credentials. Defaults to `false` unless the generated
+    /// `#[server]` client stub opted in with `#[server(idempotent)]`.
+    pub fn is_replay_safe(&self) -> bool {
+        self.replay_safe
     }
 }
 
@@ -145,6 +162,65 @@ thread_local! {
     /// dispatch clones an `Rc` instead of cloning the `Vec`.
     static MIDDLEWARE_SNAPSHOT: RefCell<Option<MiddlewareChain>> =
         const { RefCell::new(None) };
+    /// Task-local-ish route-loader fetch context. The router wraps
+    /// each loader future so this slot is set only while that future
+    /// is being polled, letting generated `#[server]` stubs inherit
+    /// the right abort signal without changing every server-function
+    /// signature.
+    static ACTIVE_ABORT_SIGNAL: RefCell<Option<AbortSignal>> =
+        const { RefCell::new(None) };
+}
+
+struct AbortSignalScope {
+    previous: Option<AbortSignal>,
+}
+
+impl Drop for AbortSignalScope {
+    fn drop(&mut self) {
+        ACTIVE_ABORT_SIGNAL.with(|cell| {
+            *cell.borrow_mut() = self.previous.take();
+        });
+    }
+}
+
+fn enter_abort_signal(signal: Option<AbortSignal>) -> AbortSignalScope {
+    let previous =
+        ACTIVE_ABORT_SIGNAL.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), signal));
+    AbortSignalScope { previous }
+}
+
+fn current_abort_signal() -> Option<AbortSignal> {
+    ACTIVE_ABORT_SIGNAL.with(|cell| cell.borrow().clone())
+}
+
+/// Future wrapper used by the router to make loader-owned abort
+/// signals visible to generated `#[server]` stubs while a specific
+/// loader future is being polled.
+pub(crate) struct AbortSignalFuture<F> {
+    signal: Option<AbortSignal>,
+    future: Pin<Box<F>>,
+}
+
+impl<F> Unpin for AbortSignalFuture<F> {}
+
+impl<F: Future> Future for AbortSignalFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let _scope = enter_abort_signal(this.signal.clone());
+        this.future.as_mut().poll(cx)
+    }
+}
+
+pub(crate) fn with_abort_signal_future<F: Future>(
+    signal: Option<AbortSignal>,
+    future: F,
+) -> AbortSignalFuture<F> {
+    AbortSignalFuture {
+        signal,
+        future: Box::pin(future),
+    }
 }
 
 /// Install a middleware. Must run before the first
@@ -228,7 +304,50 @@ where
     A: Serialize,
     R: DeserializeOwned,
 {
+    call_with_options(url, args, FetchOptions::default()).await
+}
+
+/// Options for [`call_with_options`].
+#[derive(Clone, Debug, Default)]
+pub struct FetchOptions {
+    pub abort_signal: Option<AbortSignal>,
+    pub replay_safe: bool,
+}
+
+impl FetchOptions {
+    /// Attach an explicit browser abort signal.
+    pub fn abort_signal(mut self, signal: Option<AbortSignal>) -> Self {
+        self.abort_signal = signal;
+        self
+    }
+
+    /// Mark whether middleware may replay this call after a recoverable
+    /// authentication failure.
+    pub fn replay_safe(mut self, enabled: bool) -> Self {
+        self.replay_safe = enabled;
+        self
+    }
+
+    fn with_active_context(mut self) -> Self {
+        if self.abort_signal.is_none() {
+            self.abort_signal = current_abort_signal();
+        }
+        self
+    }
+}
+
+/// Post `args` like [`call`] but with explicit request metadata.
+///
+/// This is primarily used by macro-generated `#[server]` stubs and
+/// by integration tests. Application code should usually call the
+/// generated server function directly.
+pub async fn call_with_options<A, R>(url: &str, args: &A, options: FetchOptions) -> ServerResult<R>
+where
+    A: Serialize,
+    R: DeserializeOwned,
+{
     freeze_middleware_chain();
+    let options = options.with_active_context();
 
     let body = serde_json::to_string(args)
         .map_err(|e| ServerError::Network(format!("serialize args: {e}")))?;
@@ -238,6 +357,8 @@ where
         method: "POST".to_string(),
         body,
         headers: vec![("content-type".to_string(), "application/json".to_string())],
+        abort_signal: options.abort_signal,
+        replay_safe: options.replay_safe,
     };
 
     let middlewares = snapshot_chain();
@@ -256,12 +377,26 @@ where
     outer
 }
 
+/// Post `args` and mark the generated request replay-safe.
+///
+/// `#[server(idempotent)]` stubs use this helper. Auth middleware may
+/// replay a request with this marker at most once after a successful
+/// refresh. Unmarked requests must be treated as unsafe to replay.
+pub async fn call_replay_safe<A, R>(url: &str, args: &A) -> ServerResult<R>
+where
+    A: Serialize,
+    R: DeserializeOwned,
+{
+    call_with_options(url, args, FetchOptions::default().replay_safe(true)).await
+}
+
 // ─── transport ──────────────────────────────────────────────────────
 
 async fn perform_fetch(request: FetchRequest) -> Result<FetchResponse, ServerError> {
     let init = RequestInit::new();
     init.set_method(&request.method);
     init.set_body(&JsValue::from_str(&request.body));
+    init.set_signal(request.abort_signal.as_ref());
 
     let headers =
         web_sys::Headers::new().map_err(|e| ServerError::Network(format!("headers: {e:?}")))?;
@@ -339,6 +474,8 @@ mod tests {
             method: "POST".into(),
             body: "".into(),
             headers: vec![("Content-Type".into(), "text/plain".into())],
+            abort_signal: None,
+            replay_safe: false,
         };
         req.set_header("content-type", "application/json");
         assert_eq!(req.headers.len(), 1);
@@ -354,6 +491,8 @@ mod tests {
             method: "POST".into(),
             body: "".into(),
             headers: vec![],
+            abort_signal: None,
+            replay_safe: false,
         };
         req.set_header("authorization", "Bearer t");
         assert_eq!(
@@ -380,5 +519,12 @@ mod tests {
 
         // Reset for any subsequent test in this binary.
         reset();
+    }
+
+    #[test]
+    fn fetch_options_default_to_not_replay_safe() {
+        let options = FetchOptions::default();
+        assert!(!options.replay_safe);
+        assert!(options.abort_signal.is_none());
     }
 }

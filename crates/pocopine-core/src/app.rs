@@ -294,7 +294,10 @@ where
 /// router has moved on (RFC-078 §5.10.5). The router itself drops
 /// any result returned under a stale token, so honoring this is
 /// only an optimisation — correctness of the painted view does
-/// not depend on the loader checking.
+/// not depend on the loader checking. `abort_signal` is also
+/// inherited automatically by generated `#[server]` calls made while
+/// the loader future is being polled, so route supersession cancels
+/// the underlying browser fetch.
 #[derive(Clone, Debug)]
 pub struct LoaderContext {
     pub path: String,
@@ -302,6 +305,7 @@ pub struct LoaderContext {
     pub query: HashMap<String, String>,
     pub matched_pattern: Option<&'static str>,
     pub navigation_token: crate::router::RouteToken,
+    pub(crate) abort_signal: Option<web_sys::AbortSignal>,
 }
 
 impl LoaderContext {
@@ -311,6 +315,14 @@ impl LoaderContext {
     /// loader can early-exit (its result will be dropped anyway).
     pub fn is_navigation_active(&self) -> bool {
         crate::router::route_token_is_current(self.navigation_token)
+    }
+
+    /// Browser abort signal for this route navigation, when the
+    /// platform supplied one. Generated `#[server]` stubs inherit this
+    /// automatically inside loader futures; direct `fetch::call`
+    /// users can also pass it through `FetchOptions`.
+    pub fn abort_signal(&self) -> Option<web_sys::AbortSignal> {
+        self.abort_signal.clone()
     }
 }
 
@@ -394,8 +406,12 @@ where
     T: 'static,
 {
     fn run(&self, ctx: LoaderContext) -> RouteLoaderFuture {
+        let abort_signal = ctx.abort_signal();
         let fut = (self.f)(ctx);
-        Box::pin(async move { fut.await.map(|t| Box::new(t) as Box<dyn Any>) })
+        Box::pin(crate::fetch::with_abort_signal_future(
+            abort_signal,
+            async move { fut.await.map(|t| Box::new(t) as Box<dyn Any>) },
+        ))
     }
 }
 
@@ -481,6 +497,11 @@ impl<C: Component> RouteConfig<C> {
         }
     }
 
+    /// Attach a synchronous client-side guard.
+    ///
+    /// Guards are a paint/UX primitive, not an authorization
+    /// boundary. Any sensitive data touched by the route must still be
+    /// protected by server-side `#[server(guard = ...)]` checks.
     pub fn guard(mut self, guard: impl RouteGuard) -> Self {
         self.guards.push(Rc::new(guard));
         self

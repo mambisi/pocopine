@@ -3070,6 +3070,10 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// * `#[server(guard = require_user)]` protects the endpoint. The guard
 ///   must be an async function that accepts
 ///   `pocopine_server::auth::RequestContext` and returns a `Result`.
+/// * `#[server(idempotent)]` marks the generated client request as
+///   replay-safe for middleware. Auth middleware may retry these at
+///   most once after a successful refresh; unmarked calls remain
+///   fail-closed.
 /// * `#[server]` without either marker still compiles, but emits a
 ///   warning so authors do not accidentally ship unreviewed endpoints.
 ///
@@ -3084,6 +3088,7 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct ServerPolicy {
     public: bool,
     guard: Option<Path>,
+    idempotent: bool,
 }
 
 impl ServerPolicy {
@@ -3104,6 +3109,15 @@ fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
                 }
                 policy.public = true;
             }
+            Meta::Path(path) if path.is_ident("idempotent") => {
+                if policy.idempotent {
+                    return Err(syn::Error::new_spanned(
+                        path,
+                        "duplicate `idempotent` marker",
+                    ));
+                }
+                policy.idempotent = true;
+            }
             Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("guard") => {
                 if policy.guard.is_some() {
                     return Err(syn::Error::new_spanned(path, "duplicate auth guard"));
@@ -3119,7 +3133,7 @@ fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "unsupported `#[server]` option; expected `public` or `guard = path`",
+                    "unsupported `#[server]` option; expected `public`, `idempotent`, or `guard = path`",
                 ));
             }
         }
@@ -3239,10 +3253,16 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let sig_without_body = quote! { #vis #sig };
 
+    let client_call = if policy.idempotent {
+        quote! { ::pocopine::fetch::call_replay_safe::<#args_tuple_type, _> }
+    } else {
+        quote! { ::pocopine::fetch::call::<#args_tuple_type, _> }
+    };
+
     let client = quote! {
         #[cfg(target_arch = "wasm32")]
         #sig_without_body {
-            ::pocopine::fetch::call::<#args_tuple_type, _>(
+            #client_call(
                 #route_path,
                 &#args_tuple_value,
             ).await

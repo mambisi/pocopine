@@ -13,6 +13,10 @@ This doc walks through each, then shows how they compose. The
 running example is an auth-aware dashboard — but everything here
 is generic; auth is just the marquee consumer.
 
+> **Security boundary:** client route guards are UX only. They
+> prevent protected components from painting, but every sensitive
+> `#[server]` function must still declare its own server-side guard.
+
 ## Route configuration lives with the component
 
 Every component that wants route-local behavior implements
@@ -219,23 +223,25 @@ trap.
 
 ### Cancellation
 
-Each navigation gets a monotonic `RouteToken`. Loaders capture
-the token at spawn; when they resolve, the router compares
-against the current token. Mismatch means navigation moved on
-(the user clicked a different link) and the result is **dropped
-silently** — no painting, no `RouteNavigationFailed` event (the
-new navigation is healthy and already running).
+Each navigation gets a monotonic `RouteToken` and an
+`AbortSignal`. Loaders capture both at spawn. When a later
+navigation supersedes the loader, the router aborts the controller
+first, then advances the token. That gives two layers of protection:
+browser `fetch` calls stop on the wire, and any stale result that
+still resolves is **dropped silently** — no painting, no
+`RouteNavigationFailed` event (the new navigation is healthy and
+already running).
 
 Long-running loaders can poll `LoaderContext::is_navigation_active()`
 to short-circuit voluntarily. Honoring it is an optimisation;
 correctness of the painted view doesn't depend on the loader
 checking.
 
-> **Real `AbortSignal` propagation** — letting the browser
-> actually cancel the in-flight `fetch::call` so bandwidth and
-> server work stop — lands as a follow-up. Until then,
-> cancelled loaders complete on the wire and the result is
-> dropped Rust-side.
+Generated `#[server]` client stubs inherit the loader's abort signal
+automatically while the loader future is being polled. If a loader
+starts work in a separate task, pass `ctx.abort_signal()` explicitly
+through `fetch::FetchOptions` for direct `fetch::call_with_options`
+usage.
 
 ## Route rejection chain
 
@@ -365,10 +371,13 @@ fetch::install_middleware(|req: FetchRequest, next: FetchNext| async move {
     }
     let response = next.clone().run(req.clone()).await;
     if let Err(ServerError::Unauthorized(_)) = &response {
-        // Refresh + replay.
-        if let Some(new_token) = refresh_token().await {
-            store_token(new_token);
-            return next.run(req).await;
+        // Refresh + replay only when the server function opted in
+        // with #[server(idempotent)].
+        if req.is_replay_safe() {
+            if let Some(new_token) = refresh_token().await {
+                store_token(new_token);
+                return next.run(req).await;
+            }
         }
     }
     response
@@ -377,6 +386,24 @@ fetch::install_middleware(|req: FetchRequest, next: FetchNext| async move {
 
 `FetchNext: Clone` so middleware can replay; `FetchRequest:
 Clone` for the same reason.
+
+### Replay-safe requests
+
+Generated `#[server]` stubs are **not** replay-safe by default.
+Mark read-only or otherwise idempotent server functions explicitly:
+
+```rust
+#[pocopine::server(public, idempotent)]
+async fn dashboard_stats() -> pocopine::ServerResult<DashboardStats> {
+    // ...
+}
+```
+
+The client stub marks the outgoing `FetchRequest` as
+`replay_safe`. Auth middleware may replay such a request at most once
+after a successful refresh. Unmarked server functions stay
+fail-closed: middleware should propagate `Unauthorized` rather than
+retry a POST that may have already taken effect.
 
 ### Freeze-at-boot
 
@@ -414,9 +441,9 @@ negotiable per RFC-078 §5.10:
 6. **Sign-out re-evaluates guards** synchronously
    (`reevaluate_current()`) so PII never survives the
    identity-change moment.
-7. **Replay-after-Unauthorized is fail-closed** until
-   `#[server(idempotent)]` lands; auth middleware should
-   propagate `Unauthorized` rather than retry POSTs that may
+7. **Replay-after-Unauthorized is fail-closed** unless the generated
+   request is marked by `#[server(idempotent)]`; auth middleware
+   should propagate `Unauthorized` rather than retry POSTs that may
    have already taken effect.
 
 ## End-to-end example
