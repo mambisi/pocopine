@@ -96,8 +96,13 @@ impl Argon2Params {
     }
 
     fn to_inner(&self) -> Result<Params, CredentialsError> {
-        Params::new(self.m_cost_kib, self.t_cost, self.p_cost, Some(self.output_len))
-            .map_err(|_| CredentialsError::PasswordHashing("invalid argon2 params"))
+        Params::new(
+            self.m_cost_kib,
+            self.t_cost,
+            self.p_cost,
+            Some(self.output_len),
+        )
+        .map_err(|_| CredentialsError::PasswordHashing("invalid argon2 params"))
     }
 }
 
@@ -120,10 +125,7 @@ pub async fn hash_password(
 
 /// Verify `password` against the stored PHC string. Constant-time
 /// at the argon2 level.
-pub async fn verify_password(
-    password: String,
-    hash: String,
-) -> Result<bool, CredentialsError> {
+pub async fn verify_password(password: String, hash: String) -> Result<bool, CredentialsError> {
     tokio::task::spawn_blocking(move || verify_blocking(&password, &hash))
         .await
         .map_err(|_| CredentialsError::PasswordHashing("argon2 task panicked"))?

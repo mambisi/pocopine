@@ -27,8 +27,7 @@ pub(crate) const SESSION_TTL_DEFAULT_SECS: u64 = 60 * 60;
 pub(crate) const DEFAULT_MIN_PASSWORD_LEN: usize = 8;
 
 type IdGen = Arc<dyn Fn() -> String + Send + Sync + 'static>;
-type PasswordValidator =
-    Arc<dyn Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static>;
+type PasswordValidator = Arc<dyn Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static>;
 
 /// First-party credentials builder.
 ///
@@ -78,10 +77,7 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
     /// Override argon2 parameters. `params` must pass
     /// [`Argon2Params::validate`] — weaker parameters are rejected
     /// at builder time.
-    pub fn with_argon_params(
-        mut self,
-        params: Argon2Params,
-    ) -> Result<Self, CredentialsError> {
+    pub fn with_argon_params(mut self, params: Argon2Params) -> Result<Self, CredentialsError> {
         params
             .validate()
             .map_err(|_| CredentialsError::Configuration("argon2 params below OWASP minimum"))?;
@@ -103,10 +99,7 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
 
     /// Override the user-id generator. Default: millis-prefix +
     /// UUIDv7 (see [`default_id_generator`](crate::default_id_generator)).
-    pub fn with_id_generator(
-        mut self,
-        f: impl Fn() -> String + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_id_generator(mut self, f: impl Fn() -> String + Send + Sync + 'static) -> Self {
         self.id_generator = Arc::new(f);
         self
     }
@@ -294,11 +287,7 @@ mod tests {
 
     #[async_trait]
     impl TokenStore for StubTokenStore {
-        async fn put(
-            &self,
-            _: [u8; 32],
-            _: crate::store::TokenRecord,
-        ) -> Result<(), StoreError> {
+        async fn put(&self, _: [u8; 32], _: crate::store::TokenRecord) -> Result<(), StoreError> {
             Ok(())
         }
         async fn take(

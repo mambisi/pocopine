@@ -1,11 +1,8 @@
 //! Test-only `UserStore` / `TokenStore` stubs.
 //!
-//! The credentials crate intentionally ships **no default backend**
-//! — apps implement [`UserStore`] / [`TokenStore`] against their
-//! database of choice (see `docs/auth-credentials.md` for a Postgres
-//! + `sqlx` walkthrough). The integration tests still need a
-//! concrete pair to exercise the routes end-to-end, so they keep
-//! their own minimal in-memory implementation here.
+//! The credentials crate intentionally ships no default backend.
+//!
+//! Apps implement [`UserStore`] / [`TokenStore`] against their database of choice (see `docs/auth-credentials.md` for a Postgres + `sqlx` walkthrough). The integration tests still need a concrete pair to exercise the routes end-to-end, so they keep their own minimal in-memory implementation here.
 
 #![allow(dead_code)]
 
@@ -106,11 +103,7 @@ impl TokenStore for TestTokenStore {
         Ok(())
     }
 
-    async fn take(
-        &self,
-        hash: [u8; 32],
-        now_ms: u64,
-    ) -> Result<Option<TokenRecord>, StoreError> {
+    async fn take(&self, hash: [u8; 32], now_ms: u64) -> Result<Option<TokenRecord>, StoreError> {
         let mut inner = self.inner.write().map_err(poisoned)?;
         let Some(record) = inner.remove(&hash) else {
             return Ok(None);
