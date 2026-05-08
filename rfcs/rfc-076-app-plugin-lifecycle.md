@@ -468,5 +468,6 @@ The first slice ships:
 - wasm tests for direct builder plugins, macro plugins, plugin extractors, and
   framework hook dispatch.
 
-Later slices can add convenience plugins in separate crates, beginning with
-observability.
+The first downstream consumer is `pocopine-logging`'s frontend observability
+plugin, which installs console logging and subscribes to the lifecycle hooks
+without patching `pocopine-core`.

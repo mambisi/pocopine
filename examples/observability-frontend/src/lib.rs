@@ -56,6 +56,8 @@ impl ObsFrontendHome {
     }
 }
 
+impl RouteComponent for ObsFrontendHome {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-frontend-report",
@@ -124,6 +126,8 @@ impl ObsFrontendReport {
     }
 }
 
+impl RouteComponent for ObsFrontendReport {}
+
 #[derive(Default, Serialize, Deserialize)]
 #[component(
     name = "obs-frontend-not-found",
@@ -138,6 +142,8 @@ pub struct ObsFrontendNotFound {}
 
 #[handlers]
 impl ObsFrontendNotFound {}
+
+impl RouteComponent for ObsFrontendNotFound {}
 
 #[wasm_bindgen(start)]
 pub fn main() {
