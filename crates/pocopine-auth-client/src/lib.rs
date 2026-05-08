@@ -1,13 +1,27 @@
-//! Wasm-side bearer-token bridge for outgoing `#[server]` auth.
+//! Wasm-side auth surface for pocopine.
 //!
-//! Two surfaces:
+//! Four surfaces:
 //!
 //! - **Token slot.** [`set_token`], [`clear_token`], and [`active_token`]
 //!   manage a process-global `Option<String>`.
 //! - **Fetch middleware.** [`BearerMiddleware`] reads the active token
 //!   and attaches `Authorization: Bearer <token>` to every outgoing
 //!   `#[server]` request via the RFC-078 fetch chain. Apps register it
-//!   once at startup with [`install`].
+//!   once at startup with [`install`] (or via
+//!   [`auth_plugin().with_bearer_middleware(true)`](auth_plugin)).
+//! - **Reactive identity.** [`AuthSession`] is a plugin service the
+//!   [`auth_plugin`] installs. It holds the active [`pocopine_auth::Principal`]
+//!   plus a monotonic epoch; components extract it via
+//!   `Plugin<AuthSession>` / `Option<Plugin<AuthSession>>` per
+//!   RFC-076.
+//! - **Auth-aware route guards + login redirect.** [`auth_plugin`]
+//!   is an [`AppPlugin`](pocopine_core::AppPlugin) that registers a
+//!   [`RouteRejectionHandler`](pocopine_core::RouteRejectionHandler)
+//!   mapping `RouteRejection::Unauthorized` to the configured login
+//!   route. [`predicate_guard`] adapts any
+//!   [`pocopine_auth::Predicate`] (`require_auth`, `require_role`,
+//!   …) into a [`RouteGuard`](pocopine_core::RouteGuard) that reads
+//!   the live [`AuthSession`].
 //!
 //! ## Usage
 //!
@@ -47,6 +61,12 @@
 //! The middleware never logs the token. Per RFC-077 §6, no body,
 //! headers, cookies, or query strings enter framework events. Bearer
 //! attachment is a pure mutation on the in-flight `FetchRequest`.
+
+mod plugin;
+mod session;
+
+pub use plugin::{auth_plugin, predicate_guard, AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM};
+pub use session::{active_principal, active_session, AuthSession};
 
 use std::sync::Mutex;
 use std::sync::OnceLock;
