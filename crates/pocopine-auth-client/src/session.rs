@@ -86,9 +86,7 @@ impl AuthSession {
 /// plugin registry. Returns [`None`] if no session has been
 /// installed (the app didn't add `auth_plugin()`).
 pub fn active_session() -> Option<AuthSession> {
-    Plugins::default()
-        .get::<AuthSession>()
-        .map(|handle| (*handle).clone())
+    Plugins.get::<AuthSession>().map(|handle| (*handle).clone())
 }
 
 /// Convenience: read the active [`Principal`] from the installed
@@ -96,9 +94,7 @@ pub fn active_session() -> Option<AuthSession> {
 /// `AuthSession` has been installed — apps that don't run the auth
 /// plugin still get a valid principal value.
 pub fn active_principal() -> Principal {
-    active_session()
-        .map(|s| s.principal())
-        .unwrap_or_default()
+    active_session().map(|s| s.principal()).unwrap_or_default()
 }
 
 #[cfg(test)]

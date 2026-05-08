@@ -20,9 +20,7 @@ use crate::user::User;
 /// Build the axum sub-router under `/_pocopine/auth`. Mounted by
 /// the [`crate::Credentials`] [`pocopine_server::ServerPlugin`]
 /// install path.
-pub(crate) fn router<S: UserStore, T: TokenStore>(
-    handle: Arc<CredentialsHandle<S, T>>,
-) -> Router {
+pub(crate) fn router<S: UserStore, T: TokenStore>(handle: Arc<CredentialsHandle<S, T>>) -> Router {
     Router::new()
         .route("/signup", post(signup_handler::<S, T>))
         .route("/login", post(login_handler::<S, T>))

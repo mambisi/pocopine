@@ -108,7 +108,7 @@ mod tests {
             "u1",
             "alice@example.com",
             "$argon2id$v=19$m=65536,t=3,p=4$...real-hash...",
-            1700000000_000,
+            1_700_000_000_000,
         );
         let debug = format!("{user:?}");
         assert!(
@@ -120,8 +120,13 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
-        let user = User::new("u1", "alice@example.com", "$argon2id$v=19$..", 1700000000_000)
-            .with_role(Role::admin());
+        let user = User::new(
+            "u1",
+            "alice@example.com",
+            "$argon2id$v=19$..",
+            1_700_000_000_000,
+        )
+        .with_role(Role::admin());
         let json = serde_json::to_string(&user).unwrap();
         let back: User = serde_json::from_str(&json).unwrap();
         assert_eq!(user, back);

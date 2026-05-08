@@ -22,8 +22,8 @@
 
 use pocopine_auth::{Decision, Predicate};
 use pocopine_core::{
-    App, AppPlugin, RouteContext, RouteGuard, RouteGuardDecision, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget, ReturnTo,
+    App, AppPlugin, ReturnTo, RouteContext, RouteGuard, RouteGuardDecision, RouteRejection,
+    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
 };
 
 use crate::session::{active_principal, AuthSession};
@@ -116,10 +116,7 @@ impl AppPlugin for AuthPluginBuilder {
         let param = self.return_to_query_param;
 
         app.provide_plugin(session)
-            .route_rejection_handler(UnauthorizedRedirect {
-                login_route,
-                param,
-            })
+            .route_rejection_handler(UnauthorizedRedirect { login_route, param })
     }
 }
 
@@ -217,7 +214,7 @@ pub fn predicate_guard<P: Predicate>(predicate: P) -> impl RouteGuard {
         let principal = active_principal();
         match Predicate::check(&predicate, &principal) {
             Decision::Allow => RouteGuardDecision::Allow,
-            Decision::Deny(reason) if reason == "unauthorized" => {
+            Decision::Deny("unauthorized") => {
                 RouteGuardDecision::Reject(RouteRejection::Unauthorized)
             }
             Decision::Deny(reason) => RouteGuardDecision::Reject(RouteRejection::Forbidden(reason)),
@@ -345,9 +342,8 @@ mod tests {
         assert_eq!(auth.check(&anon), Decision::Deny("unauthorized"));
         assert_eq!(admin.check(&anon), Decision::Deny("unauthorized"));
 
-        let user = pocopine_auth::Principal::from_user(
-            AuthUser::new("u1").with_role(Role::admin()),
-        );
+        let user =
+            pocopine_auth::Principal::from_user(AuthUser::new("u1").with_role(Role::admin()));
         assert_eq!(auth.check(&user), Decision::Allow);
         assert_eq!(admin.check(&user), Decision::Allow);
 

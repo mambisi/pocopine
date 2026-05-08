@@ -35,7 +35,11 @@ fn fixed_secret() -> SecretBytes {
 }
 
 fn build_credentials() -> Credentials<TestUserStore, TestTokenStore> {
-    Credentials::new(fixed_secret(), TestUserStore::default(), TestTokenStore::default())
+    Credentials::new(
+        fixed_secret(),
+        TestUserStore::default(),
+        TestTokenStore::default(),
+    )
 }
 
 fn router() -> axum::Router {
@@ -121,10 +125,17 @@ async fn signup_duplicate_email_is_409() {
         "password": "correcthorse",
     });
 
-    let first = app.clone().oneshot(post("/_pocopine/auth/signup", body.clone())).await.unwrap();
+    let first = app
+        .clone()
+        .oneshot(post("/_pocopine/auth/signup", body.clone()))
+        .await
+        .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
 
-    let second = app.oneshot(post("/_pocopine/auth/signup", body)).await.unwrap();
+    let second = app
+        .oneshot(post("/_pocopine/auth/signup", body))
+        .await
+        .unwrap();
     assert_eq!(second.status(), StatusCode::CONFLICT);
     let body = body_to_json(second.into_body()).await;
     assert_eq!(body["error"], "email_taken");

@@ -31,8 +31,7 @@ mod tests {
 
     #[test]
     fn ids_are_unique_under_burst() {
-        let ids: std::collections::HashSet<_> =
-            (0..1000).map(|_| default_id_generator()).collect();
+        let ids: std::collections::HashSet<_> = (0..1000).map(|_| default_id_generator()).collect();
         assert_eq!(ids.len(), 1000);
     }
 }
