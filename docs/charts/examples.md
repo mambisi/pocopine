@@ -13,8 +13,10 @@ all visual styling in `index.html` CSS so the chart crate can stay unstyled.
 The example intentionally uses the same public API an application would use:
 
 - `pine_charts::register_all()` at startup,
-- `<pine-cartesian-chart>` with `pine-chart-grid`, `pine-x-axis`,
-  `pine-y-axis`, mixed bar/line/scatter series, and Cartesian reference marks,
+- `<pine-cartesian-chart>` with `pine-chart-grid`, `pine-x-axis`, and
+  `pine-y-axis` guide children,
+- `<pine-cartesian-chart>` mixing bar, line, and scatter series with Cartesian
+  reference lines, dots, and labels,
 - `<pine-layer-chart>` with child layers, reference dots, labels, and icons for
   custom SVG compositions,
 - `Vec<ChartLineSeries>`, `Vec<ChartScatterSeries>`,

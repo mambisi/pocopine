@@ -68,6 +68,7 @@ Example:
 Preset charts (`pine-line-chart`, `pine-scatter-chart`, `pine-area-chart`, and
 `pine-bar-chart`) still own their generated axes and grid. That keeps the common
 case compact: set `x_label` / `y_label`, bind data, and style the emitted hooks.
+(`pine-pie-chart` is radial and has no axes or grid.)
 
 `pine-cartesian-chart` exposes guide ownership as child components:
 
