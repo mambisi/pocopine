@@ -7,4 +7,5 @@ repository.workspace = true
 description = "Wasm-side bearer-token bridge for outgoing #[server] auth: token slot + fetch middleware."
 
 [dependencies]
+pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
