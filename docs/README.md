@@ -53,6 +53,11 @@ looks the way it does — the code itself tells you *what*.
   install the bearer fetch middleware, wire `auth_plugin()` to
   install `AuthSession` + `Unauthorized → /login` redirect, and
   build route guards from `Predicate` values via `predicate_guard`.
+- [`auth-phone-otp-tutorial.md`](./auth-phone-otp-tutorial.md) —
+  build phone OTP auth today with Twilio + Postgres on top of
+  the credentials primitives, until the official
+  `pocopine-auth-otp` crate ships. Schema, sender, rate limiting,
+  attempt limits, and the migration path.
 - [`postmortems/`](./postmortems/) — write-ups of subtle bugs + the
   invariants new code should preserve.
 
