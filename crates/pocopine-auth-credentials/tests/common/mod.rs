@@ -10,7 +10,39 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use async_trait::async_trait;
-use pocopine_auth_credentials::{StoreError, TokenRecord, TokenStore, User, UserStore};
+use pocopine_auth::AuthUser;
+use pocopine_auth_credentials::{
+    PasswordCredentials, StoreError, TokenRecord, TokenStore, UserStore,
+};
+use serde_json::json;
+
+/// The app-side user record. Apps implement [`PasswordCredentials`]
+/// on whatever shape their database holds; here it's a tiny struct
+/// the tests can construct directly.
+#[derive(Clone)]
+pub(crate) struct TestUser {
+    pub(crate) id: String,
+    pub(crate) email: String,
+    pub(crate) password_hash: String,
+    pub(crate) email_verified: bool,
+}
+
+impl PasswordCredentials for TestUser {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn email(&self) -> &str {
+        &self.email
+    }
+    fn password_hash(&self) -> &str {
+        &self.password_hash
+    }
+    fn to_auth_user(&self) -> AuthUser {
+        AuthUser::new(&self.id)
+            .with_email(&self.email)
+            .with_claim("email_verified", json!(self.email_verified))
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct TestUserStore {
@@ -19,7 +51,7 @@ pub(crate) struct TestUserStore {
 
 #[derive(Default)]
 struct TestUserStoreInner {
-    by_id: HashMap<String, User>,
+    by_id: HashMap<String, TestUser>,
     /// Maps `email_lower → id`.
     by_email: HashMap<String, String>,
 }
@@ -37,7 +69,9 @@ impl std::error::Error for DuplicateUser {}
 
 #[async_trait]
 impl UserStore for TestUserStore {
-    async fn find_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
+    type User = TestUser;
+
+    async fn find_by_email(&self, email: &str) -> Result<Option<TestUser>, StoreError> {
         let inner = self.inner.read().map_err(poisoned)?;
         let lower = email.to_ascii_lowercase();
         Ok(inner
@@ -47,46 +81,28 @@ impl UserStore for TestUserStore {
             .cloned())
     }
 
-    async fn find_by_id(&self, id: &str) -> Result<Option<User>, StoreError> {
+    async fn find_by_id(&self, id: &str) -> Result<Option<TestUser>, StoreError> {
         let inner = self.inner.read().map_err(poisoned)?;
         Ok(inner.by_id.get(id).cloned())
     }
 
-    async fn create(&self, user: User) -> Result<(), StoreError> {
+    async fn create(&self, email: &str, password_hash: String) -> Result<TestUser, StoreError> {
         let mut inner = self.inner.write().map_err(poisoned)?;
-        let lower = user.email.to_ascii_lowercase();
-        if inner.by_email.contains_key(&lower) || inner.by_id.contains_key(&user.id) {
+        let lower = email.to_ascii_lowercase();
+        if inner.by_email.contains_key(&lower) {
             return Err(Box::new(DuplicateUser));
         }
-        inner.by_email.insert(lower, user.id.clone());
-        inner.by_id.insert(user.id.clone(), user);
-        Ok(())
-    }
-
-    async fn update(&self, user: User) -> Result<(), StoreError> {
-        let mut inner = self.inner.write().map_err(poisoned)?;
-        if let Some(existing) = inner.by_id.get(&user.id) {
-            let old_lower = existing.email.to_ascii_lowercase();
-            let new_lower = user.email.to_ascii_lowercase();
-            if old_lower != new_lower {
-                inner.by_email.remove(&old_lower);
-                inner.by_email.insert(new_lower, user.id.clone());
-            }
-        } else {
-            inner
-                .by_email
-                .insert(user.email.to_ascii_lowercase(), user.id.clone());
-        }
-        inner.by_id.insert(user.id.clone(), user);
-        Ok(())
-    }
-
-    async fn delete(&self, id: &str) -> Result<(), StoreError> {
-        let mut inner = self.inner.write().map_err(poisoned)?;
-        if let Some(user) = inner.by_id.remove(id) {
-            inner.by_email.remove(&user.email.to_ascii_lowercase());
-        }
-        Ok(())
+        // Tests want predictable ids: counter-based.
+        let id = format!("u{}", inner.by_id.len() + 1);
+        let user = TestUser {
+            id: id.clone(),
+            email: lower.clone(),
+            password_hash,
+            email_verified: false,
+        };
+        inner.by_email.insert(lower, id.clone());
+        inner.by_id.insert(id, user.clone());
+        Ok(user)
     }
 }
 

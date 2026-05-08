@@ -1,21 +1,19 @@
 //! Axum handlers for `/_pocopine/auth/{signup,login,logout}`.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use pocopine_auth::Role;
-use serde::{Deserialize, Serialize};
+use pocopine_auth::AuthUser;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::builder::CredentialsHandle;
 use crate::error::CredentialsError;
 use crate::password::{hash_password, verify_password};
-use crate::store::{TokenStore, UserStore};
-use crate::user::User;
+use crate::store::{PasswordCredentials, TokenStore, UserStore};
 
 /// Build the axum sub-router under `/_pocopine/auth`. Mounted by
 /// the [`crate::Credentials`] [`pocopine_server::ServerPlugin`]
@@ -40,28 +38,6 @@ struct LoginRequest {
     password: String,
 }
 
-/// Public user shape returned to the wasm client. Excludes the
-/// argon2 hash; preserves only the fields the client typically
-/// projects through `Principal::user()`.
-#[derive(Serialize)]
-struct PublicUser {
-    id: String,
-    email: String,
-    email_verified: bool,
-    roles: Vec<Role>,
-}
-
-impl From<&User> for PublicUser {
-    fn from(user: &User) -> Self {
-        Self {
-            id: user.id.clone(),
-            email: user.email.clone(),
-            email_verified: user.email_verified,
-            roles: user.roles.clone(),
-        }
-    }
-}
-
 async fn signup_handler<S: UserStore, T: TokenStore>(
     State(state): State<Arc<CredentialsHandle<S, T>>>,
     Json(req): Json<SignupRequest>,
@@ -81,21 +57,28 @@ async fn signup_handler<S: UserStore, T: TokenStore>(
     }
 
     let password_hash = hash_password(req.password, state.argon.clone()).await?;
-    let id = (state.id_generator)();
-    let now = now_ms();
-    let user = User::new(id, &email, password_hash, now);
-
-    state
+    // The store generates the id and returns the freshly-created
+    // user. Any failure inside `create` (DB issue, race-induced
+    // duplicate-email, …) maps to `EmailTaken` for the response;
+    // the `tracing` log carries the original error class.
+    let user = state
         .store
-        .create(user.clone())
+        .create(&email, password_hash)
         .await
-        .map_err(CredentialsError::Storage)?;
+        .map_err(|err| {
+            tracing::warn!(
+                target: "pocopine.log",
+                error = %err,
+                "credentials signup: store rejected create"
+            );
+            CredentialsError::EmailTaken
+        })?;
 
-    let token = issue_session_token(&state, &user)?;
-    let public = PublicUser::from(&user);
+    let auth_user = user.to_auth_user();
+    let token = issue_session_token(&state, user.id(), &auth_user)?;
     Ok(Json(json!({
         "token": token,
-        "user": public,
+        "user": auth_user,
     })))
 }
 
@@ -114,7 +97,7 @@ async fn login_handler<S: UserStore, T: TokenStore>(
     // not-found, so a timing/CPU probe can't distinguish the
     // unknown-email branch from the wrong-password branch.
     let (hash, real_user) = match user {
-        Some(u) => (u.password_hash.clone(), Some(u)),
+        Some(u) => (u.password_hash().to_string(), Some(u)),
         None => (state.dummy_hash.clone(), None),
     };
 
@@ -124,11 +107,11 @@ async fn login_handler<S: UserStore, T: TokenStore>(
         _ => return Err(CredentialsError::InvalidCredentials),
     };
 
-    let token = issue_session_token(&state, &user)?;
-    let public = PublicUser::from(&user);
+    let auth_user = user.to_auth_user();
+    let token = issue_session_token(&state, user.id(), &auth_user)?;
     Ok(Json(json!({
         "token": token,
-        "user": public,
+        "user": auth_user,
     })))
 }
 
@@ -144,17 +127,24 @@ async fn logout_handler<S: UserStore, T: TokenStore>(
 
 fn issue_session_token<S: UserStore, T: TokenStore>(
     state: &CredentialsHandle<S, T>,
-    user: &User,
+    subject: &str,
+    auth_user: &AuthUser,
 ) -> Result<String, CredentialsError> {
+    // Mirror the JWT claim shape RFC-074 §5.12 specifies. Roles +
+    // permissions come from the app's `to_auth_user()` projection;
+    // `email` / `email_verified` come from the same place.
     let extra = json!({
-        "email": user.email,
-        "email_verified": user.email_verified,
-        "roles": user.roles,
-        "permissions": user.permissions,
+        "email": auth_user.email,
+        "email_verified": auth_user
+            .claim("email_verified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "roles": auth_user.roles,
+        "permissions": auth_user.permissions,
     });
     state
         .issuer
-        .sign(&user.id, extra)
+        .sign(subject, extra)
         .map_err(|err| CredentialsError::SessionIssue(err.to_string()))
 }
 
@@ -179,13 +169,6 @@ fn validate_email_syntax(email: &str) -> Result<(), CredentialsError> {
         return Err(CredentialsError::InvalidEmail);
     }
     Ok(())
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -10,23 +10,20 @@ use pocopine_auth_jwt::{
 use pocopine_server::{Server, ServerPlugin};
 
 use crate::error::CredentialsError;
-use crate::id::default_id_generator;
 use crate::password::{hash_password_sync, Argon2Params};
 use crate::routes;
 use crate::store::{TokenStore, UserStore};
 
-/// Default issuer / audience strings for tryout / unconfigured apps.
+/// Default issuer / audience strings.
 const DEFAULT_ISSUER: &str = "pocopine";
 const DEFAULT_AUDIENCE: &str = "pocopine";
 /// Default mounted path for the credentials routes.
 pub(crate) const ROUTE_PREFIX: &str = "/_pocopine/auth";
-/// Default mount-base for the wasm app's typed login client (informational
-/// only; the bridge ships in `pocopine-auth-client`).
+/// Default session JWT lifetime.
 pub(crate) const SESSION_TTL_DEFAULT_SECS: u64 = 60 * 60;
 /// Default minimum password length.
 pub(crate) const DEFAULT_MIN_PASSWORD_LEN: usize = 8;
 
-type IdGen = Arc<dyn Fn() -> String + Send + Sync + 'static>;
 type PasswordValidator = Arc<dyn Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static>;
 
 /// First-party credentials builder.
@@ -43,7 +40,6 @@ pub struct Credentials<S: UserStore, T: TokenStore> {
     audience: String,
     session_ttl: Duration,
     argon: Argon2Params,
-    id_generator: IdGen,
     password_validator: PasswordValidator,
     cookie_name: Cow<'static, str>,
 }
@@ -62,7 +58,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
             audience: DEFAULT_AUDIENCE.to_string(),
             session_ttl: Duration::from_secs(SESSION_TTL_DEFAULT_SECS),
             argon: Argon2Params::owasp_default(),
-            id_generator: Arc::new(default_id_generator),
             password_validator: Arc::new(default_password_validator),
             cookie_name: Cow::Borrowed(pocopine_auth::SESSION_COOKIE),
         }
@@ -94,13 +89,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
     /// Override the audience string (`aud` claim).
     pub fn with_audience(mut self, name: impl Into<String>) -> Self {
         self.audience = name.into();
-        self
-    }
-
-    /// Override the user-id generator. Default: millis-prefix +
-    /// UUIDv7 (see [`default_id_generator`](crate::default_id_generator)).
-    pub fn with_id_generator(mut self, f: impl Fn() -> String + Send + Sync + 'static) -> Self {
-        self.id_generator = Arc::new(f);
         self
     }
 
@@ -153,20 +141,19 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
 }
 
 /// Internal handle wrapping a configured [`Credentials`] for
-/// sharing with axum handlers via `Arc`. Cheap to clone.
+/// sharing with axum handlers via `Arc`.
 pub(crate) struct CredentialsHandle<S: UserStore, T: TokenStore> {
     pub(crate) issuer: JwtIssuer,
     pub(crate) store: S,
     /// Token store for password-reset / email-verification records.
     /// PR-3 wires the `/password/reset/*` and `/email/verify/*`
-    /// routes against this; PR-2 stores the trait object so
-    /// builder-time configuration is stable across the chain.
+    /// routes against this; PR-2 stores it so builder-time
+    /// configuration is stable across the chain.
     #[allow(dead_code)]
     pub(crate) tokens: T,
     /// Default lifetime applied by the issuer for tokens signed
-    /// without an explicit TTL. Fed to [`JwtIssuer::with_default_ttl`]
-    /// during [`Credentials::install`] and read back here for
-    /// future builder methods (e.g. cookie `Max-Age` defaults).
+    /// without an explicit TTL. Read by future cookie-issuance
+    /// paths (PR-3 `Set-Cookie` `Max-Age`).
     #[allow(dead_code)]
     pub(crate) session_ttl: Duration,
     pub(crate) argon: Argon2Params,
@@ -176,10 +163,8 @@ pub(crate) struct CredentialsHandle<S: UserStore, T: TokenStore> {
     /// branch's CPU cost matches a wrong-password hit on a real
     /// user.
     pub(crate) dummy_hash: String,
-    pub(crate) id_generator: IdGen,
     pub(crate) password_validator: PasswordValidator,
-    /// Session cookie name. Read by future cookie-issuance paths
-    /// (PR-3 `Set-Cookie` on session creation).
+    /// Session cookie name. Read by future cookie-issuance paths.
     #[allow(dead_code)]
     pub(crate) cookie_name: Cow<'static, str>,
     /// Issuer / audience strings — kept for symmetry with
@@ -230,7 +215,6 @@ impl<S: UserStore, T: TokenStore> ServerPlugin for Credentials<S, T> {
             session_ttl: self.session_ttl,
             argon: self.argon,
             dummy_hash,
-            id_generator: self.id_generator,
             password_validator: self.password_validator,
             cookie_name: self.cookie_name,
             issuer_name: self.issuer_name,
@@ -254,34 +238,46 @@ fn default_password_validator(password: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{StoreError, TokenStore, UserStore};
-    use crate::user::User;
+    use crate::store::{PasswordCredentials, StoreError, TokenStore, UserStore};
     use async_trait::async_trait;
+    use pocopine_auth::AuthUser;
 
-    /// Bare-bones test stub — the crate doesn't ship a default
-    /// in-memory backend, so the few tests that need a `Credentials`
-    /// instance use this stub. It supports only the operations the
-    /// builder-level tests touch (none of them, currently — the
-    /// builder tests focus on validation and `verifier_config`).
+    /// Bare-bones test stub — the few tests that need a
+    /// `Credentials` instance use it. The builder tests focus on
+    /// validation and `verifier_config`; the routes are exercised
+    /// by `tests/credentials_routes.rs` against the fuller fixture
+    /// in `tests/common`.
+    struct StubAccount;
+
+    impl PasswordCredentials for StubAccount {
+        fn id(&self) -> &str {
+            "stub"
+        }
+        fn email(&self) -> &str {
+            "stub@example.com"
+        }
+        fn password_hash(&self) -> &str {
+            ""
+        }
+        fn to_auth_user(&self) -> AuthUser {
+            AuthUser::new(self.id())
+        }
+    }
+
     struct StubUserStore;
     struct StubTokenStore;
 
     #[async_trait]
     impl UserStore for StubUserStore {
-        async fn find_by_email(&self, _: &str) -> Result<Option<User>, StoreError> {
+        type User = StubAccount;
+        async fn find_by_email(&self, _: &str) -> Result<Option<Self::User>, StoreError> {
             Ok(None)
         }
-        async fn find_by_id(&self, _: &str) -> Result<Option<User>, StoreError> {
+        async fn find_by_id(&self, _: &str) -> Result<Option<Self::User>, StoreError> {
             Ok(None)
         }
-        async fn create(&self, _: User) -> Result<(), StoreError> {
-            Ok(())
-        }
-        async fn update(&self, _: User) -> Result<(), StoreError> {
-            Ok(())
-        }
-        async fn delete(&self, _: &str) -> Result<(), StoreError> {
-            Ok(())
+        async fn create(&self, _: &str, _: String) -> Result<Self::User, StoreError> {
+            Ok(StubAccount)
         }
     }
 
@@ -325,15 +321,5 @@ mod tests {
             Some(&[DEFAULT_AUDIENCE.to_string()][..])
         );
         cfg.validate().unwrap();
-    }
-
-    #[test]
-    fn now_ms_helper_sanity() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        assert!(ms > 1_700_000_000_000);
     }
 }
