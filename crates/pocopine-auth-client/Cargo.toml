@@ -1,0 +1,10 @@
+[package]
+name = "pocopine-auth-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wasm-side bearer-token bridge for outgoing #[server] auth: token slot + fetch middleware."
+
+[dependencies]
+pocopine-core = { workspace = true, default-features = false }
