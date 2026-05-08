@@ -3093,6 +3093,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-auth-client"
+version = "0.1.0"
+dependencies = [
+ "pocopine-core",
+]
+
+[[package]]
 name = "pocopine-auth-jwt"
 version = "0.1.0"
 dependencies = [
