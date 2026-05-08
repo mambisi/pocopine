@@ -7,8 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use pine_charts::{
-    ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice,
-    ChartPoint, ChartScatterSeries, LegendItem, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    line_legend_items, set_line_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries,
+    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
+    LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -1900,6 +1901,96 @@ async fn chart_legend_renders_items_and_updates() {
         .unwrap()
         .unwrap();
     assert_eq!(first_label.text_content().as_deref(), Some("API"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-line-chart class="controlled-line"
+                   label="Controlled"
+                   width="100"
+                   height="100"
+                   margin_top="0"
+                   margin_right="0"
+                   margin_bottom="0"
+                   margin_left="0"
+                   pp-bind:series="series"></pine-line-chart>
+  <pine-chart-legend class="controlled-legend"
+                     label="Controlled legend"
+                     interactive="true"
+                     @pp:chart:legend-toggle="toggle"
+                     pp-bind:items="legend"></pine-chart-legend>
+</div>
+"#)]
+struct ControlledLegendFixture {
+    series: Vec<ChartLineSeries>,
+    legend: Vec<LegendItem>,
+}
+
+impl Default for ControlledLegendFixture {
+    fn default() -> Self {
+        let series = vec![
+            ChartLineSeries::new(
+                "Actual",
+                vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+            ),
+            ChartLineSeries::new(
+                "Target",
+                vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)],
+            ),
+        ];
+        Self {
+            legend: line_legend_items(&series),
+            series,
+        }
+    }
+}
+
+#[handlers]
+impl ControlledLegendFixture {
+    pub fn toggle(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_line_series_visible(&mut self.series, &toggle.key, toggle.active) {
+            self.legend = line_legend_items(&self.series);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+async fn legend_toggle_can_control_chart_visibility() {
+    let host = mount_fixture::<ControlledLegendFixture>();
+    settle().await;
+
+    let paths = host
+        .query_selector_all(".controlled-line .pine-chart-line")
+        .unwrap();
+    assert_eq!(paths.length(), 2);
+
+    let first = host
+        .query_selector(".controlled-legend .pine-chart-legend-item")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    dispatch_keydown(&first, "Enter");
+    settle().await;
+
+    let paths = host
+        .query_selector_all(".controlled-line .pine-chart-line")
+        .unwrap();
+    assert_eq!(paths.length(), 1);
+    let first = host
+        .query_selector(".controlled-legend .pine-chart-legend-item")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.get_attribute("aria-pressed").as_deref(),
+        Some("false")
+    );
 
     host.remove();
 }

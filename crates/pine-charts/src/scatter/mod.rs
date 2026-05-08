@@ -9,7 +9,7 @@ use crate::cartesian::{
 use crate::error::{ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
-use crate::legend::{series_label_or_default, series_legend_items};
+use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::line::{ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions};
 use crate::svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 use crate::{LegendItem, LineChartSample};
@@ -17,10 +17,22 @@ use crate::{LegendItem, LineChartSample};
 pub type ScatterChartOptions = LineChartOptions;
 pub type ScatterChartSample = LineChartSample;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartScatterSeries {
     pub label: String,
     pub data: Vec<ChartPoint>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
+}
+
+impl Default for ChartScatterSeries {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            data: Vec::new(),
+            visible: true,
+        }
+    }
 }
 
 impl ChartScatterSeries {
@@ -28,6 +40,7 @@ impl ChartScatterSeries {
         Self {
             label: label.into(),
             data,
+            visible: true,
         }
     }
 }
@@ -61,7 +74,11 @@ impl ScatterChartGeometry {
     ) -> ChartResult<Self> {
         let line_series = series
             .iter()
-            .map(|series| ChartLineSeries::new(series.label.clone(), series.data.clone()))
+            .map(|series| {
+                let mut line = ChartLineSeries::new(series.label.clone(), series.data.clone());
+                line.visible = series.visible;
+                line
+            })
             .collect::<Vec<_>>();
         Self::from_line_geometry(LineChartGeometry::from_series(&line_series, options)?)
     }
@@ -105,12 +122,14 @@ pub struct ScatterChartSeriesRender {
 }
 
 pub fn scatter_legend_items(series: &[ChartScatterSeries]) -> Vec<LegendItem> {
-    series_legend_items(
+    series_legend_items_with_visibility(
         "scatter-series",
-        series
-            .iter()
-            .enumerate()
-            .map(|(index, series)| series_label_or_default(&series.label, index)),
+        series.iter().enumerate().map(|(index, series)| {
+            (
+                series_label_or_default(&series.label, index),
+                series.visible,
+            )
+        }),
     )
 }
 

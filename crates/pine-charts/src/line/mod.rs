@@ -10,7 +10,7 @@ use crate::cartesian::{
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
-use crate::legend::{series_label_or_default, series_legend_items};
+use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::path::line_path;
 use crate::scale::LinearScale;
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
@@ -34,10 +34,22 @@ impl ChartPoint {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartLineSeries {
     pub label: String,
     pub data: Vec<ChartPoint>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
+}
+
+impl Default for ChartLineSeries {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            data: Vec::new(),
+            visible: true,
+        }
+    }
 }
 
 impl ChartLineSeries {
@@ -45,6 +57,7 @@ impl ChartLineSeries {
         Self {
             label: label.into(),
             data,
+            visible: true,
         }
     }
 }
@@ -100,10 +113,6 @@ impl LineChartGeometry {
         series: &[ChartLineSeries],
         options: &LineChartOptions,
     ) -> ChartResult<Self> {
-        if series.is_empty() || series.iter().any(|series| series.data.is_empty()) {
-            return Err(ChartError::EmptySeries);
-        }
-
         let normalized = normalize_line_series(series)?;
         let layout = CartesianLayout::new(
             options.width,
@@ -252,12 +261,14 @@ impl LineChartSample {
 }
 
 pub fn line_legend_items(series: &[ChartLineSeries]) -> Vec<crate::LegendItem> {
-    series_legend_items(
+    series_legend_items_with_visibility(
         "line-series",
-        series
-            .iter()
-            .enumerate()
-            .map(|(index, series)| series_label_or_default(&series.label, index)),
+        series.iter().enumerate().map(|(index, series)| {
+            (
+                series_label_or_default(&series.label, index),
+                series.visible,
+            )
+        }),
     )
 }
 
@@ -286,9 +297,10 @@ struct NormalizedLineSeries {
 }
 
 fn normalize_line_series(series: &[ChartLineSeries]) -> ChartResult<Vec<NormalizedLineSeries>> {
-    series
+    let normalized = series
         .iter()
         .enumerate()
+        .filter(|(_, series)| series.visible)
         .map(|(index, series)| {
             if series.data.is_empty() {
                 return Err(ChartError::EmptySeries);
@@ -298,7 +310,13 @@ fn normalize_line_series(series: &[ChartLineSeries]) -> ChartResult<Vec<Normaliz
                 data: validate_points(&series.data)?,
             })
         })
-        .collect()
+        .collect::<ChartResult<Vec<_>>>()?;
+
+    if normalized.is_empty() {
+        Err(ChartError::EmptySeries)
+    } else {
+        Ok(normalized)
+    }
 }
 
 fn line_series_label(series: &ChartLineSeries, _index: usize) -> String {
@@ -802,6 +820,48 @@ mod tests {
         assert_eq!(legend[0].series, "Actual");
         assert_eq!(legend[1].label, "Target");
         assert_eq!(legend[1].series, "Target");
+    }
+
+    #[test]
+    fn line_geometry_skips_hidden_series_and_marks_legend_inactive() {
+        let options = LineChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            x_domain: Some((0.0, 1.0)),
+            y_domain: Some((0.0, 2.0)),
+        };
+        let mut series = vec![
+            ChartLineSeries::new(
+                "Actual",
+                vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 2.0)],
+            ),
+            ChartLineSeries::new("Hidden", Vec::new()),
+        ];
+        series[1].visible = false;
+
+        let geometry = LineChartGeometry::from_series(&series, &options).unwrap();
+
+        assert_eq!(geometry.series.len(), 1);
+        assert_eq!(geometry.series[0].label, "Actual");
+        let legend = line_legend_items(&series);
+        assert!(legend[0].active);
+        assert!(!legend[1].active);
+    }
+
+    #[test]
+    fn line_geometry_is_empty_when_all_series_are_hidden() {
+        let options = LineChartOptions::default();
+        let mut series = vec![ChartLineSeries::new(
+            "Hidden",
+            vec![ChartPoint::new(0.0, 0.0)],
+        )];
+        series[0].visible = false;
+
+        assert_eq!(
+            LineChartGeometry::from_series(&series, &options).unwrap_err(),
+            ChartError::EmptySeries
+        );
     }
 
     #[test]

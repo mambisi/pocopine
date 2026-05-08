@@ -347,6 +347,12 @@ Add `interactive="true"` when legend items should toggle and emit
 `pp:chart:legend-toggle`. The legend owns only item active state and hooks; the
 application still decides how toggles affect chart data.
 
+For controlled filtering, set `visible` on `ChartLineSeries`,
+`ChartScatterSeries`, `ChartAreaSeries`, `ChartBarSeries`, or `ChartPieSlice`.
+Renderers skip hidden items, and `*_legend_items` helpers expose the same state
+as `LegendItem.active`. Helper functions such as `set_line_series_visible` and
+`set_pie_slice_visible` update app-owned data by the stable legend key.
+
 ## Styling Hooks
 
 The component emits stable hooks:

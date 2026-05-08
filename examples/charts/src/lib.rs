@@ -1,7 +1,8 @@
 use pine_charts::{
-    area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items, ChartAreaSeries,
-    ChartBar, ChartBarSeries, ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint,
-    ChartScatterSeries, LegendItem,
+    area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
+    set_area_series_visible, set_bar_series_visible, set_pie_slice_visible,
+    set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint,
+    ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem, LegendToggle,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -162,6 +163,43 @@ impl ChartDemo {
         self.pie_start_angle = 180.0;
         self.pie_end_angle = 360.0;
         self.update_pie_center();
+    }
+
+    pub fn toggle_scatter_series(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_scatter_series_visible(&mut self.scatter_series, &toggle.key, toggle.active) {
+            self.scatter_legend = scatter_legend_items(&self.scatter_series);
+        }
+    }
+
+    pub fn toggle_area_series(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_area_series_visible(&mut self.area_series, &toggle.key, toggle.active) {
+            self.area_legend = area_legend_items(&self.area_series);
+        }
+    }
+
+    pub fn toggle_bar_series(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_bar_series_visible(&mut self.bar_series, &toggle.key, toggle.active) {
+            self.bar_legend = bar_legend_items(&self.bar_series);
+        }
+    }
+
+    pub fn toggle_pie_slice(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_pie_slice_visible(&mut self.pie_data, &toggle.key, toggle.active) {
+            self.pie_legend = pine_charts::pie_legend_items(&self.pie_data);
+            self.update_pie_center();
+        }
     }
 }
 
@@ -520,6 +558,7 @@ fn latency_pie_data() -> Vec<ChartPieSlice> {
 
 fn pie_total_label(data: &[ChartPieSlice]) -> String {
     data.iter()
+        .filter(|slice| slice.visible)
         .map(|slice| slice.value)
         .sum::<f64>()
         .round()

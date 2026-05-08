@@ -64,6 +64,8 @@ pub struct CartesianLineSeriesConfig {
     pub marker_radius: f64,
     pub points: Vec<ChartPoint>,
     pub data: Vec<ChartBar>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,6 +74,8 @@ pub struct CartesianBarSeriesConfig {
     pub label: String,
     pub color: String,
     pub data: Vec<ChartBar>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,6 +86,8 @@ pub struct CartesianAreaSeriesConfig {
     pub color: String,
     pub stroke_width: f64,
     pub points: Vec<ChartPoint>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,6 +97,8 @@ pub struct CartesianScatterSeriesConfig {
     pub color: String,
     pub point_radius: f64,
     pub points: Vec<ChartPoint>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -972,6 +980,8 @@ pub struct PineLineSeries {
     pub points: Vec<ChartPoint>,
     #[prop]
     pub data: Vec<ChartBar>,
+    #[prop]
+    pub visible: bool,
     pub component_key: String,
 }
 
@@ -986,6 +996,7 @@ impl Default for PineLineSeries {
             marker_radius: DEFAULT_MARKER_RADIUS,
             points: Vec::new(),
             data: Vec::new(),
+            visible: true,
             component_key: String::new(),
         }
     }
@@ -1036,6 +1047,11 @@ impl PineLineSeries {
     fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
         self.sync();
     }
+
+    #[watch(visible)]
+    fn on_visible(&mut self, _: bool, _: Option<bool>) {
+        self.sync();
+    }
 }
 
 impl PineLineSeries {
@@ -1050,6 +1066,7 @@ impl PineLineSeries {
                 marker_radius: self.marker_radius,
                 points: self.points.clone(),
                 data: self.data.clone(),
+                visible: self.visible,
             });
         });
     }
@@ -1066,6 +1083,8 @@ pub struct PineBarSeries {
     pub color: String,
     #[prop]
     pub data: Vec<ChartBar>,
+    #[prop]
+    pub visible: bool,
     pub component_key: String,
 }
 
@@ -1076,6 +1095,7 @@ impl Default for PineBarSeries {
             label: String::new(),
             color: "currentColor".into(),
             data: Vec::new(),
+            visible: true,
             component_key: String::new(),
         }
     }
@@ -1106,6 +1126,11 @@ impl PineBarSeries {
     fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
         self.sync();
     }
+
+    #[watch(visible)]
+    fn on_visible(&mut self, _: bool, _: Option<bool>) {
+        self.sync();
+    }
 }
 
 impl PineBarSeries {
@@ -1116,6 +1141,7 @@ impl PineBarSeries {
                 label: self.label.clone(),
                 color: color_or_current(&self.color),
                 data: self.data.clone(),
+                visible: self.visible,
             });
         });
     }
@@ -1136,6 +1162,8 @@ pub struct PineAreaSeries {
     pub stroke_width: f64,
     #[prop]
     pub points: Vec<ChartPoint>,
+    #[prop]
+    pub visible: bool,
     pub component_key: String,
 }
 
@@ -1148,6 +1176,7 @@ impl Default for PineAreaSeries {
             color: "currentColor".into(),
             stroke_width: DEFAULT_STROKE_WIDTH,
             points: Vec::new(),
+            visible: true,
             component_key: String::new(),
         }
     }
@@ -1188,6 +1217,11 @@ impl PineAreaSeries {
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
         self.sync();
     }
+
+    #[watch(visible)]
+    fn on_visible(&mut self, _: bool, _: Option<bool>) {
+        self.sync();
+    }
 }
 
 impl PineAreaSeries {
@@ -1200,6 +1234,7 @@ impl PineAreaSeries {
                 color: color_or_current(&self.color),
                 stroke_width: self.stroke_width,
                 points: self.points.clone(),
+                visible: self.visible,
             });
         });
     }
@@ -1218,6 +1253,8 @@ pub struct PineScatterSeries {
     pub point_radius: f64,
     #[prop]
     pub points: Vec<ChartPoint>,
+    #[prop]
+    pub visible: bool,
     pub component_key: String,
 }
 
@@ -1229,6 +1266,7 @@ impl Default for PineScatterSeries {
             color: "currentColor".into(),
             point_radius: DEFAULT_MARKER_RADIUS,
             points: Vec::new(),
+            visible: true,
             component_key: String::new(),
         }
     }
@@ -1264,6 +1302,11 @@ impl PineScatterSeries {
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
         self.sync();
     }
+
+    #[watch(visible)]
+    fn on_visible(&mut self, _: bool, _: Option<bool>) {
+        self.sync();
+    }
 }
 
 impl PineScatterSeries {
@@ -1275,6 +1318,7 @@ impl PineScatterSeries {
                 color: color_or_current(&self.color),
                 point_radius: self.point_radius,
                 points: self.points.clone(),
+                visible: self.visible,
             });
         });
     }
@@ -1633,17 +1677,17 @@ pub fn render_cartesian_chart(
     let renderable_lines: Vec<&CartesianLineSeriesConfig> = inputs
         .line_series
         .iter()
-        .filter(|series| !series.points.is_empty())
+        .filter(|series| series.visible && !series.points.is_empty())
         .collect();
     let renderable_areas: Vec<&CartesianAreaSeriesConfig> = inputs
         .area_series
         .iter()
-        .filter(|series| !series.points.is_empty())
+        .filter(|series| series.visible && !series.points.is_empty())
         .collect();
     let renderable_scatters: Vec<&CartesianScatterSeriesConfig> = inputs
         .scatter_series
         .iter()
-        .filter(|series| !series.points.is_empty())
+        .filter(|series| series.visible && !series.points.is_empty())
         .collect();
     let numeric_series = renderable_lines
         .iter()
@@ -1947,20 +1991,28 @@ fn has_renderable_series(
 ) -> bool {
     line_series
         .iter()
-        .any(|series| !series.points.is_empty() || !series.data.is_empty())
-        || bar_series.iter().any(|series| !series.data.is_empty())
-        || area_series.iter().any(|series| !series.points.is_empty())
+        .any(|series| series.visible && (!series.points.is_empty() || !series.data.is_empty()))
+        || bar_series
+            .iter()
+            .any(|series| series.visible && !series.data.is_empty())
+        || area_series
+            .iter()
+            .any(|series| series.visible && !series.points.is_empty())
         || scatter_series
             .iter()
-            .any(|series| !series.points.is_empty())
+            .any(|series| series.visible && !series.points.is_empty())
 }
 
 fn uses_categorical_x(
     line_series: &[CartesianLineSeriesConfig],
     bar_series: &[CartesianBarSeriesConfig],
 ) -> bool {
-    bar_series.iter().any(|series| !series.data.is_empty())
-        || line_series.iter().any(|series| !series.data.is_empty())
+    bar_series
+        .iter()
+        .any(|series| series.visible && !series.data.is_empty())
+        || line_series
+            .iter()
+            .any(|series| series.visible && !series.data.is_empty())
 }
 
 fn categorical_categories(
@@ -1969,7 +2021,7 @@ fn categorical_categories(
 ) -> ChartResult<Vec<String>> {
     let categories = bar_series
         .iter()
-        .find(|series| !series.data.is_empty())
+        .find(|series| series.visible && !series.data.is_empty())
         .map(|series| {
             series
                 .data
@@ -1980,7 +2032,7 @@ fn categorical_categories(
         .or_else(|| {
             line_series
                 .iter()
-                .find(|series| !series.data.is_empty())
+                .find(|series| series.visible && !series.data.is_empty())
                 .map(|series| {
                     series
                         .data
@@ -1991,14 +2043,20 @@ fn categorical_categories(
         })
         .ok_or(ChartError::EmptySeries)?;
 
-    for series in bar_series.iter().filter(|series| !series.data.is_empty()) {
+    for series in bar_series
+        .iter()
+        .filter(|series| series.visible && !series.data.is_empty())
+    {
         validate_categories(
             &series_label_or_default(&series.label, 0),
             &categories,
             &series.data,
         )?;
     }
-    for series in line_series.iter().filter(|series| !series.data.is_empty()) {
+    for series in line_series
+        .iter()
+        .filter(|series| series.visible && !series.data.is_empty())
+    {
         validate_categories(
             &series_label_or_default(&series.label, 0),
             &categories,
@@ -2043,28 +2101,35 @@ fn categorical_y_domain(
     area_series: &[CartesianAreaSeriesConfig],
     scatter_series: &[CartesianScatterSeriesConfig],
 ) -> ChartResult<(f64, f64)> {
-    let include_zero = bar_series.iter().any(|series| !series.data.is_empty());
+    let include_zero = bar_series
+        .iter()
+        .any(|series| series.visible && !series.data.is_empty());
     let values = bar_series
         .iter()
+        .filter(|series| series.visible)
         .flat_map(|series| series.data.iter().map(|bar| bar.value))
         .chain(
             line_series
                 .iter()
+                .filter(|series| series.visible)
                 .flat_map(|series| series.data.iter().map(|bar| bar.value)),
         )
         .chain(
             line_series
                 .iter()
+                .filter(|series| series.visible)
                 .flat_map(|series| series.points.iter().map(|point| point.y)),
         )
         .chain(
             area_series
                 .iter()
+                .filter(|series| series.visible)
                 .flat_map(|series| series.points.iter().map(|point| point.y)),
         )
         .chain(
             scatter_series
                 .iter()
+                .filter(|series| series.visible)
                 .flat_map(|series| series.points.iter().map(|point| point.y)),
         );
 
@@ -2081,7 +2146,7 @@ fn render_categorical_bars(
 ) -> ChartResult<Vec<CartesianBarRender>> {
     let renderable = bar_series
         .iter()
-        .filter(|series| !series.data.is_empty())
+        .filter(|series| series.visible && !series.data.is_empty())
         .collect::<Vec<_>>();
     let mut bars = Vec::with_capacity(categories.len() * renderable.len());
 
@@ -2131,7 +2196,7 @@ fn render_categorical_lines(
 
     for (series_index, config) in line_series
         .iter()
-        .filter(|series| !series.data.is_empty() || !series.points.is_empty())
+        .filter(|series| series.visible && (!series.data.is_empty() || !series.points.is_empty()))
         .enumerate()
     {
         let series_label = series_label_or_default(&config.label, series_index);
@@ -2172,7 +2237,7 @@ fn render_categorical_areas(
 ) -> ChartResult<Vec<CartesianAreaSeriesRender>> {
     area_series
         .iter()
-        .filter(|series| !series.points.is_empty())
+        .filter(|series| series.visible && !series.points.is_empty())
         .enumerate()
         .map(|(series_index, config)| {
             let series_label = series_label_or_default(&config.label, series_index);
@@ -2213,7 +2278,7 @@ fn render_categorical_scatter_points(
     let mut points = Vec::new();
     for (series_index, config) in scatter_series
         .iter()
-        .filter(|series| !series.points.is_empty())
+        .filter(|series| series.visible && !series.points.is_empty())
         .enumerate()
     {
         let series_label = series_label_or_default(&config.label, series_index);
@@ -2594,6 +2659,7 @@ mod tests {
                 ChartPoint::new(10.0, 15.0),
             ],
             data: Vec::new(),
+            visible: true,
         }];
 
         let grid = CartesianGridConfig::default();
@@ -2642,6 +2708,7 @@ mod tests {
             label: "Actual".into(),
             color: "#16a085".into(),
             data: vec![ChartBar::new("W1", 10.0), ChartBar::new("W2", 20.0)],
+            visible: true,
         }];
         let lines = vec![CartesianLineSeriesConfig {
             key: "target".into(),
@@ -2652,6 +2719,7 @@ mod tests {
             marker_radius: 4.0,
             points: Vec::new(),
             data: vec![ChartBar::new("W1", 12.0), ChartBar::new("W2", 18.0)],
+            visible: true,
         }];
 
         let render = render_cartesian_chart(
@@ -2700,6 +2768,7 @@ mod tests {
             color: "#1d6fd8".into(),
             stroke_width: 2.0,
             points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
+            visible: true,
         }];
         let scatters = vec![CartesianScatterSeriesConfig {
             key: "samples".into(),
@@ -2707,6 +2776,7 @@ mod tests {
             color: "#d96c2c".into(),
             point_radius: 6.0,
             points: vec![ChartPoint::new(5.0, 5.0)],
+            visible: true,
         }];
 
         let render = render_cartesian_chart(
@@ -2753,6 +2823,7 @@ mod tests {
             marker_radius: 3.0,
             points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
             data: Vec::new(),
+            visible: true,
         }];
         let reference_lines = vec![CartesianReferenceLineConfig {
             key: "goal".into(),
@@ -2836,6 +2907,7 @@ mod tests {
             marker_radius: 3.0,
             points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
             data: Vec::new(),
+            visible: true,
         }];
         let reference_lines = vec![CartesianReferenceLineConfig {
             key: "bad".into(),
@@ -2890,6 +2962,7 @@ mod tests {
             marker_radius: 3.0,
             points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(10.0, 10.0)],
             data: Vec::new(),
+            visible: true,
         }];
         let reference_dots = vec![CartesianReferenceDotConfig {
             key: "dot".into(),

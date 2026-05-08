@@ -15,10 +15,22 @@ use crate::svg::format_tick;
 
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartPieSlice {
     pub label: String,
     pub value: f64,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
+}
+
+impl Default for ChartPieSlice {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            value: 0.0,
+            visible: true,
+        }
+    }
 }
 
 impl ChartPieSlice {
@@ -26,6 +38,7 @@ impl ChartPieSlice {
         Self {
             label: label.into(),
             value,
+            visible: true,
         }
     }
 }
@@ -133,12 +146,7 @@ impl PieChartGeometry {
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
-        let legend_items = slices
-            .iter()
-            .map(|slice| {
-                LegendItem::with_series(slice.key.clone(), slice.label.clone(), slice.label.clone())
-            })
-            .collect();
+        let legend_items = pie_legend_items(data);
 
         Ok(Self {
             view_box: format!("0 0 {width} {height}"),
@@ -159,7 +167,12 @@ pub fn pie_legend_items(data: &[ChartPieSlice]) -> Vec<LegendItem> {
         .filter(|(_, slice)| slice.value > 0.0)
         .map(|(index, slice)| {
             let label = slice_label(&slice.label, index);
-            LegendItem::with_series(format!("pie-slice-{index}-{label}"), label.clone(), label)
+            LegendItem::with_series_active(
+                format!("pie-slice-{index}-{label}"),
+                label.clone(),
+                label,
+                slice.visible,
+            )
         })
         .collect()
 }
@@ -676,7 +689,7 @@ fn normalize_slices(data: &[ChartPieSlice]) -> ChartResult<Vec<NormalizedPieSlic
                 value: value.to_string(),
             });
         }
-        if value == 0.0 {
+        if value == 0.0 || !slice.visible {
             continue;
         }
         output.push(NormalizedPieSlice {
@@ -703,7 +716,7 @@ fn validate_inner_radius(value: f64) -> ChartResult<f64> {
     Ok(value)
 }
 
-fn slice_label(label: &str, index: usize) -> String {
+pub(crate) fn slice_label(label: &str, index: usize) -> String {
     if label.is_empty() {
         format!("Slice {}", index + 1)
     } else {
@@ -850,6 +863,28 @@ mod tests {
         assert_eq!(geometry.slices[0].percentage, 25.0);
         assert_eq!(geometry.slices[0].d, "M50,50 L50,0 A50,50 0 0 1 100,50 Z");
         assert_eq!(geometry.legend_items.len(), 2);
+    }
+
+    #[test]
+    fn pie_geometry_skips_hidden_slices_and_marks_legend_inactive() {
+        let options = PieChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.0,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        };
+        let mut data = vec![ChartPieSlice::new("A", 1.0), ChartPieSlice::new("B", 3.0)];
+        data[1].visible = false;
+
+        let geometry = PieChartGeometry::new(&data, &options).unwrap();
+
+        assert_eq!(geometry.slices.len(), 1);
+        assert_eq!(geometry.slices[0].label, "A");
+        assert_eq!(geometry.total, 1.0);
+        assert!(geometry.legend_items[0].active);
+        assert!(!geometry.legend_items[1].active);
     }
 
     #[test]

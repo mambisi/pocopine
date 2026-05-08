@@ -10,7 +10,7 @@ use crate::cartesian::{
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
-use crate::legend::{series_label_or_default, series_legend_items, LegendItem};
+use crate::legend::{series_label_or_default, series_legend_items_with_visibility, LegendItem};
 use crate::scale::{BandScale, LinearScale};
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
@@ -29,10 +29,22 @@ impl ChartBar {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartBarSeries {
     pub label: String,
     pub data: Vec<ChartBar>,
+    #[serde(default = "crate::legend::default_visible")]
+    pub visible: bool,
+}
+
+impl Default for ChartBarSeries {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            data: Vec::new(),
+            visible: true,
+        }
+    }
 }
 
 impl ChartBarSeries {
@@ -40,6 +52,7 @@ impl ChartBarSeries {
         Self {
             label: label.into(),
             data,
+            visible: true,
         }
     }
 }
@@ -163,19 +176,23 @@ impl BarChartGeometry {
                 baseline_y,
             ),
             y_axis: SvgLine::new("y-axis".into(), plot.x, plot.y, plot.x, plot.bottom()),
-            legend_items: data.legend_items(),
+            legend_items: if series.len() > 1 {
+                bar_legend_items(series)
+            } else {
+                Vec::new()
+            },
             y_ticks,
         })
     }
 }
 
 pub fn bar_legend_items(series: &[ChartBarSeries]) -> Vec<LegendItem> {
-    series_legend_items(
+    series_legend_items_with_visibility(
         "bar-series",
         series
             .iter()
             .enumerate()
-            .map(|(index, series)| series_label(series, index)),
+            .map(|(index, series)| (series_label(series, index), series.visible)),
     )
 }
 
@@ -259,13 +276,24 @@ struct NormalizedBarData {
 
 impl NormalizedBarData {
     fn from_series(series: &[ChartBarSeries]) -> ChartResult<Self> {
-        if series.is_empty() || series.iter().all(|series| series.data.is_empty()) {
+        let visible_series = series
+            .iter()
+            .enumerate()
+            .filter(|(_, series)| series.visible)
+            .collect::<Vec<_>>();
+
+        if visible_series.is_empty()
+            || visible_series
+                .iter()
+                .all(|(_, series)| series.data.is_empty())
+        {
             return Err(ChartError::EmptySeries);
         }
 
-        let first = series
+        let first = visible_series
             .iter()
-            .find(|series| !series.data.is_empty())
+            .find(|(_, series)| !series.data.is_empty())
+            .map(|(_, series)| *series)
             .ok_or(ChartError::EmptySeries)?;
         let categories = first
             .data
@@ -273,8 +301,8 @@ impl NormalizedBarData {
             .map(|bar| bar.label.clone())
             .collect::<Vec<_>>();
 
-        let mut normalized = Vec::with_capacity(series.len());
-        for (series_index, series) in series.iter().enumerate() {
+        let mut normalized = Vec::with_capacity(visible_series.len());
+        for (series_index, series) in visible_series {
             if series.data.len() != categories.len() {
                 let expected = categories
                     .get(series.data.len())
@@ -318,17 +346,6 @@ impl NormalizedBarData {
 
     fn values(&self) -> impl Iterator<Item = &f64> {
         self.series.iter().flat_map(|series| series.values.iter())
-    }
-
-    fn legend_items(&self) -> Vec<LegendItem> {
-        if self.series.len() <= 1 {
-            return Vec::new();
-        }
-
-        series_legend_items(
-            "bar-series",
-            self.series.iter().map(|series| series.label.clone()),
-        )
     }
 }
 
@@ -1060,6 +1077,38 @@ mod tests {
         assert_eq!(geometry.legend_items.len(), 2);
         assert_eq!(geometry.legend_items[0].label, "New");
         assert_eq!(geometry.legend_items[1].series, "Returning");
+    }
+
+    #[test]
+    fn grouped_bar_geometry_skips_hidden_series() {
+        let options = BarChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            y_domain: Some((0.0, 10.0)),
+            mode: BarChartMode::Grouped,
+            padding_inner: 0.0,
+            padding_outer: 0.0,
+            series_padding_inner: 0.0,
+        };
+        let mut series = vec![
+            ChartBarSeries::new(
+                "New",
+                vec![ChartBar::new("A", 2.0), ChartBar::new("B", 4.0)],
+            ),
+            ChartBarSeries::new(
+                "Hidden",
+                vec![ChartBar::new("A", 3.0), ChartBar::new("B", 10.0)],
+            ),
+        ];
+        series[1].visible = false;
+
+        let geometry = BarChartGeometry::from_series(&series, &options).unwrap();
+
+        assert_eq!(geometry.bars.len(), 2);
+        assert!(geometry.bars.iter().all(|bar| bar.series_label == "New"));
+        assert!(geometry.legend_items[0].active);
+        assert!(!geometry.legend_items[1].active);
     }
 
     #[test]
