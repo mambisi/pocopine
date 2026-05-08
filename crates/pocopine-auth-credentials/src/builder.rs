@@ -295,8 +295,8 @@ mod tests {
         fn login_id(&self) -> &str {
             "stub@example.com"
         }
-        fn password_hash(&self) -> &str {
-            ""
+        fn password_hash(&self) -> Option<&str> {
+            None
         }
         fn to_auth_user(&self) -> AuthUser {
             AuthUser::new(self.id())

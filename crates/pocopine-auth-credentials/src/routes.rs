@@ -122,10 +122,19 @@ async fn login_handler<S: UserStore, T: TokenStore>(
         .map_err(CredentialsError::Storage)?;
 
     // Constant-time login: always run argon2 verify, even on
-    // not-found, so a timing/CPU probe can't distinguish the
-    // unknown-identifier branch from the wrong-password branch.
+    // not-found OR no-password-set (multi-credential users with
+    // OAuth-only / passkey-only auth). A timing/CPU probe sees
+    // the same shape regardless of which bucket the input fell
+    // into: unknown identifier, OAuth-only account, wrong
+    // password — all run argon2 against the dummy hash before
+    // returning `InvalidCredentials`.
     let (hash, real_user) = match user {
-        Some(u) => (u.password_hash().to_string(), Some(u)),
+        Some(u) => match u.password_hash() {
+            Some(h) => (h.to_string(), Some(u)),
+            // User exists but has no password (OAuth-only / passkey-only).
+            // Fall through to the dummy hash so timing matches.
+            None => (state.dummy_hash.clone(), None),
+        },
         None => (state.dummy_hash.clone(), None),
     };
 

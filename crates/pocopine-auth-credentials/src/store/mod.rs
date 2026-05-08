@@ -32,10 +32,9 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// record to verify a password and issue a session token.
 ///
 /// Apps implement this on their own user type (Postgres row, custom
-/// struct, etc.). The argon2id PHC string in
-/// [`password_hash`](Self::password_hash) is the only credentials-
-/// specific field the framework looks at; everything else (timestamps,
-/// roles, profile fields, OAuth links) lives on the app's record
+/// struct, etc.). Everything outside the four trait methods —
+/// profile fields, OAuth-linked-provider columns, passkey
+/// public-key list, audit timestamps — lives on the app's record
 /// untouched.
 ///
 /// ## Login identifier
@@ -50,11 +49,32 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// [`crate::E164PhoneValidator`] or [`crate::UsernameValidator`];
 /// truly custom shapes implement [`crate::LoginIdValidator`] directly.
 ///
+/// ## Multiple credential types per user
+///
+/// Real apps often link more than one auth method to a single user
+/// (email + password and Google OAuth and phone OTP, all → the
+/// same `user_id`). [`PasswordCredentials`] is **one credential
+/// type** in that mix; future sibling crates ship traits for the
+/// others (`GoogleOAuthCredentials`, `PasskeyCredentials`,
+/// `PhoneOtpCredentials`, …). Apps implement multiple on the same
+/// `AppUser` struct as their database picks up the corresponding
+/// columns / link tables.
+///
+/// To make this work, [`password_hash`](Self::password_hash) returns
+/// **`Option<&str>`** — `None` means "this user exists but doesn't
+/// have a password set" (signed up via OAuth / passkey only). The
+/// login flow treats `None` like "user not found": it runs the
+/// constant-time dummy hash and returns
+/// [`crate::CredentialsError::InvalidCredentials`], so a probe
+/// against the login route can't distinguish "no password" from
+/// "wrong password" or "no account".
+///
 /// ## Privacy
 ///
 /// `password_hash` is a secret. Never log it. The app's `Debug` impl
 /// for the user type SHOULD redact it; the credentials crate's own
-/// types do (`Debug` on the response shape excludes the hash).
+/// types do (the signup/login response builds an `AuthUser`
+/// projection that never serializes the hash).
 pub trait PasswordCredentials: Send + Sync + 'static {
     /// Stable identifier — used as the JWT `sub` claim. Independent
     /// of [`login_id`](Self::login_id) (which can change when the
@@ -70,7 +90,14 @@ pub trait PasswordCredentials: Send + Sync + 'static {
     fn login_id(&self) -> &str;
 
     /// Argon2id PHC string for the user's current password.
-    fn password_hash(&self) -> &str;
+    /// **`None` for users without a password set** (OAuth-only,
+    /// passkey-only, OTP-only). The framework treats `None` like
+    /// "no such user" — the login flow falls through to the
+    /// constant-time dummy hash and returns
+    /// [`crate::CredentialsError::InvalidCredentials`], so an
+    /// attacker probing for "is this email an OAuth-only account?"
+    /// gets the same response shape as "is this email registered?".
+    fn password_hash(&self) -> Option<&str>;
 
     /// Project to an [`AuthUser`] for token issuance and
     /// `Principal` construction. The credentials crate calls this

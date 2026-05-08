@@ -21,11 +21,16 @@ use serde_json::json;
 /// the tests can construct directly. `login_id` is whatever the
 /// configured [`pocopine_auth_credentials::LoginIdValidator`]
 /// produced — in the default setup that's a normalized email.
+///
+/// `password_hash` is `Option<String>` to match the multi-credential
+/// trait shape; the integration tests set it to `Some(...)` for
+/// password users and could leave it `None` for an OAuth-only /
+/// passkey-only account in the same table.
 #[derive(Clone)]
 pub(crate) struct TestUser {
     pub(crate) id: String,
     pub(crate) login_id: String,
-    pub(crate) password_hash: String,
+    pub(crate) password_hash: Option<String>,
     pub(crate) email_verified: bool,
 }
 
@@ -36,8 +41,8 @@ impl PasswordCredentials for TestUser {
     fn login_id(&self) -> &str {
         &self.login_id
     }
-    fn password_hash(&self) -> &str {
-        &self.password_hash
+    fn password_hash(&self) -> Option<&str> {
+        self.password_hash.as_deref()
     }
     fn to_auth_user(&self) -> AuthUser {
         // For the email-shaped default config the login_id IS the
@@ -53,6 +58,24 @@ impl PasswordCredentials for TestUser {
 #[derive(Default)]
 pub(crate) struct TestUserStore {
     inner: RwLock<TestUserStoreInner>,
+}
+
+impl TestUserStore {
+    /// Test helper: seed an OAuth-only / passkey-only user (no
+    /// password set) so the login flow can confirm the
+    /// password-less branch falls through to InvalidCredentials.
+    pub(crate) fn seed_passwordless(&self, login_id: &str) {
+        let mut inner = self.inner.write().expect("test lock");
+        let id = format!("u{}", inner.by_id.len() + 1);
+        let user = TestUser {
+            id: id.clone(),
+            login_id: login_id.to_string(),
+            password_hash: None,
+            email_verified: true,
+        };
+        inner.by_login_id.insert(login_id.to_string(), id.clone());
+        inner.by_id.insert(id, user);
+    }
 }
 
 #[derive(Default)]
@@ -105,7 +128,7 @@ impl UserStore for TestUserStore {
         let user = TestUser {
             id: id.clone(),
             login_id: login_id.to_string(),
-            password_hash,
+            password_hash: Some(password_hash),
             email_verified: false,
         };
         inner.by_login_id.insert(login_id.to_string(), id.clone());
