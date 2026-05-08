@@ -353,6 +353,11 @@ Renderers skip hidden items, and `*_legend_items` helpers expose the same state
 as `LegendItem.active`. Helper functions such as `set_line_series_visible` and
 `set_pie_slice_visible` update app-owned data by the stable legend key.
 
+When every item is hidden, chart roots switch to `data-state="empty"` and expose
+a `.pine-chart-status-empty` status node. The default text is `No visible data`;
+set `empty_message` on a chart to use application-specific copy while keeping
+the same styling hook.
+
 ## Styling Hooks
 
 The component emits stable hooks:
@@ -404,6 +409,7 @@ The component emits stable hooks:
 - `.pine-chart-legend-marker`
 - `.pine-chart-legend-label`
 - `.pine-chart-status`
+- `.pine-chart-status-empty`
 - `data-state="empty|ready|invalid"`
 - `data-hover`
 - `data-tooltip-x="left|right"`

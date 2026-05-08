@@ -89,4 +89,8 @@
           pp-text="hover_percentage_label"></span>
   </div>
   <span class="pine-chart-status" pp-show="invalid" pp-text="error"></span>
+  <span pp-show="empty"
+        class="pine-chart-status pine-chart-status-empty"
+        role="status"
+        pp-text="empty_message"></span>
 </root>

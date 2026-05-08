@@ -5,6 +5,8 @@ use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::scale::LinearScale;
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
 
+pub(crate) const DEFAULT_EMPTY_MESSAGE: &str = "No visible data";
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CartesianLayout {
     pub view_box: String,

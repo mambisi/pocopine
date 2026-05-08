@@ -11,6 +11,7 @@ use crate::path::line_path;
 
 const DEFAULT_WIDTH: f64 = 900.0;
 const DEFAULT_HEIGHT: f64 = 480.0;
+const DEFAULT_EMPTY_MESSAGE: &str = crate::cartesian::DEFAULT_EMPTY_MESSAGE;
 const DEFAULT_LINE_WIDTH: f64 = 3.0;
 const DEFAULT_MARKER_RADIUS: f64 = 4.0;
 const DEFAULT_REFERENCE_RADIUS: f64 = 12.0;
@@ -247,6 +248,8 @@ pub struct PineLayerChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -275,6 +278,7 @@ impl Default for PineLayerChart {
     fn default() -> Self {
         Self {
             label: "Layer chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             state: "empty".into(),

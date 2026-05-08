@@ -1311,6 +1311,11 @@ async fn line_chart_reports_empty_state() {
             .is_none(),
         "empty charts should not render a data path",
     );
+    let status = host
+        .query_selector(".pine-chart-status-empty")
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.text_content().as_deref(), Some("No visible data"));
 
     host.remove();
 }
@@ -2005,6 +2010,30 @@ async fn legend_toggle_can_control_chart_visibility() {
         first.get_attribute("aria-pressed").as_deref(),
         Some("false")
     );
+    let second = host
+        .query_selector_all(".controlled-legend .pine-chart-legend-item")
+        .unwrap()
+        .get(1)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    dispatch_keydown(&second, "Enter");
+    settle().await;
+
+    let chart = host.query_selector(".controlled-line").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("empty"));
+    assert!(chart.has_attribute("data-empty"));
+    assert!(
+        host.query_selector(".controlled-line .pine-chart-line")
+            .unwrap()
+            .is_none(),
+        "all-hidden chart should not render stale line geometry",
+    );
+    let status = chart
+        .query_selector(".pine-chart-status-empty")
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.text_content().as_deref(), Some("No visible data"));
 
     host.remove();
 }
