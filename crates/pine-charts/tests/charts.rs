@@ -1770,6 +1770,19 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     settle().await;
 
     assert!(first.has_attribute("data-hovered"));
+    let hovered_key = first.get_attribute("data-key").unwrap();
+    let painted_slices = host.query_selector_all(".pine-chart-pie-slice").unwrap();
+    assert_eq!(painted_slices.length(), 2);
+    let top_slice = painted_slices
+        .get(painted_slices.length() - 1)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        top_slice.get_attribute("data-key").as_deref(),
+        Some(hovered_key.as_str())
+    );
+    assert!(top_slice.has_attribute("data-hovered"));
     let tooltip = host
         .query_selector(".pine-chart-pie-tooltip")
         .unwrap()
