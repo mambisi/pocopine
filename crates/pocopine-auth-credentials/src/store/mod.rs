@@ -38,18 +38,36 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// roles, profile fields, OAuth links) lives on the app's record
 /// untouched.
 ///
+/// ## Login identifier
+///
+/// [`login_id`](Self::login_id) returns whatever string the user
+/// types to sign in: email, phone number, username, account number,
+/// etc. The framework treats it as opaque — the
+/// [`crate::LoginIdValidator`] configured on the [`crate::Credentials`]
+/// builder validates and normalizes the value before it reaches
+/// the store. Apps that want email-based auth use the default
+/// [`crate::EmailValidator`]; phone / username apps swap in
+/// [`crate::E164PhoneValidator`] or [`crate::UsernameValidator`];
+/// truly custom shapes implement [`crate::LoginIdValidator`] directly.
+///
 /// ## Privacy
 ///
 /// `password_hash` is a secret. Never log it. The app's `Debug` impl
 /// for the user type SHOULD redact it; the credentials crate's own
 /// types do (`Debug` on the response shape excludes the hash).
 pub trait PasswordCredentials: Send + Sync + 'static {
-    /// Stable identifier — used as the JWT `sub` claim.
+    /// Stable identifier — used as the JWT `sub` claim. Independent
+    /// of [`login_id`](Self::login_id) (which can change when the
+    /// user updates their email / phone / username; this can't).
     fn id(&self) -> &str;
 
-    /// Email address the user signs in with. Login matches
-    /// case-insensitively against this value.
-    fn email(&self) -> &str;
+    /// The opaque, **already-normalized** identifier the user typed
+    /// to sign in. Email, phone (E.164), username, account number —
+    /// whatever the configured [`crate::LoginIdValidator`] produced.
+    /// The framework matches this byte-for-byte against the
+    /// normalized form of the login request input; case folding /
+    /// trimming has already happened at the validator layer.
+    fn login_id(&self) -> &str;
 
     /// Argon2id PHC string for the user's current password.
     fn password_hash(&self) -> &str;
@@ -57,7 +75,7 @@ pub trait PasswordCredentials: Send + Sync + 'static {
     /// Project to an [`AuthUser`] for token issuance and
     /// `Principal` construction. The credentials crate calls this
     /// at sign-up and login time to (a) populate the JWT claims
-    /// (`email`, `email_verified`, `roles`, `permissions`, …) and
+    /// (`email`, `roles`, `permissions`, custom claims, …) and
     /// (b) shape the `user` field of the `{ token, user }` response.
     /// Apps decide which roles/permissions/claims appear by what
     /// they put on the returned [`AuthUser`].
@@ -79,31 +97,35 @@ pub trait UserStore: Send + Sync + 'static {
     /// The app's user / account type.
     type User: PasswordCredentials;
 
-    /// Return the user with `email`, if any. Implementations should
-    /// match case-insensitively — the credentials crate folds to
-    /// lower at signup, but defenders shouldn't rely on call-site
-    /// casing.
-    async fn find_by_email(&self, email: &str) -> Result<Option<Self::User>, StoreError>;
+    /// Return the user with the given `login_id`, if any. The value
+    /// is the **already-normalized** form (lowercase email, +E.164
+    /// phone, …) — implementors do a literal match against the
+    /// stored field. Case folding / trimming has already happened
+    /// at the validator layer; defending against case-different
+    /// inserts is the validator's responsibility, not the store's.
+    async fn find_by_login_id(&self, login_id: &str) -> Result<Option<Self::User>, StoreError>;
 
     /// Return the user with `id`, if any.
     async fn find_by_id(&self, id: &str) -> Result<Option<Self::User>, StoreError>;
 
-    /// Insert a new user with `email` and the freshly-hashed
-    /// `password_hash`. Implementations generate the id, set any
-    /// app-specific defaults (display name, role on signup,
-    /// timestamps, …), and return the constructed user record.
+    /// Insert a new user with `login_id` (already normalized) and
+    /// the freshly-hashed `password_hash`. Implementations generate
+    /// the id, set any app-specific defaults (display name, role on
+    /// signup, timestamps, …), and return the constructed user
+    /// record.
     ///
     /// Implementors MUST reject by error (not silently upsert) when
-    /// a user with the same email already exists; the credentials
+    /// a user with the same `login_id` already exists; the credentials
     /// crate maps any error from this method to
-    /// [`crate::CredentialsError::EmailTaken`] for the `409 Conflict`
+    /// [`crate::CredentialsError::LoginIdTaken`] for the `409 Conflict`
     /// response on the signup route. (If the failure is something
-    /// other than duplicate-email — e.g. a connection drop — the
+    /// other than duplicate-login — e.g. a connection drop — the
     /// `tracing` log carries the original error class while the
-    /// HTTP response stays the closed-set `email_taken`. Callers
-    /// that need to distinguish should re-check the email
-    /// availability before retrying.)
-    async fn create(&self, email: &str, password_hash: String) -> Result<Self::User, StoreError>;
+    /// HTTP response stays the closed-set `login_id_taken`. Callers
+    /// that need to distinguish should re-check availability before
+    /// retrying.)
+    async fn create(&self, login_id: &str, password_hash: String)
+        -> Result<Self::User, StoreError>;
 }
 
 /// Ephemeral, hashed-token store for password-reset and

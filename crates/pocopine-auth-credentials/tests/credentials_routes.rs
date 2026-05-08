@@ -25,6 +25,7 @@ use common::{TestTokenStore, TestUserStore};
 use http_body_util::BodyExt;
 use pocopine_auth::Principal;
 use pocopine_auth_credentials::Credentials;
+use pocopine_auth_credentials::{E164PhoneValidator, UsernameValidator};
 use pocopine_auth_jwt::{JwtVerifier, SecretBytes, TokenSource};
 use pocopine_server::Server;
 use serde_json::Value;
@@ -143,7 +144,7 @@ async fn signup_duplicate_email_is_409() {
         .unwrap();
     assert_eq!(second.status(), StatusCode::CONFLICT);
     let body = body_to_json(second.into_body()).await;
-    assert_eq!(body["error"], "email_taken");
+    assert_eq!(body["error"], "login_id_taken");
 }
 
 #[tokio::test]
@@ -181,7 +182,7 @@ async fn signup_invalid_email_is_422() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = body_to_json(resp.into_body()).await;
-    assert_eq!(body["error"], "invalid_email");
+    assert_eq!(body["error"], "invalid_login_id");
 }
 
 #[tokio::test]
@@ -285,4 +286,173 @@ async fn issued_token_verifies_through_paired_jwt_verifier() {
     assert_eq!(user.email.as_deref(), Some("alice@example.com"));
     let principal = Principal::from_user(user);
     assert!(principal.is_authenticated());
+}
+
+// ─── phone-based configuration ──────────────────────────────────────
+
+fn build_phone_credentials() -> Credentials<TestUserStore, TestTokenStore> {
+    Credentials::new(
+        fixed_secret(),
+        TestUserStore::default(),
+        TestTokenStore::default(),
+    )
+    .with_login_id_validator(E164PhoneValidator)
+    .with_login_id_field("phone")
+}
+
+#[tokio::test]
+async fn signup_login_round_trip_keyed_on_phone_number() {
+    pocopine_server::__reset_for_test();
+    let app = Server::new(axum::Router::new())
+        .plugin(build_phone_credentials())
+        .try_finalize()
+        .expect("server finalize");
+
+    // Phone field, no email field — the configured validator
+    // accepts E.164 only.
+    let resp = app
+        .clone()
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "phone": "+12025551234",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(post(
+            "/_pocopine/auth/login",
+            serde_json::json!({
+                "phone": "+12025551234",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn signup_keyed_on_phone_rejects_non_e164_input() {
+    pocopine_server::__reset_for_test();
+    let app = Server::new(axum::Router::new())
+        .plugin(build_phone_credentials())
+        .try_finalize()
+        .expect("server finalize");
+
+    // Formatted input (parens, dashes) — E164PhoneValidator
+    // rejects, never touches the store / argon.
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "phone": "(202) 555-1234",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_to_json(resp.into_body()).await;
+    assert_eq!(body["error"], "invalid_login_id");
+}
+
+#[tokio::test]
+async fn signup_keyed_on_phone_rejects_email_input() {
+    pocopine_server::__reset_for_test();
+    let app = Server::new(axum::Router::new())
+        .plugin(build_phone_credentials())
+        .try_finalize()
+        .expect("server finalize");
+
+    // Wire shape uses `phone` field; `email` is just an unknown
+    // field that returns a missing-login-id error.
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ─── username-based configuration ───────────────────────────────────
+
+fn build_username_credentials() -> Credentials<TestUserStore, TestTokenStore> {
+    Credentials::new(
+        fixed_secret(),
+        TestUserStore::default(),
+        TestTokenStore::default(),
+    )
+    .with_login_id_validator(UsernameValidator::default())
+    .with_login_id_field("username")
+}
+
+#[tokio::test]
+async fn signup_login_round_trip_keyed_on_username_with_case_folding() {
+    pocopine_server::__reset_for_test();
+    let app = Server::new(axum::Router::new())
+        .plugin(build_username_credentials())
+        .try_finalize()
+        .expect("server finalize");
+
+    // Sign up as "Alice".
+    let resp = app
+        .clone()
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "username": "Alice",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Login as "alice" — UsernameValidator default lowercases on
+    // normalize, so the same row matches both casings.
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/login",
+            serde_json::json!({
+                "username": "alice",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn signup_keyed_on_username_rejects_invalid_chars() {
+    pocopine_server::__reset_for_test();
+    let app = Server::new(axum::Router::new())
+        .plugin(build_username_credentials())
+        .try_finalize()
+        .expect("server finalize");
+
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "username": "alice@example.com",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_to_json(resp.into_body()).await;
+    assert_eq!(body["error"], "invalid_login_id");
 }

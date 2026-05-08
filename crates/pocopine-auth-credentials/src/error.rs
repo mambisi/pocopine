@@ -16,16 +16,23 @@ use serde_json::json;
 /// through `Self::Storage` (one variant for any backend hiccup).
 #[derive(Debug)]
 pub enum CredentialsError {
-    /// Login form rejected — wrong email or password. Same variant
-    /// for both branches so a timing/shape probe can't tell which.
+    /// Login form rejected — wrong identifier or password. Same
+    /// variant for both branches so a timing/shape probe can't tell
+    /// which.
     InvalidCredentials,
-    /// Signup rejected — email already in use. Returned with a 409.
-    EmailTaken,
+    /// Signup rejected — login identifier already in use. Returned
+    /// with a 409. Stable closed-set reason regardless of whether
+    /// the identifier is an email, phone, or username.
+    LoginIdTaken,
     /// Password failed the configured complexity validator
     /// (default: minimum length).
     WeakPassword(&'static str),
-    /// Email syntax check failed.
-    InvalidEmail,
+    /// Login identifier failed the configured
+    /// [`crate::LoginIdValidator`]. The static reason carries the
+    /// validator's failure class (`"missing_at_sign"`,
+    /// `"too_short"`, …) for observability; the HTTP body still
+    /// uses the closed-set `invalid_login_id` reason.
+    InvalidLoginId(&'static str),
     /// Storage backend hiccup. Wraps the `UserStore` / `TokenStore`
     /// `Error` (`std::error::Error + Send + Sync`).
     Storage(Box<dyn std::error::Error + Send + Sync + 'static>),
@@ -42,10 +49,10 @@ pub enum CredentialsError {
 impl fmt::Display for CredentialsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCredentials => f.write_str("invalid email or password"),
-            Self::EmailTaken => f.write_str("email already registered"),
+            Self::InvalidCredentials => f.write_str("invalid login or password"),
+            Self::LoginIdTaken => f.write_str("login identifier already registered"),
             Self::WeakPassword(reason) => write!(f, "password rejected: {reason}"),
-            Self::InvalidEmail => f.write_str("email is not a valid address"),
+            Self::InvalidLoginId(reason) => write!(f, "login identifier rejected: {reason}"),
             Self::Storage(_) => f.write_str("credentials store unavailable"),
             Self::PasswordHashing(reason) => write!(f, "password hashing failure: {reason}"),
             Self::SessionIssue(reason) => write!(f, "session token issue failed: {reason}"),
@@ -69,9 +76,9 @@ impl CredentialsError {
     pub fn reason(&self) -> &'static str {
         match self {
             Self::InvalidCredentials => "invalid_credentials",
-            Self::EmailTaken => "email_taken",
+            Self::LoginIdTaken => "login_id_taken",
             Self::WeakPassword(_) => "weak_password",
-            Self::InvalidEmail => "invalid_email",
+            Self::InvalidLoginId(_) => "invalid_login_id",
             Self::Storage(_) => "storage_error",
             Self::PasswordHashing(_) => "password_hashing_error",
             Self::SessionIssue(_) => "session_issue_error",
@@ -82,8 +89,8 @@ impl CredentialsError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
-            Self::EmailTaken => StatusCode::CONFLICT,
-            Self::WeakPassword(_) | Self::InvalidEmail => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::LoginIdTaken => StatusCode::CONFLICT,
+            Self::WeakPassword(_) | Self::InvalidLoginId(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Storage(_) | Self::PasswordHashing(_) | Self::SessionIssue(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
