@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::cartesian::{
     centered_plot_y, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
     CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
-    ChartStateFields, PlotEdgeFields,
+    ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect, Point};
@@ -155,6 +155,8 @@ pub struct PineAreaChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub x_label: String,
     #[prop]
     pub y_label: String,
@@ -221,6 +223,7 @@ impl Default for PineAreaChart {
             points: Vec::new(),
             series: Vec::new(),
             label: "Area chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             x_label: String::new(),
             y_label: String::new(),
             width: options.width,

@@ -5,7 +5,7 @@ use crate::cartesian::{
     centered_plot_y, nearest_sample_by_point, nearest_sample_by_x, optional_domain,
     plot_rect_from_edges, pointer_event_svg_point, step_key, CartesianChartState,
     CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, CartesianHoverSample,
-    CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields,
+    CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
@@ -342,6 +342,8 @@ pub struct PineLineChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub x_label: String,
     #[prop]
     pub y_label: String,
@@ -410,6 +412,7 @@ impl Default for PineLineChart {
         Self {
             points: Vec::new(),
             label: "Line chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             x_label: String::new(),
             y_label: String::new(),
             width: options.width,

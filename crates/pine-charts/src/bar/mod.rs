@@ -5,7 +5,7 @@ use crate::cartesian::{
     expanded_domain, grid_lines_for_y, optional_domain, plot_rect_from_edges,
     pointer_event_svg_point, step_key, tick_labels_for_y, x_axis_label, y_axis_label,
     CartesianChartState, CartesianHoverPlacement, CategoricalGuideFields, CategoricalGuideUpdate,
-    ChartStateFields, PlotEdgeFields,
+    ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
@@ -553,6 +553,8 @@ pub struct PineBarChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub x_label: String,
     #[prop]
     pub y_label: String,
@@ -619,6 +621,7 @@ impl Default for PineBarChart {
             series: Vec::new(),
             mode: "grouped".into(),
             label: "Bar chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             x_label: String::new(),
             y_label: String::new(),
             width: options.width,

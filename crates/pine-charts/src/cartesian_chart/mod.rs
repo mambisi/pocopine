@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::bar::{bar_aria_label, baseline_value, category_tick_labels, ChartBar};
 use crate::cartesian::{
     expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y, x_axis_label,
-    y_axis_label,
+    y_axis_label, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::{ChartMargins, ChartRect};
@@ -301,6 +301,8 @@ pub struct PineCartesianChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -383,6 +385,7 @@ impl Default for PineCartesianChart {
         let margins = ChartMargins::default();
         Self {
             label: "Cartesian chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             margin_top: margins.top,

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cartesian::{
     pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
+    DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{ChartSelection, CHART_SELECT_EVENT};
@@ -257,6 +258,8 @@ pub struct PinePieChart {
     #[prop]
     pub label: String,
     #[prop]
+    pub empty_message: String,
+    #[prop]
     pub width: f64,
     #[prop]
     pub height: f64,
@@ -317,6 +320,7 @@ impl Default for PinePieChart {
         Self {
             data: Vec::new(),
             label: "Pie chart".into(),
+            empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             width: options.width,
             height: options.height,
             margin_top: options.margins.top,
