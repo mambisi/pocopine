@@ -12,6 +12,7 @@ use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine::App;
 use serde::{Deserialize, Serialize};
+use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -519,6 +520,125 @@ async fn reevaluate_current_drops_mount_when_guards_flip_to_reject() {
 }
 
 // ─── Fetch middleware: install + freeze panic ───────────────────────
+
+#[pocopine::server(public, idempotent)]
+async fn rgl_replay_safe_value() -> pocopine::ServerResult<u32> {
+    Ok(0)
+}
+
+#[wasm_bindgen_test(async)]
+async fn server_idempotent_marks_fetch_request_replay_safe() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+    let seen_replay_safe = Rc::new(RefCell::new(None));
+    let seen_replay_safe_for_middleware = seen_replay_safe.clone();
+
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| {
+            let seen_replay_safe = seen_replay_safe_for_middleware.clone();
+            async move {
+                *seen_replay_safe.borrow_mut() = Some(req.is_replay_safe());
+                Ok(pocopine::fetch::FetchResponse {
+                    status: 200,
+                    body: serde_json::to_string(&Ok::<u32, pocopine::ServerError>(42)).unwrap(),
+                })
+            }
+        },
+    );
+
+    let value = rgl_replay_safe_value().await.unwrap();
+    assert_eq!(value, 42);
+    assert_eq!(
+        *seen_replay_safe.borrow(),
+        Some(true),
+        "#[server(idempotent)] stubs should mark requests replay-safe"
+    );
+
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rgl-abort-slow",
+    template_inline = r#"<div>slow loader should never paint</div>"#
+)]
+struct AbortSlowRoute {}
+
+#[handlers]
+impl AbortSlowRoute {}
+
+impl RouteComponent for AbortSlowRoute {
+    fn config() -> RouteConfig<Self> {
+        RouteConfig::new().loader(|_ctx: LoaderContext| async move {
+            let _: u32 = pocopine::fetch::call("/test-abort-never", &()).await?;
+            Ok::<_, LoaderError>(())
+        })
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "rgl-abort-target",
+    template_inline = r#"<div class="rgl-abort-target">target</div>"#
+)]
+struct AbortTargetRoute {}
+
+#[handlers]
+impl AbortTargetRoute {}
+
+impl RouteComponent for AbortTargetRoute {}
+
+#[wasm_bindgen_test(async)]
+async fn loader_fetch_signal_aborts_on_navigation_supersession() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+    let captured_signal = Rc::new(RefCell::new(None));
+    let captured_signal_for_middleware = captured_signal.clone();
+
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| {
+            let captured_signal = captured_signal_for_middleware.clone();
+            async move {
+                *captured_signal.borrow_mut() = req.abort_signal.clone();
+                std::future::pending::<Result<pocopine::fetch::FetchResponse, pocopine::ServerError>>()
+                    .await
+            }
+        },
+    );
+
+    let host = app_host_with_outlet();
+    replace_url("/");
+    App::new()
+        .route_component::<AbortSlowRoute>("/test-abort-loader")
+        .route_component::<AbortTargetRoute>("/test-abort-target")
+        .run();
+
+    navigate_to("/test-abort-loader");
+    yield_event_loop_for_loaders().await;
+
+    let signal = captured_signal
+        .borrow()
+        .clone()
+        .expect("loader-owned fetch::call should receive an AbortSignal");
+    assert!(
+        !signal.aborted(),
+        "fresh loader abort signal should not be aborted before supersession"
+    );
+
+    navigate_to("/test-abort-target");
+    next_microtask().await;
+
+    assert!(
+        signal.aborted(),
+        "superseding navigation should abort the loader's fetch signal"
+    );
+    assert!(
+        outlet_html().contains("rgl-abort-target"),
+        "target route should paint after superseding the loader route"
+    );
+
+    replace_url("/");
+    host.remove();
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
 
 #[wasm_bindgen_test]
 #[should_panic(expected = "called after the chain was frozen")]
