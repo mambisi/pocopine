@@ -77,12 +77,14 @@
 
 mod builder;
 mod error;
+mod login_id;
 mod password;
 mod routes;
 mod store;
 
 pub use builder::Credentials;
 pub use error::CredentialsError;
+pub use login_id::{E164PhoneValidator, EmailValidator, LoginIdValidator, UsernameValidator};
 pub use password::{Argon2Params, Argon2ParamsError};
 pub use store::{
     token::{TokenKind, TokenRecord},

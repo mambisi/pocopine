@@ -7,8 +7,7 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use pocopine_auth::AuthUser;
-use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use crate::builder::CredentialsHandle;
 use crate::error::CredentialsError;
@@ -26,44 +25,59 @@ pub(crate) fn router<S: UserStore, T: TokenStore>(handle: Arc<CredentialsHandle<
         .with_state(handle)
 }
 
-#[derive(Deserialize)]
-struct SignupRequest {
-    email: String,
-    password: String,
-}
-
-#[derive(Deserialize)]
-struct LoginRequest {
-    email: String,
-    password: String,
+/// Pull the login identifier and password out of an incoming JSON
+/// body. The field carrying the identifier is configurable per
+/// builder; the password field is always `"password"`. Both must
+/// be strings.
+fn extract_credentials(
+    body: &Map<String, Value>,
+    login_field: &str,
+) -> Result<(String, String), CredentialsError> {
+    let login_id = body
+        .get(login_field)
+        .and_then(|v| v.as_str())
+        .ok_or(CredentialsError::InvalidLoginId("missing"))?
+        .to_string();
+    let password = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .ok_or(CredentialsError::WeakPassword("missing"))?
+        .to_string();
+    Ok((login_id, password))
 }
 
 async fn signup_handler<S: UserStore, T: TokenStore>(
     State(state): State<Arc<CredentialsHandle<S, T>>>,
-    Json(req): Json<SignupRequest>,
+    Json(body): Json<Map<String, Value>>,
 ) -> Result<Json<serde_json::Value>, CredentialsError> {
-    validate_email_syntax(&req.email)?;
-    (state.password_validator)(&req.password).map_err(CredentialsError::WeakPassword)?;
-    let email = req.email.to_ascii_lowercase();
+    let (raw_login_id, password) = extract_credentials(&body, &state.login_id_field)?;
+
+    state
+        .login_id_validator
+        .validate(&raw_login_id)
+        .map_err(CredentialsError::InvalidLoginId)?;
+    let normalized = state.login_id_validator.normalize(&raw_login_id);
+
+    (state.password_validator)(&password).map_err(CredentialsError::WeakPassword)?;
 
     if state
         .store
-        .find_by_email(&email)
+        .find_by_login_id(&normalized)
         .await
         .map_err(CredentialsError::Storage)?
         .is_some()
     {
-        return Err(CredentialsError::EmailTaken);
+        return Err(CredentialsError::LoginIdTaken);
     }
 
-    let password_hash = hash_password(req.password, state.argon.clone()).await?;
+    let password_hash = hash_password(password, state.argon.clone()).await?;
     // The store generates the id and returns the freshly-created
     // user. Any failure inside `create` (DB issue, race-induced
-    // duplicate-email, …) maps to `EmailTaken` for the response;
+    // duplicate, …) maps to `LoginIdTaken` for the response;
     // the `tracing` log carries the original error class.
     let user = state
         .store
-        .create(&email, password_hash)
+        .create(&normalized, password_hash)
         .await
         .map_err(|err| {
             tracing::warn!(
@@ -71,7 +85,7 @@ async fn signup_handler<S: UserStore, T: TokenStore>(
                 error = %err,
                 "credentials signup: store rejected create"
             );
-            CredentialsError::EmailTaken
+            CredentialsError::LoginIdTaken
         })?;
 
     let auth_user = user.to_auth_user();
@@ -84,24 +98,38 @@ async fn signup_handler<S: UserStore, T: TokenStore>(
 
 async fn login_handler<S: UserStore, T: TokenStore>(
     State(state): State<Arc<CredentialsHandle<S, T>>>,
-    Json(req): Json<LoginRequest>,
+    Json(body): Json<Map<String, Value>>,
 ) -> Result<Json<serde_json::Value>, CredentialsError> {
-    let email = req.email.to_ascii_lowercase();
+    let (raw_login_id, password) = extract_credentials(&body, &state.login_id_field)?;
+
+    // Validation runs even on login: a malformed identifier never
+    // matches a stored one, but doing the check at the route layer
+    // gives the client a `422 invalid_login_id` error rather than a
+    // `401 invalid_credentials` after the argon2 cycle (which would
+    // run anyway). The constant-time-login property is preserved
+    // because the validation+normalization does no
+    // crypto / DB work.
+    state
+        .login_id_validator
+        .validate(&raw_login_id)
+        .map_err(CredentialsError::InvalidLoginId)?;
+    let normalized = state.login_id_validator.normalize(&raw_login_id);
+
     let user = state
         .store
-        .find_by_email(&email)
+        .find_by_login_id(&normalized)
         .await
         .map_err(CredentialsError::Storage)?;
 
     // Constant-time login: always run argon2 verify, even on
     // not-found, so a timing/CPU probe can't distinguish the
-    // unknown-email branch from the wrong-password branch.
+    // unknown-identifier branch from the wrong-password branch.
     let (hash, real_user) = match user {
         Some(u) => (u.password_hash().to_string(), Some(u)),
         None => (state.dummy_hash.clone(), None),
     };
 
-    let ok = verify_password(req.password, hash).await?;
+    let ok = verify_password(password, hash).await?;
     let user = match (ok, real_user) {
         (true, Some(u)) => u,
         _ => return Err(CredentialsError::InvalidCredentials),
@@ -130,82 +158,19 @@ fn issue_session_token<S: UserStore, T: TokenStore>(
     subject: &str,
     auth_user: &AuthUser,
 ) -> Result<String, CredentialsError> {
-    // Mirror the JWT claim shape RFC-074 §5.12 specifies. Roles +
-    // permissions come from the app's `to_auth_user()` projection;
-    // `email` / `email_verified` come from the same place.
+    // Mirror the JWT claim shape RFC-074 §5.12 specifies. The app's
+    // `to_auth_user()` projection decides which fields are visible:
+    // emails, phones, roles, custom claims (incl. `email_verified`)
+    // all flow through here.
     let extra = json!({
         "email": auth_user.email,
-        "email_verified": auth_user
-            .claim("email_verified")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        "name": auth_user.name,
         "roles": auth_user.roles,
         "permissions": auth_user.permissions,
+        "claims": auth_user.claims,
     });
     state
         .issuer
         .sign(subject, extra)
         .map_err(|err| CredentialsError::SessionIssue(err.to_string()))
-}
-
-/// Minimal email-address validator. Apps that need RFC 5322 strictness
-/// should override the validator on the [`crate::Credentials`] builder
-/// (a future builder addition); for the tryout case this catches the
-/// structural shape and the empty-string footgun.
-fn validate_email_syntax(email: &str) -> Result<(), CredentialsError> {
-    let trimmed = email.trim();
-    if trimmed.is_empty() || trimmed.len() > 254 {
-        return Err(CredentialsError::InvalidEmail);
-    }
-    let Some(at) = trimmed.find('@') else {
-        return Err(CredentialsError::InvalidEmail);
-    };
-    let (local, domain) = trimmed.split_at(at);
-    let domain = &domain[1..];
-    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
-        return Err(CredentialsError::InvalidEmail);
-    }
-    if trimmed.contains(char::is_whitespace) {
-        return Err(CredentialsError::InvalidEmail);
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn email_syntax_acceptance() {
-        validate_email_syntax("alice@example.com").unwrap();
-        validate_email_syntax("a.b+tag@sub.example.co.uk").unwrap();
-    }
-
-    #[test]
-    fn email_syntax_rejection() {
-        assert!(matches!(
-            validate_email_syntax(""),
-            Err(CredentialsError::InvalidEmail)
-        ));
-        assert!(matches!(
-            validate_email_syntax("not-an-email"),
-            Err(CredentialsError::InvalidEmail)
-        ));
-        assert!(matches!(
-            validate_email_syntax("@example.com"),
-            Err(CredentialsError::InvalidEmail)
-        ));
-        assert!(matches!(
-            validate_email_syntax("alice@"),
-            Err(CredentialsError::InvalidEmail)
-        ));
-        assert!(matches!(
-            validate_email_syntax("alice@nodot"),
-            Err(CredentialsError::InvalidEmail)
-        ));
-        assert!(matches!(
-            validate_email_syntax("alice @example.com"),
-            Err(CredentialsError::InvalidEmail)
-        ));
-    }
 }
