@@ -23,7 +23,7 @@
        @pointermove="on_pointer_move"
        @pointerleave="clear_hover">
     <g class="pine-chart-pie-slices" data-layer="series">
-      <template pp-for="slice in painted_slices" pp-key="slice.key">
+      <template pp-for="slice in slices" pp-key="slice.key">
         <path class="pine-chart-pie-slice"
               :d="slice.d"
               role="option"
@@ -38,6 +38,19 @@
               :data-selected="slice.key == selected_key"
               @click.stop="select_slice(slice.key)"></path>
       </template>
+    </g>
+    <g pp-show="hover_visible"
+       class="pine-chart-pie-hover"
+       data-layer="hover"
+       aria-hidden="true"
+       pointer-events="none">
+      <path class="pine-chart-pie-slice pine-chart-pie-hover-slice"
+            :d="hover_slice.d"
+            :data-key="hover_slice.key"
+            :data-label="hover_slice.label"
+            :data-value="hover_slice.value"
+            :data-percentage="hover_slice.percentage"
+            data-hovered="true"></path>
     </g>
     <g pp-show="center_visible"
        class="pine-chart-center"

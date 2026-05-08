@@ -281,7 +281,7 @@ pub struct PinePieChart {
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
-    pub painted_slices: Vec<SvgPieSlice>,
+    pub hover_slice: SvgPieSlice,
     pub legend_items: Vec<LegendItem>,
     pub center_x: f64,
     pub center_y: f64,
@@ -331,7 +331,7 @@ impl Default for PinePieChart {
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
-            painted_slices: Vec::new(),
+            hover_slice: SvgPieSlice::default(),
             legend_items: Vec::new(),
             center_x: 0.0,
             center_y: 0.0,
@@ -448,7 +448,7 @@ impl PinePieChart {
         self.hover_placement_x = "right".into();
         self.hover_placement_y = "above".into();
         self.hover_style.clear();
-        self.update_painted_slices();
+        self.hover_slice = SvgPieSlice::default();
     }
 
     pub fn select_slice(&mut self, key: String) {
@@ -582,7 +582,7 @@ impl PinePieChart {
 
     fn clear_geometry(&mut self) {
         self.slices.clear();
-        self.painted_slices.clear();
+        self.hover_slice = SvgPieSlice::default();
         self.legend_items.clear();
         self.center_x = 0.0;
         self.center_y = 0.0;
@@ -647,28 +647,12 @@ impl PinePieChart {
         self.hover_placement_x = update.placement.x.into();
         self.hover_placement_y = update.placement.y.into();
         self.hover_style = update.placement.style;
-        self.update_painted_slices();
-    }
-
-    fn update_painted_slices(&mut self) {
-        if self.hover_key.is_empty() {
-            self.painted_slices = self.slices.clone();
-            return;
-        }
-
-        let mut hovered = None;
-        let mut painted = Vec::with_capacity(self.slices.len());
-        for slice in &self.slices {
-            if slice.key == self.hover_key {
-                hovered = Some(slice.clone());
-            } else {
-                painted.push(slice.clone());
-            }
-        }
-        if let Some(slice) = hovered {
-            painted.push(slice);
-        }
-        self.painted_slices = painted;
+        self.hover_slice = self
+            .slices
+            .iter()
+            .find(|slice| slice.key == self.hover_key)
+            .cloned()
+            .unwrap_or_default();
     }
 
     fn reconcile_selection(&mut self) {

@@ -1732,7 +1732,9 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
     assert!(!chart.has_attribute("data-hover"));
 
-    let slices = host.query_selector_all(".pine-chart-pie-slice").unwrap();
+    let slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
     assert_eq!(slices.length(), 2);
     let first = slices.get(0).unwrap().dyn_into::<Element>().unwrap();
     assert_eq!(
@@ -1765,24 +1767,23 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert_eq!(center_label.get_attribute("y").as_deref(), Some("66"));
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
-    assert_eq!(direct_svg_layers(&svg), vec!["series", "labels"]);
+    assert_eq!(direct_svg_layers(&svg), vec!["series", "hover", "labels"]);
     dispatch_pointer_move(&svg, 50.0, 10.0);
     settle().await;
 
     assert!(first.has_attribute("data-hovered"));
     let hovered_key = first.get_attribute("data-key").unwrap();
-    let painted_slices = host.query_selector_all(".pine-chart-pie-slice").unwrap();
-    assert_eq!(painted_slices.length(), 2);
-    let top_slice = painted_slices
-        .get(painted_slices.length() - 1)
+    let hover_slice = host
+        .query_selector(".pine-chart-pie-hover .pine-chart-pie-slice")
+        .unwrap()
         .unwrap()
         .dyn_into::<Element>()
         .unwrap();
     assert_eq!(
-        top_slice.get_attribute("data-key").as_deref(),
+        hover_slice.get_attribute("data-key").as_deref(),
         Some(hovered_key.as_str())
     );
-    assert!(top_slice.has_attribute("data-hovered"));
+    assert!(hover_slice.has_attribute("data-hovered"));
     let tooltip = host
         .query_selector(".pine-chart-pie-tooltip")
         .unwrap()
