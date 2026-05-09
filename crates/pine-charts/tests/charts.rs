@@ -739,6 +739,7 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
         path.get_attribute("d").as_deref(),
         Some("M0,100 L50,0 L100,50")
     );
+    assert_eq!(path.get_attribute("pathLength").as_deref(), Some("1"));
 
     let grid_lines = host.query_selector_all(".pine-chart-grid-line").unwrap();
     assert_eq!(grid_lines.length(), 12, "six x-grid plus six y-grid lines");

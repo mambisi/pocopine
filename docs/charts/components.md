@@ -488,6 +488,33 @@ treatment:
   transition-timing-function: var(--pine-chart-animation-easing);
 }
 
+.pine-chart-root[data-animate="true"] .pine-chart-line {
+  animation: chart-line-draw var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing);
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+
+.pine-chart-root[data-animate="true"] .pine-chart-bar {
+  animation: chart-bar-grow var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing);
+  transform-box: fill-box;
+  transform-origin: center bottom;
+}
+
+@keyframes chart-line-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes chart-bar-grow {
+  from {
+    opacity: 0;
+    transform: scaleY(0);
+  }
+}
+
 .pine-chart-marker[data-focused],
 .pine-chart-point[data-focused],
 .pine-chart-bar[data-focused],

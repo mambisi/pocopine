@@ -108,6 +108,7 @@
         <path class="pine-chart-line"
               :d="series.line_d"
               fill="none"
+              pathLength="1"
               stroke="currentColor"
               vector-effect="non-scaling-stroke"
               :data-series="series.label"></path>

@@ -145,25 +145,60 @@
       visibility: hidden;
     }
 
-    .pine-chart-root[data-animate="true"] .pine-chart-line,
     .pine-chart-root[data-animate="true"] .pine-chart-area,
     .pine-chart-root[data-animate="true"] .pine-chart-bar,
+    .pine-chart-root[data-animate="true"] .pine-chart-line,
     .pine-chart-root[data-animate="true"] .pine-chart-marker,
-    .pine-chart-root[data-animate="true"] .pine-chart-point,
     .pine-chart-root[data-animate="true"] .pine-chart-pie-slice,
+    .pine-chart-root[data-animate="true"] .pine-chart-point,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-line,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
-    .pine-chart-root[data-animate="true"] .pine-layer-chart-reference-dot,
-    .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane {
-      animation: pine-chart-fade-in var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-reference-dot {
       transition-duration: var(--pine-chart-animation-duration);
       transition-property: opacity, stroke-width, transform;
       transition-timing-function: var(--pine-chart-animation-easing);
     }
 
+    .pine-chart-root[data-animate="true"] .pine-chart-area,
+    .pine-chart-root[data-animate="true"] .pine-chart-marker,
+    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice,
+    .pine-chart-root[data-animate="true"] .pine-chart-point,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-reference-dot {
+      animation: pine-chart-fade-in var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+    }
+
+    .pine-chart-root[data-animate="true"] .pine-chart-line,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-line {
+      animation: pine-chart-line-draw var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+      stroke-dasharray: 1;
+      stroke-dashoffset: 0;
+    }
+
+    .pine-chart-root[data-animate="true"] .pine-chart-bar {
+      animation: pine-chart-bar-grow var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+      transform-box: fill-box;
+      transform-origin: center bottom;
+    }
+
     @keyframes pine-chart-fade-in {
       from {
         opacity: 0;
+      }
+    }
+
+    @keyframes pine-chart-line-draw {
+      from {
+        stroke-dashoffset: 1;
+      }
+    }
+
+    @keyframes pine-chart-bar-grow {
+      from {
+        opacity: 0;
+        transform: scaleY(0);
       }
     }
 
