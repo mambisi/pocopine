@@ -1009,6 +1009,7 @@ async fn scatter_chart_renders_points_axes_and_hover() {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <button class="add-area-forecast" @click="add_forecast">Add forecast</button>
   <pine-area-chart class="multi-area-chart"
                    label="Area"
                    width="100"
@@ -1043,7 +1044,17 @@ impl Default for AreaChartFixture {
 }
 
 #[handlers]
-impl AreaChartFixture {}
+impl AreaChartFixture {
+    pub fn add_forecast(&mut self) {
+        if self.series.iter().any(|series| series.label == "Forecast") {
+            return;
+        }
+        self.series.push(ChartAreaSeries::new(
+            "Forecast",
+            vec![ChartPoint::new(0.0, 0.5), ChartPoint::new(1.0, 0.8)],
+        ));
+    }
+}
 
 #[wasm_bindgen_test]
 async fn area_chart_renders_fills_lines_and_hover_metadata() {
@@ -1224,6 +1235,45 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
     host.remove();
 }
 
+#[wasm_bindgen_test]
+async fn area_chart_keeps_existing_series_nodes_when_adding_series() {
+    let host = mount_fixture::<AreaChartFixture>();
+    settle().await;
+
+    let lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(lines.length(), 2);
+    let first_line = lines.get(0).unwrap().dyn_into::<Element>().unwrap();
+
+    host.query_selector("button.add-area-forecast")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let updated_lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(updated_lines.length(), 3);
+    let updated_first = updated_lines.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert!(
+        first_line
+            .unchecked_ref::<web_sys::Node>()
+            .is_same_node(Some(updated_first.unchecked_ref::<web_sys::Node>())),
+        "existing keyed area-series line should keep its DOM node when a new series is added",
+    );
+    let forecast = updated_lines.get(2).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        forecast.get_attribute("data-series").as_deref(),
+        Some("Forecast")
+    );
+
+    host.remove();
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -1338,6 +1388,7 @@ async fn line_chart_reports_empty_state() {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <button class="animated-swap" @click="swap">Swap</button>
   <pine-line-chart class="animated-chart"
                    label="Animated"
                    animate="true"
@@ -1361,7 +1412,11 @@ impl Default for AnimatedChartFixture {
 }
 
 #[handlers]
-impl AnimatedChartFixture {}
+impl AnimatedChartFixture {
+    pub fn swap(&mut self) {
+        self.points = vec![ChartPoint::new(0.0, 1.0), ChartPoint::new(1.0, 0.0)];
+    }
+}
 
 #[wasm_bindgen_test]
 async fn chart_animation_props_emit_css_hooks() {
@@ -1381,6 +1436,7 @@ async fn chart_animation_props_emit_css_hooks() {
     let style = chart.get_attribute("style").unwrap_or_default();
     assert!(style.contains("--pine-chart-animation-duration: 240ms"));
     assert!(style.contains("--pine-chart-animation-easing: linear"));
+    assert_eq!(chart.get_attribute("data-animation-cycle"), None);
 
     host.remove();
 }

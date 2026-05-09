@@ -61,7 +61,9 @@ Pie and donut hover follows the same hook-first model as bars: the hovered slice
 receives `data-hovered`, and the tooltip exposes `data-label`, `data-value`, and
 `data-percentage`. Applications can use that hook for a grow effect with CSS.
 Set `animate="true"` on the chart when those transitions should use the chart's
-animation variables.
+animation variables. Keyframe entry animations should target keyed marks as they
+enter the DOM; add/remove updates then animate only the new line, area, bar,
+point, or slice instead of restarting the whole chart.
 
 Interactive legends are opt-in with `interactive="true"`. The legend then gives
 each item keyboard focus, toggles `data-active`, and emits

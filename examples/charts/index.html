@@ -16,25 +16,27 @@
       margin: 0;
       min-height: 100vh;
       display: grid;
-      place-items: center;
-      padding: 32px;
+      align-items: start;
+      justify-items: center;
+      padding: 28px;
     }
 
     [pp-app] {
-      width: min(900px, 100%);
+      width: min(1240px, 100%);
     }
 
     .chart-demo {
       display: grid;
-      gap: 24px;
+      gap: 18px;
     }
 
     .chart-demo-header {
       display: flex;
-      align-items: end;
+      align-items: start;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 20px;
+      gap: 18px;
+      padding-inline: 2px;
     }
 
     .chart-demo-header h1 {
@@ -48,33 +50,89 @@
       color: #526173;
     }
 
-    .chart-demo-actions {
+    .chart-card-actions {
       display: flex;
-      gap: 8px;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
     }
 
-    .chart-demo-actions button {
+    .chart-card-actions button {
       border: 1px solid #c7d0da;
       border-radius: 6px;
       background: white;
       color: inherit;
       cursor: pointer;
       font: inherit;
-      padding: 8px 12px;
+      font-size: 12px;
+      line-height: 1;
+      padding: 6px 8px;
     }
 
-    .chart-demo-actions button[data-active="true"] {
+    .chart-card-actions button[data-active="true"] {
       border-color: #1d6fd8;
       color: #0f58b8;
     }
 
-    .chart-panel {
-      display: block;
+    .chart-card-control-stack {
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+    }
+
+    .chart-demo-grid {
+      align-items: stretch;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    .chart-card {
       background: white;
       border: 1px solid #dde4ec;
       border-radius: 8px;
       box-sizing: border-box;
-      padding: 20px;
+      display: grid;
+      gap: 14px;
+      grid-column: span 4;
+      grid-template-rows: auto auto auto;
+      min-width: 0;
+      padding: 16px;
+      order: 3;
+    }
+
+    .chart-card--hero {
+      grid-column: span 8;
+      order: 1;
+    }
+
+    .chart-card--radial {
+      grid-column: span 4;
+      order: 2;
+    }
+
+    .chart-card--metro {
+      grid-column: 1 / -1;
+      order: 4;
+    }
+
+    .chart-card-header {
+      align-items: start;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      min-height: 28px;
+    }
+
+    .chart-card-header h2 {
+      font-size: 15px;
+      line-height: 1.2;
+      margin: 4px 0 0;
+    }
+
+    .chart-panel {
+      display: block;
+      box-sizing: border-box;
       position: relative;
     }
 
@@ -84,6 +142,10 @@
 
     .chart-panel--metro {
       overflow: hidden;
+    }
+
+    .chart-card-legend {
+      min-height: 22px;
     }
 
     .pine-chart-responsive-frame {
@@ -162,7 +224,6 @@
 
     .pine-chart-root[data-animate="true"] .pine-chart-area,
     .pine-chart-root[data-animate="true"] .pine-chart-marker,
-    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice,
     .pine-chart-root[data-animate="true"] .pine-chart-point,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
@@ -183,6 +244,10 @@
       transform-origin: center bottom;
     }
 
+    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice:not(.pine-chart-pie-hover-slice) {
+      animation: pine-chart-pie-sweep var(--pine-chart-animation-duration) var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms) backwards;
+    }
+
     @keyframes pine-chart-fade-in {
       from {
         opacity: 0;
@@ -199,6 +264,12 @@
       from {
         opacity: 0;
         transform: scaleY(0);
+      }
+    }
+
+    @keyframes pine-chart-pie-sweep {
+      from {
+        transform: rotate(-18deg) scale(0.01);
       }
     }
 
@@ -277,6 +348,13 @@
     .pine-chart-marker[data-series="Referral"],
     .pine-chart-hover-marker[data-series="Referral"] {
       color: #d96c2c;
+    }
+
+    .pine-chart-line[data-series="Forecast"],
+    .pine-chart-area[data-series="Forecast"],
+    .pine-chart-marker[data-series="Forecast"],
+    .pine-chart-hover-marker[data-series="Forecast"] {
+      color: #7c3aed;
     }
 
     .pine-chart-marker {
@@ -412,7 +490,7 @@
       fill: currentColor;
       stroke: white;
       stroke-width: 1.5;
-      transform-box: fill-box;
+      transform-box: view-box;
       transform-origin: center;
     }
 
@@ -520,18 +598,45 @@
     }
 
     .pine-chart-legend-marker[data-series="Partner"],
+    .pine-chart-legend-marker[data-series="Forecast"],
     .pine-chart-legend-marker[data-series="Idle"] {
       background: #7c3aed;
     }
 
     @media (max-width: 640px) {
       body {
-        padding: 20px;
+        padding: 18px;
       }
 
       .chart-demo-header {
         align-items: start;
         flex-direction: column;
+      }
+
+      .chart-demo-toolbar,
+      .chart-demo-actions {
+        width: 100%;
+      }
+
+      .chart-demo-actions {
+        overflow-x: auto;
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .chart-card {
+        grid-column: span 6;
+      }
+
+      .chart-card--hero,
+      .chart-card--metro {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .chart-card {
+        grid-column: 1 / -1;
       }
     }
   </style>
