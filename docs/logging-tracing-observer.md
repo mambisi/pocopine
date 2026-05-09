@@ -240,6 +240,81 @@ If `RUST_LOG` is unset, the default filter is:
 info,pocopine=debug
 ```
 
+## Backend observability plugin
+
+Server apps can install backend lifecycle observability through the server
+plugin system. Install routes first, then install the observability plugin so
+the HTTP request layer wraps the completed router:
+
+```rust
+use pocopine::logging::{
+    init_server_logging, server_observability_with_config,
+    ServerLoggingConfig, ServerObservabilityConfig,
+};
+use pocopine_server::{axum::Router, static_files, Server};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    init_server_logging(ServerLoggingConfig::json())
+        .expect("logging should initialize");
+
+    let router = Router::new().nest_service("/", static_files("pkg"));
+    let router = my_app::__routes(router);
+
+    Server::new(router)
+        .plugin(server_observability_with_config(
+            ServerObservabilityConfig::new()
+                .with_service("blog-api")
+                .with_environment("production"),
+        ))
+        .serve("0.0.0.0:3000")
+        .await
+}
+```
+
+`server_observability()` uses the default config. It installs
+`pocopine_server::request_event_layer()` and translates RFC 077 typed server
+hooks into `ObservedEvent`s:
+
+| Server hook | Observed event |
+|---|---|
+| `ServerBootStarted` | `server_boot_started` trace |
+| `ServerListening` | `server_listening` trace |
+| `ServerBootFailed` | `server_boot_failed` log |
+| `HttpRequestStarted` | `http_request_started` trace |
+| `HttpRequestCompleted` | `http_request_completed` trace |
+| `HttpRequestFailed` | `http_request_failed` log |
+| `ServerFunctionStarted` | `server_function_started` trace |
+| `ServerFunctionCompleted` | `server_function_completed` trace |
+| `ServerFunctionRejected` | `server_function_rejected` log |
+| `ServerFunctionFailed` | `server_function_failed` log |
+
+HTTP events report axum's matched route pattern, such as `/posts/:id`, rather
+than the concrete request path. Headers, cookies, query strings, request
+bodies, response bodies, and raw server-function payloads are never exported by
+the plugin. For unmatched routes, the concrete path is omitted by default; opt
+in only when that value is acceptable for your deployment:
+
+```rust
+ServerObservabilityConfig::new()
+    .with_unmatched_paths(true);
+```
+
+Disable event groups when another plugin owns that surface:
+
+```rust
+ServerObservabilityConfig::new()
+    .with_http_requests(false)
+    .with_server_functions(true)
+    .with_boot(true);
+```
+
+When server-function hooks are enabled, the plugin still installs the request
+event layer so generated `#[server]` handlers can share the HTTP `request_id`
+with request events. Jobs are intentionally not mapped into typed server hooks:
+`pocopine-jobs` already emits structured `pocopine.trace` / `pocopine.log`
+events, and RFC 077 rejects typed job lifecycle hooks.
+
 ## OTLP trace export
 
 `pocopine-logging` can also install an OpenTelemetry layer for OTLP trace

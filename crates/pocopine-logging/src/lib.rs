@@ -15,6 +15,14 @@ mod server {
     #[cfg(feature = "otlp")]
     use std::time::Duration;
 
+    use pocopine_observe::{
+        emit_tracing, EventClass, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent,
+    };
+    use pocopine_server::{
+        request_event_layer, HttpRequestCompleted, HttpRequestFailed, HttpRequestStarted, Server,
+        ServerBootFailed, ServerBootStarted, ServerFunctionCompleted, ServerFunctionFailed,
+        ServerFunctionRejected, ServerFunctionStarted, ServerHook, ServerListening, ServerPlugin,
+    };
     use tracing_subscriber::fmt as tracing_fmt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -87,6 +95,347 @@ mod server {
     impl Default for ServerLoggingConfig {
         fn default() -> Self {
             Self::compact()
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct ServerObservabilityConfig {
+        pub service: Option<String>,
+        pub environment: Option<String>,
+        pub boot: bool,
+        pub http_requests: bool,
+        pub server_functions: bool,
+        pub include_unmatched_paths: bool,
+    }
+
+    impl ServerObservabilityConfig {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn with_service(mut self, service: impl Into<String>) -> Self {
+            self.service = Some(service.into());
+            self
+        }
+
+        pub fn with_environment(mut self, environment: impl Into<String>) -> Self {
+            self.environment = Some(environment.into());
+            self
+        }
+
+        pub fn with_boot(mut self, enabled: bool) -> Self {
+            self.boot = enabled;
+            self
+        }
+
+        pub fn with_http_requests(mut self, enabled: bool) -> Self {
+            self.http_requests = enabled;
+            self
+        }
+
+        pub fn with_server_functions(mut self, enabled: bool) -> Self {
+            self.server_functions = enabled;
+            self
+        }
+
+        /// Include raw URI paths for unmatched HTTP requests.
+        ///
+        /// Matched routes always emit the route pattern instead of the concrete
+        /// path. Unmatched paths can contain tenant ids, slugs, or other
+        /// pseudonymous values, so the default is to omit them.
+        pub fn with_unmatched_paths(mut self, enabled: bool) -> Self {
+            self.include_unmatched_paths = enabled;
+            self
+        }
+    }
+
+    impl Default for ServerObservabilityConfig {
+        fn default() -> Self {
+            Self {
+                service: None,
+                environment: None,
+                boot: true,
+                http_requests: true,
+                server_functions: true,
+                include_unmatched_paths: false,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct ServerObservabilityPlugin {
+        config: ServerObservabilityConfig,
+    }
+
+    impl ServerObservabilityPlugin {
+        pub fn new(config: ServerObservabilityConfig) -> Self {
+            Self { config }
+        }
+    }
+
+    pub fn server_observability() -> ServerObservabilityPlugin {
+        ServerObservabilityPlugin::new(ServerObservabilityConfig::default())
+    }
+
+    pub fn server_observability_with_config(
+        config: ServerObservabilityConfig,
+    ) -> ServerObservabilityPlugin {
+        ServerObservabilityPlugin::new(config)
+    }
+
+    impl ServerPlugin for ServerObservabilityPlugin {
+        fn name(&self) -> &'static str {
+            "pocopine.logging.server_observability"
+        }
+
+        fn install(self, server: Server) -> Server {
+            let ServerObservabilityConfig {
+                service,
+                environment,
+                boot,
+                http_requests,
+                server_functions,
+                include_unmatched_paths,
+            } = self.config;
+
+            let mut server = server.provide_plugin(ServerObservability {
+                service,
+                environment,
+                include_unmatched_paths,
+            });
+
+            if http_requests || server_functions {
+                server = server.layer(request_event_layer());
+            }
+
+            if boot {
+                server = server
+                    .hook_plugin::<ServerObservability, ServerBootStarted>()
+                    .hook_plugin::<ServerObservability, ServerListening>()
+                    .hook_plugin::<ServerObservability, ServerBootFailed>();
+            }
+
+            if http_requests {
+                server = server
+                    .hook_plugin::<ServerObservability, HttpRequestStarted>()
+                    .hook_plugin::<ServerObservability, HttpRequestCompleted>()
+                    .hook_plugin::<ServerObservability, HttpRequestFailed>();
+            }
+
+            if server_functions {
+                server = server
+                    .hook_plugin::<ServerObservability, ServerFunctionStarted>()
+                    .hook_plugin::<ServerObservability, ServerFunctionCompleted>()
+                    .hook_plugin::<ServerObservability, ServerFunctionRejected>()
+                    .hook_plugin::<ServerObservability, ServerFunctionFailed>();
+            }
+
+            server
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct ServerObservability {
+        service: Option<String>,
+        environment: Option<String>,
+        include_unmatched_paths: bool,
+    }
+
+    impl ServerObservability {
+        pub fn emit(&self, event: ObservedEvent) {
+            let event = self.with_base_context(event);
+            emit_tracing(&event);
+        }
+
+        fn with_base_context(&self, mut event: ObservedEvent) -> ObservedEvent {
+            if event.context.service.is_none() {
+                event.context.service = self.service.clone();
+            }
+            if event.context.environment.is_none() {
+                event.context.environment = self.environment.clone();
+            }
+            event
+        }
+
+        fn context(&self) -> ObserveContext {
+            ObserveContext {
+                service: self.service.clone(),
+                environment: self.environment.clone(),
+                ..ObserveContext::default()
+            }
+        }
+
+        fn context_with_route(&self, route: &str) -> ObserveContext {
+            self.context().with_route(route)
+        }
+
+        fn request_event(
+            &self,
+            name: &'static str,
+            class: EventClass,
+            method: String,
+            path: String,
+            route_pattern: Option<String>,
+            request_id: u64,
+        ) -> ObservedEvent {
+            let matched = route_pattern.is_some();
+            let mut event = ObservedEvent::new(name, class)
+                .field("method", method, FieldPrivacy::Public)
+                .field("matched", matched, FieldPrivacy::Public)
+                .field("request_id", request_id, FieldPrivacy::Public);
+
+            if let Some(route) = route_pattern {
+                event = event.context(self.context_with_route(&route)).field(
+                    "route",
+                    route,
+                    FieldPrivacy::Public,
+                );
+            } else {
+                event = event.context(self.context());
+                if self.include_unmatched_paths {
+                    event = event.field("path", path, FieldPrivacy::Pseudonymous);
+                }
+            }
+
+            event
+        }
+    }
+
+    impl ServerHook<ServerBootStarted> for ServerObservability {
+        fn call(&self, event: ServerBootStarted) {
+            self.emit(
+                ObservedEvent::trace("server_boot_started")
+                    .context(self.context())
+                    .field("addr", event.addr, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<ServerListening> for ServerObservability {
+        fn call(&self, event: ServerListening) {
+            self.emit(
+                ObservedEvent::trace("server_listening")
+                    .context(self.context())
+                    .field("addr", event.addr, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<ServerBootFailed> for ServerObservability {
+        fn call(&self, event: ServerBootFailed) {
+            self.emit(
+                ObservedEvent::log("server_boot_failed")
+                    .priority(EventPriority::Critical)
+                    .context(self.context())
+                    .field("reason", event.reason, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<HttpRequestStarted> for ServerObservability {
+        fn call(&self, event: HttpRequestStarted) {
+            let observed = self
+                .request_event(
+                    "http_request_started",
+                    EventClass::Trace,
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
+                )
+                .priority(EventPriority::Low);
+            self.emit(observed);
+        }
+    }
+
+    impl ServerHook<HttpRequestCompleted> for ServerObservability {
+        fn call(&self, event: HttpRequestCompleted) {
+            let status = event.status as u64;
+            let duration_ms = event.duration_ms;
+            let observed = self
+                .request_event(
+                    "http_request_completed",
+                    EventClass::Trace,
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
+                )
+                .field("status", status, FieldPrivacy::Public)
+                .field("duration_ms", duration_ms, FieldPrivacy::Public);
+            self.emit(observed);
+        }
+    }
+
+    impl ServerHook<HttpRequestFailed> for ServerObservability {
+        fn call(&self, event: HttpRequestFailed) {
+            let reason = event.reason;
+            let duration_ms = event.duration_ms;
+            let observed = self
+                .request_event(
+                    "http_request_failed",
+                    EventClass::Log,
+                    event.method,
+                    event.path,
+                    event.route_pattern,
+                    event.request_id,
+                )
+                .priority(EventPriority::High)
+                .field("reason", reason, FieldPrivacy::Public)
+                .field("duration_ms", duration_ms, FieldPrivacy::Public);
+            self.emit(observed);
+        }
+    }
+
+    impl ServerHook<ServerFunctionStarted> for ServerObservability {
+        fn call(&self, event: ServerFunctionStarted) {
+            self.emit(
+                ObservedEvent::trace("server_function_started")
+                    .priority(EventPriority::Low)
+                    .context(self.context())
+                    .field("function", event.function, FieldPrivacy::Public)
+                    .field("request_id", event.request_id, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<ServerFunctionCompleted> for ServerObservability {
+        fn call(&self, event: ServerFunctionCompleted) {
+            self.emit(
+                ObservedEvent::trace("server_function_completed")
+                    .context(self.context())
+                    .field("function", event.function, FieldPrivacy::Public)
+                    .field("request_id", event.request_id, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<ServerFunctionRejected> for ServerObservability {
+        fn call(&self, event: ServerFunctionRejected) {
+            self.emit(
+                ObservedEvent::log("server_function_rejected")
+                    .priority(EventPriority::High)
+                    .context(self.context())
+                    .field("function", event.function, FieldPrivacy::Public)
+                    .field("request_id", event.request_id, FieldPrivacy::Public)
+                    .field("status", event.status as u64, FieldPrivacy::Public)
+                    .field("reason", event.reason, FieldPrivacy::Public),
+            );
+        }
+    }
+
+    impl ServerHook<ServerFunctionFailed> for ServerObservability {
+        fn call(&self, event: ServerFunctionFailed) {
+            self.emit(
+                ObservedEvent::log("server_function_failed")
+                    .priority(EventPriority::High)
+                    .context(self.context())
+                    .field("function", event.function, FieldPrivacy::Public)
+                    .field("request_id", event.request_id, FieldPrivacy::Public)
+                    .field("error_class", event.error_class, FieldPrivacy::Public)
+                    .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
+            );
         }
     }
 
@@ -375,7 +724,9 @@ mod server {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    init_default, init_server_logging, InitLoggingError, LogFormat, ServerLoggingConfig,
+    init_default, init_server_logging, server_observability, server_observability_with_config,
+    InitLoggingError, LogFormat, ServerLoggingConfig, ServerObservability,
+    ServerObservabilityConfig, ServerObservabilityPlugin,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "otlp"))]

@@ -37,6 +37,15 @@ impl TraceCapture {
         tracing::subscriber::with_default(subscriber, f)
     }
 
+    #[allow(dead_code)]
+    pub fn events(&self) -> Vec<CapturedEvent> {
+        self.events
+            .lock()
+            .expect("trace capture lock poisoned")
+            .clone()
+    }
+
+    #[allow(dead_code)]
     pub fn events_with_message(&self, target: &str, message: &str) -> Vec<CapturedEvent> {
         // Message text is part of these observability contract assertions;
         // rename emitted messages only as a deliberate telemetry change.
