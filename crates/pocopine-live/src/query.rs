@@ -1,10 +1,30 @@
+use std::marker::PhantomData;
+
 use serde::{Deserialize, Serialize};
 
-pub const QUERY_REASON_INITIAL: &str = "initial";
-pub const QUERY_REASON_MANUAL: &str = "manual";
-pub const QUERY_REASON_LIVE: &str = "live";
-pub const QUERY_REASON_GAP: &str = "gap";
-pub const QUERY_REASON_STREAM_ERROR: &str = "stream_error";
+#[cfg(target_arch = "wasm32")]
+use {
+    pocopine_core::{current_scope_id, Handle, Scope},
+    std::{future::Future, rc::Rc},
+};
+
+use crate::LiveClientError;
+
+#[cfg(any(test, target_arch = "wasm32"))]
+use crate::{live_refresh_targets, LiveEvent};
+
+/// Reason attached to the most recent query state transition.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryReason {
+    #[default]
+    Idle,
+    Initial,
+    Manual,
+    Live,
+    Gap,
+    StreamError,
+}
 
 /// Opaque generation token for one query request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,7 +54,7 @@ pub struct QueryState<T> {
     pub version: u64,
     pub refresh_count: u64,
     pub live_event_count: u64,
-    pub last_reason: String,
+    pub last_reason: QueryReason,
     #[serde(skip)]
     request_generation: u64,
 }
@@ -56,20 +76,20 @@ impl<T> QueryState<T> {
             version: 0,
             refresh_count: 0,
             live_event_count: 0,
-            last_reason: String::new(),
+            last_reason: QueryReason::Idle,
             request_generation: 0,
         }
     }
 
     pub fn begin_initial(&mut self) -> QueryRequest {
-        self.begin(QUERY_REASON_INITIAL, false)
+        self.begin(QueryReason::Initial, false)
     }
 
-    pub fn begin_refresh(&mut self, reason: impl Into<String>) -> QueryRequest {
+    pub fn begin_refresh(&mut self, reason: QueryReason) -> QueryRequest {
         self.begin(reason, false)
     }
 
-    pub fn begin_live_refresh(&mut self, reason: impl Into<String>) -> QueryRequest {
+    pub fn begin_live_refresh(&mut self, reason: QueryReason) -> QueryRequest {
         self.live_event_count = self.live_event_count.saturating_add(1);
         self.begin(reason, true)
     }
@@ -110,15 +130,15 @@ impl<T> QueryState<T> {
         self.error.clear();
     }
 
-    pub fn mark_stale(&mut self, reason: impl Into<String>) {
+    pub fn mark_stale(&mut self, reason: QueryReason) {
         self.stale = true;
-        self.last_reason = reason.into();
+        self.last_reason = reason;
     }
 
     pub fn record_stream_error(&mut self, error: impl ToString) {
         self.loading = false;
         self.refreshing = false;
-        self.last_reason = QUERY_REASON_STREAM_ERROR.to_string();
+        self.last_reason = QueryReason::StreamError;
         self.error = error.to_string();
     }
 
@@ -126,10 +146,10 @@ impl<T> QueryState<T> {
         self.request_generation == request.generation
     }
 
-    fn begin(&mut self, reason: impl Into<String>, stale_during_refresh: bool) -> QueryRequest {
+    fn begin(&mut self, reason: QueryReason, stale_during_refresh: bool) -> QueryRequest {
         self.request_generation = self.request_generation.saturating_add(1);
         self.refresh_count = self.refresh_count.saturating_add(1);
-        self.last_reason = reason.into();
+        self.last_reason = reason;
         self.error.clear();
         self.stale = stale_during_refresh;
 
@@ -145,6 +165,304 @@ impl<T> QueryState<T> {
             generation: self.request_generation,
         }
     }
+}
+
+/// Scope-bound browser query runner for server-function backed data.
+pub struct LiveQuery<C = (), T = (), S = (), F = ()> {
+    selector: S,
+    fetch: F,
+    endpoint: Option<String>,
+    collections: Vec<String>,
+    query_tags: Vec<String>,
+    last_event_id: Option<String>,
+    with_credentials: bool,
+    refetch_on_open: bool,
+    _marker: PhantomData<fn(C) -> T>,
+}
+
+impl LiveQuery<(), (), (), ()> {
+    pub fn scoped<C, T, S, F>(selector: S, fetch: F) -> LiveQuery<C, T, S, F> {
+        LiveQuery {
+            selector,
+            fetch,
+            endpoint: None,
+            collections: Vec::new(),
+            query_tags: Vec::new(),
+            last_event_id: None,
+            with_credentials: false,
+            refetch_on_open: true,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn refresh_scoped<C, T, S, F, Fut, E>(selector: S, fetch: F) -> Result<(), LiveClientError>
+    where
+        C: 'static,
+        T: 'static,
+        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
+        F: Fn() -> Fut + 'static,
+        Fut: Future<Output = Result<T, E>> + 'static,
+        E: ToString + 'static,
+    {
+        let handle = current_component_handle::<C>()?;
+        start_query(
+            handle,
+            Rc::new(selector),
+            Rc::new(fetch),
+            QueryReason::Manual,
+            false,
+        );
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn refresh_scoped<C, T, S, F, Fut, E>(selector: S, fetch: F) -> Result<(), LiveClientError>
+    where
+        C: 'static,
+        T: 'static,
+        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
+        F: Fn() -> Fut + 'static,
+        Fut: std::future::Future<Output = Result<T, E>> + 'static,
+        E: ToString + 'static,
+    {
+        let _ = (selector, fetch);
+        Ok(())
+    }
+}
+
+impl<C, T, S, F> LiveQuery<C, T, S, F> {
+    pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    pub fn collection(mut self, collection: impl Into<String>) -> Self {
+        self.collections.push(collection.into());
+        self
+    }
+
+    pub fn query_tag(mut self, tag: impl Into<String>) -> Self {
+        self.query_tags.push(tag.into());
+        self
+    }
+
+    pub fn last_event_id(mut self, cursor: impl Into<String>) -> Self {
+        self.last_event_id = Some(cursor.into());
+        self
+    }
+
+    pub fn with_credentials(mut self, enabled: bool) -> Self {
+        self.with_credentials = enabled;
+        self
+    }
+
+    pub fn refetch_on_open(mut self, enabled: bool) -> Self {
+        self.refetch_on_open = enabled;
+        self
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn open<Fut, E>(self) -> Result<(), LiveClientError>
+    where
+        C: 'static,
+        T: 'static,
+        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
+        F: Fn() -> Fut + 'static,
+        Fut: Future<Output = Result<T, E>> + 'static,
+        E: ToString + 'static,
+    {
+        let handle = current_component_handle::<C>()?;
+        let selector = Rc::new(self.selector);
+        let fetch = Rc::new(self.fetch);
+
+        if self.refetch_on_open {
+            start_query(
+                handle.clone(),
+                selector.clone(),
+                fetch.clone(),
+                QueryReason::Initial,
+                false,
+            );
+        }
+
+        if self.collections.is_empty() && self.query_tags.is_empty() {
+            return Ok(());
+        }
+
+        let mut client = crate::LiveClient::new();
+        if let Some(endpoint) = self.endpoint {
+            client = client.endpoint(endpoint);
+        }
+        if let Some(cursor) = self.last_event_id {
+            client = client.last_event_id(cursor);
+        }
+        client = client.with_credentials(self.with_credentials);
+        for collection in &self.collections {
+            client = client.collection(collection.clone());
+        }
+        for query_tag in &self.query_tags {
+            client = client.query_tag(query_tag.clone());
+        }
+
+        let collections = Rc::new(self.collections);
+        let query_tags = Rc::new(self.query_tags);
+        client.connect_scoped(move |event| {
+            match live_query_action(&event, &collections, &query_tags) {
+                LiveQueryAction::Refresh(reason) => {
+                    start_query(
+                        handle.clone(),
+                        selector.clone(),
+                        fetch.clone(),
+                        reason,
+                        true,
+                    );
+                }
+                LiveQueryAction::Error(error) => {
+                    handle.update(|state| {
+                        (selector)(state).record_stream_error(error);
+                    });
+                }
+                LiveQueryAction::Ignore => {}
+            }
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open<Fut, E>(self) -> Result<(), LiveClientError>
+    where
+        C: 'static,
+        T: 'static,
+        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
+        F: Fn() -> Fut + 'static,
+        Fut: std::future::Future<Output = Result<T, E>> + 'static,
+        E: ToString + 'static,
+    {
+        let LiveQuery {
+            selector,
+            fetch,
+            endpoint,
+            collections,
+            query_tags,
+            last_event_id,
+            with_credentials,
+            refetch_on_open,
+            _marker,
+        } = self;
+        let _ = (
+            selector,
+            fetch,
+            endpoint,
+            collections,
+            query_tags,
+            last_event_id,
+            with_credentials,
+            refetch_on_open,
+        );
+        Ok(())
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LiveQueryAction {
+    Refresh(QueryReason),
+    Error(String),
+    Ignore,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn live_query_action(
+    event: &LiveEvent,
+    collections: &[String],
+    query_tags: &[String],
+) -> LiveQueryAction {
+    let targets = live_refresh_targets(event);
+
+    if let Some(reason) = targets.error {
+        return LiveQueryAction::Error(reason);
+    }
+
+    if targets.gap.is_some() {
+        return LiveQueryAction::Refresh(QueryReason::Gap);
+    }
+
+    let matches_collection = targets
+        .collections
+        .iter()
+        .any(|target| collections.iter().any(|value| value == target));
+    let matches_query_tag = targets
+        .query_tags
+        .iter()
+        .any(|target| query_tags.iter().any(|value| value == target));
+
+    if matches_collection || matches_query_tag {
+        LiveQueryAction::Refresh(QueryReason::Live)
+    } else {
+        LiveQueryAction::Ignore
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_component_handle<C: 'static>() -> Result<Handle<C>, LiveClientError> {
+    let scope_id = current_scope_id().ok_or_else(|| {
+        LiveClientError::Browser(
+            "LiveQuery::scoped used outside a component handler or lifecycle hook".to_string(),
+        )
+    })?;
+    let scope = Scope::find(scope_id)
+        .ok_or_else(|| LiveClientError::Browser("current component scope is gone".to_string()))?;
+    let typed = scope.typed::<C>().ok_or_else(|| {
+        LiveClientError::Browser(format!(
+            "LiveQuery::scoped expected current scope to be {}",
+            std::any::type_name::<C>()
+        ))
+    })?;
+    Ok(Handle::new(typed, scope_id))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_query<C, T, S, F, Fut, E>(
+    handle: Handle<C>,
+    selector: Rc<S>,
+    fetch: Rc<F>,
+    reason: QueryReason,
+    live_event: bool,
+) where
+    C: 'static,
+    T: 'static,
+    S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
+    F: Fn() -> Fut + 'static,
+    Fut: Future<Output = Result<T, E>> + 'static,
+    E: ToString + 'static,
+{
+    let request = handle.update(|state| {
+        let query = (selector)(state);
+        if live_event {
+            query.begin_live_refresh(reason)
+        } else {
+            query.begin_refresh(reason)
+        }
+    });
+    let scope_id = handle.scope_id();
+    pocopine_core::spawn_for_scope(scope_id, async move {
+        let result = (fetch)().await;
+        if Scope::find(scope_id).is_none() {
+            return;
+        }
+
+        handle.update(|state| {
+            let query = (selector)(state);
+            match result {
+                Ok(data) => {
+                    query.finish_success(request, data);
+                }
+                Err(error) => {
+                    query.finish_error(request, error);
+                }
+            }
+        });
+    });
 }
 
 #[cfg(test)]
@@ -180,14 +498,14 @@ mod tests {
         assert!(state.error.is_empty());
         assert_eq!(state.version, 1);
         assert_eq!(state.refresh_count, 1);
-        assert_eq!(state.last_reason, QUERY_REASON_INITIAL);
+        assert_eq!(state.last_reason, QueryReason::Initial);
     }
 
     #[test]
     fn query_state_ignores_stale_success() {
         let mut state = QueryState::new(vec![1]);
         let stale = state.begin_initial();
-        let current = state.begin_refresh(QUERY_REASON_MANUAL);
+        let current = state.begin_refresh(QueryReason::Manual);
 
         assert!(!state.finish_success(stale, vec![9]));
         assert_eq!(state.data, vec![1]);
@@ -201,7 +519,7 @@ mod tests {
         let request = state.begin_initial();
         assert!(state.finish_success(request, vec![2]));
 
-        let request = state.begin_refresh(QUERY_REASON_MANUAL);
+        let request = state.begin_refresh(QueryReason::Manual);
         assert!(state.finish_error(request, "network down"));
 
         assert_eq!(state.data, vec![2]);
@@ -217,13 +535,60 @@ mod tests {
         let request = state.begin_initial();
         assert!(state.finish_success(request, vec![1]));
 
-        let live = state.begin_live_refresh(QUERY_REASON_LIVE);
+        let live = state.begin_live_refresh(QueryReason::Live);
 
         assert_eq!(state.live_event_count, 1);
-        assert_eq!(state.last_reason, QUERY_REASON_LIVE);
+        assert_eq!(state.last_reason, QueryReason::Live);
         assert!(state.stale);
         assert!(state.refreshing);
         assert!(state.finish_success(live, vec![2]));
         assert!(!state.stale);
+    }
+
+    #[test]
+    fn live_query_action_matches_collection_or_query_tag() {
+        let event = LiveEvent::CollectionChanged {
+            collection: "posts".to_string(),
+            op: crate::LiveOp::Upsert,
+            keys: vec![],
+            query_tags: vec!["posts:list".to_string()],
+            schema_version: 1,
+            cursor: None,
+            created_at_ms: None,
+        };
+
+        assert_eq!(
+            live_query_action(&event, &[], &["posts:list".to_string()]),
+            LiveQueryAction::Refresh(QueryReason::Live)
+        );
+        assert_eq!(
+            live_query_action(&event, &["posts".to_string()], &[]),
+            LiveQueryAction::Refresh(QueryReason::Live)
+        );
+        assert_eq!(live_query_action(&event, &[], &[]), LiveQueryAction::Ignore);
+    }
+
+    #[test]
+    fn live_query_action_refreshes_on_gap_and_records_error() {
+        assert_eq!(
+            live_query_action(
+                &LiveEvent::Gap {
+                    reason: "retention_gap".to_string()
+                },
+                &[],
+                &[]
+            ),
+            LiveQueryAction::Refresh(QueryReason::Gap)
+        );
+        assert_eq!(
+            live_query_action(
+                &LiveEvent::Error {
+                    reason: "forbidden_topic".to_string()
+                },
+                &[],
+                &[]
+            ),
+            LiveQueryAction::Error("forbidden_topic".to_string())
+        );
     }
 }

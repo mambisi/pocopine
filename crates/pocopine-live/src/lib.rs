@@ -23,10 +23,7 @@ use serde_json::{json, Value};
 
 mod query;
 
-pub use query::{
-    QueryRequest, QueryState, QUERY_REASON_GAP, QUERY_REASON_INITIAL, QUERY_REASON_LIVE,
-    QUERY_REASON_MANUAL, QUERY_REASON_STREAM_ERROR,
-};
+pub use query::{LiveQuery, QueryReason, QueryRequest, QueryState};
 
 /// Current browser live protocol identifier.
 pub const LIVE_PROTOCOL_V1: &str = "pocopine.live.v1";
