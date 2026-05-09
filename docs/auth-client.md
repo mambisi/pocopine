@@ -584,6 +584,39 @@ impl TokenStorage for MyKeychainStorage {
 }
 ```
 
+Plug it into the builder the same way as the provided impls — the
+`with_token_storage` method takes any `TokenStorage`:
+
+```rust
+auth_plugin()
+    .login_route("/login")
+    .with_bearer_middleware(true)
+    .with_token_storage(MyKeychainStorage)  // ← pass your impl by value
+```
+
+For storage that needs runtime configuration (e.g., a
+keychain-service name read from app state), give your impl
+fields and construct accordingly:
+
+```rust
+struct MyKeychainStorage {
+    service: String,
+}
+
+impl MyKeychainStorage {
+    pub fn new(service: impl Into<String>) -> Self {
+        Self { service: service.into() }
+    }
+}
+
+// Usage:
+auth_plugin()
+    .with_token_storage(MyKeychainStorage::new("com.example.app.auth"))
+```
+
+The plugin builder wraps your impl in an `Rc<dyn TokenStorage>`
+internally, so the impl doesn't need to be `Clone` or `Send`.
+
 ## Step 6 — sync sign-in/out across tabs (`BroadcastChannel`)
 
 Without coordination, signing in on tab A leaves tab B oblivious:
@@ -682,26 +715,68 @@ auth_plugin()
 
 The closure is `Fn() -> Future<Output = Result<String, ServerError>>`
 — stateless, can be called repeatedly. For stateful refresh logic
-(e.g. capturing a refresh-token cookie) implement the
-`TokenRefresh` trait directly:
+(e.g. capturing a refresh-token cookie, holding a configured
+issuer URL, sharing a connection with the rest of the app)
+implement the `TokenRefresh` trait directly:
 
 ```rust
 use pocopine_auth_client::{TokenRefresh, TokenRefreshFuture};
+use pocopine_core::ServerError;
 use std::rc::Rc;
 
 struct MyRefresher {
     client: Rc<HttpClient>,
+    issuer_url: String,
+}
+
+impl MyRefresher {
+    pub fn new(client: Rc<HttpClient>, issuer_url: impl Into<String>) -> Self {
+        Self { client, issuer_url: issuer_url.into() }
+    }
 }
 
 impl TokenRefresh for MyRefresher {
     fn refresh(&self) -> TokenRefreshFuture {
+        // Clone what the future needs to own; the future must be
+        // 'static so it can outlive the &self borrow.
         let client = self.client.clone();
+        let url = self.issuer_url.clone();
         Box::pin(async move {
-            client.post("/auth/refresh").await
+            client
+                .post(&url)
+                .await
+                .map_err(|e| ServerError::unauthorized(format!("refresh: {e}")))
         })
     }
 }
 ```
+
+Plug it into the builder — `with_token_refresh` accepts both
+forms because of the blanket `impl<F, Fut> TokenRefresh for F`
+that covers closures:
+
+```rust
+auth_plugin()
+    .login_route("/login")
+    .with_bearer_middleware(true)
+    .with_token_refresh(MyRefresher::new(http_client.clone(), issuer))
+    //  ↑ trait-impl form
+```
+
+vs. the closure form:
+
+```rust
+auth_plugin()
+    .with_token_refresh(|| async {
+        my_app::refresh_session_token().await
+    })
+    //  ↑ closure form (uses the blanket impl)
+```
+
+Both end up as `Rc<dyn TokenRefresh>` inside the plugin. Pick the
+trait-impl form when you have configuration to thread through;
+pick the closure form when the refresh is a one-line call into an
+SDK or `#[server]` function.
 
 ### Mark idempotent server functions
 
