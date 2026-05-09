@@ -1,6 +1,6 @@
 // Recorded-token integration test for the Firebase provider —
-// the discipline RFC-074 §5.3.1 mandates for every in-tree
-// provider.
+// the discipline RFC-074 §5.3.1 mandates for every provider
+// crate (in-tree or community-maintained).
 //
 // We generate an RSA keypair at test time, synthesize a JWKS
 // document with the public key, build the Firebase preset's
@@ -28,8 +28,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::{encode, Algorithm as JwtAlg, EncodingKey, Header};
-use pocopine_auth_jwt::providers::Firebase;
 use pocopine_auth_jwt::{JwtConfig, JwtVerifier, KeySource, Provider};
+use pocopine_auth_jwt_firebase::Firebase;
 use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
