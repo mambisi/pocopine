@@ -4,7 +4,7 @@ Small app showing the current live invalidation flow:
 
 - server functions mutate a process-local `posts` collection,
 - the host publishes `LiveInvalidation` events through a memory backend,
-- the browser subscribes with `LiveRefresh::scoped()`,
+- the browser uses `LiveQuery::scoped(...)` with `QueryState<Vec<Post>>`,
 - matching query-tag events refetch the list.
 
 Run it with the CLI:

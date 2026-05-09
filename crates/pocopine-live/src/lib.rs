@@ -4,16 +4,22 @@
 //! neutral event spine, while this crate owns the safe browser protocol
 //! for collection/query invalidation.
 //!
-//! Browser components can either consume raw typed events with
-//! `LiveClient` or use `LiveRefresh` to map collection/query
-//! invalidations to refetch callbacks:
+//! Browser components should usually store data in `QueryState<T>` and
+//! open a `LiveQuery` that refetches when a collection/query invalidation
+//! arrives:
 //!
 //! ```ignore
-//! let handle = pocopine::this::<PostList>();
-//! pocopine::live::LiveRefresh::scoped()
-//!     .collection("posts", move |_| handle.update(|s| s.reload()))
+//! pocopine::live::LiveQuery::scoped(
+//!     |s: &mut PostList| &mut s.posts,
+//!     || async { list_posts().await },
+//! )
+//!     .query_tag("posts:list")
 //!     .open()?;
 //! ```
+//!
+//! Use `LiveClient` for raw typed events and `LiveRefresh` when a
+//! component needs custom collection/query callbacks instead of a query
+//! refetch.
 
 use std::fmt;
 
@@ -23,7 +29,7 @@ use serde_json::{json, Value};
 
 mod query;
 
-pub use query::{LiveQuery, QueryReason, QueryRequest, QueryState};
+pub use query::{LiveQuery, QueryReason, QueryRequest, QuerySelector, QueryState};
 
 /// Current browser live protocol identifier.
 pub const LIVE_PROTOCOL_V1: &str = "pocopine.live.v1";

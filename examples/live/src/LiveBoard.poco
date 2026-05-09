@@ -26,15 +26,16 @@
   <section class="feed" aria-label="posts">
     <div class="feed__bar">
       <span class="status" pp-text="status"></span>
-      <span class="counter"><strong pp-text="event_count"></strong> live events</span>
+      <span class="counter"><strong pp-text="posts.live_event_count"></strong> live events</span>
     </div>
 
-    <p pp-show="error" class="error"><span pp-text="error"></span></p>
-    <p pp-show="loading" class="empty">Loading posts.</p>
-    <p pp-show="!loading && !posts.length" class="empty">No posts yet.</p>
+    <p pp-show="posts.error" class="error"><span pp-text="posts.error"></span></p>
+    <p pp-show="posts.loading" class="empty">Loading posts.</p>
+    <p pp-show="posts.refreshing" class="empty">Refreshing posts.</p>
+    <p pp-show="!posts.loading && !posts.data.length" class="empty">No posts yet.</p>
 
-    <ol class="posts" pp-show="posts.length">
-      <template pp-for="post in posts" pp-key="post.id">
+    <ol class="posts" pp-show="posts.data.length">
+      <template pp-for="post in posts.data" pp-key="post.id">
         <li class="post">
           <div class="post__meta">
             <span pp-text="post.id"></span>
