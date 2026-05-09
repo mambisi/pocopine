@@ -64,10 +64,12 @@ Set `animate="true"` on the chart when those transitions should use the chart's
 animation variables. Keyframe entry animations should target keyed marks as they
 enter the DOM; add/remove updates then animate only the new line, area, bar,
 point, or pie segment instead of restarting the whole chart. Pie/donut slices
-expose `data-entering="true"` during that window and provide clip-path
-variables for a CSS-only segment reveal. Area series and pie/donut slices expose
-`data-leaving="true"` during their exit window so CSS can animate removal before
-the renderer prunes the mark.
+expose `data-entering="true"` during that window. Pie/donut enter, exit, and
+shape changes are rendered by interpolating sector geometry in component state,
+so the visible path itself sweeps between sector angles and radii. Area series
+and pie/donut slices expose `data-leaving="true"` during their exit window so
+CSS or renderer-owned animation can show removal before the renderer prunes the
+mark.
 
 Interactive legends are opt-in with `interactive="true"`. The legend then gives
 each item keyboard focus, toggles `data-active`, and emits

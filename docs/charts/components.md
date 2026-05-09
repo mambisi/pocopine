@@ -448,16 +448,14 @@ The component emits stable hooks:
 - `--pine-chart-animation-duration`
 - `--pine-chart-animation-easing`
 - `--pine-chart-slice-delay`
-- `--pine-chart-slice-enter-clip`
-- `--pine-chart-slice-exit-clip`
 
 The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
 treatment. Pie/donut slices expose `data-entering` and `data-leaving` so CSS
-can animate the slice element itself. The renderer emits
-`--pine-chart-slice-enter-clip` and `--pine-chart-slice-exit-clip` for a
-CSS-only clip-path reveal. The real slice `d` attribute still updates directly,
-so interaction changes are never blocked by animation state.
+can style keyed mark changes. The chart owns pie/donut animation by
+interpolating sector geometry in component state, following the same broad
+model as Recharts' animated pie sectors. That keeps the rendered `d` attribute
+authoritative for interaction, donut radius changes, and half-donut morphs.
 
 ```css
 .pine-chart-root {
@@ -517,13 +515,6 @@ so interaction changes are never blocked by animation state.
   transform-origin: center bottom;
 }
 
-.pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-entering="true"] {
-  animation: chart-pie-segment-enter var(--pine-chart-animation-duration)
-    var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms)
-    backwards;
-  will-change: clip-path, opacity;
-}
-
 .pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"] {
   animation: chart-fade-out var(--pine-chart-animation-duration)
     var(--pine-chart-animation-easing) forwards;
@@ -537,9 +528,6 @@ so interaction changes are never blocked by animation state.
 }
 
 .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
-  animation: chart-pie-segment-exit var(--pine-chart-animation-duration)
-    var(--pine-chart-animation-easing) forwards;
-  will-change: clip-path, opacity;
   pointer-events: none;
 }
 
@@ -560,28 +548,6 @@ so interaction changes are never blocked by animation state.
   from {
     opacity: 0;
     transform: scaleY(0);
-  }
-}
-
-@keyframes chart-pie-segment-enter {
-  from {
-    opacity: 0;
-    clip-path: var(--pine-chart-slice-enter-clip);
-  }
-  to {
-    opacity: 1;
-    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
-  }
-}
-
-@keyframes chart-pie-segment-exit {
-  from {
-    opacity: 1;
-    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
-  }
-  to {
-    opacity: 0;
-    clip-path: var(--pine-chart-slice-exit-clip);
   }
 }
 
