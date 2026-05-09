@@ -453,20 +453,40 @@ async fn verify_handler(
         .await
         .map_err(|e| OtpError::Storage(Box::new(e)))?;
 
-    // Mint the session token. Same `JwtIssuer` the credentials
-    // crate uses — the token shape is identical, so the
-    // verifier middleware on the rest of the app accepts both
-    // password-issued and OTP-issued tokens.
+    // Mint the session token. Same JWT shape the credentials crate
+    // produces — framework-recognized fields at the top level,
+    // app-supplied custom claims flattened in beside them. Verifier
+    // middleware accepts password-issued and OTP-issued tokens
+    // identically. Reserved keys protect against an app-supplied
+    // claim shadowing JWT signature fields (`sub`, `iss`, etc.) or
+    // overriding the framework's projection (`email`, `roles`, …).
     let auth_user = user.to_auth_user();
-    let extra = json!({
-        "phone": user.phone,
-        "phone_verified": true,
-        "name": auth_user.name,
-        "claims": auth_user.claims,
-    });
+    let mut extra = serde_json::Map::new();
+    if let Some(email) = &auth_user.email {
+        extra.insert("email".to_string(), json!(email));
+    }
+    if let Some(name) = &auth_user.name {
+        extra.insert("name".to_string(), json!(name));
+    }
+    if !auth_user.roles.is_empty() {
+        extra.insert("roles".to_string(), json!(auth_user.roles));
+    }
+    if !auth_user.permissions.is_empty() {
+        extra.insert("permissions".to_string(), json!(auth_user.permissions));
+    }
+    const RESERVED: &[&str] = &[
+        "sub", "iss", "aud", "iat", "exp", "nbf", "jti",
+        "email", "name", "roles", "permissions",
+    ];
+    for (key, value) in &auth_user.claims {
+        if RESERVED.contains(&key.as_str()) {
+            continue;
+        }
+        extra.insert(key.clone(), value.clone());
+    }
     let token = state
         .issuer
-        .sign(&user.id, extra)
+        .sign(&user.id, serde_json::Value::Object(extra))
         .map_err(|e| OtpError::SessionIssue(e.to_string()))?;
 
     Ok(Json(json!({

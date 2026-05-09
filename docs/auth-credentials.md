@@ -497,7 +497,6 @@ required values; everything else is a builder method:
 | `.with_issuer(name)` | `"pocopine"` | `iss` claim. |
 | `.with_audience(name)` | `"pocopine"` | `aud` claim. |
 | `.with_password_validator(closure)` | min 8 chars | NIST SP 800-63B-style checks, HIBP, anything you want. |
-| `.with_cookie_name(cow)` | `pocopine_session` | Used by the cookie token source on the verifier side. |
 
 The user-id scheme is the **store's** decision — `UserStore::create`
 returns the constructed user, so the store picks the format

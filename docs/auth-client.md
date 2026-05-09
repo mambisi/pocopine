@@ -444,7 +444,15 @@ middleware) and serializes the inner `AuthUser`:
 #[pocopine::server(guard = require_login)]
 pub async fn me() -> pocopine::ServerResult<AuthUser> {
     let principal = pocopine::server::principal()?;
-    Ok(principal.user().cloned().unwrap_or_default())
+    // `require_user` returns `ServerResult<&AuthUser>`; on the
+    // anonymous branch it produces `ServerError::Unauthorized` so
+    // the client gets `401`, not a defaulted-empty user. (The
+    // `require_login` guard above already rejects anonymous, so
+    // this is belt-and-suspenders — and `AuthUser` doesn't impl
+    // `Default` anyway, so falling through to `unwrap_or_default`
+    // wouldn't compile.)
+    let user = principal.require_user()?;
+    Ok(user.clone())
 }
 ```
 
