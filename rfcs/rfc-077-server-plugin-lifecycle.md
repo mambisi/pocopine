@@ -252,19 +252,13 @@ function payloads are never part of framework events. Observability plugins may
 derive fields such as payload size or error class, but raw payload logging
 stays opt-in application code.
 
-Job lifecycle events should either be added to this same hook registry or
-bridged from `pocopine-jobs` through a small server plugin:
-
-```rust
-JobStarted { job_name, job_id, attempt, max_attempts }
-JobCompleted { job_name, job_id, duration_ms }
-JobRetryScheduled { job_name, job_id, attempt, retry_in_ms }
-JobDeadLettered { job_name, job_id, attempts, error_class }
-```
-
-The preferred first slice is to make jobs emit through their existing tracing
-targets and let the observability plugin consume them. A later slice can add
-typed job hooks if callers need in-process behavior.
+Job lifecycle observability stays tracing-first. `pocopine-jobs` already emits
+structured events on the `pocopine.trace` and `pocopine.log` targets; server
+observability plugins should subscribe to and export those events through the
+normal tracing pipeline. Do not mirror them into typed `ServerHook<E>` events.
+Phase 4 records why the typed hook shape was rejected. If a future plugin needs
+to change job execution behavior, design the around-job middleware chain
+described in Phase 4 instead of lifecycle callbacks.
 
 ### 5.4 HTTP middleware
 

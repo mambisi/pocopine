@@ -176,7 +176,8 @@ wasm logging/analytics adapter compile checks.
 
 Later phases should add:
 
-- first-class route/server-function/job instrumentation points;
+- first-class route and server-function instrumentation points;
+- job observability export from the existing `pocopine-jobs` tracing events;
 - OpenTelemetry adapter;
 - AWS/Cloudflare host sinks;
 - bounded async exporter queues;
