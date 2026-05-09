@@ -185,15 +185,9 @@ pub fn hydrate_from_storage() {
     let Some(storage) = storage::current_storage() else {
         return;
     };
-    if let Some(token) = storage.load() {
-        *TOKEN
-            .lock()
-            .expect("pocopine_auth_client::TOKEN mutex poisoned") = Some(token);
-    } else {
-        *TOKEN
-            .lock()
-            .expect("pocopine_auth_client::TOKEN mutex poisoned") = None;
-    }
+    *TOKEN
+        .lock()
+        .expect("pocopine_auth_client::TOKEN mutex poisoned") = storage.load();
 }
 
 /// Fetch middleware that attaches `Authorization: Bearer <token>`,
@@ -210,11 +204,17 @@ impl FetchMiddleware for BearerMiddleware {
         // between two locks could split the invariant.
         let token_snapshot = active_token();
         let had_token = token_snapshot.is_some();
-        let captured_epoch = if had_token {
-            session::active_session().map(|s| s.epoch())
+        // Capture the session handle once. Both fences below
+        // (write-side after refresh, response-side post-completion)
+        // read its epoch — sharing the handle avoids two extra
+        // RwLock reads + Arc clones on the plugin registry per
+        // authenticated request.
+        let session_handle = if had_token {
+            session::active_session()
         } else {
             None
         };
+        let captured_epoch = session_handle.as_ref().map(|s| s.epoch());
 
         if let Some(token) = token_snapshot.as_deref() {
             request.set_header("authorization", format!("Bearer {token}"));
@@ -243,7 +243,7 @@ impl FetchMiddleware for BearerMiddleware {
                             // slot. The response-side fence below can't
                             // undo a slot write — only this gate can.
                             let still_valid =
-                                session::active_session().map(|s| s.epoch()) == captured_epoch;
+                                session_handle.as_ref().map(|s| s.epoch()) == captured_epoch;
                             if still_valid {
                                 set_token(new_token.as_str());
                                 let mut retry = request;
@@ -273,7 +273,7 @@ impl FetchMiddleware for BearerMiddleware {
             // sign-in/out does. So a refresh-replay passes; a
             // concurrent identity change trips this fence.
             if let Some(captured) = captured_epoch {
-                let now = session::active_session().map(|s| s.epoch());
+                let now = session_handle.as_ref().map(|s| s.epoch());
                 if now != Some(captured) {
                     return Err(ServerError::unauthorized("session_changed"));
                 }
