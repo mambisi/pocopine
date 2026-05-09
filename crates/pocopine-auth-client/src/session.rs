@@ -82,10 +82,30 @@ impl AuthSession {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only override so host unit tests can drive the
+    /// middleware's session-aware paths without spinning up an `App`
+    /// plus runtime. Real wasm runs go through the plugin registry.
+    static TEST_SESSION_OVERRIDE: std::cell::RefCell<Option<AuthSession>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn __set_test_session(session: Option<AuthSession>) {
+    TEST_SESSION_OVERRIDE.with(|cell| *cell.borrow_mut() = session);
+}
+
 /// Convenience: read the active [`AuthSession`] from the runtime
 /// plugin registry. Returns [`None`] if no session has been
 /// installed (the app didn't add `auth_plugin()`).
 pub fn active_session() -> Option<AuthSession> {
+    #[cfg(test)]
+    {
+        if let Some(s) = TEST_SESSION_OVERRIDE.with(|c| c.borrow().clone()) {
+            return Some(s);
+        }
+    }
     Plugins.get::<AuthSession>().map(|handle| (*handle).clone())
 }
 

@@ -20,12 +20,15 @@
 //! `impl<P: Predicate> RouteGuard for P` from this crate; the helper
 //! function is the next-best ergonomic shape).
 
+use std::rc::Rc;
+
 use pocopine_auth::{Decision, Predicate};
 use pocopine_core::{
     App, AppPlugin, ReturnTo, RouteContext, RouteGuard, RouteGuardDecision, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
 };
 
+use crate::refresh::{set_refresh, TokenRefresh};
 use crate::session::{active_principal, AuthSession};
 
 /// Default query parameter name used for the post-login redirect
@@ -58,6 +61,7 @@ pub struct AuthPluginBuilder {
     login_route: Option<String>,
     return_to_query_param: &'static str,
     install_bearer_middleware: bool,
+    token_refresh: Option<Rc<dyn TokenRefresh>>,
 }
 
 impl Default for AuthPluginBuilder {
@@ -66,6 +70,7 @@ impl Default for AuthPluginBuilder {
             login_route: None,
             return_to_query_param: DEFAULT_RETURN_TO_PARAM,
             install_bearer_middleware: false,
+            token_refresh: None,
         }
     }
 }
@@ -92,18 +97,43 @@ impl AuthPluginBuilder {
 
     /// Install the [`crate::BearerMiddleware`] on the fetch chain
     /// from inside the plugin — saves the app from a separate
-    /// [`crate::install`] call. Off by default so apps that already
-    /// install the middleware (or want to install a different one)
-    /// don't double-register and trip the freeze contract.
+    /// [`crate::install`] call. Off by default so apps that don't
+    /// authenticate outgoing `#[server]` calls don't pay for the
+    /// middleware.
     ///
-    /// **Mutually exclusive with calling `pocopine_auth_client::install()`
-    /// directly.** Both call paths register a `BearerMiddleware` on
-    /// the same chain; the second call doesn't panic (the chain
-    /// isn't frozen yet at builder time) but the chain ends up with
-    /// two `BearerMiddleware` entries, each writing the
-    /// `Authorization` header in turn — wasted work. Pick one.
+    /// Safe to mix with calling [`crate::install`] directly: both
+    /// call paths are idempotent. The chain ends up with exactly one
+    /// `BearerMiddleware` regardless of how many install paths fired.
     pub fn with_bearer_middleware(mut self, install: bool) -> Self {
         self.install_bearer_middleware = install;
+        self
+    }
+
+    /// Configure how the bearer middleware obtains a fresh token when
+    /// an outgoing replay-safe `#[server]` call returns
+    /// `Unauthorized`. The closure is invoked at most once per
+    /// originating request; on success the middleware calls
+    /// [`crate::set_token`] with the result and replays the request
+    /// once. On failure the original `Unauthorized` propagates.
+    ///
+    /// Without a configured refresh the middleware fails closed:
+    /// `Unauthorized` propagates directly. This honors RFC-078
+    /// §5.10.4's fail-closed default for the no-`#[server(idempotent)]`
+    /// and no-refresh cases.
+    ///
+    /// ```ignore
+    /// auth_plugin()
+    ///     .with_bearer_middleware(true)
+    ///     .with_token_refresh(|| async {
+    ///         my_app::refresh_session_token().await
+    ///     })
+    /// ```
+    ///
+    /// Concurrent in-flight requests that 401 may each trigger an
+    /// independent refresh — single-flight coalescing is a follow-up,
+    /// see [`crate::refresh`] module docs.
+    pub fn with_token_refresh<R: TokenRefresh>(mut self, refresh: R) -> Self {
+        self.token_refresh = Some(Rc::new(refresh));
         self
     }
 }
@@ -116,6 +146,9 @@ impl AppPlugin for AuthPluginBuilder {
     fn install(self, app: App) -> App {
         if self.install_bearer_middleware {
             crate::install();
+        }
+        if let Some(refresh) = self.token_refresh {
+            set_refresh(refresh);
         }
 
         let session = AuthSession::new();
@@ -247,6 +280,22 @@ fn percent_encode_into(out: &mut String, s: &str) {
 /// boundary is the server-side `#[server(guard = …)]` check. The
 /// same predicate value plugs into both install points, so a
 /// route-guard miss never leaves a server function unprotected.
+///
+/// **Route-aware guards.** This adapter ignores `RouteContext` because
+/// `Predicate::check` is a function of `Principal` only. Guards that
+/// need to inspect `path` / `params` / `query` (for example,
+/// `/users/:id` where the principal must equal `params["id"]`) cannot
+/// be expressed through `predicate_guard`; write the closure directly:
+///
+/// ```ignore
+/// .guard(|ctx: &RouteContext<'_>| -> RouteGuardDecision {
+///     let principal = pocopine_auth_client::active_principal();
+///     match (principal.user(), ctx.params.get("id")) {
+///         (Some(u), Some(id)) if u.id == *id => RouteGuardDecision::Allow,
+///         _ => RouteGuardDecision::Reject(RouteRejection::Forbidden("not_owner")),
+///     }
+/// })
+/// ```
 pub fn predicate_guard<P: Predicate>(predicate: P) -> impl RouteGuard {
     move |_ctx: &RouteContext<'_>| -> RouteGuardDecision {
         let principal = active_principal();
@@ -284,6 +333,7 @@ mod tests {
         assert!(plugin.login_route.is_none());
         assert_eq!(plugin.return_to_query_param, "redirect");
         assert!(!plugin.install_bearer_middleware);
+        assert!(plugin.token_refresh.is_none());
     }
 
     #[test]
@@ -291,10 +341,12 @@ mod tests {
         let plugin = auth_plugin()
             .login_route("/signin")
             .return_to_query_param("next")
-            .with_bearer_middleware(true);
+            .with_bearer_middleware(true)
+            .with_token_refresh(|| async { Ok("fresh".to_string()) });
         assert_eq!(plugin.login_route.as_deref(), Some("/signin"));
         assert_eq!(plugin.return_to_query_param, "next");
         assert!(plugin.install_bearer_middleware);
+        assert!(plugin.token_refresh.is_some());
     }
 
     #[test]
