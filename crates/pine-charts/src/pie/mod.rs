@@ -4,6 +4,7 @@ use core::fmt::Write;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::cartesian::{
     pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
     DEFAULT_EMPTY_MESSAGE,
@@ -281,6 +282,13 @@ pub struct PinePieChart {
     pub center_label: String,
     #[prop]
     pub center_value: String,
+    #[prop]
+    pub animate: bool,
+    #[prop]
+    pub animation_duration: f64,
+    #[prop]
+    pub animation_easing: String,
+    pub animation_style: String,
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
@@ -332,6 +340,13 @@ impl Default for PinePieChart {
             end_angle: options.end_angle,
             center_label: String::new(),
             center_value: String::new(),
+            animate: false,
+            animation_duration: DEFAULT_ANIMATION_DURATION_MS,
+            animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            animation_style: animation_style(
+                DEFAULT_ANIMATION_DURATION_MS,
+                DEFAULT_ANIMATION_EASING,
+            ),
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
@@ -370,7 +385,23 @@ impl Default for PinePieChart {
 #[handlers]
 impl PinePieChart {
     fn on_setup(&mut self) {
+        self.update_animation_style();
         self.recompute();
+    }
+
+    #[watch(animate)]
+    fn on_animate(&mut self, _: bool, _: Option<bool>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_duration)]
+    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_easing)]
+    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
+        self.update_animation_style();
     }
 
     #[watch(data)]
@@ -483,6 +514,10 @@ impl PinePieChart {
 }
 
 impl PinePieChart {
+    fn update_animation_style(&mut self) {
+        self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
     fn recompute(&mut self) {
         match PieChartGeometry::new(&self.data, &self.options()) {
             Ok(geometry) => {

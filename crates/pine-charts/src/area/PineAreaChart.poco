@@ -4,7 +4,11 @@
       :data-state="state"
       :data-empty="empty"
       :data-invalid="invalid"
-      :data-hover="hover_visible">
+      :data-hover="hover_visible"
+      :data-animate="animate"
+      :data-animation-duration="animation_duration"
+      :data-animation-easing="animation_easing"
+      :style="animation_style">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"

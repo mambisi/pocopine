@@ -145,6 +145,28 @@
       visibility: hidden;
     }
 
+    .pine-chart-root[data-animate="true"] .pine-chart-line,
+    .pine-chart-root[data-animate="true"] .pine-chart-area,
+    .pine-chart-root[data-animate="true"] .pine-chart-bar,
+    .pine-chart-root[data-animate="true"] .pine-chart-marker,
+    .pine-chart-root[data-animate="true"] .pine-chart-point,
+    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-line,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-reference-dot,
+    .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane {
+      animation: pine-chart-fade-in var(--pine-chart-animation-duration) var(--pine-chart-animation-easing);
+      transition-duration: var(--pine-chart-animation-duration);
+      transition-property: opacity, stroke-width, transform;
+      transition-timing-function: var(--pine-chart-animation-easing);
+    }
+
+    @keyframes pine-chart-fade-in {
+      from {
+        opacity: 0;
+      }
+    }
+
     .pine-chart-grid-line {
       stroke: #d9e2ec;
       stroke-width: 1;
@@ -304,7 +326,7 @@
       opacity: 0;
       top: var(--pine-chart-tooltip-y);
       transform: translate(10px, calc(-100% - 10px));
-      transition: opacity 120ms ease;
+      transition: opacity var(--pine-chart-animation-duration, 120ms) var(--pine-chart-animation-easing, ease);
       visibility: hidden;
     }
 
@@ -357,7 +379,6 @@
       stroke-width: 1.5;
       transform-box: fill-box;
       transform-origin: center;
-      transition: opacity 120ms ease, transform 120ms ease;
     }
 
     .pine-chart-pie-slice[data-hovered] {

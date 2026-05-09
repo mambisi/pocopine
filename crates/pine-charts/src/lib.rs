@@ -4,6 +4,7 @@
 //! Pine components are layered on top of these primitives so chart behavior
 //! can be checked without a browser and without committing to canvas.
 
+mod animation;
 pub mod area;
 pub mod bar;
 mod cartesian;

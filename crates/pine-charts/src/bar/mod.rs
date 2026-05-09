@@ -1,6 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::cartesian::{
     expanded_domain, grid_lines_for_y, optional_domain, plot_rect_from_edges,
     pointer_event_svg_point, step_key, tick_labels_for_y, x_axis_label, y_axis_label,
@@ -580,6 +581,13 @@ pub struct PineBarChart {
     pub padding_outer: f64,
     #[prop]
     pub series_padding_inner: f64,
+    #[prop]
+    pub animate: bool,
+    #[prop]
+    pub animation_duration: f64,
+    #[prop]
+    pub animation_easing: String,
+    pub animation_style: String,
     pub state: String,
     pub view_box: String,
     pub bars: Vec<SvgBar>,
@@ -635,6 +643,13 @@ impl Default for PineBarChart {
             padding_inner: options.padding_inner,
             padding_outer: options.padding_outer,
             series_padding_inner: options.series_padding_inner,
+            animate: false,
+            animation_duration: DEFAULT_ANIMATION_DURATION_MS,
+            animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            animation_style: animation_style(
+                DEFAULT_ANIMATION_DURATION_MS,
+                DEFAULT_ANIMATION_EASING,
+            ),
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             bars: Vec::new(),
@@ -673,7 +688,23 @@ impl Default for PineBarChart {
 #[handlers]
 impl PineBarChart {
     fn on_setup(&mut self) {
+        self.update_animation_style();
         self.recompute();
+    }
+
+    #[watch(animate)]
+    fn on_animate(&mut self, _: bool, _: Option<bool>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_duration)]
+    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_easing)]
+    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
+        self.update_animation_style();
     }
 
     #[watch(data)]
@@ -794,6 +825,10 @@ impl PineBarChart {
 }
 
 impl PineBarChart {
+    fn update_animation_style(&mut self) {
+        self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
     fn recompute(&mut self) {
         let options = match self.options() {
             Ok(options) => options,

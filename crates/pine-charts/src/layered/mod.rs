@@ -2,6 +2,7 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::error::{finite, ChartError, ChartResult};
 use crate::geometry::Point;
 use crate::marks::{
@@ -253,6 +254,13 @@ pub struct PineLayerChart {
     pub width: f64,
     #[prop]
     pub height: f64,
+    #[prop]
+    pub animate: bool,
+    #[prop]
+    pub animation_duration: f64,
+    #[prop]
+    pub animation_easing: String,
+    pub animation_style: String,
     pub state: String,
     pub view_box: String,
     pub guides: Vec<ChartLayerGuide>,
@@ -281,6 +289,13 @@ impl Default for PineLayerChart {
             empty_message: DEFAULT_EMPTY_MESSAGE.into(),
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
+            animate: false,
+            animation_duration: DEFAULT_ANIMATION_DURATION_MS,
+            animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            animation_style: animation_style(
+                DEFAULT_ANIMATION_DURATION_MS,
+                DEFAULT_ANIMATION_EASING,
+            ),
             state: "empty".into(),
             view_box: format!("0 0 {DEFAULT_WIDTH} {DEFAULT_HEIGHT}"),
             guides: Vec::new(),
@@ -308,7 +323,23 @@ impl Default for PineLayerChart {
 impl PineLayerChart {
     fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
+        self.update_animation_style();
         self.recompute();
+    }
+
+    #[watch(animate)]
+    fn on_animate(&mut self, _: bool, _: Option<bool>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_duration)]
+    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_easing)]
+    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
+        self.update_animation_style();
     }
 
     #[watch(width)]
@@ -323,6 +354,10 @@ impl PineLayerChart {
 }
 
 impl PineLayerChart {
+    fn update_animation_style(&mut self) {
+        self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
     pub fn upsert_guide(&mut self, guide: ChartLayerGuide) {
         let key = guide.key.clone();
         upsert_by_key(&mut self.guides, &key, guide, |item| &item.key);

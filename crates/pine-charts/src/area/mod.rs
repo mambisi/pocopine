@@ -1,6 +1,7 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::cartesian::{
     centered_plot_y, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
     CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
@@ -182,6 +183,13 @@ pub struct PineAreaChart {
     pub y_max: Option<f64>,
     #[prop]
     pub show_markers: bool,
+    #[prop]
+    pub animate: bool,
+    #[prop]
+    pub animation_duration: f64,
+    #[prop]
+    pub animation_easing: String,
+    pub animation_style: String,
     pub state: String,
     pub view_box: String,
     pub area_series: Vec<AreaChartSeriesRender>,
@@ -237,6 +245,13 @@ impl Default for PineAreaChart {
             y_min: None,
             y_max: None,
             show_markers: false,
+            animate: false,
+            animation_duration: DEFAULT_ANIMATION_DURATION_MS,
+            animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            animation_style: animation_style(
+                DEFAULT_ANIMATION_DURATION_MS,
+                DEFAULT_ANIMATION_EASING,
+            ),
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             area_series: Vec::new(),
@@ -276,7 +291,23 @@ impl Default for PineAreaChart {
 #[handlers]
 impl PineAreaChart {
     fn on_setup(&mut self) {
+        self.update_animation_style();
         self.recompute();
+    }
+
+    #[watch(animate)]
+    fn on_animate(&mut self, _: bool, _: Option<bool>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_duration)]
+    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_easing)]
+    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
+        self.update_animation_style();
     }
 
     #[watch(points)]
@@ -352,6 +383,10 @@ impl PineAreaChart {
 }
 
 impl PineAreaChart {
+    fn update_animation_style(&mut self) {
+        self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
     fn recompute(&mut self) {
         let geometry = if self.series.is_empty() {
             AreaChartGeometry::new(&self.points, &self.options())

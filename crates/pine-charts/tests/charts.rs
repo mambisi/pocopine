@@ -1337,6 +1337,56 @@ async fn line_chart_reports_empty_state() {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <pine-line-chart class="animated-chart"
+                   label="Animated"
+                   animate="true"
+                   animation_duration="240"
+                   animation_easing="linear"
+                   width="100"
+                   height="100"
+                   pp-bind:points="points"></pine-line-chart>
+</div>
+"#)]
+struct AnimatedChartFixture {
+    points: Vec<ChartPoint>,
+}
+
+impl Default for AnimatedChartFixture {
+    fn default() -> Self {
+        Self {
+            points: vec![ChartPoint::new(0.0, 0.0), ChartPoint::new(1.0, 1.0)],
+        }
+    }
+}
+
+#[handlers]
+impl AnimatedChartFixture {}
+
+#[wasm_bindgen_test]
+async fn chart_animation_props_emit_css_hooks() {
+    let host = mount_fixture::<AnimatedChartFixture>();
+    settle().await;
+
+    let chart = host.query_selector(".animated-chart").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("data-animate").as_deref(), Some("true"));
+    assert_eq!(
+        chart.get_attribute("data-animation-duration").as_deref(),
+        Some("240")
+    );
+    assert_eq!(
+        chart.get_attribute("data-animation-easing").as_deref(),
+        Some("linear")
+    );
+    let style = chart.get_attribute("style").unwrap_or_default();
+    assert!(style.contains("--pine-chart-animation-duration: 240ms"));
+    assert!(style.contains("--pine-chart-animation-easing: linear"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
   <pine-line-chart class="invalid-chart"
                    label="Invalid"
                    width="0"

@@ -59,8 +59,9 @@ are rendered.
 
 Pie and donut hover follows the same hook-first model as bars: the hovered slice
 receives `data-hovered`, and the tooltip exposes `data-label`, `data-value`, and
-`data-percentage`. Applications can use that hook for a grow effect with CSS or
-delegate it to the animation layer later.
+`data-percentage`. Applications can use that hook for a grow effect with CSS.
+Set `animate="true"` on the chart when those transitions should use the chart's
+animation variables.
 
 Interactive legends are opt-in with `interactive="true"`. The legend then gives
 each item keyboard focus, toggles `data-active`, and emits
@@ -76,9 +77,18 @@ the hook for filtering or dimming series.
 
 .pine-chart-tooltip {
   left: var(--pine-chart-tooltip-x);
+  opacity: 0;
   position: absolute;
   top: var(--pine-chart-tooltip-y);
   transform: translate(10px, calc(-100% - 10px));
+  transition: opacity var(--pine-chart-animation-duration, 120ms)
+    var(--pine-chart-animation-easing, ease);
+  visibility: hidden;
+}
+
+.pine-chart-root[data-hover] .pine-chart-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .pine-chart-tooltip[data-tooltip-x="left"] {

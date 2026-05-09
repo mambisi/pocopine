@@ -358,6 +358,12 @@ a `.pine-chart-status-empty` status node. The default text is `No visible data`;
 set `empty_message` on a chart to use application-specific copy while keeping
 the same styling hook.
 
+Chart animation is opt-in. Set `animate="true"` on a chart root to emit
+`data-animate="true"`, `data-animation-duration`, `data-animation-easing`, and
+CSS variables `--pine-chart-animation-duration` /
+`--pine-chart-animation-easing`. The renderer does not own animation behavior;
+applications decide which marks transition or keyframe from those hooks.
+
 ## Styling Hooks
 
 The component emits stable hooks:
@@ -412,6 +418,9 @@ The component emits stable hooks:
 - `.pine-chart-status-empty`
 - `data-state="empty|ready|invalid"`
 - `data-hover`
+- `data-animate="true|false"`
+- `data-animation-duration`
+- `data-animation-easing`
 - `data-tooltip-x="left|right"`
 - `data-tooltip-y="above|below"`
 - `data-orientation="horizontal|vertical|..."`
@@ -428,6 +437,8 @@ The component emits stable hooks:
 - `data-active`
 - `data-empty`
 - `data-invalid`
+- `--pine-chart-animation-duration`
+- `--pine-chart-animation-easing`
 
 The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
@@ -466,6 +477,15 @@ treatment:
 .pine-chart-point {
   fill: currentColor;
   stroke: var(--chart-surface);
+}
+
+.pine-chart-root[data-animate="true"] .pine-chart-line,
+.pine-chart-root[data-animate="true"] .pine-chart-bar,
+.pine-chart-root[data-animate="true"] .pine-chart-point,
+.pine-chart-root[data-animate="true"] .pine-chart-pie-slice {
+  transition-duration: var(--pine-chart-animation-duration);
+  transition-property: opacity, stroke-width, transform;
+  transition-timing-function: var(--pine-chart-animation-easing);
 }
 
 .pine-chart-marker[data-focused],
