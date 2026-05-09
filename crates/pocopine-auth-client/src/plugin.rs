@@ -201,6 +201,21 @@ impl AppPlugin for AuthPluginBuilder {
     }
 
     fn install(self, app: App) -> App {
+        // Cross-tab sync requires storage to read the new credential
+        // when peer tabs receive a broadcast — without it, peer tabs
+        // bump their epoch but have no way to learn the new token,
+        // and their bearer middleware keeps using the stale value.
+        // Fail loudly at install time rather than ship a broken UX
+        // that only surfaces under the sign-in-on-tab-A scenario.
+        if self.cross_tab_sync && self.token_storage.is_none() {
+            panic!(
+                "auth_plugin: with_cross_tab_sync(true) requires \
+                 with_token_storage(...) — peer tabs read the new \
+                 credential from shared storage. Without storage, \
+                 they bump epoch but keep using the stale token."
+            );
+        }
+
         // Storage first: hydrate the token slot before middleware
         // runs so the very first outgoing request carries a persisted
         // credential.
@@ -414,6 +429,31 @@ mod tests {
         assert_eq!(plugin.return_to_query_param, "next");
         assert!(plugin.install_bearer_middleware);
         assert!(plugin.token_refresh.is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "with_cross_tab_sync(true) requires with_token_storage")]
+    fn cross_tab_without_storage_panics_at_install() {
+        // P2: without storage, cross-tab broadcast can't tell peer
+        // tabs what the new token is. Fail at install time.
+        use pocopine_core::App;
+        let plugin = auth_plugin().with_cross_tab_sync(true);
+        let _ = AppPlugin::install(plugin, App::new());
+    }
+
+    #[test]
+    fn cross_tab_with_storage_installs_cleanly() {
+        use pocopine_core::App;
+        // Stand-up storage (using a test impl) and cross-tab; install
+        // should not panic. We can't observe the cross-tab channel on
+        // host (it's wasm-only), but the install path itself is safe.
+        crate::storage::__reset_storage_for_test();
+        let plugin = auth_plugin()
+            .with_token_storage(crate::storage::TestStorage::default())
+            .with_cross_tab_sync(true);
+        // Install consumes self; we just need to confirm no panic.
+        let _ = AppPlugin::install(plugin, App::new());
+        crate::storage::__reset_storage_for_test();
     }
 
     #[test]

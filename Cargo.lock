@@ -3129,9 +3129,12 @@ dependencies = [
 name = "pocopine-auth-client"
 version = "0.1.0"
 dependencies = [
+ "js-sys",
  "pocopine-auth",
  "pocopine-core",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 

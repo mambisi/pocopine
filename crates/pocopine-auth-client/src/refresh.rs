@@ -186,8 +186,7 @@ impl Drop for ClearOnDrop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::task::{Wake, Waker};
+    use crate::test_util::{block_on, block_on_unpin, yield_once};
 
     #[test]
     fn closure_blanket_impl_drives_through_trait_object() {
@@ -243,25 +242,6 @@ mod tests {
         __reset_refresh_for_test();
     }
 
-    /// Future that returns Pending once, schedules its own waker,
-    /// then resolves on the next poll.
-    async fn yield_once() {
-        struct YieldOnce(bool);
-        impl Future for YieldOnce {
-            type Output = ();
-            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-                if self.0 {
-                    Poll::Ready(())
-                } else {
-                    self.0 = true;
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-            }
-        }
-        YieldOnce(false).await
-    }
-
     #[test]
     fn single_flight_releases_after_completion() {
         __reset_refresh_for_test();
@@ -290,39 +270,6 @@ mod tests {
         assert!(matches!(result, Err(e) if matches!(*e, ServerError::Unauthorized(_))));
     }
 
-    fn block_on<F: Future>(fut: F) -> F::Output {
-        struct NoopWake;
-        impl Wake for NoopWake {
-            fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: &Arc<Self>) {}
-        }
-        let waker: Waker = Arc::new(NoopWake).into();
-        let mut cx = std::task::Context::from_waker(&waker);
-        let mut fut = Box::pin(fut);
-        loop {
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => continue,
-            }
-        }
-    }
-
-    fn block_on_unpin<F: Future + Unpin>(mut fut: F) -> F::Output {
-        struct NoopWake;
-        impl Wake for NoopWake {
-            fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: &Arc<Self>) {}
-        }
-        let waker: Waker = Arc::new(NoopWake).into();
-        let mut cx = std::task::Context::from_waker(&waker);
-        loop {
-            match Pin::new(&mut fut).poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => continue,
-            }
-        }
-    }
-
     /// Hand-rolled join, avoids pulling `futures-util` just for tests.
     struct Join<A: Future, B: Future> {
         a: Option<Pin<Box<A>>>,
@@ -343,10 +290,11 @@ mod tests {
     impl<A: Future, B: Future> Future for Join<A, B> {
         type Output = (A::Output, B::Output);
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            // Safety: we never move `self` out, and the inner Box<F>
-            // futures are individually pinned (Pin<Box<F>>). Treating
-            // `Self` as Unpin is sound for this aggregator.
-            let this = unsafe { self.get_unchecked_mut() };
+            // `Self: Unpin` (declared below), so `Pin::get_mut` is the
+            // safe API. The inner futures are `Pin<Box<F>>` and
+            // remain individually pinned regardless of how we treat
+            // `Self`.
+            let this = self.get_mut();
             if this.a_out.is_none() {
                 if let Some(fut) = this.a.as_mut() {
                     if let Poll::Ready(v) = fut.as_mut().poll(cx) {
