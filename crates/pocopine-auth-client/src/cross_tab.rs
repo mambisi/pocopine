@@ -62,9 +62,22 @@ pub const CHANNEL_NAME: &str = "pocopine-auth";
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static CHANNEL: RefCell<Option<BroadcastChannel>> = const { RefCell::new(None) };
-    /// Re-entrancy flag: set to `true` while we're applying an inbound
-    /// message so the resulting `set_principal` / `bump_epoch` doesn't
-    /// loop the broadcast back out again.
+    /// Re-entrancy guard for inbound message handling.
+    ///
+    /// Currently dormant — the framework's listener calls
+    /// [`crate::hydrate_from_storage`] (which writes only to the
+    /// token slot and storage, never the session) and
+    /// [`crate::session::AuthSession::bump_epoch`] (which is
+    /// deliberately the broadcast-free epoch advance). Neither
+    /// triggers `broadcast_session_changed`, so today the flag never
+    /// fires.
+    ///
+    /// Kept as defensive scaffolding so app code that wraps inbound
+    /// handling (e.g., calling `session.set_principal` from a custom
+    /// listener) doesn't ping-pong messages between tabs. Per the
+    /// `BroadcastChannel` spec, posts are not delivered to the
+    /// origin tab, so the flag protects against
+    /// `set_principal`-from-listener loops, not against self-echo.
     static SUPPRESS_BROADCAST: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -127,6 +140,16 @@ pub fn __teardown_for_test() {
         channel.close();
     }
     SUPPRESS_BROADCAST.with(|c| c.set(false));
+}
+
+/// Install the cross-tab listener directly. Test seam — production
+/// goes through `auth_plugin().with_cross_tab_sync(true)` which
+/// validates the storage requirement first. Bypassing the builder
+/// in production code is unsupported.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub fn __install_for_test(session: AuthSession) {
+    install(session);
 }
 
 // ─── Host stubs ─────────────────────────────────────────────────────

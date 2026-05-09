@@ -91,6 +91,9 @@ mod refresh;
 mod session;
 pub mod storage;
 
+#[cfg(test)]
+mod test_util;
+
 pub use plugin::{auth_plugin, predicate_guard, AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM};
 pub use refresh::{TokenRefresh, TokenRefreshFuture};
 pub use session::{active_principal, active_session, AuthSession};
@@ -229,17 +232,33 @@ impl FetchMiddleware for BearerMiddleware {
                 if refresh::current_refresh().is_some() {
                     match refresh::refresh_single_flight().await {
                         Ok(new_token) => {
-                            // `set_token` writes through to storage,
-                            // which (with cross-tab sync installed)
-                            // also propagates the new token to peer
-                            // tabs on their next storage read.
-                            set_token(new_token.as_str());
-                            let mut retry = request;
-                            retry.set_header(
-                                "authorization",
-                                format!("Bearer {}", new_token.as_str()),
-                            );
-                            next.run(retry).await
+                            // Identity-change fence on the WRITE side.
+                            // If the user signed out (or signed in as a
+                            // different identity) during the refresh,
+                            // the epoch advanced. Writing `new_token`
+                            // would re-pollute the cleared slot with a
+                            // valid bearer the user no longer has any
+                            // intent to use. Drop the result here; the
+                            // outer fence below handles the response
+                            // side, but it can't undo a token-slot
+                            // write — only this gate can.
+                            let still_valid =
+                                session::active_session().map(|s| s.epoch()) == captured_epoch;
+                            if still_valid {
+                                // `set_token` writes through to storage,
+                                // which (with cross-tab sync installed)
+                                // also propagates the new token to peer
+                                // tabs on their next storage read.
+                                set_token(new_token.as_str());
+                                let mut retry = request;
+                                retry.set_header(
+                                    "authorization",
+                                    format!("Bearer {}", new_token.as_str()),
+                                );
+                                next.run(retry).await
+                            } else {
+                                Err(ServerError::unauthorized("session_changed"))
+                            }
                         }
                         Err(err) => Err((*err).clone()),
                     }
@@ -309,16 +328,15 @@ pub fn install() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{block_on, noop_waker, yield_once};
     use pocopine_auth::{AuthUser, Principal};
     use pocopine_core::fetch::{
         __reset_middleware_chain_for_test, freeze_middleware_chain, FetchResponse,
     };
     use std::cell::RefCell;
     use std::future::Future;
-    use std::pin::Pin;
     use std::rc::Rc;
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll};
 
     // The token store, INSTALLED flag, and `pocopine_core::fetch`
     // chain are all process- or thread-local globals. Serialize all
@@ -410,25 +428,6 @@ mod tests {
     }
 
     // ─── BearerMiddleware ───────────────────────────────────────────
-
-    /// Synchronous block_on for tests. The chain returns immediately
-    /// (no real network), so a single poll-loop is sufficient.
-    fn block_on<F: Future>(future: F) -> F::Output {
-        struct NoopWake;
-        impl Wake for NoopWake {
-            fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: &Arc<Self>) {}
-        }
-        let waker: Waker = Arc::new(NoopWake).into();
-        let mut cx = Context::from_waker(&waker);
-        let mut fut = Box::pin(future);
-        loop {
-            match Pin::new(&mut fut).as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => continue,
-            }
-        }
-    }
 
     /// Drive a `pocopine_core::fetch::call::<(), ()>("/probe", &())`
     /// through the chain and return the request the trailing capture
@@ -926,6 +925,70 @@ mod tests {
     }
 
     #[test]
+    fn refresh_does_not_pollute_token_slot_after_signout_during_flight() {
+        // P1 scenario: user calls sign_out() while a refresh is in
+        // flight. Refresh resolves with a fresh token; the middleware
+        // must NOT write that token to the slot — otherwise the
+        // signed-out user has a valid bearer for the next request.
+        let _guard = lock_serial();
+        full_reset_with_session();
+
+        let session = AuthSession::new();
+        session.set_principal(Principal::from_user(AuthUser::new("u1")));
+        install_session_for_test(session.clone());
+        set_token("stale");
+        install();
+
+        // Refresh that mutates session epoch (simulating sign-out
+        // arriving while refresh is in flight) before returning the
+        // new token.
+        let session_for_refresh = session.clone();
+        refresh::set_refresh(Rc::new(move || {
+            let s = session_for_refresh.clone();
+            async move {
+                // Sign-out happens while we wait for the issuer.
+                s.set_principal(Principal::anonymous());
+                Ok("would-be-leaked".to_string())
+            }
+        }));
+
+        // 401 then 200 (so a successful retry would happen if the
+        // middleware didn't gate on epoch).
+        let chain_calls = Rc::new(std::cell::Cell::new(0));
+        install_401_then_ok_n_times(chain_calls.clone());
+
+        let result = block_on(pocopine_core::fetch::call_replay_safe::<(), ()>(
+            "/probe",
+            &(),
+        ));
+
+        match result {
+            Err(ServerError::Unauthorized(msg)) => {
+                assert!(
+                    msg.contains("session_changed") || msg.contains("session"),
+                    "unexpected reason: {msg}"
+                );
+            }
+            other => panic!("expected Unauthorized session_changed, got {other:?}"),
+        }
+        // Token slot must NOT contain the leaked token. The pre-refresh
+        // value ("stale") is fine; the leaked value ("would-be-leaked")
+        // is not. Either is acceptable as long as we didn't write the
+        // refreshed bearer post-signout.
+        let token = active_token();
+        assert_ne!(
+            token.as_deref(),
+            Some("would-be-leaked"),
+            "refresh post-signout must not pollute the token slot"
+        );
+        // The replay must NOT have happened either (chain saw the 401
+        // only).
+        assert_eq!(chain_calls.get(), 1, "replay must not run after signout");
+
+        full_reset_with_session();
+    }
+
+    #[test]
     fn aborted_refresh_unblocks_waiters_with_error() {
         // Drive refresh_single_flight directly. First caller drops
         // its future before the refresh resolves — second caller
@@ -943,7 +1006,7 @@ mod tests {
             async move {
                 if !yielded.get() {
                     yielded.set(true);
-                    futures_yield_once().await;
+                    yield_once().await;
                 }
                 Ok("never-reached".to_string())
             }
@@ -951,25 +1014,13 @@ mod tests {
 
         // Driver
         let mut driver = Box::pin(refresh::refresh_single_flight());
-        // Poll once → Pending (yields inside refresh).
-        struct NoopWake;
-        impl std::task::Wake for NoopWake {
-            fn wake(self: std::sync::Arc<Self>) {}
-            fn wake_by_ref(self: &std::sync::Arc<Self>) {}
-        }
-        let waker: std::task::Waker = std::sync::Arc::new(NoopWake).into();
-        let mut cx = std::task::Context::from_waker(&waker);
-        assert!(matches!(
-            driver.as_mut().poll(&mut cx),
-            std::task::Poll::Pending
-        ));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(driver.as_mut().poll(&mut cx), Poll::Pending));
 
         // Spawn a waiter while the driver is still pending.
         let mut waiter = Box::pin(refresh::refresh_single_flight());
-        assert!(matches!(
-            waiter.as_mut().poll(&mut cx),
-            std::task::Poll::Pending
-        ));
+        assert!(matches!(waiter.as_mut().poll(&mut cx), Poll::Pending));
 
         // Drop the driver — its ClearOnDrop guard publishes a
         // synthetic error and clears IN_FLIGHT. The waiter must
@@ -977,7 +1028,7 @@ mod tests {
         drop(driver);
 
         match waiter.as_mut().poll(&mut cx) {
-            std::task::Poll::Ready(Err(e)) => match &*e {
+            Poll::Ready(Err(e)) => match &*e {
                 ServerError::Unauthorized(msg) => {
                     assert!(msg.contains("aborted"), "unexpected reason: {msg}");
                 }
@@ -987,27 +1038,5 @@ mod tests {
         }
 
         full_reset();
-    }
-
-    /// Yields control once. Used to introduce an await point so the
-    /// caller can drop the future before completion.
-    async fn futures_yield_once() {
-        struct YieldOnce(bool);
-        impl Future for YieldOnce {
-            type Output = ();
-            fn poll(
-                mut self: Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<()> {
-                if self.0 {
-                    std::task::Poll::Ready(())
-                } else {
-                    self.0 = true;
-                    cx.waker().wake_by_ref();
-                    std::task::Poll::Pending
-                }
-            }
-        }
-        YieldOnce(false).await
     }
 }
