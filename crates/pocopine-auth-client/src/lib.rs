@@ -196,36 +196,21 @@ pub fn hydrate_from_storage() {
     }
 }
 
-/// Fetch middleware that attaches `Authorization: Bearer <token>` to
-/// every outgoing request when [`active_token`] is `Some`, refreshes
-/// the token once on `Unauthorized` for replay-safe requests, and
-/// fences the response against identity changes that happened while
-/// the request was in flight.
-///
-/// All three concerns live in one middleware so the active-token,
-/// epoch, and refresh state are observed atomically with respect to
-/// one outgoing request — a single rejection handler position in the
-/// chain (registered once at `install` time) wins by being simple to
-/// reason about.
+/// Fetch middleware that attaches `Authorization: Bearer <token>`,
+/// refreshes once on `Unauthorized` for replay-safe requests, and
+/// fences responses against identity changes that happened in
+/// flight. All three concerns live here so token, epoch, and
+/// refresh state are observed atomically per outgoing request.
 pub struct BearerMiddleware;
 
 impl FetchMiddleware for BearerMiddleware {
     fn call(&self, mut request: FetchRequest, next: FetchNext) -> FetchMiddlewareFuture {
-        // Single read of the token slot: the "did we authenticate this
-        // request?" decision and the actual header attachment must
-        // observe the same value, otherwise a concurrent `set_token` /
-        // `clear_token` between two locks could leave us with
-        // had_token=true but no header attached (or vice versa). Wasm
-        // is single-threaded so this is impossible in production, but
-        // tighten the invariant for host-test robustness and to keep
-        // the code honest if pocopine ever grows a multi-threaded
-        // wasm runtime.
+        // Snapshot once: the auth-decision and the header-attach must
+        // observe the same token, else a `set_token`/`clear_token`
+        // between two locks could split the invariant.
         let token_snapshot = active_token();
         let had_token = token_snapshot.is_some();
         let captured_epoch = if had_token {
-            // Only capture when we're actually authenticating this
-            // request. An anonymous request can't go stale on identity
-            // change because it didn't depend on identity.
             session::active_session().map(|s| s.epoch())
         } else {
             None
@@ -239,42 +224,27 @@ impl FetchMiddleware for BearerMiddleware {
         Box::pin(async move {
             let response = next.clone().run(request.clone()).await;
 
-            // Normalize 401-shaped signals. `pocopine_core::fetch::call`
-            // converts non-2xx to `ServerError::Network("HTTP 401")` at
-            // the top, dropping any body before the auth middleware can
-            // see it. We need to recognise the auth-shaped error before
-            // that happens, so we treat both `Ok(status == 401)` and
-            // `Err(Unauthorized)` as the same logical signal.
+            // `pocopine_core::fetch::call` collapses non-2xx into
+            // `Network("HTTP 401")` before deserializing the body, so
+            // we recognise both shapes as the same auth signal.
             let unauthorized = matches!(&response, Ok(r) if r.status == 401)
                 || matches!(&response, Err(ServerError::Unauthorized(_)));
 
-            // Refresh-on-Unauthorized + replay once. Gated on
-            // `is_replay_safe` (i.e. `#[server(idempotent)]`) per RFC-078
-            // §5.10.4 and on having actually attached a token (refresh
-            // can't help an endpoint that 401s without auth context).
-            // Routed through `refresh_single_flight` so concurrent
-            // 401s coalesce into one refresh call to the issuer.
+            // RFC-078 §5.10.4: refresh + replay only for replay-safe
+            // requests that actually carried a token. Concurrent 401s
+            // coalesce into one issuer call via `refresh_single_flight`.
             let response = if unauthorized && had_token && is_replay_safe {
                 if refresh::current_refresh().is_some() {
                     match refresh::refresh_single_flight().await {
                         Ok(new_token) => {
-                            // Identity-change fence on the WRITE side.
-                            // If the user signed out (or signed in as a
-                            // different identity) during the refresh,
-                            // the epoch advanced. Writing `new_token`
-                            // would re-pollute the cleared slot with a
-                            // valid bearer the user no longer has any
-                            // intent to use. Drop the result here; the
-                            // outer fence below handles the response
-                            // side, but it can't undo a token-slot
-                            // write — only this gate can.
+                            // Write-side identity fence: a sign-out
+                            // during refresh advances the epoch; writing
+                            // the new token would re-pollute a cleared
+                            // slot. The response-side fence below can't
+                            // undo a slot write — only this gate can.
                             let still_valid =
                                 session::active_session().map(|s| s.epoch()) == captured_epoch;
                             if still_valid {
-                                // `set_token` writes through to storage,
-                                // which (with cross-tab sync installed)
-                                // also propagates the new token to peer
-                                // tabs on their next storage read.
                                 set_token(new_token.as_str());
                                 let mut retry = request;
                                 retry.set_header(
@@ -289,27 +259,19 @@ impl FetchMiddleware for BearerMiddleware {
                         Err(err) => Err((*err).clone()),
                     }
                 } else {
-                    // No refresh configured — propagate fail-closed with
-                    // an auth-shaped error so the caller can match on it.
                     Err(ServerError::unauthorized("token expired"))
                 }
             } else if unauthorized && had_token {
-                // Replay disabled (or non-idempotent server fn). Still
-                // surface the Unauthorized shape for callers.
                 Err(ServerError::unauthorized("token expired"))
             } else if unauthorized {
-                // Anonymous request that 401'd. Refresh wouldn't help;
-                // surface the auth shape for the caller.
                 Err(ServerError::unauthorized("auth required"))
             } else {
                 response
             };
 
-            // Identity-change fence. Refresh rotates the token but does
-            // *not* bump the epoch (epoch tracks principal changes), so
-            // a successful refresh-replay still passes the fence. A
-            // concurrent sign-in/sign-out that bumped the epoch trips
-            // it — the response is from the previous identity.
+            // Refresh rotates the token but does NOT bump the epoch;
+            // sign-in/out does. So a refresh-replay passes; a
+            // concurrent identity change trips this fence.
             if let Some(captured) = captured_epoch {
                 let now = session::active_session().map(|s| s.epoch());
                 if now != Some(captured) {
@@ -323,12 +285,8 @@ impl FetchMiddleware for BearerMiddleware {
 }
 
 thread_local! {
-    /// Tracks whether [`install`] has already registered
-    /// [`BearerMiddleware`] on the current thread's chain. Makes
-    /// repeated calls (e.g. `install()` plus
-    /// `auth_plugin().with_bearer_middleware(true)`) safe — the
-    /// second one is a no-op rather than a silent
-    /// double-register.
+    /// Idempotency guard for [`install`]; second-and-later calls
+    /// no-op rather than double-registering on the fetch chain.
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 

@@ -97,19 +97,14 @@ pub(crate) fn install(session: AuthSession) {
     let session_for_listener = session;
     let listener = Closure::<dyn FnMut(MessageEvent)>::new(move |_evt: MessageEvent| {
         SUPPRESS_BROADCAST.with(|c| c.set(true));
-        // 1. Re-read token from storage so this tab's bearer
-        //    middleware switches credentials on its next outgoing
-        //    request.
         crate::hydrate_from_storage();
-        // 2. Bump epoch so any in-flight responses captured under the
-        //    previous identity get fenced by `BearerMiddleware`.
         session_for_listener.bump_epoch();
         SUPPRESS_BROADCAST.with(|c| c.set(false));
     });
     channel.set_onmessage(Some(listener.as_ref().unchecked_ref()));
-    // Leak the closure; it lives for the app's lifetime. Storing it
-    // in the thread_local would tie its lifetime to module unload,
-    // which never happens for wasm apps.
+    // Leaked intentionally: the listener lives for the app's
+    // lifetime. Storing it would force a Drop boundary that wasm
+    // apps never cross.
     listener.forget();
 
     CHANNEL.with(|c| *c.borrow_mut() = Some(channel));
@@ -124,9 +119,6 @@ pub fn broadcast_session_changed() {
         return;
     }
     if let Some(channel) = CHANNEL.with(|c| c.borrow().clone()) {
-        // Payload is intentionally minimal: receivers re-load token
-        // from storage and bump epoch; they don't need a payload to
-        // act on.
         let _ = channel.post_message(&JsValue::from_str("session_changed"));
     }
 }

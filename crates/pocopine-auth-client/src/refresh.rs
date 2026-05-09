@@ -85,9 +85,7 @@ pub fn __reset_refresh_for_test() {
 
 // ─── Single-flight coordinator ──────────────────────────────────────
 
-/// Shared outcome cell for the in-flight refresh. Result is wrapped in
-/// `Rc` so all waiters get a cheap clone instead of duplicating either
-/// the token string or the `ServerError`.
+/// `Rc`-wrapped so all waiters share one allocation per outcome.
 struct RefreshSlot {
     result: RefCell<Option<Result<Rc<String>, Rc<ServerError>>>>,
     wakers: RefCell<Vec<Waker>>,
@@ -108,10 +106,8 @@ pub(crate) async fn refresh_single_flight() -> Result<Rc<String>, Rc<ServerError
     });
     IN_FLIGHT.with(|cell| *cell.borrow_mut() = Some(slot.clone()));
 
-    // RAII guard: clears the in-flight slot on every exit path,
-    // including the case where the driver future is dropped before
-    // `refresh.refresh().await` resolves. Without this, peer waiters
-    // would hang on a never-published slot.
+    // RAII so a driver dropped mid-await still publishes to waiters
+    // (otherwise they hang forever).
     let _guard = ClearOnDrop { slot: slot.clone() };
 
     let result = match current_refresh() {
@@ -149,12 +145,9 @@ impl Future for SlotWait {
     }
 }
 
-/// Clear the in-flight slot on Drop and, if no result was ever
-/// published, surface a synthetic error to waiters so they don't
-/// hang. Drops happen on:
-/// 1. Normal completion (after `publish` set the result).
-/// 2. The driving future being cancelled mid-await.
-/// 3. A panic in `refresh.refresh()`.
+/// On Drop: clear `IN_FLIGHT` and, if nothing was published yet,
+/// publish a synthetic error so waiters don't hang on a cancelled
+/// or panicked driver.
 struct ClearOnDrop {
     slot: Rc<RefreshSlot>,
 }
@@ -169,8 +162,8 @@ impl Drop for ClearOnDrop {
             );
         }
         IN_FLIGHT.with(|cell| {
-            // Only clear if the cell still points at our slot — a
-            // re-entrant test reset may have already cleared it.
+            // Don't clobber a successor slot if a test reset or a
+            // later driver already replaced ours.
             let mut cell = cell.borrow_mut();
             let same = cell
                 .as_ref()
@@ -290,10 +283,6 @@ mod tests {
     impl<A: Future, B: Future> Future for Join<A, B> {
         type Output = (A::Output, B::Output);
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            // `Self: Unpin` (declared below), so `Pin::get_mut` is the
-            // safe API. The inner futures are `Pin<Box<F>>` and
-            // remain individually pinned regardless of how we treat
-            // `Self`.
             let this = self.get_mut();
             if this.a_out.is_none() {
                 if let Some(fut) = this.a.as_mut() {
