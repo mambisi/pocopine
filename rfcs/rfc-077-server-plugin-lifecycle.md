@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Implemented (Phases 1-3); Phase 4 closed — typed job hooks rejected (2026-05-09), middleware-chain alternative deferred until demand |
+| **Status** | Implemented (Phase 4 typed hooks rejected 2026-05-09; middleware-chain alternative deferred until demand) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-05 |
 | **Related** | [`rfc-066-server-function-auth.md`](./rfc-066-server-function-auth.md), [`rfc-067-redis-background-jobs.md`](./rfc-067-redis-background-jobs.md), [`rfc-069-observability.md`](./rfc-069-observability.md), [`rfc-076-app-plugin-lifecycle.md`](./rfc-076-app-plugin-lifecycle.md) |

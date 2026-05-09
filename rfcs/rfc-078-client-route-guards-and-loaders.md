@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted (core primitives implemented; `pocopine-auth-client` follow-up pending) |
+| **Status** | Implemented (core primitives + `pocopine-auth-client` consumer landed) |
 | **Author** | pocopine team |
 | **Created** | 2026-05-07 |
 | **Related** | [`rfc-003-router.md`](./rfc-003-router.md), [`rfc-076-app-plugin-lifecycle.md`](./rfc-076-app-plugin-lifecycle.md), [`rfc-077-server-plugin-lifecycle.md`](./rfc-077-server-plugin-lifecycle.md), [`rfc-074-auth-credentials-and-provider-trait.md`](./rfc-074-auth-credentials-and-provider-trait.md) |

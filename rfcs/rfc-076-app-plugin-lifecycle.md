@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Author** | pocopine team |
 | **Created** | 2026-05-05 |
 | **Related** | [`rfc-002-app-stores-servers.md`](./rfc-002-app-stores-servers.md), [`rfc-060-component-uses-registry.md`](./rfc-060-component-uses-registry.md), [`rfc-069-observability.md`](./rfc-069-observability.md), [`rfc-071-event-spine-and-live-invalidation.md`](./rfc-071-event-spine-and-live-invalidation.md) |
