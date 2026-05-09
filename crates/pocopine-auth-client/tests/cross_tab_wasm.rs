@@ -23,20 +23,13 @@ use web_sys::BroadcastChannel;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-/// Yield through the task queue (NOT the microtask queue):
-/// `BroadcastChannel` `MessageEvent` delivery is dispatched as a
-/// task, so awaiting `Promise.resolve()` (which fires on the
-/// microtask queue) is too eager — the listener hasn't run yet by
-/// the time we resume. Schedule resolution via `setTimeout(0)`
-/// instead so the test continuation lands AFTER pending message
-/// tasks.
+/// Yield through the task queue. `MessageEvent` delivery is a task,
+/// not a microtask, so `Promise.resolve()` resumes too eagerly.
 async fn next_task() {
     let promise = Promise::new(&mut |resolve, _reject| {
         if let Some(window) = web_sys::window() {
             let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0);
         } else {
-            // No window — just resolve immediately (test will likely
-            // fail downstream, which is the right signal).
             let _ = resolve.call0(&JsValue::UNDEFINED);
         }
     });
@@ -50,30 +43,22 @@ async fn settle() {
 
 #[wasm_bindgen_test(async)]
 async fn outbound_post_triggers_inbound_listener_in_peer() {
-    // Fresh state.
     cross_tab::__teardown_for_test();
     pocopine_auth_client::storage::__reset_storage_for_test();
 
     let session = AuthSession::new();
     let initial_epoch = session.epoch();
     cross_tab::__install_for_test(session.clone());
-
-    // Yield once after install so Firefox finishes wiring the
-    // listener before we post.
     next_task().await;
 
-    // Origin channel — distinct from the framework's, but on the
-    // same name, so its posts are delivered to the framework's
-    // listener.
     let origin =
         BroadcastChannel::new("pocopine-auth").expect("BroadcastChannel must be available");
     origin
         .post_message(&JsValue::from_str("session_changed"))
         .expect("post_message must succeed");
 
-    // Give the browser plenty of task cycles to deliver and run the
-    // listener — different browsers schedule MessageEvents
-    // differently.
+    // Bounded retry — different browsers schedule MessageEvents on
+    // slightly different ticks; bail early on success so CI is fast.
     for _ in 0..5 {
         next_task().await;
         if session.epoch() > initial_epoch {
@@ -94,11 +79,9 @@ async fn outbound_post_triggers_inbound_listener_in_peer() {
 
 #[wasm_bindgen_test(async)]
 async fn local_broadcast_channel_does_not_echo_to_origin() {
-    // Sanity check on the BroadcastChannel spec: a channel does not
-    // receive its own posts. The framework relies on this — without
-    // it, `broadcast_session_changed` would feed back into the
-    // origin tab's listener and SUPPRESS_BROADCAST would need to
-    // be load-bearing instead of dormant.
+    // Pins the spec invariant that a channel doesn't receive its own
+    // posts; otherwise `SUPPRESS_BROADCAST` would have to be
+    // load-bearing instead of dormant.
     let channel = BroadcastChannel::new("pocopine-auth-test-echo")
         .expect("BroadcastChannel must be available");
 

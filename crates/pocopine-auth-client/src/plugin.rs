@@ -201,12 +201,6 @@ impl AppPlugin for AuthPluginBuilder {
     }
 
     fn install(self, app: App) -> App {
-        // Cross-tab sync requires storage to read the new credential
-        // when peer tabs receive a broadcast — without it, peer tabs
-        // bump their epoch but have no way to learn the new token,
-        // and their bearer middleware keeps using the stale value.
-        // Fail loudly at install time rather than ship a broken UX
-        // that only surfaces under the sign-in-on-tab-A scenario.
         if self.cross_tab_sync && self.token_storage.is_none() {
             panic!(
                 "auth_plugin: with_cross_tab_sync(true) requires \
@@ -216,9 +210,8 @@ impl AppPlugin for AuthPluginBuilder {
             );
         }
 
-        // Storage first: hydrate the token slot before middleware
-        // runs so the very first outgoing request carries a persisted
-        // credential.
+        // Hydrate before middleware so the first outgoing request
+        // carries a persisted credential.
         if let Some(storage) = self.token_storage {
             install_storage(storage);
             crate::hydrate_from_storage();
