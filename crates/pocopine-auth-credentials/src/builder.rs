@@ -1,6 +1,5 @@
 //! [`Credentials<S, T>`] builder + [`ServerPlugin`] install.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +40,6 @@ pub struct Credentials<S: UserStore, T: TokenStore> {
     session_ttl: Duration,
     argon: Argon2Params,
     password_validator: PasswordValidator,
-    cookie_name: Cow<'static, str>,
 }
 
 impl<S: UserStore, T: TokenStore> Credentials<S, T> {
@@ -59,7 +57,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
             session_ttl: Duration::from_secs(SESSION_TTL_DEFAULT_SECS),
             argon: Argon2Params::owasp_default(),
             password_validator: Arc::new(default_password_validator),
-            cookie_name: Cow::Borrowed(pocopine_auth::SESSION_COOKIE),
         }
     }
 
@@ -100,12 +97,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
         f: impl Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static,
     ) -> Self {
         self.password_validator = Arc::new(f);
-        self
-    }
-
-    /// Override the session cookie name. Default: `pocopine_session`.
-    pub fn with_cookie_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
-        self.cookie_name = name.into();
         self
     }
 
@@ -172,9 +163,6 @@ pub(crate) struct CredentialsHandle<S: UserStore, T: TokenStore> {
     /// user.
     pub(crate) dummy_hash: String,
     pub(crate) password_validator: PasswordValidator,
-    /// Session cookie name. Read by future cookie-issuance paths.
-    #[allow(dead_code)]
-    pub(crate) cookie_name: Cow<'static, str>,
     /// Issuer / audience strings — kept for symmetry with
     /// `verifier_config()` and for tracing fields on observability
     /// emit; the issuer is the source of truth for signing.
@@ -234,7 +222,6 @@ impl<S: UserStore, T: TokenStore> ServerPlugin for Credentials<S, T> {
             argon: self.argon,
             dummy_hash,
             password_validator: self.password_validator,
-            cookie_name: self.cookie_name,
             issuer_name: self.issuer_name,
             audience: self.audience,
         });
