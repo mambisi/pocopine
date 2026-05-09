@@ -1,22 +1,15 @@
 # First-party credentials — `pocopine-auth-credentials`
 
-Password-based sign-up / login / logout for pocopine apps —
-**keyed on whatever identifier you want**. Email is the default,
-but the crate ships bundled validators for E.164 phone numbers and
-usernames, and apps with a stranger shape (account number with
-checksum, NRIC, domain-restricted email) implement
-[`LoginIdValidator`] directly.
+Email + password sign-up / login / logout for pocopine apps —
+the Django-shaped path, plain and stable.
 
 The `pocopine-auth-credentials` crate ships:
 
 - `PasswordCredentials` trait — apps implement it on **their own**
   user/account record (Postgres row, custom struct, anything). The
-  crate doesn't define a `User` type; it reads `id()`,
-  `login_id()`, `password_hash()`, and a `to_auth_user()`
-  projection off whatever the app gives it.
-- `LoginIdValidator` trait + bundled `EmailValidator` /
-  `E164PhoneValidator` / `UsernameValidator` so apps pick the
-  shape they want without reimplementing the structural checks.
+  crate doesn't define a `User` type; it reads `id()`, `email()`,
+  `password_hash()`, and a `to_auth_user()` projection off
+  whatever the app gives it.
 - `UserStore` / `TokenStore` traits — implement against your database.
 - `Argon2Params` (OWASP defaults + min-validation) and the
   argon2id wrapper.
@@ -38,64 +31,17 @@ What the crate **does not** ship:
   (data lost every restart, no shared state across processes),
   and we'd rather you spend ten minutes on the real thing than
   ship a tryout backend you'll forget to swap.
+- Phone-OTP / username-based / passkey / OAuth flows. Those are
+  **different credential types** and ship as **sibling crates**
+  (future `pocopine-auth-otp`, etc.). They produce the same
+  session-JWT shape, so the verifier middleware accepts tokens
+  from any of them and `Principal` / route guards / `#[server]`
+  guards work identically. See [`auth-phone-otp-tutorial.md`](./auth-phone-otp-tutorial.md)
+  for the build-it-yourself-today pattern.
 
 This page walks Postgres + [`sqlx`](https://docs.rs/sqlx) end to
 end. SQLite, MySQL, Redis, or any other backend works the same way
 — implement the same trait + storage contract.
-
-## Choosing your login key
-
-Three configurations are one builder call apart:
-
-```rust
-use pocopine_auth_credentials::{
-    Credentials, E164PhoneValidator, EmailValidator, UsernameValidator,
-};
-
-// Default — email + password (matches Django, Rails, the
-// majority of SaaS apps). The validator is `EmailValidator`,
-// the JSON request body field is `"email"`.
-let creds = Credentials::new(secret, store, tokens);
-
-// Phone + password — chat / messaging apps that lean on phone
-// number as primary identity. Strict E.164 (`+\d{8,15}`); apps
-// that want to accept formatted input pre-normalize on the wasm
-// side before posting.
-let creds = Credentials::new(secret, store, tokens)
-    .with_login_id_validator(E164PhoneValidator)
-    .with_login_id_field("phone");
-
-// Username + password — social media, forums, gaming. Default:
-// 3..=32 chars `[a-zA-Z0-9_-]`, lowercased on lookup so `Alice`
-// and `alice` are the same account (display case preserved
-// elsewhere on your record).
-let creds = Credentials::new(secret, store, tokens)
-    .with_login_id_validator(UsernameValidator::default())
-    .with_login_id_field("username");
-
-// Custom — anything weirder.
-struct AccountNumberValidator;
-impl pocopine_auth_credentials::LoginIdValidator for AccountNumberValidator {
-    fn validate(&self, raw: &str) -> Result<(), &'static str> {
-        if raw.len() != 12 || !raw.chars().all(|c| c.is_ascii_digit()) {
-            return Err("not_12_digits");
-        }
-        Ok(())
-    }
-}
-let creds = Credentials::new(secret, store, tokens)
-    .with_login_id_validator(AccountNumberValidator)
-    .with_login_id_field("account_number");
-```
-
-The validator does **two** jobs: validate the raw input (reject
-malformed values with a stable `&'static str` reason that the
-framework maps to `422 invalid_login_id`) and normalize for
-lookup (lowercase email, lowercase username, identity for E.164).
-The framework runs both on every signup and login attempt before
-the value reaches the store, so storage indexes never see
-case-different duplicates and your database doesn't need
-collation tricks.
 
 ## At a glance
 
@@ -179,11 +125,7 @@ impl PasswordCredentials for AppUser {
     fn id(&self) -> &str {
         &self.id
     }
-    fn login_id(&self) -> &str {
-        // For email-keyed apps, the login_id IS the (normalized)
-        // email. Phone-keyed apps return the +E.164 phone string.
-        // Username-keyed apps return the lowercase username.
-        // Whatever your app uses as the login key — return that.
+    fn email(&self) -> &str {
         &self.email
     }
     fn password_hash(&self) -> Option<&str> {
@@ -216,53 +158,6 @@ impl PasswordCredentials for AppUser {
 }
 ```
 
-For a **phone-keyed** chat app, the same trait shape — different
-projection:
-
-```rust
-pub struct ChatUser {
-    pub id: String,
-    pub phone: String,            // +E.164 normalized
-    pub display_name: String,
-    pub password_hash: String,
-}
-
-impl PasswordCredentials for ChatUser {
-    fn id(&self) -> &str { &self.id }
-    fn login_id(&self) -> &str { &self.phone }
-    fn password_hash(&self) -> Option<&str> { Some(&self.password_hash) }
-    fn to_auth_user(&self) -> AuthUser {
-        AuthUser::new(&self.id)
-            .with_name(&self.display_name)
-            .with_claim("phone", json!(self.phone))
-    }
-}
-```
-
-For a **username-keyed** social app:
-
-```rust
-pub struct SocialUser {
-    pub id: String,
-    pub handle: String,           // lowercase canonical
-    pub display_handle: String,   // case as the user typed it
-    pub password_hash: String,
-}
-
-impl PasswordCredentials for SocialUser {
-    fn id(&self) -> &str { &self.id }
-    fn login_id(&self) -> &str { &self.handle }
-    fn password_hash(&self) -> Option<&str> { Some(&self.password_hash) }
-    fn to_auth_user(&self) -> AuthUser {
-        AuthUser::new(&self.id)
-            .with_name(&self.display_handle)
-            .with_claim("handle", json!(self.display_handle))
-    }
-}
-```
-
-Same trait, three different shapes.
-
 ## Multiple credential types per user
 
 Real apps usually link more than one auth method to a single
@@ -288,7 +183,7 @@ table grows columns / link tables for each provider:
 ```sql
 CREATE TABLE app_users (
     id                TEXT PRIMARY KEY,
-    login_id          TEXT NOT NULL UNIQUE,
+    email             TEXT NOT NULL UNIQUE,
     password_hash     TEXT,                 -- nullable: NULL for OAuth-only users
     google_oauth_sub  TEXT UNIQUE,          -- non-null if Google linked
     firebase_uid      TEXT UNIQUE,          -- non-null if Firebase linked
@@ -305,7 +200,7 @@ the same as "user not found":
 ```
 login("alice@example.com", "anything")
     ↓
-find_by_login_id("alice@example.com") → Some(user), but password_hash() → None
+find_by_email("alice@example.com") → Some(user), but password_hash() → None
     ↓
 fall through to the dummy hash, run argon2 verify
     ↓
@@ -336,27 +231,25 @@ business.
 
 ## Step 2 — implement `UserStore` against Postgres
 
-Schema (email-keyed example; phone or username apps use the same
-shape with the column renamed):
+Schema:
 
 ```sql
 CREATE TABLE app_users (
     id                TEXT PRIMARY KEY,
-    login_id          TEXT NOT NULL UNIQUE,  -- normalized email/phone/username
+    email             TEXT NOT NULL UNIQUE,
     email_verified    BOOLEAN NOT NULL DEFAULT FALSE,
-    password_hash     TEXT NOT NULL,
+    password_hash     TEXT,                    -- NULL for OAuth-only / passkey-only users
     display_name      TEXT,
     roles             JSONB NOT NULL DEFAULT '[]',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-`login_id` is already-normalized when the framework calls
-`create` / `find_by_login_id` (the validator's `normalize` method
-ran first). No `LOWER()` collation needed in the index — a plain
-`UNIQUE` constraint suffices.
+The framework lowercases `email` before calling the store, so a
+plain `UNIQUE` constraint suffices — no `LOWER()`-indexed
+expression needed.
 
-The trait — three methods to implement (`find_by_login_id`,
+The trait — three methods to implement (`find_by_email`,
 `find_by_id`, `create`):
 
 ```rust
@@ -373,14 +266,14 @@ pub struct PgUserStore {
 impl UserStore for PgUserStore {
     type User = AppUser;
 
-    async fn find_by_login_id(
+    async fn find_by_email(
         &self,
-        login_id: &str,
+        email: &str,
     ) -> Result<Option<AppUser>, StoreError> {
         sqlx::query_as::<_, AppUser>(
-            "SELECT * FROM app_users WHERE login_id = $1",
+            "SELECT * FROM app_users WHERE email = $1",
         )
-        .bind(login_id)
+        .bind(email)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Box::new(e) as StoreError)
@@ -396,19 +289,19 @@ impl UserStore for PgUserStore {
 
     async fn create(
         &self,
-        login_id: &str,
+        email: &str,
         password_hash: String,
     ) -> Result<AppUser, StoreError> {
         // The store decides id format. UUIDv7 is the recommended
         // default — sortable by creation time, collision-resistant.
         let id = Uuid::now_v7().to_string();
         let user = sqlx::query_as::<_, AppUser>(
-            "INSERT INTO app_users (id, login_id, email_verified, password_hash)
+            "INSERT INTO app_users (id, email, email_verified, password_hash)
              VALUES ($1, $2, FALSE, $3)
              RETURNING *",
         )
         .bind(&id)
-        .bind(login_id)
+        .bind(email)
         .bind(&password_hash)
         .fetch_one(&self.pool)
         .await
@@ -423,14 +316,13 @@ impl UserStore for PgUserStore {
 
 A few non-obvious things to keep in mind:
 
-- **No collation tricks needed.** The framework normalizes before
-  calling the store, so a plain `UNIQUE` constraint on `login_id`
-  is enough. (For email-keyed apps you can still use a
-  `LOWER()`-indexed expression if you prefer; either works.)
+- **No collation tricks needed.** The framework lowercases the
+  email before calling the store, so a plain `UNIQUE` constraint
+  is enough.
 - **Unique violation on signup.** The crate translates *any* error
-  from `create` into `CredentialsError::LoginIdTaken → 409`. The
+  from `create` into `CredentialsError::EmailTaken → 409`. The
   original error is logged via `tracing` at `pocopine.log` so you
-  can tell duplicate-login apart from a connection drop in your
+  can tell duplicate-email apart from a connection drop in your
   logs even though both surface the same closed-set HTTP reason.
 - **Nothing in the error message reaches the wire.** The body is
   `{"error": "email_taken"}` — closed-set identifier — and the
@@ -604,8 +496,6 @@ required values; everything else is a builder method:
 | `.with_argon_params(Argon2Params)` | OWASP m=64MiB / t=3 / p=4 | Argon2id cost. Validated against `owasp_minimum()` (m=19MiB / t=2 / p=1). |
 | `.with_issuer(name)` | `"pocopine"` | `iss` claim. |
 | `.with_audience(name)` | `"pocopine"` | `aud` claim. |
-| `.with_login_id_validator(impl LoginIdValidator)` | `EmailValidator` | Validate + normalize the login key. Bundled: `EmailValidator`, `E164PhoneValidator`, `UsernameValidator`. |
-| `.with_login_id_field(name)` | `"email"` | JSON field name in the signup/login request body. Common alternatives: `"phone"`, `"username"`, `"identifier"`. |
 | `.with_password_validator(closure)` | min 8 chars | NIST SP 800-63B-style checks, HIBP, anything you want. |
 | `.with_cookie_name(cow)` | `pocopine_session` | Used by the cookie token source on the verifier side. |
 

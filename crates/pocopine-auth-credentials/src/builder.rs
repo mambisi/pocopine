@@ -10,7 +10,6 @@ use pocopine_auth_jwt::{
 use pocopine_server::{Server, ServerPlugin};
 
 use crate::error::CredentialsError;
-use crate::login_id::{EmailValidator, LoginIdValidator};
 use crate::password::{hash_password_sync, Argon2Params};
 use crate::routes;
 use crate::store::{TokenStore, UserStore};
@@ -24,13 +23,8 @@ pub(crate) const ROUTE_PREFIX: &str = "/_pocopine/auth";
 pub(crate) const SESSION_TTL_DEFAULT_SECS: u64 = 60 * 60;
 /// Default minimum password length.
 pub(crate) const DEFAULT_MIN_PASSWORD_LEN: usize = 8;
-/// Default JSON request body field name carrying the login
-/// identifier. Apps that key login on phone/username/etc. override
-/// via [`Credentials::with_login_id_field`].
-pub(crate) const DEFAULT_LOGIN_ID_FIELD: &str = "email";
 
 type PasswordValidator = Arc<dyn Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static>;
-type LoginIdValidatorHandle = Arc<dyn LoginIdValidator>;
 
 /// First-party credentials builder.
 ///
@@ -47,8 +41,6 @@ pub struct Credentials<S: UserStore, T: TokenStore> {
     session_ttl: Duration,
     argon: Argon2Params,
     password_validator: PasswordValidator,
-    login_id_validator: LoginIdValidatorHandle,
-    login_id_field: Cow<'static, str>,
     cookie_name: Cow<'static, str>,
 }
 
@@ -67,11 +59,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
             session_ttl: Duration::from_secs(SESSION_TTL_DEFAULT_SECS),
             argon: Argon2Params::owasp_default(),
             password_validator: Arc::new(default_password_validator),
-            // Default: email-shaped identifier. Apps wiring phone /
-            // username auth swap both pieces (validator + JSON
-            // field name) before calling `.plugin(creds)`.
-            login_id_validator: Arc::new(EmailValidator),
-            login_id_field: Cow::Borrowed(DEFAULT_LOGIN_ID_FIELD),
             cookie_name: Cow::Borrowed(pocopine_auth::SESSION_COOKIE),
         }
     }
@@ -113,28 +100,6 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
         f: impl Fn(&str) -> Result<(), &'static str> + Send + Sync + 'static,
     ) -> Self {
         self.password_validator = Arc::new(f);
-        self
-    }
-
-    /// Override the login-identifier validator. Default:
-    /// [`EmailValidator`]. Bundled alternatives are
-    /// [`E164PhoneValidator`](crate::E164PhoneValidator) and
-    /// [`UsernameValidator`](crate::UsernameValidator); apps with a
-    /// stranger shape implement [`LoginIdValidator`] directly.
-    ///
-    /// Pair this with [`Self::with_login_id_field`] when the
-    /// JSON request body field name should change too (`"email"` →
-    /// `"phone"` / `"username"`).
-    pub fn with_login_id_validator<V: LoginIdValidator>(mut self, validator: V) -> Self {
-        self.login_id_validator = Arc::new(validator);
-        self
-    }
-
-    /// Override the JSON field name carrying the login identifier
-    /// in the signup/login request body. Default: `"email"`.
-    /// Common alternatives: `"phone"`, `"username"`, `"identifier"`.
-    pub fn with_login_id_field(mut self, name: impl Into<Cow<'static, str>>) -> Self {
-        self.login_id_field = name.into();
         self
     }
 
@@ -199,8 +164,6 @@ pub(crate) struct CredentialsHandle<S: UserStore, T: TokenStore> {
     /// user.
     pub(crate) dummy_hash: String,
     pub(crate) password_validator: PasswordValidator,
-    pub(crate) login_id_validator: LoginIdValidatorHandle,
-    pub(crate) login_id_field: Cow<'static, str>,
     /// Session cookie name. Read by future cookie-issuance paths.
     #[allow(dead_code)]
     pub(crate) cookie_name: Cow<'static, str>,
@@ -253,8 +216,6 @@ impl<S: UserStore, T: TokenStore> ServerPlugin for Credentials<S, T> {
             argon: self.argon,
             dummy_hash,
             password_validator: self.password_validator,
-            login_id_validator: self.login_id_validator,
-            login_id_field: self.login_id_field,
             cookie_name: self.cookie_name,
             issuer_name: self.issuer_name,
             audience: self.audience,
@@ -292,7 +253,7 @@ mod tests {
         fn id(&self) -> &str {
             "stub"
         }
-        fn login_id(&self) -> &str {
+        fn email(&self) -> &str {
             "stub@example.com"
         }
         fn password_hash(&self) -> Option<&str> {
@@ -309,7 +270,7 @@ mod tests {
     #[async_trait]
     impl UserStore for StubUserStore {
         type User = StubAccount;
-        async fn find_by_login_id(&self, _: &str) -> Result<Option<Self::User>, StoreError> {
+        async fn find_by_email(&self, _: &str) -> Result<Option<Self::User>, StoreError> {
             Ok(None)
         }
         async fn find_by_id(&self, _: &str) -> Result<Option<Self::User>, StoreError> {
