@@ -141,6 +141,10 @@
       overflow: visible;
     }
 
+    .pine-chart-root[data-empty] .pine-chart-svg {
+      visibility: hidden;
+    }
+
     .pine-chart-grid-line {
       stroke: #d9e2ec;
       stroke-width: 1;
@@ -297,8 +301,16 @@
       padding: 6px 8px;
       pointer-events: none;
       position: absolute;
+      opacity: 0;
       top: var(--pine-chart-tooltip-y);
       transform: translate(10px, calc(-100% - 10px));
+      transition: opacity 120ms ease;
+      visibility: hidden;
+    }
+
+    .pine-chart-root[data-hover] .pine-chart-tooltip {
+      opacity: 1;
+      visibility: visible;
     }
 
     .pine-chart-tooltip[data-tooltip-x="left"] {
@@ -387,10 +399,14 @@
     }
 
     .pine-chart-status-empty {
+      align-items: center;
       color: #526173;
-      display: block;
+      display: flex;
       font-size: 14px;
-      margin-block-start: 10px;
+      inset: 0;
+      justify-content: center;
+      pointer-events: none;
+      position: absolute;
       text-align: center;
     }
 

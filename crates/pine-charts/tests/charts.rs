@@ -1116,6 +1116,11 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 
     let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
     assert!(!chart.has_attribute("data-hover"));
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("aria-hidden").as_deref(),
+        Some("true")
+    );
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     dispatch_pointer_move(&svg, 50.0, 50.0);
@@ -1139,6 +1144,10 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert_eq!(marker.get_attribute("data-y").as_deref(), Some("10"));
 
     let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("aria-hidden").as_deref(),
+        Some("false")
+    );
     assert_eq!(tooltip.get_attribute("data-x").as_deref(), Some("5"));
     assert_eq!(tooltip.get_attribute("data-y").as_deref(), Some("10"));
     assert_eq!(
@@ -1166,6 +1175,11 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
     assert!(!chart.has_attribute("data-hover"));
     let hover = host.query_selector(".pine-chart-hover").unwrap().unwrap();
     assert_eq!(hover.get_attribute("visibility").as_deref(), Some("hidden"));
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("aria-hidden").as_deref(),
+        Some("true")
+    );
 
     host.remove();
 }

@@ -146,8 +146,8 @@
               :data-series="hover_series"></circle>
     </g>
   </svg>
-  <div pp-show="hover_visible"
-       class="pine-chart-tooltip"
+  <div class="pine-chart-tooltip"
+       :aria-hidden="hover_visible ? 'false' : 'true'"
        role="status"
        :aria-label="hover_aria_label"
        :style="hover_style"

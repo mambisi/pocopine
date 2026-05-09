@@ -71,8 +71,8 @@
             pp-text="center_label_text"></text>
     </g>
   </svg>
-  <div pp-show="hover_visible"
-       class="pine-chart-tooltip pine-chart-pie-tooltip"
+  <div class="pine-chart-tooltip pine-chart-pie-tooltip"
+       :aria-hidden="hover_visible ? 'false' : 'true'"
        role="status"
        :aria-label="hover_aria_label"
        :style="hover_style"

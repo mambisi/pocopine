@@ -112,8 +112,8 @@
       </template>
     </g>
   </svg>
-  <div pp-show="hover_visible"
-       class="pine-chart-tooltip pine-chart-bar-tooltip"
+  <div class="pine-chart-tooltip pine-chart-bar-tooltip"
+       :aria-hidden="hover_visible ? 'false' : 'true'"
        role="status"
        :aria-label="hover_aria_label"
        :style="hover_style"

@@ -434,6 +434,10 @@ use `fill="currentColor"`. Application CSS should own the final visual
 treatment:
 
 ```css
+.pine-chart-root {
+  position: relative;
+}
+
 .pine-line-chart {
   color: var(--series-accent);
 }
@@ -480,7 +484,15 @@ treatment:
 
 .pine-chart-tooltip {
   left: var(--pine-chart-tooltip-x);
+  opacity: 0;
   top: var(--pine-chart-tooltip-y);
+  transition: opacity 120ms ease;
+  visibility: hidden;
+}
+
+.pine-chart-root[data-hover] .pine-chart-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .pine-chart-tooltip[data-tooltip-x="left"] {
@@ -497,6 +509,19 @@ treatment:
 
 .pine-chart-pie-slice[data-hovered] {
   transform: scale(1.03);
+}
+
+.pine-chart-root[data-empty] .pine-chart-svg {
+  visibility: hidden;
+}
+
+.pine-chart-status-empty {
+  align-items: center;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  pointer-events: none;
+  position: absolute;
 }
 
 .pine-chart-bar[data-series="Organic"] {
