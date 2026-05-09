@@ -56,10 +56,29 @@ impl AuthSession {
         self.inner.borrow().epoch
     }
 
-    /// Replace the active principal. Bumps the epoch.
+    /// Replace the active principal. Bumps the epoch and (when
+    /// cross-tab sync is installed via
+    /// [`crate::AuthPluginBuilder::with_cross_tab_sync`]) broadcasts
+    /// the change so peer tabs can re-hydrate.
     pub fn set_principal(&self, principal: Principal) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.principal = principal;
+            inner.epoch = inner.epoch.saturating_add(1);
+        }
+        crate::cross_tab::broadcast_session_changed();
+    }
+
+    /// Bump the epoch without changing the principal. Use this when
+    /// some external signal (websocket message, cross-tab broadcast,
+    /// iframe communication) tells you the session state has shifted
+    /// but you don't yet have a fresh `Principal` to publish. The
+    /// bearer middleware's identity-change fence reads the epoch, so
+    /// a bump alone is enough to drop in-flight responses captured
+    /// under the previous identity. Does NOT re-broadcast — call this
+    /// from inbound handlers without triggering a feedback loop.
+    pub fn bump_epoch(&self) {
         let mut inner = self.inner.borrow_mut();
-        inner.principal = principal;
         inner.epoch = inner.epoch.saturating_add(1);
     }
 
@@ -168,5 +187,17 @@ mod tests {
         a.set_principal(Principal::from_user(AuthUser::new("u1")));
         assert_eq!(a.epoch(), b.epoch());
         assert_eq!(a.principal(), b.principal());
+    }
+
+    #[test]
+    fn bump_epoch_advances_without_changing_principal() {
+        let session = AuthSession::new();
+        let user = AuthUser::new("u1");
+        session.set_principal(Principal::from_user(user.clone()));
+        let before = session.epoch();
+        let principal_before = session.principal();
+        session.bump_epoch();
+        assert_eq!(session.epoch(), before + 1);
+        assert_eq!(session.principal(), principal_before);
     }
 }

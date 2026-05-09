@@ -30,6 +30,7 @@ use pocopine_core::{
 
 use crate::refresh::{set_refresh, TokenRefresh};
 use crate::session::{active_principal, AuthSession};
+use crate::storage::{install_storage, TokenStorage};
 
 /// Default query parameter name used for the post-login redirect
 /// intent. Configurable per-app via
@@ -62,6 +63,8 @@ pub struct AuthPluginBuilder {
     return_to_query_param: &'static str,
     install_bearer_middleware: bool,
     token_refresh: Option<Rc<dyn TokenRefresh>>,
+    token_storage: Option<Rc<dyn TokenStorage>>,
+    cross_tab_sync: bool,
 }
 
 impl Default for AuthPluginBuilder {
@@ -71,6 +74,8 @@ impl Default for AuthPluginBuilder {
             return_to_query_param: DEFAULT_RETURN_TO_PARAM,
             install_bearer_middleware: false,
             token_refresh: None,
+            token_storage: None,
+            cross_tab_sync: false,
         }
     }
 }
@@ -136,6 +141,58 @@ impl AuthPluginBuilder {
         self.token_refresh = Some(Rc::new(refresh));
         self
     }
+
+    /// Persist the bearer token through the supplied [`TokenStorage`]
+    /// implementation. Without this, the token slot is in-memory only
+    /// and a page reload signs the user out.
+    ///
+    /// At plugin install time the token slot is hydrated from the
+    /// storage's [`TokenStorage::load`] so a returning user picks up
+    /// where they left off. Subsequent [`crate::set_token`] /
+    /// [`crate::clear_token`] calls write through automatically.
+    ///
+    /// ```ignore
+    /// auth_plugin()
+    ///     .with_token_storage(
+    ///         pocopine_auth_client::storage::LocalStorage::new("auth_token"),
+    ///     )
+    /// ```
+    ///
+    /// **Security tradeoff.** Persisting access tokens in
+    /// JavaScript-readable storage means an XSS vulnerability can
+    /// steal them. For high-value applications, prefer an `httpOnly`
+    /// cookie issued by the server (the bearer middleware then doesn't
+    /// need a token slot at all). See [`crate::storage`] for the full
+    /// rundown.
+    pub fn with_token_storage<S: TokenStorage>(mut self, storage: S) -> Self {
+        self.token_storage = Some(Rc::new(storage));
+        self
+    }
+
+    /// Sync sign-in / sign-out across tabs of the same origin via a
+    /// `BroadcastChannel`. Off by default.
+    ///
+    /// When enabled, calls to [`AuthSession::set_principal`],
+    /// [`AuthSession::sign_in`], [`AuthSession::sign_out`] (and any
+    /// app code that goes through `set_principal`) post a message to
+    /// the channel. Other tabs of the same origin running this app
+    /// receive it and:
+    /// 1. Re-load the token from the configured [`TokenStorage`].
+    /// 2. Bump the local [`AuthSession`]'s epoch so the bearer
+    ///    middleware fences any in-flight responses captured under
+    ///    the previous identity.
+    ///
+    /// **Requires [`with_token_storage`](Self::with_token_storage)** for
+    /// the peer tab to read the new credential — otherwise the peer
+    /// just bumps its epoch with no way to learn the new token.
+    /// Combine the two for end-to-end coordination.
+    ///
+    /// See [`crate::cross_tab`] for the full description and security
+    /// considerations.
+    pub fn with_cross_tab_sync(mut self, enabled: bool) -> Self {
+        self.cross_tab_sync = enabled;
+        self
+    }
 }
 
 impl AppPlugin for AuthPluginBuilder {
@@ -144,6 +201,13 @@ impl AppPlugin for AuthPluginBuilder {
     }
 
     fn install(self, app: App) -> App {
+        // Storage first: hydrate the token slot before middleware
+        // runs so the very first outgoing request carries a persisted
+        // credential.
+        if let Some(storage) = self.token_storage {
+            install_storage(storage);
+            crate::hydrate_from_storage();
+        }
         if self.install_bearer_middleware {
             crate::install();
         }
@@ -152,6 +216,9 @@ impl AppPlugin for AuthPluginBuilder {
         }
 
         let session = AuthSession::new();
+        if self.cross_tab_sync {
+            crate::cross_tab::install(session.clone());
+        }
         let login_route = self.login_route;
         let param = self.return_to_query_param;
 
