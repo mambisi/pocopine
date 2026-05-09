@@ -95,6 +95,13 @@ impl AuthPluginBuilder {
     /// [`crate::install`] call. Off by default so apps that already
     /// install the middleware (or want to install a different one)
     /// don't double-register and trip the freeze contract.
+    ///
+    /// **Mutually exclusive with calling `pocopine_auth_client::install()`
+    /// directly.** Both call paths register a `BearerMiddleware` on
+    /// the same chain; the second call doesn't panic (the chain
+    /// isn't frozen yet at builder time) but the chain ends up with
+    /// two `BearerMiddleware` entries, each writing the
+    /// `Authorization` header in turn — wasted work. Pick one.
     pub fn with_bearer_middleware(mut self, install: bool) -> Self {
         self.install_bearer_middleware = install;
         self
@@ -150,22 +157,53 @@ fn build_return_to(ctx: &RouteRejectionContext<'_>) -> ReturnTo {
     // navigation URL (no scheme/host). Feed it through
     // [`ReturnTo::from_path`] so the path-only validation in
     // RFC-078 §5.10.2 runs: protocol-relative, javascript:, etc.
-    // are silently dropped to `ReturnTo::none`, and
-    // `append_to` becomes a no-op.
+    // are silently dropped to `ReturnTo::none`.
     if ctx.query.is_empty() {
-        ReturnTo::from_path(ctx.path)
-    } else {
-        let mut combined = ctx.path.to_string();
-        combined.push('?');
-        for (i, (k, v)) in ctx.query.iter().enumerate() {
-            if i > 0 {
-                combined.push('&');
-            }
-            combined.push_str(k);
-            combined.push('=');
-            combined.push_str(v);
+        return ReturnTo::from_path(ctx.path);
+    }
+
+    // The router decoded query params into a `HashMap<String,
+    // String>`, so we can't recover the original wire ordering or
+    // character-for-character representation. We MUST re-encode
+    // reserved characters when reconstructing the query string;
+    // a value that arrived as `q=a%26b` (percent-encoded `&`)
+    // decodes to `q=a&b` and would otherwise reconstruct as two
+    // params on the way out. We also sort keys so HashMap
+    // iteration order doesn't make the same input produce
+    // different return-to URLs.
+    let mut combined = ctx.path.to_string();
+    combined.push('?');
+    let mut params: Vec<(&String, &String)> = ctx.query.iter().collect();
+    params.sort_by(|a, b| a.0.cmp(b.0));
+    for (i, (k, v)) in params.iter().enumerate() {
+        if i > 0 {
+            combined.push('&');
         }
-        ReturnTo::from_path(&combined)
+        percent_encode_into(&mut combined, k);
+        combined.push('=');
+        percent_encode_into(&mut combined, v);
+    }
+    ReturnTo::from_path(&combined)
+}
+
+/// Percent-encode `s` into `out` per RFC 3986 "unreserved" set
+/// (`A-Z` / `a-z` / `0-9` / `-` / `.` / `_` / `~`). Any other byte
+/// becomes `%XX`. Conservative on purpose: covers the
+/// `application/x-www-form-urlencoded` reserved characters (`&`,
+/// `=`, `+`, `?`, `#`, …) plus the rest of the URI reserved set.
+fn percent_encode_into(out: &mut String, s: &str) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+        }
     }
 }
 
@@ -307,6 +345,93 @@ mod tests {
             }
             other => panic!("expected redirect, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unauthorized_redirect_re_encodes_reserved_chars_in_query() {
+        // Codex review MEDIUM: the router decodes query into a
+        // HashMap, so a value that arrived as `q=a%26b` becomes
+        // `q=a&b` — reconstructing without re-encoding would
+        // corrupt the return-intent into two params. We re-encode
+        // when reconstructing the intent's query, then `append_to`
+        // re-encodes again because the whole intent travels as the
+        // value of the `redirect=` query param. So `a&b` →
+        // (once) `a%26b` → (twice) `a%2526b` in the final URL.
+        let handler = UnauthorizedRedirect {
+            login_route: Some("/login".to_string()),
+            param: "redirect",
+        };
+        let path = "/search";
+        let params = HashMap::new();
+        let mut query = HashMap::new();
+        query.insert("q".to_string(), "a&b".to_string());
+        query.insert("k=v".to_string(), "x#y".to_string());
+        let ctx = RouteRejectionContext {
+            path,
+            params: &params,
+            query: &query,
+            matched_pattern: Some("/search"),
+        };
+        let action = handler
+            .handle(&ctx, &RouteRejection::Unauthorized)
+            .expect("redirect produced");
+        let target = match action {
+            RouteRejectionAction::Redirect(t) => t,
+            other => panic!("expected redirect, got {other:?}"),
+        };
+        let s = target.as_str();
+        // Double-encoded reserved characters: the intent string
+        // is `q=a%26b&k%3Dv=x%23y` after our re-encoding (one
+        // encode); `append_to` URI-encodes the whole string for
+        // safe use as a query value (twice). `%26` becomes
+        // `%2526`, `%3D` becomes `%253D`, `%23` becomes `%2523`.
+        assert!(
+            s.contains("a%2526b"),
+            "expected double-encoded ampersand (%2526) in {s}"
+        );
+        assert!(
+            s.contains("k%253Dv"),
+            "expected double-encoded equals (%253D) in {s}"
+        );
+        assert!(
+            s.contains("x%2523y"),
+            "expected double-encoded hash (%2523) in {s}"
+        );
+    }
+
+    #[test]
+    fn unauthorized_redirect_query_param_order_is_deterministic() {
+        // Two queries with the same content inserted in different
+        // orders must produce the same return-to URL. HashMap
+        // iteration is non-deterministic; we sort by key.
+        let handler = UnauthorizedRedirect {
+            login_route: Some("/login".to_string()),
+            param: "redirect",
+        };
+        let path = "/search";
+        let params = HashMap::new();
+
+        let mut q1 = HashMap::new();
+        q1.insert("a".to_string(), "1".to_string());
+        q1.insert("z".to_string(), "9".to_string());
+
+        let mut q2 = HashMap::new();
+        q2.insert("z".to_string(), "9".to_string());
+        q2.insert("a".to_string(), "1".to_string());
+
+        let mk = |q: &HashMap<String, String>| {
+            let ctx = RouteRejectionContext {
+                path,
+                params: &params,
+                query: q,
+                matched_pattern: Some("/search"),
+            };
+            match handler.handle(&ctx, &RouteRejection::Unauthorized).unwrap() {
+                RouteRejectionAction::Redirect(t) => t.as_str().to_string(),
+                _ => panic!(),
+            }
+        };
+        assert_eq!(mk(&q1), mk(&q2));
     }
 
     #[test]

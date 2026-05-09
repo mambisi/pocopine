@@ -288,6 +288,159 @@ async fn issued_token_verifies_through_paired_jwt_verifier() {
 }
 
 #[tokio::test]
+async fn custom_claims_round_trip_through_session_token() {
+    pocopine_server::__reset_for_test();
+    // The TestUser's `to_auth_user()` adds `email_verified` as a
+    // custom claim via `with_claim(...)`. After signup mints a JWT
+    // and the paired verifier extracts it, `email_verified` MUST be
+    // reachable via `principal.user().claim("email_verified")` —
+    // i.e. the routes flatten custom claims to top-level JWT, and
+    // the verifier puts them back into `AuthUser::claims`. Codex
+    // review HIGH: this used to break because the routes nested
+    // app claims under `"claims"` instead of flattening.
+    let creds = build_credentials();
+    let mut config = creds.verifier_config();
+    config.sources = vec![TokenSource::Bearer];
+    let verifier = JwtVerifier::custom(config).expect("build verifier");
+
+    let app = Server::new(axum::Router::new())
+        .plugin(creds)
+        .try_finalize()
+        .expect("server finalize");
+
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = body_to_json(resp.into_body()).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let user = verifier
+        .verify_token(&token)
+        .await
+        .expect("verifier accepts session token");
+
+    assert_eq!(
+        user.claim("email_verified").and_then(|v| v.as_bool()),
+        Some(false),
+        "email_verified custom claim must round-trip at top level; got user.claims = {:?}",
+        user.claims,
+    );
+}
+
+#[tokio::test]
+async fn verifier_config_default_excludes_cookie_source() {
+    // Codex review MEDIUM: cookie auth was on by default but the
+    // crate ships no cookie issuance / clearing / CSRF — apps with
+    // an XSS or subdomain-takeover surface could inject a cookie
+    // without ever signing in. Default is bearer-only; cookie
+    // ships when the cookie lifecycle ships.
+    let creds = build_credentials();
+    let cfg = creds.verifier_config();
+    assert_eq!(
+        cfg.sources.len(),
+        1,
+        "default verifier config must have exactly one source (Codex MEDIUM); got {:?}",
+        cfg.sources
+    );
+    assert!(
+        matches!(cfg.sources[0], TokenSource::Bearer),
+        "default verifier config must be Bearer-only (Codex MEDIUM); cookie auth ships \
+         with cookie lifecycle. got: {:?}",
+        cfg.sources[0]
+    );
+}
+
+#[tokio::test]
+async fn signup_response_body_does_not_contain_password_hash() {
+    pocopine_server::__reset_for_test();
+    let app = router();
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "correcthorse",
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = body_to_json(resp.into_body()).await;
+    // Strict assertion: every leaf in the response body is checked
+    // against argon2 PHC markers + the literal `password_hash` key
+    // anywhere in the JSON tree. Catches both direct serialization
+    // and accidental nesting.
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(
+        !raw.contains("password_hash"),
+        "response body must not contain `password_hash`: {raw}"
+    );
+    assert!(
+        !raw.contains("$argon2"),
+        "response body must not contain an argon2 PHC string: {raw}"
+    );
+}
+
+#[tokio::test]
+async fn signup_with_custom_password_validator_rejects_weak() {
+    use pocopine_auth_credentials::Credentials;
+    pocopine_server::__reset_for_test();
+    // Custom validator: must contain a digit. Mirrors what an
+    // app would write when defaulting on top of the framework's
+    // length-only check.
+    let creds = Credentials::new(
+        fixed_secret(),
+        TestUserStore::default(),
+        TestTokenStore::default(),
+    )
+    .with_password_validator(|p| {
+        if !p.chars().any(|c| c.is_ascii_digit()) {
+            return Err("must_contain_digit");
+        }
+        Ok(())
+    });
+    let app = Server::new(axum::Router::new())
+        .plugin(creds)
+        .try_finalize()
+        .unwrap();
+
+    // No digit → rejected.
+    let resp = app
+        .clone()
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "alphabetic",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_to_json(resp.into_body()).await;
+    assert_eq!(body["error"], "weak_password");
+
+    // Same length WITH a digit → accepted.
+    let resp = app
+        .oneshot(post(
+            "/_pocopine/auth/signup",
+            serde_json::json!({
+                "email": "alice@example.com",
+                "password": "alphabetic1",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn login_against_passwordless_user_returns_invalid_credentials() {
     pocopine_server::__reset_for_test();
     // Multi-credential model: a user who signed up via OAuth /

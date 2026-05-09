@@ -117,6 +117,17 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
     /// `KeySource::Hmac` is built from the same secret used for
     /// signing — the issuer / audience / algorithm / Bearer source
     /// stay aligned by construction.
+    ///
+    /// **Bearer source only.** This PR ships only the bearer-token
+    /// lifecycle (signup/login return `{token, user}`; logout is a
+    /// stateless no-op). Adding `TokenSource::Cookie` here would
+    /// widen the verifier's accept surface to cookies the credentials
+    /// crate doesn't issue, lacks `Set-Cookie` / `SameSite` /
+    /// logout-clear / CSRF handling for, and never tests against.
+    /// Apps that want a session-cookie path should opt in
+    /// explicitly by augmenting the returned config (and shipping
+    /// the matching cookie-issuance / clearing / CSRF middleware
+    /// themselves) until the cookie lifecycle PR lands.
     pub fn verifier_config(&self) -> JwtConfig {
         let mut claim_map = ClaimMap::oidc();
         claim_map.roles = Some(pocopine_auth_jwt::ClaimPath::from_str("roles"));
@@ -129,10 +140,7 @@ impl<S: UserStore, T: TokenStore> Credentials<S, T> {
             audience: Some(vec![self.audience.clone()]),
             algorithms: vec![Algorithm::Hs256],
             leeway: Duration::from_secs(60),
-            sources: vec![
-                TokenSource::Bearer,
-                TokenSource::Cookie(self.cookie_name.clone()),
-            ],
+            sources: vec![TokenSource::Bearer],
             revocation: None,
             claim_map,
             required_scopes: vec![],
@@ -189,17 +197,27 @@ impl<S: UserStore, T: TokenStore> ServerPlugin for Credentials<S, T> {
         // straightforward path. The dummy uses the configured params
         // so the timing of the constant-time-login negative branch
         // matches a wrong-password hit on a real user.
-        let dummy_hash = match hash_password_sync("__pocopine_dummy_password__", &self.argon) {
-            Ok(h) => h,
-            Err(_) => {
-                tracing::error!(
-                    target: "pocopine.log",
-                    "pocopine-auth-credentials: failed to pre-bake dummy argon2 hash; \
-                     constant-time login path will be unavailable"
-                );
-                String::new()
-            }
-        };
+        //
+        // Cost note: ~200-300ms one-shot CPU at OWASP defaults
+        // (m=64MiB, t=3, p=4). It blocks the runtime worker thread
+        // briefly at startup; not a hot-path concern.
+        //
+        // Failure is fatal. With an empty / failed dummy hash, the
+        // login route's not-found / no-password-set branch would
+        // fall through to `verify_password(submitted, "")` and
+        // return `500 password_hashing_error` — breaking the
+        // constant-time-login property AND leaking the
+        // unknown-email branch via timing. We refuse to mount with
+        // a broken auth surface; the operator gets a panic at boot
+        // they can act on rather than a silent runtime regression.
+        let dummy_hash = hash_password_sync("__pocopine_dummy_password__", &self.argon)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "pocopine-auth-credentials: failed to pre-bake dummy argon2 hash \
+                     during ServerPlugin install: {err}. Configured Argon2Params must \
+                     support hashing — check Argon2Params::validate()."
+                )
+            });
 
         let issuer = JwtIssuer::hs256(
             self.secret.clone(),
