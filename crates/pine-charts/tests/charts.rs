@@ -1867,6 +1867,7 @@ async fn stacked_bar_chart_accumulates_segments() {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <button class="add-paid" @click="add_paid">Add paid</button>
   <button class="remove-referral" @click="remove_referral">Remove referral</button>
   <pine-pie-chart class="share-chart"
                   label="Share"
@@ -1905,6 +1906,12 @@ impl Default for PieChartFixture {
 
 #[handlers]
 impl PieChartFixture {
+    pub fn add_paid(&mut self) {
+        if !self.data.iter().any(|slice| slice.label == "Paid") {
+            self.data.push(ChartPieSlice::new("Paid", 2.0));
+        }
+    }
+
     pub fn remove_referral(&mut self) {
         if let Some(slice) = self.data.get_mut(1) {
             slice.visible = false;
@@ -2015,6 +2022,77 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 }
 
 #[wasm_bindgen_test]
+async fn pie_chart_animates_added_slice_as_segment_morph() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    let initial_slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
+    assert_eq!(initial_slices.length(), 2);
+    let organic = initial_slices
+        .get(0)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    let organic_animation = organic.query_selector("animate").unwrap().unwrap();
+    assert_eq!(
+        organic_animation.get_attribute("dur").as_deref(),
+        Some("0ms")
+    );
+
+    host.query_selector("button.add-paid")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
+    assert_eq!(slices.length(), 3);
+    let paid = slices.get(2).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(paid.get_attribute("data-label").as_deref(), Some("Paid"));
+    assert_eq!(paid.get_attribute("data-entering").as_deref(), Some("true"));
+    let paid_animation = paid.query_selector("animate").unwrap().unwrap();
+    assert_eq!(
+        paid_animation.get_attribute("attributeName").as_deref(),
+        Some("d")
+    );
+    assert_eq!(paid_animation.get_attribute("dur").as_deref(), Some("40ms"));
+    assert_eq!(
+        paid_animation.get_attribute("begin").as_deref(),
+        Some("56ms")
+    );
+    assert_ne!(
+        paid_animation.get_attribute("from"),
+        paid_animation.get_attribute("to")
+    );
+    assert_eq!(paid_animation.get_attribute("to"), paid.get_attribute("d"));
+
+    sleep_ms(160).await;
+    settle().await;
+
+    let settled_paid = host
+        .query_selector(".pine-chart-pie-slice[data-label='Paid']")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        settled_paid.get_attribute("data-entering").as_deref(),
+        Some("false")
+    );
+    let settled_animation = settled_paid.query_selector("animate").unwrap().unwrap();
+    assert_eq!(
+        settled_animation.get_attribute("dur").as_deref(),
+        Some("0ms")
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
 async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
     let host = mount_fixture::<PieChartFixture>();
     settle().await;
@@ -2068,6 +2146,23 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
     assert_eq!(
         referral.get_attribute("data-leaving").as_deref(),
         Some("true")
+    );
+    let referral_animation = referral.query_selector("animate").unwrap().unwrap();
+    assert_eq!(
+        referral_animation.get_attribute("attributeName").as_deref(),
+        Some("d")
+    );
+    assert_eq!(
+        referral_animation.get_attribute("dur").as_deref(),
+        Some("40ms")
+    );
+    assert_ne!(
+        referral_animation.get_attribute("from"),
+        referral_animation.get_attribute("to")
+    );
+    assert_eq!(
+        referral_animation.get_attribute("from"),
+        referral.get_attribute("d")
     );
 
     sleep_ms(120).await;

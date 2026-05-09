@@ -5,8 +5,7 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::{
-    animation_style, exit_animation_delay_ms, DEFAULT_ANIMATION_DURATION_MS,
-    DEFAULT_ANIMATION_EASING,
+    animation_duration_ms, animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING,
 };
 use crate::cartesian::{
     pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
@@ -19,6 +18,8 @@ use crate::legend::LegendItem;
 use crate::svg::format_tick;
 
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
+const PIE_SLICE_DELAY_MS: u32 = 28;
+const PIE_ANIMATION_BUFFER_MS: u32 = 40;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartPieSlice {
@@ -130,6 +131,11 @@ impl PieChartGeometry {
                 let label = slice.label.clone();
                 let aria_label = format!("{label}: {value_label} ({percentage_label})");
                 let d = pie_slice_path(center, outer_radius, inner_radius, slice_start, slice_end)?;
+                let enter_d =
+                    collapsed_pie_slice_path(center, outer_radius, inner_radius, slice_start)?;
+                let exit_d =
+                    collapsed_pie_slice_path(center, outer_radius, inner_radius, slice_end)?;
+                let delay_ms = slice_delay_ms(index);
                 let label_point = polar_point(
                     center,
                     label_radius(outer_radius, inner_radius),
@@ -143,15 +149,19 @@ impl PieChartGeometry {
                     percentage,
                     percentage_label,
                     aria_label,
-                    d,
+                    d: d.clone(),
                     start_angle: slice_start,
                     end_angle: slice_end,
                     label_x: label_point.x,
                     label_y: label_point.y,
-                    animation_style: format!(
-                        "--pine-chart-slice-delay: {}ms;",
-                        format_tick(index as f64 * 28.0)
-                    ),
+                    animation_style: format!("--pine-chart-slice-delay: {delay_ms}ms;"),
+                    morph_from_d: d.clone(),
+                    morph_to_d: d.clone(),
+                    morph_duration: "0ms".into(),
+                    morph_begin: "0ms".into(),
+                    enter_d,
+                    exit_d,
+                    entering: false,
                     leaving: false,
                 })
             })
@@ -202,6 +212,13 @@ pub struct SvgPieSlice {
     pub label_x: f64,
     pub label_y: f64,
     pub animation_style: String,
+    pub morph_from_d: String,
+    pub morph_to_d: String,
+    pub morph_duration: String,
+    pub morph_begin: String,
+    pub enter_d: String,
+    pub exit_d: String,
+    pub entering: bool,
     pub leaving: bool,
 }
 
@@ -299,7 +316,7 @@ pub struct PinePieChart {
     #[prop]
     pub animation_easing: String,
     pub animation_style: String,
-    pub exit_generation: u32,
+    pub animation_generation: u32,
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
@@ -358,7 +375,7 @@ impl Default for PinePieChart {
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
             ),
-            exit_generation: 0,
+            animation_generation: 0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
@@ -543,8 +560,17 @@ impl PinePieChart {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 let mut slices = geometry.slices;
-                if retain_leaving && self.merge_leaving_slices(&mut slices) {
-                    self.schedule_leaving_cleanup();
+                if retain_leaving {
+                    let mut needs_animation_cleanup = false;
+                    if self.mark_entering_slices(&mut slices) {
+                        needs_animation_cleanup = true;
+                    }
+                    if self.merge_leaving_slices(&mut slices) {
+                        needs_animation_cleanup = true;
+                    }
+                    if needs_animation_cleanup {
+                        self.schedule_slice_animation_cleanup(slices.len());
+                    }
                 }
                 self.slices = slices;
                 self.legend_items = geometry.legend_items;
@@ -562,6 +588,7 @@ impl PinePieChart {
             Err(ChartError::EmptySeries) => {
                 if retain_leaving && !self.slices.is_empty() {
                     self.slices.iter_mut().for_each(|slice| {
+                        configure_leaving_slice(slice, self.animation_duration);
                         slice.leaving = true;
                     });
                     self.legend_items = pie_legend_items(&self.data);
@@ -570,7 +597,7 @@ impl PinePieChart {
                     self.error.clear();
                     self.state_fields()
                         .apply(crate::cartesian::CartesianChartState::Ready);
-                    self.schedule_leaving_cleanup();
+                    self.schedule_slice_animation_cleanup(self.slices.len());
                     return;
                 }
                 self.clear_geometry();
@@ -591,6 +618,28 @@ impl PinePieChart {
         }
     }
 
+    fn mark_entering_slices(&self, next: &mut [SvgPieSlice]) -> bool {
+        let has_previous = self.slices.iter().any(|slice| !slice.leaving);
+        if !has_previous {
+            return false;
+        }
+
+        let mut added = false;
+        for slice in next {
+            if self
+                .slices
+                .iter()
+                .any(|previous| !previous.leaving && previous.key == slice.key)
+            {
+                configure_static_slice(slice);
+                continue;
+            }
+            configure_entering_slice(slice, self.animation_duration);
+            added = true;
+        }
+        added
+    }
+
     fn merge_leaving_slices(&self, next: &mut Vec<SvgPieSlice>) -> bool {
         let mut added = false;
         for previous in &self.slices {
@@ -598,6 +647,8 @@ impl PinePieChart {
                 continue;
             }
             let mut leaving = previous.clone();
+            configure_leaving_slice(&mut leaving, self.animation_duration);
+            leaving.entering = false;
             leaving.leaving = true;
             next.push(leaving);
             added = true;
@@ -605,21 +656,25 @@ impl PinePieChart {
         added
     }
 
-    fn schedule_leaving_cleanup(&mut self) {
-        self.exit_generation = self.exit_generation.wrapping_add(1);
-        let generation = self.exit_generation;
-        let delay = exit_animation_delay_ms(self.animation_duration);
+    fn schedule_slice_animation_cleanup(&mut self, slice_count: usize) {
+        self.animation_generation = self.animation_generation.wrapping_add(1);
+        let generation = self.animation_generation;
+        let delay = pie_animation_cleanup_delay_ms(self.animation_duration, slice_count);
         let me = pocopine::this::<Self>();
         pocopine::timers::after_scoped(delay, move || {
-            me.update(|chart| chart.prune_leaving_slices(generation));
+            me.update(|chart| chart.finish_slice_animations(generation));
         });
     }
 
-    fn prune_leaving_slices(&mut self, generation: u32) {
-        if generation != self.exit_generation {
+    fn finish_slice_animations(&mut self, generation: u32) {
+        if generation != self.animation_generation {
             return;
         }
         self.slices.retain(|slice| !slice.leaving);
+        self.slices.iter_mut().for_each(|slice| {
+            slice.entering = false;
+            configure_static_slice(slice);
+        });
         if self.slices.is_empty() {
             self.clear_geometry();
             self.state_fields()
@@ -910,6 +965,65 @@ fn pie_slice_path(
     )
     .expect("writing to string should not fail");
     Ok(path)
+}
+
+fn collapsed_pie_slice_path(
+    center: Point,
+    outer_radius: f64,
+    inner_radius: f64,
+    angle: f64,
+) -> ChartResult<String> {
+    pie_slice_path(center, outer_radius, inner_radius, angle, angle)
+}
+
+fn configure_static_slice(slice: &mut SvgPieSlice) {
+    slice.morph_from_d = slice.d.clone();
+    slice.morph_to_d = slice.d.clone();
+    slice.morph_duration = "0ms".into();
+    slice.morph_begin = "0ms".into();
+}
+
+fn configure_entering_slice(slice: &mut SvgPieSlice, duration_ms: f64) {
+    slice.entering = true;
+    slice.leaving = false;
+    slice.morph_from_d = slice.enter_d.clone();
+    slice.morph_to_d = slice.d.clone();
+    slice.morph_duration = animation_duration_attr(duration_ms);
+    slice.morph_begin = slice_begin_attr(slice);
+}
+
+fn configure_leaving_slice(slice: &mut SvgPieSlice, duration_ms: f64) {
+    slice.entering = false;
+    slice.morph_from_d = slice.d.clone();
+    slice.morph_to_d = slice.exit_d.clone();
+    slice.morph_duration = animation_duration_attr(duration_ms);
+    slice.morph_begin = "0ms".into();
+}
+
+fn animation_duration_attr(duration_ms: f64) -> String {
+    format!("{}ms", animation_duration_ms(duration_ms))
+}
+
+fn slice_begin_attr(slice: &SvgPieSlice) -> String {
+    format!("{}ms", slice_animation_delay_ms(&slice.animation_style))
+}
+
+fn slice_animation_delay_ms(animation_style: &str) -> u32 {
+    animation_style
+        .trim()
+        .strip_prefix("--pine-chart-slice-delay:")
+        .and_then(|value| value.trim().strip_suffix("ms;"))
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn slice_delay_ms(index: usize) -> u32 {
+    index as u32 * PIE_SLICE_DELAY_MS
+}
+
+fn pie_animation_cleanup_delay_ms(duration_ms: f64, slice_count: usize) -> u32 {
+    let max_delay = slice_count.saturating_sub(1) as u32 * PIE_SLICE_DELAY_MS;
+    animation_duration_ms(duration_ms) + max_delay + PIE_ANIMATION_BUFFER_MS
 }
 
 fn visible_arc_end(start_angle: f64, end_angle: f64) -> f64 {
