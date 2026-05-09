@@ -9,8 +9,9 @@ sync or collaboration:
 - offline sync will own local persistence, conflict handling, and CDC,
 - collaboration will own CRDT document updates.
 
-The current transport is SSE. The current browser API is
-`LiveRefresh::scoped()`. The runnable source of truth is
+The current transport is SSE. The recommended browser API is
+`LiveQuery::scoped(...)`, which stores loading/error/data state in a
+component-owned `QueryState<T>`. The runnable source of truth is
 [`examples/live`](../examples/live/), and the CI regression test is
 [`examples/live/tests/live_refresh.rs`](../examples/live/tests/live_refresh.rs).
 
@@ -24,7 +25,7 @@ A live app needs four pieces:
 1. Stable topic names for the data you expose.
 2. A host-side event backend and `LiveHub`.
 3. Server mutations that publish invalidations after they commit.
-4. Browser components that subscribe and refetch.
+4. Browser components that use `LiveQuery` to subscribe and refetch.
 
 The example below tracks a posts list. A post mutation publishes both a
 collection invalidation and a query-tag invalidation:
@@ -231,77 +232,106 @@ The server function body does not need `#[cfg(pocopine_host)]`; the
 `#[pocopine::server]` macro already compiles the original body only for
 the host target and generates a browser fetch stub for wasm.
 
-## 6. Subscribe In The Component
+## 6. Query In The Component
 
-Open the stream in `on_mount`. Use `LiveRefresh::scoped()` so the stream
-closes when the component unmounts.
+Store server-function data in a `QueryState<T>` field. The field is
+serializable, so templates can read `data`, `loading`, `refreshing`,
+`stale`, `error`, and counters directly.
 
 ```rust
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(style = "live_board.css")]
+pub struct LiveBoard {
+    pub posts: pocopine::live::QueryState<Vec<Post>>,
+    pub title: String,
+    pub body: String,
+    pub saving: bool,
+    pub status: String,
+}
+
 #[handlers]
 impl LiveBoard {
     pub fn on_mount(&mut self) {
-        self.status = "live stream opening".to_string();
-        self.reload();
-
-        #[cfg(pocopine_browser)]
+        self.status = "live query opening".to_string();
+        if let Err(err) = pocopine::live::LiveQuery::scoped(
+            |s: &mut Self| &mut s.posts,
+            || async { list_posts().await },
+        )
+        .query_tag(POSTS_LIST_QUERY_TAG)
+        .open()
         {
-            let handle = this::<Self>();
-            let refresh_handle = handle.clone();
-            let gap_handle = handle.clone();
-            let error_handle = handle;
-
-            if let Err(err) = pocopine::live::LiveRefresh::scoped()
-                .query_tag(POSTS_LIST_QUERY_TAG, move |_event| {
-                    refresh_handle.update(|s| {
-                        s.status = "live event received".to_string();
-                        s.reload();
-                    });
-                })
-                .on_gap(move |_event| {
-                    gap_handle.update(|s| {
-                        s.status = "live cursor gap; refetching".to_string();
-                    });
-                })
-                .on_error(move |event| {
-                    error_handle.update(|s| {
-                        s.status = "live stream error".to_string();
-                        s.error = format!("{:?}", event.live_event);
-                    });
-                })
-                .open()
-            {
-                self.status = "live stream failed".to_string();
-                self.error = err.to_string();
-            }
+            self.status = "live query failed".to_string();
+            self.posts.set_error(err.to_string());
         }
     }
 }
 ```
 
-The `reload` method should use the same server function you already use
-for first load:
+`LiveQuery::scoped(...)` does three things:
+
+- it fetches once on mount,
+- it subscribes to the query tag and closes the SSE stream on unmount,
+- it refetches when the server publishes a matching live invalidation or
+  reports a replay gap.
+
+Manual refresh uses the same field selector and server function:
 
 ```rust
 pub fn reload(&mut self) {
-    self.loading = true;
-    dispatch!(list_posts().await, |s, result| {
-        s.loading = false;
-        match result {
-            Ok(posts) => {
-                s.posts = posts;
-                s.error.clear();
-            }
-            Err(err) => {
-                s.status = "refresh failed".to_string();
-                s.error = err.to_string();
-            }
-        }
-    },);
+    self.status = "refreshing".to_string();
+    if let Err(err) = pocopine::live::LiveQuery::refresh_scoped(
+        |s: &mut Self| &mut s.posts,
+        || async { list_posts().await },
+    ) {
+        self.status = "refresh failed".to_string();
+        self.posts.set_error(err.to_string());
+    }
 }
 ```
 
 If a component cares about every change to a collection, subscribe with
-`.collection(POSTS_COLLECTION, ...)` instead of `.query_tag(...)`.
+`.collection(POSTS_COLLECTION)` instead of `.query_tag(...)`.
+
+Templates read the query field:
+
+```html
+<p pp-show="posts.error" class="error">
+  <span pp-text="posts.error"></span>
+</p>
+<p pp-show="posts.loading">Loading posts.</p>
+<p pp-show="posts.refreshing">Refreshing posts.</p>
+
+<ol pp-show="posts.data.length">
+  <template pp-for="post in posts.data" pp-key="post.id">
+    <li>
+      <h2 pp-text="post.title"></h2>
+      <p pp-text="post.body"></p>
+    </li>
+  </template>
+</ol>
+```
+
+`QueryState<T>` preserves existing data on refresh errors. A stale async
+response cannot overwrite a newer request, so rapid manual refreshes and
+live invalidations are safe.
+
+## Advanced: Manual Streams
+
+Use `LiveRefresh::scoped()` directly only when a component needs custom
+event handling instead of a query refetch:
+
+```rust
+let handle = this::<LiveBoard>();
+pocopine::live::LiveRefresh::scoped()
+    .query_tag(POSTS_LIST_QUERY_TAG, move |_event| {
+        handle.update(|s| {
+            s.status = "custom live event".to_string();
+        });
+    })
+    .open()?;
+```
+
+Most app data should use `LiveQuery`; manual streams are the escape hatch.
 
 ## 7. Run The Example
 
@@ -332,12 +362,11 @@ change.
 ## Failure Model
 
 - SSE delivery is at-least-once. Refresh callbacks must tolerate
-  duplicate events.
+  duplicate events. `LiveQuery` handles this by refetching idempotently.
 - A `gap` means the backend could not replay enough retained history.
-  Pocopine invokes registered refresh callbacks so the component refetches
-  from scratch.
-- An `error` goes to `on_error` callbacks and does not automatically
-  refetch data.
+  `LiveQuery` refetches from scratch.
+- A stream `error` is recorded on the query state and does not erase the
+  last successful data.
 - Topic authorization is server-side. `LiveHub` denies all topics until
   the app installs a topic policy or explicit allowlist.
 - Audience fields are descriptive metadata today. Do not rely on them for

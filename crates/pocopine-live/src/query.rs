@@ -168,8 +168,11 @@ impl<T> QueryState<T> {
 }
 
 /// Scope-bound browser query runner for server-function backed data.
-pub struct LiveQuery<C = (), T = (), S = (), F = ()> {
-    selector: S,
+pub type QuerySelector<C, T> = for<'a> fn(&'a mut C) -> &'a mut QueryState<T>;
+
+/// Scope-bound browser query runner for server-function backed data.
+pub struct LiveQuery<C = (), T = (), F = ()> {
+    selector: QuerySelector<C, T>,
     fetch: F,
     endpoint: Option<String>,
     collections: Vec<String>,
@@ -180,8 +183,8 @@ pub struct LiveQuery<C = (), T = (), S = (), F = ()> {
     _marker: PhantomData<fn(C) -> T>,
 }
 
-impl LiveQuery<(), (), (), ()> {
-    pub fn scoped<C, T, S, F>(selector: S, fetch: F) -> LiveQuery<C, T, S, F> {
+impl LiveQuery<(), (), ()> {
+    pub fn scoped<C, T, F>(selector: QuerySelector<C, T>, fetch: F) -> LiveQuery<C, T, F> {
         LiveQuery {
             selector,
             fetch,
@@ -196,32 +199,30 @@ impl LiveQuery<(), (), (), ()> {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn refresh_scoped<C, T, S, F, Fut, E>(selector: S, fetch: F) -> Result<(), LiveClientError>
+    pub fn refresh_scoped<C, T, F, Fut, E>(
+        selector: QuerySelector<C, T>,
+        fetch: F,
+    ) -> Result<(), LiveClientError>
     where
         C: 'static,
         T: 'static,
-        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
         F: Fn() -> Fut + 'static,
         Fut: Future<Output = Result<T, E>> + 'static,
         E: ToString + 'static,
     {
         let handle = current_component_handle::<C>()?;
-        start_query(
-            handle,
-            Rc::new(selector),
-            Rc::new(fetch),
-            QueryReason::Manual,
-            false,
-        );
+        start_query(handle, selector, Rc::new(fetch), QueryReason::Manual, false);
         Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn refresh_scoped<C, T, S, F, Fut, E>(selector: S, fetch: F) -> Result<(), LiveClientError>
+    pub fn refresh_scoped<C, T, F, Fut, E>(
+        selector: QuerySelector<C, T>,
+        fetch: F,
+    ) -> Result<(), LiveClientError>
     where
         C: 'static,
         T: 'static,
-        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
         F: Fn() -> Fut + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + 'static,
         E: ToString + 'static,
@@ -231,7 +232,7 @@ impl LiveQuery<(), (), (), ()> {
     }
 }
 
-impl<C, T, S, F> LiveQuery<C, T, S, F> {
+impl<C, T, F> LiveQuery<C, T, F> {
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
@@ -267,19 +268,18 @@ impl<C, T, S, F> LiveQuery<C, T, S, F> {
     where
         C: 'static,
         T: 'static,
-        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
         F: Fn() -> Fut + 'static,
         Fut: Future<Output = Result<T, E>> + 'static,
         E: ToString + 'static,
     {
         let handle = current_component_handle::<C>()?;
-        let selector = Rc::new(self.selector);
+        let selector = self.selector;
         let fetch = Rc::new(self.fetch);
 
         if self.refetch_on_open {
             start_query(
                 handle.clone(),
-                selector.clone(),
+                selector,
                 fetch.clone(),
                 QueryReason::Initial,
                 false,
@@ -310,17 +310,11 @@ impl<C, T, S, F> LiveQuery<C, T, S, F> {
         client.connect_scoped(move |event| {
             match live_query_action(&event, &collections, &query_tags) {
                 LiveQueryAction::Refresh(reason) => {
-                    start_query(
-                        handle.clone(),
-                        selector.clone(),
-                        fetch.clone(),
-                        reason,
-                        true,
-                    );
+                    start_query(handle.clone(), selector, fetch.clone(), reason, true);
                 }
                 LiveQueryAction::Error(error) => {
                     handle.update(|state| {
-                        (selector)(state).record_stream_error(error);
+                        selector(state).record_stream_error(error);
                     });
                 }
                 LiveQueryAction::Ignore => {}
@@ -333,7 +327,6 @@ impl<C, T, S, F> LiveQuery<C, T, S, F> {
     where
         C: 'static,
         T: 'static,
-        S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
         F: Fn() -> Fut + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + 'static,
         E: ToString + 'static,
@@ -422,22 +415,21 @@ fn current_component_handle<C: 'static>() -> Result<Handle<C>, LiveClientError> 
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start_query<C, T, S, F, Fut, E>(
+fn start_query<C, T, F, Fut, E>(
     handle: Handle<C>,
-    selector: Rc<S>,
+    selector: QuerySelector<C, T>,
     fetch: Rc<F>,
     reason: QueryReason,
     live_event: bool,
 ) where
     C: 'static,
     T: 'static,
-    S: for<'a> Fn(&'a mut C) -> &'a mut QueryState<T> + 'static,
     F: Fn() -> Fut + 'static,
     Fut: Future<Output = Result<T, E>> + 'static,
     E: ToString + 'static,
 {
     let request = handle.update(|state| {
-        let query = (selector)(state);
+        let query = selector(state);
         if live_event {
             query.begin_live_refresh(reason)
         } else {
@@ -452,7 +444,7 @@ fn start_query<C, T, S, F, Fut, E>(
         }
 
         handle.update(|state| {
-            let query = (selector)(state);
+            let query = selector(state);
             match result {
                 Ok(data) => {
                     query.finish_success(request, data);
@@ -481,6 +473,13 @@ mod tests {
         assert_eq!(state.version, 0);
         assert_eq!(state.refresh_count, 0);
         assert_eq!(state.live_event_count, 0);
+    }
+
+    #[test]
+    fn query_reason_serializes_as_snake_case_string() {
+        let value = serde_json::to_value(QueryReason::StreamError).unwrap();
+
+        assert_eq!(value, serde_json::json!("stream_error"));
     }
 
     #[test]
