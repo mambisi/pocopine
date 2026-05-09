@@ -244,10 +244,6 @@
       transform-origin: center bottom;
     }
 
-    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice:not(.pine-chart-pie-hover-slice) {
-      animation: pine-chart-pie-sweep var(--pine-chart-animation-duration) var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms) backwards;
-    }
-
     .pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"],
     .pine-chart-root[data-animate="true"] .pine-chart-marker[data-leaving="true"],
     .pine-chart-root[data-animate="true"] .pine-chart-point[data-leaving="true"] {
@@ -262,7 +258,6 @@
     }
 
     .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
-      animation: pine-chart-pie-consume-out var(--pine-chart-animation-duration) var(--pine-chart-animation-easing) forwards;
       pointer-events: none;
     }
 
@@ -295,18 +290,6 @@
       from {
         opacity: 0;
         transform: scaleY(0);
-      }
-    }
-
-    @keyframes pine-chart-pie-sweep {
-      from {
-        transform: rotate(-18deg) scale(0.01);
-      }
-    }
-
-    @keyframes pine-chart-pie-consume-out {
-      to {
-        transform: rotate(18deg) scale(0.01);
       }
     }
 

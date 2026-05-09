@@ -40,9 +40,17 @@
               :data-hovered="slice.key == hover_key"
               :data-focused="slice.key == focused_key"
               :data-selected="slice.key == selected_key"
+              :data-entering="slice.entering ? 'true' : 'false'"
               :data-leaving="slice.leaving ? 'true' : 'false'"
               :style="slice.animation_style"
-              @click.stop="select_slice(slice.key)"></path>
+              @click.stop="select_slice(slice.key)">
+          <animate attributeName="d"
+                   :from="slice.morph_from_d"
+                   :to="slice.morph_to_d"
+                   :dur="slice.morph_duration"
+                   :begin="slice.morph_begin"
+                   fill="freeze"></animate>
+        </path>
       </template>
     </g>
     <g pp-show="hover_visible"

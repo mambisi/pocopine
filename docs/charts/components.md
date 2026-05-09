@@ -440,6 +440,7 @@ The component emits stable hooks:
 - `data-hovered`
 - `data-focused`
 - `data-selected`
+- `data-entering="true|false"`
 - `data-leaving="true|false"`
 - `data-active`
 - `data-empty`
@@ -450,10 +451,10 @@ The component emits stable hooks:
 
 The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
-treatment. The example below animates keyed marks on entry: newly added lines
-draw in, bars grow from the baseline, and pie/donut slices use a clockwise
-sweep instead of a fade. Leaving area series and pie/donut slices use the same
-hooks in reverse.
+treatment. Pie/donut slices animate their SVG path from a collapsed wedge to
+the final slice, so adding a slice reveals the new segment itself rather than
+scaling the whole chart from the center. Leaving area series and pie/donut
+slices use the same hooks in reverse.
 
 ```css
 .pine-chart-root {
@@ -513,14 +514,6 @@ hooks in reverse.
   transform-origin: center bottom;
 }
 
-.pine-chart-root[data-animate="true"] .pine-chart-pie-slice {
-  animation: chart-pie-sweep var(--pine-chart-animation-duration)
-    var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms)
-    backwards;
-  transform-box: view-box;
-  transform-origin: center;
-}
-
 .pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"] {
   animation: chart-fade-out var(--pine-chart-animation-duration)
     var(--pine-chart-animation-easing) forwards;
@@ -534,8 +527,6 @@ hooks in reverse.
 }
 
 .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
-  animation: chart-pie-consume-out var(--pine-chart-animation-duration)
-    var(--pine-chart-animation-easing) forwards;
   pointer-events: none;
 }
 
@@ -562,18 +553,6 @@ hooks in reverse.
 @keyframes chart-fade-out {
   to {
     opacity: 0;
-  }
-}
-
-@keyframes chart-pie-sweep {
-  from {
-    transform: rotate(-18deg) scale(0.01);
-  }
-}
-
-@keyframes chart-pie-consume-out {
-  to {
-    transform: rotate(18deg) scale(0.01);
   }
 }
 
