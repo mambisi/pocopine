@@ -1,7 +1,7 @@
 # Wasm-side auth — `pocopine-auth-client`
 
 The wasm-side companion to the credentials core / Firebase preset /
-Clerk preset / etc. Four surfaces:
+Clerk preset / etc. Seven surfaces:
 
 - **Token slot.** `set_token` / `clear_token` / `active_token`
   manage a process-global `Option<String>` the bearer middleware
@@ -10,7 +10,19 @@ Clerk preset / etc. Four surfaces:
   `pocopine_core::fetch::FetchMiddleware`; `install()` registers it
   on the global RFC-078 chain. From then on every outgoing
   `#[server]` call gets `Authorization: Bearer <token>` when a
-  token is set.
+  token is set. The middleware also enforces an identity-change
+  fence: if the user signs in/out while a request is in flight,
+  the response is dropped with `Unauthorized("session_changed")`.
+- **Token refresh + replay (single-flight).** Apps install a
+  `TokenRefresh` via `with_token_refresh(...)`. On `Unauthorized`
+  for a `#[server(idempotent)]` request the middleware refreshes
+  once and replays. Concurrent in-flight 401s coalesce into a
+  single refresh call to the issuer.
+- **Token persistence (`TokenStorage`).** Pluggable storage so the
+  token survives reload. Provided impls: `LocalStorage`,
+  `SessionStorage`, `InMemory` (default no-op).
+- **Cross-tab session coordination.** Sign-in/out in one tab
+  propagates to peer tabs of the same origin via `BroadcastChannel`.
 - **Reactive identity.** `AuthSession` is a plugin service the
   `auth_plugin()` builder installs. Holds the active `Principal` +
   monotonic epoch; cheap to clone, internally `Rc<RefCell<…>>`.
@@ -503,20 +515,289 @@ pub async fn admin_audit() -> ServerResult<Vec<Event>> {
 }
 ```
 
+## Step 5 — keep users signed in across reloads (`TokenStorage`)
+
+By default the token slot is in-memory only. Refresh the page and
+the user is signed out. Real apps persist the token through some
+browser surface; pocopine ships a `TokenStorage` trait + provided
+impls so you don't hand-roll that.
+
+### Pick a storage backend
+
+| Impl | Survives reload | Survives tab close | XSS-readable |
+|---|---|---|---|
+| `InMemory` (default) | no | no | no |
+| `SessionStorage` | yes | no (per-tab) | yes |
+| `LocalStorage` | yes | yes (cross-tab) | yes |
+| `httpOnly` cookie (server-side) | yes | yes | **no** |
+
+If your access tokens are short-lived bearer JWTs and you accept
+the XSS exposure, `LocalStorage` is the standard choice. For
+high-value applications, prefer an `httpOnly` cookie issued by the
+server — pocopine then doesn't need a token slot at all (the
+browser sends the cookie automatically; skip the bearer middleware).
+
+### Wire it in
+
+```rust
+use pocopine_auth_client::{auth_plugin, storage::LocalStorage};
+
+App::new()
+    .plugin(
+        auth_plugin()
+            .login_route("/login")
+            .with_bearer_middleware(true)
+            .with_token_storage(LocalStorage::new("auth_token")),
+    )
+    .run();
+```
+
+That's it. Three things change:
+
+1. At plugin install time, the in-memory slot is hydrated from
+   storage (`hydrate_from_storage()` runs). Returning users keep
+   their session.
+2. `set_token` writes through to storage on every call.
+3. `clear_token` / `AuthSession::sign_out` clear storage too.
+
+### Custom storage
+
+The trait is small. Implement it for a cookie writer, IndexedDB
+adapter, native iOS keychain via a JS bridge, etc.:
+
+```rust
+use pocopine_auth_client::TokenStorage;
+
+struct MyKeychainStorage;
+
+impl TokenStorage for MyKeychainStorage {
+    fn load(&self) -> Option<String> {
+        // call into your bridge
+        Some(call_native_keychain_get())
+    }
+    fn save(&self, token: &str) {
+        call_native_keychain_set(token);
+    }
+    fn clear(&self) {
+        call_native_keychain_clear();
+    }
+}
+```
+
+## Step 6 — sync sign-in/out across tabs (`BroadcastChannel`)
+
+Without coordination, signing in on tab A leaves tab B oblivious:
+tab B keeps issuing requests under the previous identity until it
+catches a 401. Worse for sign-out: tab B keeps rendering the
+authenticated dashboard with stale data.
+
+Enable cross-tab sync at builder time:
+
+```rust
+auth_plugin()
+    .login_route("/login")
+    .with_bearer_middleware(true)
+    .with_token_storage(LocalStorage::new("auth_token"))  // required
+    .with_cross_tab_sync(true)
+```
+
+**`with_token_storage` is required** for cross-tab sync to work
+end-to-end. The broadcast tells peer tabs "something changed" but
+doesn't carry the new token over the channel — peers re-read it
+from shared storage. Without storage, peers just bump their epoch
+and have no way to learn the new credential.
+
+### What happens on the wire
+
+1. Tab A: `session.sign_in("token-xyz", principal)`.
+2. Tab A's `set_token` writes `"token-xyz"` to localStorage.
+3. Tab A's `set_principal` posts a message to the
+   `"pocopine-auth"` `BroadcastChannel`.
+4. Tab B's listener fires:
+   - Calls `hydrate_from_storage()` → reads `"token-xyz"` into
+     tab B's in-memory slot.
+   - Calls `session.bump_epoch()` → tab B's bearer-middleware
+     fence trips on any in-flight request still under the old
+     identity, returning `Err(Unauthorized("session_changed"))`.
+5. Tab B's app code reacts to the epoch bump (reactive view,
+   call `/me`, navigate, etc.) — that's app-level wiring; the
+   framework provides the primitive, not the UX.
+
+Re-entrancy is handled internally: when tab B's listener runs,
+the principal-set inside the listener is suppressed from
+re-broadcasting. No infinite ping-pong.
+
+### Optional: react to peer-tab events
+
+The broadcast itself is the framework's signal. If your app needs
+to do something specific on a peer-tab change (refetch profile,
+flash a notification), watch the session epoch:
+
+```rust
+impl Dashboard {
+    pub fn on_setup(&mut self, session: Plugin<AuthSession>) {
+        // Capture the current epoch.
+        let captured_epoch = session.epoch();
+        // After every render, check if epoch advanced; if so,
+        // re-fetch /me. (Concrete shape depends on the reactive
+        // system you're using — this is illustrative.)
+        // ...
+    }
+}
+```
+
+### Falling back when unavailable
+
+`BroadcastChannel` ships in all evergreen browsers but is missing
+in older Safari and `file://` contexts. `with_cross_tab_sync(true)`
+silently degrades to a no-op when the constructor fails — apps
+don't see a panic; they just don't get cross-tab coordination.
+
+## Step 7 — refresh tokens automatically (`TokenRefresh`)
+
+Access tokens expire. Without refresh, the user sees an
+authentication error mid-session even when their identity is still
+valid (the issuer would gladly hand them a new token if asked).
+
+The bearer middleware can refresh and replay automatically when:
+- The server function is marked `#[server(idempotent)]` (replay-safe).
+- A `TokenRefresh` is configured.
+- The original request actually carried a token.
+
+```rust
+auth_plugin()
+    .login_route("/login")
+    .with_bearer_middleware(true)
+    .with_token_storage(LocalStorage::new("auth_token"))
+    .with_token_refresh(|| async {
+        // Talk to your provider. The closure can call any of:
+        //   - your own #[server] function
+        //   - Firebase / Clerk / Auth0 SDK
+        //   - a refresh-cookie-backed endpoint
+        // Return Ok(new_token) on success; Err propagates the
+        // original Unauthorized to the caller.
+        my_app::refresh_session_token().await
+    })
+```
+
+The closure is `Fn() -> Future<Output = Result<String, ServerError>>`
+— stateless, can be called repeatedly. For stateful refresh logic
+(e.g. capturing a refresh-token cookie) implement the
+`TokenRefresh` trait directly:
+
+```rust
+use pocopine_auth_client::{TokenRefresh, TokenRefreshFuture};
+use std::rc::Rc;
+
+struct MyRefresher {
+    client: Rc<HttpClient>,
+}
+
+impl TokenRefresh for MyRefresher {
+    fn refresh(&self) -> TokenRefreshFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            client.post("/auth/refresh").await
+        })
+    }
+}
+```
+
+### Mark idempotent server functions
+
+The middleware **only** retries server functions you've explicitly
+marked replay-safe. Non-idempotent calls (POST that creates an
+order, transfer money, send an email) must NEVER be replayed —
+the user might end up double-charged. Marking is opt-in:
+
+```rust
+#[pocopine::server(public, idempotent)]
+async fn get_dashboard_stats() -> ServerResult<DashboardStats> {
+    // GET-shaped: read-only, replay-safe
+}
+
+#[pocopine::server(public)]
+async fn place_order(order: Order) -> ServerResult<OrderId> {
+    // NOT marked: middleware propagates Unauthorized rather
+    // than retry. The user sees the error and can re-submit
+    // with intent.
+}
+```
+
+This is RFC-078 §5.10.4's fail-closed default.
+
+### Single-flight coalescing
+
+If five concurrent requests all 401 (e.g. user came back to the
+tab after a network blip), the middleware fires a **single**
+refresh call to the issuer. The first 401 starts the refresh; the
+others wait for that same outcome. After it resolves, all five
+requests replay with the new token.
+
+This matters because token issuers rate-limit. A naive "one
+refresh per failed request" implementation exhausts the quota
+during a quota-burst event.
+
+### What if refresh fails?
+
+Refresh failure (network error, the user's refresh token is
+itself revoked, the issuer is down) propagates as
+`ServerError::Unauthorized` with the refresh's own message. Your
+app should handle that the same way as a fresh `Unauthorized`:
+clear the session, navigate to `/login`, surface a UI message.
+
+```rust
+match user_request_result {
+    Err(ServerError::Unauthorized(_)) => {
+        session.sign_out();
+        // The auth_plugin's rejection handler will redirect.
+    }
+    // ...
+}
+```
+
+## Putting it all together — production-shape config
+
+```rust
+use pocopine::App;
+use pocopine_auth_client::{auth_plugin, storage::LocalStorage};
+
+App::new()
+    .plugin(
+        auth_plugin()
+            // Where to redirect on Unauthorized:
+            .login_route("/login")
+            .return_to_query_param("redirect")
+            // Wire the bearer middleware on the fetch chain:
+            .with_bearer_middleware(true)
+            // Persist the token across reloads:
+            .with_token_storage(LocalStorage::new("auth_token"))
+            // Sync identity changes across tabs:
+            .with_cross_tab_sync(true)
+            // Refresh on Unauthorized for #[server(idempotent)]:
+            .with_token_refresh(|| async {
+                my_app::refresh_session_token().await
+            }),
+    )
+    .run();
+```
+
+That's the complete client-side auth picture: persisted, coordinated
+across tabs, transparently refreshing, fenced against
+identity-change races, and routing rejected requests to the login
+flow with `ReturnTo`.
+
 ## What's deferred
 
-- **Single-flight refresh + replay-on-401.** RFC-078 §5.5 / §5.10.4.
-  Depends on a `#[server(idempotent)]` attribute that doesn't
-  exist yet; until then the bearer middleware doesn't retry —
-  `Unauthorized` propagates upward and the loader/component
-  surfaces `RouteRejection::Unauthorized` to the rejection chain.
-- **Session-epoch dispatch / response gate.** RFC-078 §5.10.5.
-  Will read `AuthSession::epoch()` on outgoing requests and
-  abort/drop responses computed under a stale identity.
 - **The `pocopine::auth::client::…` umbrella re-export.**
   Deferred until the public surface stabilizes; apps `use
   pocopine_auth_client::{set_token, install, …};` directly for
   now.
+- **Route-aware predicate adapters.** `predicate_guard` is
+  `Principal`-only. Guards that need to inspect `params` /
+  `query` (e.g. `/users/:id` requiring `principal.id == params["id"]`)
+  must write the closure directly — see the docstring on
+  `predicate_guard` for the pattern.
 
 ## See also
 
