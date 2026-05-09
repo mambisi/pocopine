@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Implemented (Phases 1-3); Phase 4 deferred |
+| **Status** | Implemented (Phases 1-3); Phase 4 closed — typed job hooks rejected (2026-05-09), middleware-chain alternative deferred until demand |
 | **Author** | pocopine team |
 | **Created** | 2026-05-05 |
 | **Related** | [`rfc-066-server-function-auth.md`](./rfc-066-server-function-auth.md), [`rfc-067-redis-background-jobs.md`](./rfc-067-redis-background-jobs.md), [`rfc-069-observability.md`](./rfc-069-observability.md), [`rfc-076-app-plugin-lifecycle.md`](./rfc-076-app-plugin-lifecycle.md) |
@@ -423,16 +423,91 @@ The first server plugin implementation must therefore enforce:
   share an id end-to-end. Falls back to a fresh id when no HTTP layer ran.
 - ✅ Tests in `crates/pocopine/tests/server_function_events.rs`.
 
-### Phase 4 - Jobs bridge — deferred
+### Phase 4 - Jobs bridge — typed hooks rejected; middleware chain on demand
 
 The job runtime in `pocopine-jobs` already emits structured tracing events
 (`pocopine.trace` / `pocopine.log` targets per RFC-069). The first slice of
-this RFC ships server-side typed hooks for HTTP requests and `#[server]`
-calls; jobs can be subscribed via tracing subscribers in observability
-plugins. Promoting them to typed `JobStarted` / `JobCompleted` /
-`JobRetryScheduled` / `JobDeadLettered` events should land in a follow-up
-RFC if a downstream plugin demonstrates it needs in-process behavior (retry
-shaping, dead-letter side effects) that tracing subscribers can't express.
+this RFC shipped server-side typed hooks for HTTP requests and `#[server]`
+calls; jobs are subscribed via tracing subscribers in observability plugins.
+
+The original sketch promoted those tracing events to typed
+`JobStarted` / `JobCompleted` / `JobRetryScheduled` / `JobDeadLettered`
+hooks if a downstream plugin needed in-process behavior. **A 2026-05-09
+study of the Sidekiq and Celery plugin ecosystems concluded the typed
+lifecycle-hook shape is the wrong primitive and should not ship.** Future
+agents and contributors picking up this work should not propose
+`JobStarted` / `JobCompleted` / etc. without first reading this section.
+
+#### Why the typed-hook shape is rejected
+
+Sidekiq (Ruby) and Celery (Python) are the two largest production
+ecosystems with the typed observe-and-act lifecycle-hook surface this RFC
+sketched. Both have ~10+ years of plugin authorship to draw on. The
+empirical pattern across both:
+
+- **~90–95% of plugins are observe-only.** Sentry, OpenTelemetry, Datadog,
+  New Relic, AppSignal, Prometheus exporters, Flower, `django-celery-results`,
+  `sidekiq-statsd`, `sidekiq-status`, `rollbar-sidekiq`: all wrap execution,
+  emit a metric or capture an exception, re-raise unchanged. Tracing serves
+  every one of them.
+- **Sidekiq death handlers are fire-and-forget in production.** Every
+  documented `sidekiq_retries_exhausted` / `Sidekiq.death_handlers` usage
+  (Slack pings, Sentry capture, log lines) treats the callback as
+  non-blocking. Nobody relies on the framework waiting for the handler to
+  complete before acking the dead-letter, despite the API technically
+  allowing it. The "transactional DLQ pipeline" use case the original
+  Phase 4 anticipated does not exist in the wild.
+- **Genuine observe-and-act needs cluster into exactly three patterns**,
+  none of which fit a lifecycle hook:
+  1. **Uniqueness/locking** (`sidekiq-unique-jobs`, `celery-once`,
+     `celery-singleton`): mutate the enqueue payload before it's written;
+     hold a lock around execution and release it after.
+  2. **Throttling/rate-limiting** (`sidekiq-throttled`): suppress execution
+     and reschedule the job, replacing rather than reacting to the lifecycle.
+  3. **Context wrapping** (`apartment-sidekiq`, tracing-context propagation):
+     lexical scope around the call (e.g., `Apartment::Tenant.switch { yield }`).
+
+  All three require **wrapping execution**, not observing a transition. A
+  `JobFailed` callback can't suppress-and-reschedule; a `JobStarted`
+  callback can't lexically scope the body that follows.
+
+- **Celery community evidence is the killer data point.** Celery already
+  has typed observe-and-act signals (`task_prerun`, `task_failure`,
+  `task_retry`). The act-pattern plugins deliberately bypass them.
+  `celery-once` and `celery-singleton` override the task base class
+  instead, because raising from `task_prerun` does not cancel the task
+  ([celery #7792](https://github.com/celery/celery/issues/7792)). When
+  the typed-hook surface was tried, it failed the act-cases so badly the
+  community routed around it.
+
+#### What to build if demand arrives
+
+If a real plugin author surfaces a need for in-process job behaviour the
+existing tracing events can't express, the right primitive is **a single
+around-job middleware chain** mirroring the fetch middleware chain shipped
+in RFC-078 §5.10:
+
+```rust
+trait JobMiddleware: 'static {
+    fn call(&self, job: JobInvocation, next: JobNext) -> JobMiddlewareFuture;
+}
+```
+
+One observe-and-act surface handles all three real act-patterns
+(lock-around-execution, suppress-and-reschedule, lexical context) plus
+the observe-only case (`next.run(job).await`, then record). Same
+freeze-at-boot trust contract as `pocopine_core::fetch`. Designing this
+now without a consumer would over-fit on guesses — when a real plugin
+shows up, design against its actual shape.
+
+#### What not to build
+
+Do not ship `JobStarted` / `JobCompleted` / `JobRetryScheduled` /
+`JobDeadLettered` as typed `ServerHook<E>` events. The cost (four emit
+sites in every job's hot path, four event types to maintain, four
+Plugin-trait method declarations) buys nothing tracing doesn't already
+provide for the 95% observe-only case, and falls short of what the 5%
+act-case actually needs. The Celery experience is the proof.
 
 ## 8. Open Questions — resolved
 
