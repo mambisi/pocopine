@@ -63,7 +63,9 @@ receives `data-hovered`, and the tooltip exposes `data-label`, `data-value`, and
 Set `animate="true"` on the chart when those transitions should use the chart's
 animation variables. Keyframe entry animations should target keyed marks as they
 enter the DOM; add/remove updates then animate only the new line, area, bar,
-point, or slice instead of restarting the whole chart.
+point, or slice instead of restarting the whole chart. Area series and
+pie/donut slices expose `data-leaving="true"` during their exit window so CSS
+can animate removal before the renderer prunes the mark.
 
 Interactive legends are opt-in with `interactive="true"`. The legend then gives
 each item keyboard focus, toggles `data-active`, and emits

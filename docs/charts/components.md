@@ -367,6 +367,8 @@ CSS can keyframe newly inserted marks while existing marks remain stable during
 add/remove updates. If an application wants an existing mark to replay an entry
 animation after a data change, change that mark's key deliberately or use CSS
 transitions for the changed property.
+Area series and pie/donut slices also retain removed marks for one animation
+window and expose `data-leaving="true"` before pruning them from the DOM.
 
 ## Styling Hooks
 
@@ -438,6 +440,7 @@ The component emits stable hooks:
 - `data-hovered`
 - `data-focused`
 - `data-selected`
+- `data-leaving="true|false"`
 - `data-active`
 - `data-empty`
 - `data-invalid`
@@ -449,7 +452,8 @@ The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
 treatment. The example below animates keyed marks on entry: newly added lines
 draw in, bars grow from the baseline, and pie/donut slices use a clockwise
-sweep instead of a fade.
+sweep instead of a fade. Leaving area series and pie/donut slices use the same
+hooks in reverse.
 
 ```css
 .pine-chart-root {
@@ -517,8 +521,33 @@ sweep instead of a fade.
   transform-origin: center;
 }
 
+.pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"] {
+  animation: chart-fade-out var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing) forwards;
+  pointer-events: none;
+}
+
+.pine-chart-root[data-animate="true"] .pine-chart-line[data-leaving="true"] {
+  animation: chart-line-exit var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing) forwards;
+  pointer-events: none;
+}
+
+.pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
+  animation: chart-pie-consume-out var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing) forwards;
+  pointer-events: none;
+}
+
 @keyframes chart-line-draw {
   from {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes chart-line-exit {
+  to {
+    opacity: 0;
     stroke-dashoffset: 1;
   }
 }
@@ -530,9 +559,21 @@ sweep instead of a fade.
   }
 }
 
+@keyframes chart-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes chart-pie-sweep {
   from {
     transform: rotate(-18deg) scale(0.01);
+  }
+}
+
+@keyframes chart-pie-consume-out {
+  to {
+    transform: rotate(18deg) scale(0.01);
   }
 }
 

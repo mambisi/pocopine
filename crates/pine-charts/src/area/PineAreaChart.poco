@@ -102,6 +102,7 @@
               :d="series.area_d"
               fill="currentColor"
               stroke="none"
+              :data-leaving="series.leaving ? 'true' : 'false'"
               :data-series="series.label"></path>
       </template>
     </g>
@@ -116,6 +117,7 @@
               pathLength="1"
               stroke="currentColor"
               vector-effect="non-scaling-stroke"
+              :data-leaving="series.leaving ? 'true' : 'false'"
               :data-series="series.label"></path>
       </template>
     </g>

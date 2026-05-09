@@ -4,7 +4,10 @@ use core::fmt::Write;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
+use crate::animation::{
+    animation_style, exit_animation_delay_ms, DEFAULT_ANIMATION_DURATION_MS,
+    DEFAULT_ANIMATION_EASING,
+};
 use crate::cartesian::{
     pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
     DEFAULT_EMPTY_MESSAGE,
@@ -124,7 +127,7 @@ impl PieChartGeometry {
                 let percentage = slice.value / total * 100.0;
                 let percentage_label = format!("{}%", format_tick(percentage));
                 let value_label = format_tick(slice.value);
-                let label = slice_label(&slice.label, index);
+                let label = slice.label.clone();
                 let aria_label = format!("{label}: {value_label} ({percentage_label})");
                 let d = pie_slice_path(center, outer_radius, inner_radius, slice_start, slice_end)?;
                 let label_point = polar_point(
@@ -133,7 +136,7 @@ impl PieChartGeometry {
                     (slice_start + slice_end) * 0.5,
                 );
                 Ok(SvgPieSlice {
-                    key: format!("pie-slice-{index}-{label}"),
+                    key: slice.key.clone(),
                     label,
                     value: slice.value,
                     value_label,
@@ -149,6 +152,7 @@ impl PieChartGeometry {
                         "--pine-chart-slice-delay: {}ms;",
                         format_tick(index as f64 * 28.0)
                     ),
+                    leaving: false,
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
@@ -198,6 +202,7 @@ pub struct SvgPieSlice {
     pub label_x: f64,
     pub label_y: f64,
     pub animation_style: String,
+    pub leaving: bool,
 }
 
 impl SvgPieSlice {
@@ -294,6 +299,7 @@ pub struct PinePieChart {
     #[prop]
     pub animation_easing: String,
     pub animation_style: String,
+    pub exit_generation: u32,
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
@@ -352,6 +358,7 @@ impl Default for PinePieChart {
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
             ),
+            exit_generation: 0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
@@ -411,7 +418,7 @@ impl PinePieChart {
 
     #[watch(data)]
     fn on_data(&mut self, _: Vec<ChartPieSlice>, _: Option<Vec<ChartPieSlice>>) {
-        self.recompute();
+        self.recompute_with_leaving();
     }
 
     #[watch(width)]
@@ -524,10 +531,22 @@ impl PinePieChart {
     }
 
     fn recompute(&mut self) {
+        self.recompute_inner(false);
+    }
+
+    fn recompute_with_leaving(&mut self) {
+        self.recompute_inner(self.animate);
+    }
+
+    fn recompute_inner(&mut self, retain_leaving: bool) {
         match PieChartGeometry::new(&self.data, &self.options()) {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
-                self.slices = geometry.slices;
+                let mut slices = geometry.slices;
+                if retain_leaving && self.merge_leaving_slices(&mut slices) {
+                    self.schedule_leaving_cleanup();
+                }
+                self.slices = slices;
                 self.legend_items = geometry.legend_items;
                 self.center_x = geometry.center.x;
                 self.center_y = geometry.center.y;
@@ -541,6 +560,19 @@ impl PinePieChart {
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
+                if retain_leaving && !self.slices.is_empty() {
+                    self.slices.iter_mut().for_each(|slice| {
+                        slice.leaving = true;
+                    });
+                    self.legend_items = pie_legend_items(&self.data);
+                    self.clear_hover();
+                    self.clear_selection();
+                    self.error.clear();
+                    self.state_fields()
+                        .apply(crate::cartesian::CartesianChartState::Ready);
+                    self.schedule_leaving_cleanup();
+                    return;
+                }
                 self.clear_geometry();
                 self.clear_hover();
                 self.clear_selection();
@@ -556,6 +588,42 @@ impl PinePieChart {
                 self.state_fields()
                     .apply(crate::cartesian::CartesianChartState::Invalid);
             }
+        }
+    }
+
+    fn merge_leaving_slices(&self, next: &mut Vec<SvgPieSlice>) -> bool {
+        let mut added = false;
+        for previous in &self.slices {
+            if next.iter().any(|slice| slice.key == previous.key) {
+                continue;
+            }
+            let mut leaving = previous.clone();
+            leaving.leaving = true;
+            next.push(leaving);
+            added = true;
+        }
+        added
+    }
+
+    fn schedule_leaving_cleanup(&mut self) {
+        self.exit_generation = self.exit_generation.wrapping_add(1);
+        let generation = self.exit_generation;
+        let delay = exit_animation_delay_ms(self.animation_duration);
+        let me = pocopine::this::<Self>();
+        pocopine::timers::after_scoped(delay, move || {
+            me.update(|chart| chart.prune_leaving_slices(generation));
+        });
+    }
+
+    fn prune_leaving_slices(&mut self, generation: u32) {
+        if generation != self.exit_generation {
+            return;
+        }
+        self.slices.retain(|slice| !slice.leaving);
+        if self.slices.is_empty() {
+            self.clear_geometry();
+            self.state_fields()
+                .apply(crate::cartesian::CartesianChartState::Empty);
         }
     }
 
@@ -593,6 +661,7 @@ impl PinePieChart {
         let Some(update) = self
             .slices
             .iter()
+            .filter(|slice| !slice.leaving)
             .find(|slice| slice.contains(point, center, self.inner_radius_px, self.outer_radius_px))
             .map(|slice| slice.hover_update(plot, self.width, self.height))
         else {
@@ -605,7 +674,10 @@ impl PinePieChart {
 
     fn step_slice_focus(&mut self, step: isize) {
         if let Some(key) = step_key(
-            self.slices.iter().map(|slice| slice.key.as_str()),
+            self.slices
+                .iter()
+                .filter(|slice| !slice.leaving)
+                .map(|slice| slice.key.as_str()),
             &self.focused_key,
             step,
         ) {
@@ -614,13 +686,15 @@ impl PinePieChart {
     }
 
     fn has_slice_key(&self, key: &str) -> bool {
-        self.slices.iter().any(|slice| slice.key == key)
+        self.slices
+            .iter()
+            .any(|slice| !slice.leaving && slice.key == key)
     }
 
     fn selection_for_slice(&self, key: &str) -> Option<ChartSelection> {
         self.slices
             .iter()
-            .find(|slice| slice.key == key)
+            .find(|slice| !slice.leaving && slice.key == key)
             .map(SvgPieSlice::selection)
     }
 
@@ -725,6 +799,7 @@ impl PinePieChart {
 
 #[derive(Clone, Debug, PartialEq)]
 struct NormalizedPieSlice {
+    key: String,
     label: String,
     value: f64,
 }
@@ -746,8 +821,10 @@ fn normalize_slices(data: &[ChartPieSlice]) -> ChartResult<Vec<NormalizedPieSlic
         if value == 0.0 || !slice.visible {
             continue;
         }
+        let label = slice_label(&slice.label, index);
         output.push(NormalizedPieSlice {
-            label: slice_label(&slice.label, index),
+            key: format!("pie-slice-{index}-{label}"),
+            label,
             value,
         });
     }

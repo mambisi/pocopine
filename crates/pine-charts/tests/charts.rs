@@ -1010,8 +1010,11 @@ async fn scatter_chart_renders_points_axes_and_hover() {
 #[component(template_inline = r#"
 <div>
   <button class="add-area-forecast" @click="add_forecast">Add forecast</button>
+  <button class="remove-area-forecast" @click="remove_forecast">Remove forecast</button>
   <pine-area-chart class="multi-area-chart"
                    label="Area"
+                   animate="true"
+                   animation_duration="40"
                    width="100"
                    height="100"
                    margin_top="0"
@@ -1053,6 +1056,10 @@ impl AreaChartFixture {
             "Forecast",
             vec![ChartPoint::new(0.0, 0.5), ChartPoint::new(1.0, 0.8)],
         ));
+    }
+
+    pub fn remove_forecast(&mut self) {
+        self.series.retain(|series| series.label != "Forecast");
     }
 }
 
@@ -1231,6 +1238,57 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
     assert!(third.has_attribute("data-selected"));
     assert!(!second.has_attribute("data-selected"));
     assert_eq!(selected_label.borrow().as_deref(), Some("x 10, y 5"));
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn area_chart_marks_removed_series_as_leaving_before_pruning() {
+    let host = mount_fixture::<AreaChartFixture>();
+    settle().await;
+
+    host.query_selector("button.add-area-forecast")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(lines.length(), 3);
+
+    host.query_selector("button.remove-area-forecast")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let leaving_lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(leaving_lines.length(), 3);
+    let forecast = leaving_lines.get(2).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        forecast.get_attribute("data-series").as_deref(),
+        Some("Forecast")
+    );
+    assert_eq!(
+        forecast.get_attribute("data-leaving").as_deref(),
+        Some("true")
+    );
+
+    sleep_ms(120).await;
+    settle().await;
+
+    let pruned_lines = host
+        .query_selector_all(".pine-area-chart .pine-chart-line")
+        .unwrap();
+    assert_eq!(pruned_lines.length(), 2);
 
     host.remove();
 }
@@ -1809,8 +1867,11 @@ async fn stacked_bar_chart_accumulates_segments() {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <button class="remove-referral" @click="remove_referral">Remove referral</button>
   <pine-pie-chart class="share-chart"
                   label="Share"
+                  animate="true"
+                  animation_duration="40"
                   width="100"
                   height="100"
                   margin_top="0"
@@ -1843,7 +1904,13 @@ impl Default for PieChartFixture {
 }
 
 #[handlers]
-impl PieChartFixture {}
+impl PieChartFixture {
+    pub fn remove_referral(&mut self) {
+        if let Some(slice) = self.data.get_mut(1) {
+            slice.visible = false;
+        }
+    }
+}
 
 #[wasm_bindgen_test]
 async fn pie_chart_renders_donut_slices_and_selection() {
@@ -1943,6 +2010,73 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 
     assert!(second.has_attribute("data-selected"));
     assert!(!first.has_attribute("data-selected"));
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    let slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
+    assert_eq!(slices.length(), 2);
+    let organic_key = slices
+        .get(0)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap()
+        .get_attribute("data-key")
+        .unwrap();
+
+    host.query_selector("button.remove-referral")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let leaving_slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
+    assert_eq!(leaving_slices.length(), 2);
+    let organic = leaving_slices
+        .get(0)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        organic.get_attribute("data-key").as_deref(),
+        Some(organic_key.as_str())
+    );
+    assert_eq!(
+        organic.get_attribute("data-leaving").as_deref(),
+        Some("false")
+    );
+    let referral = leaving_slices
+        .get(1)
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        referral.get_attribute("data-label").as_deref(),
+        Some("Referral")
+    );
+    assert_eq!(
+        referral.get_attribute("data-leaving").as_deref(),
+        Some("true")
+    );
+
+    sleep_ms(120).await;
+    settle().await;
+
+    let pruned_slices = host
+        .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+        .unwrap();
+    assert_eq!(pruned_slices.length(), 1);
 
     host.remove();
 }

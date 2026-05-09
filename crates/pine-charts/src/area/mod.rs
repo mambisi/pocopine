@@ -1,7 +1,10 @@
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
+use crate::animation::{
+    animation_style, exit_animation_delay_ms, DEFAULT_ANIMATION_DURATION_MS,
+    DEFAULT_ANIMATION_EASING,
+};
 use crate::cartesian::{
     centered_plot_y, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
     CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
@@ -102,6 +105,7 @@ impl AreaChartGeometry {
                     )?,
                     line_d: series.line_d.clone(),
                     samples: series.samples.clone(),
+                    leaving: false,
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
@@ -132,6 +136,7 @@ pub struct AreaChartSeriesRender {
     pub area_d: String,
     pub line_d: String,
     pub samples: Vec<LineChartSample>,
+    pub leaving: bool,
 }
 
 pub fn area_legend_items(series: &[ChartAreaSeries]) -> Vec<LegendItem> {
@@ -190,6 +195,7 @@ pub struct PineAreaChart {
     #[prop]
     pub animation_easing: String,
     pub animation_style: String,
+    pub exit_generation: u32,
     pub state: String,
     pub view_box: String,
     pub area_series: Vec<AreaChartSeriesRender>,
@@ -252,6 +258,7 @@ impl Default for PineAreaChart {
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
             ),
+            exit_generation: 0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             area_series: Vec::new(),
@@ -312,12 +319,12 @@ impl PineAreaChart {
 
     #[watch(points)]
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.recompute();
+        self.recompute_with_leaving();
     }
 
     #[watch(series)]
     fn on_series(&mut self, _: Vec<ChartAreaSeries>, _: Option<Vec<ChartAreaSeries>>) {
-        self.recompute();
+        self.recompute_with_leaving();
     }
 
     #[watch(width)]
@@ -388,6 +395,14 @@ impl PineAreaChart {
     }
 
     fn recompute(&mut self) {
+        self.recompute_inner(false);
+    }
+
+    fn recompute_with_leaving(&mut self) {
+        self.recompute_inner(self.animate);
+    }
+
+    fn recompute_inner(&mut self, retain_leaving: bool) {
         let geometry = if self.series.is_empty() {
             AreaChartGeometry::new(&self.points, &self.options())
         } else {
@@ -397,7 +412,11 @@ impl PineAreaChart {
         match geometry {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
-                self.area_series = geometry.series;
+                let mut area_series = geometry.series;
+                if retain_leaving && self.merge_leaving_area_series(&mut area_series) {
+                    self.schedule_leaving_cleanup();
+                }
+                self.area_series = area_series;
                 self.samples = geometry.samples;
                 self.plot_edges().apply(geometry.plot);
                 self.guides().apply(CartesianGuideUpdate {
@@ -415,6 +434,17 @@ impl PineAreaChart {
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
+                if retain_leaving && !self.area_series.is_empty() {
+                    self.area_series.iter_mut().for_each(|series| {
+                        series.leaving = true;
+                    });
+                    self.samples.clear();
+                    self.clear_hover();
+                    self.error.clear();
+                    self.state_fields().apply(CartesianChartState::Ready);
+                    self.schedule_leaving_cleanup();
+                    return;
+                }
                 self.area_series.clear();
                 self.samples.clear();
                 self.plot_edges().clear();
@@ -432,6 +462,40 @@ impl PineAreaChart {
                 self.error = error.to_string();
                 self.state_fields().apply(CartesianChartState::Invalid);
             }
+        }
+    }
+
+    fn merge_leaving_area_series(&self, next: &mut Vec<AreaChartSeriesRender>) -> bool {
+        let mut added = false;
+        for previous in &self.area_series {
+            if next.iter().any(|series| series.key == previous.key) {
+                continue;
+            }
+            let mut leaving = previous.clone();
+            leaving.leaving = true;
+            next.push(leaving);
+            added = true;
+        }
+        added
+    }
+
+    fn schedule_leaving_cleanup(&mut self) {
+        self.exit_generation = self.exit_generation.wrapping_add(1);
+        let generation = self.exit_generation;
+        let delay = exit_animation_delay_ms(self.animation_duration);
+        let me = pocopine::this::<Self>();
+        pocopine::timers::after_scoped(delay, move || {
+            me.update(|chart| chart.prune_leaving_area_series(generation));
+        });
+    }
+
+    fn prune_leaving_area_series(&mut self, generation: u32) {
+        if generation != self.exit_generation {
+            return;
+        }
+        self.area_series.retain(|series| !series.leaving);
+        if self.area_series.is_empty() {
+            self.state_fields().apply(CartesianChartState::Empty);
         }
     }
 
