@@ -1,6 +1,6 @@
 //! Wasm-side auth surface for pocopine.
 //!
-//! Five surfaces:
+//! Seven surfaces:
 //!
 //! - **Token slot.** [`set_token`], [`clear_token`], and [`active_token`]
 //!   manage a process-global `Option<String>`.
@@ -13,15 +13,33 @@
 //!   register the middleware via [`install`] or via the plugin builder
 //!   ([`auth_plugin().with_bearer_middleware(true)`](auth_plugin)) — both
 //!   are idempotent, so mixing them is safe.
+//! - **Token refresh + single-flight coordinator.** Apps install a
+//!   provider-specific [`TokenRefresh`] via
+//!   [`AuthPluginBuilder::with_token_refresh`]; concurrent in-flight
+//!   401s coalesce into one issuer call via [`refresh`]'s shared-slot
+//!   coordinator (see module docs).
+//! - **Token persistence.** Pluggable [`TokenStorage`] so the bearer
+//!   token survives reload. Provided impls in [`storage`]:
+//!   `InMemory` (default no-op), `LocalStorage`, `SessionStorage`.
+//!   Wired via [`AuthPluginBuilder::with_token_storage`].
+//! - **Cross-tab session coordination.** Sign-in / sign-out in tab A
+//!   propagates to peer tabs of the same origin via a
+//!   `BroadcastChannel`. Opt-in via
+//!   [`AuthPluginBuilder::with_cross_tab_sync`]; requires
+//!   [`with_token_storage`](AuthPluginBuilder::with_token_storage)
+//!   so peer tabs can read the new credential. See [`cross_tab`].
 //! - **Reactive identity.** [`AuthSession`] is a plugin service the
 //!   [`auth_plugin`] installs. It holds the active [`pocopine_auth::Principal`]
 //!   plus a monotonic epoch; components extract it via
 //!   `Plugin<AuthSession>` / `Option<Plugin<AuthSession>>` per RFC-076.
 //!   The bearer middleware also captures the epoch on outgoing
-//!   authenticated requests and fences the response on completion: if the
-//!   user signed in/out while the request was in flight, the middleware
-//!   returns `Err(ServerError::Unauthorized("session_changed"))` instead
-//!   of letting stale-identity data through (RFC-078 §5.10.5).
+//!   authenticated requests and fences the response on completion: if
+//!   the user signed in/out while the request was in flight, the
+//!   middleware returns `Err(ServerError::Unauthorized("session_changed"))`
+//!   instead of letting stale-identity data through (RFC-078 §5.10.5).
+//!   The fence runs on both the response side AND the refresh-replay
+//!   write side, so a refresh resolving after a sign-out doesn't
+//!   re-pollute the cleared token slot.
 //! - **Auth-aware route guards + login redirect.** [`auth_plugin`]
 //!   is an [`AppPlugin`](pocopine_core::AppPlugin) that registers a
 //!   [`RouteRejectionHandler`](pocopine_core::RouteRejectionHandler)
@@ -30,23 +48,24 @@
 //!   [`pocopine_auth::Predicate`] (`require_auth`, `require_role`,
 //!   …) into a [`RouteGuard`](pocopine_core::RouteGuard) that reads
 //!   the live [`AuthSession`].
-//! - **Token refresh.** Apps install a provider-specific [`TokenRefresh`]
-//!   via [`AuthPluginBuilder::with_token_refresh`]; the bearer middleware
-//!   uses it for the replay-on-401 flow described above.
 //!
 //! ## Usage
 //!
 //! ```ignore
 //! use pocopine::App;
-//! use pocopine_auth_client::auth_plugin;
+//! use pocopine_auth_client::{auth_plugin, storage::LocalStorage};
 //!
 //! App::new()
 //!     .plugin(
 //!         auth_plugin()
 //!             .login_route("/login")
 //!             .with_bearer_middleware(true)
+//!             // Persist token across reload:
+//!             .with_token_storage(LocalStorage::new("auth_token"))
+//!             // Sync identity changes across tabs:
+//!             .with_cross_tab_sync(true)
+//!             // Refresh + replay on Unauthorized for idempotent calls:
 //!             .with_token_refresh(|| async {
-//!                 // Talk to your provider here. For example:
 //!                 my_app::refresh_session_token().await
 //!             }),
 //!     )
@@ -65,19 +84,26 @@
 //! pocopine_auth_client::clear_token();
 //! ```
 //!
+//! See `docs/auth-client.md` for a step-by-step walkthrough of each
+//! surface, the security tradeoffs, and the cross-tab/refresh wire
+//! traces.
+//!
 //! ## What this is *not*
 //!
-//! - **Not a token store.** Storage is in-memory and per-process;
-//!   persistence across reloads (cookie, localStorage, IndexedDB) is
-//!   the app's job.
 //! - **Not provider-coupled.** [`set_token`] accepts any string; the
 //!   server-side verifier decides validity. [`TokenRefresh`] is a
 //!   provider-supplied closure or struct, not a built-in.
-//! - **Not a single-flight refresh coordinator yet.** Multiple
-//!   concurrent requests that all 401 may each trigger an independent
-//!   refresh. The wasm runtime is single-threaded so the practical
-//!   blast radius is bounded; coalescing is a follow-up — see
-//!   [`refresh`] module docs.
+//! - **Not an `httpOnly` cookie issuer.** The [`storage`] impls
+//!   persist the bearer in JavaScript-readable browser storage; for
+//!   high-value applications, prefer an `httpOnly` cookie set by the
+//!   server (then skip the bearer middleware entirely — the browser
+//!   sends the cookie automatically). See `storage.rs` module docs
+//!   for the full XSS-vs-durability tradeoff.
+//! - **Not a route-aware predicate adapter.** [`predicate_guard`] is
+//!   `Principal`-only; guards that need to inspect `params` /
+//!   `query` (e.g., `/users/:id` requiring `principal.id == params["id"]`)
+//!   must write the closure directly. See [`predicate_guard`]'s
+//!   docstring for the pattern.
 //!
 //! ## Privacy
 //!
