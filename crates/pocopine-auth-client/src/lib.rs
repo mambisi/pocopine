@@ -146,7 +146,17 @@ pub struct BearerMiddleware;
 
 impl FetchMiddleware for BearerMiddleware {
     fn call(&self, mut request: FetchRequest, next: FetchNext) -> FetchMiddlewareFuture {
-        let had_token = active_token().is_some();
+        // Single read of the token slot: the "did we authenticate this
+        // request?" decision and the actual header attachment must
+        // observe the same value, otherwise a concurrent `set_token` /
+        // `clear_token` between two locks could leave us with
+        // had_token=true but no header attached (or vice versa). Wasm
+        // is single-threaded so this is impossible in production, but
+        // tighten the invariant for host-test robustness and to keep
+        // the code honest if pocopine ever grows a multi-threaded
+        // wasm runtime.
+        let token_snapshot = active_token();
+        let had_token = token_snapshot.is_some();
         let captured_epoch = if had_token {
             // Only capture when we're actually authenticating this
             // request. An anonymous request can't go stale on identity
@@ -156,7 +166,7 @@ impl FetchMiddleware for BearerMiddleware {
             None
         };
 
-        if let Some(token) = active_token() {
+        if let Some(token) = token_snapshot.as_deref() {
             request.set_header("authorization", format!("Bearer {token}"));
         }
 
