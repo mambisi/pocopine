@@ -2022,7 +2022,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 }
 
 #[wasm_bindgen_test]
-async fn pie_chart_animates_added_slice_as_segment_morph() {
+async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updates() {
     let host = mount_fixture::<PieChartFixture>();
     settle().await;
 
@@ -2035,11 +2035,9 @@ async fn pie_chart_animates_added_slice_as_segment_morph() {
         .unwrap()
         .dyn_into::<Element>()
         .unwrap();
-    let organic_animation = organic.query_selector("animate").unwrap().unwrap();
-    assert_eq!(
-        organic_animation.get_attribute("dur").as_deref(),
-        Some("0ms")
-    );
+    let organic_key = organic.get_attribute("data-key").unwrap();
+    let initial_organic_path = organic.get_attribute("d").unwrap();
+    assert!(organic.query_selector("animate").unwrap().is_none());
 
     host.query_selector("button.add-paid")
         .unwrap()
@@ -2053,24 +2051,27 @@ async fn pie_chart_animates_added_slice_as_segment_morph() {
         .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
         .unwrap();
     assert_eq!(slices.length(), 3);
+    let organic_after_add = slices.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        organic_after_add.get_attribute("data-key").as_deref(),
+        Some(organic_key.as_str())
+    );
+    assert_eq!(
+        organic_after_add.get_attribute("data-entering").as_deref(),
+        Some("false")
+    );
+    assert_ne!(
+        organic_after_add.get_attribute("d").as_deref(),
+        Some(initial_organic_path.as_str())
+    );
     let paid = slices.get(2).unwrap().dyn_into::<Element>().unwrap();
     assert_eq!(paid.get_attribute("data-label").as_deref(), Some("Paid"));
     assert_eq!(paid.get_attribute("data-entering").as_deref(), Some("true"));
-    let paid_animation = paid.query_selector("animate").unwrap().unwrap();
-    assert_eq!(
-        paid_animation.get_attribute("attributeName").as_deref(),
-        Some("d")
-    );
-    assert_eq!(paid_animation.get_attribute("dur").as_deref(), Some("40ms"));
-    assert_eq!(
-        paid_animation.get_attribute("begin").as_deref(),
-        Some("56ms")
-    );
-    assert_ne!(
-        paid_animation.get_attribute("from"),
-        paid_animation.get_attribute("to")
-    );
-    assert_eq!(paid_animation.get_attribute("to"), paid.get_attribute("d"));
+    let paid_style = paid.get_attribute("style").unwrap();
+    assert!(paid_style.contains("--pine-chart-slice-delay: 56ms;"));
+    assert!(paid_style.contains("--pine-chart-slice-enter-clip:"));
+    assert!(paid_style.contains("--pine-chart-slice-exit-clip:"));
+    assert!(paid.query_selector("animate").unwrap().is_none());
 
     sleep_ms(160).await;
     settle().await;
@@ -2083,11 +2084,7 @@ async fn pie_chart_animates_added_slice_as_segment_morph() {
         settled_paid.get_attribute("data-entering").as_deref(),
         Some("false")
     );
-    let settled_animation = settled_paid.query_selector("animate").unwrap().unwrap();
-    assert_eq!(
-        settled_animation.get_attribute("dur").as_deref(),
-        Some("0ms")
-    );
+    assert!(settled_paid.query_selector("animate").unwrap().is_none());
 
     host.remove();
 }
@@ -2101,13 +2098,9 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
         .unwrap();
     assert_eq!(slices.length(), 2);
-    let organic_key = slices
-        .get(0)
-        .unwrap()
-        .dyn_into::<Element>()
-        .unwrap()
-        .get_attribute("data-key")
-        .unwrap();
+    let initial_organic = slices.get(0).unwrap().dyn_into::<Element>().unwrap();
+    let organic_key = initial_organic.get_attribute("data-key").unwrap();
+    let initial_organic_path = initial_organic.get_attribute("d").unwrap();
 
     host.query_selector("button.remove-referral")
         .unwrap()
@@ -2134,6 +2127,10 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         organic.get_attribute("data-leaving").as_deref(),
         Some("false")
     );
+    assert_ne!(
+        organic.get_attribute("d").as_deref(),
+        Some(initial_organic_path.as_str())
+    );
     let referral = leaving_slices
         .get(1)
         .unwrap()
@@ -2147,23 +2144,7 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         referral.get_attribute("data-leaving").as_deref(),
         Some("true")
     );
-    let referral_animation = referral.query_selector("animate").unwrap().unwrap();
-    assert_eq!(
-        referral_animation.get_attribute("attributeName").as_deref(),
-        Some("d")
-    );
-    assert_eq!(
-        referral_animation.get_attribute("dur").as_deref(),
-        Some("40ms")
-    );
-    assert_ne!(
-        referral_animation.get_attribute("from"),
-        referral_animation.get_attribute("to")
-    );
-    assert_eq!(
-        referral_animation.get_attribute("from"),
-        referral.get_attribute("d")
-    );
+    assert!(referral.query_selector("animate").unwrap().is_none());
 
     sleep_ms(120).await;
     settle().await;
