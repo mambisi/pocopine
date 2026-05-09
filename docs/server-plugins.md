@@ -10,8 +10,9 @@ around an axum `Router`. Apps opt into optional integrations
 ## Quickstart
 
 ```rust
+use pocopine::logging::server_observability;
 use pocopine_server::axum::Router;
-use pocopine_server::{request_event_layer, static_files, Server};
+use pocopine_server::{static_files, Server};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -20,8 +21,7 @@ async fn main() -> std::io::Result<()> {
     let router = my_app::__routes(router);
 
     Server::new(router)
-        .layer(request_event_layer())   // emit HTTP request events
-        .plugin(my_observability::server(config()))
+        .plugin(server_observability()) // installs hooks + HTTP request layer
         .serve("0.0.0.0:3000")
         .await
 }
