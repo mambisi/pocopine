@@ -109,6 +109,19 @@ fn assert_svg_fills_frame_without_stretching(frame: &Element, svg: &Element) {
     assert_near(svg_rect.height(), svg_height, "svg rendered height");
 }
 
+fn assert_path_changed(actual: &str, previous: &str) {
+    assert_ne!(
+        actual, previous,
+        "expected SVG path to change during sector animation"
+    );
+}
+
+fn first_arc_radius(path: &str) -> f64 {
+    let (_, arc) = path.split_once('A').expect("expected SVG arc command");
+    let (radius, _) = arc.split_once(',').expect("expected SVG arc radius");
+    radius.parse().expect("expected numeric SVG arc radius")
+}
+
 fn direct_svg_layers(svg: &Element) -> Vec<String> {
     let groups = svg.query_selector_all(":scope > g[data-layer]").unwrap();
     (0..groups.length())
@@ -776,6 +789,192 @@ async fn line_chart_renders_svg_path_axes_and_grid() {
         y_axis_label.get_attribute("transform").as_deref(),
         Some("rotate(-90 12 50)")
     );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pie_chart_morphs_shape_without_svg_animate_nodes() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    let first_slice = host
+        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
+        .unwrap()
+        .unwrap();
+    let donut_path = first_slice.get_attribute("d").unwrap();
+
+    host.query_selector("button.show-pie")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    sleep_ms(50).await;
+    settle().await;
+
+    let morphing_slice = host
+        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        morphing_slice.get_attribute("d").as_deref(),
+        Some(donut_path.as_str())
+    );
+    assert!(morphing_slice.query_selector("animate").unwrap().is_none());
+    assert!(host
+        .query_selector(".pine-chart-pie-slice-reveal")
+        .unwrap()
+        .is_none());
+
+    sleep_ms(80).await;
+    settle().await;
+
+    let settled_slice = host
+        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        settled_slice.get_attribute("data-entering").as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        settled_slice.get_attribute("data-leaving").as_deref(),
+        Some("false")
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pie_chart_prunes_finished_leaving_slices_before_delayed_entries_finish() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    host.query_selector("button.swap-latency")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    sleep_ms(70).await;
+    settle().await;
+
+    assert!(host
+        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
+        .unwrap()
+        .is_none());
+    assert!(host
+        .query_selector(".pine-chart-pie-slice[data-label='Referral']")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        host.query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
+            .unwrap()
+            .length(),
+        4
+    );
+    assert_eq!(
+        host.query_selector(".pine-chart-pie-slice[data-label='Idle']")
+            .unwrap()
+            .unwrap()
+            .get_attribute("data-entering")
+            .as_deref(),
+        Some("true")
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn pie_chart_animates_survivor_renormalization_when_middle_slice_is_removed() {
+    let host = mount_fixture::<PieChartFixture>();
+    settle().await;
+
+    host.query_selector("button.load-renormalize")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    sleep_ms(160).await;
+    settle().await;
+
+    let one_before = host
+        .query_selector(".pine-chart-pie-slice[data-label='One']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    let three_before = host
+        .query_selector(".pine-chart-pie-slice[data-label='Three']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+
+    host.query_selector("button.remove-middle")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    let one_start = host
+        .query_selector(".pine-chart-pie-slice[data-label='One']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    let three_start = host
+        .query_selector(".pine-chart-pie-slice[data-label='Three']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    assert_path_changed(&one_start, &one_before);
+    assert_path_changed(&three_start, &three_before);
+
+    sleep_ms(24).await;
+    settle().await;
+
+    let one_mid = host
+        .query_selector(".pine-chart-pie-slice[data-label='One']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    let three_mid = host
+        .query_selector(".pine-chart-pie-slice[data-label='Three']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    assert_path_changed(&one_mid, &one_before);
+    assert_path_changed(&three_mid, &three_before);
+
+    sleep_ms(120).await;
+    settle().await;
+
+    assert!(host
+        .query_selector(".pine-chart-pie-slice[data-label='Two']")
+        .unwrap()
+        .is_none());
+    let one_done = host
+        .query_selector(".pine-chart-pie-slice[data-label='One']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    let three_done = host
+        .query_selector(".pine-chart-pie-slice[data-label='Three']")
+        .unwrap()
+        .unwrap()
+        .get_attribute("d")
+        .unwrap();
+    assert_path_changed(&one_done, &one_before);
+    assert_path_changed(&three_done, &three_before);
 
     host.remove();
 }
@@ -1869,6 +2068,10 @@ async fn stacked_bar_chart_accumulates_segments() {
 <div>
   <button class="add-paid" @click="add_paid">Add paid</button>
   <button class="remove-referral" @click="remove_referral">Remove referral</button>
+  <button class="show-pie" @click="show_pie">Pie</button>
+  <button class="swap-latency" @click="swap_latency">Latency</button>
+  <button class="load-renormalize" @click="load_renormalize">Load renormalize</button>
+  <button class="remove-middle" @click="remove_middle">Remove middle</button>
   <pine-pie-chart class="share-chart"
                   label="Share"
                   animate="true"
@@ -1879,7 +2082,9 @@ async fn stacked_bar_chart_accumulates_segments() {
                   margin_right="0"
                   margin_bottom="0"
                   margin_left="0"
-                  inner_radius="0.5"
+                  pp-bind:inner_radius="inner_radius"
+                  pp-bind:start_angle="start_angle"
+                  pp-bind:end_angle="end_angle"
                   pp-bind:center_label="center_label"
                   pp-bind:center_value="center_value"
                   pp-bind:data="data"></pine-pie-chart>
@@ -1887,6 +2092,9 @@ async fn stacked_bar_chart_accumulates_segments() {
 "#)]
 struct PieChartFixture {
     data: Vec<ChartPieSlice>,
+    inner_radius: f64,
+    start_angle: f64,
+    end_angle: f64,
     center_label: String,
     center_value: String,
 }
@@ -1898,6 +2106,9 @@ impl Default for PieChartFixture {
                 ChartPieSlice::new("Organic", 3.0),
                 ChartPieSlice::new("Referral", 1.0),
             ],
+            inner_radius: 0.5,
+            start_angle: -90.0,
+            end_angle: 270.0,
             center_label: "Total".into(),
             center_value: "4".into(),
         }
@@ -1917,6 +2128,35 @@ impl PieChartFixture {
             slice.visible = false;
         }
     }
+
+    pub fn show_pie(&mut self) {
+        self.inner_radius = 0.0;
+        self.start_angle = -90.0;
+        self.end_angle = 270.0;
+    }
+
+    pub fn swap_latency(&mut self) {
+        self.data = vec![
+            ChartPieSlice::new("API", 38.0),
+            ChartPieSlice::new("Render", 29.0),
+            ChartPieSlice::new("Network", 21.0),
+            ChartPieSlice::new("Idle", 12.0),
+        ];
+    }
+
+    pub fn load_renormalize(&mut self) {
+        self.data = vec![
+            ChartPieSlice::new("One", 10.0),
+            ChartPieSlice::new("Two", 10.0),
+            ChartPieSlice::new("Three", 80.0),
+        ];
+    }
+
+    pub fn remove_middle(&mut self) {
+        if let Some(slice) = self.data.get_mut(1) {
+            slice.visible = false;
+        }
+    }
 }
 
 #[wasm_bindgen_test]
@@ -1931,6 +2171,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     assert!(chart.has_attribute("data-donut"));
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
     assert!(!chart.has_attribute("data-hover"));
+    assert!(!chart.has_attribute("data-slice-animating"));
 
     let slices = host
         .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
@@ -1971,7 +2212,7 @@ async fn pie_chart_renders_donut_slices_and_selection() {
     dispatch_pointer_move(&svg, 50.0, 10.0);
     settle().await;
 
-    assert!(first.has_attribute("data-hovered"));
+    assert!(!first.has_attribute("data-hovered"));
     let hovered_key = first.get_attribute("data-key").unwrap();
     let hover_slice = host
         .query_selector(".pine-chart-pie-hover .pine-chart-pie-slice")
@@ -2060,18 +2301,42 @@ async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updat
         organic_after_add.get_attribute("data-entering").as_deref(),
         Some("false")
     );
-    assert_ne!(
-        organic_after_add.get_attribute("d").as_deref(),
-        Some(initial_organic_path.as_str())
-    );
     let paid = slices.get(2).unwrap().dyn_into::<Element>().unwrap();
     assert_eq!(paid.get_attribute("data-label").as_deref(), Some("Paid"));
     assert_eq!(paid.get_attribute("data-entering").as_deref(), Some("true"));
     let paid_style = paid.get_attribute("style").unwrap();
     assert!(paid_style.contains("--pine-chart-slice-delay: 56ms;"));
-    assert!(paid_style.contains("--pine-chart-slice-enter-clip:"));
-    assert!(paid_style.contains("--pine-chart-slice-exit-clip:"));
     assert!(paid.query_selector("animate").unwrap().is_none());
+    assert!(host
+        .query_selector(".pine-chart-pie-slice-reveal")
+        .unwrap()
+        .is_none());
+    let paid_animating_path = paid.get_attribute("d").unwrap();
+    assert!(
+        first_arc_radius(&paid_animating_path) > 1.0,
+        "expected entering slice to keep chart radius while the arc grows, got {paid_animating_path}"
+    );
+    let chart = host.query_selector(".pine-pie-chart").unwrap().unwrap();
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 50.0, 10.0);
+    settle().await;
+    assert!(chart.has_attribute("data-hover"));
+    assert!(chart.has_attribute("data-slice-animating"));
+    assert!(host
+        .query_selector(".pine-chart-pie-slices .pine-chart-pie-slice[data-hovered]")
+        .unwrap()
+        .is_some());
+    let hover_layer = host
+        .query_selector(".pine-chart-pie-hover")
+        .unwrap()
+        .unwrap();
+    assert!(
+        hover_layer
+            .get_attribute("style")
+            .unwrap_or_default()
+            .contains("display: none"),
+        "expected hover overlay to stay hidden while slices animate"
+    );
 
     sleep_ms(160).await;
     settle().await;
@@ -2085,6 +2350,18 @@ async fn pie_chart_marks_added_slice_as_entering_without_blocking_geometry_updat
         Some("false")
     );
     assert!(settled_paid.query_selector("animate").unwrap().is_none());
+    assert_ne!(
+        settled_paid.get_attribute("d").as_deref(),
+        Some(paid_animating_path.as_str())
+    );
+    let settled_organic = host
+        .query_selector(".pine-chart-pie-slice[data-label='Organic']")
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        settled_organic.get_attribute("d").as_deref(),
+        Some(initial_organic_path.as_str())
+    );
 
     host.remove();
 }
@@ -2127,10 +2404,6 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         organic.get_attribute("data-leaving").as_deref(),
         Some("false")
     );
-    assert_ne!(
-        organic.get_attribute("d").as_deref(),
-        Some(initial_organic_path.as_str())
-    );
     let referral = leaving_slices
         .get(1)
         .unwrap()
@@ -2145,6 +2418,28 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         Some("true")
     );
     assert!(referral.query_selector("animate").unwrap().is_none());
+    let referral_start_path = referral.get_attribute("d").unwrap();
+    let referral_start_radius = first_arc_radius(&referral_start_path);
+    assert!(host
+        .query_selector(".pine-chart-pie-slice-reveal")
+        .unwrap()
+        .is_none());
+
+    sleep_ms(34).await;
+    settle().await;
+
+    let shrinking_referral = host
+        .query_selector(".pine-chart-pie-slice[data-label='Referral']")
+        .unwrap()
+        .unwrap();
+    let shrinking_path = shrinking_referral.get_attribute("d").unwrap();
+    let shrinking_radius = first_arc_radius(&shrinking_path);
+    assert_path_changed(&shrinking_path, &referral_start_path);
+    assert_near(
+        shrinking_radius,
+        referral_start_radius,
+        "leaving slice radius",
+    );
 
     sleep_ms(120).await;
     settle().await;
@@ -2153,6 +2448,11 @@ async fn pie_chart_marks_removed_slice_as_leaving_before_pruning() {
         .query_selector_all(".pine-chart-pie-slices .pine-chart-pie-slice")
         .unwrap();
     assert_eq!(pruned_slices.length(), 1);
+    let pruned_organic = pruned_slices.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_ne!(
+        pruned_organic.get_attribute("d").as_deref(),
+        Some(initial_organic_path.as_str())
+    );
 
     host.remove();
 }

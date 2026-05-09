@@ -7,6 +7,7 @@
       :data-donut="inner_radius > 0"
       :data-hover="hover_visible"
       :data-animate="animate"
+      :data-slice-animating="animating_slices"
       :data-animation-duration="animation_duration"
       :data-animation-easing="animation_easing"
       :style="animation_style"
@@ -28,29 +29,33 @@
        @pointerleave="clear_hover">
     <g class="pine-chart-pie-slices" data-layer="series">
       <template pp-for="slice in slices" pp-key="slice.key">
-        <path class="pine-chart-pie-slice"
-              :d="slice.d"
-              role="option"
-              :aria-label="slice.aria_label"
-              :aria-selected="slice.key == selected_key ? 'true' : 'false'"
-              :data-key="slice.key"
-              :data-label="slice.label"
-              :data-value="slice.value"
-              :data-percentage="slice.percentage"
-              :data-hovered="slice.key == hover_key"
-              :data-focused="slice.key == focused_key"
-              :data-selected="slice.key == selected_key"
-              :data-entering="slice.entering ? 'true' : 'false'"
-              :data-leaving="slice.leaving ? 'true' : 'false'"
-              :style="slice.animation_style"
-              @click.stop="select_slice(slice.key)"></path>
+        <g class="pine-chart-pie-slice-group"
+           :data-key="slice.key"
+           :data-label="slice.label">
+          <path class="pine-chart-pie-slice"
+                :d="slice.d"
+                role="option"
+                :aria-label="slice.aria_label"
+                :aria-selected="slice.key == selected_key ? 'true' : 'false'"
+                :data-key="slice.key"
+                :data-label="slice.label"
+                :data-value="slice.value"
+                :data-percentage="slice.percentage"
+                :data-hovered="slice.key == hover_key && animating_slices"
+                :data-focused="slice.key == focused_key"
+                :data-selected="slice.key == selected_key"
+                :data-entering="slice.entering ? 'true' : 'false'"
+                :data-leaving="slice.leaving ? 'true' : 'false'"
+                :style="slice.animation_style"
+                @click.stop="select_slice(slice.key)"></path>
+        </g>
       </template>
     </g>
-    <g pp-show="hover_visible"
-       class="pine-chart-pie-hover"
+    <g class="pine-chart-pie-hover"
        data-layer="hover"
        aria-hidden="true"
-       pointer-events="none">
+       pointer-events="none"
+       :style="hover_overlay_visible ? '' : 'display: none;'">
       <path class="pine-chart-pie-slice pine-chart-pie-hover-slice"
             :d="hover_slice.d"
             :data-key="hover_slice.key"

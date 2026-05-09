@@ -19,7 +19,7 @@ use crate::svg::format_tick;
 
 const FULL_CIRCLE_DEGREES: f64 = 360.0;
 const PIE_SLICE_DELAY_MS: u32 = 28;
-const PIE_ANIMATION_BUFFER_MS: u32 = 40;
+const PIE_LEAVING_PRUNE_PROGRESS: f64 = 0.995;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChartPieSlice {
@@ -144,12 +144,16 @@ impl PieChartGeometry {
                     percentage,
                     percentage_label,
                     aria_label,
-                    d,
+                    d: d.clone(),
                     start_angle: slice_start,
                     end_angle: slice_end,
                     label_x: label_point.x,
                     label_y: label_point.y,
-                    animation_style: slice_animation_style(index, slice_start, slice_end),
+                    animation_style: slice_animation_style(index),
+                    center_x: center.x,
+                    center_y: center.y,
+                    outer_radius,
+                    inner_radius,
                     entering: false,
                     leaving: false,
                 })
@@ -201,6 +205,10 @@ pub struct SvgPieSlice {
     pub label_x: f64,
     pub label_y: f64,
     pub animation_style: String,
+    pub center_x: f64,
+    pub center_y: f64,
+    pub outer_radius: f64,
+    pub inner_radius: f64,
     pub entering: bool,
     pub leaving: bool,
 }
@@ -247,6 +255,33 @@ impl SvgPieSlice {
             ),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct PieSliceFrame {
+    center_x: f64,
+    center_y: f64,
+    outer_radius: f64,
+    inner_radius: f64,
+    start_angle: f64,
+    end_angle: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct PieSliceAnimation {
+    key: String,
+    from: PieSliceFrame,
+    to: PieSliceFrame,
+    delay_ms: u32,
+    duration_ms: u32,
+    entering: bool,
+    leaving: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PieSliceBoundary {
+    key: String,
+    frame: PieSliceFrame,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -300,6 +335,9 @@ pub struct PinePieChart {
     pub animation_easing: String,
     pub animation_style: String,
     pub animation_generation: u32,
+    pub animating_slices: bool,
+    slice_animations: Vec<PieSliceAnimation>,
+    animation_started_at_ms: f64,
     pub state: String,
     pub view_box: String,
     pub slices: Vec<SvgPieSlice>,
@@ -315,6 +353,7 @@ pub struct PinePieChart {
     pub center_label_y: f64,
     pub center_value_y: f64,
     pub hover_visible: bool,
+    pub hover_overlay_visible: bool,
     pub hover_key: String,
     pub hover_label: String,
     pub hover_value: f64,
@@ -359,6 +398,9 @@ impl Default for PinePieChart {
                 DEFAULT_ANIMATION_EASING,
             ),
             animation_generation: 0,
+            animating_slices: false,
+            slice_animations: Vec::new(),
+            animation_started_at_ms: 0.0,
             state: "empty".into(),
             view_box: format!("0 0 {} {}", options.width, options.height),
             slices: Vec::new(),
@@ -374,6 +416,7 @@ impl Default for PinePieChart {
             center_label_y: 0.0,
             center_value_y: 0.0,
             hover_visible: false,
+            hover_overlay_visible: false,
             hover_key: String::new(),
             hover_label: String::new(),
             hover_value: 0.0,
@@ -453,17 +496,17 @@ impl PinePieChart {
 
     #[watch(inner_radius)]
     fn on_inner_radius(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+        self.recompute_shape();
     }
 
     #[watch(start_angle)]
     fn on_start_angle(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+        self.recompute_shape();
     }
 
     #[watch(end_angle)]
     fn on_end_angle(&mut self, _: f64, _: Option<f64>) {
-        self.recompute();
+        self.recompute_shape();
     }
 
     #[watch(center_label)]
@@ -485,6 +528,7 @@ impl PinePieChart {
 
     pub fn clear_hover(&mut self) {
         self.hover_visible = false;
+        self.hover_overlay_visible = false;
         self.hover_key.clear();
         self.hover_label.clear();
         self.hover_value = 0.0;
@@ -531,29 +575,26 @@ impl PinePieChart {
     }
 
     fn recompute(&mut self) {
-        self.recompute_inner(false);
+        self.recompute_inner(false, false);
     }
 
     fn recompute_with_leaving(&mut self) {
-        self.recompute_inner(self.animate);
+        self.recompute_inner(self.animate, self.animate);
     }
 
-    fn recompute_inner(&mut self, retain_leaving: bool) {
+    fn recompute_shape(&mut self) {
+        self.recompute_inner(false, self.animate);
+    }
+
+    fn recompute_inner(&mut self, retain_leaving: bool, animate_geometry: bool) {
         match PieChartGeometry::new(&self.data, &self.options()) {
             Ok(geometry) => {
                 self.view_box = geometry.view_box;
                 let mut slices = geometry.slices;
-                if retain_leaving {
-                    let mut needs_animation_cleanup = false;
-                    if self.mark_entering_slices(&mut slices) {
-                        needs_animation_cleanup = true;
-                    }
-                    if self.merge_leaving_slices(&mut slices) {
-                        needs_animation_cleanup = true;
-                    }
-                    if needs_animation_cleanup {
-                        self.schedule_slice_animation_cleanup(slices.len());
-                    }
+                if animate_geometry || retain_leaving {
+                    self.prepare_slice_animations(&mut slices, retain_leaving);
+                } else {
+                    self.clear_slice_animations();
                 }
                 self.slices = slices;
                 self.legend_items = geometry.legend_items;
@@ -569,18 +610,17 @@ impl PinePieChart {
                 self.clear_hover();
             }
             Err(ChartError::EmptySeries) => {
-                if retain_leaving && !self.slices.is_empty() {
-                    self.slices.iter_mut().for_each(|slice| {
-                        configure_leaving_slice(slice);
-                        slice.leaving = true;
-                    });
+                if retain_leaving
+                    && !self.slices.is_empty()
+                    && animation_duration_ms(self.animation_duration) > 0
+                {
+                    self.prepare_empty_slice_exit();
                     self.legend_items = pie_legend_items(&self.data);
                     self.clear_hover();
                     self.clear_selection();
                     self.error.clear();
                     self.state_fields()
                         .apply(crate::cartesian::CartesianChartState::Ready);
-                    self.schedule_slice_animation_cleanup(self.slices.len());
                     return;
                 }
                 self.clear_geometry();
@@ -601,67 +641,233 @@ impl PinePieChart {
         }
     }
 
-    fn mark_entering_slices(&self, next: &mut [SvgPieSlice]) -> bool {
-        let has_previous = self.slices.iter().any(|slice| !slice.leaving);
-        if !has_previous {
-            return false;
+    fn prepare_slice_animations(&mut self, next: &mut Vec<SvgPieSlice>, retain_leaving: bool) {
+        let previous_boundaries = slice_boundaries(&self.slices);
+        if previous_boundaries.is_empty() {
+            self.clear_slice_animations();
+            return;
+        }
+        let next_boundaries = slice_boundaries(next);
+
+        let duration_ms = animation_duration_ms(self.animation_duration);
+        if duration_ms == 0 {
+            self.clear_slice_animations();
+            return;
         }
 
-        let mut added = false;
-        for slice in next {
+        let mut animations = Vec::new();
+        for (index, slice) in next.iter_mut().enumerate() {
             if let Some(previous) = self
                 .slices
                 .iter()
                 .find(|previous| !previous.leaving && previous.key == slice.key)
             {
-                if previous.entering {
-                    configure_entering_slice(slice);
-                    added = true;
-                } else {
+                let from = slice_frame(previous);
+                let to = slice_frame(slice);
+                if frames_match(&from, &to) && !previous.entering {
                     configure_static_slice(slice);
+                    continue;
                 }
+                let entering = previous.entering;
+                slice.entering = entering;
+                slice.leaving = false;
+                let delay_ms = if entering { slice_delay_ms(index) } else { 0 };
+                animations.push(PieSliceAnimation {
+                    key: slice.key.clone(),
+                    from: from.clone(),
+                    to,
+                    delay_ms,
+                    duration_ms,
+                    entering,
+                    leaving: false,
+                });
+                apply_slice_frame(slice, &from);
                 continue;
             }
-            configure_entering_slice(slice);
-            added = true;
-        }
-        added
-    }
 
-    fn merge_leaving_slices(&self, next: &mut Vec<SvgPieSlice>) -> bool {
-        let mut added = false;
-        for previous in &self.slices {
-            if next.iter().any(|slice| slice.key == previous.key) {
-                continue;
+            let to = slice_frame(slice);
+            let collapse_angle = entering_collapse_angle(
+                index,
+                &next_boundaries,
+                &previous_boundaries,
+                to.start_angle,
+            );
+            let from = collapsed_frame(&to, collapse_angle);
+            slice.entering = true;
+            slice.leaving = false;
+            animations.push(PieSliceAnimation {
+                key: slice.key.clone(),
+                from: from.clone(),
+                to,
+                delay_ms: slice_delay_ms(index),
+                duration_ms,
+                entering: true,
+                leaving: false,
+            });
+            apply_slice_frame(slice, &from);
+        }
+
+        if retain_leaving {
+            for (previous_index, previous_boundary) in previous_boundaries.iter().enumerate() {
+                if next_boundaries
+                    .iter()
+                    .any(|slice| slice.key == previous_boundary.key)
+                {
+                    continue;
+                }
+                let Some(previous) = self
+                    .slices
+                    .iter()
+                    .find(|slice| slice.key == previous_boundary.key)
+                else {
+                    continue;
+                };
+                let mut leaving = previous.clone();
+                let from = previous_boundary.frame.clone();
+                let collapse_angle = leaving_collapse_angle(
+                    previous_index,
+                    &previous_boundaries,
+                    &next_boundaries,
+                    from.end_angle,
+                );
+                let to = collapsed_frame(&from, collapse_angle);
+                leaving.entering = false;
+                leaving.leaving = true;
+                apply_slice_frame(&mut leaving, &from);
+                animations.push(PieSliceAnimation {
+                    key: leaving.key.clone(),
+                    from,
+                    to,
+                    delay_ms: 0,
+                    duration_ms,
+                    entering: false,
+                    leaving: true,
+                });
+                next.push(leaving);
             }
-            let mut leaving = previous.clone();
-            configure_leaving_slice(&mut leaving);
-            leaving.entering = false;
-            leaving.leaving = true;
-            next.push(leaving);
-            added = true;
         }
-        added
+
+        if animations.is_empty() {
+            self.clear_slice_animations();
+            return;
+        }
+        self.slice_animations = animations;
+        self.animating_slices = true;
+        self.update_hover_overlay_visibility();
+        self.animation_started_at_ms = now_ms();
+        self.start_slice_animation_loop();
     }
 
-    fn schedule_slice_animation_cleanup(&mut self, slice_count: usize) {
+    fn prepare_empty_slice_exit(&mut self) {
+        let duration_ms = animation_duration_ms(self.animation_duration);
+        if duration_ms == 0 || self.slices.is_empty() {
+            self.clear_slice_animations();
+            return;
+        }
+        let mut animations = Vec::new();
+        for slice in &mut self.slices {
+            let from = slice_frame(slice);
+            let to = collapsed_frame(&from, from.end_angle);
+            slice.entering = false;
+            slice.leaving = true;
+            animations.push(PieSliceAnimation {
+                key: slice.key.clone(),
+                from,
+                to,
+                delay_ms: 0,
+                duration_ms,
+                entering: false,
+                leaving: true,
+            });
+        }
+        self.slice_animations = animations;
+        self.animating_slices = true;
+        self.update_hover_overlay_visibility();
+        self.animation_started_at_ms = now_ms();
+        self.start_slice_animation_loop();
+    }
+
+    fn clear_slice_animations(&mut self) {
+        self.slice_animations.clear();
+        self.animating_slices = false;
+        self.update_hover_overlay_visibility();
+    }
+
+    fn start_slice_animation_loop(&mut self) {
         self.animation_generation = self.animation_generation.wrapping_add(1);
         let generation = self.animation_generation;
-        let delay = pie_animation_cleanup_delay_ms(self.animation_duration, slice_count);
         let me = pocopine::this::<Self>();
-        pocopine::timers::after_scoped(delay, move || {
-            me.update(|chart| chart.finish_slice_animations(generation));
+        pocopine::spawn_scoped(async move {
+            loop {
+                let now = pocopine::timers::next_frame().await;
+                if me.update(|chart| chart.tick_slice_animations(generation, now)) {
+                    break;
+                }
+            }
         });
+    }
+
+    fn tick_slice_animations(&mut self, generation: u32, now_ms: f64) -> bool {
+        if generation != self.animation_generation || self.slice_animations.is_empty() {
+            return true;
+        }
+
+        let animations = self.slice_animations.clone();
+        let elapsed_ms = (now_ms - self.animation_started_at_ms).max(0.0);
+        let easing = self.animation_easing.clone();
+        let complete = animations
+            .iter()
+            .all(|animation| slice_animation_progress(animation, elapsed_ms) >= 1.0);
+        let mut prune_leaving_keys = Vec::new();
+
+        for slice in &mut self.slices {
+            let Some(animation) = animations
+                .iter()
+                .find(|animation| animation.key == slice.key)
+            else {
+                configure_static_slice(slice);
+                continue;
+            };
+
+            let progress = slice_animation_progress(animation, elapsed_ms);
+            if animation.leaving && progress >= PIE_LEAVING_PRUNE_PROGRESS {
+                prune_leaving_keys.push(slice.key.clone());
+                continue;
+            }
+            let frame = interpolate_slice_frame(
+                &animation.from,
+                &animation.to,
+                easing_progress(progress, &easing),
+            );
+            apply_slice_frame(slice, &frame);
+            slice.entering = animation.entering && progress < 1.0;
+            slice.leaving = animation.leaving;
+        }
+
+        if !prune_leaving_keys.is_empty() {
+            self.slices.retain(|slice| {
+                !slice.leaving || !prune_leaving_keys.iter().any(|key| key == &slice.key)
+            });
+        }
+        self.sync_hover_slice();
+
+        if complete {
+            self.finish_slice_animations(generation);
+            return true;
+        }
+        false
     }
 
     fn finish_slice_animations(&mut self, generation: u32) {
         if generation != self.animation_generation {
             return;
         }
+        self.clear_slice_animations();
         self.slices.retain(|slice| !slice.leaving);
         self.slices.iter_mut().for_each(|slice| {
             configure_static_slice(slice);
         });
+        self.sync_hover_slice();
         if self.slices.is_empty() {
             self.clear_geometry();
             self.state_fields()
@@ -742,6 +948,7 @@ impl PinePieChart {
 
     fn clear_geometry(&mut self) {
         self.slices.clear();
+        self.clear_slice_animations();
         self.hover_slice = SvgPieSlice::default();
         self.legend_items.clear();
         self.center_x = 0.0;
@@ -807,12 +1014,25 @@ impl PinePieChart {
         self.hover_placement_x = update.placement.x.into();
         self.hover_placement_y = update.placement.y.into();
         self.hover_style = update.placement.style;
+        self.sync_hover_slice();
+        self.update_hover_overlay_visibility();
+    }
+
+    fn sync_hover_slice(&mut self) {
+        if self.hover_key.is_empty() {
+            self.hover_slice = SvgPieSlice::default();
+            return;
+        }
         self.hover_slice = self
             .slices
             .iter()
-            .find(|slice| slice.key == self.hover_key)
+            .find(|slice| !slice.leaving && slice.key == self.hover_key)
             .cloned()
             .unwrap_or_default();
+    }
+
+    fn update_hover_overlay_visibility(&mut self) {
+        self.hover_overlay_visible = self.hover_visible && !self.animating_slices;
     }
 
     fn reconcile_selection(&mut self) {
@@ -959,45 +1179,194 @@ fn configure_static_slice(slice: &mut SvgPieSlice) {
     slice.leaving = false;
 }
 
-fn configure_entering_slice(slice: &mut SvgPieSlice) {
-    slice.entering = true;
-    slice.leaving = false;
-}
-
-fn configure_leaving_slice(slice: &mut SvgPieSlice) {
-    slice.entering = false;
-    slice.leaving = true;
-}
-
-fn slice_animation_style(index: usize, start_angle: f64, end_angle: f64) -> String {
-    format!(
-        "--pine-chart-slice-delay: {}ms; --pine-chart-slice-enter-clip: {}; --pine-chart-slice-exit-clip: {};",
-        slice_delay_ms(index),
-        collapsed_clip_for_angle(start_angle),
-        collapsed_clip_for_angle(end_angle),
-    )
-}
-
-fn collapsed_clip_for_angle(angle: f64) -> &'static str {
-    let angle = angle.rem_euclid(FULL_CIRCLE_DEGREES);
-    if !(45.0..315.0).contains(&angle) {
-        "polygon(100% 0, 100% 0, 100% 100%, 100% 100%)"
-    } else if angle < 135.0 {
-        "polygon(0 100%, 100% 100%, 100% 100%, 0 100%)"
-    } else if angle < 225.0 {
-        "polygon(0 0, 0 0, 0 100%, 0 100%)"
-    } else {
-        "polygon(0 0, 100% 0, 100% 0, 0 0)"
+fn slice_frame(slice: &SvgPieSlice) -> PieSliceFrame {
+    PieSliceFrame {
+        center_x: slice.center_x,
+        center_y: slice.center_y,
+        outer_radius: slice.outer_radius,
+        inner_radius: slice.inner_radius,
+        start_angle: slice.start_angle,
+        end_angle: slice.end_angle,
     }
+}
+
+fn slice_boundaries(slices: &[SvgPieSlice]) -> Vec<PieSliceBoundary> {
+    slices
+        .iter()
+        .filter(|slice| !slice.leaving)
+        .map(|slice| PieSliceBoundary {
+            key: slice.key.clone(),
+            frame: slice_frame(slice),
+        })
+        .collect()
+}
+
+fn entering_collapse_angle(
+    next_index: usize,
+    next: &[PieSliceBoundary],
+    previous: &[PieSliceBoundary],
+    fallback: f64,
+) -> f64 {
+    let before = next
+        .get(..next_index)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|slice| boundary_frame(previous, &slice.key).map(|frame| frame.end_angle));
+    let after = next
+        .get(next_index + 1..)
+        .unwrap_or_default()
+        .iter()
+        .find_map(|slice| boundary_frame(previous, &slice.key).map(|frame| frame.start_angle));
+    collapse_angle(before, after, fallback)
+}
+
+fn leaving_collapse_angle(
+    previous_index: usize,
+    previous: &[PieSliceBoundary],
+    next: &[PieSliceBoundary],
+    fallback: f64,
+) -> f64 {
+    let before = previous
+        .get(..previous_index)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|slice| boundary_frame(next, &slice.key).map(|frame| frame.end_angle));
+    let after = previous
+        .get(previous_index + 1..)
+        .unwrap_or_default()
+        .iter()
+        .find_map(|slice| boundary_frame(next, &slice.key).map(|frame| frame.start_angle));
+    collapse_angle(before, after, fallback)
+}
+
+fn boundary_frame<'a>(boundaries: &'a [PieSliceBoundary], key: &str) -> Option<&'a PieSliceFrame> {
+    boundaries
+        .iter()
+        .find(|boundary| boundary.key == key)
+        .map(|boundary| &boundary.frame)
+}
+
+fn collapse_angle(before: Option<f64>, after: Option<f64>, fallback: f64) -> f64 {
+    match (before, after) {
+        (Some(before), Some(after)) => clean((before + after) * 0.5),
+        (Some(before), None) => before,
+        (None, Some(after)) => after,
+        (None, None) => fallback,
+    }
+}
+
+fn collapsed_frame(frame: &PieSliceFrame, angle: f64) -> PieSliceFrame {
+    PieSliceFrame {
+        center_x: frame.center_x,
+        center_y: frame.center_y,
+        outer_radius: frame.outer_radius,
+        inner_radius: frame.inner_radius,
+        start_angle: angle,
+        end_angle: angle,
+    }
+}
+
+fn apply_slice_frame(slice: &mut SvgPieSlice, frame: &PieSliceFrame) {
+    let center = Point {
+        x: frame.center_x,
+        y: frame.center_y,
+    };
+    if let Ok(path) = pie_slice_path(
+        center,
+        frame.outer_radius,
+        frame.inner_radius,
+        frame.start_angle,
+        frame.end_angle,
+    ) {
+        slice.d = path;
+    }
+    slice.center_x = frame.center_x;
+    slice.center_y = frame.center_y;
+    slice.outer_radius = frame.outer_radius;
+    slice.inner_radius = frame.inner_radius;
+    slice.start_angle = frame.start_angle;
+    slice.end_angle = frame.end_angle;
+    let label_point = polar_point(
+        center,
+        label_radius(frame.outer_radius, frame.inner_radius),
+        (frame.start_angle + frame.end_angle) * 0.5,
+    );
+    slice.label_x = label_point.x;
+    slice.label_y = label_point.y;
+}
+
+fn interpolate_slice_frame(
+    from: &PieSliceFrame,
+    to: &PieSliceFrame,
+    progress: f64,
+) -> PieSliceFrame {
+    PieSliceFrame {
+        center_x: lerp(from.center_x, to.center_x, progress),
+        center_y: lerp(from.center_y, to.center_y, progress),
+        outer_radius: lerp(from.outer_radius, to.outer_radius, progress),
+        inner_radius: lerp(from.inner_radius, to.inner_radius, progress),
+        start_angle: lerp(from.start_angle, to.start_angle, progress),
+        end_angle: lerp(from.end_angle, to.end_angle, progress),
+    }
+}
+
+fn frames_match(left: &PieSliceFrame, right: &PieSliceFrame) -> bool {
+    const EPSILON: f64 = 0.001;
+    (left.center_x - right.center_x).abs() <= EPSILON
+        && (left.center_y - right.center_y).abs() <= EPSILON
+        && (left.outer_radius - right.outer_radius).abs() <= EPSILON
+        && (left.inner_radius - right.inner_radius).abs() <= EPSILON
+        && (left.start_angle - right.start_angle).abs() <= EPSILON
+        && (left.end_angle - right.end_angle).abs() <= EPSILON
+}
+
+fn slice_animation_progress(animation: &PieSliceAnimation, elapsed_ms: f64) -> f64 {
+    let elapsed_ms = elapsed_ms - animation.delay_ms as f64;
+    if elapsed_ms <= 0.0 {
+        return 0.0;
+    }
+    if animation.duration_ms == 0 {
+        return 1.0;
+    }
+    (elapsed_ms / animation.duration_ms as f64).clamp(0.0, 1.0)
+}
+
+fn easing_progress(progress: f64, easing: &str) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    match easing.trim() {
+        "linear" => progress,
+        "ease-in" => progress * progress,
+        "ease-out" => 1.0 - (1.0 - progress).powi(2),
+        "ease-in-out" => {
+            if progress < 0.5 {
+                2.0 * progress * progress
+            } else {
+                1.0 - (-2.0 * progress + 2.0).powi(2) * 0.5
+            }
+        }
+        _ => progress * progress * (3.0 - 2.0 * progress),
+    }
+}
+
+fn lerp(from: f64, to: f64, progress: f64) -> f64 {
+    clean(from + (to - from) * progress)
+}
+
+fn slice_animation_style(index: usize) -> String {
+    format!("--pine-chart-slice-delay: {}ms;", slice_delay_ms(index))
 }
 
 fn slice_delay_ms(index: usize) -> u32 {
     index as u32 * PIE_SLICE_DELAY_MS
 }
 
-fn pie_animation_cleanup_delay_ms(duration_ms: f64, slice_count: usize) -> u32 {
-    let max_delay = slice_count.saturating_sub(1) as u32 * PIE_SLICE_DELAY_MS;
-    animation_duration_ms(duration_ms) + max_delay + PIE_ANIMATION_BUFFER_MS
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map(|performance| performance.now())
+        .unwrap_or_else(js_sys::Date::now)
 }
 
 fn visible_arc_end(start_angle: f64, end_angle: f64) -> f64 {
@@ -1247,5 +1616,64 @@ mod tests {
         assert!(chart.center_visible);
         assert_eq!(chart.center_value_y, chart.center_y - 26.0);
         assert_eq!(chart.center_label_y, chart.center_y);
+    }
+
+    #[test]
+    fn entering_slice_collapses_at_old_neighbor_boundary() {
+        let previous = vec![boundary("a", -90.0, 180.0), boundary("b", 180.0, 270.0)];
+        let next = vec![
+            boundary("a", -90.0, 90.0),
+            boundary("b", 90.0, 150.0),
+            boundary("c", 150.0, 270.0),
+        ];
+
+        assert_eq!(
+            entering_collapse_angle(2, &next, &previous, next[2].frame.start_angle),
+            270.0
+        );
+    }
+
+    #[test]
+    fn entering_middle_slice_collapses_between_old_neighbors() {
+        let previous = vec![boundary("a", -90.0, 90.0), boundary("b", 90.0, 270.0)];
+        let next = vec![
+            boundary("a", -90.0, 54.0),
+            boundary("new", 54.0, 126.0),
+            boundary("b", 126.0, 270.0),
+        ];
+
+        assert_eq!(
+            entering_collapse_angle(1, &next, &previous, next[1].frame.start_angle),
+            90.0
+        );
+    }
+
+    #[test]
+    fn leaving_middle_slice_collapses_to_new_neighbor_boundary() {
+        let previous = vec![
+            boundary("one", -90.0, -54.0),
+            boundary("two", -54.0, -18.0),
+            boundary("three", -18.0, 270.0),
+        ];
+        let next = vec![
+            boundary("one", -90.0, -45.0),
+            boundary("three", -45.0, 270.0),
+        ];
+
+        assert_eq!(
+            leaving_collapse_angle(1, &previous, &next, previous[1].frame.end_angle),
+            -45.0
+        );
+    }
+
+    fn boundary(key: &str, start_angle: f64, end_angle: f64) -> PieSliceBoundary {
+        PieSliceBoundary {
+            key: key.into(),
+            frame: PieSliceFrame {
+                start_angle,
+                end_angle,
+                ..PieSliceFrame::default()
+            },
+        }
     }
 }
