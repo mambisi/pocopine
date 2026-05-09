@@ -120,8 +120,10 @@ The test pattern (synthesize a keypair → inject as static JWKS →
 sign a token → verify round-trip):
 
 ```rust
-use pocopine_auth_jwt::providers::Okta;
-// ... (see crates/pocopine-auth-jwt/tests/firebase_provider.rs
+// In your `pocopine-auth-jwt-okta` crate's tests/okta_provider.rs:
+use pocopine_auth_jwt::{JwtVerifier, KeySource, Provider};
+use pocopine_auth_jwt_okta::Okta;
+// ... (see crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs
 //      for the full pattern)
 
 #[tokio::test]
@@ -149,14 +151,18 @@ defends against:
 - Missing `kid` in the JWKS (key rotation gap).
 
 The full pattern lives in
-[`crates/pocopine-auth-jwt/tests/firebase_provider.rs`](../crates/pocopine-auth-jwt/tests/firebase_provider.rs);
+[`crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs`](../crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs);
 copy that file and adjust for your provider.
 
 ## Bundled providers
 
+In-tree provider crates follow the `pocopine-auth-jwt-<vendor>`
+naming convention and version independently from the verifier
+engine. Apps add one Cargo dep per provider they use:
+
 | Provider | Crate | Notes |
 |---|---|---|
-| Firebase ID token | `pocopine-auth-jwt` (in-tree) | RS256, `Authorization: Bearer` only. SSR `__session` cookies use a different JWKS URL — out of scope. |
+| Firebase ID token | [`pocopine-auth-jwt-firebase`](../crates/pocopine-auth-jwt-firebase) | RS256, `Authorization: Bearer` only. SSR `__session` cookies use a different JWKS URL — out of scope. |
 
 ## Community providers
 

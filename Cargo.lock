@@ -3176,6 +3176,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-auth-jwt-firebase"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "jsonwebtoken",
+ "pocopine-auth",
+ "pocopine-auth-jwt",
+ "rand 0.8.6",
+ "rsa",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "pocopine-cli"
 version = "0.1.0"
 dependencies = [

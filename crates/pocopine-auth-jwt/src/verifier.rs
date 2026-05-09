@@ -53,12 +53,14 @@ struct VerifierInner {
 
 impl JwtVerifier {
     /// Build a verifier from any [`Provider`](crate::Provider)
-    /// — a typed provider config (e.g.
-    /// [`crate::providers::Firebase`]) that materializes a
-    /// `JwtConfig`.
+    /// — a typed provider config that materializes a
+    /// `JwtConfig`. Provider crates ship under the
+    /// `pocopine-auth-jwt-<vendor>` naming convention, e.g.
+    /// `pocopine-auth-jwt-firebase`.
     ///
     /// ```ignore
-    /// use pocopine_auth_jwt::{JwtVerifier, providers::Firebase};
+    /// use pocopine_auth_jwt::JwtVerifier;
+    /// use pocopine_auth_jwt_firebase::Firebase;
     /// let verifier = JwtVerifier::from_provider(Firebase::new("my-project"))?;
     /// ```
     pub fn from_provider<P: crate::provider::Provider>(provider: P) -> Result<Self, JwtAuthError> {

@@ -1,7 +1,9 @@
-//! Firebase Authentication ID-token verifier.
+//! Firebase Authentication ID-token verifier preset for
+//! `pocopine-auth-jwt`.
 //!
 //! ```ignore
-//! use pocopine_auth_jwt::{JwtVerifier, providers::Firebase};
+//! use pocopine_auth_jwt::JwtVerifier;
+//! use pocopine_auth_jwt_firebase::Firebase;
 //!
 //! let verifier = JwtVerifier::from_provider(
 //!     Firebase::new("my-project-id"),
@@ -22,12 +24,30 @@
 //! apps that want them override `claim_map.roles` /
 //! `claim_map.permissions` to point at the right path on top of
 //! `Firebase::new(...).jwt_config()`.
+//!
+//! ## Crate split rationale
+//!
+//! Firebase-specific code lives here, separate from
+//! `pocopine-auth-jwt`, so:
+//!
+//! - The verifier engine has zero vendor coupling.
+//! - This crate versions independently — a Firebase-specific fix
+//!   doesn't bump the engine.
+//! - The `pocopine-auth-jwt-<vendor>` naming convention from
+//!   RFC-074 is symmetric: in-tree and community-maintained
+//!   provider crates follow the same shape.
+//!
+//! Apps that use multiple providers (e.g. Firebase + Auth0) add
+//! one dep per provider to their server `Cargo.toml` and call
+//! `JwtVerifier::from_provider(...)` for each.
+
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::time::Duration;
 
-use crate::config::{Algorithm, ClaimMap, JwtConfig, KeySource, TokenSource};
-use crate::error::JwtAuthError;
-use crate::provider::Provider;
+use pocopine_auth_jwt::{
+    Algorithm, ClaimMap, JwtAuthError, JwtConfig, KeySource, Provider, TokenSource,
+};
 
 /// Firebase ID-token JWKS endpoint. Only used for `id_token`
 /// verification; session-cookie verification uses a different URL
@@ -52,12 +72,12 @@ const DEFAULT_LEEWAY: Duration = Duration::from_secs(60);
 /// Firebase identity verifier configuration.
 ///
 /// Construct with [`Firebase::new`] and pass to
-/// [`crate::JwtVerifier::from_provider`]. Override individual
-/// fields via struct-update syntax:
+/// [`pocopine_auth_jwt::JwtVerifier::from_provider`]. Override
+/// individual fields via struct-update syntax:
 ///
 /// ```ignore
 /// use std::time::Duration;
-/// use pocopine_auth_jwt::providers::Firebase;
+/// use pocopine_auth_jwt_firebase::Firebase;
 ///
 /// let firebase = Firebase {
 ///     leeway: Duration::from_secs(120),
