@@ -21,6 +21,13 @@ use pocopine_events::{EventDraft, EventError, EventKind, EventResult, IntoTopic,
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod query;
+
+pub use query::{
+    QueryRequest, QueryState, QUERY_REASON_GAP, QUERY_REASON_INITIAL, QUERY_REASON_LIVE,
+    QUERY_REASON_MANUAL, QUERY_REASON_STREAM_ERROR,
+};
+
 /// Current browser live protocol identifier.
 pub const LIVE_PROTOCOL_V1: &str = "pocopine.live.v1";
 
