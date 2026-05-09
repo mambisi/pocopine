@@ -84,5 +84,5 @@ Conventions:
 | 073 | [Yrs collaboration over WebSocket and Redis](./rfc-073-yrs-collaboration.md) | Draft |
 | 074 | [`pocopine-auth-credentials` and the `Provider` trait](./rfc-074-auth-credentials-and-provider-trait.md) | Draft |
 | 076 | [App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md) | Draft |
-| 077 | [Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md) | Draft |
+| 077 | [Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md) | Accepted (Phases 1-3 implemented; Phase 4 typed hooks rejected) |
 | 078 | [Client route guards, loaders, and fetch middleware](./rfc-078-client-route-guards-and-loaders.md) | Accepted (core implemented; auth-client follow-up pending) |
