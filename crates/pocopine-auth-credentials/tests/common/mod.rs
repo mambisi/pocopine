@@ -18,9 +18,7 @@ use serde_json::json;
 
 /// The app-side user record. Apps implement [`PasswordCredentials`]
 /// on whatever shape their database holds; here it's a tiny struct
-/// the tests can construct directly. `login_id` is whatever the
-/// configured [`pocopine_auth_credentials::LoginIdValidator`]
-/// produced — in the default setup that's a normalized email.
+/// the tests can construct directly.
 ///
 /// `password_hash` is `Option<String>` to match the multi-credential
 /// trait shape; the integration tests set it to `Some(...)` for
@@ -29,7 +27,7 @@ use serde_json::json;
 #[derive(Clone)]
 pub(crate) struct TestUser {
     pub(crate) id: String,
-    pub(crate) login_id: String,
+    pub(crate) email: String,
     pub(crate) password_hash: Option<String>,
     pub(crate) email_verified: bool,
 }
@@ -38,19 +36,15 @@ impl PasswordCredentials for TestUser {
     fn id(&self) -> &str {
         &self.id
     }
-    fn login_id(&self) -> &str {
-        &self.login_id
+    fn email(&self) -> &str {
+        &self.email
     }
     fn password_hash(&self) -> Option<&str> {
         self.password_hash.as_deref()
     }
     fn to_auth_user(&self) -> AuthUser {
-        // For the email-shaped default config the login_id IS the
-        // email; surface it as such so tokens carry an `email`
-        // claim. Phone/username configurations would project
-        // differently (claim("phone") = ..., name = ..., etc.).
         AuthUser::new(&self.id)
-            .with_email(&self.login_id)
+            .with_email(&self.email)
             .with_claim("email_verified", json!(self.email_verified))
     }
 }
@@ -64,16 +58,16 @@ impl TestUserStore {
     /// Test helper: seed an OAuth-only / passkey-only user (no
     /// password set) so the login flow can confirm the
     /// password-less branch falls through to InvalidCredentials.
-    pub(crate) fn seed_passwordless(&self, login_id: &str) {
+    pub(crate) fn seed_passwordless(&self, email: &str) {
         let mut inner = self.inner.write().expect("test lock");
         let id = format!("u{}", inner.by_id.len() + 1);
         let user = TestUser {
             id: id.clone(),
-            login_id: login_id.to_string(),
+            email: email.to_string(),
             password_hash: None,
             email_verified: true,
         };
-        inner.by_login_id.insert(login_id.to_string(), id.clone());
+        inner.by_email.insert(email.to_string(), id.clone());
         inner.by_id.insert(id, user);
     }
 }
@@ -81,8 +75,8 @@ impl TestUserStore {
 #[derive(Default)]
 struct TestUserStoreInner {
     by_id: HashMap<String, TestUser>,
-    /// Maps `login_id (already-normalized) → id`.
-    by_login_id: HashMap<String, String>,
+    /// Maps `email (already-lowercased) → id`.
+    by_email: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -100,15 +94,15 @@ impl std::error::Error for DuplicateUser {}
 impl UserStore for TestUserStore {
     type User = TestUser;
 
-    async fn find_by_login_id(&self, login_id: &str) -> Result<Option<TestUser>, StoreError> {
-        // The framework already normalized the value before
+    async fn find_by_email(&self, email: &str) -> Result<Option<TestUser>, StoreError> {
+        // The framework already lowercased the value before
         // calling us; defense-in-depth case-insensitive lookup
         // belongs in production stores via column collations,
         // not here.
         let inner = self.inner.read().map_err(poisoned)?;
         Ok(inner
-            .by_login_id
-            .get(login_id)
+            .by_email
+            .get(email)
             .and_then(|id| inner.by_id.get(id))
             .cloned())
     }
@@ -118,20 +112,20 @@ impl UserStore for TestUserStore {
         Ok(inner.by_id.get(id).cloned())
     }
 
-    async fn create(&self, login_id: &str, password_hash: String) -> Result<TestUser, StoreError> {
+    async fn create(&self, email: &str, password_hash: String) -> Result<TestUser, StoreError> {
         let mut inner = self.inner.write().map_err(poisoned)?;
-        if inner.by_login_id.contains_key(login_id) {
+        if inner.by_email.contains_key(email) {
             return Err(Box::new(DuplicateUser));
         }
         // Tests want predictable ids: counter-based.
         let id = format!("u{}", inner.by_id.len() + 1);
         let user = TestUser {
             id: id.clone(),
-            login_id: login_id.to_string(),
+            email: email.to_string(),
             password_hash: Some(password_hash),
             email_verified: false,
         };
-        inner.by_login_id.insert(login_id.to_string(), id.clone());
+        inner.by_email.insert(email.to_string(), id.clone());
         inner.by_id.insert(id, user.clone());
         Ok(user)
     }

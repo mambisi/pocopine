@@ -37,17 +37,15 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// public-key list, audit timestamps — lives on the app's record
 /// untouched.
 ///
-/// ## Login identifier
+/// ## Scope
 ///
-/// [`login_id`](Self::login_id) returns whatever string the user
-/// types to sign in: email, phone number, username, account number,
-/// etc. The framework treats it as opaque — the
-/// [`crate::LoginIdValidator`] configured on the [`crate::Credentials`]
-/// builder validates and normalizes the value before it reaches
-/// the store. Apps that want email-based auth use the default
-/// [`crate::EmailValidator`]; phone / username apps swap in
-/// [`crate::E164PhoneValidator`] or [`crate::UsernameValidator`];
-/// truly custom shapes implement [`crate::LoginIdValidator`] directly.
+/// This crate is **email + password specifically**. The Django-shaped
+/// path: users sign up with an email address, hash a password,
+/// authenticate against that pair. Phone-OTP, username-based social
+/// auth, OAuth, passkeys are **different credential types** and
+/// belong in sibling crates implementing their own traits
+/// (`PhoneOtpCredentials`, `GoogleOAuthCredentials`,
+/// `PasskeyCredentials`, …) on the **same** `AppUser` record.
 ///
 /// ## Multiple credential types per user
 ///
@@ -55,10 +53,8 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// (email + password and Google OAuth and phone OTP, all → the
 /// same `user_id`). [`PasswordCredentials`] is **one credential
 /// type** in that mix; future sibling crates ship traits for the
-/// others (`GoogleOAuthCredentials`, `PasskeyCredentials`,
-/// `PhoneOtpCredentials`, …). Apps implement multiple on the same
-/// `AppUser` struct as their database picks up the corresponding
-/// columns / link tables.
+/// others. Apps implement multiple on the same `AppUser` struct as
+/// their database picks up the corresponding columns / link tables.
 ///
 /// To make this work, [`password_hash`](Self::password_hash) returns
 /// **`Option<&str>`** — `None` means "this user exists but doesn't
@@ -77,17 +73,14 @@ pub type StoreError = Box<dyn Error + Send + Sync + 'static>;
 /// projection that never serializes the hash).
 pub trait PasswordCredentials: Send + Sync + 'static {
     /// Stable identifier — used as the JWT `sub` claim. Independent
-    /// of [`login_id`](Self::login_id) (which can change when the
-    /// user updates their email / phone / username; this can't).
+    /// of the email (which can change when the user updates their
+    /// address; this can't).
     fn id(&self) -> &str;
 
-    /// The opaque, **already-normalized** identifier the user typed
-    /// to sign in. Email, phone (E.164), username, account number —
-    /// whatever the configured [`crate::LoginIdValidator`] produced.
-    /// The framework matches this byte-for-byte against the
-    /// normalized form of the login request input; case folding /
-    /// trimming has already happened at the validator layer.
-    fn login_id(&self) -> &str;
+    /// The user's already-normalized email address (lowercase,
+    /// trimmed). The framework matches this byte-for-byte against
+    /// the normalized form of the login request input.
+    fn email(&self) -> &str;
 
     /// Argon2id PHC string for the user's current password.
     /// **`None` for users without a password set** (OAuth-only,
@@ -124,35 +117,33 @@ pub trait UserStore: Send + Sync + 'static {
     /// The app's user / account type.
     type User: PasswordCredentials;
 
-    /// Return the user with the given `login_id`, if any. The value
-    /// is the **already-normalized** form (lowercase email, +E.164
-    /// phone, …) — implementors do a literal match against the
-    /// stored field. Case folding / trimming has already happened
-    /// at the validator layer; defending against case-different
-    /// inserts is the validator's responsibility, not the store's.
-    async fn find_by_login_id(&self, login_id: &str) -> Result<Option<Self::User>, StoreError>;
+    /// Return the user with `email`, if any. The framework folds
+    /// the request input to lowercase before calling this, so a
+    /// literal byte-for-byte match against the stored email
+    /// suffices; implementors do **not** need to add their own
+    /// `LOWER(...)` collation.
+    async fn find_by_email(&self, email: &str) -> Result<Option<Self::User>, StoreError>;
 
     /// Return the user with `id`, if any.
     async fn find_by_id(&self, id: &str) -> Result<Option<Self::User>, StoreError>;
 
-    /// Insert a new user with `login_id` (already normalized) and
-    /// the freshly-hashed `password_hash`. Implementations generate
-    /// the id, set any app-specific defaults (display name, role on
-    /// signup, timestamps, …), and return the constructed user
+    /// Insert a new user with `email` (already lowercased) and the
+    /// freshly-hashed `password_hash`. Implementations generate
+    /// the id, set any app-specific defaults (display name, role
+    /// on signup, timestamps, …), and return the constructed user
     /// record.
     ///
     /// Implementors MUST reject by error (not silently upsert) when
-    /// a user with the same `login_id` already exists; the credentials
+    /// a user with the same email already exists; the credentials
     /// crate maps any error from this method to
-    /// [`crate::CredentialsError::LoginIdTaken`] for the `409 Conflict`
+    /// [`crate::CredentialsError::EmailTaken`] for the `409 Conflict`
     /// response on the signup route. (If the failure is something
-    /// other than duplicate-login — e.g. a connection drop — the
+    /// other than duplicate-email — e.g. a connection drop — the
     /// `tracing` log carries the original error class while the
-    /// HTTP response stays the closed-set `login_id_taken`. Callers
-    /// that need to distinguish should re-check availability before
-    /// retrying.)
-    async fn create(&self, login_id: &str, password_hash: String)
-        -> Result<Self::User, StoreError>;
+    /// HTTP response stays the closed-set `email_taken`. Callers
+    /// that need to distinguish should re-check email availability
+    /// before retrying.)
+    async fn create(&self, email: &str, password_hash: String) -> Result<Self::User, StoreError>;
 }
 
 /// Ephemeral, hashed-token store for password-reset and
