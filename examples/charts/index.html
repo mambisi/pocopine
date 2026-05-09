@@ -244,6 +244,11 @@
       transform-origin: center bottom;
     }
 
+    .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-entering="true"]:not(.pine-chart-pie-hover-slice) {
+      animation: pine-chart-pie-segment-enter var(--pine-chart-animation-duration) var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms) backwards;
+      will-change: clip-path, opacity;
+    }
+
     .pine-chart-root[data-animate="true"] .pine-chart-area[data-leaving="true"],
     .pine-chart-root[data-animate="true"] .pine-chart-marker[data-leaving="true"],
     .pine-chart-root[data-animate="true"] .pine-chart-point[data-leaving="true"] {
@@ -258,6 +263,8 @@
     }
 
     .pine-chart-root[data-animate="true"] .pine-chart-pie-slice[data-leaving="true"] {
+      animation: pine-chart-pie-segment-exit var(--pine-chart-animation-duration) var(--pine-chart-animation-easing) forwards;
+      will-change: clip-path, opacity;
       pointer-events: none;
     }
 
@@ -290,6 +297,28 @@
       from {
         opacity: 0;
         transform: scaleY(0);
+      }
+    }
+
+    @keyframes pine-chart-pie-segment-enter {
+      from {
+        opacity: 0;
+        clip-path: var(--pine-chart-slice-enter-clip);
+      }
+      to {
+        opacity: 1;
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+      }
+    }
+
+    @keyframes pine-chart-pie-segment-exit {
+      from {
+        opacity: 1;
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+      }
+      to {
+        opacity: 0;
+        clip-path: var(--pine-chart-slice-exit-clip);
       }
     }
 

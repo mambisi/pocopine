@@ -131,11 +131,6 @@ impl PieChartGeometry {
                 let label = slice.label.clone();
                 let aria_label = format!("{label}: {value_label} ({percentage_label})");
                 let d = pie_slice_path(center, outer_radius, inner_radius, slice_start, slice_end)?;
-                let enter_d =
-                    collapsed_pie_slice_path(center, outer_radius, inner_radius, slice_start)?;
-                let exit_d =
-                    collapsed_pie_slice_path(center, outer_radius, inner_radius, slice_end)?;
-                let delay_ms = slice_delay_ms(index);
                 let label_point = polar_point(
                     center,
                     label_radius(outer_radius, inner_radius),
@@ -149,18 +144,12 @@ impl PieChartGeometry {
                     percentage,
                     percentage_label,
                     aria_label,
-                    d: d.clone(),
+                    d,
                     start_angle: slice_start,
                     end_angle: slice_end,
                     label_x: label_point.x,
                     label_y: label_point.y,
-                    animation_style: format!("--pine-chart-slice-delay: {delay_ms}ms;"),
-                    morph_from_d: d.clone(),
-                    morph_to_d: d.clone(),
-                    morph_duration: "0ms".into(),
-                    morph_begin: "0ms".into(),
-                    enter_d,
-                    exit_d,
+                    animation_style: slice_animation_style(index, slice_start, slice_end),
                     entering: false,
                     leaving: false,
                 })
@@ -212,12 +201,6 @@ pub struct SvgPieSlice {
     pub label_x: f64,
     pub label_y: f64,
     pub animation_style: String,
-    pub morph_from_d: String,
-    pub morph_to_d: String,
-    pub morph_duration: String,
-    pub morph_begin: String,
-    pub enter_d: String,
-    pub exit_d: String,
     pub entering: bool,
     pub leaving: bool,
 }
@@ -588,7 +571,7 @@ impl PinePieChart {
             Err(ChartError::EmptySeries) => {
                 if retain_leaving && !self.slices.is_empty() {
                     self.slices.iter_mut().for_each(|slice| {
-                        configure_leaving_slice(slice, self.animation_duration);
+                        configure_leaving_slice(slice);
                         slice.leaving = true;
                     });
                     self.legend_items = pie_legend_items(&self.data);
@@ -626,15 +609,20 @@ impl PinePieChart {
 
         let mut added = false;
         for slice in next {
-            if self
+            if let Some(previous) = self
                 .slices
                 .iter()
-                .any(|previous| !previous.leaving && previous.key == slice.key)
+                .find(|previous| !previous.leaving && previous.key == slice.key)
             {
-                configure_static_slice(slice);
+                if previous.entering {
+                    configure_entering_slice(slice);
+                    added = true;
+                } else {
+                    configure_static_slice(slice);
+                }
                 continue;
             }
-            configure_entering_slice(slice, self.animation_duration);
+            configure_entering_slice(slice);
             added = true;
         }
         added
@@ -647,7 +635,7 @@ impl PinePieChart {
                 continue;
             }
             let mut leaving = previous.clone();
-            configure_leaving_slice(&mut leaving, self.animation_duration);
+            configure_leaving_slice(&mut leaving);
             leaving.entering = false;
             leaving.leaving = true;
             next.push(leaving);
@@ -672,7 +660,6 @@ impl PinePieChart {
         }
         self.slices.retain(|slice| !slice.leaving);
         self.slices.iter_mut().for_each(|slice| {
-            slice.entering = false;
             configure_static_slice(slice);
         });
         if self.slices.is_empty() {
@@ -967,54 +954,41 @@ fn pie_slice_path(
     Ok(path)
 }
 
-fn collapsed_pie_slice_path(
-    center: Point,
-    outer_radius: f64,
-    inner_radius: f64,
-    angle: f64,
-) -> ChartResult<String> {
-    pie_slice_path(center, outer_radius, inner_radius, angle, angle)
-}
-
 fn configure_static_slice(slice: &mut SvgPieSlice) {
-    slice.morph_from_d = slice.d.clone();
-    slice.morph_to_d = slice.d.clone();
-    slice.morph_duration = "0ms".into();
-    slice.morph_begin = "0ms".into();
+    slice.entering = false;
+    slice.leaving = false;
 }
 
-fn configure_entering_slice(slice: &mut SvgPieSlice, duration_ms: f64) {
+fn configure_entering_slice(slice: &mut SvgPieSlice) {
     slice.entering = true;
     slice.leaving = false;
-    slice.morph_from_d = slice.enter_d.clone();
-    slice.morph_to_d = slice.d.clone();
-    slice.morph_duration = animation_duration_attr(duration_ms);
-    slice.morph_begin = slice_begin_attr(slice);
 }
 
-fn configure_leaving_slice(slice: &mut SvgPieSlice, duration_ms: f64) {
+fn configure_leaving_slice(slice: &mut SvgPieSlice) {
     slice.entering = false;
-    slice.morph_from_d = slice.d.clone();
-    slice.morph_to_d = slice.exit_d.clone();
-    slice.morph_duration = animation_duration_attr(duration_ms);
-    slice.morph_begin = "0ms".into();
+    slice.leaving = true;
 }
 
-fn animation_duration_attr(duration_ms: f64) -> String {
-    format!("{}ms", animation_duration_ms(duration_ms))
+fn slice_animation_style(index: usize, start_angle: f64, end_angle: f64) -> String {
+    format!(
+        "--pine-chart-slice-delay: {}ms; --pine-chart-slice-enter-clip: {}; --pine-chart-slice-exit-clip: {};",
+        slice_delay_ms(index),
+        collapsed_clip_for_angle(start_angle),
+        collapsed_clip_for_angle(end_angle),
+    )
 }
 
-fn slice_begin_attr(slice: &SvgPieSlice) -> String {
-    format!("{}ms", slice_animation_delay_ms(&slice.animation_style))
-}
-
-fn slice_animation_delay_ms(animation_style: &str) -> u32 {
-    animation_style
-        .trim()
-        .strip_prefix("--pine-chart-slice-delay:")
-        .and_then(|value| value.trim().strip_suffix("ms;"))
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(0)
+fn collapsed_clip_for_angle(angle: f64) -> &'static str {
+    let angle = angle.rem_euclid(FULL_CIRCLE_DEGREES);
+    if !(45.0..315.0).contains(&angle) {
+        "polygon(100% 0, 100% 0, 100% 100%, 100% 100%)"
+    } else if angle < 135.0 {
+        "polygon(0 100%, 100% 100%, 100% 100%, 0 100%)"
+    } else if angle < 225.0 {
+        "polygon(0 0, 0 0, 0 100%, 0 100%)"
+    } else {
+        "polygon(0 0, 100% 0, 100% 0, 0 0)"
+    }
 }
 
 fn slice_delay_ms(index: usize) -> u32 {
