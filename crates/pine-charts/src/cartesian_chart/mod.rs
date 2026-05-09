@@ -2,6 +2,7 @@ use pocopine::prelude::*;
 use pocopine::{create_context, current_scope_id};
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::bar::{bar_aria_label, baseline_value, category_tick_labels, ChartBar};
 use crate::cartesian::{
     expanded_domain, grid_lines_for_y, optional_domain, tick_labels_for_y, x_axis_label,
@@ -328,6 +329,13 @@ pub struct PineCartesianChart {
     pub padding_outer: f64,
     #[prop]
     pub series_padding_inner: f64,
+    #[prop]
+    pub animate: bool,
+    #[prop]
+    pub animation_duration: f64,
+    #[prop]
+    pub animation_easing: String,
+    pub animation_style: String,
     pub state: String,
     pub view_box: String,
     pub grid: Option<CartesianGridConfig>,
@@ -399,6 +407,13 @@ impl Default for PineCartesianChart {
             padding_inner: DEFAULT_PADDING_INNER,
             padding_outer: DEFAULT_PADDING_OUTER,
             series_padding_inner: DEFAULT_SERIES_PADDING_INNER,
+            animate: false,
+            animation_duration: DEFAULT_ANIMATION_DURATION_MS,
+            animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            animation_style: animation_style(
+                DEFAULT_ANIMATION_DURATION_MS,
+                DEFAULT_ANIMATION_EASING,
+            ),
             state: "empty".into(),
             view_box: format!("0 0 {DEFAULT_WIDTH} {DEFAULT_HEIGHT}"),
             grid: None,
@@ -457,7 +472,23 @@ impl Default for PineCartesianChart {
 impl PineCartesianChart {
     fn on_setup(&mut self) {
         ROOT.provide(this::<Self>());
+        self.update_animation_style();
         self.recompute();
+    }
+
+    #[watch(animate)]
+    fn on_animate(&mut self, _: bool, _: Option<bool>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_duration)]
+    fn on_animation_duration(&mut self, _: f64, _: Option<f64>) {
+        self.update_animation_style();
+    }
+
+    #[watch(animation_easing)]
+    fn on_animation_easing(&mut self, _: String, _: Option<String>) {
+        self.update_animation_style();
     }
 
     #[watch(width)]
@@ -507,6 +538,10 @@ impl PineCartesianChart {
 }
 
 impl PineCartesianChart {
+    fn update_animation_style(&mut self) {
+        self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
     pub fn set_grid(&mut self, grid: CartesianGridConfig) {
         self.grid = Some(grid);
         self.recompute();

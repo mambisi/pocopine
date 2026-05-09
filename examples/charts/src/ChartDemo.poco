@@ -41,7 +41,10 @@
   </header>
 
   <pine-chart-responsive class="chart-panel" aspect_ratio="2" min_height="220">
-    <pine-cartesian-chart label="Weekly metric combo">
+    <pine-cartesian-chart label="Weekly metric combo"
+                          animate="true"
+                          animation_duration="180"
+                          animation_easing="ease-out">
       <pine-chart-grid></pine-chart-grid>
       <pine-x-axis label="Week"></pine-x-axis>
       <pine-y-axis label="Metric"></pine-y-axis>
@@ -97,7 +100,10 @@
   <pine-chart-responsive class="chart-panel chart-panel--metro"
                          aspect_ratio="1.875"
                          min_height="320">
-    <pine-layer-chart label="Metro layer order">
+    <pine-layer-chart label="Metro layer order"
+                      animate="true"
+                      animation_duration="180"
+                      animation_easing="ease-out">
       <pine-chart-layer name="grid">
         <pine-chart-guide key="top-row" x1="80" y1="120" x2="820" y2="120"></pine-chart-guide>
         <pine-chart-guide key="mid-row" x1="80" y1="240" x2="820" y2="240"></pine-chart-guide>
@@ -155,6 +161,9 @@
                         pp-bind:series="scatter_series"
                         x_label="Size"
                         y_label="Rate"
+                        animate="true"
+                        animation_duration="180"
+                        animation_easing="ease-out"
                         point_radius="4.5"></pine-scatter-chart>
   </pine-chart-responsive>
 
@@ -168,6 +177,9 @@
                      pp-bind:series="area_series"
                      x_label="Week"
                      y_label="Volume"
+                     animate="true"
+                     animation_duration="180"
+                     animation_easing="ease-out"
                      show_markers="true"></pine-area-chart>
   </pine-chart-responsive>
 
@@ -181,6 +193,9 @@
                     pp-bind:series="bar_series"
                     pp-bind:mode="bar_mode"
                     x_label="Bucket"
+                    animate="true"
+                    animation_duration="180"
+                    animation_easing="ease-out"
                     y_label="Count"></pine-bar-chart>
   </pine-chart-responsive>
 
@@ -199,6 +214,9 @@
                     pp-bind:start_angle="pie_start_angle"
                     pp-bind:end_angle="pie_end_angle"
                     pp-bind:center_label="pie_center_label"
+                    animate="true"
+                    animation_duration="180"
+                    animation_easing="ease-out"
                     pp-bind:center_value="pie_center_value"></pine-pie-chart>
   </pine-chart-responsive>
 

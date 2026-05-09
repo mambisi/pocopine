@@ -3,7 +3,11 @@
       :aria-label="label"
       :data-state="state"
       :data-empty="empty"
-      :data-invalid="invalid">
+      :data-invalid="invalid"
+      :data-animate="animate"
+      :data-animation-duration="animation_duration"
+      :data-animation-easing="animation_easing"
+      :style="animation_style">
   <div class="pine-cartesian-chart-definitions"
        hidden
        aria-hidden="true">
