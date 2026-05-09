@@ -417,6 +417,44 @@ Fixed tracing targets:
 | metric | `pocopine.metric` |
 | analytics | `pocopine.analytics` |
 
+When an `ObservedEvent` is emitted into `tracing`, the shared context and
+event fields are recorded as stable tracing fields instead of a single Debug
+blob. This is important for JSON logs, `tracing-opentelemetry`, and log agents
+that consume typed tracing values.
+
+Context fields use fixed names:
+
+```text
+observed_context_service
+observed_context_route
+observed_context_component
+observed_context_trace_id
+```
+
+Each optional context field also has an `observed_context_has_*` boolean so
+exporters can distinguish missing context from an intentionally empty string.
+
+User event fields are exported through fixed slots because `tracing` callsites
+require static field names. Slots preserve the original field name, privacy
+label, kind, and typed value:
+
+```text
+observed_field_count = 2
+observed_field_overflowed = false
+observed_field_0_name = "duration_ms"
+observed_field_0_privacy = "public"
+observed_field_0_kind = "f64"
+observed_field_0_value_f64 = 12.7
+observed_field_1_name = "route"
+observed_field_1_kind = "string"
+observed_field_1_value_string = "/settings"
+```
+
+The current tracing emission reserves eight slots. If an event carries more
+fields, `observed_field_count` still records the full count and
+`observed_field_overflowed` is set to `true`; keep framework events coarse and
+stable rather than shipping wide payloads.
+
 ## Analytics and telemetry
 
 Analytics is separate from logging. Logs are operational records. Analytics
@@ -451,6 +489,36 @@ stored in shared server state such as axum state. On wasm targets this bound is
 relaxed because browser SDK handles are usually JavaScript objects. The closure
 example above spells out `&pocopine::observe::ObservedEvent` so Rust can infer
 the host closure sink against that `Send + Sync` blanket implementation.
+
+Host exporters that buffer work should use a bounded queue. The built-in
+`BoundedAnalyticsSink` wraps another sink, accepts up to `capacity` redacted
+events, rejects new events when full, and exposes counters for pending,
+enqueued, dropped, delivered, and failed operations:
+
+```rust
+use pocopine::analytics::{AnalyticsClient, BoundedAnalyticsSink};
+
+let exporter = BoundedAnalyticsSink::new(my_exporter_sink, 1024);
+let metrics = exporter.clone();
+
+let analytics = AnalyticsClient::new()
+    .with_sink(exporter);
+
+let report = analytics.emit(pocopine::analytics::route_view("/settings"));
+if !report.all_succeeded() {
+    let snapshot = metrics.metrics();
+    tracing::warn!(
+        target: "pocopine.log",
+        dropped = snapshot.dropped,
+        failed = snapshot.failed,
+        "analytics exporter backpressure"
+    );
+}
+```
+
+Call `analytics.flush()` during graceful shutdown to drain the queued events
+into the wrapped sink. Flush keeps going after per-event exporter errors and
+counts those failures in the wrapper metrics.
 
 ## Browser vendor bridges
 
@@ -504,7 +572,10 @@ Observability must not change application behavior.
 - Analytics sink failure must not stop other sinks.
 - Analytics sinks receive redacted events, not raw debug fields.
 - Runtime/library crates do not install global subscribers.
-- Async exporters added later must use bounded queues and count drops.
+- Host exporters that buffer work should use `BoundedAnalyticsSink` or an
+  equivalent bounded queue and count drops.
+- Async exporters added later must preserve the same bounded-queue and
+  drop/error-counter contract.
 
 ## Common recipes
 
