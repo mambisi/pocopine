@@ -8,7 +8,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use pocopine_auth::AuthUser;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use crate::builder::CredentialsHandle;
 use crate::error::CredentialsError;
@@ -134,25 +134,73 @@ async fn logout_handler<S: UserStore, T: TokenStore>(
     StatusCode::NO_CONTENT
 }
 
+/// JWT-reserved + framework-recognized claim keys that custom
+/// claims must not shadow. The framework writes the authoritative
+/// values for these; an app-supplied `with_claim("sub", "evil")`
+/// would otherwise overwrite the JWT subject and let the user
+/// impersonate anyone.
+const RESERVED_CLAIM_KEYS: &[&str] = &[
+    // Standard JWT (RFC 7519) — the issuer sets these.
+    "sub",
+    "iss",
+    "aud",
+    "iat",
+    "exp",
+    "nbf",
+    "jti",
+    // Framework-recognized projections from `AuthUser` typed fields.
+    "email",
+    "name",
+    "roles",
+    "permissions",
+];
+
 fn issue_session_token<S: UserStore, T: TokenStore>(
     state: &CredentialsHandle<S, T>,
     subject: &str,
     auth_user: &AuthUser,
 ) -> Result<String, CredentialsError> {
-    // Mirror the JWT claim shape RFC-074 §5.12 specifies. The app's
-    // `to_auth_user()` projection decides which fields are visible:
-    // emails, roles, custom claims (incl. `email_verified`) all flow
-    // through here.
-    let extra = json!({
-        "email": auth_user.email,
-        "name": auth_user.name,
-        "roles": auth_user.roles,
-        "permissions": auth_user.permissions,
-        "claims": auth_user.claims,
-    });
+    // Build the JWT claim payload. Framework-recognized fields go at
+    // the top level; the app's custom claims (from
+    // `to_auth_user().with_claim(...)`) are flattened in alongside
+    // so they round-trip through `JwtVerifier` and reach
+    // `principal.user().claim("...")` at the documented top-level
+    // path. RFC-074 §5.12 specifies this shape.
+    //
+    // Reserved-key collision policy: framework writes the
+    // authoritative values for `sub` / `iss` / `aud` / `iat` /
+    // `exp` / `nbf` / `jti` / `email` / `name` / `roles` /
+    // `permissions`. App custom claims with the same key are
+    // dropped with a `tracing::warn!` — never silently overwritten,
+    // never silently shadowed.
+    let mut extra = Map::new();
+    if let Some(email) = &auth_user.email {
+        extra.insert("email".to_string(), json!(email));
+    }
+    if let Some(name) = &auth_user.name {
+        extra.insert("name".to_string(), json!(name));
+    }
+    if !auth_user.roles.is_empty() {
+        extra.insert("roles".to_string(), json!(auth_user.roles));
+    }
+    if !auth_user.permissions.is_empty() {
+        extra.insert("permissions".to_string(), json!(auth_user.permissions));
+    }
+    for (key, value) in &auth_user.claims {
+        if RESERVED_CLAIM_KEYS.contains(&key.as_str()) {
+            tracing::warn!(
+                target: "pocopine.log",
+                claim = %key,
+                "credentials: custom claim collides with reserved JWT or framework key; dropping"
+            );
+            continue;
+        }
+        extra.insert(key.clone(), value.clone());
+    }
+
     state
         .issuer
-        .sign(subject, extra)
+        .sign(subject, Value::Object(extra))
         .map_err(|err| CredentialsError::SessionIssue(err.to_string()))
 }
 

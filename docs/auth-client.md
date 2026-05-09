@@ -331,15 +331,13 @@ pub struct LoginRequest<'a> {
 #[derive(Deserialize)]
 pub struct LoginResponse {
     pub token: String,
-    pub user: PublicUser,
-}
-
-#[derive(Deserialize)]
-pub struct PublicUser {
-    pub id: String,
-    pub email: String,
-    pub email_verified: bool,
-    pub roles: Vec<pocopine_auth::Role>,
+    /// The credentials response wraps the framework's `AuthUser`
+    /// shape directly: typed top-level fields (`id`, `email`,
+    /// `name`, `roles`, `permissions`) plus a `claims` map for
+    /// anything the app's `to_auth_user()` projected via
+    /// `with_claim(...)` (e.g. `email_verified`,
+    /// `phone_verified`, custom flags).
+    pub user: AuthUser,
 }
 
 pub async fn login(
@@ -353,12 +351,7 @@ pub async fn login(
     )
     .await?;
 
-    let principal = Principal::from_user(
-        AuthUser::new(response.user.id)
-            .with_email(response.user.email)
-            .with_role(pocopine_auth::Role::user()),
-    );
-    session.sign_in(response.token, principal);
+    session.sign_in(response.token, Principal::from_user(response.user));
     Ok(())
 }
 
@@ -372,15 +365,100 @@ pub async fn signup(
         &LoginRequest { email, password },
     )
     .await?;
-    let principal = Principal::from_user(
-        AuthUser::new(response.user.id).with_email(response.user.email),
-    );
-    session.sign_in(response.token, principal);
+    session.sign_in(response.token, Principal::from_user(response.user));
     Ok(())
 }
 ```
 
-The pattern is the same for any provider — Firebase / Clerk /
+`AuthUser` deserializes directly from the response body — no
+intermediate `PublicUser` shape. Custom claims live in
+`response.user.claims`; reach them with `principal.user().claim("email_verified")`
+once the session is signed in.
+
+## Principal hydration with external IdPs (Firebase, Clerk, Auth0)
+
+The credentials flow above is the easy case: the server returns
+`{token, user: AuthUser}`, you have everything to build a
+`Principal` immediately. With external IdPs (Firebase's SDK, Clerk's
+`<SignIn>` widget, Auth0's `loginWithPopup`) you only get a token —
+the SDK doesn't hand you a pocopine-shaped `AuthUser`. Two patterns:
+
+**Decode the JWT body unverified for the wasm-side `Principal`.**
+The token's signature is verified on every `#[server]` call by the
+server-side middleware, so the wasm side trusting its own decoded
+copy is safe — at worst, an attacker who tampers with their local
+JWT gets a stale client-side `Principal` (their server requests
+still fail with `Unauthorized`). The decode is small:
+
+```rust
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use pocopine_auth::{AuthUser, Principal};
+
+fn decode_unverified_principal(token: &str) -> Option<Principal> {
+    let body = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(body).ok()?;
+    let raw: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&bytes).ok()?;
+
+    let sub = raw.get("sub")?.as_str()?.to_string();
+    let mut user = AuthUser::new(sub);
+    if let Some(email) = raw.get("email").and_then(|v| v.as_str()) {
+        user = user.with_email(email);
+    }
+    if let Some(name) = raw.get("name").and_then(|v| v.as_str()) {
+        user = user.with_name(name);
+    }
+    // Surface remaining claims so component code can read
+    // provider-specific fields via `principal.user().claim("...")`.
+    for (key, value) in raw {
+        if matches!(key.as_str(), "sub" | "iss" | "aud" | "iat" | "exp" | "nbf" | "jti" | "email" | "name") {
+            continue;
+        }
+        user = user.with_claim(key, value);
+    }
+    Some(Principal::from_user(user))
+}
+
+// Wire to Firebase's onAuthStateChanged (in your JS bridge):
+#[wasm_bindgen]
+pub fn __pocopine_set_token(token: String) {
+    if let (Some(session), Some(principal)) =
+        (pocopine_auth_client::active_session(), decode_unverified_principal(&token))
+    {
+        session.sign_in(token, principal);
+    } else {
+        pocopine_auth_client::set_token(token);
+    }
+}
+```
+
+**Or call a server `/me` endpoint after sign-in** to populate the
+`Principal` authoritatively. Costs one round-trip; useful when the
+server's `to_auth_user()` projection includes app-specific roles
+(via custom Firebase claims, Clerk org metadata, etc.) you don't
+want to re-derive on the client. The endpoint reads
+`Principal` from the request extensions (set by the auth
+middleware) and serializes the inner `AuthUser`:
+
+```rust
+#[pocopine::server(guard = require_login)]
+pub async fn me() -> pocopine::ServerResult<AuthUser> {
+    let principal = pocopine::server::principal()?;
+    Ok(principal.user().cloned().unwrap_or_default())
+}
+```
+
+Either pattern is fine. The decode-unverified path is a single
+network request lighter; the `/me` path stays server-of-truth and
+matches whatever roles/claims the server-side `to_auth_user()`
+projection chooses to expose. Apps that don't hydrate the
+client-side `Principal` end up with a signed-in `AuthSession` whose
+`principal()` is anonymous — guards work for the next navigation
+(after the next `/me` lookup) but immediate post-sign-in
+component reads see `Principal::anonymous()`. Decode the JWT body
+or call `/me`; don't skip both.
+
+The pattern is the same regardless of provider — Firebase / Clerk /
 Auth0 SDKs return their own `(token, user)` shape, you adapt it
 into a `Principal`, and call `AuthSession::sign_in(token, principal)`.
 
