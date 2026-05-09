@@ -85,13 +85,16 @@
 //! headers, cookies, or query strings enter framework events. Bearer
 //! attachment is a pure mutation on the in-flight `FetchRequest`.
 
+pub mod cross_tab;
 mod plugin;
 mod refresh;
 mod session;
+pub mod storage;
 
 pub use plugin::{auth_plugin, predicate_guard, AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM};
 pub use refresh::{TokenRefresh, TokenRefreshFuture};
 pub use session::{active_principal, active_session, AuthSession};
+pub use storage::TokenStorage;
 
 use std::cell::Cell;
 use std::sync::Mutex;
@@ -108,19 +111,28 @@ use pocopine_core::ServerError;
 static TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register the bearer token attached to subsequent `#[server]` calls.
-/// Replaces any previously-set token.
+/// Replaces any previously-set token. Writes through to the configured
+/// [`TokenStorage`] when one is installed via
+/// [`AuthPluginBuilder::with_token_storage`].
 pub fn set_token(token: impl Into<String>) {
+    let token = token.into();
     *TOKEN
         .lock()
-        .expect("pocopine_auth_client::TOKEN mutex poisoned") = Some(token.into());
+        .expect("pocopine_auth_client::TOKEN mutex poisoned") = Some(token.clone());
+    if let Some(storage) = storage::current_storage() {
+        storage.save(&token);
+    }
 }
 
 /// Drop the active token. Subsequent calls go out without an
-/// `Authorization` header.
+/// `Authorization` header. Also clears the configured [`TokenStorage`].
 pub fn clear_token() {
     *TOKEN
         .lock()
         .expect("pocopine_auth_client::TOKEN mutex poisoned") = None;
+    if let Some(storage) = storage::current_storage() {
+        storage.clear();
+    }
 }
 
 /// Read the active token, if any.
@@ -129,6 +141,30 @@ pub fn active_token() -> Option<String> {
         .lock()
         .expect("pocopine_auth_client::TOKEN mutex poisoned")
         .clone()
+}
+
+/// Replace the in-memory token slot from the configured
+/// [`TokenStorage`]. Called at boot (so a refreshing user's token
+/// survives reload) and from the cross-tab listener (so a sign-in in
+/// tab A propagates to tab B without an extra round-trip). No-op if
+/// no storage is installed or storage has no value.
+///
+/// Does **not** broadcast across tabs — this is the inbound side of
+/// the broadcast handshake; calling it inside the broadcast listener
+/// without recursion guard is the correct shape.
+pub fn hydrate_from_storage() {
+    let Some(storage) = storage::current_storage() else {
+        return;
+    };
+    if let Some(token) = storage.load() {
+        *TOKEN
+            .lock()
+            .expect("pocopine_auth_client::TOKEN mutex poisoned") = Some(token);
+    } else {
+        *TOKEN
+            .lock()
+            .expect("pocopine_auth_client::TOKEN mutex poisoned") = None;
+    }
 }
 
 /// Fetch middleware that attaches `Authorization: Bearer <token>` to
@@ -187,16 +223,25 @@ impl FetchMiddleware for BearerMiddleware {
             // `is_replay_safe` (i.e. `#[server(idempotent)]`) per RFC-078
             // §5.10.4 and on having actually attached a token (refresh
             // can't help an endpoint that 401s without auth context).
+            // Routed through `refresh_single_flight` so concurrent
+            // 401s coalesce into one refresh call to the issuer.
             let response = if unauthorized && had_token && is_replay_safe {
-                if let Some(refresh) = refresh::current_refresh() {
-                    match refresh.refresh().await {
+                if refresh::current_refresh().is_some() {
+                    match refresh::refresh_single_flight().await {
                         Ok(new_token) => {
-                            set_token(new_token.clone());
+                            // `set_token` writes through to storage,
+                            // which (with cross-tab sync installed)
+                            // also propagates the new token to peer
+                            // tabs on their next storage read.
+                            set_token(new_token.as_str());
                             let mut retry = request;
-                            retry.set_header("authorization", format!("Bearer {new_token}"));
+                            retry.set_header(
+                                "authorization",
+                                format!("Bearer {}", new_token.as_str()),
+                            );
                             next.run(retry).await
                         }
-                        Err(err) => Err(err),
+                        Err(err) => Err((*err).clone()),
                     }
                 } else {
                     // No refresh configured — propagate fail-closed with
@@ -297,6 +342,7 @@ mod tests {
         clear_token();
         __reset_middleware_chain_for_test();
         refresh::__reset_refresh_for_test();
+        storage::__reset_storage_for_test();
         INSTALLED.with(|c| c.set(false));
     }
 
@@ -742,5 +788,226 @@ mod tests {
         );
 
         full_reset_with_session();
+    }
+
+    // ─── TokenStorage write-through + hydration ─────────────────────
+
+    #[test]
+    fn set_token_writes_through_to_configured_storage() {
+        let _guard = lock_serial();
+        full_reset();
+
+        let test_storage = Rc::new(storage::TestStorage::default());
+        storage::install_storage(test_storage.clone());
+
+        set_token("persisted");
+        assert_eq!(test_storage.saved.borrow().as_deref(), Some("persisted"));
+
+        clear_token();
+        assert_eq!(test_storage.saved.borrow().as_deref(), None);
+
+        full_reset();
+    }
+
+    #[test]
+    fn hydrate_from_storage_repopulates_in_memory_token() {
+        let _guard = lock_serial();
+        full_reset();
+
+        let test_storage = Rc::new(storage::TestStorage::default());
+        *test_storage.saved.borrow_mut() = Some("from-storage".to_string());
+        storage::install_storage(test_storage.clone());
+
+        // Slot starts empty (full_reset cleared it).
+        assert_eq!(active_token(), None);
+
+        hydrate_from_storage();
+        assert_eq!(active_token().as_deref(), Some("from-storage"));
+
+        full_reset();
+    }
+
+    #[test]
+    fn hydrate_with_no_storage_is_a_noop() {
+        let _guard = lock_serial();
+        full_reset();
+        // No storage installed.
+        hydrate_from_storage();
+        assert_eq!(active_token(), None);
+        full_reset();
+    }
+
+    #[test]
+    fn hydrate_clears_in_memory_token_when_storage_is_empty() {
+        let _guard = lock_serial();
+        full_reset();
+
+        // Pre-populate the in-memory slot, then hydrate from an empty
+        // storage. Hydration should clear the slot to match storage.
+        set_token("in-memory");
+        let test_storage = Rc::new(storage::TestStorage::default());
+        storage::install_storage(test_storage);
+        // saved is None.
+
+        hydrate_from_storage();
+        assert_eq!(active_token(), None);
+
+        full_reset();
+    }
+
+    // ─── Single-flight refresh integrated through middleware ────────
+
+    /// Install a counter middleware that returns Unauthorized on the
+    /// first call, then 200 on subsequent calls. Counts how many
+    /// distinct requests reached the chain bottom.
+    fn install_401_then_ok_n_times(reach: Rc<std::cell::Cell<usize>>) {
+        let reach_inner = reach;
+        install_middleware(move |request: FetchRequest, _next: FetchNext| {
+            let reach = reach_inner.clone();
+            async move {
+                let _ = request;
+                let attempt = {
+                    let n = reach.get() + 1;
+                    reach.set(n);
+                    n
+                };
+                if attempt == 1 {
+                    Ok(FetchResponse {
+                        status: 401,
+                        body: r#"{"Err":{"Unauthorized":"token expired"}}"#.to_string(),
+                    })
+                } else {
+                    Ok(FetchResponse {
+                        status: 200,
+                        body: r#"{"Ok":null}"#.to_string(),
+                    })
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn single_flight_refresh_through_middleware() {
+        // Verifies the middleware path uses refresh_single_flight,
+        // not refresh.refresh() directly. We can't easily run two
+        // concurrent fetch::call invocations through one block_on,
+        // so this is the integration-level smoke: one call with
+        // refresh configured drives one refresh, replays once, gets
+        // Ok.
+        let _guard = lock_serial();
+        full_reset();
+
+        set_token("stale");
+        install();
+
+        let refresh_count = Rc::new(std::cell::Cell::new(0));
+        let refresh_count_inner = refresh_count.clone();
+        refresh::set_refresh(Rc::new(move || {
+            let c = refresh_count_inner.clone();
+            async move {
+                c.set(c.get() + 1);
+                Ok("fresh".to_string())
+            }
+        }));
+
+        let chain_calls = Rc::new(std::cell::Cell::new(0));
+        install_401_then_ok_n_times(chain_calls.clone());
+
+        let result = block_on(pocopine_core::fetch::call_replay_safe::<(), ()>(
+            "/probe",
+            &(),
+        ));
+        assert!(result.is_ok());
+        assert_eq!(refresh_count.get(), 1);
+        assert_eq!(chain_calls.get(), 2, "one 401 + one replay");
+        assert_eq!(active_token().as_deref(), Some("fresh"));
+
+        full_reset();
+    }
+
+    #[test]
+    fn aborted_refresh_unblocks_waiters_with_error() {
+        // Drive refresh_single_flight directly. First caller drops
+        // its future before the refresh resolves — second caller
+        // should not hang; it should receive the synthetic
+        // "refresh aborted" Unauthorized.
+        let _guard = lock_serial();
+        full_reset();
+
+        // Refresh future yields once before resolving so we can drop
+        // the driver mid-flight.
+        let yielded = Rc::new(std::cell::Cell::new(false));
+        let yielded_inner = yielded.clone();
+        refresh::set_refresh(Rc::new(move || {
+            let yielded = yielded_inner.clone();
+            async move {
+                if !yielded.get() {
+                    yielded.set(true);
+                    futures_yield_once().await;
+                }
+                Ok("never-reached".to_string())
+            }
+        }));
+
+        // Driver
+        let mut driver = Box::pin(refresh::refresh_single_flight());
+        // Poll once → Pending (yields inside refresh).
+        struct NoopWake;
+        impl std::task::Wake for NoopWake {
+            fn wake(self: std::sync::Arc<Self>) {}
+            fn wake_by_ref(self: &std::sync::Arc<Self>) {}
+        }
+        let waker: std::task::Waker = std::sync::Arc::new(NoopWake).into();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(matches!(
+            driver.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+
+        // Spawn a waiter while the driver is still pending.
+        let mut waiter = Box::pin(refresh::refresh_single_flight());
+        assert!(matches!(
+            waiter.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+
+        // Drop the driver — its ClearOnDrop guard publishes a
+        // synthetic error and clears IN_FLIGHT. The waiter must
+        // resolve to that error on next poll.
+        drop(driver);
+
+        match waiter.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(Err(e)) => match &*e {
+                ServerError::Unauthorized(msg) => {
+                    assert!(msg.contains("aborted"), "unexpected reason: {msg}");
+                }
+                other => panic!("expected Unauthorized, got {other:?}"),
+            },
+            other => panic!("waiter must resolve after driver drops, got {other:?}"),
+        }
+
+        full_reset();
+    }
+
+    /// Yields control once. Used to introduce an await point so the
+    /// caller can drop the future before completion.
+    async fn futures_yield_once() {
+        struct YieldOnce(bool);
+        impl Future for YieldOnce {
+            type Output = ();
+            fn poll(
+                mut self: Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<()> {
+                if self.0 {
+                    std::task::Poll::Ready(())
+                } else {
+                    self.0 = true;
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
+            }
+        }
+        YieldOnce(false).await
     }
 }
