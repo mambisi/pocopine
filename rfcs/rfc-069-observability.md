@@ -76,6 +76,8 @@ ships:
 - redaction before dispatch;
 - continued delivery after individual sink errors;
 - panic isolation around sink calls;
+- a host-side bounded exporter wrapper with drop, delivery, and failure
+  counters;
 - wasm JS function sinks for user-supplied vendor bridges;
 - wasm Firebase and Google Analytics function adapters.
 
@@ -141,10 +143,11 @@ This keeps vendor APIs out of `pocopine-core` and out of
 - Telemetry/exporter failure must not fail app behavior.
 - Analytics fan-out continues after a sink returns an error.
 - Sink panics are caught and reported as analytics delivery failures.
-- Export queues must be bounded when asynchronous exporters are added.
-- Overflow should drop low-priority analytics before operational errors.
-- Exporters must expose dropped-event and export-error counters once metrics
-  sinks land.
+- Exporters that buffer work must use bounded queues and expose dropped-event
+  and export-error counters.
+- The initial bounded host wrapper rejects new events when full. Future
+  priority-aware async exporters may drop low-priority analytics before
+  operational errors.
 - Libraries do not install global subscribers.
 
 ## 5. Privacy Rules
@@ -180,6 +183,6 @@ Later phases should add:
 - job observability export from the existing `pocopine-jobs` tracing events;
 - OpenTelemetry adapter;
 - AWS/Cloudflare host sinks;
-- bounded async exporter queues;
-- metrics for drops and exporter failures;
+- priority-aware async exporter queues;
+- metrics sink integration for exporter drop/failure counters;
 - devtools panel integration on top of the same event stream.

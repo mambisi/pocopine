@@ -4,8 +4,12 @@
 //! redaction and fan-out rules, then lets apps attach Firebase,
 //! Google Analytics, Cloudflare, OpenTelemetry, or custom sinks.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::VecDeque;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
 
 use pocopine_observe::{
     emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, RedactionPolicy,
@@ -99,6 +103,173 @@ pub struct AnalyticsReport {
 impl AnalyticsReport {
     pub fn all_succeeded(&self) -> bool {
         self.failed == 0
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExporterMetrics {
+    /// Events currently waiting for this exporter to flush.
+    pub pending: usize,
+    /// Events accepted into the bounded queue.
+    pub enqueued: u64,
+    /// Events rejected because the bounded queue was full.
+    pub dropped: u64,
+    /// Queued events successfully delivered to the wrapped sink.
+    pub delivered: u64,
+    /// Queued events, sink flushes, or panics that failed during delivery.
+    pub failed: u64,
+}
+
+/// Bounded queue wrapper for exporter sinks.
+///
+/// This keeps exporter integrations honest: backpressure is bounded, drops are
+/// counted, and flush continues across per-event failures.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct BoundedAnalyticsSink<S> {
+    inner: Arc<S>,
+    capacity: usize,
+    queue: Arc<Mutex<VecDeque<ObservedEvent>>>,
+    metrics: Arc<Mutex<ExporterMetrics>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S> BoundedAnalyticsSink<S>
+where
+    S: AnalyticsSink + 'static,
+{
+    pub fn new(inner: S, capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(inner),
+            capacity,
+            queue: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
+            metrics: Arc::new(Mutex::new(ExporterMetrics::default())),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn pending(&self) -> usize {
+        self.queue
+            .lock()
+            .expect("analytics exporter queue lock poisoned")
+            .len()
+    }
+
+    pub fn metrics(&self) -> ExporterMetrics {
+        let pending = self.pending();
+        let mut metrics = self
+            .metrics
+            .lock()
+            .expect("analytics exporter metrics lock poisoned")
+            .clone();
+        metrics.pending = pending;
+        metrics
+    }
+
+    fn increment_dropped(&self) {
+        self.metrics
+            .lock()
+            .expect("analytics exporter metrics lock poisoned")
+            .dropped += 1;
+    }
+
+    fn increment_enqueued(&self) {
+        self.metrics
+            .lock()
+            .expect("analytics exporter metrics lock poisoned")
+            .enqueued += 1;
+    }
+
+    fn increment_delivered(&self) {
+        self.metrics
+            .lock()
+            .expect("analytics exporter metrics lock poisoned")
+            .delivered += 1;
+    }
+
+    fn increment_failed(&self) {
+        self.metrics
+            .lock()
+            .expect("analytics exporter metrics lock poisoned")
+            .failed += 1;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S> Clone for BoundedAnalyticsSink<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            capacity: self.capacity,
+            queue: Arc::clone(&self.queue),
+            metrics: Arc::clone(&self.metrics),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S> AnalyticsSink for BoundedAnalyticsSink<S>
+where
+    S: AnalyticsSink + 'static,
+{
+    fn emit(&self, event: &ObservedEvent) -> Result<(), AnalyticsError> {
+        let mut queue = self
+            .queue
+            .lock()
+            .expect("analytics exporter queue lock poisoned");
+        if queue.len() >= self.capacity {
+            self.increment_dropped();
+            return Err(AnalyticsError::new(format!(
+                "analytics export queue full (capacity {})",
+                self.capacity
+            )));
+        }
+
+        queue.push_back(event.clone());
+        drop(queue);
+        self.increment_enqueued();
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), AnalyticsError> {
+        let queued = {
+            let mut queue = self
+                .queue
+                .lock()
+                .expect("analytics exporter queue lock poisoned");
+            queue.drain(..).collect::<Vec<_>>()
+        };
+
+        let mut failed = 0usize;
+
+        for event in queued {
+            match catch_unwind(AssertUnwindSafe(|| self.inner.emit(&event))) {
+                Ok(Ok(())) => self.increment_delivered(),
+                Ok(Err(_)) | Err(_) => {
+                    failed += 1;
+                    self.increment_failed();
+                }
+            }
+        }
+
+        match catch_unwind(AssertUnwindSafe(|| self.inner.flush())) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => {
+                failed += 1;
+                self.increment_failed();
+            }
+        }
+
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(AnalyticsError::new(format!(
+                "analytics exporter flush failed for {failed} operation(s)"
+            )))
+        }
     }
 }
 
@@ -479,5 +650,112 @@ mod tests {
         assert_eq!(report.succeeded, 1);
         assert_eq!(report.failed, 0);
         assert!(report.all_succeeded());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_sink_counts_backpressure_and_flush_delivery() {
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let delivered_sink = Arc::clone(&delivered);
+        let bounded = BoundedAnalyticsSink::new(
+            move |_: &ObservedEvent| {
+                delivered_sink.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            1,
+        );
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(bounded.clone());
+
+        let first = client.emit(event("first"));
+        let second = client.emit(event("second"));
+
+        assert!(first.all_succeeded());
+        assert_eq!(second.attempted, 1);
+        assert_eq!(second.succeeded, 0);
+        assert_eq!(second.failed, 1);
+        assert_eq!(
+            second.errors[0].message(),
+            "analytics export queue full (capacity 1)"
+        );
+        assert_eq!(
+            bounded.metrics(),
+            ExporterMetrics {
+                pending: 1,
+                enqueued: 1,
+                dropped: 1,
+                delivered: 0,
+                failed: 0,
+            }
+        );
+
+        let flush = client.flush();
+
+        assert!(flush.all_succeeded());
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            bounded.metrics(),
+            ExporterMetrics {
+                pending: 0,
+                enqueued: 1,
+                dropped: 1,
+                delivered: 1,
+                failed: 0,
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_sink_flush_counts_inner_errors_and_continues() {
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let delivered_sink = Arc::clone(&delivered);
+        let bounded = BoundedAnalyticsSink::new(
+            move |event: &ObservedEvent| {
+                if event.name == "bad" {
+                    return Err(AnalyticsError::new("inner exporter rejected event"));
+                }
+                delivered_sink
+                    .lock()
+                    .expect("delivered lock poisoned")
+                    .push(event.name.clone());
+                Ok(())
+            },
+            4,
+        );
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(bounded.clone());
+
+        assert!(client.emit(event("bad")).all_succeeded());
+        assert!(client.emit(event("good")).all_succeeded());
+
+        let report = client.flush();
+
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(
+            report.errors[0].message(),
+            "analytics exporter flush failed for 1 operation(s)"
+        );
+        assert_eq!(
+            delivered
+                .lock()
+                .expect("delivered lock poisoned")
+                .as_slice(),
+            ["good"]
+        );
+        assert_eq!(
+            bounded.metrics(),
+            ExporterMetrics {
+                pending: 0,
+                enqueued: 2,
+                dropped: 0,
+                delivered: 1,
+                failed: 1,
+            }
+        );
     }
 }

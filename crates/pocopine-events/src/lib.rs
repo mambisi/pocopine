@@ -1482,10 +1482,7 @@ return {id, tostring(now_ms)}
             }
 
             fn mark_seen(&mut self, stream_id: (u64, u64)) {
-                if self
-                    .last_seen
-                    .map_or(true, |last_seen| stream_id > last_seen)
-                {
+                if self.last_seen.is_none_or(|last_seen| stream_id > last_seen) {
                     self.last_seen = Some(stream_id);
                 }
             }
