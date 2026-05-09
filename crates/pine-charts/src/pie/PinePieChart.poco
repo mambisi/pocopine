@@ -40,6 +40,7 @@
               :data-hovered="slice.key == hover_key"
               :data-focused="slice.key == focused_key"
               :data-selected="slice.key == selected_key"
+              :style="slice.animation_style"
               @click.stop="select_slice(slice.key)"></path>
       </template>
     </g>

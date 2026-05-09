@@ -360,9 +360,13 @@ the same styling hook.
 
 Chart animation is opt-in. Set `animate="true"` on a chart root to emit
 `data-animate="true"`, `data-animation-duration`, `data-animation-easing`, and
-CSS variables `--pine-chart-animation-duration` /
-`--pine-chart-animation-easing`. The renderer does not own animation behavior;
-applications decide which marks transition or keyframe from those hooks.
+CSS variables
+`--pine-chart-animation-duration` / `--pine-chart-animation-easing`.
+The renderer keeps marks keyed by series, slice, or point identity. Application
+CSS can keyframe newly inserted marks while existing marks remain stable during
+add/remove updates. If an application wants an existing mark to replay an entry
+animation after a data change, change that mark's key deliberately or use CSS
+transitions for the changed property.
 
 ## Styling Hooks
 
@@ -439,10 +443,13 @@ The component emits stable hooks:
 - `data-invalid`
 - `--pine-chart-animation-duration`
 - `--pine-chart-animation-easing`
+- `--pine-chart-slice-delay`
 
 The default line paths use `stroke="currentColor"` and `fill="none"`, while bars
 use `fill="currentColor"`. Application CSS should own the final visual
-treatment:
+treatment. The example below animates keyed marks on entry: newly added lines
+draw in, bars grow from the baseline, and pie/donut slices use a clockwise
+sweep instead of a fade.
 
 ```css
 .pine-chart-root {
@@ -502,6 +509,14 @@ treatment:
   transform-origin: center bottom;
 }
 
+.pine-chart-root[data-animate="true"] .pine-chart-pie-slice {
+  animation: chart-pie-sweep var(--pine-chart-animation-duration)
+    var(--pine-chart-animation-easing) var(--pine-chart-slice-delay, 0ms)
+    backwards;
+  transform-box: view-box;
+  transform-origin: center;
+}
+
 @keyframes chart-line-draw {
   from {
     stroke-dashoffset: 1;
@@ -512,6 +527,12 @@ treatment:
   from {
     opacity: 0;
     transform: scaleY(0);
+  }
+}
+
+@keyframes chart-pie-sweep {
+  from {
+    transform: rotate(-18deg) scale(0.01);
   }
 }
 

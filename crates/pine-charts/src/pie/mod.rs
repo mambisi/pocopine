@@ -145,6 +145,10 @@ impl PieChartGeometry {
                     end_angle: slice_end,
                     label_x: label_point.x,
                     label_y: label_point.y,
+                    animation_style: format!(
+                        "--pine-chart-slice-delay: {}ms;",
+                        format_tick(index as f64 * 28.0)
+                    ),
                 })
             })
             .collect::<ChartResult<Vec<_>>>()?;
@@ -193,6 +197,7 @@ pub struct SvgPieSlice {
     pub end_angle: f64,
     pub label_x: f64,
     pub label_y: f64,
+    pub animation_style: String,
 }
 
 impl SvgPieSlice {

@@ -10,7 +10,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 #[component(template = "ChartDemo.poco")]
 pub struct ChartDemo {
-    pub dataset: String,
+    pub combo_dataset: String,
+    pub area_dataset: String,
+    pub bar_dataset: String,
+    pub scatter_dataset: String,
+    pub pie_dataset: String,
     pub bar_mode: String,
     pub pie_shape: String,
     pub line_series: Vec<ChartLineSeries>,
@@ -29,6 +33,7 @@ pub struct ChartDemo {
     pub metro_line_a: Vec<ChartLayerPoint>,
     pub metro_line_b: Vec<ChartLayerPoint>,
     pub metro_line_c: Vec<ChartLayerPoint>,
+    pub area_forecast_visible: bool,
     pub area_series: Vec<ChartAreaSeries>,
     pub area_legend: Vec<LegendItem>,
     pub bar_series: Vec<ChartBarSeries>,
@@ -53,7 +58,11 @@ impl Default for ChartDemo {
         let pie_data = growth_pie_data();
         let pie_center_value = pie_total_label(&pie_data);
         Self {
-            dataset: "growth".into(),
+            combo_dataset: "growth".into(),
+            area_dataset: "growth".into(),
+            bar_dataset: "growth".into(),
+            scatter_dataset: "growth".into(),
+            pie_dataset: "growth".into(),
             bar_mode: "grouped".into(),
             pie_shape: "pie".into(),
             line_legend: line_legend_items(&line_series),
@@ -72,6 +81,7 @@ impl Default for ChartDemo {
             metro_line_a: metro_line_a(),
             metro_line_b: metro_line_b(),
             metro_line_c: metro_line_c(),
+            area_forecast_visible: false,
             area_legend: area_legend_items(&area_series),
             area_series,
             bar_legend: bar_legend_items(&bar_series),
@@ -91,43 +101,96 @@ impl Default for ChartDemo {
 
 #[handlers]
 impl ChartDemo {
-    pub fn show_growth(&mut self) {
+    pub fn show_combo_growth(&mut self) {
         let line_series = growth_line_series();
-        let area_series = growth_area_series();
-        let bar_series = growth_bar_series();
-        let scatter_series = growth_scatter_series();
-        let pie_data = growth_pie_data();
-        self.dataset = "growth".into();
+        self.combo_dataset = "growth".into();
         self.line_legend = line_legend_items(&line_series);
         self.update_combo_chart(&line_series, "#16a085", "#d96c2c");
         self.line_series = line_series;
-        self.area_legend = area_legend_items(&area_series);
-        self.area_series = area_series;
-        self.bar_legend = bar_legend_items(&bar_series);
-        self.bar_series = bar_series;
+    }
+
+    pub fn show_combo_latency(&mut self) {
+        let line_series = latency_line_series();
+        self.combo_dataset = "latency".into();
+        self.line_legend = line_legend_items(&line_series);
+        self.update_combo_chart(&line_series, "#16a085", "#d96c2c");
+        self.line_series = line_series;
+    }
+
+    pub fn show_scatter_growth(&mut self) {
+        let scatter_series = growth_scatter_series();
+        self.scatter_dataset = "growth".into();
         self.scatter_legend = scatter_legend_items(&scatter_series);
         self.scatter_series = scatter_series;
+    }
+
+    pub fn show_scatter_latency(&mut self) {
+        let scatter_series = latency_scatter_series();
+        self.scatter_dataset = "latency".into();
+        self.scatter_legend = scatter_legend_items(&scatter_series);
+        self.scatter_series = scatter_series;
+    }
+
+    pub fn show_area_growth(&mut self) {
+        let area_series = growth_area_series();
+        self.area_dataset = "growth".into();
+        self.area_forecast_visible = false;
+        self.area_legend = area_legend_items(&area_series);
+        self.area_series = area_series;
+    }
+
+    pub fn show_area_latency(&mut self) {
+        let area_series = latency_area_series();
+        self.area_dataset = "latency".into();
+        self.area_forecast_visible = false;
+        self.area_legend = area_legend_items(&area_series);
+        self.area_series = area_series;
+    }
+
+    pub fn add_area_forecast(&mut self) {
+        if self.area_forecast_visible {
+            return;
+        }
+        self.area_series
+            .push(area_forecast_series(&self.area_dataset));
+        self.area_forecast_visible = true;
+        self.area_legend = area_legend_items(&self.area_series);
+    }
+
+    pub fn remove_area_forecast(&mut self) {
+        if !self.area_forecast_visible {
+            return;
+        }
+        self.area_series.retain(|series| series.label != "Forecast");
+        self.area_forecast_visible = false;
+        self.area_legend = area_legend_items(&self.area_series);
+    }
+
+    pub fn show_bar_growth(&mut self) {
+        let bar_series = growth_bar_series();
+        self.bar_dataset = "growth".into();
+        self.bar_legend = bar_legend_items(&bar_series);
+        self.bar_series = bar_series;
+    }
+
+    pub fn show_bar_latency(&mut self) {
+        let bar_series = latency_bar_series();
+        self.bar_dataset = "latency".into();
+        self.bar_legend = bar_legend_items(&bar_series);
+        self.bar_series = bar_series;
+    }
+
+    pub fn show_pie_growth(&mut self) {
+        let pie_data = growth_pie_data();
+        self.pie_dataset = "growth".into();
         self.pie_legend = pine_charts::pie_legend_items(&pie_data);
         self.pie_data = pie_data;
         self.update_pie_center();
     }
 
-    pub fn show_latency(&mut self) {
-        let line_series = latency_line_series();
-        let area_series = latency_area_series();
-        let bar_series = latency_bar_series();
-        let scatter_series = latency_scatter_series();
+    pub fn show_pie_latency(&mut self) {
         let pie_data = latency_pie_data();
-        self.dataset = "latency".into();
-        self.line_legend = line_legend_items(&line_series);
-        self.update_combo_chart(&line_series, "#16a085", "#d96c2c");
-        self.line_series = line_series;
-        self.area_legend = area_legend_items(&area_series);
-        self.area_series = area_series;
-        self.bar_legend = bar_legend_items(&bar_series);
-        self.bar_series = bar_series;
-        self.scatter_legend = scatter_legend_items(&scatter_series);
-        self.scatter_series = scatter_series;
+        self.pie_dataset = "latency".into();
         self.pie_legend = pine_charts::pie_legend_items(&pie_data);
         self.pie_data = pie_data;
         self.update_pie_center();
@@ -234,7 +297,7 @@ impl ChartDemo {
     fn update_pie_center(&mut self) {
         if self.pie_shape == "half-donut" {
             self.pie_center_label = "Progress".into();
-            self.pie_center_value = if self.dataset == "growth" {
+            self.pie_center_value = if self.pie_dataset == "growth" {
                 "74%".into()
             } else {
                 "62%".into()
@@ -482,6 +545,36 @@ fn latency_area_series() -> Vec<ChartAreaSeries> {
             ],
         ),
     ]
+}
+
+fn area_forecast_series(dataset: &str) -> ChartAreaSeries {
+    if dataset == "latency" {
+        ChartAreaSeries::new(
+            "Forecast",
+            vec![
+                ChartPoint::new(0.0, 90.0),
+                ChartPoint::new(1.0, 82.0),
+                ChartPoint::new(2.0, 74.0),
+                ChartPoint::new(3.0, 67.0),
+                ChartPoint::new(4.0, 61.0),
+                ChartPoint::new(5.0, 55.0),
+                ChartPoint::new(6.0, 49.0),
+            ],
+        )
+    } else {
+        ChartAreaSeries::new(
+            "Forecast",
+            vec![
+                ChartPoint::new(0.0, 5.0),
+                ChartPoint::new(1.0, 8.0),
+                ChartPoint::new(2.0, 12.0),
+                ChartPoint::new(3.0, 17.0),
+                ChartPoint::new(4.0, 23.0),
+                ChartPoint::new(5.0, 30.0),
+                ChartPoint::new(6.0, 38.0),
+            ],
+        )
+    }
 }
 
 fn growth_bar_series() -> Vec<ChartBarSeries> {

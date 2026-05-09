@@ -1,46 +1,27 @@
 <root class="chart-demo">
   <header class="chart-demo-header">
-    <div>
+    <div class="chart-demo-title">
       <h1>Pine Charts</h1>
       <p>SVG-first, unstyled chart primitives for Pocopine apps.</p>
     </div>
-    <div class="chart-demo-actions" role="group" aria-label="Chart dataset">
-      <button type="button"
-              :aria-pressed="dataset == 'growth' ? 'true' : 'false'"
-              :data-active="dataset == 'growth'"
-              @click="show_growth">Growth</button>
-      <button type="button"
-              :aria-pressed="dataset == 'latency' ? 'true' : 'false'"
-              :data-active="dataset == 'latency'"
-              @click="show_latency">Latency</button>
-    </div>
-    <div class="chart-demo-actions" role="group" aria-label="Bar layout">
-      <button type="button"
-              :aria-pressed="bar_mode == 'grouped' ? 'true' : 'false'"
-              :data-active="bar_mode == 'grouped'"
-              @click="show_grouped">Grouped</button>
-      <button type="button"
-              :aria-pressed="bar_mode == 'stacked' ? 'true' : 'false'"
-              :data-active="bar_mode == 'stacked'"
-              @click="show_stacked">Stacked</button>
-    </div>
-    <div class="chart-demo-actions" role="group" aria-label="Share shape">
-      <button type="button"
-              :aria-pressed="pie_shape == 'pie' ? 'true' : 'false'"
-              :data-active="pie_shape == 'pie'"
-              @click="show_pie">Pie</button>
-      <button type="button"
-              :aria-pressed="pie_shape == 'donut' ? 'true' : 'false'"
-              :data-active="pie_shape == 'donut'"
-              @click="show_donut">Donut</button>
-      <button type="button"
-              :aria-pressed="pie_shape == 'half-donut' ? 'true' : 'false'"
-              :data-active="pie_shape == 'half-donut'"
-              @click="show_half_donut">Half donut</button>
-    </div>
   </header>
 
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2" min_height="220">
+  <section class="chart-demo-grid" aria-label="Chart examples">
+    <article class="chart-card chart-card--hero">
+      <header class="chart-card-header">
+        <h2>Weekly metric</h2>
+        <div class="chart-card-actions" role="group" aria-label="Weekly metric dataset">
+          <button type="button"
+                  :aria-pressed="combo_dataset == 'growth' ? 'true' : 'false'"
+                  :data-active="combo_dataset == 'growth'"
+                  @click="show_combo_growth">Growth</button>
+          <button type="button"
+                  :aria-pressed="combo_dataset == 'latency' ? 'true' : 'false'"
+                  :data-active="combo_dataset == 'latency'"
+                  @click="show_combo_latency">Latency</button>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel" aspect_ratio="3.2" min_height="190">
     <pine-cartesian-chart label="Weekly metric combo"
                           animate="true"
                           animation_duration="180"
@@ -92,18 +73,24 @@
                                       fill="#18212f"
                                       font_weight="700"></pine-cartesian-reference-label>
     </pine-cartesian-chart>
-  </pine-chart-responsive>
+      </pine-chart-responsive>
 
-  <pine-chart-legend label="Weekly metric legend"
-                     pp-bind:items="line_legend"></pine-chart-legend>
+      <pine-chart-legend class="chart-card-legend"
+                         label="Weekly metric legend"
+                         pp-bind:items="line_legend"></pine-chart-legend>
+    </article>
 
-  <pine-chart-responsive class="chart-panel chart-panel--metro"
-                         aspect_ratio="1.875"
-                         min_height="320">
-    <pine-layer-chart label="Metro layer order"
-                      animate="true"
-                      animation_duration="180"
-                      animation_easing="ease-out">
+    <article class="chart-card chart-card--metro">
+      <header class="chart-card-header">
+        <h2>Metro layer order</h2>
+      </header>
+      <pine-chart-responsive class="chart-panel chart-panel--metro"
+                             aspect_ratio="3.2"
+                             min_height="260">
+        <pine-layer-chart label="Metro layer order"
+                          animate="true"
+                          animation_duration="180"
+                          animation_easing="ease-out">
       <pine-chart-layer name="grid">
         <pine-chart-guide key="top-row" x1="80" y1="120" x2="820" y2="120"></pine-chart-guide>
         <pine-chart-guide key="mid-row" x1="80" y1="240" x2="820" y2="240"></pine-chart-guide>
@@ -153,75 +140,180 @@
         <pine-chart-label key="republic-label" text="Republic" x="520" y="180" dx="12" dy="-24" angle="-65" fill="#18212f" text_anchor="start" font_weight="700"></pine-chart-label>
         <pine-chart-label key="east-gate-label" text="East Gate" x="840" y="240" dx="8" dy="-24" angle="-65" fill="#f2c230" text_anchor="start" font_weight="700"></pine-chart-label>
       </pine-chart-layer>
-    </pine-layer-chart>
-  </pine-chart-responsive>
+        </pine-layer-chart>
+      </pine-chart-responsive>
+    </article>
 
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2" min_height="220">
-    <pine-scatter-chart label="Cohort spread"
-                        pp-bind:series="scatter_series"
-                        x_label="Size"
-                        y_label="Rate"
+    <article class="chart-card">
+      <header class="chart-card-header">
+        <h2>Cohort spread</h2>
+        <div class="chart-card-actions" role="group" aria-label="Cohort spread dataset">
+          <button type="button"
+                  :aria-pressed="scatter_dataset == 'growth' ? 'true' : 'false'"
+                  :data-active="scatter_dataset == 'growth'"
+                  @click="show_scatter_growth">Growth</button>
+          <button type="button"
+                  :aria-pressed="scatter_dataset == 'latency' ? 'true' : 'false'"
+                  :data-active="scatter_dataset == 'latency'"
+                  @click="show_scatter_latency">Latency</button>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel" aspect_ratio="1.55" min_height="220">
+        <pine-scatter-chart label="Cohort spread"
+                            pp-bind:series="scatter_series"
+                            x_label="Size"
+                            y_label="Rate"
+                            animate="true"
+                            animation_duration="180"
+                            animation_easing="ease-out"
+                            point_radius="4.5"></pine-scatter-chart>
+      </pine-chart-responsive>
+
+      <pine-chart-legend class="chart-card-legend"
+                         label="Cohort spread legend"
+                         interactive="true"
+                         @pp:chart:legend-toggle="toggle_scatter_series"
+                         pp-bind:items="scatter_legend"></pine-chart-legend>
+    </article>
+
+    <article class="chart-card">
+      <header class="chart-card-header">
+        <h2>Trend area</h2>
+        <div class="chart-card-control-stack">
+          <div class="chart-card-actions" role="group" aria-label="Trend area dataset">
+            <button type="button"
+                    :aria-pressed="area_dataset == 'growth' ? 'true' : 'false'"
+                    :data-active="area_dataset == 'growth'"
+                    @click="show_area_growth">Growth</button>
+            <button type="button"
+                    :aria-pressed="area_dataset == 'latency' ? 'true' : 'false'"
+                    :data-active="area_dataset == 'latency'"
+                    @click="show_area_latency">Latency</button>
+          </div>
+          <div class="chart-card-actions" role="group" aria-label="Trend area layers">
+            <button type="button"
+                    :aria-pressed="area_forecast_visible ? 'true' : 'false'"
+                    :data-active="area_forecast_visible"
+                    @click="add_area_forecast">Add forecast</button>
+            <button type="button"
+                    :aria-disabled="!area_forecast_visible ? 'true' : 'false'"
+                    @click="remove_area_forecast">Remove</button>
+          </div>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel" aspect_ratio="1.55" min_height="220">
+        <pine-area-chart label="Trend area"
+                         pp-bind:series="area_series"
+                         x_label="Week"
+                         y_label="Volume"
+                         animate="true"
+                         animation_duration="180"
+                         animation_easing="ease-out"
+                         show_markers="true"></pine-area-chart>
+      </pine-chart-responsive>
+
+      <pine-chart-legend class="chart-card-legend"
+                         label="Trend area legend"
+                         interactive="true"
+                         @pp:chart:legend-toggle="toggle_area_series"
+                         pp-bind:items="area_legend"></pine-chart-legend>
+    </article>
+
+    <article class="chart-card">
+      <header class="chart-card-header">
+        <h2>Distribution</h2>
+        <div class="chart-card-control-stack">
+          <div class="chart-card-actions" role="group" aria-label="Distribution dataset">
+            <button type="button"
+                    :aria-pressed="bar_dataset == 'growth' ? 'true' : 'false'"
+                    :data-active="bar_dataset == 'growth'"
+                    @click="show_bar_growth">Growth</button>
+            <button type="button"
+                    :aria-pressed="bar_dataset == 'latency' ? 'true' : 'false'"
+                    :data-active="bar_dataset == 'latency'"
+                    @click="show_bar_latency">Latency</button>
+          </div>
+          <div class="chart-card-actions" role="group" aria-label="Distribution layout">
+            <button type="button"
+                    :aria-pressed="bar_mode == 'grouped' ? 'true' : 'false'"
+                    :data-active="bar_mode == 'grouped'"
+                    @click="show_grouped">Grouped</button>
+            <button type="button"
+                    :aria-pressed="bar_mode == 'stacked' ? 'true' : 'false'"
+                    :data-active="bar_mode == 'stacked'"
+                    @click="show_stacked">Stacked</button>
+          </div>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel" aspect_ratio="1.55" min_height="220">
+        <pine-bar-chart label="Distribution"
+                        pp-bind:series="bar_series"
+                        pp-bind:mode="bar_mode"
+                        x_label="Bucket"
                         animate="true"
                         animation_duration="180"
                         animation_easing="ease-out"
-                        point_radius="4.5"></pine-scatter-chart>
-  </pine-chart-responsive>
+                        y_label="Count"></pine-bar-chart>
+      </pine-chart-responsive>
 
-  <pine-chart-legend label="Cohort spread legend"
-                     interactive="true"
-                     @pp:chart:legend-toggle="toggle_scatter_series"
-                     pp-bind:items="scatter_legend"></pine-chart-legend>
+      <pine-chart-legend class="chart-card-legend"
+                         label="Distribution legend"
+                         interactive="true"
+                         @pp:chart:legend-toggle="toggle_bar_series"
+                         pp-bind:items="bar_legend"></pine-chart-legend>
+    </article>
 
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
-    <pine-area-chart label="Trend area"
-                     pp-bind:series="area_series"
-                     x_label="Week"
-                     y_label="Volume"
-                     animate="true"
-                     animation_duration="180"
-                     animation_easing="ease-out"
-                     show_markers="true"></pine-area-chart>
-  </pine-chart-responsive>
+    <article class="chart-card chart-card--radial">
+      <header class="chart-card-header">
+        <h2>Channel share</h2>
+        <div class="chart-card-control-stack">
+          <div class="chart-card-actions" role="group" aria-label="Channel share dataset">
+            <button type="button"
+                    :aria-pressed="pie_dataset == 'growth' ? 'true' : 'false'"
+                    :data-active="pie_dataset == 'growth'"
+                    @click="show_pie_growth">Growth</button>
+            <button type="button"
+                    :aria-pressed="pie_dataset == 'latency' ? 'true' : 'false'"
+                    :data-active="pie_dataset == 'latency'"
+                    @click="show_pie_latency">Latency</button>
+          </div>
+          <div class="chart-card-actions" role="group" aria-label="Channel share shape">
+            <button type="button"
+                    :aria-pressed="pie_shape == 'pie' ? 'true' : 'false'"
+                    :data-active="pie_shape == 'pie'"
+                    @click="show_pie">Pie</button>
+            <button type="button"
+                    :aria-pressed="pie_shape == 'donut' ? 'true' : 'false'"
+                    :data-active="pie_shape == 'donut'"
+                    @click="show_donut">Donut</button>
+            <button type="button"
+                    :aria-pressed="pie_shape == 'half-donut' ? 'true' : 'false'"
+                    :data-active="pie_shape == 'half-donut'"
+                    @click="show_half_donut">Half</button>
+          </div>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel chart-panel--radial"
+                             width="min(280px, 100%)"
+                             aspect_ratio="1"
+                             min_height="220">
+        <pine-pie-chart label="Channel share"
+                        pp-bind:data="pie_data"
+                        pp-bind:inner_radius="pie_inner_radius"
+                        pp-bind:start_angle="pie_start_angle"
+                        pp-bind:end_angle="pie_end_angle"
+                        pp-bind:center_label="pie_center_label"
+                        animate="true"
+                        animation_duration="180"
+                        animation_easing="ease-out"
+                        pp-bind:center_value="pie_center_value"></pine-pie-chart>
+      </pine-chart-responsive>
 
-  <pine-chart-legend label="Trend area legend"
-                     interactive="true"
-                     @pp:chart:legend-toggle="toggle_area_series"
-                     pp-bind:items="area_legend"></pine-chart-legend>
-
-  <pine-chart-responsive class="chart-panel" aspect_ratio="2.25" min_height="220">
-    <pine-bar-chart label="Distribution"
-                    pp-bind:series="bar_series"
-                    pp-bind:mode="bar_mode"
-                    x_label="Bucket"
-                    animate="true"
-                    animation_duration="180"
-                    animation_easing="ease-out"
-                    y_label="Count"></pine-bar-chart>
-  </pine-chart-responsive>
-
-  <pine-chart-legend label="Distribution legend"
-                     interactive="true"
-                     @pp:chart:legend-toggle="toggle_bar_series"
-                     pp-bind:items="bar_legend"></pine-chart-legend>
-
-  <pine-chart-responsive class="chart-panel chart-panel--radial"
-                         width="min(520px, 100%)"
-                         aspect_ratio="1"
-                         min_height="260">
-    <pine-pie-chart label="Channel share"
-                    pp-bind:data="pie_data"
-                    pp-bind:inner_radius="pie_inner_radius"
-                    pp-bind:start_angle="pie_start_angle"
-                    pp-bind:end_angle="pie_end_angle"
-                    pp-bind:center_label="pie_center_label"
-                    animate="true"
-                    animation_duration="180"
-                    animation_easing="ease-out"
-                    pp-bind:center_value="pie_center_value"></pine-pie-chart>
-  </pine-chart-responsive>
-
-  <pine-chart-legend label="Channel share legend"
-                     interactive="true"
-                     @pp:chart:legend-toggle="toggle_pie_slice"
-                     pp-bind:items="pie_legend"></pine-chart-legend>
+      <pine-chart-legend class="chart-card-legend"
+                         label="Channel share legend"
+                         interactive="true"
+                         @pp:chart:legend-toggle="toggle_pie_slice"
+                         pp-bind:items="pie_legend"></pine-chart-legend>
+    </article>
+  </section>
 </root>
