@@ -167,7 +167,7 @@ impl SyncBoard {
                 Ok(_) => {
                     s.title.clear();
                     s.body.clear();
-                    s.status = "saved; waiting for sync wake-up".to_string();
+                    s.status = "saved".to_string();
                 }
                 Err(err) => {
                     s.status = "save failed".to_string();
@@ -199,7 +199,7 @@ impl SyncBoard {
             s.saving = false;
             match result {
                 Ok(()) => {
-                    s.status = "reset; waiting for sync wake-up".to_string();
+                    s.status = "reset".to_string();
                 }
                 Err(err) => {
                     s.status = "reset failed".to_string();
