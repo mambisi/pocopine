@@ -3,13 +3,14 @@ use std::marker::PhantomData;
 use pocopine_core::{App, AppPlugin, Handle};
 
 use crate::{
-    CollectionState, SyncCursor, SyncError, SyncReason, SyncResult, SyncStreamName,
-    SYNC_ENDPOINT_PREFIX,
+    ClientMutation, CollectionState, SyncCursor, SyncError, SyncReason, SyncResult, SyncRow,
+    SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
     sync_stream_tag, SyncOpenRequest, SyncOpenResponse, SyncPullRequest, SyncPullResponse,
+    SyncPushRequest, SyncPushResponse,
 };
 
 /// Selector from an app-owned component/store into one sync collection field.
@@ -171,6 +172,20 @@ where
         self.pull_impl(SyncReason::Manual, false)
     }
 
+    /// Push one client mutation and apply an optional optimistic row while
+    /// the server confirms, rejects, or conflicts the write.
+    pub fn push<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned,
+        M: serde::Serialize + 'static,
+    {
+        self.push_impl(mutation, optimistic)
+    }
+
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
         self.stream
             .clone()
@@ -242,6 +257,33 @@ where
         );
         Ok(())
     }
+
+    fn push_impl<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
+            SyncError::client(
+                "SyncCollection::push used outside a component handler/lifecycle hook",
+            )
+        })?;
+        start_push(
+            scope_id,
+            self.handle,
+            self.selector,
+            self.endpoint,
+            stream,
+            mutation,
+            optimistic,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -259,6 +301,21 @@ where
     fn pull_impl(self, _reason: SyncReason, _live_event: bool) -> SyncResult<()> {
         self.touch_host_fields();
         let _ = self.stream_value()?;
+        Ok(())
+    }
+
+    fn push_impl<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let _ = self.stream_value()?;
+        let _ = (mutation, optimistic);
         Ok(())
     }
 }
@@ -474,6 +531,67 @@ fn start_pull<C, T>(
                 }
             }
         });
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_push<C, T, M>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    endpoint: String,
+    stream: SyncStreamName,
+    mutation: ClientMutation<M>,
+    optimistic: Option<SyncRow<T>>,
+) where
+    C: 'static,
+    T: Clone + serde::de::DeserializeOwned + 'static,
+    M: serde::Serialize + 'static,
+{
+    let push_url = endpoint_path(&endpoint, "push");
+    let pull_endpoint = endpoint.clone();
+    let mutation_id = mutation.id.clone();
+    let mutation_op = mutation.op;
+    let mutation_key = mutation.key.clone();
+
+    pocopine_core::spawn_for_scope(scope_id, async move {
+        handle.update(|state| {
+            selector(state).apply_optimistic_mutation(
+                mutation_id,
+                mutation_op,
+                mutation_key,
+                optimistic,
+            );
+        });
+
+        let request = SyncPushRequest::new(stream.clone(), [mutation]);
+        let result = pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(
+            &push_url, &request,
+        )
+        .await;
+        let should_pull = handle.update(|state| {
+            let collection = selector(state);
+            match result {
+                Ok(response) => collection.apply_push(response),
+                Err(err) => {
+                    collection.set_error(err.to_string());
+                    false
+                }
+            }
+        });
+
+        if should_pull {
+            start_pull(
+                scope_id,
+                handle,
+                selector,
+                pull_endpoint,
+                stream,
+                None,
+                SyncReason::Push,
+                false,
+            );
+        }
     });
 }
 
