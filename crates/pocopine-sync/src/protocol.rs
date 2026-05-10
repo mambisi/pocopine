@@ -332,6 +332,19 @@ pub struct SyncPushRequest<M> {
     pub mutations: Vec<ClientMutation<M>>,
 }
 
+impl<M> SyncPushRequest<M> {
+    pub fn new(
+        stream: SyncStreamName,
+        mutations: impl IntoIterator<Item = ClientMutation<M>>,
+    ) -> Self {
+        Self {
+            protocol: SYNC_PROTOCOL_V1.to_string(),
+            stream,
+            mutations: mutations.into_iter().collect(),
+        }
+    }
+}
+
 /// Conflict returned by a push.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
@@ -339,6 +352,14 @@ pub struct SyncConflict<T> {
     pub mutation_id: MutationId,
     pub key: Option<RowKey>,
     pub server_row: Option<SyncRow<T>>,
+    pub reason: String,
+}
+
+/// Rejected mutation returned by a push.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncRejectedMutation {
+    pub mutation_id: MutationId,
+    pub key: Option<RowKey>,
     pub reason: String,
 }
 
@@ -351,10 +372,26 @@ pub struct SyncPushResponse<T> {
     #[serde(default)]
     pub accepted: Vec<MutationId>,
     #[serde(default)]
+    pub rejected: Vec<SyncRejectedMutation>,
+    #[serde(default)]
     pub rows: Vec<SyncRow<T>>,
     #[serde(default)]
     pub conflicts: Vec<SyncConflict<T>>,
     pub cursor: Option<SyncCursor>,
+}
+
+impl<T> SyncPushResponse<T> {
+    pub fn new(stream: SyncStreamName) -> Self {
+        Self {
+            protocol: SYNC_PROTOCOL_V1.to_string(),
+            stream,
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+            rows: Vec::new(),
+            conflicts: Vec::new(),
+            cursor: None,
+        }
+    }
 }
 
 #[cfg(test)]
