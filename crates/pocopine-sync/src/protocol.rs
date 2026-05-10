@@ -310,7 +310,7 @@ impl<T> SyncPullResponse<T> {
     }
 }
 
-/// Client mutation envelope. The first slice defines the wire stream;
+/// Client mutation envelope. The first slice defines the wire format;
 /// concrete mutation application belongs to stream sources.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]

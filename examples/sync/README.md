@@ -18,6 +18,9 @@ wakes the other tab over SSE; the data itself is fetched from
 `/__pocopine/sync/v1/pull`.
 
 This example uses memory backends, so it is intentionally single-process.
+It registers its stream with `public_stream(...)` to avoid bundling an
+auth setup into the demo; production apps should use `guarded_stream(...)`
+or `guarded_stream_with(...)`.
 Future database adapters should keep this same browser stream while
 replacing the server-side source.
 

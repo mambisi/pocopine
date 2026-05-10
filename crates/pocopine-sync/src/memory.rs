@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use pocopine_server::auth::RequestContext;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -174,12 +175,18 @@ where
         &self.collection
     }
 
-    fn current_cursor(&self) -> Option<SyncCursor> {
+    fn current_cursor(&self, ctx: &RequestContext) -> Option<SyncCursor> {
+        let _ = ctx;
         let inner = self.inner.lock().ok()?;
         SyncCursor::new(inner.version.to_string()).ok()
     }
 
-    fn pull<'a>(&'a self, request: SyncPullRequest) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
+    fn pull<'a>(
+        &'a self,
+        ctx: RequestContext,
+        request: SyncPullRequest,
+    ) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
+        let _ = ctx;
         Box::pin(async move { self.pull_value(request) })
     }
 }

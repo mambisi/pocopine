@@ -16,21 +16,24 @@ Initial implementation has started in `pocopine-sync`:
 - target-specific browser and host modules in one crate,
 - `/__pocopine/sync/v1/open`, `/pull`, and `/push` protocol routes,
 - `SyncServer`, `SyncStreamSource`, and `MemorySyncStream`,
+- explicit `public_stream`, `guarded_stream`, and
+  `guarded_stream_with` registration,
+- stream guards run on `/open`, `/pull`, and `/push`,
+- `SyncStreamSource::pull` / `push` receive `RequestContext` after the
+  stream guard passes,
 - browser `sync_plugin()`, `SyncClient`, and `CollectionState<T>`,
 - browser `SyncClient::open()` calls `/open` before the first `/pull`,
 - live wake-up integration through `pocopine-live` query-tag topics,
 - runnable memory-backed example in `examples/sync`,
 - Firefox wasm smoke coverage for `open -> pull -> render`.
 
-Current limitation: registered streams are pullable through `/pull`;
-`/open` is a discovery/validation step, not a server-side session grant.
-Stream-level guards remain part of the RFC target model and must be
-enforced inside stream sources or in front of the sync server until that
-follow-up lands.
+Current model: `/open` is discovery/validation, not a session grant.
+Every `/open`, `/pull`, and `/push` request runs the stream guard
+independently, so skipping `/open` does not bypass access control.
 
-Still future work: stream auth/guards, durable browser storage,
-optimistic mutation replay, conflict resolution UI, SQLx/database
-adapters, CDC sources, and query-driven stream parameters.
+Still future work: durable browser storage, optimistic mutation replay,
+conflict resolution UI, SQLx/database adapters, CDC sources, and
+query-driven stream parameters.
 
 ## 1. Summary
 
@@ -103,6 +106,24 @@ pocopine::sync_stream! {
 
 The client subscribes to stream names. It does not send table names, SQL
 fragments, or raw database filters.
+
+Streams are registered explicitly:
+
+```rust
+SyncServer::builder()
+    .public_stream(public_posts_stream())
+    .guarded_stream(user_posts_stream(), require_auth())
+    .guarded_stream(admin_posts_stream(), require_role("admin"))
+    .guarded_stream_with(tenant_posts_stream(), |ctx| async move {
+        let user = ctx.require_user()?;
+        ensure_tenant_access(user)?;
+        Ok(())
+    })
+    .build();
+```
+
+There is no implicit public registration. Public streams are an explicit
+author choice.
 
 ### 5.2 Cursor
 
@@ -478,7 +499,7 @@ The adapter contract:
 - Frontend query predicates must map to declared stream parameters. They
   must not produce unchecked SQL string concatenation.
 
-SQLx checks query stream and database/Rust types for supported macros. It
+SQLx checks query structure and database/Rust types for supported macros. It
 does not prove tenant isolation, authorization, conflict correctness, or
 delete privacy. Pocopine still owns those safety checks through stream
 guards, server-side mutation policy, cursor validation, and tombstone
@@ -498,13 +519,16 @@ If the live stream drops, the next pull is still authoritative.
 
 ## 11. Security Model
 
-- Every stream must have a guard.
+- Every stream must be explicitly registered as public or guarded.
 - Stream filters run on the server.
 - Clients cannot invent new filters.
 - Pushes execute through typed server mutations, not direct table writes.
 - Tombstones reveal only keys unless explicitly configured.
 - Cursor tokens must not grant access by themselves; access is checked on
   every open, pull, and push.
+- `SyncStreamSource` receives `RequestContext` after stream-level access
+  passes so the source can apply user/tenant filters before producing
+  rows or accepting mutations.
 - Frontend query predicates may narrow an authorized stream but must not
   expand it beyond the server-registered stream guard.
 - SQLx compile-time checks, when enabled, are query/type checks only.
