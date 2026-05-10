@@ -81,8 +81,22 @@ impl<T> CollectionState<T> {
     }
 
     pub fn begin_live_pull(&mut self, reason: SyncReason) -> SyncRequest {
+        if self.version == 0 {
+            self.live_event_count = self.live_event_count.saturating_add(1);
+            return self.begin(reason, true);
+        }
+
+        self.request_generation = self.request_generation.saturating_add(1);
+        self.refresh_count = self.refresh_count.saturating_add(1);
         self.live_event_count = self.live_event_count.saturating_add(1);
-        self.begin(reason, true)
+        self.last_reason = reason;
+        self.error.clear();
+        self.loading = false;
+        self.syncing = false;
+
+        SyncRequest {
+            generation: self.request_generation,
+        }
     }
 
     pub fn apply_pull(&mut self, request: SyncRequest, response: SyncPullResponse<T>) -> bool {
@@ -90,14 +104,13 @@ impl<T> CollectionState<T> {
             return false;
         }
 
-        match response.mode {
+        let rows_changed = match response.mode {
             SyncPullMode::Snapshot => {
                 self.rows = response.rows;
+                true
             }
-            SyncPullMode::Incremental => {
-                self.apply_changes(response.changes);
-            }
-        }
+            SyncPullMode::Incremental => self.apply_changes(response.changes),
+        };
 
         self.cursor = response.cursor;
         self.loading = false;
@@ -105,7 +118,9 @@ impl<T> CollectionState<T> {
         self.stale = false;
         self.error.clear();
         self.version = self.version.saturating_add(1);
-        self.recount_row_flags();
+        if rows_changed {
+            self.recount_row_flags();
+        }
         true
     }
 
@@ -161,7 +176,8 @@ impl<T> CollectionState<T> {
         }
     }
 
-    fn apply_changes(&mut self, changes: Vec<SyncChange<T>>) {
+    fn apply_changes(&mut self, changes: Vec<SyncChange<T>>) -> bool {
+        let mut rows_changed = false;
         for change in changes {
             match change.op {
                 SyncOp::Upsert => {
@@ -177,20 +193,32 @@ impl<T> CollectionState<T> {
                     } else {
                         self.rows.push(row);
                     }
+                    rows_changed = true;
                 }
                 SyncOp::Delete => {
-                    if let Some(key) = change.key {
-                        self.rows.retain(|row| row.key != key);
+                    let Some(key) = change.key else {
+                        continue;
+                    };
+                    if let Some(index) = self.rows.iter().position(|row| row.key == key) {
+                        self.rows.remove(index);
+                        rows_changed = true;
                     }
                 }
-                SyncOp::Reset => {
-                    self.rows.clear();
-                    if let Some(row) = change.row {
+                SyncOp::Reset => match change.row {
+                    Some(row) => {
+                        self.rows.clear();
                         self.rows.push(row);
+                        rows_changed = true;
                     }
-                }
+                    None if !self.rows.is_empty() => {
+                        self.rows.clear();
+                        rows_changed = true;
+                    }
+                    None => {}
+                },
             }
         }
+        rows_changed
     }
 
     fn recount_row_flags(&mut self) {
@@ -293,5 +321,76 @@ mod tests {
             ),
         ));
         assert_eq!(state.rows[0].value, "current");
+    }
+
+    #[test]
+    fn live_pull_after_initial_load_is_background_refresh() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncShapeName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "loaded".to_string()).unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+
+        let request = state.begin_live_pull(SyncReason::Live);
+
+        assert_eq!(request.generation(), 2);
+        assert_eq!(state.refresh_count, 2);
+        assert_eq!(state.live_event_count, 1);
+        assert_eq!(state.last_reason, SyncReason::Live);
+        assert!(!state.loading);
+        assert!(!state.syncing);
+        assert!(!state.stale);
+        assert_eq!(state.rows[0].value, "loaded");
+    }
+
+    #[test]
+    fn initial_live_pull_still_shows_loading() {
+        let mut state = CollectionState::<String>::default();
+
+        state.begin_live_pull(SyncReason::Live);
+
+        assert!(state.loading);
+        assert!(!state.syncing);
+        assert!(state.stale);
+        assert_eq!(state.live_event_count, 1);
+    }
+
+    #[test]
+    fn empty_incremental_pull_keeps_existing_rows_visible() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncShapeName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "loaded".to_string()).unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+
+        let request = state.begin_live_pull(SyncReason::Live);
+        assert!(state.apply_pull(
+            request,
+            SyncPullResponse::incremental(
+                SyncShapeName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                Vec::new(),
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        ));
+
+        assert_eq!(state.rows.len(), 1);
+        assert_eq!(state.rows[0].key.as_str(), "post_1");
+        assert_eq!(state.rows[0].value, "loaded");
+        assert!(!state.loading);
+        assert!(!state.syncing);
+        assert!(!state.stale);
     }
 }
