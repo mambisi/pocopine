@@ -375,14 +375,14 @@ The client sends mutations:
 
 ```json
 {
-  "client_id": "device_abc",
+  "protocol": "pocopine.sync.v1",
+  "stream": "posts_for_tenant",
   "mutations": [
     {
-      "mutation_id": "device_abc:42",
-      "stream": "posts_for_tenant",
+      "id": "device_abc:42",
       "key": "post_123",
       "base_version": "row:v7",
-      "op": "update",
+      "op": "upsert",
       "payload": {"title": "New title"}
     }
   ]
@@ -390,7 +390,32 @@ The client sends mutations:
 ```
 
 Mutation ids are idempotency keys. Replayed pushes must not apply twice.
-The server returns accepted, rejected, or conflict states per mutation.
+The server returns accepted, rejected, or conflict states per mutation:
+
+```json
+{
+  "protocol": "pocopine.sync.v1",
+  "stream": "posts_for_tenant",
+  "accepted": ["device_abc:42"],
+  "rejected": [],
+  "rows": [
+    {
+      "key": "post_123",
+      "version": "row:v8",
+      "value": {"title": "New title"},
+      "pending": false,
+      "conflict": false
+    }
+  ],
+  "conflicts": [],
+  "cursor": "sync:v1:cursor_124"
+}
+```
+
+`rejected` is for validation, authorization, or business-rule failures
+where retrying the same mutation as-is cannot succeed. `conflicts` is for
+stale `base_version` or concurrent-write cases where the server can return
+the current row and let the UI choose how to proceed.
 
 ## 8. Conflict Policy
 

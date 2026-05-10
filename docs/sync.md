@@ -349,8 +349,10 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 - `open` validates stream names and reports registered stream metadata.
   The browser client calls it before the first `pull`.
 - `pull` returns either a full snapshot or incremental changes.
-- `push` exists in the protocol, but the memory stream rejects it until
-  optimistic mutations and conflict policy are implemented.
+- `push` sends client-generated mutation ids plus app payloads to the
+  stream source. Responses split mutations into `accepted`, `rejected`,
+  and `conflicts`; accepted mutations may include canonical rows and also
+  wake live listeners so clients can pull the committed stream changes.
 - Cursors are opaque. Components should store and resend them, not parse
   them.
 - A live wake-up is not a data packet. It is only a prompt to pull.
