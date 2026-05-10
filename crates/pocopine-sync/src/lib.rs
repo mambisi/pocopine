@@ -32,6 +32,6 @@ pub use memory::{MemorySyncState, MemorySyncStream};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
-    sync_server_plugin, SyncBoxFuture, SyncServer, SyncServerBuilder, SyncServerPlugin,
-    SyncStreamSource,
+    sync_server_plugin, SyncBoxFuture, SyncGuardFuture, SyncServer, SyncServerBuilder,
+    SyncServerPlugin, SyncStreamGuard, SyncStreamSource,
 };

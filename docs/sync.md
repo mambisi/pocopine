@@ -12,7 +12,7 @@ The first implementation is intentionally small:
 This is not the full offline store yet. IndexedDB persistence,
 optimistic mutation replay, SQLx-backed adapters, and CDC integrations
 remain future work. The current API gives us the protocol boundary and a
-browser state stream that those backends can plug into later.
+browser state model that those backends can plug into later.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
@@ -45,6 +45,7 @@ serde = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pocopine-auth = { workspace = true }
 pocopine-events = { workspace = true }
 pocopine-live = { workspace = true }
 pocopine-logging = { workspace = true }
@@ -59,8 +60,9 @@ plugin and source traits.
 
 ## 2. Define A Stream
 
-A stream is the server-approved subset of data the browser can sync. It
-is not a database table name or arbitrary browser filter.
+A stream is the server-approved flow of sync state the browser can open
+and pull. It is not a database table name, arbitrary browser filter, or
+SSE/WebSocket transport.
 
 ```rust
 pub const POSTS_STREAM: &str = "posts_for_user";
@@ -91,9 +93,10 @@ pub fn posts_stream() -> pocopine_sync::MemorySyncStream<Post> {
 }
 ```
 
-Database-backed apps should hide authorization, tenant filters, delete
-privacy, and cursor validation inside their source implementation.
-Browsers only ask for registered stream names.
+Browsers only ask for registered stream names. Stream guards decide
+whether the request may use that stream; database-backed sources still
+own tenant filters, delete privacy, cursor validation, and per-row
+visibility.
 
 `MemorySyncStream<T>` is not a production backend. It keeps an unbounded
 in-memory change log and uses one process-local lock. Use it for tests,
@@ -102,7 +105,17 @@ examples, and explicit single-process demos.
 ## 3. Build The Sync Server
 
 `SyncServer` owns the registered streams and optionally shares the live
-event backend so it can publish wake-ups after mutations commit:
+event backend so it can publish wake-ups after mutations commit.
+
+Every stream registration is explicit:
+
+- `public_stream(...)` is for public demo or globally readable data.
+- `guarded_stream(..., predicate)` accepts `pocopine-auth` predicates
+  such as `require_auth()` or `require_role("admin")`.
+- `guarded_stream_with(..., guard)` accepts an async guard that receives
+  the same `RequestContext` used by server-function guards.
+
+The example is intentionally public so it can run without an auth setup:
 
 ```rust
 #[cfg(pocopine_host)]
@@ -113,12 +126,41 @@ pub fn sync_server() -> pocopine_sync::SyncServer {
     SYNC_SERVER
         .get_or_init(|| {
             pocopine_sync::SyncServer::builder()
-                .stream(posts_stream())
+                .public_stream(posts_stream())
                 .events(std::sync::Arc::new(live_backend()))
                 .build()
         })
         .clone()
 }
+```
+
+A protected app should register guarded streams instead:
+
+```rust
+use pocopine_auth::{require_auth, require_role};
+
+let sync = pocopine_sync::SyncServer::builder()
+    .guarded_stream(user_posts_stream(), require_auth())
+    .guarded_stream(admin_posts_stream(), require_role("admin"))
+    .guarded_stream_with(tenant_posts_stream(), |ctx| async move {
+        let user = ctx.require_user()?;
+        ensure_tenant_access(user)?;
+        Ok(())
+    })
+    .build();
+```
+
+Each `/open`, `/pull`, and `/push` request runs the stream guard before
+the stream source is called. `SyncStreamSource` receives the
+`RequestContext` after the guard passes, so sources can filter rows for
+the authenticated user or tenant:
+
+```rust
+fn pull<'a>(
+    &'a self,
+    ctx: pocopine_auth::RequestContext,
+    request: pocopine_sync::SyncPullRequest,
+) -> pocopine_sync::SyncBoxFuture<'a, pocopine_sync::SyncPullResponse<serde_json::Value>>;
 ```
 
 Publishing a sync invalidation does not send rows through SSE. It sends
@@ -174,12 +216,10 @@ async fn main() -> std::io::Result<()> {
 The default live topic policy is deny-all. `sync.live_topics()` returns
 only the wake-up topics for registered streams.
 
-This first sync slice does not make `/open` a server-side session
-boundary. A registered stream is pullable through `/pull`; `/open`
-validates discovery and gives the client metadata before the first pull.
-Production stream sources must enforce auth, tenant filtering, and cursor
-policy themselves, or the host app must mount sync behind an auth
-boundary.
+`/open` is not a session token. It validates discovery and gives the
+client metadata before the first pull, but `/pull` and `/push` still run
+the stream guard independently. A client that skips `/open` does not
+bypass access control.
 
 ## 5. Install The Browser Plugin
 
@@ -324,8 +364,9 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
   `CollectionState<T>`.
 - Memory backends are single-process. Multi-process sync needs shared
   event and data-source backends.
-- Authorization belongs to the stream source and route policy. Do not
-  treat a cursor or browser-provided stream name as proof of access.
+- Authorization belongs to stream guards plus the stream source's
+  row-level policy. Do not treat a cursor or browser-provided stream name
+  as proof of access.
 
 ## Future Backends
 

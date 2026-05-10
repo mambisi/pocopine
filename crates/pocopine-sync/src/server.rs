@@ -5,10 +5,14 @@ use std::sync::Arc;
 
 use pocopine_core::{ServerError, ServerResult};
 use pocopine_events::SharedEventBackend;
-use pocopine_server::axum::extract::State;
+use pocopine_server::auth::{Predicate, RequestContext};
+use pocopine_server::axum::body::Body;
+use pocopine_server::axum::extract::{FromRequest, State};
+use pocopine_server::axum::http::Request;
 use pocopine_server::axum::response::Json;
 use pocopine_server::axum::routing::post;
 use pocopine_server::{Server, ServerPlugin};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
@@ -20,12 +24,42 @@ use crate::{
 /// Future returned by a stream source.
 pub type SyncBoxFuture<'a, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'a>>;
 
+/// Future returned by a stream guard.
+pub type SyncGuardFuture<'a> = Pin<Box<dyn Future<Output = ServerResult<()>> + Send + 'a>>;
+
+/// Server-side access check for a sync stream.
+pub trait SyncStreamGuard: Send + Sync + 'static {
+    /// Authorize one request before the stream source runs.
+    fn check(&self, ctx: RequestContext) -> SyncGuardFuture<'_>;
+}
+
+impl<F, Fut> SyncStreamGuard for F
+where
+    F: Fn(RequestContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ServerResult<()>> + Send + 'static,
+{
+    fn check(&self, ctx: RequestContext) -> SyncGuardFuture<'_> {
+        Box::pin((self)(ctx))
+    }
+}
+
+struct PredicateStreamGuard<P>(P);
+
+impl<P> SyncStreamGuard for PredicateStreamGuard<P>
+where
+    P: Predicate,
+{
+    fn check(&self, ctx: RequestContext) -> SyncGuardFuture<'_> {
+        let result: ServerResult<()> = self.0.check(&ctx.user).into();
+        Box::pin(async move { result })
+    }
+}
+
 /// Server-side source for one registered sync stream.
 ///
-/// Registered streams are pullable through the sync routes. Until a source
-/// implements its own authorization or the host app mounts sync behind an
-/// auth boundary, `/open` is validation/discovery and `/pull` remains
-/// callable for any registered stream.
+/// The request context is passed into each source call after stream-level
+/// authorization has succeeded. Sources still own tenant filtering, cursor
+/// validation, and any per-row visibility rules.
 pub trait SyncStreamSource: Send + Sync + 'static {
     /// Server-registered stream name.
     fn stream(&self) -> &crate::SyncStreamName;
@@ -34,18 +68,25 @@ pub trait SyncStreamSource: Send + Sync + 'static {
     fn collection(&self) -> &crate::SyncCollectionName;
 
     /// Current cursor, if the source can cheaply report it.
-    fn current_cursor(&self) -> Option<crate::SyncCursor> {
+    fn current_cursor(&self, ctx: &RequestContext) -> Option<crate::SyncCursor> {
+        let _ = ctx;
         None
     }
 
     /// Pull changes or a snapshot for this stream.
-    fn pull<'a>(&'a self, request: SyncPullRequest) -> SyncBoxFuture<'a, SyncPullResponse<Value>>;
+    fn pull<'a>(
+        &'a self,
+        ctx: RequestContext,
+        request: SyncPullRequest,
+    ) -> SyncBoxFuture<'a, SyncPullResponse<Value>>;
 
     /// Push client mutations for this stream.
     fn push<'a>(
         &'a self,
+        ctx: RequestContext,
         request: SyncPushRequest<Value>,
     ) -> SyncBoxFuture<'a, SyncPushResponse<Value>> {
+        let _ = ctx;
         let _ = request;
         Box::pin(async {
             Err(SyncError::unsupported(
@@ -56,8 +97,24 @@ pub trait SyncStreamSource: Send + Sync + 'static {
 }
 
 #[derive(Clone)]
+struct RegisteredSyncStream {
+    source: Arc<dyn SyncStreamSource>,
+    guard: Option<Arc<dyn SyncStreamGuard>>,
+}
+
+impl RegisteredSyncStream {
+    async fn authorize(&self, ctx: RequestContext) -> ServerResult<()> {
+        if let Some(guard) = &self.guard {
+            guard.check(ctx).await
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone)]
 struct SyncServerInner {
-    streams: Arc<HashMap<String, Arc<dyn SyncStreamSource>>>,
+    streams: Arc<HashMap<String, Arc<RegisteredSyncStream>>>,
     events: Option<SharedEventBackend>,
 }
 
@@ -109,7 +166,7 @@ impl SyncServer {
         Ok(())
     }
 
-    fn stream(&self, stream: &str) -> SyncResult<Arc<dyn SyncStreamSource>> {
+    fn stream(&self, stream: &str) -> SyncResult<Arc<RegisteredSyncStream>> {
         self.inner
             .streams
             .get(stream)
@@ -121,18 +178,37 @@ impl SyncServer {
 /// Builder for [`SyncServer`].
 #[derive(Default)]
 pub struct SyncServerBuilder {
-    streams: HashMap<String, Arc<dyn SyncStreamSource>>,
+    streams: HashMap<String, Arc<RegisteredSyncStream>>,
     events: Option<SharedEventBackend>,
 }
 
 impl SyncServerBuilder {
-    /// Register one stream source.
-    pub fn stream<S>(mut self, stream: S) -> Self
+    /// Register one explicitly public stream source.
+    pub fn public_stream<S>(mut self, stream: S) -> Self
     where
         S: SyncStreamSource,
     {
-        self.streams
-            .insert(stream.stream().as_str().to_string(), Arc::new(stream));
+        self.insert_stream(stream, None);
+        self
+    }
+
+    /// Register one stream guarded by a sync auth predicate.
+    pub fn guarded_stream<S, P>(mut self, stream: S, predicate: P) -> Self
+    where
+        S: SyncStreamSource,
+        P: Predicate,
+    {
+        self.insert_stream(stream, Some(Arc::new(PredicateStreamGuard(predicate))));
+        self
+    }
+
+    /// Register one stream guarded by an async request-context guard.
+    pub fn guarded_stream_with<S, G>(mut self, stream: S, guard: G) -> Self
+    where
+        S: SyncStreamSource,
+        G: SyncStreamGuard,
+    {
+        self.insert_stream(stream, Some(Arc::new(guard)));
         self
     }
 
@@ -151,13 +227,26 @@ impl SyncServerBuilder {
             }),
         }
     }
+
+    fn insert_stream<S>(&mut self, stream: S, guard: Option<Arc<dyn SyncStreamGuard>>)
+    where
+        S: SyncStreamSource,
+    {
+        self.streams.insert(
+            stream.stream().as_str().to_string(),
+            Arc::new(RegisteredSyncStream {
+                source: Arc::new(stream),
+                guard,
+            }),
+        );
+    }
 }
 
 /// Server plugin that mounts sync routes and provides [`SyncServer`].
 ///
 /// Installing this plugin exposes `/__pocopine/sync/v1/open`, `/pull`, and
-/// `/push` for every registered stream. Stream sources are responsible for
-/// tenant filtering, authorization, and cursor policy in this first slice.
+/// `/push` for every registered stream. Streams must be registered as either
+/// explicitly public or guarded; there is no implicit public registration.
 #[derive(Clone)]
 pub struct SyncServerPlugin {
     sync: SyncServer,
@@ -185,19 +274,30 @@ impl ServerPlugin for SyncServerPlugin {
 
 async fn open_handler(
     State(sync): State<SyncServer>,
-    Json(request): Json<SyncOpenRequest>,
+    request: Request<Body>,
 ) -> Json<ServerResult<SyncOpenResponse>> {
-    Json(open(sync, request).await.map_err(server_error))
+    Json(
+        async {
+            let (ctx, request) = parse_json_request::<SyncOpenRequest>(request).await?;
+            open(sync, ctx, request).await
+        }
+        .await,
+    )
 }
 
-async fn open(sync: SyncServer, request: SyncOpenRequest) -> SyncResult<SyncOpenResponse> {
+async fn open(
+    sync: SyncServer,
+    ctx: RequestContext,
+    request: SyncOpenRequest,
+) -> ServerResult<SyncOpenResponse> {
     let mut streams = Vec::with_capacity(request.streams.len());
     for requested in request.streams {
-        let stream = sync.stream(requested.as_str())?;
+        let stream = sync.stream(requested.as_str()).map_err(server_error)?;
+        stream.authorize(ctx.clone()).await?;
         streams.push(SyncOpenStream {
-            stream: stream.stream().clone(),
-            collection: stream.collection().clone(),
-            cursor: stream.current_cursor(),
+            stream: stream.source.stream().clone(),
+            collection: stream.source.collection().clone(),
+            cursor: stream.source.current_cursor(&ctx),
         });
     }
     Ok(SyncOpenResponse::new(streams))
@@ -205,26 +305,48 @@ async fn open(sync: SyncServer, request: SyncOpenRequest) -> SyncResult<SyncOpen
 
 async fn pull_handler(
     State(sync): State<SyncServer>,
-    Json(request): Json<SyncPullRequest>,
+    request: Request<Body>,
 ) -> Json<ServerResult<SyncPullResponse<Value>>> {
     let result = async {
-        let stream = sync.stream(request.stream.as_str())?;
-        stream.pull(request).await
+        let (ctx, request) = parse_json_request::<SyncPullRequest>(request).await?;
+        let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
+        stream.authorize(ctx.clone()).await?;
+        stream.source.pull(ctx, request).await.map_err(server_error)
     }
     .await;
-    Json(result.map_err(server_error))
+    Json(result)
 }
 
 async fn push_handler(
     State(sync): State<SyncServer>,
-    Json(request): Json<SyncPushRequest<Value>>,
+    request: Request<Body>,
 ) -> Json<ServerResult<SyncPushResponse<Value>>> {
     let result = async {
-        let stream = sync.stream(request.stream.as_str())?;
-        stream.push(request).await
+        let (ctx, request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
+        let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
+        stream.authorize(ctx.clone()).await?;
+        stream.source.push(ctx, request).await.map_err(server_error)
     }
     .await;
-    Json(result.map_err(server_error))
+    Json(result)
+}
+
+async fn parse_json_request<T>(request: Request<Body>) -> ServerResult<(RequestContext, T)>
+where
+    T: DeserializeOwned + Send + 'static,
+{
+    let (parts, body) = request.into_parts();
+    let ctx = RequestContext::from_parts(
+        parts.method.clone(),
+        parts.uri.clone(),
+        parts.headers.clone(),
+        parts.extensions.clone(),
+    );
+    let request = Request::from_parts(parts, body);
+    let Json(payload) = Json::<T>::from_request(request, &())
+        .await
+        .map_err(|err| ServerError::BadRequest(err.to_string()))?;
+    Ok((ctx, payload))
 }
 
 fn server_error(error: SyncError) -> ServerError {
@@ -246,15 +368,25 @@ fn server_error(error: SyncError) -> ServerError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use http_body_util::BodyExt;
     use pocopine_core::ServerError;
+    use pocopine_server::auth::{
+        require_auth, require_role, AuthUser, Predicate, Principal, RequestContext, Role,
+    };
     use pocopine_server::axum::body::Body;
     use pocopine_server::axum::http::{Request, StatusCode};
+    use pocopine_server::axum::Router;
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+    use serde_json::{json, Value};
     use tower::ServiceExt;
 
     use super::*;
     use crate::{
-        MemorySyncStream, SyncPullMode, SyncPushRequest, SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
+        MemorySyncStream, SyncCollectionName, SyncOpenRequest, SyncPullMode, SyncPushRequest,
+        SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
     };
 
     #[tokio::test]
@@ -262,21 +394,8 @@ mod tests {
         let router = router_with_posts_stream();
 
         let request = SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap());
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(SYNC_PULL_PATH)
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let outer: ServerResult<SyncPullResponse<String>> = serde_json::from_slice(&bytes).unwrap();
+        let outer: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &request, None).await;
         let response = outer.unwrap();
         assert_eq!(response.protocol, SYNC_PROTOCOL_V1);
         assert_eq!(response.mode, SyncPullMode::Snapshot);
@@ -290,21 +409,8 @@ mod tests {
         let router = router_with_posts_stream();
 
         let request = SyncPullRequest::new(SyncStreamName::new("unknown_stream").unwrap());
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(SYNC_PULL_PATH)
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let outer: ServerResult<SyncPullResponse<String>> = serde_json::from_slice(&bytes).unwrap();
+        let outer: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &request, None).await;
         assert!(matches!(
             outer,
             Err(ServerError::Forbidden(message)) if message.contains("unknown sync stream")
@@ -320,26 +426,88 @@ mod tests {
             stream: SyncStreamName::new("posts_for_tenant").unwrap(),
             mutations: Vec::new(),
         };
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(SYNC_PUSH_PATH)
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let outer: ServerResult<SyncPushResponse<String>> = serde_json::from_slice(&bytes).unwrap();
+        let outer: ServerResult<SyncPushResponse<String>> =
+            post_json(router, SYNC_PUSH_PATH, &request, None).await;
         assert!(matches!(
             outer,
             Err(ServerError::BadRequest(message))
                 if message.contains("unsupported sync operation")
         ));
+    }
+
+    #[tokio::test]
+    async fn guarded_stream_denies_anonymous_open_and_pull() {
+        let router = router_with_guarded_posts_stream(require_auth());
+
+        let open = SyncOpenRequest::new([SyncStreamName::new("posts_for_tenant").unwrap()]);
+        let opened: ServerResult<SyncOpenResponse> =
+            post_json(router.clone(), SYNC_OPEN_PATH, &open, None).await;
+        assert!(matches!(opened, Err(ServerError::Unauthorized(_))));
+
+        let pull = SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap());
+        let pulled: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &pull, None).await;
+        assert!(matches!(pulled, Err(ServerError::Unauthorized(_))));
+    }
+
+    #[tokio::test]
+    async fn guarded_stream_allows_authenticated_principal() {
+        let router = router_with_guarded_posts_stream(require_auth());
+        let principal = Principal::from_user(AuthUser::new("user_1"));
+
+        let pull = SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap());
+        let pulled: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &pull, Some(principal)).await;
+
+        assert!(pulled.is_ok());
+    }
+
+    #[tokio::test]
+    async fn role_guard_checks_authenticated_principal_roles() {
+        let router = router_with_guarded_posts_stream(require_role("admin"));
+        let viewer = Principal::from_user(AuthUser::new("viewer").with_role(Role::user()));
+        let admin = Principal::from_user(AuthUser::new("admin").with_role(Role::admin()));
+        let pull = SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap());
+
+        let denied: ServerResult<SyncPullResponse<String>> =
+            post_json(router.clone(), SYNC_PULL_PATH, &pull, Some(viewer)).await;
+        assert!(matches!(denied, Err(ServerError::Forbidden(_))));
+
+        let allowed: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &pull, Some(admin)).await;
+        assert!(allowed.is_ok());
+    }
+
+    #[tokio::test]
+    async fn source_receives_request_context_after_guard_passes() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sync = SyncServer::builder()
+            .public_stream(ContextCaptureStream::new(seen.clone()))
+            .build();
+        let router = finalize(sync);
+        let principal = Principal::from_user(AuthUser::new("ctx_user"));
+        let pull = SyncPullRequest::new(SyncStreamName::new("context_stream").unwrap());
+
+        let pulled: ServerResult<SyncPullResponse<String>> =
+            post_json(router, SYNC_PULL_PATH, &pull, Some(principal)).await;
+
+        assert!(pulled.is_ok());
+        assert_eq!(seen.lock().unwrap().as_slice(), &["ctx_user".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn guarded_stream_denies_push_before_default_unsupported() {
+        let router = router_with_guarded_posts_stream(require_auth());
+        let request = SyncPushRequest::<String> {
+            protocol: SYNC_PROTOCOL_V1.to_string(),
+            stream: SyncStreamName::new("posts_for_tenant").unwrap(),
+            mutations: Vec::new(),
+        };
+
+        let pushed: ServerResult<SyncPushResponse<String>> =
+            post_json(router, SYNC_PUSH_PATH, &request, None).await;
+
+        assert!(matches!(pushed, Err(ServerError::Unauthorized(_))));
     }
 
     #[test]
@@ -357,13 +525,113 @@ mod tests {
     }
 
     fn router_with_posts_stream() -> pocopine_server::axum::Router {
-        pocopine_server::__reset_for_test();
         let posts = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
         posts.upsert("post_1", "hello".to_string()).unwrap();
-        let sync = SyncServer::builder().stream(posts).build();
+        let sync = SyncServer::builder().public_stream(posts).build();
+        finalize(sync)
+    }
+
+    fn router_with_guarded_posts_stream<P>(predicate: P) -> Router
+    where
+        P: Predicate,
+    {
+        let posts = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
+        posts.upsert("post_1", "hello".to_string()).unwrap();
+        let sync = SyncServer::builder()
+            .guarded_stream(posts, predicate)
+            .build();
+        finalize(sync)
+    }
+
+    fn finalize(sync: SyncServer) -> Router {
+        pocopine_server::__reset_for_test();
         pocopine_server::Server::new(pocopine_server::axum::Router::new())
             .plugin(sync_server_plugin(sync))
             .try_finalize()
             .unwrap()
+    }
+
+    async fn post_json<T, R>(
+        router: Router,
+        uri: &str,
+        payload: &T,
+        principal: Option<Principal>,
+    ) -> ServerResult<R>
+    where
+        T: Serialize,
+        R: DeserializeOwned,
+    {
+        let response = router
+            .oneshot(sync_request(uri, payload, principal))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn sync_request<T>(uri: &str, payload: &T, principal: Option<Principal>) -> Request<Body>
+    where
+        T: Serialize,
+    {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(principal) = principal {
+            builder = builder.extension(principal);
+        }
+        builder
+            .body(Body::from(serde_json::to_string(payload).unwrap()))
+            .unwrap()
+    }
+
+    struct ContextCaptureStream {
+        stream: SyncStreamName,
+        collection: SyncCollectionName,
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ContextCaptureStream {
+        fn new(seen: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                stream: SyncStreamName::new("context_stream").unwrap(),
+                collection: SyncCollectionName::new("context").unwrap(),
+                seen,
+            }
+        }
+    }
+
+    impl SyncStreamSource for ContextCaptureStream {
+        fn stream(&self) -> &SyncStreamName {
+            &self.stream
+        }
+
+        fn collection(&self) -> &SyncCollectionName {
+            &self.collection
+        }
+
+        fn pull<'a>(
+            &'a self,
+            ctx: RequestContext,
+            request: SyncPullRequest,
+        ) -> SyncBoxFuture<'a, SyncPullResponse<Value>> {
+            let _ = request;
+            let user_id = ctx
+                .user
+                .user()
+                .map(|user| user.id.clone())
+                .unwrap_or_else(|| "anonymous".to_string());
+            self.seen.lock().unwrap().push(user_id.clone());
+            Box::pin(async move {
+                Ok(SyncPullResponse::snapshot(
+                    SyncStreamName::new("context_stream").unwrap(),
+                    SyncCollectionName::new("context").unwrap(),
+                    vec![SyncRow::new("ctx", json!(user_id))?],
+                    None,
+                ))
+            })
+        }
     }
 }

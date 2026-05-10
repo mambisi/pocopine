@@ -82,7 +82,7 @@ pub fn sync_server() -> SyncServer {
     SYNC_SERVER
         .get_or_init(|| {
             SyncServer::builder()
-                .stream(posts_stream())
+                .public_stream(posts_stream())
                 .events(Arc::new(live_backend()))
                 .build()
         })
