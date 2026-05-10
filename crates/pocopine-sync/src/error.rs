@@ -8,8 +8,8 @@ pub type SyncResult<T> = Result<T, SyncError>;
 pub enum SyncError {
     /// A protocol value was empty or malformed.
     InvalidValue { field: &'static str, value: String },
-    /// A requested shape is not registered on the sync server.
-    UnknownShape(String),
+    /// A requested stream is not registered on the sync server.
+    UnknownStream(String),
     /// The requested operation is not implemented by the current source.
     Unsupported(String),
     /// The server can no longer resume from the supplied cursor.
@@ -52,7 +52,7 @@ impl fmt::Display for SyncError {
             Self::InvalidValue { field, value } => {
                 write!(f, "invalid sync {field}: {:?}", display_value(value))
             }
-            Self::UnknownShape(shape) => write!(f, "unknown sync shape: {shape}"),
+            Self::UnknownStream(stream) => write!(f, "unknown sync stream: {stream}"),
             Self::Unsupported(msg) => write!(f, "unsupported sync operation: {msg}"),
             Self::Gap(cursor) => write!(f, "sync cursor is no longer resumable: {cursor}"),
             Self::Json(err) => write!(f, "sync json error: {err}"),

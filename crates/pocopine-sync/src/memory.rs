@@ -6,10 +6,10 @@ use serde_json::Value;
 
 use crate::{
     SyncChange, SyncCollectionName, SyncCursor, SyncError, SyncOp, SyncPullRequest,
-    SyncPullResponse, SyncResult, SyncRow, SyncShapeName,
+    SyncPullResponse, SyncResult, SyncRow, SyncStreamName,
 };
 
-use super::server::{SyncBoxFuture, SyncShapeSource};
+use super::server::{SyncBoxFuture, SyncStreamSource};
 
 #[derive(Debug)]
 struct Inner<T> {
@@ -34,23 +34,23 @@ impl<T> Default for Inner<T> {
 /// access through one lock. It is a reference implementation, not a durable
 /// production backend.
 #[derive(Clone, Debug)]
-pub struct MemorySyncShape<T> {
-    shape: SyncShapeName,
+pub struct MemorySyncStream<T> {
+    stream: SyncStreamName,
     collection: SyncCollectionName,
     inner: Arc<Mutex<Inner<T>>>,
 }
 
-/// Cloneable handle to the in-memory state backing a shape.
-pub type MemorySyncState<T> = MemorySyncShape<T>;
+/// Cloneable handle to the in-memory state backing a stream.
+pub type MemorySyncState<T> = MemorySyncStream<T>;
 
-impl<T> MemorySyncShape<T>
+impl<T> MemorySyncStream<T>
 where
     T: Clone + Serialize + Send + Sync + 'static,
 {
-    /// Create an empty in-memory shape.
-    pub fn new(shape: impl Into<String>, collection: impl Into<String>) -> SyncResult<Self> {
+    /// Create an empty in-memory stream.
+    pub fn new(stream: impl Into<String>, collection: impl Into<String>) -> SyncResult<Self> {
         Ok(Self {
-            shape: SyncShapeName::new(shape.into())?,
+            stream: SyncStreamName::new(stream.into())?,
             collection: SyncCollectionName::new(collection.into())?,
             inner: Arc::new(Mutex::new(Inner::default())),
         })
@@ -67,7 +67,7 @@ where
         // Unbounded by design for the reference source; production adapters
         // should retain changes according to their own cursor window policy.
         inner.changes.push(SyncChange {
-            shape: self.shape.clone(),
+            stream: self.stream.clone(),
             collection: self.collection.clone(),
             key: None,
             op: SyncOp::Upsert,
@@ -85,7 +85,7 @@ where
         let cursor = SyncCursor::new(inner.version.to_string())?;
         inner.rows.remove(key.as_str());
         inner.changes.push(SyncChange {
-            shape: self.shape.clone(),
+            stream: self.stream.clone(),
             collection: self.collection.clone(),
             key: Some(key),
             op: SyncOp::Delete,
@@ -102,7 +102,7 @@ where
         let cursor = SyncCursor::new(inner.version.to_string())?;
         inner.rows.clear();
         inner.changes.push(SyncChange {
-            shape: self.shape.clone(),
+            stream: self.stream.clone(),
             collection: self.collection.clone(),
             key: None,
             op: SyncOp::Reset,
@@ -124,7 +124,7 @@ where
                 .map(row_to_value)
                 .collect::<SyncResult<Vec<_>>>()?;
             return Ok(SyncPullResponse::snapshot(
-                self.shape.clone(),
+                self.stream.clone(),
                 self.collection.clone(),
                 rows,
                 cursor,
@@ -148,7 +148,7 @@ where
         }
 
         Ok(SyncPullResponse::incremental(
-            self.shape.clone(),
+            self.stream.clone(),
             self.collection.clone(),
             changes,
             cursor,
@@ -158,16 +158,16 @@ where
     fn lock(&self) -> SyncResult<std::sync::MutexGuard<'_, Inner<T>>> {
         self.inner
             .lock()
-            .map_err(|_| SyncError::backend("memory sync shape lock poisoned"))
+            .map_err(|_| SyncError::backend("memory sync stream lock poisoned"))
     }
 }
 
-impl<T> SyncShapeSource for MemorySyncShape<T>
+impl<T> SyncStreamSource for MemorySyncStream<T>
 where
     T: Clone + Serialize + Send + Sync + 'static,
 {
-    fn shape(&self) -> &SyncShapeName {
-        &self.shape
+    fn stream(&self) -> &SyncStreamName {
+        &self.stream
     }
 
     fn collection(&self) -> &SyncCollectionName {
@@ -196,7 +196,7 @@ fn row_to_value<T: Serialize>(row: SyncRow<T>) -> SyncResult<SyncRow<Value>> {
 
 fn change_to_value<T: Serialize>(change: SyncChange<T>) -> SyncResult<SyncChange<Value>> {
     Ok(SyncChange {
-        shape: change.shape,
+        stream: change.stream,
         collection: change.collection,
         key: change.key,
         op: change.op,
@@ -211,21 +211,21 @@ mod tests {
     use crate::SyncPullMode;
 
     #[test]
-    fn memory_shape_returns_snapshot_then_incremental_changes() {
-        let shape = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
-        shape.upsert("post_1", "one".to_string()).unwrap();
-        let first = shape
+    fn memory_stream_returns_snapshot_then_incremental_changes() {
+        let stream = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
+        stream.upsert("post_1", "one".to_string()).unwrap();
+        let first = stream
             .pull_value(SyncPullRequest::new(
-                SyncShapeName::new("posts_for_tenant").unwrap(),
+                SyncStreamName::new("posts_for_tenant").unwrap(),
             ))
             .unwrap();
         assert_eq!(first.mode, SyncPullMode::Snapshot);
         assert_eq!(first.rows.len(), 1);
 
-        shape.upsert("post_2", "two".to_string()).unwrap();
-        let second = shape
+        stream.upsert("post_2", "two".to_string()).unwrap();
+        let second = stream
             .pull_value(
-                SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap())
+                SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap())
                     .cursor(first.cursor.clone()),
             )
             .unwrap();
@@ -238,21 +238,21 @@ mod tests {
     }
 
     #[test]
-    fn memory_shape_returns_delete_and_reset_changes() {
-        let shape = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
-        shape.upsert("post_1", "one".to_string()).unwrap();
-        let first = shape
+    fn memory_stream_returns_delete_and_reset_changes() {
+        let stream = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
+        stream.upsert("post_1", "one".to_string()).unwrap();
+        let first = stream
             .pull_value(SyncPullRequest::new(
-                SyncShapeName::new("posts_for_tenant").unwrap(),
+                SyncStreamName::new("posts_for_tenant").unwrap(),
             ))
             .unwrap();
 
-        shape.delete("post_1").unwrap();
-        shape.reset().unwrap();
+        stream.delete("post_1").unwrap();
+        stream.reset().unwrap();
 
-        let second = shape
+        let second = stream
             .pull_value(
-                SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap())
+                SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap())
                     .cursor(first.cursor.clone()),
             )
             .unwrap();
@@ -264,11 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn memory_shape_reports_gap_for_non_numeric_cursor() {
-        let shape = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
-        let err = shape
+    fn memory_stream_reports_gap_for_non_numeric_cursor() {
+        let stream = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
+        let err = stream
             .pull_value(
-                SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap())
+                SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap())
                     .cursor(Some(SyncCursor::new("not_numeric").unwrap())),
             )
             .unwrap_err();

@@ -17,21 +17,21 @@ mod server;
 
 pub use error::{SyncError, SyncResult};
 pub use protocol::{
-    sync_shape_tag, ClientMutation, MutationId, RowKey, RowVersion, SyncChange, SyncCollectionName,
-    SyncConflict, SyncCursor, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenShape,
-    SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRow,
-    SyncShapeName, MAX_SYNC_TOKEN_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1,
-    SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    sync_stream_tag, ClientMutation, MutationId, RowKey, RowVersion, SyncChange,
+    SyncCollectionName, SyncConflict, SyncCursor, SyncOp, SyncOpenRequest, SyncOpenResponse,
+    SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, SyncRow, SyncStreamName, MAX_SYNC_TOKEN_LEN, SYNC_ENDPOINT_PREFIX,
+    SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 pub use state::{CollectionState, SyncReason, SyncRequest};
 
 pub use client::{sync_plugin, SyncClient, SyncClientPlugin, SyncCollection};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use memory::{MemorySyncShape, MemorySyncState};
+pub use memory::{MemorySyncState, MemorySyncStream};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
     sync_server_plugin, SyncBoxFuture, SyncServer, SyncServerBuilder, SyncServerPlugin,
-    SyncShapeSource,
+    SyncStreamSource,
 };

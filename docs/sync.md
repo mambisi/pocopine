@@ -3,8 +3,8 @@
 `pocopine-sync` is the framework extension for cursor-based data sync.
 The first implementation is intentionally small:
 
-- the server owns named sync shapes,
-- the browser opens an authorized shape, then pulls a snapshot or
+- the server owns named sync streams,
+- the browser opens an authorized stream, then pulls a snapshot or
   incremental changes with a cursor,
 - `pocopine-live` is used only as a wake-up signal,
 - the data payload still moves through `POST /__pocopine/sync/v1/pull`.
@@ -12,7 +12,7 @@ The first implementation is intentionally small:
 This is not the full offline store yet. IndexedDB persistence,
 optimistic mutation replay, SQLx-backed adapters, and CDC integrations
 remain future work. The current API gives us the protocol boundary and a
-browser state shape that those backends can plug into later.
+browser state stream that those backends can plug into later.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
@@ -22,15 +22,15 @@ same PR.
 
 A sync-enabled app needs five pieces:
 
-1. A stable shape name for the data the browser may sync.
-2. A host-side `SyncShapeSource` registered with `SyncServer`.
+1. A stable stream name for the data the browser may sync.
+2. A host-side `SyncStreamSource` registered with `SyncServer`.
 3. Sync routes mounted through `sync_server_plugin(...)`.
-4. Optional live routes that allow the sync shape's wake-up topic.
+4. Optional live routes that allow the sync stream's wake-up topic.
 5. A browser component with `CollectionState<T>` and `sync_plugin()`.
 
-The example uses `MemorySyncShape<Post>` so the whole flow can run
+The example uses `MemorySyncStream<Post>` so the whole flow can run
 without a database. Production adapters should implement
-`SyncShapeSource` and keep the browser code unchanged.
+`SyncStreamSource` and keep the browser code unchanged.
 
 ## 1. Enable The Extension Crate
 
@@ -57,13 +57,13 @@ tracing = { workspace = true }
 the client plugin and protocol/state types. The host gets the server
 plugin and source traits.
 
-## 2. Define A Shape
+## 2. Define A Stream
 
-A shape is the server-approved subset of data the browser can sync. It
+A stream is the server-approved subset of data the browser can sync. It
 is not a database table name or arbitrary browser filter.
 
 ```rust
-pub const POSTS_SHAPE: &str = "posts_for_user";
+pub const POSTS_STREAM: &str = "posts_for_user";
 pub const POSTS_COLLECTION: &str = "posts";
 ```
 
@@ -72,20 +72,20 @@ single-process apps:
 
 ```rust
 #[cfg(pocopine_host)]
-pub fn posts_shape() -> pocopine_sync::MemorySyncShape<Post> {
+pub fn posts_stream() -> pocopine_sync::MemorySyncStream<Post> {
     static POSTS_SYNC: std::sync::OnceLock<
-        pocopine_sync::MemorySyncShape<Post>,
+        pocopine_sync::MemorySyncStream<Post>,
     > = std::sync::OnceLock::new();
 
     POSTS_SYNC
         .get_or_init(|| {
-            let shape =
-                pocopine_sync::MemorySyncShape::new(POSTS_SHAPE, POSTS_COLLECTION)
-                    .expect("shape names must be valid");
-            shape
+            let stream =
+                pocopine_sync::MemorySyncStream::new(POSTS_STREAM, POSTS_COLLECTION)
+                    .expect("stream names must be valid");
+            stream
                 .upsert("post_1", Post::seeded())
                 .expect("seed post should sync");
-            shape
+            stream
         })
         .clone()
 }
@@ -93,15 +93,15 @@ pub fn posts_shape() -> pocopine_sync::MemorySyncShape<Post> {
 
 Database-backed apps should hide authorization, tenant filters, delete
 privacy, and cursor validation inside their source implementation.
-Browsers only ask for registered shape names.
+Browsers only ask for registered stream names.
 
-`MemorySyncShape<T>` is not a production backend. It keeps an unbounded
+`MemorySyncStream<T>` is not a production backend. It keeps an unbounded
 in-memory change log and uses one process-local lock. Use it for tests,
 examples, and explicit single-process demos.
 
 ## 3. Build The Sync Server
 
-`SyncServer` owns the registered shapes and optionally shares the live
+`SyncServer` owns the registered streams and optionally shares the live
 event backend so it can publish wake-ups after mutations commit:
 
 ```rust
@@ -113,7 +113,7 @@ pub fn sync_server() -> pocopine_sync::SyncServer {
     SYNC_SERVER
         .get_or_init(|| {
             pocopine_sync::SyncServer::builder()
-                .shape(posts_shape())
+                .stream(posts_stream())
                 .events(std::sync::Arc::new(live_backend()))
                 .build()
         })
@@ -127,7 +127,7 @@ a query-tag wake-up that tells the browser to call `pull`:
 ```rust
 #[cfg(pocopine_host)]
 async fn invalidate_posts() {
-    if let Err(err) = sync_server().invalidate_shape(POSTS_SHAPE).await {
+    if let Err(err) = sync_server().invalidate_stream(POSTS_STREAM).await {
         tracing::warn!(
             target: "pocopine.log",
             error = %err,
@@ -172,12 +172,12 @@ async fn main() -> std::io::Result<()> {
 ```
 
 The default live topic policy is deny-all. `sync.live_topics()` returns
-only the wake-up topics for registered shapes.
+only the wake-up topics for registered streams.
 
 This first sync slice does not make `/open` a server-side session
-boundary. A registered shape is pullable through `/pull`; `/open`
+boundary. A registered stream is pullable through `/pull`; `/open`
 validates discovery and gives the client metadata before the first pull.
-Production shape sources must enforce auth, tenant filtering, and cursor
+Production stream sources must enforce auth, tenant filtering, and cursor
 policy themselves, or the host app must mount sync behind an auth
 boundary.
 
@@ -219,7 +219,7 @@ impl SyncBoard {
         let result = self
             .plugin::<pocopine_sync::SyncClient>()
             .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
-            .shape(POSTS_SHAPE)
+            .stream(POSTS_STREAM)
             .and_then(|collection| collection.open());
 
         if let Err(err) = result {
@@ -229,12 +229,12 @@ impl SyncBoard {
 }
 ```
 
-`open()` first calls `/__pocopine/sync/v1/open` to validate the shape,
+`open()` first calls `/__pocopine/sync/v1/open` to validate the stream,
 then calls `/__pocopine/sync/v1/pull`. A fresh client still pulls
 without a cursor so it receives a snapshot; the server's current cursor
 from `open` is metadata, not permission to skip initial data. When live
-wake-up is enabled, `open()` also subscribes to the shape's wake-up topic
-and pulls again whenever the server invalidates that shape. `pull()` can
+wake-up is enabled, `open()` also subscribes to the stream's wake-up topic
+and pulls again whenever the server invalidates that stream. `pull()` can
 be called manually for refresh buttons.
 
 Templates read `CollectionState<T>` directly:
@@ -266,7 +266,7 @@ write succeeds:
 pub async fn create_post(title: String, body: String) -> ServerResult<Post> {
     let post = insert_post(title, body)?;
 
-    posts_shape()
+    posts_stream()
         .upsert(post.id.clone(), post.clone())
         .map_err(|err| ServerError::App(err.to_string()))?;
 
@@ -306,10 +306,10 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 
 ## Protocol Boundary
 
-- `open` validates shape names and reports registered shape metadata.
+- `open` validates stream names and reports registered stream metadata.
   The browser client calls it before the first `pull`.
 - `pull` returns either a full snapshot or incremental changes.
-- `push` exists in the protocol, but the memory shape rejects it until
+- `push` exists in the protocol, but the memory stream rejects it until
   optimistic mutations and conflict policy are implemented.
 - Cursors are opaque. Components should store and resend them, not parse
   them.
@@ -324,14 +324,14 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
   `CollectionState<T>`.
 - Memory backends are single-process. Multi-process sync needs shared
   event and data-source backends.
-- Authorization belongs to the shape source and route policy. Do not
-  treat a cursor or browser-provided shape name as proof of access.
+- Authorization belongs to the stream source and route policy. Do not
+  treat a cursor or browser-provided stream name as proof of access.
 
 ## Future Backends
 
 Keep these as separate adapter crates:
 
-- `pocopine-sync-sqlx` for compile-time checked SQL shapes,
+- `pocopine-sync-sqlx` for compile-time checked SQL streams,
 - `pocopine-sync-indexeddb` for browser persistence,
 - `pocopine-sync-redis` for shared cursor/change storage.
 

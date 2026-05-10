@@ -6,14 +6,14 @@ use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
 use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, sync_shape_tag, SyncPullMode, SyncPullRequest, SyncPullResponse,
-    SyncShapeName, SYNC_PULL_PATH,
+    sync_server_plugin, sync_stream_tag, SyncPullMode, SyncPullRequest, SyncPullResponse,
+    SyncStreamName, SYNC_PULL_PATH,
 };
-use sync_example::{create_post, live_backend, sync_server, Post, POSTS_SHAPE};
+use sync_example::{create_post, live_backend, sync_server, Post, POSTS_STREAM};
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn sync_pull_and_live_wakeup_share_the_shape_topic() {
+async fn sync_pull_and_live_wakeup_share_the_stream_topic() {
     pocopine_server::__reset_for_test();
     let sync = sync_server();
     let sync_topics = sync.live_topics().unwrap();
@@ -33,7 +33,7 @@ async fn sync_pull_and_live_wakeup_share_the_shape_topic() {
     let stream_url = build_live_stream_url(
         LIVE_STREAM_PATH,
         &[],
-        &[format!("query:{}", sync_shape_tag(POSTS_SHAPE))],
+        &[format!("query:{}", sync_stream_tag(POSTS_STREAM))],
         None,
     )
     .unwrap();
@@ -52,7 +52,7 @@ async fn sync_pull_and_live_wakeup_share_the_shape_topic() {
     let mut body = response.into_body();
     let ready = read_sse_frame(&mut body).await;
     assert!(ready.contains("event: ready"));
-    assert!(ready.contains("query:sync:shape:posts_for_user"));
+    assert!(ready.contains("query:sync:stream:posts_for_user"));
 
     create_post(
         "CI sync wake-up".to_string(),
@@ -63,7 +63,7 @@ async fn sync_pull_and_live_wakeup_share_the_shape_topic() {
 
     let invalidation = read_sse_frame(&mut body).await;
     assert!(invalidation.contains("event: query.invalidated"));
-    assert!(invalidation.contains("sync:shape:posts_for_user"));
+    assert!(invalidation.contains("sync:stream:posts_for_user"));
 
     let second = pull_posts(&app, first.cursor).await;
     assert_eq!(second.mode, SyncPullMode::Incremental);
@@ -80,7 +80,7 @@ async fn pull_posts(
     app: &pocopine_server::axum::Router,
     cursor: Option<pocopine_sync::SyncCursor>,
 ) -> SyncPullResponse<Post> {
-    let request = SyncPullRequest::new(SyncShapeName::new(POSTS_SHAPE).unwrap()).cursor(cursor);
+    let request = SyncPullRequest::new(SyncStreamName::new(POSTS_STREAM).unwrap()).cursor(cursor);
     let response = app
         .clone()
         .oneshot(

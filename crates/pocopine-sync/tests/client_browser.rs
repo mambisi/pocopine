@@ -12,7 +12,7 @@ use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine_sync::{
     sync_plugin, CollectionState, SyncCollectionName, SyncOpenRequest, SyncOpenResponse,
-    SyncOpenShape, SyncPullRequest, SyncPullResponse, SyncRow, SyncShapeName, SYNC_OPEN_PATH,
+    SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncRow, SyncStreamName, SYNC_OPEN_PATH,
     SYNC_PULL_PATH,
 };
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use web_sys::window;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-const SHAPE: &str = "posts_for_browser";
+const STREAM: &str = "posts_for_browser";
 const COLLECTION: &str = "posts";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ impl SyncBrowserBoard {
             .collection(pocopine::this::<Self>(), |state: &mut Self| {
                 &mut state.posts
             })
-            .shape(SHAPE)
+            .stream(STREAM)
             .and_then(|collection| collection.open())
         {
             self.posts.set_error(err.to_string());
@@ -68,7 +68,7 @@ impl SyncBrowserBoard {
 }
 
 #[wasm_bindgen_test(async)]
-async fn open_validates_shape_then_pull_renders_snapshot() {
+async fn open_validates_stream_then_pull_renders_snapshot() {
     pocopine::fetch::__reset_middleware_chain_for_test();
 
     let seen_urls = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -81,9 +81,9 @@ async fn open_validates_shape_then_pull_renders_snapshot() {
                 match req.url.as_str() {
                     SYNC_OPEN_PATH => {
                         let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.shapes[0].as_str(), SHAPE);
-                        let response = SyncOpenResponse::new(vec![SyncOpenShape {
-                            shape: SyncShapeName::new(SHAPE).unwrap(),
+                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        let response = SyncOpenResponse::new(vec![SyncOpenStream {
+                            stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
                         }]);
@@ -91,13 +91,13 @@ async fn open_validates_shape_then_pull_renders_snapshot() {
                     }
                     SYNC_PULL_PATH => {
                         let request: SyncPullRequest = serde_json::from_str(&req.body).unwrap();
-                        assert_eq!(request.shape.as_str(), SHAPE);
+                        assert_eq!(request.stream.as_str(), STREAM);
                         assert!(
                             request.cursor.is_none(),
                             "the /open cursor must not make a fresh client skip its snapshot"
                         );
                         let response = SyncPullResponse::snapshot(
-                            SyncShapeName::new(SHAPE).unwrap(),
+                            SyncStreamName::new(STREAM).unwrap(),
                             SyncCollectionName::new(COLLECTION).unwrap(),
                             vec![SyncRow::new(
                                 "post_1",

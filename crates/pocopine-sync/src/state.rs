@@ -231,7 +231,7 @@ impl<T> CollectionState<T> {
 mod tests {
     use super::*;
     use crate::{
-        RowKey, SyncChange, SyncCollectionName, SyncCursor, SyncPullResponse, SyncShapeName,
+        RowKey, SyncChange, SyncCollectionName, SyncCursor, SyncPullResponse, SyncStreamName,
     };
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
         let mut state = CollectionState::<String>::default();
         let request = state.begin_initial();
         let response = SyncPullResponse::snapshot(
-            SyncShapeName::new("posts").unwrap(),
+            SyncStreamName::new("posts").unwrap(),
             SyncCollectionName::new("posts").unwrap(),
             vec![SyncRow::new("post_1", "hello".to_string()).unwrap()],
             Some(SyncCursor::new("1").unwrap()),
@@ -259,7 +259,7 @@ mod tests {
         state.apply_pull(
             initial,
             SyncPullResponse::snapshot(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 vec![SyncRow::new("post_1", "old".to_string()).unwrap()],
                 Some(SyncCursor::new("1").unwrap()),
@@ -268,11 +268,11 @@ mod tests {
 
         let request = state.begin_pull(SyncReason::Manual);
         let response = SyncPullResponse::incremental(
-            SyncShapeName::new("posts").unwrap(),
+            SyncStreamName::new("posts").unwrap(),
             SyncCollectionName::new("posts").unwrap(),
             vec![
                 SyncChange {
-                    shape: SyncShapeName::new("posts").unwrap(),
+                    stream: SyncStreamName::new("posts").unwrap(),
                     collection: SyncCollectionName::new("posts").unwrap(),
                     key: None,
                     op: SyncOp::Upsert,
@@ -280,7 +280,7 @@ mod tests {
                     cursor: SyncCursor::new("2").unwrap(),
                 },
                 SyncChange {
-                    shape: SyncShapeName::new("posts").unwrap(),
+                    stream: SyncStreamName::new("posts").unwrap(),
                     collection: SyncCollectionName::new("posts").unwrap(),
                     key: Some(RowKey::new("post_1").unwrap()),
                     op: SyncOp::Delete,
@@ -305,7 +305,7 @@ mod tests {
         assert!(!state.apply_pull(
             stale,
             SyncPullResponse::snapshot(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 vec![SyncRow::new("post_1", "stale".to_string()).unwrap()],
                 None,
@@ -314,7 +314,7 @@ mod tests {
         assert!(state.apply_pull(
             current,
             SyncPullResponse::snapshot(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 vec![SyncRow::new("post_2", "current".to_string()).unwrap()],
                 None,
@@ -330,7 +330,7 @@ mod tests {
         state.apply_pull(
             initial,
             SyncPullResponse::snapshot(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 vec![SyncRow::new("post_1", "loaded".to_string()).unwrap()],
                 Some(SyncCursor::new("1").unwrap()),
@@ -368,7 +368,7 @@ mod tests {
         state.apply_pull(
             initial,
             SyncPullResponse::snapshot(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 vec![SyncRow::new("post_1", "loaded".to_string()).unwrap()],
                 Some(SyncCursor::new("1").unwrap()),
@@ -379,7 +379,7 @@ mod tests {
         assert!(state.apply_pull(
             request,
             SyncPullResponse::incremental(
-                SyncShapeName::new("posts").unwrap(),
+                SyncStreamName::new("posts").unwrap(),
                 SyncCollectionName::new("posts").unwrap(),
                 Vec::new(),
                 Some(SyncCursor::new("1").unwrap()),
