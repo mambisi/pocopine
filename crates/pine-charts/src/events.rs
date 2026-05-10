@@ -90,6 +90,17 @@ impl ChartSelection {
     }
 }
 
+/// Payload for `pp:chart:hover`.
+///
+/// `kind` determines which value fields are populated:
+/// - `xy`: line, scatter, and area hovers populate `x`, `y`, `x_label`, and
+///   `y_label`.
+/// - `category`: bar hovers populate `category`, `value`, and `value_label`.
+/// - `share`: pie/donut hovers populate `value`, `value_label`, `percentage`,
+///   and `percentage_label`.
+///
+/// `label` is the concise label suitable for custom UI. `aria_label` mirrors
+/// the rendered mark's accessible label.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartHover {
     pub chart: String,
@@ -234,6 +245,7 @@ impl ChartHover {
     }
 }
 
+/// Payload for `pp:chart:hover-end`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartHoverEnd {
     pub chart: String,

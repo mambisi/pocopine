@@ -174,10 +174,11 @@ impl CartesianHoverUpdate {
 }
 
 pub(crate) fn chart_hover_payload(chart: &str, update: &CartesianHoverUpdate) -> ChartHover {
+    let label = format!("x {}, y {}", update.sample.x_label, update.sample.y_label);
     ChartHover::xy(
         chart,
         update.sample.key.clone(),
-        update.sample.aria_label.clone(),
+        label,
         update.sample.aria_label.clone(),
         update.sample.series.clone(),
         update.sample.data_x,
@@ -188,6 +189,22 @@ pub(crate) fn chart_hover_payload(chart: &str, update: &CartesianHoverUpdate) ->
         update.placement.y,
         update.placement.style.clone(),
     )
+}
+
+pub(crate) fn tooltip_mode(value: &str) -> &'static str {
+    if value.trim().eq_ignore_ascii_case("none") {
+        "none"
+    } else {
+        "default"
+    }
+}
+
+pub(crate) fn tooltip_aria_hidden(mode: &str, hover_visible: bool) -> &'static str {
+    if hover_visible && mode != "none" {
+        "false"
+    } else {
+        "true"
+    }
 }
 
 pub(crate) struct CartesianHoverFields<'a> {

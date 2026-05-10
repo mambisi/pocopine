@@ -1203,6 +1203,9 @@ async fn scatter_chart_renders_points_axes_and_hover() {
 
     let axis_labels = host.query_selector_all(".pine-chart-axis-label").unwrap();
     assert_eq!(axis_labels.length(), 2);
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_label = listen_string_field(&chart, CHART_HOVER_EVENT, "label");
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     dispatch_pointer_move(&svg, 95.0, 95.0);
@@ -1224,6 +1227,9 @@ async fn scatter_chart_renders_points_axes_and_hover() {
         tooltip.get_attribute("aria-label").as_deref(),
         Some("Segment B: x 1, y 0")
     );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("scatter"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
+    assert_eq!(hover_label.borrow().as_deref(), Some("x 1, y 0"));
 
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
     dispatch_click(&first);
@@ -1350,6 +1356,9 @@ async fn area_chart_renders_fills_lines_and_hover_metadata() {
         .query_selector_all(".pine-area-chart .pine-chart-marker")
         .unwrap();
     assert_eq!(markers.length(), 4);
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_label = listen_string_field(&chart, CHART_HOVER_EVENT, "label");
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     let rect = svg.get_bounding_client_rect();
@@ -1372,6 +1381,9 @@ async fn area_chart_renders_fills_lines_and_hover_metadata() {
         tooltip.get_attribute("aria-label").as_deref(),
         Some("Target: x 1, y 0")
     );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("area"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
+    assert_eq!(hover_label.borrow().as_deref(), Some("x 1, y 0"));
 
     host.remove();
 }
@@ -1472,14 +1484,15 @@ async fn line_chart_emits_hover_events_and_allows_custom_tooltips() {
     settle().await;
 
     let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(chart.get_attribute("data-tooltip").as_deref(), Some("none"));
     assert_eq!(
         tooltip.get_attribute("aria-hidden").as_deref(),
         Some("true")
     );
-    assert_eq!(
-        tooltip.get_attribute("style").as_deref(),
-        Some("display: none;")
-    );
+    assert!(tooltip
+        .get_attribute("style")
+        .unwrap_or_default()
+        .contains("--pine-chart-tooltip-x: 50%"));
     assert_eq!(hover_chart.borrow().as_deref(), Some("line"));
     assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
     assert_eq!(hover_label.borrow().as_deref(), Some("x 5, y 10"));
@@ -2310,6 +2323,9 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     assert_eq!(direct_svg_layers(&svg), vec!["series", "hover", "labels"]);
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_label = listen_string_field(&chart, CHART_HOVER_EVENT, "label");
     dispatch_pointer_move(&svg, 50.0, 10.0);
     settle().await;
 
@@ -2339,6 +2355,9 @@ async fn pie_chart_renders_donut_slices_and_selection() {
         tooltip.get_attribute("data-percentage").as_deref(),
         Some("75")
     );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("pie"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("share"));
+    assert_eq!(hover_label.borrow().as_deref(), Some("Organic"));
 
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
     dispatch_click(&first);

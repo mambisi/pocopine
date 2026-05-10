@@ -5,7 +5,7 @@
       :data-empty="empty"
       :data-invalid="invalid"
       :data-hover="hover_visible"
-      :data-tooltip="tooltip"
+      :data-tooltip="tooltip_mode"
       :data-animate="animate"
       :data-animation-duration="animation_duration"
       :data-animation-easing="animation_easing"
@@ -162,10 +162,10 @@
     </g>
   </svg>
   <div class="pine-chart-tooltip"
-       :aria-hidden="hover_visible && tooltip != 'none' ? 'false' : 'true'"
+       :aria-hidden="tooltip_aria_hidden"
        role="status"
        :aria-label="hover_aria_label"
-       :style="hover_visible && tooltip != 'none' ? hover_style : (tooltip == 'none' ? 'display: none;' : '')"
+       :style="hover_style"
        :data-tooltip-x="hover_placement_x"
        :data-tooltip-y="hover_placement_y"
        :data-x="hover_data_x"

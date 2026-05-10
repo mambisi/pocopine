@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::cartesian::{
     centered_plot_y, chart_hover_payload, nearest_sample_by_point, nearest_sample_by_x,
-    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, CartesianChartState,
-    CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, CartesianHoverSample,
-    CartesianHoverUpdate, CartesianLayout, ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
+    optional_domain, plot_rect_from_edges, pointer_event_svg_point, step_key, tooltip_aria_hidden,
+    tooltip_mode, CartesianChartState, CartesianGuideFields, CartesianGuideUpdate,
+    CartesianHoverFields, CartesianHoverSample, CartesianHoverUpdate, CartesianLayout,
+    ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{
@@ -381,6 +382,8 @@ pub struct PineLineChart {
     pub animation_easing: String,
     #[prop]
     pub tooltip: String,
+    pub tooltip_mode: String,
+    pub tooltip_aria_hidden: String,
     pub animation_style: String,
     pub state: String,
     pub view_box: String,
@@ -443,6 +446,8 @@ impl Default for PineLineChart {
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
             tooltip: "default".into(),
+            tooltip_mode: "default".into(),
+            tooltip_aria_hidden: "true".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -491,6 +496,7 @@ impl Default for PineLineChart {
 impl PineLineChart {
     fn on_setup(&mut self) {
         self.update_animation_style();
+        self.sync_tooltip_state();
         self.recompute();
     }
 
@@ -507,6 +513,11 @@ impl PineLineChart {
     #[watch(animation_easing)]
     fn on_animation_easing(&mut self, _: String, _: Option<String>) {
         self.update_animation_style();
+    }
+
+    #[watch(tooltip)]
+    fn on_tooltip(&mut self, _: String, _: Option<String>) {
+        self.sync_tooltip_state();
     }
 
     #[watch(points)]
@@ -579,6 +590,7 @@ impl PineLineChart {
     pub fn clear_hover(&mut self) {
         let was_visible = self.hover_visible;
         self.hover_fields().clear();
+        self.sync_tooltip_state();
         if was_visible {
             pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("line"));
         }
@@ -614,6 +626,12 @@ impl PineLineChart {
 impl PineLineChart {
     fn update_animation_style(&mut self) {
         self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
+    fn sync_tooltip_state(&mut self) {
+        self.tooltip_mode = tooltip_mode(&self.tooltip).into();
+        self.tooltip_aria_hidden =
+            tooltip_aria_hidden(&self.tooltip_mode, self.hover_visible).into();
     }
 
     fn recompute(&mut self) {
@@ -707,6 +725,7 @@ impl PineLineChart {
         let update = sample.hover_update(self.plot_rect(), self.width, self.height);
         let hover = chart_hover_payload("line", &update);
         self.hover_fields().apply(update);
+        self.sync_tooltip_state();
         pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 

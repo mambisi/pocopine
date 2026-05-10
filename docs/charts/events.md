@@ -37,7 +37,9 @@ Template listeners use the event name directly:
 
 Line, scatter, area, bar, and pie/donut charts emit `pp:chart:hover` while the
 pointer is over an interactive chart mark. Pointer exit emits
-`pp:chart:hover-end`. The hover payload is `ChartHover`:
+`pp:chart:hover-end`. Hover events are pointer-driven, so custom handlers should
+stay cheap and push expensive work outside the pointer path. The hover payload
+is `ChartHover`:
 
 ```rust
 use pine_charts::ChartHover;
@@ -61,6 +63,22 @@ Payload fields:
 - `percentage_label`
 - `tooltip_x` / `tooltip_y`
 - `tooltip_style`
+
+`kind` determines which fields are populated:
+
+- `xy`: line, scatter, and area hovers. `label` is the compact point label,
+  `series` is the series label when present, and `x`, `y`, `x_label`, and
+  `y_label` are populated.
+- `category`: bar hovers. `label` and `category` are the category label,
+  `series` is populated for grouped/stacked series, and `value` /
+  `value_label` are populated.
+- `share`: pie and donut hovers. `label` is the slice label, `value`,
+  `value_label`, `percentage`, and `percentage_label` are populated, and
+  `series` / `category` are empty.
+
+`aria_label` always matches the rendered mark's accessible label. Prefer
+`label` for concise custom UI and `aria_label` when mirroring the chart's
+accessible announcement.
 
 The built-in tooltip remains the default. Set `tooltip="none"` on a chart to
 hide the built-in tooltip while keeping hover crosshairs, markers, data
@@ -87,6 +105,10 @@ pub fn show_tooltip(&mut self, event: JsValue) {
     self.tooltip_value = format!("{}: {}", hover.x_label, hover.y_label);
 }
 ```
+
+When `tooltip="none"` is set, the application owns the replacement tooltip's
+accessibility. Use a status/live region such as `role="status"` and
+`aria-live="polite"` when the custom tooltip should be announced.
 
 ## Legend Toggles
 
