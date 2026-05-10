@@ -384,6 +384,8 @@ pub struct SyncRejectedMutation {
 pub struct SyncPushResponse<T> {
     pub protocol: String,
     pub stream: SyncStreamName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<SyncCollectionName>,
     #[serde(default)]
     pub accepted: Vec<MutationId>,
     #[serde(default)]
@@ -400,6 +402,7 @@ impl<T> SyncPushResponse<T> {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             stream,
+            collection: None,
             accepted: Vec::new(),
             rejected: Vec::new(),
             rows: Vec::new(),

@@ -298,6 +298,8 @@ choose a database filename with
 validated as OPFS filenames rather than paths. If the browser denies
 persistent storage, the store reports a client error and the app can fall
 back to `MemoryLocalStore` or surface an offline-storage warning.
+Because the underlying SQLite WASM wrapper owns a singleton worker,
+Pocopine supports one open browser SQLite sync database per page.
 
 Native apps can use the same crate with
 `SqliteLocalStore::open_path(path)` or `SqliteLocalStore::open_in_memory()`.
@@ -347,6 +349,11 @@ Pending mutations found in the local store are replayed after `open`
 passes and before the authoritative pull. With `MemoryLocalStore` this is
 useful inside one page lifetime. With `pocopine-sync-sqlite`, it also
 survives reloads in browsers that support OPFS.
+
+`SyncLocalIdentity` and `MutationIdGenerator` are available for apps that
+want stable device-scoped mutation ids today. The current
+`SyncCollection::push` method still expects the app to provide
+`ClientMutation::id`; automatic id allocation is a follow-up API.
 
 Templates read `CollectionState<T>` directly:
 
@@ -406,6 +413,11 @@ same rule: do not emit a live wake-up until the mutation has committed.
 The example uses short client-local ids to keep the code readable.
 Production apps should use server-assigned ids or client-generated UUIDs
 to avoid row-key collisions across tabs and devices.
+
+Local-store row flags are a cached view of the latest server outcome. If
+an app stacks multiple pending mutations against the same row, a hydrated
+row may temporarily show `pending = false` until the client replays the
+stored mutation queue.
 
 ## 7. Run The Example
 

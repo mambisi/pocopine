@@ -180,6 +180,7 @@ impl LocalChangeBatch {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LocalPushResult {
     pub stream: SyncStreamName,
+    pub collection: Option<SyncCollectionName>,
     #[serde(default)]
     pub accepted: Vec<MutationId>,
     #[serde(default)]
@@ -195,6 +196,7 @@ impl LocalPushResult {
     pub fn from_response(response: SyncPushResponse<serde_json::Value>) -> Self {
         Self {
             stream: response.stream,
+            collection: response.collection,
             accepted: response.accepted,
             rejected: response.rejected,
             rows: response.rows,
@@ -209,6 +211,11 @@ impl LocalPushResult {
 /// Implementations must apply snapshot, change, mutation enqueue, and push
 /// result operations atomically. The local store improves durability and
 /// startup latency; it is not an authorization boundary.
+///
+/// `load_identity` and `save_identity` expose the durable identity slot used
+/// by apps or future Pocopine client helpers to allocate stable mutation ids.
+/// The current `SyncCollection::push` API remains id-explicit: callers still
+/// provide `ClientMutation::id` themselves.
 pub trait SyncLocalStore {
     /// Load the persisted client identity, if this store has one.
     fn load_identity(&self) -> SyncLocalFuture<'_, Option<SyncLocalIdentity>>;
@@ -233,6 +240,11 @@ pub trait SyncLocalStore {
     ) -> SyncLocalFuture<'_, ()>;
 
     /// Persist accepted, rejected, or conflicted mutation outcomes.
+    ///
+    /// Row `pending` flags persisted here describe the latest server outcome.
+    /// With stacked pending mutations for the same key, hydrated rows may
+    /// understate pending UI state until the client replays the queued
+    /// mutations.
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()>;
 
     /// Load pending mutations that should be replayed for one stream.

@@ -827,6 +827,7 @@ where
 {
     Ok(LocalPushResult {
         stream: response.stream.clone(),
+        collection: response.collection.clone(),
         accepted: response.accepted.clone(),
         rejected: response.rejected.clone(),
         rows: response

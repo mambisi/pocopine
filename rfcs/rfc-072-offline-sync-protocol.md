@@ -46,7 +46,9 @@ independently, so skipping `/open` does not bypass access control.
 
 Still future work: conflict resolution UI, SQLx/database adapters, CDC
 sources, query-driven stream parameters, and production guidance for
-storage-denied browser environments.
+storage-denied browser environments. Automatic mutation-id allocation in
+the client is also future API work; this slice exposes the durable
+identity slot but keeps `SyncCollection::push` id-explicit.
 The local-store implementation plan is documented in
 [`docs/sync-local-store-plan.md`](../docs/sync-local-store-plan.md):
 SQLite-first local storage, with SQLx kept as a later host/server

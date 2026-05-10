@@ -2,7 +2,7 @@ use std::{
     future,
     path::Path,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use pocopine_sync::{
@@ -20,9 +20,6 @@ use crate::schema::{
 };
 
 /// SQLite-backed [`SyncLocalStore`] for host/native targets.
-///
-/// Browser builds expose the same type name but return a clear unsupported
-/// error until the SQLite WASM + OPFS worker binding lands.
 #[derive(Clone)]
 pub struct SqliteLocalStore {
     conn: Arc<Mutex<Connection>>,
@@ -36,11 +33,14 @@ impl SqliteLocalStore {
 
     /// Open or create a SQLite local store at `path`.
     pub fn open_path(path: impl AsRef<Path>) -> SyncResult<Self> {
-        Self::from_connection(Connection::open(path).map_err(sqlite_error)?)
+        let conn = Connection::open(path).map_err(sqlite_error)?;
+        configure_file_connection(&conn)?;
+        Self::from_connection(conn)
     }
 
     /// Build a store from an existing SQLite connection and bootstrap schema.
     pub fn from_connection(mut conn: Connection) -> SyncResult<Self> {
+        configure_connection(&conn)?;
         bootstrap_schema(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -109,8 +109,46 @@ fn bootstrap_schema(conn: &mut Connection) -> SyncResult<()> {
     for sql in BOOTSTRAP_SQL {
         tx.execute_batch(sql).map_err(sqlite_error)?;
     }
+    validate_schema_version(&tx)?;
     upsert_meta(&tx, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
     tx.commit().map_err(sqlite_error)
+}
+
+fn configure_connection(conn: &Connection) -> SyncResult<()> {
+    conn.busy_timeout(Duration::from_millis(5_000))
+        .map_err(sqlite_error)
+}
+
+fn configure_file_connection(conn: &Connection) -> SyncResult<()> {
+    configure_connection(conn)?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(sqlite_error)
+}
+
+fn validate_schema_version(tx: &Transaction<'_>) -> SyncResult<()> {
+    let existing = tx
+        .query_row(
+            "select value from __pocopine_meta where key = ?1",
+            params![META_SCHEMA_VERSION],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+
+    if let Some(existing) = existing {
+        let version = existing.parse::<u32>().map_err(|_| {
+            SyncError::backend(format!(
+                "invalid sync sqlite schema version in local store: {existing}"
+            ))
+        })?;
+        if version != SCHEMA_VERSION {
+            return Err(SyncError::backend(format!(
+                "incompatible sync sqlite schema version: found {version}, expected {SCHEMA_VERSION}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn load_identity(conn: &mut Connection) -> SyncResult<Option<SyncLocalIdentity>> {
@@ -199,34 +237,36 @@ fn save_snapshot(conn: &mut Connection, snapshot: LocalSnapshotBatch) -> SyncRes
 fn apply_changes(conn: &mut Connection, changes: LocalChangeBatch) -> SyncResult<()> {
     let tx = conn.transaction().map_err(sqlite_error)?;
     let now = epoch_ms();
+    let stream = changes.stream;
     upsert_stream(
         &tx,
-        &changes.stream,
+        &stream,
         &changes.collection,
         changes.cursor.as_ref(),
         now,
     )?;
-    for change in changes.changes {
+    let changes = changes_after_last_reset(changes.changes);
+    if changes.had_reset {
+        tx.execute(DELETE_STREAM_ROWS_SQL, params![stream.as_str()])
+            .map_err(sqlite_error)?;
+    }
+
+    for change in changes.items {
         match change.op {
             SyncOp::Upsert => {
                 if let Some(row) = change.row {
-                    upsert_row(&tx, &changes.stream, &row, now)?;
+                    upsert_row(&tx, &stream, &row, now)?;
                 }
             }
             SyncOp::Delete => {
                 if let Some(key) = change.key {
-                    tx.execute(
-                        DELETE_ROW_SQL,
-                        params![changes.stream.as_str(), key.as_str()],
-                    )
-                    .map_err(sqlite_error)?;
+                    tx.execute(DELETE_ROW_SQL, params![stream.as_str(), key.as_str()])
+                        .map_err(sqlite_error)?;
                 }
             }
             SyncOp::Reset => {
-                tx.execute(DELETE_STREAM_ROWS_SQL, params![changes.stream.as_str()])
-                    .map_err(sqlite_error)?;
                 if let Some(row) = change.row {
-                    upsert_row(&tx, &changes.stream, &row, now)?;
+                    upsert_row(&tx, &stream, &row, now)?;
                 }
             }
         }
@@ -261,12 +301,21 @@ fn mark_push_result(conn: &mut Connection, result: LocalPushResult) -> SyncResul
     let tx = conn.transaction().map_err(sqlite_error)?;
     let now = epoch_ms();
 
-    if let Some(cursor) = result.cursor {
-        tx.execute(
-            "update __pocopine_streams set cursor = ?2, updated_at_ms = ?3 where stream = ?1",
-            params![result.stream.as_str(), cursor.as_str(), now],
-        )
-        .map_err(sqlite_error)?;
+    if let Some(collection) = result.collection.as_ref() {
+        upsert_stream(&tx, &result.stream, collection, result.cursor.as_ref(), now)?;
+    } else if let Some(cursor) = result.cursor.as_ref() {
+        let updated = tx
+            .execute(
+                "update __pocopine_streams set cursor = ?2, updated_at_ms = ?3 where stream = ?1",
+                params![result.stream.as_str(), cursor.as_str(), now],
+            )
+            .map_err(sqlite_error)?;
+        if updated == 0 {
+            return Err(SyncError::backend(format!(
+                "cannot persist sync push cursor for stream {} before stream metadata exists",
+                result.stream
+            )));
+        }
     }
 
     for id in result.accepted {
@@ -454,6 +503,30 @@ fn op_from_str(value: &str) -> SyncResult<SyncOp> {
     }
 }
 
+struct LocalChanges {
+    had_reset: bool,
+    items: Vec<pocopine_sync::SyncChange<serde_json::Value>>,
+}
+
+fn changes_after_last_reset(
+    changes: Vec<pocopine_sync::SyncChange<serde_json::Value>>,
+) -> LocalChanges {
+    let Some(index) = changes
+        .iter()
+        .rposition(|change| change.op == SyncOp::Reset)
+    else {
+        return LocalChanges {
+            had_reset: false,
+            items: changes,
+        };
+    };
+
+    LocalChanges {
+        had_reset: true,
+        items: changes.into_iter().skip(index).collect(),
+    }
+}
+
 fn epoch_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -583,6 +656,7 @@ mod tests {
 
         block(store.mark_push_result(LocalPushResult {
             stream: stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
             accepted: vec![MutationId::new("device_abc:1").unwrap()],
             rejected: Vec::new(),
             rows: vec![SyncRow::new("post_1", serde_json::json!({"title": "Saved"})).unwrap()],
@@ -593,6 +667,31 @@ mod tests {
 
         assert!(block(store.pending_mutations(&stream)).unwrap().is_empty());
         assert_eq!(block(store.hydrate_stream(&stream)).unwrap().rows.len(), 1);
+    }
+
+    #[test]
+    fn sqlite_store_persists_push_cursor_before_snapshot_when_collection_is_present() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+
+        block(store.mark_push_result(LocalPushResult {
+            stream: stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
+            accepted: vec![MutationId::new("device_abc:1").unwrap()],
+            rejected: Vec::new(),
+            rows: vec![SyncRow::new("post_1", serde_json::json!({"title": "Saved"}))
+                .unwrap()
+                .version("row_1")
+                .unwrap()],
+            conflicts: Vec::new(),
+            cursor: Some(SyncCursor::new("cursor_1").unwrap()),
+        }))
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.collection.unwrap().as_str(), "posts");
+        assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_1");
+        assert_eq!(snapshot.rows.len(), 1);
     }
 
     #[test]
@@ -624,6 +723,7 @@ mod tests {
 
         block(store.mark_push_result(LocalPushResult {
             stream: stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
             accepted: Vec::new(),
             rejected: vec![SyncRejectedMutation {
                 mutation_id: MutationId::new("device_abc:1").unwrap(),
@@ -647,6 +747,28 @@ mod tests {
         assert!(block(store.pending_mutations(&stream)).unwrap().is_empty());
         assert_eq!(snapshot.rows.len(), 1);
         assert!(snapshot.rows[0].conflict);
+    }
+
+    #[test]
+    fn sqlite_store_rejects_incompatible_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table __pocopine_meta (
+                key text primary key,
+                value text not null
+            );
+            insert into __pocopine_meta (key, value) values ('schema_version', '2');",
+        )
+        .unwrap();
+
+        let err = match SqliteLocalStore::from_connection(conn) {
+            Ok(_) => panic!("schema version mismatch should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("incompatible sync sqlite schema version"));
     }
 
     fn block<T>(future: SyncLocalFuture<'_, T>) -> SyncResult<T> {

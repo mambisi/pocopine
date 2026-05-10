@@ -51,6 +51,10 @@ worker implementation behind the same store trait.
 - hydration from local rows before network pull,
 - pending mutation replay after reload.
 
+Browser SQLite is constrained to one open sync database per page because
+the current SQLite WASM wrapper exposes one process-wide worker/database
+handle. Apps should pick one database name for their sync store.
+
 `pocopine-sync-sqlx` is a later host/server adapter:
 
 - SQLx-backed `SyncStreamSource` implementations,
@@ -77,6 +81,11 @@ The local store is responsible for durable client-side sync state:
 The store is not trusted. Server guards, stream filters, and mutation
 policies still run on every `/open`, `/pull`, and `/push`.
 
+Persisted row flags are not a complete transaction UI model. They record
+the latest server outcome stored for a row; when several pending
+mutations target the same key, the client may need to replay the queued
+mutations before the hydrated row reflects every pending edit.
+
 ## Identity And Mutation Ids
 
 The next phase should add stable client identity:
@@ -94,6 +103,10 @@ durably before exposing a mutation id that can be sent to the server.
 
 This keeps mutation ids stable across reloads and avoids the current
 example-only `post_local_{n}` pattern becoming a production habit.
+
+The first client API remains explicit: apps pass `ClientMutation::id` to
+`SyncCollection::push`. Automatic id allocation from `SyncLocalIdentity`
+is a future helper layered on this storage slot.
 
 ## Store Contract Sketch
 
