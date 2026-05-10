@@ -1,0 +1,14 @@
+[package]
+name = "pocopine-sync-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SQLite local-store backend for Pocopine sync."
+
+[dependencies]
+pocopine-sync = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
