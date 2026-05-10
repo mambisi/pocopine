@@ -162,6 +162,56 @@ impl ChartSelectionEnd {
     }
 }
 
+pub(crate) struct ChartSelectionKeys<'a> {
+    chart: &'static str,
+    focused: &'a mut String,
+    selected: &'a mut String,
+}
+
+impl<'a> ChartSelectionKeys<'a> {
+    pub(crate) fn new(
+        chart: &'static str,
+        focused: &'a mut String,
+        selected: &'a mut String,
+    ) -> Self {
+        Self {
+            chart,
+            focused,
+            selected,
+        }
+    }
+
+    pub(crate) fn select(&mut self, key: String, selection: ChartSelection) {
+        *self.focused = key.clone();
+        *self.selected = key;
+        pocopine::emit(CHART_SELECT_EVENT, selection);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.focused.clear();
+        self.clear_selected();
+    }
+
+    pub(crate) fn reconcile(&mut self, has_focused: bool, has_selected: bool) {
+        if !has_focused {
+            self.focused.clear();
+        }
+        if !has_selected {
+            self.clear_selected();
+        }
+    }
+
+    pub(crate) fn clear_selected(&mut self) {
+        let key = std::mem::take(self.selected);
+        if !key.is_empty() {
+            pocopine::emit(
+                CHART_SELECT_END_EVENT,
+                ChartSelectionEnd::new(self.chart, key),
+            );
+        }
+    }
+}
+
 /// Payload for `pp:chart:hover`.
 ///
 /// `kind` determines which value fields are populated:
