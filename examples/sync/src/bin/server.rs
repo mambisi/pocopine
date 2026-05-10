@@ -5,7 +5,7 @@ async fn main() -> std::io::Result<()> {
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files, Server};
     use pocopine_sync::sync_server_plugin;
-    use sync_example::{__create_post_route, __reset_posts_route, live_backend, sync_server};
+    use sync_example::{__reset_posts_route, live_backend, sync_server};
 
     init_default().map_err(std::io::Error::other)?;
 
@@ -23,7 +23,6 @@ async fn main() -> std::io::Result<()> {
         .plugin(sync_server_plugin(sync))
         .try_finalize()
         .map_err(std::io::Error::other)?;
-    let router = __create_post_route(router);
     let router = __reset_posts_route(router);
 
     let addr = "127.0.0.1:3021";

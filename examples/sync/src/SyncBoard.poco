@@ -28,6 +28,8 @@
       <span class="status" pp-text="status"></span>
       <span class="counter"><strong pp-text="posts.live_event_count"></strong> wake-ups</span>
       <span class="counter"><strong pp-text="posts.refresh_count"></strong> pulls</span>
+      <span class="counter"><strong pp-text="posts.pending_count"></strong> pending</span>
+      <span class="counter"><strong pp-text="posts.conflict_count"></strong> conflicts</span>
     </div>
 
     <p pp-show="posts.error" class="error"><span pp-text="posts.error"></span></p>
@@ -41,6 +43,10 @@
           <div class="post__meta">
             <span pp-text="row.key"></span>
             <span pp-text="row.version"></span>
+          </div>
+          <div class="post__flags">
+            <span pp-show="row.pending">pending</span>
+            <span pp-show="row.conflict">conflict</span>
           </div>
           <h2 pp-text="row.value.title"></h2>
           <p pp-text="row.value.body"></p>

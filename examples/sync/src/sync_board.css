@@ -134,6 +134,24 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+.post__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 22px;
+  margin-bottom: 8px;
+}
+
+.post__flags span {
+  border: 1px solid #d7b56d;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #664b0f;
+  background: #fff7df;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
 .post h2 {
   margin: 0 0 8px;
   font-size: 1.05rem;

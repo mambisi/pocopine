@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 use {
     pocopine_events::MemoryEventBackend,
     pocopine_sync::{MemorySyncStream, SyncServer},
-    std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, OnceLock,
-    },
+    std::sync::{Arc, OnceLock},
 };
 
 pub const POSTS_STREAM: &str = "posts_for_user";
@@ -29,6 +26,7 @@ pub struct SyncBoard {
     pub posts: pocopine_sync::CollectionState<Post>,
     pub saving: bool,
     pub status: String,
+    pub next_local_id: u64,
 }
 
 #[cfg(pocopine_host)]
@@ -37,8 +35,6 @@ static POSTS_SYNC: OnceLock<MemorySyncStream<Post>> = OnceLock::new();
 static LIVE_BACKEND: OnceLock<MemoryEventBackend> = OnceLock::new();
 #[cfg(pocopine_host)]
 static SYNC_SERVER: OnceLock<SyncServer> = OnceLock::new();
-#[cfg(pocopine_host)]
-static NEXT_POST_ID: AtomicU64 = AtomicU64::new(3);
 
 #[cfg(pocopine_host)]
 pub fn posts_stream() -> MemorySyncStream<Post> {
@@ -101,30 +97,6 @@ async fn invalidate_posts() {
 }
 
 #[pocopine::server(public)]
-pub async fn create_post(title: String, body: String) -> ServerResult<Post> {
-    let title = title.trim();
-    let body = body.trim();
-    if title.is_empty() || body.is_empty() {
-        return Err(ServerError::BadRequest(
-            "title and body are required".to_string(),
-        ));
-    }
-
-    let next_id = NEXT_POST_ID.fetch_add(1, Ordering::Relaxed);
-    let post = Post {
-        id: format!("post_{next_id}"),
-        title: title.to_string(),
-        body: body.to_string(),
-    };
-
-    posts_stream()
-        .upsert(post.id.clone(), post.clone())
-        .map_err(|err| ServerError::App(err.to_string()))?;
-    invalidate_posts().await;
-    Ok(post)
-}
-
-#[pocopine::server(public)]
 pub async fn reset_posts() -> ServerResult<()> {
     posts_stream()
         .reset()
@@ -150,31 +122,39 @@ impl SyncBoard {
     }
 
     pub fn create(&mut self) {
-        if self.title.trim().is_empty() || self.body.trim().is_empty() {
+        let title = self.title.trim().to_string();
+        let body = self.body.trim().to_string();
+        if title.is_empty() || body.is_empty() {
             self.posts.set_error("title and body are required");
             return;
         }
 
-        self.saving = true;
         self.posts.clear_error();
-        self.status = "saving".to_string();
-        let title = self.title.clone();
-        let body = self.body.clone();
+        self.next_local_id = self.next_local_id.saturating_add(1);
+        let post = Post {
+            id: format!("post_local_{}", self.next_local_id),
+            title,
+            body,
+        };
 
-        dispatch!(create_post(title, body).await, |s, result| {
-            s.saving = false;
-            match result {
-                Ok(_) => {
-                    s.title.clear();
-                    s.body.clear();
-                    s.status = "saved".to_string();
-                }
-                Err(err) => {
-                    s.status = "save failed".to_string();
-                    s.posts.set_error(err.to_string());
-                }
-            }
+        let result = build_create_mutation(post.clone()).and_then(|(mutation, optimistic)| {
+            self.plugin::<pocopine_sync::SyncClient>()
+                .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
+                .stream(POSTS_STREAM)
+                .and_then(|collection| collection.push(mutation, Some(optimistic)))
         });
+
+        match result {
+            Ok(()) => {
+                self.title.clear();
+                self.body.clear();
+                self.status = "ready".to_string();
+            }
+            Err(err) => {
+                self.status = "push failed".to_string();
+                self.posts.set_error(err.to_string());
+            }
+        }
     }
 
     pub fn refresh(&mut self) {
@@ -208,6 +188,24 @@ impl SyncBoard {
             }
         });
     }
+}
+
+fn build_create_mutation(
+    post: Post,
+) -> pocopine_sync::SyncResult<(
+    pocopine_sync::ClientMutation<Post>,
+    pocopine_sync::SyncRow<Post>,
+)> {
+    let key = pocopine_sync::RowKey::new(post.id.clone())?;
+    let mutation = pocopine_sync::ClientMutation {
+        id: pocopine_sync::MutationId::new(format!("create_post:{}", post.id))?,
+        key: Some(key),
+        op: pocopine_sync::SyncOp::Upsert,
+        base_version: None,
+        payload: post.clone(),
+    };
+    let optimistic = pocopine_sync::SyncRow::new(post.id.clone(), post)?;
+    Ok((mutation, optimistic))
 }
 
 #[wasm_bindgen(start)]
