@@ -123,6 +123,16 @@ opaque_string_type!(
     "mutation id",
     "Client-generated mutation idempotency key."
 );
+opaque_string_type!(
+    SyncDeviceId,
+    "device id",
+    "Stable client device identity persisted by a local sync store."
+);
+opaque_string_type!(
+    SyncSessionId,
+    "session id",
+    "Ephemeral sync session identity for one running client instance."
+);
 
 /// Live query tag used to wake clients for a sync stream.
 pub fn sync_stream_tag(stream: &str) -> String {
@@ -193,7 +203,7 @@ pub struct SyncChange<T> {
 pub struct SyncOpenRequest {
     pub protocol: String,
     #[serde(default)]
-    pub client_id: Option<String>,
+    pub client_id: Option<SyncDeviceId>,
     pub streams: Vec<SyncStreamName>,
 }
 
@@ -204,6 +214,11 @@ impl SyncOpenRequest {
             client_id: None,
             streams: streams.into_iter().collect(),
         }
+    }
+
+    pub fn client_id(mut self, client_id: SyncDeviceId) -> Self {
+        self.client_id = Some(client_id);
+        self
     }
 }
 
@@ -405,6 +420,23 @@ mod tests {
         assert!(SyncStreamName::new(" posts").is_err());
         assert!(SyncStreamName::new("posts\nbad").is_err());
         assert!(SyncStreamName::new("x".repeat(MAX_SYNC_TOKEN_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn validates_device_and_session_ids() {
+        assert!(SyncDeviceId::new("device_abc").is_ok());
+        assert!(SyncSessionId::new("session_abc").is_ok());
+        assert!(SyncDeviceId::new("").is_err());
+        assert!(SyncSessionId::new("session bad\n").is_err());
+    }
+
+    #[test]
+    fn open_request_serializes_typed_client_id() {
+        let request = SyncOpenRequest::new([SyncStreamName::new("posts").unwrap()])
+            .client_id(SyncDeviceId::new("device_abc").unwrap());
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["client_id"], "device_abc");
     }
 
     #[test]

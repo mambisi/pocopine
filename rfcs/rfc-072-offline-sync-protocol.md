@@ -307,11 +307,21 @@ contract and a memory implementation for tests:
 
 ```rust
 pub trait SyncLocalStore {
-    async fn hydrate_stream(&self, stream: &str) -> SyncResult<ClientSnapshot>;
-    async fn save_snapshot(&self, batch: ClientSnapshotBatch) -> SyncResult<()>;
-    async fn apply_changes(&self, batch: ClientChangeBatch) -> SyncResult<()>;
-    async fn enqueue_mutation(&self, mutation: ClientMutation) -> SyncResult<()>;
-    async fn load_pending_mutations(&self, stream: &str) -> SyncResult<Vec<ClientMutation>>;
+    fn load_identity(&self) -> SyncLocalFuture<'_, Option<SyncLocalIdentity>>;
+    fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()>;
+    fn hydrate_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, LocalStreamSnapshot>;
+    fn save_snapshot(&self, snapshot: LocalSnapshotBatch) -> SyncLocalFuture<'_, ()>;
+    fn apply_changes(&self, changes: LocalChangeBatch) -> SyncLocalFuture<'_, ()>;
+    fn enqueue_mutation(
+        &self,
+        stream: &SyncStreamName,
+        mutation: ClientMutation<serde_json::Value>,
+    ) -> SyncLocalFuture<'_, ()>;
+    fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()>;
+    fn pending_mutations(
+        &self,
+        stream: &SyncStreamName,
+    ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>>;
 }
 ```
 
