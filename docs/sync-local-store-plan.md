@@ -23,6 +23,11 @@ Do not route browser-local sync through SQLx. SQLx uses native database
 drivers and is excellent for server Rust, but browser SQLite uses the
 SQLite WASM/OPFS runtime shape.
 
+Current implementation status: the `SyncLocalStore` contract,
+`SyncLocalIdentity`, `MutationIdGenerator`, and `MemoryLocalStore` are in
+place. The client runtime does not yet hydrate from a store or replay
+stored mutations automatically.
+
 ## Crate Boundaries
 
 `pocopine-sync` owns the protocol and store-neutral client semantics:
