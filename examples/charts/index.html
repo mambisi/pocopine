@@ -144,27 +144,50 @@
       overflow: hidden;
     }
 
+    .chart-panel--custom-tooltip {
+      position: relative;
+    }
+
     .chart-card-legend {
       min-height: 22px;
     }
 
     .chart-custom-tooltip {
-      align-items: center;
-      background: #f7f9fb;
-      border: 1px solid #dde4ec;
+      background: white;
+      border: 1px solid #c7d0da;
       border-radius: 6px;
       display: grid;
       gap: 2px;
-      grid-template-columns: minmax(0, 1fr) auto;
-      min-height: 48px;
-      opacity: 0.72;
+      left: var(--pine-chart-tooltip-x);
+      max-width: min(220px, calc(100% - 24px));
+      min-width: 150px;
+      opacity: 0;
       padding: 8px 10px;
-      transition: border-color 140ms ease, opacity 140ms ease;
+      pointer-events: none;
+      position: absolute;
+      top: var(--pine-chart-tooltip-y);
+      transform: translate(10px, calc(-100% - 10px));
+      transition: opacity var(--pine-chart-animation-duration, 120ms) var(--pine-chart-animation-easing, ease);
+      visibility: hidden;
+      z-index: 4;
     }
 
     .chart-custom-tooltip[data-visible="true"] {
       border-color: #1d6fd8;
       opacity: 1;
+      visibility: visible;
+    }
+
+    .chart-custom-tooltip[data-tooltip-x="left"] {
+      transform: translate(calc(-100% - 10px), calc(-100% - 10px));
+    }
+
+    .chart-custom-tooltip[data-tooltip-y="below"] {
+      transform: translate(10px, 10px);
+    }
+
+    .chart-custom-tooltip[data-tooltip-x="left"][data-tooltip-y="below"] {
+      transform: translate(calc(-100% - 10px), 10px);
     }
 
     .chart-custom-tooltip-title {
@@ -178,17 +201,13 @@
     .chart-custom-tooltip-value {
       font-size: 14px;
       font-weight: 700;
-      grid-column: 1;
       min-width: 0;
     }
 
     .chart-custom-tooltip-meta {
       color: #526173;
       font-size: 12px;
-      grid-column: 2;
-      grid-row: 1 / span 2;
-      justify-self: end;
-      text-align: right;
+      min-width: 0;
     }
 
     .pine-chart-responsive-frame {
