@@ -4,7 +4,8 @@
 The first implementation is intentionally small:
 
 - the server owns named sync shapes,
-- the browser pulls a snapshot, then incremental changes with a cursor,
+- the browser opens an authorized shape, then pulls a snapshot or
+  incremental changes with a cursor,
 - `pocopine-live` is used only as a wake-up signal,
 - the data payload still moves through `POST /__pocopine/sync/v1/pull`.
 
@@ -213,9 +214,13 @@ impl SyncBoard {
 }
 ```
 
-`open()` pulls once. When live wake-up is enabled, it also subscribes to
-the shape's wake-up topic and pulls again whenever the server invalidates
-that shape. `pull()` can be called manually for refresh buttons.
+`open()` first calls `/__pocopine/sync/v1/open` to validate the shape,
+then calls `/__pocopine/sync/v1/pull`. A fresh client still pulls
+without a cursor so it receives a snapshot; the server's current cursor
+from `open` is metadata, not permission to skip initial data. When live
+wake-up is enabled, `open()` also subscribes to the shape's wake-up topic
+and pulls again whenever the server invalidates that shape. `pull()` can
+be called manually for refresh buttons.
 
 Templates read `CollectionState<T>` directly:
 
@@ -269,16 +274,25 @@ Open `http://127.0.0.1:3021` in two tabs. Create or reset posts in one
 tab. The other tab should receive a live wake-up and then pull the new
 sync changes.
 
-For a fast compile check:
+For fast host checks:
 
 ```bash
 cargo check -p sync-example
 cargo test -p pocopine-sync
+cargo test -p sync-example
+```
+
+For the browser smoke test that mounts a real component in headless
+Firefox and verifies `open -> pull -> render`:
+
+```bash
+wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 ```
 
 ## Protocol Boundary
 
 - `open` validates shape names and reports registered shape metadata.
+  The browser client calls it before the first `pull`.
 - `pull` returns either a full snapshot or incremental changes.
 - `push` exists in the protocol, but the memory shape rejects it until
   optimistic mutations and conflict policy are implemented.
