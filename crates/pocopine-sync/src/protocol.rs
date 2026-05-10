@@ -97,7 +97,11 @@ macro_rules! opaque_string_type {
     };
 }
 
-opaque_string_type!(SyncShapeName, "shape", "Server-registered sync shape name.");
+opaque_string_type!(
+    SyncStreamName,
+    "stream",
+    "Server-registered sync stream name."
+);
 opaque_string_type!(
     SyncCollectionName,
     "collection",
@@ -107,7 +111,7 @@ opaque_string_type!(SyncCursor, "cursor", "Opaque server-issued sync cursor.");
 opaque_string_type!(
     RowKey,
     "row key",
-    "Public row identity inside one sync shape."
+    "Public row identity inside one sync stream."
 );
 opaque_string_type!(
     RowVersion,
@@ -120,9 +124,9 @@ opaque_string_type!(
     "Client-generated mutation idempotency key."
 );
 
-/// Live query tag used to wake clients for a sync shape.
-pub fn sync_shape_tag(shape: &str) -> String {
-    format!("sync:shape:{shape}")
+/// Live query tag used to wake clients for a sync stream.
+pub fn sync_stream_tag(stream: &str) -> String {
+    format!("sync:stream:{stream}")
 }
 
 /// Operation attached to a sync change.
@@ -176,7 +180,7 @@ impl<T> SyncRow<T> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct SyncChange<T> {
-    pub shape: SyncShapeName,
+    pub stream: SyncStreamName,
     pub collection: SyncCollectionName,
     pub key: Option<RowKey>,
     pub op: SyncOp,
@@ -184,29 +188,29 @@ pub struct SyncChange<T> {
     pub cursor: SyncCursor,
 }
 
-/// Open one or more shapes.
+/// Open one or more streams.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncOpenRequest {
     pub protocol: String,
     #[serde(default)]
     pub client_id: Option<String>,
-    pub shapes: Vec<SyncShapeName>,
+    pub streams: Vec<SyncStreamName>,
 }
 
 impl SyncOpenRequest {
-    pub fn new(shapes: impl IntoIterator<Item = SyncShapeName>) -> Self {
+    pub fn new(streams: impl IntoIterator<Item = SyncStreamName>) -> Self {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
             client_id: None,
-            shapes: shapes.into_iter().collect(),
+            streams: streams.into_iter().collect(),
         }
     }
 }
 
-/// Shape accepted by an open response.
+/// Stream accepted by an open response.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SyncOpenShape {
-    pub shape: SyncShapeName,
+pub struct SyncOpenStream {
+    pub stream: SyncStreamName,
     pub collection: SyncCollectionName,
     pub cursor: Option<SyncCursor>,
 }
@@ -215,32 +219,32 @@ pub struct SyncOpenShape {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncOpenResponse {
     pub protocol: String,
-    pub shapes: Vec<SyncOpenShape>,
+    pub streams: Vec<SyncOpenStream>,
 }
 
 impl SyncOpenResponse {
-    pub fn new(shapes: Vec<SyncOpenShape>) -> Self {
+    pub fn new(streams: Vec<SyncOpenStream>) -> Self {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
-            shapes,
+            streams,
         }
     }
 }
 
-/// Pull request for one shape.
+/// Pull request for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncPullRequest {
     pub protocol: String,
-    pub shape: SyncShapeName,
+    pub stream: SyncStreamName,
     pub cursor: Option<SyncCursor>,
     pub limit: u32,
 }
 
 impl SyncPullRequest {
-    pub fn new(shape: SyncShapeName) -> Self {
+    pub fn new(stream: SyncStreamName) -> Self {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
-            shape,
+            stream,
             cursor: None,
             limit: 500,
         }
@@ -252,12 +256,12 @@ impl SyncPullRequest {
     }
 }
 
-/// Pull response for one shape.
+/// Pull response for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct SyncPullResponse<T> {
     pub protocol: String,
-    pub shape: SyncShapeName,
+    pub stream: SyncStreamName,
     pub collection: SyncCollectionName,
     pub mode: SyncPullMode,
     #[serde(default)]
@@ -270,14 +274,14 @@ pub struct SyncPullResponse<T> {
 
 impl<T> SyncPullResponse<T> {
     pub fn snapshot(
-        shape: SyncShapeName,
+        stream: SyncStreamName,
         collection: SyncCollectionName,
         rows: Vec<SyncRow<T>>,
         cursor: Option<SyncCursor>,
     ) -> Self {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
-            shape,
+            stream,
             collection,
             mode: SyncPullMode::Snapshot,
             rows,
@@ -288,14 +292,14 @@ impl<T> SyncPullResponse<T> {
     }
 
     pub fn incremental(
-        shape: SyncShapeName,
+        stream: SyncStreamName,
         collection: SyncCollectionName,
         changes: Vec<SyncChange<T>>,
         cursor: Option<SyncCursor>,
     ) -> Self {
         Self {
             protocol: SYNC_PROTOCOL_V1.to_string(),
-            shape,
+            stream,
             collection,
             mode: SyncPullMode::Incremental,
             rows: Vec::new(),
@@ -306,8 +310,8 @@ impl<T> SyncPullResponse<T> {
     }
 }
 
-/// Client mutation envelope. The first slice defines the wire shape;
-/// concrete mutation application belongs to shape sources.
+/// Client mutation envelope. The first slice defines the wire stream;
+/// concrete mutation application belongs to stream sources.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
 pub struct ClientMutation<M> {
@@ -318,12 +322,12 @@ pub struct ClientMutation<M> {
     pub payload: M,
 }
 
-/// Push request for one shape.
+/// Push request for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
 pub struct SyncPushRequest<M> {
     pub protocol: String,
-    pub shape: SyncShapeName,
+    pub stream: SyncStreamName,
     #[serde(default)]
     pub mutations: Vec<ClientMutation<M>>,
 }
@@ -338,12 +342,12 @@ pub struct SyncConflict<T> {
     pub reason: String,
 }
 
-/// Push response for one shape.
+/// Push response for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct SyncPushResponse<T> {
     pub protocol: String,
-    pub shape: SyncShapeName,
+    pub stream: SyncStreamName,
     #[serde(default)]
     pub accepted: Vec<MutationId>,
     #[serde(default)]
@@ -358,27 +362,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_shape_names() {
-        assert!(SyncShapeName::new("posts_for_tenant").is_ok());
-        assert!(SyncShapeName::new("").is_err());
-        assert!(SyncShapeName::new(" posts").is_err());
-        assert!(SyncShapeName::new("posts\nbad").is_err());
-        assert!(SyncShapeName::new("x".repeat(MAX_SYNC_TOKEN_LEN + 1)).is_err());
+    fn validates_stream_names() {
+        assert!(SyncStreamName::new("posts_for_tenant").is_ok());
+        assert!(SyncStreamName::new("").is_err());
+        assert!(SyncStreamName::new(" posts").is_err());
+        assert!(SyncStreamName::new("posts\nbad").is_err());
+        assert!(SyncStreamName::new("x".repeat(MAX_SYNC_TOKEN_LEN + 1)).is_err());
     }
 
     #[test]
     fn deserializes_tokens_through_validation() {
-        let shape: SyncShapeName = serde_json::from_str("\"posts_for_tenant\"").unwrap();
-        assert_eq!(shape.as_str(), "posts_for_tenant");
-        assert!(serde_json::from_str::<SyncShapeName>("\" posts\"").is_err());
-        assert!(serde_json::from_str::<SyncShapeName>("\"posts\\nbad\"").is_err());
+        let stream: SyncStreamName = serde_json::from_str("\"posts_for_tenant\"").unwrap();
+        assert_eq!(stream.as_str(), "posts_for_tenant");
+        assert!(serde_json::from_str::<SyncStreamName>("\" posts\"").is_err());
+        assert!(serde_json::from_str::<SyncStreamName>("\"posts\\nbad\"").is_err());
     }
 
     #[test]
-    fn sync_shape_tag_is_stable() {
+    fn sync_stream_tag_is_stable() {
         assert_eq!(
-            sync_shape_tag("posts_for_tenant"),
-            "sync:shape:posts_for_tenant"
+            sync_stream_tag("posts_for_tenant"),
+            "sync:stream:posts_for_tenant"
         );
     }
 

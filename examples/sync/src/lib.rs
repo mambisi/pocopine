@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 #[cfg(pocopine_host)]
 use {
     pocopine_events::MemoryEventBackend,
-    pocopine_sync::{MemorySyncShape, SyncServer},
+    pocopine_sync::{MemorySyncStream, SyncServer},
     std::sync::{
         atomic::{AtomicU64, Ordering},
         Arc, OnceLock,
     },
 };
 
-pub const POSTS_SHAPE: &str = "posts_for_user";
+pub const POSTS_STREAM: &str = "posts_for_user";
 pub const POSTS_COLLECTION: &str = "posts";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -32,7 +32,7 @@ pub struct SyncBoard {
 }
 
 #[cfg(pocopine_host)]
-static POSTS_SYNC: OnceLock<MemorySyncShape<Post>> = OnceLock::new();
+static POSTS_SYNC: OnceLock<MemorySyncStream<Post>> = OnceLock::new();
 #[cfg(pocopine_host)]
 static LIVE_BACKEND: OnceLock<MemoryEventBackend> = OnceLock::new();
 #[cfg(pocopine_host)]
@@ -41,12 +41,12 @@ static SYNC_SERVER: OnceLock<SyncServer> = OnceLock::new();
 static NEXT_POST_ID: AtomicU64 = AtomicU64::new(3);
 
 #[cfg(pocopine_host)]
-pub fn posts_shape() -> MemorySyncShape<Post> {
+pub fn posts_stream() -> MemorySyncStream<Post> {
     POSTS_SYNC
         .get_or_init(|| {
-            let shape = MemorySyncShape::new(POSTS_SHAPE, POSTS_COLLECTION)
-                .expect("sync example shape names must be valid");
-            shape
+            let stream = MemorySyncStream::new(POSTS_STREAM, POSTS_COLLECTION)
+                .expect("sync example stream names must be valid");
+            stream
                 .upsert(
                     "post_1",
                     Post {
@@ -56,7 +56,7 @@ pub fn posts_shape() -> MemorySyncShape<Post> {
                     },
                 )
                 .expect("seed post should sync");
-            shape
+            stream
                 .upsert(
                     "post_2",
                     Post {
@@ -67,7 +67,7 @@ pub fn posts_shape() -> MemorySyncShape<Post> {
                     },
                 )
                 .expect("seed post should sync");
-            shape
+            stream
         })
         .clone()
 }
@@ -82,7 +82,7 @@ pub fn sync_server() -> SyncServer {
     SYNC_SERVER
         .get_or_init(|| {
             SyncServer::builder()
-                .shape(posts_shape())
+                .stream(posts_stream())
                 .events(Arc::new(live_backend()))
                 .build()
         })
@@ -91,7 +91,7 @@ pub fn sync_server() -> SyncServer {
 
 #[cfg(pocopine_host)]
 async fn invalidate_posts() {
-    if let Err(err) = sync_server().invalidate_shape(POSTS_SHAPE).await {
+    if let Err(err) = sync_server().invalidate_stream(POSTS_STREAM).await {
         tracing::warn!(
             target: "pocopine.log",
             error = %err,
@@ -117,7 +117,7 @@ pub async fn create_post(title: String, body: String) -> ServerResult<Post> {
         body: body.to_string(),
     };
 
-    posts_shape()
+    posts_stream()
         .upsert(post.id.clone(), post.clone())
         .map_err(|err| ServerError::App(err.to_string()))?;
     invalidate_posts().await;
@@ -126,7 +126,7 @@ pub async fn create_post(title: String, body: String) -> ServerResult<Post> {
 
 #[pocopine::server(public)]
 pub async fn reset_posts() -> ServerResult<()> {
-    posts_shape()
+    posts_stream()
         .reset()
         .map_err(|err| ServerError::App(err.to_string()))?;
     invalidate_posts().await;
@@ -136,11 +136,11 @@ pub async fn reset_posts() -> ServerResult<()> {
 #[handlers]
 impl SyncBoard {
     pub fn on_mount(&mut self) {
-        self.status = "opening sync shape".to_string();
+        self.status = "opening sync stream".to_string();
         let result = self
             .plugin::<pocopine_sync::SyncClient>()
             .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
-            .shape(POSTS_SHAPE)
+            .stream(POSTS_STREAM)
             .and_then(|collection| collection.open());
 
         if let Err(err) = result {
@@ -182,7 +182,7 @@ impl SyncBoard {
         let result = self
             .plugin::<pocopine_sync::SyncClient>()
             .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
-            .shape(POSTS_SHAPE)
+            .stream(POSTS_STREAM)
             .and_then(|collection| collection.pull());
 
         if let Err(err) = result {

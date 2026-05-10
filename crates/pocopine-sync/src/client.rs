@@ -3,12 +3,14 @@ use std::marker::PhantomData;
 use pocopine_core::{App, AppPlugin, Handle};
 
 use crate::{
-    CollectionState, SyncCursor, SyncError, SyncReason, SyncResult, SyncShapeName,
+    CollectionState, SyncCursor, SyncError, SyncReason, SyncResult, SyncStreamName,
     SYNC_ENDPOINT_PREFIX,
 };
 
 #[cfg(target_arch = "wasm32")]
-use crate::{sync_shape_tag, SyncOpenRequest, SyncOpenResponse, SyncPullRequest, SyncPullResponse};
+use crate::{
+    sync_stream_tag, SyncOpenRequest, SyncOpenResponse, SyncPullRequest, SyncPullResponse,
+};
 
 /// Selector from an app-owned component/store into one sync collection field.
 pub type CollectionSelector<C, T> = for<'a> fn(&'a mut C) -> &'a mut CollectionState<T>;
@@ -110,7 +112,7 @@ impl SyncClient {
             live_endpoint: self.live_endpoint.clone(),
             live_wakeup: self.live_wakeup,
             with_credentials: self.with_credentials,
-            shape: None,
+            stream: None,
             cursor: None,
             _marker: PhantomData,
         }
@@ -125,7 +127,7 @@ pub struct SyncCollection<C: 'static, T> {
     live_endpoint: Option<String>,
     live_wakeup: bool,
     with_credentials: bool,
-    shape: Option<SyncShapeName>,
+    stream: Option<SyncStreamName>,
     cursor: Option<SyncCursor>,
     _marker: PhantomData<fn(C) -> T>,
 }
@@ -135,9 +137,9 @@ where
     C: 'static,
     T: 'static,
 {
-    /// Set the server-registered shape to pull.
-    pub fn shape(mut self, shape: impl Into<String>) -> SyncResult<Self> {
-        self.shape = Some(SyncShapeName::new(shape.into())?);
+    /// Set the server-registered stream to pull.
+    pub fn stream(mut self, stream: impl Into<String>) -> SyncResult<Self> {
+        self.stream = Some(SyncStreamName::new(stream.into())?);
         Ok(self)
     }
 
@@ -169,10 +171,10 @@ where
         self.pull_impl(SyncReason::Manual, false)
     }
 
-    fn shape_value(&self) -> SyncResult<SyncShapeName> {
-        self.shape
+    fn stream_value(&self) -> SyncResult<SyncStreamName> {
+        self.stream
             .clone()
-            .ok_or_else(|| SyncError::invalid_value("shape", "<missing>"))
+            .ok_or_else(|| SyncError::invalid_value("stream", "<missing>"))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -195,7 +197,7 @@ where
     T: serde::de::DeserializeOwned + 'static,
 {
     fn open_impl(self) -> SyncResult<()> {
-        let shape = self.shape_value()?;
+        let stream = self.stream_value()?;
         let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
             SyncError::client(
                 "SyncCollection::open used outside a component handler/lifecycle hook",
@@ -213,7 +215,7 @@ where
             handle.clone(),
             selector,
             self.endpoint.clone(),
-            shape.clone(),
+            stream.clone(),
             self.cursor.clone(),
             SyncReason::Initial,
             live_wakeup,
@@ -222,7 +224,7 @@ where
     }
 
     fn pull_impl(self, reason: SyncReason, live_event: bool) -> SyncResult<()> {
-        let shape = self.shape_value()?;
+        let stream = self.stream_value()?;
         let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
             SyncError::client(
                 "SyncCollection::pull used outside a component handler/lifecycle hook",
@@ -233,7 +235,7 @@ where
             self.handle,
             self.selector,
             self.endpoint,
-            shape,
+            stream,
             self.cursor,
             reason,
             live_event,
@@ -250,13 +252,13 @@ where
 {
     fn open_impl(self) -> SyncResult<()> {
         self.touch_host_fields();
-        let _ = self.shape_value()?;
+        let _ = self.stream_value()?;
         Ok(())
     }
 
     fn pull_impl(self, _reason: SyncReason, _live_event: bool) -> SyncResult<()> {
         self.touch_host_fields();
-        let _ = self.shape_value()?;
+        let _ = self.stream_value()?;
         Ok(())
     }
 }
@@ -273,7 +275,7 @@ fn start_open_then_pull<C, T>(
     handle: Handle<C>,
     selector: CollectionSelector<C, T>,
     endpoint: String,
-    shape: SyncShapeName,
+    stream: SyncStreamName,
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_wakeup: Option<LiveWakeupOptions>,
@@ -297,13 +299,13 @@ fn start_open_then_pull<C, T>(
         });
         let (cursor, token) = request_token;
 
-        let open_request = SyncOpenRequest::new([shape.clone()]);
+        let open_request = SyncOpenRequest::new([stream.clone()]);
         let open_result = pocopine_core::fetch::call::<SyncOpenRequest, SyncOpenResponse>(
             &open_url,
             &open_request,
         )
         .await;
-        if let Err(err) = open_result.and_then(|response| validate_open_response(response, &shape))
+        if let Err(err) = open_result.and_then(|response| validate_open_response(response, &stream))
         {
             handle.update(|state| {
                 selector(state).apply_error(token, err);
@@ -317,12 +319,12 @@ fn start_open_then_pull<C, T>(
                 handle.clone(),
                 selector,
                 endpoint.clone(),
-                shape.clone(),
+                stream.clone(),
                 live_wakeup,
             );
         }
 
-        let request = SyncPullRequest::new(shape).cursor(cursor);
+        let request = SyncPullRequest::new(stream).cursor(cursor);
         let result =
             pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
                 .await;
@@ -346,18 +348,18 @@ fn open_live_wakeup<C, T>(
     handle: Handle<C>,
     selector: CollectionSelector<C, T>,
     endpoint: String,
-    shape: SyncShapeName,
+    stream: SyncStreamName,
     options: LiveWakeupOptions,
 ) where
     C: 'static,
     T: serde::de::DeserializeOwned + 'static,
 {
-    let live_tag = sync_shape_tag(shape.as_str());
+    let live_tag = sync_stream_tag(stream.as_str());
     let mut refresh = pocopine_live::LiveRefresh::scoped()
         .query_tag(live_tag, {
             let handle = handle.clone();
             let endpoint = endpoint.clone();
-            let shape = shape.clone();
+            let stream = stream.clone();
             move |event| {
                 let reason = if matches!(event.live_event, pocopine_live::LiveEvent::Gap { .. }) {
                     SyncReason::Gap
@@ -369,7 +371,7 @@ fn open_live_wakeup<C, T>(
                     handle.clone(),
                     selector,
                     endpoint.clone(),
-                    shape.clone(),
+                    stream.clone(),
                     None,
                     reason,
                     true,
@@ -405,7 +407,7 @@ fn open_live_wakeup<C, T>(
 #[cfg(target_arch = "wasm32")]
 fn validate_open_response(
     response: SyncOpenResponse,
-    shape: &SyncShapeName,
+    stream: &SyncStreamName,
 ) -> Result<(), pocopine_core::ServerError> {
     if response.protocol != crate::SYNC_PROTOCOL_V1 {
         return Err(pocopine_core::ServerError::BadRequest(format!(
@@ -415,14 +417,14 @@ fn validate_open_response(
     }
 
     if response
-        .shapes
+        .streams
         .iter()
-        .any(|accepted| accepted.shape == *shape)
+        .any(|accepted| accepted.stream == *stream)
     {
         Ok(())
     } else {
         Err(pocopine_core::ServerError::Forbidden(format!(
-            "sync shape was not opened: {shape}"
+            "sync stream was not opened: {stream}"
         )))
     }
 }
@@ -433,7 +435,7 @@ fn start_pull<C, T>(
     handle: Handle<C>,
     selector: CollectionSelector<C, T>,
     endpoint: String,
-    shape: SyncShapeName,
+    stream: SyncStreamName,
     cursor: Option<SyncCursor>,
     reason: SyncReason,
     live_event: bool,
@@ -447,7 +449,7 @@ fn start_pull<C, T>(
         let request_token = handle.update(|state| {
             let collection = selector(state);
             let cursor = cursor.or_else(|| collection.cursor.clone());
-            let request = SyncPullRequest::new(shape.clone()).cursor(cursor);
+            let request = SyncPullRequest::new(stream.clone()).cursor(cursor);
             let token = if live_event {
                 collection.begin_live_pull(reason)
             } else if collection.version == 0 {

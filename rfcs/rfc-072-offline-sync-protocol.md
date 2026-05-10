@@ -15,22 +15,22 @@ Initial implementation has started in `pocopine-sync`:
 - explicit extension crate, not a `pocopine` core feature,
 - target-specific browser and host modules in one crate,
 - `/__pocopine/sync/v1/open`, `/pull`, and `/push` protocol routes,
-- `SyncServer`, `SyncShapeSource`, and `MemorySyncShape`,
+- `SyncServer`, `SyncStreamSource`, and `MemorySyncStream`,
 - browser `sync_plugin()`, `SyncClient`, and `CollectionState<T>`,
 - browser `SyncClient::open()` calls `/open` before the first `/pull`,
 - live wake-up integration through `pocopine-live` query-tag topics,
 - runnable memory-backed example in `examples/sync`,
 - Firefox wasm smoke coverage for `open -> pull -> render`.
 
-Current limitation: registered shapes are pullable through `/pull`;
+Current limitation: registered streams are pullable through `/pull`;
 `/open` is a discovery/validation step, not a server-side session grant.
-Shape-level guards remain part of the RFC target model and must be
-enforced inside shape sources or in front of the sync server until that
+Stream-level guards remain part of the RFC target model and must be
+enforced inside stream sources or in front of the sync server until that
 follow-up lands.
 
-Still future work: shape auth/guards, durable browser storage,
+Still future work: stream auth/guards, durable browser storage,
 optimistic mutation replay, conflict resolution UI, SQLx/database
-adapters, CDC sources, and query-driven shape parameters.
+adapters, CDC sources, and query-driven stream parameters.
 
 ## 1. Summary
 
@@ -68,7 +68,7 @@ the fact. They need a stable protocol boundary.
   SQL without making SQLx a framework-wide dependency.
 - Support initial snapshots, incremental pulls, mutation pushes, and
   cursor-based resume.
-- Make sync shapes explicit and guarded.
+- Make sync streams explicit and guarded.
 - Let components query normalized local data instead of forcing
   view-specific server endpoints.
 - Provide safe defaults for conflict handling.
@@ -85,12 +85,12 @@ the fact. They need a stable protocol boundary.
 
 ## 5. Core Concepts
 
-### 5.1 Shape
+### 5.1 Stream
 
-A shape is a named, authorized subset of application data:
+A stream is a named, authorized subset of application data:
 
 ```rust
-pocopine::sync_shape! {
+pocopine::sync_stream! {
     posts_for_tenant {
         collection: posts;
         key: PostId;
@@ -101,7 +101,7 @@ pocopine::sync_shape! {
 }
 ```
 
-The client subscribes to shape names. It does not send table names, SQL
+The client subscribes to stream names. It does not send table names, SQL
 fragments, or raw database filters.
 
 ### 5.2 Cursor
@@ -111,7 +111,7 @@ such as a Redis stream id, database LSN, sequence id, or framework
 logical clock. Clients must not parse it.
 
 If a cursor expires or is no longer available, the server returns `gap`
-and the client must resnapshot the shape.
+and the client must resnapshot the stream.
 
 ### 5.3 Change
 
@@ -119,7 +119,7 @@ The sync protocol has a stable change envelope:
 
 ```rust
 pub struct SyncChange {
-    pub shape: String,
+    pub stream: String,
     pub key: serde_json::Value,
     pub op: SyncOp,
     pub version: RowVersion,
@@ -155,7 +155,7 @@ let posts = sync.collection::<PostSyncView>("posts_for_tenant");
 
 Collections may be populated by:
 
-- sync shapes from this RFC,
+- sync streams from this RFC,
 - ordinary server-function/query fetches,
 - local-only browser state,
 - direct framework writes from live events or CDC adapters.
@@ -206,7 +206,7 @@ storage.
 ### 6.3 Query-driven sync
 
 For large datasets, the observed frontend query should be able to drive
-which server shape subset is loaded:
+which server stream subset is loaded:
 
 ```rust
 let products = sync.collection::<ProductView>("products");
@@ -220,8 +220,8 @@ let results = sync.live_query(|q| {
 ```
 
 The client does not send arbitrary executable filters. The framework maps
-supported query predicates onto registered shape parameters. Unsupported
-predicates run locally after the authorized shape subset is loaded.
+supported query predicates onto registered stream parameters. Unsupported
+predicates run locally after the authorized stream subset is loaded.
 
 This gives the desired "query the local store from components" workflow
 without creating a raw database query API in the browser.
@@ -314,7 +314,7 @@ Request:
 
 ```json
 {
-  "shapes": ["posts_for_tenant"],
+  "streams": ["posts_for_tenant"],
   "client_id": "device_abc",
   "known_cursors": {}
 }
@@ -325,7 +325,7 @@ Response:
 ```json
 {
   "session_id": "sync_sess_123",
-  "shapes": [
+  "streams": [
     {
       "name": "posts_for_tenant",
       "snapshot_url": "/__pocopine/sync/v1/snapshot/snap_123",
@@ -341,7 +341,7 @@ Response:
 POST /__pocopine/sync/v1/pull
 ```
 
-The client sends shape cursors. The server returns ordered changes and a
+The client sends stream cursors. The server returns ordered changes and a
 new cursor. Pull responses may be empty.
 
 ### 7.3 Push
@@ -358,7 +358,7 @@ The client sends mutations:
   "mutations": [
     {
       "mutation_id": "device_abc:42",
-      "shape": "posts_for_tenant",
+      "stream": "posts_for_tenant",
       "key": "post_123",
       "base_version": "row:v7",
       "op": "update",
@@ -397,7 +397,7 @@ Later phases can add CDC adapters:
 
 ```rust
 pub trait ChangeSource {
-    async fn snapshot(&self, shape: ShapeRequest) -> SyncResult<Snapshot>;
+    async fn snapshot(&self, stream: StreamRequest) -> SyncResult<Snapshot>;
     async fn changes_since(&self, cursor: SyncCursor) -> SyncResult<ChangeBatch>;
 }
 ```
@@ -426,10 +426,10 @@ sqlx = { version = "0.8", features = [
 ] }
 ```
 
-Inline checked SQL should be the default authoring path for small shapes:
+Inline checked SQL should be the default authoring path for small streams:
 
 ```rust
-pocopine::sync_shape! {
+pocopine::sync_stream! {
     posts_for_tenant {
         collection: posts;
         key: PostId;
@@ -470,17 +470,17 @@ sqlx::query_file_as!(
 The adapter contract:
 
 - SQL remains normal SQL, not a Pocopine ORM DSL.
-- Inline `query!`/`query_as!` is preferred for simple shapes.
+- Inline `query!`/`query_as!` is preferred for simple streams.
 - `query_file!`/`query_file_as!` is supported for large or shared SQL.
 - Compile-time checking requires `DATABASE_URL` at build time or checked
   in SQLx offline metadata under `.sqlx`.
 - CI for SQLx-enabled apps should run `cargo sqlx prepare --check`.
-- Frontend query predicates must map to declared shape parameters. They
+- Frontend query predicates must map to declared stream parameters. They
   must not produce unchecked SQL string concatenation.
 
-SQLx checks query shape and database/Rust types for supported macros. It
+SQLx checks query stream and database/Rust types for supported macros. It
 does not prove tenant isolation, authorization, conflict correctness, or
-delete privacy. Pocopine still owns those safety checks through shape
+delete privacy. Pocopine still owns those safety checks through stream
 guards, server-side mutation policy, cursor validation, and tombstone
 rules.
 
@@ -489,8 +489,8 @@ rules.
 Sync does not need to keep a long-running bidirectional socket open for
 the first version. The client can use `pocopine-live` as a wake-up path:
 
-1. open the sync shape and load the snapshot,
-2. listen for `shape.invalidated`,
+1. open the sync stream and load the snapshot,
+2. listen for `stream.invalidated`,
 3. call `pull` with the current cursor,
 4. apply returned changes to the local store.
 
@@ -498,15 +498,15 @@ If the live stream drops, the next pull is still authoritative.
 
 ## 11. Security Model
 
-- Every shape must have a guard.
-- Shape filters run on the server.
+- Every stream must have a guard.
+- Stream filters run on the server.
 - Clients cannot invent new filters.
 - Pushes execute through typed server mutations, not direct table writes.
 - Tombstones reveal only keys unless explicitly configured.
 - Cursor tokens must not grant access by themselves; access is checked on
   every open, pull, and push.
-- Frontend query predicates may narrow an authorized shape but must not
-  expand it beyond the server-registered shape guard.
+- Frontend query predicates may narrow an authorized stream but must not
+  expand it beyond the server-registered stream guard.
 - SQLx compile-time checks, when enabled, are query/type checks only.
   They are not authorization proofs.
 
@@ -526,21 +526,21 @@ Mutation payloads and row payloads are not logged.
 
 ### Phase A - Manual source, HTTP protocol
 
-- Add sync shape registration and guarded open/pull/push endpoints.
+- Add sync stream registration and guarded open/pull/push endpoints.
 - Use application-published changes as the source.
 - Add memory frontend collection store.
 - Add basic live queries with conservative recomputation.
 
 ### Phase B - Live wake-up
 
-- Emit `shape.invalidated` through RFC 071.
+- Emit `stream.invalidated` through RFC 071.
 - Add browser helper that pulls on invalidation.
 - Apply server changes directly to synced collections.
 
 ### Phase C - CDC adapters
 
 - Add Postgres adapter using logical replication or Supabase ETL.
-- Map database changes into shape changes.
+- Map database changes into stream changes.
 - Add tests for delete privacy and cursor gaps.
 
 ### Phase D - Local store helpers
@@ -556,7 +556,7 @@ Mutation payloads and row payloads are not logged.
 
 ### Phase F - Query-driven sync
 
-- Map supported frontend predicates to shape parameters.
+- Map supported frontend predicates to stream parameters.
 - Add request coalescing and subset expansion.
 - Keep unsupported predicates as local-only filters.
 
@@ -574,7 +574,7 @@ Mutation payloads and row payloads are not logged.
 - Local-first software paper: https://www.inkandswitch.com/essay/local-first/
 - Automerge sync protocol: https://automerge.org/automerge/automerge/sync/index.html
 - CouchDB replication protocol: https://docs.couchdb.org/en/stable/replication/protocol.html
-- ElectricSQL sync engine and shapes: https://electric-sql.com/product/sync
+- ElectricSQL sync engine and streams: https://electric-sql.com/product/sync
 - PostgreSQL logical replication: https://www.postgresql.org/docs/current/logical-replication.html
 - Supabase ETL: https://supabase.github.io/etl/
 - TanStack DB overview: https://tanstack.com/db/latest/docs/overview

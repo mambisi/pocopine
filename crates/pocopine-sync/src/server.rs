@@ -12,25 +12,25 @@ use pocopine_server::{Server, ServerPlugin};
 use serde_json::Value;
 
 use crate::{
-    sync_shape_tag, SyncError, SyncOpenRequest, SyncOpenResponse, SyncOpenShape, SyncPullRequest,
+    sync_stream_tag, SyncError, SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullRequest,
     SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncResult, SYNC_OPEN_PATH,
     SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 
-/// Future returned by a shape source.
+/// Future returned by a stream source.
 pub type SyncBoxFuture<'a, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'a>>;
 
-/// Server-side source for one registered sync shape.
+/// Server-side source for one registered sync stream.
 ///
-/// Registered shapes are pullable through the sync routes. Until a source
+/// Registered streams are pullable through the sync routes. Until a source
 /// implements its own authorization or the host app mounts sync behind an
 /// auth boundary, `/open` is validation/discovery and `/pull` remains
-/// callable for any registered shape.
-pub trait SyncShapeSource: Send + Sync + 'static {
-    /// Server-registered shape name.
-    fn shape(&self) -> &crate::SyncShapeName;
+/// callable for any registered stream.
+pub trait SyncStreamSource: Send + Sync + 'static {
+    /// Server-registered stream name.
+    fn stream(&self) -> &crate::SyncStreamName;
 
-    /// Public collection name represented by this shape.
+    /// Public collection name represented by this stream.
     fn collection(&self) -> &crate::SyncCollectionName;
 
     /// Current cursor, if the source can cheaply report it.
@@ -38,10 +38,10 @@ pub trait SyncShapeSource: Send + Sync + 'static {
         None
     }
 
-    /// Pull changes or a snapshot for this shape.
+    /// Pull changes or a snapshot for this stream.
     fn pull<'a>(&'a self, request: SyncPullRequest) -> SyncBoxFuture<'a, SyncPullResponse<Value>>;
 
-    /// Push client mutations for this shape.
+    /// Push client mutations for this stream.
     fn push<'a>(
         &'a self,
         request: SyncPushRequest<Value>,
@@ -49,7 +49,7 @@ pub trait SyncShapeSource: Send + Sync + 'static {
         let _ = request;
         Box::pin(async {
             Err(SyncError::unsupported(
-                "push is not implemented for this shape",
+                "push is not implemented for this stream",
             ))
         })
     }
@@ -57,7 +57,7 @@ pub trait SyncShapeSource: Send + Sync + 'static {
 
 #[derive(Clone)]
 struct SyncServerInner {
-    shapes: Arc<HashMap<String, Arc<dyn SyncShapeSource>>>,
+    streams: Arc<HashMap<String, Arc<dyn SyncStreamSource>>>,
     events: Option<SharedEventBackend>,
 }
 
@@ -73,16 +73,16 @@ impl SyncServer {
         SyncServerBuilder::default()
     }
 
-    /// Return the live query tags this server can publish for shapes.
+    /// Return the live query tags this server can publish for streams.
     pub fn live_query_tags(&self) -> Vec<String> {
         self.inner
-            .shapes
+            .streams
             .keys()
-            .map(|shape| sync_shape_tag(shape))
+            .map(|stream| sync_stream_tag(stream))
             .collect()
     }
 
-    /// Return the live topics this server can publish for shapes.
+    /// Return the live topics this server can publish for streams.
     pub fn live_topics(&self) -> pocopine_events::EventResult<Vec<pocopine_events::Topic>> {
         self.live_query_tags()
             .into_iter()
@@ -90,14 +90,14 @@ impl SyncServer {
             .collect()
     }
 
-    /// Publish a live wake-up for one shape when an event backend is
+    /// Publish a live wake-up for one stream when an event backend is
     /// attached. The sync data still moves through pull; this only wakes
     /// browsers to pull with their current sync cursor.
-    pub async fn invalidate_shape(&self, shape: &str) -> SyncResult<()> {
+    pub async fn invalidate_stream(&self, stream: &str) -> SyncResult<()> {
         let Some(events) = self.inner.events.as_ref() else {
             return Ok(());
         };
-        let tag = sync_shape_tag(shape);
+        let tag = sync_stream_tag(stream);
         let topic = pocopine_live::query_tag_topic(&tag)
             .map_err(|err| SyncError::backend(err.to_string()))?;
         let draft = pocopine_live::query_invalidated(topic, [tag])
@@ -109,30 +109,30 @@ impl SyncServer {
         Ok(())
     }
 
-    fn shape(&self, shape: &str) -> SyncResult<Arc<dyn SyncShapeSource>> {
+    fn stream(&self, stream: &str) -> SyncResult<Arc<dyn SyncStreamSource>> {
         self.inner
-            .shapes
-            .get(shape)
+            .streams
+            .get(stream)
             .cloned()
-            .ok_or_else(|| SyncError::UnknownShape(shape.to_string()))
+            .ok_or_else(|| SyncError::UnknownStream(stream.to_string()))
     }
 }
 
 /// Builder for [`SyncServer`].
 #[derive(Default)]
 pub struct SyncServerBuilder {
-    shapes: HashMap<String, Arc<dyn SyncShapeSource>>,
+    streams: HashMap<String, Arc<dyn SyncStreamSource>>,
     events: Option<SharedEventBackend>,
 }
 
 impl SyncServerBuilder {
-    /// Register one shape source.
-    pub fn shape<S>(mut self, shape: S) -> Self
+    /// Register one stream source.
+    pub fn stream<S>(mut self, stream: S) -> Self
     where
-        S: SyncShapeSource,
+        S: SyncStreamSource,
     {
-        self.shapes
-            .insert(shape.shape().as_str().to_string(), Arc::new(shape));
+        self.streams
+            .insert(stream.stream().as_str().to_string(), Arc::new(stream));
         self
     }
 
@@ -146,7 +146,7 @@ impl SyncServerBuilder {
     pub fn build(self) -> SyncServer {
         SyncServer {
             inner: Arc::new(SyncServerInner {
-                shapes: Arc::new(self.shapes),
+                streams: Arc::new(self.streams),
                 events: self.events,
             }),
         }
@@ -156,7 +156,7 @@ impl SyncServerBuilder {
 /// Server plugin that mounts sync routes and provides [`SyncServer`].
 ///
 /// Installing this plugin exposes `/__pocopine/sync/v1/open`, `/pull`, and
-/// `/push` for every registered shape. Shape sources are responsible for
+/// `/push` for every registered stream. Stream sources are responsible for
 /// tenant filtering, authorization, and cursor policy in this first slice.
 #[derive(Clone)]
 pub struct SyncServerPlugin {
@@ -191,16 +191,16 @@ async fn open_handler(
 }
 
 async fn open(sync: SyncServer, request: SyncOpenRequest) -> SyncResult<SyncOpenResponse> {
-    let mut shapes = Vec::with_capacity(request.shapes.len());
-    for requested in request.shapes {
-        let shape = sync.shape(requested.as_str())?;
-        shapes.push(SyncOpenShape {
-            shape: shape.shape().clone(),
-            collection: shape.collection().clone(),
-            cursor: shape.current_cursor(),
+    let mut streams = Vec::with_capacity(request.streams.len());
+    for requested in request.streams {
+        let stream = sync.stream(requested.as_str())?;
+        streams.push(SyncOpenStream {
+            stream: stream.stream().clone(),
+            collection: stream.collection().clone(),
+            cursor: stream.current_cursor(),
         });
     }
-    Ok(SyncOpenResponse::new(shapes))
+    Ok(SyncOpenResponse::new(streams))
 }
 
 async fn pull_handler(
@@ -208,8 +208,8 @@ async fn pull_handler(
     Json(request): Json<SyncPullRequest>,
 ) -> Json<ServerResult<SyncPullResponse<Value>>> {
     let result = async {
-        let shape = sync.shape(request.shape.as_str())?;
-        shape.pull(request).await
+        let stream = sync.stream(request.stream.as_str())?;
+        stream.pull(request).await
     }
     .await;
     Json(result.map_err(server_error))
@@ -220,8 +220,8 @@ async fn push_handler(
     Json(request): Json<SyncPushRequest<Value>>,
 ) -> Json<ServerResult<SyncPushResponse<Value>>> {
     let result = async {
-        let shape = sync.shape(request.shape.as_str())?;
-        shape.push(request).await
+        let stream = sync.stream(request.stream.as_str())?;
+        stream.push(request).await
     }
     .await;
     Json(result.map_err(server_error))
@@ -230,7 +230,7 @@ async fn push_handler(
 fn server_error(error: SyncError) -> ServerError {
     match error {
         SyncError::InvalidValue { .. } => ServerError::BadRequest(error.to_string()),
-        SyncError::UnknownShape(_) => ServerError::Forbidden(error.to_string()),
+        SyncError::UnknownStream(_) => ServerError::Forbidden(error.to_string()),
         SyncError::Unsupported(_) => ServerError::BadRequest(error.to_string()),
         SyncError::Gap(_) => ServerError::BadRequest(error.to_string()),
         SyncError::Json(err) => {
@@ -254,14 +254,14 @@ mod tests {
 
     use super::*;
     use crate::{
-        MemorySyncShape, SyncPullMode, SyncPushRequest, SyncRow, SyncShapeName, SYNC_PROTOCOL_V1,
+        MemorySyncStream, SyncPullMode, SyncPushRequest, SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
     };
 
     #[tokio::test]
-    async fn pull_route_is_public_for_registered_shapes() {
-        let router = router_with_posts_shape();
+    async fn pull_route_is_public_for_registered_streams() {
+        let router = router_with_posts_stream();
 
-        let request = SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap());
+        let request = SyncPullRequest::new(SyncStreamName::new("posts_for_tenant").unwrap());
         let response = router
             .oneshot(
                 Request::builder()
@@ -286,10 +286,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pull_unknown_shape_returns_forbidden() {
-        let router = router_with_posts_shape();
+    async fn pull_unknown_stream_returns_forbidden() {
+        let router = router_with_posts_stream();
 
-        let request = SyncPullRequest::new(SyncShapeName::new("unknown_shape").unwrap());
+        let request = SyncPullRequest::new(SyncStreamName::new("unknown_stream").unwrap());
         let response = router
             .oneshot(
                 Request::builder()
@@ -307,17 +307,17 @@ mod tests {
         let outer: ServerResult<SyncPullResponse<String>> = serde_json::from_slice(&bytes).unwrap();
         assert!(matches!(
             outer,
-            Err(ServerError::Forbidden(message)) if message.contains("unknown sync shape")
+            Err(ServerError::Forbidden(message)) if message.contains("unknown sync stream")
         ));
     }
 
     #[tokio::test]
     async fn default_push_returns_unsupported_bad_request() {
-        let router = router_with_posts_shape();
+        let router = router_with_posts_stream();
 
         let request = SyncPushRequest::<String> {
             protocol: SYNC_PROTOCOL_V1.to_string(),
-            shape: SyncShapeName::new("posts_for_tenant").unwrap(),
+            stream: SyncStreamName::new("posts_for_tenant").unwrap(),
             mutations: Vec::new(),
         };
         let response = router
@@ -356,11 +356,11 @@ mod tests {
         ));
     }
 
-    fn router_with_posts_shape() -> pocopine_server::axum::Router {
+    fn router_with_posts_stream() -> pocopine_server::axum::Router {
         pocopine_server::__reset_for_test();
-        let posts = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
+        let posts = MemorySyncStream::<String>::new("posts_for_tenant", "posts").unwrap();
         posts.upsert("post_1", "hello".to_string()).unwrap();
-        let sync = SyncServer::builder().shape(posts).build();
+        let sync = SyncServer::builder().stream(posts).build();
         pocopine_server::Server::new(pocopine_server::axum::Router::new())
             .plugin(sync_server_plugin(sync))
             .try_finalize()
