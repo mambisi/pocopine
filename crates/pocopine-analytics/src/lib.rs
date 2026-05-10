@@ -158,43 +158,33 @@ where
             .len()
     }
 
+    /// Returns a best-effort point-in-time snapshot.
+    ///
+    /// Monotonic counters are exact, while `pending` reflects queue depth at
+    /// the moment the snapshot was read.
     pub fn metrics(&self) -> ExporterMetrics {
-        let pending = self.pending();
+        let queue = self
+            .queue
+            .lock()
+            .expect("analytics exporter queue lock poisoned");
         let mut metrics = self
             .metrics
             .lock()
             .expect("analytics exporter metrics lock poisoned")
             .clone();
-        metrics.pending = pending;
+        metrics.pending = queue.len();
         metrics
     }
 
-    fn increment_dropped(&self) {
-        self.metrics
+    fn add_metrics(&self, enqueued: u64, dropped: u64, delivered: u64, failed: u64) {
+        let mut metrics = self
+            .metrics
             .lock()
-            .expect("analytics exporter metrics lock poisoned")
-            .dropped += 1;
-    }
-
-    fn increment_enqueued(&self) {
-        self.metrics
-            .lock()
-            .expect("analytics exporter metrics lock poisoned")
-            .enqueued += 1;
-    }
-
-    fn increment_delivered(&self) {
-        self.metrics
-            .lock()
-            .expect("analytics exporter metrics lock poisoned")
-            .delivered += 1;
-    }
-
-    fn increment_failed(&self) {
-        self.metrics
-            .lock()
-            .expect("analytics exporter metrics lock poisoned")
-            .failed += 1;
+            .expect("analytics exporter metrics lock poisoned");
+        metrics.enqueued += enqueued;
+        metrics.dropped += dropped;
+        metrics.delivered += delivered;
+        metrics.failed += failed;
     }
 }
 
@@ -221,7 +211,7 @@ where
             .lock()
             .expect("analytics exporter queue lock poisoned");
         if queue.len() >= self.capacity {
-            self.increment_dropped();
+            self.add_metrics(0, 1, 0, 0);
             return Err(AnalyticsError::new(format!(
                 "analytics export queue full (capacity {})",
                 self.capacity
@@ -229,8 +219,7 @@ where
         }
 
         queue.push_back(event.clone());
-        drop(queue);
-        self.increment_enqueued();
+        self.add_metrics(1, 0, 0, 0);
         Ok(())
     }
 
@@ -243,14 +232,14 @@ where
             queue.drain(..).collect::<Vec<_>>()
         };
 
-        let mut failed = 0usize;
+        let mut delivered = 0u64;
+        let mut failed = 0u64;
 
         for event in queued {
             match catch_unwind(AssertUnwindSafe(|| self.inner.emit(&event))) {
-                Ok(Ok(())) => self.increment_delivered(),
+                Ok(Ok(())) => delivered += 1,
                 Ok(Err(_)) | Err(_) => {
                     failed += 1;
-                    self.increment_failed();
                 }
             }
         }
@@ -259,9 +248,10 @@ where
             Ok(Ok(())) => {}
             Ok(Err(_)) | Err(_) => {
                 failed += 1;
-                self.increment_failed();
             }
         }
+
+        self.add_metrics(0, 0, delivered, failed);
 
         if failed == 0 {
             Ok(())
@@ -752,6 +742,89 @@ mod tests {
             ExporterMetrics {
                 pending: 0,
                 enqueued: 2,
+                dropped: 0,
+                delivered: 1,
+                failed: 1,
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_sink_flush_counts_inner_emit_panic() {
+        let bounded = BoundedAnalyticsSink::new(
+            |_: &ObservedEvent| -> Result<(), AnalyticsError> { panic!("inner emit panic") },
+            2,
+        );
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(bounded.clone());
+
+        assert!(client.emit(event("panic")).all_succeeded());
+
+        let report = client.flush();
+
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(
+            report.errors[0].message(),
+            "analytics exporter flush failed for 1 operation(s)"
+        );
+        assert_eq!(
+            bounded.metrics(),
+            ExporterMetrics {
+                pending: 0,
+                enqueued: 1,
+                dropped: 0,
+                delivered: 0,
+                failed: 1,
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn bounded_sink_flush_counts_inner_flush_panic_after_delivery() {
+        struct FlushPanicSink {
+            delivered: Arc<AtomicUsize>,
+        }
+
+        impl AnalyticsSink for FlushPanicSink {
+            fn emit(&self, _: &ObservedEvent) -> Result<(), AnalyticsError> {
+                self.delivered.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn flush(&self) -> Result<(), AnalyticsError> {
+                panic!("inner flush panic")
+            }
+        }
+
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let bounded = BoundedAnalyticsSink::new(
+            FlushPanicSink {
+                delivered: Arc::clone(&delivered),
+            },
+            2,
+        );
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_sink(bounded.clone());
+
+        assert!(client.emit(event("good")).all_succeeded());
+
+        let report = client.flush();
+
+        assert_eq!(report.attempted, 1);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.failed, 1);
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            bounded.metrics(),
+            ExporterMetrics {
+                pending: 0,
+                enqueued: 1,
                 dropped: 0,
                 delivered: 1,
                 failed: 1,
