@@ -10,6 +10,20 @@ cargo run -p pocopine-cli -- run --path examples/charts --port 8025
 Open `http://localhost:8025` and switch between the two datasets. The demo keeps
 all visual styling in `index.html` CSS so the chart crate can stay unstyled.
 
+## What The Demo Proves
+
+The demo is intentionally a composition test, not a theme showcase. It should
+prove that applications can assemble chart blocks into their own product UI:
+
+- combo Cartesian charts with bars, areas, lines, scatter points, and reference
+  marks sharing one scale system,
+- custom layered SVG scenes with explicit paint order,
+- app-owned custom tooltips driven by `pp:chart:hover`,
+- persistent selection details driven by `pp:chart:select`,
+- interactive legends that mutate application-owned visible data,
+- responsive wrappers that keep SVG text and circular marks unstretched,
+- empty states when filtering hides all visible data.
+
 The example intentionally uses the same public API an application would use:
 
 - `pine_charts::register_all()` at startup,
@@ -36,6 +50,10 @@ The example intentionally uses the same public API an application would use:
   the template,
 - `<pine-pie-chart pp-bind:data="pie_data">` in the template,
 - `x_label` and `y_label` attributes for chart axis labels,
+- `tooltip="none"` plus `pp:chart:hover` / `pp:chart:hover-end` handlers for an
+  app-owned tooltip,
+- `pp:chart:select` / `pp:chart:select-end` handlers for an app-owned detail
+  panel,
 - `<pine-chart-legend pp-bind:items="line_legend">`,
   `<pine-chart-legend pp-bind:items="scatter_legend">`,
   `<pine-chart-legend pp-bind:items="area_legend">`,

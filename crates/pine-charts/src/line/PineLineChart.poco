@@ -27,7 +27,7 @@
        focusable="false"
        @pointermove="on_pointer_move"
        @pointerleave="clear_hover"
-       @click="clear_selection">
+       @click="select_hovered_or_clear">
     <g pp-show="ready"
        class="pine-chart-grid"
        data-layer="grid"

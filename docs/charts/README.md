@@ -17,6 +17,30 @@ Higher level components build on those primitives instead of hiding them. That
 keeps charts useful for simple dashboards while still giving application authors
 a path to custom marks, axes, interaction, and styling.
 
+## Design Model
+
+Pine Charts is a block system, not a full dashboard framework. The crate should
+make the hard chart behavior reusable without taking over the application's
+layout or product decisions.
+
+Pine owns:
+
+- geometry, scales, SVG paths, and responsive measurement,
+- hit testing, hover state, keyboard selection, and event payloads,
+- accessibility metadata, stable classes, and `data-*` hooks,
+- validation errors for malformed data and unsupported options.
+
+Applications own:
+
+- cards, panels, dashboard grids, and page layout,
+- color, typography, spacing, animation timing, and visual emphasis,
+- filtering policy, custom tooltips, selection detail panels, and drilldown,
+- routing, persistence, analytics, and domain-specific labels.
+
+That boundary keeps the public API low-to-high: use the ready-made line, bar,
+area, scatter, pie, and Cartesian components when they fit; drop to layered SVG
+blocks when the visualization needs custom marks.
+
 ## Styling Contract
 
 Pine Charts does not ship a theme. Components must expose semantic classes such

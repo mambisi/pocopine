@@ -1389,6 +1389,21 @@ async fn area_chart_renders_fills_lines_and_hover_metadata() {
     let selected_kind = listen_string_field(&chart, CHART_SELECT_EVENT, "kind");
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
     let selected_x = listen_string_field(&chart, CHART_SELECT_EVENT, "x_label");
+    dispatch_click(&svg);
+    settle().await;
+
+    let hovered_marker = host
+        .query_selector(".pine-area-chart .pine-chart-marker[data-selected]")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hovered_marker.get_attribute("data-series").as_deref(),
+        Some("Target")
+    );
+    assert_eq!(selected_kind.borrow().as_deref(), Some("xy"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("Target: x 1, y 0"));
+    assert_eq!(selected_x.borrow().as_deref(), Some("1"));
+
     let first_marker = markers.get(0).unwrap().dyn_into::<Element>().unwrap();
     dispatch_click(&first_marker);
     settle().await;
@@ -1569,6 +1584,17 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
     assert!(!third.has_attribute("data-selected"));
     let third_key = third.get_attribute("data-key");
     assert_eq!(cleared_key.borrow().as_deref(), third_key.as_deref());
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    let second_x = second.get_attribute("cx").unwrap().parse::<f64>().unwrap();
+    let second_y = second.get_attribute("cy").unwrap().parse::<f64>().unwrap();
+    dispatch_pointer_move(&svg, second_x, second_y);
+    settle().await;
+    dispatch_click(&svg);
+    settle().await;
+
+    assert!(second.has_attribute("data-selected"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("x 5, y 10"));
 
     host.remove();
 }
