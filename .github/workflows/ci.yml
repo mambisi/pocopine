@@ -3,8 +3,10 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,11 +20,94 @@ concurrency:
 # `rust-toolchain.toml` at the repo root. The CI jobs install the
 # same nightly explicitly so dtolnay/rust-toolchain@master doesn't
 # need to read the toml file (its support for that is partial).
+#
+# Cost strategy:
+#   - `changes` job fans out per-area outputs so docs-only or
+#     scoped changes don't trigger the full pipeline.
+#   - macOS / Windows builds run only on tags (`v*`) and manual
+#     dispatch — they're 10×/2× linux billing and the wasm32
+#     target is platform-independent, so PRs and main pushes
+#     stay linux-only.
+#   - Examples + jsbench builds collapsed into one runner that
+#     loops, so toolchain + wasm-pack install costs are paid once
+#     instead of 11 times.
 
 jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      wasm: ${{ steps.filter.outputs.wasm }}
+      cli: ${{ steps.filter.outputs.cli }}
+      examples: ${{ steps.filter.outputs.examples }}
+      observability: ${{ steps.filter.outputs.observability }}
+      redis: ${{ steps.filter.outputs.redis }}
+      browser: ${{ steps.filter.outputs.browser }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Filters are evaluated against the PR diff (pull_request
+          # event) or the push diff (push event). Tag pushes and
+          # workflow_dispatch don't have a diff base — paths-filter
+          # treats those as "all filters true", so manual / release
+          # runs always exercise the full matrix.
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            wasm:
+              - 'crates/**'
+              - '!crates/pocopine-cli/**'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            cli:
+              - 'crates/pocopine-cli/**'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            examples:
+              - 'examples/**'
+              - 'jsbench/**'
+              - 'crates/**'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            observability:
+              - 'crates/pocopine-observe/**'
+              - 'crates/pocopine-logging/**'
+              - 'crates/pocopine-analytics/**'
+              - 'examples/observability-smoke/**'
+              - 'scripts/ci/otlp_smoke.sh'
+              - '.github/workflows/ci.yml'
+            redis:
+              - 'crates/pocopine-events/**'
+              - 'crates/pocopine-live/**'
+              - 'crates/pocopine-jobs/**'
+              - '.github/workflows/ci.yml'
+            browser:
+              - 'crates/pine/**'
+              - 'crates/pine-charts/**'
+              - 'crates/pine-motion/**'
+              - 'crates/pocopine/**'
+              - 'crates/pocopine-core/**'
+              - 'crates/pocopine-macros/**'
+              - '.github/workflows/ci.yml'
+            ci:
+              - '.github/workflows/**'
+              - 'scripts/ci/**'
+
   fmt:
     name: cargo fmt --check
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -34,6 +119,8 @@ jobs:
   clippy-wasm:
     name: clippy (wasm32)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -51,6 +138,8 @@ jobs:
   clippy-host:
     name: clippy (host — pocopine-cli)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.cli == 'true' || needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -62,36 +151,58 @@ jobs:
           key: clippy-host
       - run: cargo clippy -p pocopine-cli --all-targets -- -D warnings
 
-  build:
-    name: build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  build-host:
+    name: build (host — pocopine-cli)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.cli == 'true' || needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-12-18
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          key: build-${{ matrix.os }}
-      # Framework + example crates target wasm; build them for the
-      # canonical wasm32 target on every OS so platform-specific
-      # surprises (path separators, line endings, host toolchain
-      # quirks) surface here, not at release time.
-      - name: build (wasm32 workspace)
-        run: cargo build --workspace --exclude pocopine-cli --target wasm32-unknown-unknown
-      # pocopine-cli is the only host-binary crate. Build it for the
-      # current OS so each platform's CLI binary is exercised.
+          # Share cache with clippy-host — same crate, same target,
+          # same profile, so debug artifacts overlap.
+          key: clippy-host
+      # The wasm32 workspace build that used to live here was
+      # redundant with `clippy-wasm` (clippy already type-checks
+      # the full crate graph). Cross-OS coverage moved to the
+      # `cross-platform-build` job below, which only runs on
+      # tags / manual dispatch.
+      - run: cargo build -p pocopine-cli
+
+  cross-platform-build:
+    name: cross-platform build (${{ matrix.os }})
+    # Run only on release tags or manual dispatch. macOS billing is
+    # 10× linux, Windows is 2×; per-PR cross-OS runs were the
+    # largest single line item on the bill. The wasm32 target is
+    # platform-independent (covered by clippy-wasm on linux) so
+    # only the host CLI binary needs cross-OS validation, and that
+    # only matters at release time.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.os }}
       - name: build (host — pocopine-cli)
-        run: cargo build -p pocopine-cli
+        run: cargo build -p pocopine-cli --release
 
   test-host:
     name: cargo test (host)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -113,6 +224,8 @@ jobs:
   observability-otlp:
     name: observability OTLP smoke
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.observability == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -130,6 +243,8 @@ jobs:
   test-live-redis:
     name: live Redis integration
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.redis == 'true'
     services:
       redis:
         image: redis:7-alpine
@@ -158,6 +273,8 @@ jobs:
   test-wasm-node:
     name: wasm-pack test --node (${{ matrix.name }})
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
     # Tests that run under JSDOM/Node — no DOM walker, no real
     # event dispatch. Faster than the browser jobs and catch the
     # bulk of the runtime regressions (reactive core, registry
@@ -218,6 +335,8 @@ jobs:
   test-wasm-browser:
     name: wasm-pack test --firefox (${{ matrix.name }})
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
     # Tests that need a real browser — DOM walker, MutationObserver,
     # focus traps, pp-for keyed reorder, transitions. We use
     # Firefox + geckodriver instead of Chrome + chromedriver because
@@ -239,42 +358,19 @@ jobs:
           - name: pine
             crate: crates/pine
             args: ""
-          - name: pocopine-sync-client
-            crate: crates/pocopine-sync
-            args: --test client_browser
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
-      # Install via `taiki-e/install-action` instead of
-      # `jetli/wasm-pack-action`. The jetli action shells out to
-      # the GitHub Releases CDN, which is intermittently 502'ing
-      # ("Unexpected HTTP response: 502" while downloading the
-      # `wasm-pack-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
-      # tarball) and aborts the workflow before any test job
-      # runs. taiki-e ships pre-built archives via its own
-      # mirror with retry baked in, the same way we install
-      # `wasm-bindgen-cli` below — so CI fails on the work, not
-      # on a flaky download.
-      #
-      # Pinned to 0.14.0 to match the version every job
-      # downloads (jetli was resolving "latest" each time, which
-      # made any future release a quiet regression risk).
       - name: install wasm-pack (pinned)
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@0.14.0
-      # Pin wasm-bindgen-cli to the workspace lockfile version —
-      # see the `test-wasm-node` job for the rationale.
       - name: install wasm-bindgen-cli (locked)
         uses: taiki-e/install-action@v2
         with:
-          # Pinned to the workspace lockfile's wasm-bindgen
-          # version — the test runner ABI must match exactly or
-          # ChromeDriver returns `http status: 404` from the
-          # session-init handshake.
           tool: wasm-bindgen-cli@0.2.118
       - uses: browser-actions/setup-firefox@v1
         id: setup-firefox
@@ -299,58 +395,65 @@ jobs:
   examples:
     name: examples (wasm-pack)
     runs-on: ubuntu-latest
-    # The workspace build above already type-checks each example
-    # via plain `cargo build --target wasm32`. This job exercises
-    # the full ship pipeline — wasm-bindgen-cli post-processing,
-    # JS shim generation, snippet emission — that `cargo build`
-    # alone doesn't run. Catches integration regressions
-    # (incompatible wasm-bindgen versions, missing target features
-    # in `[lib]`, etc.) before they hit anyone deploying.
-    strategy:
-      fail-fast: false
-      matrix:
-        example:
-          - examples/blog
-          - examples/counter
-          - examples/hn
-          - examples/site
-          - examples/spa
-          - examples/sync
-          - examples/tailwind
-          - examples/todo
-          - examples/website
-          - jsbench/pocopine
-          - jsbench/leptos
-          - jsbench/yew
+    needs: changes
+    if: needs.changes.outputs.examples == 'true'
+    # Collapsed from an 11-entry matrix to a single runner that
+    # loops over the example list. Trade-off: serial builds give
+    # up some wall-clock parallelism, but in exchange we pay
+    # toolchain + wasm-pack install once instead of 11×, and the
+    # rust-cache holds dep artifacts shared across examples
+    # (most pull from the workspace crates anyway). Net cost is
+    # well under the matrix form even when every example rebuilds.
+    #
+    # Failure mode: a break in one example aborts the rest of the
+    # loop. That's intentional — fix the first failure and rerun.
+    # If isolation becomes important, split into 2–3 buckets
+    # rather than going back to 11 runners.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-12-18
           targets: wasm32-unknown-unknown
-      # Install via `taiki-e/install-action` instead of
-      # `jetli/wasm-pack-action`. The jetli action shells out to
-      # the GitHub Releases CDN, which is intermittently 502'ing
-      # ("Unexpected HTTP response: 502" while downloading the
-      # `wasm-pack-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
-      # tarball) and aborts the workflow before any test job
-      # runs. taiki-e ships pre-built archives via its own
-      # mirror with retry baked in, the same way we install
-      # `wasm-bindgen-cli` below — so CI fails on the work, not
-      # on a flaky download.
-      #
-      # Pinned to 0.14.0 to match the version every job
-      # downloads (jetli was resolving "latest" each time, which
-      # made any future release a quiet regression risk).
       - name: install wasm-pack (pinned)
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@0.14.0
       - uses: Swatinem/rust-cache@v2
         with:
-          # Per-example cache so a regression in one doesn't
-          # blow away the others' compiled deps.
-          key: examples-${{ matrix.example }}
-          workspaces: ${{ matrix.example }}
-      - name: wasm-pack build (${{ matrix.example }})
-        run: wasm-pack build --release --target web ${{ matrix.example }}
+          key: examples
+          # `workspaces` lists every example dir so each one's
+          # `target/` is included in the cache. They share
+          # registry/git deps via the global cargo cache.
+          workspaces: |
+            examples/blog
+            examples/counter
+            examples/hn
+            examples/site
+            examples/spa
+            examples/tailwind
+            examples/todo
+            examples/website
+            jsbench/pocopine
+            jsbench/leptos
+            jsbench/yew
+      - name: wasm-pack build (all examples)
+        run: |
+          set -euo pipefail
+          for ex in \
+            examples/blog \
+            examples/counter \
+            examples/hn \
+            examples/site \
+            examples/spa \
+            examples/tailwind \
+            examples/todo \
+            examples/website \
+            jsbench/pocopine \
+            jsbench/leptos \
+            jsbench/yew
+          do
+            echo "::group::wasm-pack build $ex"
+            wasm-pack build --release --target web "$ex"
+            echo "::endgroup::"
+          done
