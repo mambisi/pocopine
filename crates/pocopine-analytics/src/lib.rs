@@ -7,9 +7,15 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs::{File, OpenOptions};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use pocopine_observe::{
     emit_tracing, EventPriority, FieldPrivacy, ObserveContext, ObservedEvent, RedactionPolicy,
@@ -103,6 +109,82 @@ pub struct AnalyticsReport {
 impl AnalyticsReport {
     pub fn all_succeeded(&self) -> bool {
         self.failed == 0
+    }
+}
+
+/// Host-side JSON-lines analytics exporter.
+///
+/// Each accepted event is serialized as one JSON object followed by `\n`.
+/// This is useful for stdout/file pipelines consumed by AWS CloudWatch agents,
+/// Cloudflare log pipelines, container log collectors, or local tests.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct JsonLinesAnalyticsSink<W> {
+    writer: Mutex<W>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<W> JsonLinesAnalyticsSink<W>
+where
+    W: Write + Send + 'static,
+{
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer: Mutex::new(writer),
+        }
+    }
+
+    fn writer(&self) -> Result<MutexGuard<'_, W>, AnalyticsError> {
+        self.writer
+            .lock()
+            .map_err(|_| AnalyticsError::new("analytics json-lines writer lock poisoned"))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl JsonLinesAnalyticsSink<io::Stdout> {
+    pub fn stdout() -> Self {
+        Self::new(io::stdout())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl JsonLinesAnalyticsSink<io::Stderr> {
+    pub fn stderr() -> Self {
+        Self::new(io::stderr())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl JsonLinesAnalyticsSink<File> {
+    pub fn file(path: impl AsRef<Path>) -> Result<Self, AnalyticsError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|err| AnalyticsError::new(format!("open analytics json-lines file: {err}")))?;
+        Ok(Self::new(file))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<W> AnalyticsSink for JsonLinesAnalyticsSink<W>
+where
+    W: Write + Send + 'static,
+{
+    fn emit(&self, event: &ObservedEvent) -> Result<(), AnalyticsError> {
+        let mut writer = self.writer()?;
+        serde_json::to_writer(&mut *writer, event)
+            .map_err(|err| AnalyticsError::new(format!("serialize analytics event: {err}")))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|err| AnalyticsError::new(format!("write analytics event: {err}")))?;
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), AnalyticsError> {
+        self.writer()?
+            .flush()
+            .map_err(|err| AnalyticsError::new(format!("flush analytics json-lines writer: {err}")))
     }
 }
 
@@ -545,12 +627,43 @@ pub mod web {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::io::{self, Write};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use pocopine_observe::{FieldPrivacy, RedactionPolicy};
 
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[derive(Clone, Default)]
+    struct SharedBuffer {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.bytes.lock().expect("buffer lock poisoned").clone())
+                .expect("analytics json-lines output is utf-8")
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("buffer lock poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -640,6 +753,37 @@ mod tests {
         assert_eq!(report.succeeded, 1);
         assert_eq!(report.failed, 0);
         assert!(report.all_succeeded());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn json_lines_sink_writes_one_redacted_event_per_line() {
+        let output = SharedBuffer::default();
+        let sink = JsonLinesAnalyticsSink::new(output.clone());
+        let client = AnalyticsClient::new()
+            .without_tracing_events()
+            .with_redaction(RedactionPolicy::public_only())
+            .with_sink(sink);
+
+        let report = client.emit(
+            event("checkout")
+                .field("plan", "pro", FieldPrivacy::Public)
+                .field("email", "person@example.test", FieldPrivacy::Sensitive),
+        );
+        let flush = client.flush();
+
+        assert!(report.all_succeeded());
+        assert!(flush.all_succeeded());
+
+        let output = output.contents();
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        let json: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("analytics json-line is valid json");
+        assert_eq!(json["name"], "checkout");
+        assert_eq!(json["fields"]["plan"]["value"], "pro");
+        assert_eq!(json["fields"]["plan"]["privacy"], "public");
+        assert!(json["fields"].get("email").is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

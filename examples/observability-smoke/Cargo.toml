@@ -16,8 +16,12 @@ crate-type = ["rlib"]
 name = "server"
 path = "src/bin/server.rs"
 
+[[bin]]
+name = "analytics_exporter"
+path = "src/bin/analytics_exporter.rs"
+
 [dependencies]
-pocopine = { path = "../../crates/pocopine", features = ["logging-otlp"] }
+pocopine = { path = "../../crates/pocopine", features = ["analytics", "logging-otlp"] }
 serde = { workspace = true }
 tracing = { workspace = true }
 

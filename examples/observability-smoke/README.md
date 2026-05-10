@@ -1,4 +1,4 @@
-# OTLP observability smoke example
+# Observability smoke example
 
 This example is a small host-side server that installs pocopine JSON logging and
 OTLP trace export, then exposes one `#[server(public)]` endpoint.
@@ -35,6 +35,19 @@ You should see spans named `pocopine.server_function` and
 
 The example intentionally does not log or export the raw message body.
 
+## Run the analytics JSON-lines exporter
+
+This binary emits a couple of redacted analytics events through
+`BoundedAnalyticsSink<JsonLinesAnalyticsSink<_>>`:
+
+```sh
+cargo run -p observability-smoke --bin analytics_exporter
+```
+
+The JSON-lines output is suitable for stdout/file log agents such as container
+logs, AWS CloudWatch agents, Cloudflare log pipelines, or local smoke tests.
+Exporter metrics are printed to stderr.
+
 ## CI smoke test
 
 The repository CI runs:
@@ -50,3 +63,12 @@ server-function route, and asserts:
 - `function`, `route`, `message_len`, and `service.name` metadata are present;
 - the raw request message is absent from exported telemetry;
 - local p95 request latency stays below a broad CI budget.
+
+The analytics exporter test can run without Docker or a collector:
+
+```sh
+bash scripts/ci/observability_exporters.sh
+```
+
+It asserts JSON-lines shape, redaction, bounded queue drops, delivery counts,
+and flush behavior through the public analytics API.

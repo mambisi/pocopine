@@ -78,6 +78,8 @@ ships:
 - panic isolation around sink calls;
 - a host-side bounded exporter wrapper with drop, delivery, and failure
   counters;
+- a host-side JSON-lines analytics sink for stdout, stderr, files, and
+  platform log agents;
 - wasm JS function sinks for user-supplied vendor bridges;
 - wasm Firebase and Google Analytics function adapters.
 
@@ -182,7 +184,8 @@ Later phases should add:
 - first-class route and server-function instrumentation points;
 - job observability export from the existing `pocopine-jobs` tracing events;
 - OpenTelemetry adapter;
-- AWS/Cloudflare host sinks;
+- vendor-specific AWS/Cloudflare host sinks on top of the JSON-lines and
+  bounded exporter primitives;
 - priority-aware async exporter queues;
 - metrics sink integration for exporter drop/failure counters;
 - devtools panel integration on top of the same event stream.

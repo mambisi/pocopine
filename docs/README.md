@@ -74,6 +74,6 @@ Example apps:
   with collection/query refetch callbacks.
 - [`examples/sync/`](../examples/sync/) — `pocopine-sync` cursor pulls
   with `pocopine-live` wake-ups.
-- [`examples/observability-smoke/`](../examples/observability-smoke/) — OTLP trace export smoke server.
+- [`examples/observability-smoke/`](../examples/observability-smoke/) — OTLP trace export and JSON-lines analytics exporter smoke paths.
 - [`examples/spa/`](../examples/spa/) — `App::route` + `<pp-outlet>` + `pp-route` + `$route`.
 - [`examples/site/`](../examples/site/) — the marketing page, dogfooded.
