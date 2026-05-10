@@ -25,9 +25,10 @@ browser durable store. SQLx comes later as a host/server adapter, not as
 the browser-local SQLite layer.
 
 The crate currently exposes `SyncLocalStore` and `MemoryLocalStore` so
-the storage contract can be tested without a browser database. Automatic
-`SyncCollection` hydration, persisted mutation replay, and SQLite
-WASM/OPFS durability are the next implementation steps.
+the storage contract can be tested without a browser database.
+`SyncCollection::open()` hydrates cached rows before the network pull and
+replays pending stored mutations. SQLite WASM/OPFS durability is the next
+implementation step.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
@@ -257,6 +258,21 @@ When live wake-up is enabled, accepted pushes rely on the live
 invalidation to trigger the follow-up pull. Without live wake-up, the
 push path performs that pull directly.
 
+The plugin installs a `MemoryLocalStore` by default. That makes the
+local-store contract active for tests and demos but does not survive page
+reloads. Apps can provide another store explicitly:
+
+```rust
+App::new()
+    .plugin(
+        pocopine_sync::sync_plugin()
+            .with_live_wakeup(true)
+            .local_store(my_store),
+    )
+    .register::<SyncBoard>()
+    .run();
+```
+
 Components store synced rows in `CollectionState<T>`:
 
 ```rust
@@ -287,13 +303,20 @@ impl SyncBoard {
 }
 ```
 
-`open()` first calls `/__pocopine/sync/v1/open` to validate the stream,
-then calls `/__pocopine/sync/v1/pull`. A fresh client still pulls
-without a cursor so it receives a snapshot; the server's current cursor
-from `open` is metadata, not permission to skip initial data. When live
-wake-up is enabled, `open()` also subscribes to the stream's wake-up topic
-and pulls again whenever the server invalidates that stream. `pull()` can
-be called manually for refresh buttons.
+`open()` first hydrates rows and pending mutations from the local store.
+Cached rows render immediately with `stale = true`, then the client calls
+`/__pocopine/sync/v1/open` to validate the stream and
+`/__pocopine/sync/v1/pull` to reconcile with the server. If the local
+store has a cursor, that cursor is sent to `pull`; otherwise a fresh
+client pulls without a cursor so it receives a snapshot. The server's
+current cursor from `open` is metadata, not permission to skip initial
+data. When live wake-up is enabled, `open()` also subscribes to the
+stream's wake-up topic and pulls again whenever the server invalidates
+that stream. `pull()` can be called manually for refresh buttons.
+
+Pending mutations found in the local store are replayed after `open`
+passes and before the authoritative pull. This is the first anti-entropy
+hook; the durable SQLite backend will make it useful across reloads.
 
 Templates read `CollectionState<T>` directly:
 
@@ -316,11 +339,12 @@ Templates read `CollectionState<T>` directly:
 
 ## 6. Push Optimistic Mutations
 
-`SyncCollection::push` applies an optimistic row locally, sends a stable
-mutation id to `/__pocopine/sync/v1/push`, then applies the server's
-accepted, rejected, or conflict response. Accepted pushes also wake live
-listeners through the sync server's event backend, so other tabs pull the
-committed stream changes.
+`SyncCollection::push` first enqueues the mutation in the local store,
+then applies an optimistic row locally, sends a stable mutation id to
+`/__pocopine/sync/v1/push`, and applies the server's accepted, rejected,
+or conflict response. Accepted pushes also wake live listeners through
+the sync server's event backend, so other tabs pull the committed stream
+changes.
 
 ```rust
 pub fn create(&mut self) {
@@ -409,8 +433,8 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 Keep these as separate adapter crates:
 
 - `pocopine-sync-sqlx` for compile-time checked SQL streams,
-- `pocopine-sync-indexeddb` for browser persistence,
-- `pocopine-sync-redis` for shared cursor/change storage.
+- `pocopine-sync-sqlite` for durable browser SQLite via SQLite WASM/OPFS,
+- `pocopine-sync-redis` only if we need a shared server-side change log.
 
 Those crates should implement the same protocol contracts rather than
 adding optional backend settings to framework core.

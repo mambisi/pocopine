@@ -27,6 +27,10 @@ Initial implementation has started in `pocopine-sync`:
   accepted, rejected, and conflict push outcomes,
 - `SyncLocalStore`, `SyncLocalIdentity`, `MutationIdGenerator`, and
   `MemoryLocalStore` as the first local-store contract slice,
+- `SyncCollection::open()` hydrates cached local rows, replays pending
+  stored mutations, and persists pull responses through `SyncLocalStore`,
+- `SyncCollection::push()` enqueues mutations before the network request
+  and persists accepted/rejected/conflict outcomes,
 - `MemorySyncStream` accepts upsert/delete/reset pushes with stable
   mutation-id dedupe,
 - live wake-up integration through `pocopine-live` query-tag topics,
@@ -37,11 +41,10 @@ Current model: `/open` is discovery/validation, not a session grant.
 Every `/open`, `/pull`, and `/push` request runs the stream guard
 independently, so skipping `/open` does not bypass access control.
 
-Still future work: wiring `SyncLocalStore` into `SyncCollection` runtime
-hydration/replay, durable browser storage, cross-reload mutation replay,
-conflict resolution UI, SQLx/database adapters, CDC sources, and
-query-driven stream parameters. The local-store implementation plan is
-documented in
+Still future work: durable browser storage, cross-reload mutation replay
+with the SQLite backend, conflict resolution UI, SQLx/database adapters,
+CDC sources, and query-driven stream parameters. The local-store
+implementation plan is documented in
 [`docs/sync-local-store-plan.md`](../docs/sync-local-store-plan.md):
 SQLite-first local storage, with SQLx kept as a later host/server
 adapter.

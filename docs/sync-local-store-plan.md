@@ -25,8 +25,10 @@ SQLite WASM/OPFS runtime shape.
 
 Current implementation status: the `SyncLocalStore` contract,
 `SyncLocalIdentity`, `MutationIdGenerator`, and `MemoryLocalStore` are in
-place. The client runtime does not yet hydrate from a store or replay
-stored mutations automatically.
+place. The client runtime hydrates cached rows before network pull,
+persists pull/push outcomes into the store, and replays stored pending
+mutations during `open()`. The store is still memory-backed until the
+SQLite WASM/OPFS crate lands.
 
 ## Crate Boundaries
 
