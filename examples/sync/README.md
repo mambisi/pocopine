@@ -24,6 +24,9 @@ This example uses memory backends, so it is intentionally single-process.
 It registers its stream with `public_stream(...)` to avoid bundling an
 auth setup into the demo; production apps should use `guarded_stream(...)`
 or `guarded_stream_with(...)`.
+The create form uses short client-local ids for readability; production
+apps should use server-assigned ids or client-side UUIDs so multiple tabs
+and devices do not collide.
 Future database adapters should keep this same browser stream while
 replacing the server-side source.
 

@@ -241,6 +241,9 @@ pub fn main() {
 `sync_plugin()` sends fetches without browser credentials by default. If
 an app opts into `.with_credentials(true)`, the server must provide the
 same CSRF protections it uses for any credentialed JSON POST endpoint.
+When live wake-up is enabled, accepted pushes rely on the live
+invalidation to trigger the follow-up pull. Without live wake-up, the
+push path performs that pull directly.
 
 Components store synced rows in `CollectionState<T>`:
 
@@ -333,6 +336,10 @@ source, invalid payloads are returned in `rejected`, stale
 `base_version` values are returned in `conflicts`, and accepted upserts
 append an incremental stream change. Production sources should keep the
 same rule: do not emit a live wake-up until the mutation has committed.
+
+The example uses short client-local ids to keep the code readable.
+Production apps should use server-assigned ids or client-generated UUIDs
+to avoid row-key collisions across tabs and devices.
 
 ## 7. Run The Example
 
