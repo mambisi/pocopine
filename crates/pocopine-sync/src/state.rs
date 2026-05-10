@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{SyncChange, SyncCursor, SyncOp, SyncPullMode, SyncPullResponse, SyncRow};
+use crate::{
+    MutationId, RowKey, SyncChange, SyncCursor, SyncOp, SyncPullMode, SyncPullResponse,
+    SyncPushResponse, SyncRow,
+};
 
 /// Reason attached to the latest sync state transition.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -11,6 +14,7 @@ pub enum SyncReason {
     Initial,
     Manual,
     Live,
+    Push,
     Gap,
     Error,
 }
@@ -25,6 +29,19 @@ impl SyncRequest {
     pub fn generation(self) -> u64 {
         self.generation
     }
+}
+
+/// Local mutation tracked until the server accepts, rejects, or conflicts it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+pub struct PendingMutation<T> {
+    pub id: MutationId,
+    pub op: SyncOp,
+    pub key: Option<RowKey>,
+    pub before: Option<SyncRow<T>>,
+    #[serde(default)]
+    pub before_rows: Vec<SyncRow<T>>,
+    pub optimistic: Option<SyncRow<T>>,
 }
 
 /// Serializable state for one synced collection.
@@ -43,6 +60,9 @@ pub struct CollectionState<T> {
     pub live_event_count: u64,
     pub pending_count: u64,
     pub conflict_count: u64,
+    pub rejected_count: u64,
+    #[serde(default)]
+    pub pending_mutations: Vec<PendingMutation<T>>,
     pub last_reason: SyncReason,
     #[serde(skip)]
     request_generation: u64,
@@ -63,6 +83,8 @@ impl<T> Default for CollectionState<T> {
             live_event_count: 0,
             pending_count: 0,
             conflict_count: 0,
+            rejected_count: 0,
+            pending_mutations: Vec::new(),
             last_reason: SyncReason::Idle,
             request_generation: 0,
         }
@@ -222,8 +244,181 @@ impl<T> CollectionState<T> {
     }
 
     fn recount_row_flags(&mut self) {
-        self.pending_count = self.rows.iter().filter(|row| row.pending).count() as u64;
+        let row_pending = self.rows.iter().filter(|row| row.pending).count() as u64;
+        self.pending_count = self.pending_mutations.len() as u64;
+        if row_pending > self.pending_count {
+            self.pending_count = row_pending;
+        }
         self.conflict_count = self.rows.iter().filter(|row| row.conflict).count() as u64;
+    }
+}
+
+impl<T> CollectionState<T>
+where
+    T: Clone,
+{
+    pub fn apply_optimistic_mutation(
+        &mut self,
+        id: MutationId,
+        op: SyncOp,
+        key: Option<RowKey>,
+        optimistic: Option<SyncRow<T>>,
+    ) {
+        let before = key.as_ref().and_then(|key| self.row_by_key(key).cloned());
+        let before_rows = if op == SyncOp::Reset {
+            self.rows.clone()
+        } else {
+            Vec::new()
+        };
+        self.pending_mutations.retain(|pending| pending.id != id);
+
+        match op {
+            SyncOp::Upsert => {
+                if let Some(mut row) = optimistic.clone() {
+                    row.pending = true;
+                    row.conflict = false;
+                    self.upsert_row(row);
+                }
+            }
+            SyncOp::Delete => {
+                if let Some(key) = &key {
+                    self.remove_row(key);
+                }
+            }
+            SyncOp::Reset => {
+                self.rows.clear();
+                if let Some(mut row) = optimistic.clone() {
+                    row.pending = true;
+                    row.conflict = false;
+                    self.rows.push(row);
+                }
+            }
+        }
+
+        self.pending_mutations.push(PendingMutation {
+            id,
+            op,
+            key,
+            before,
+            before_rows,
+            optimistic,
+        });
+        self.error.clear();
+        self.last_reason = SyncReason::Push;
+        self.recount_row_flags();
+    }
+
+    pub fn apply_push(&mut self, response: SyncPushResponse<T>) -> bool {
+        let has_accepted = !response.accepted.is_empty();
+
+        for rejected in response.rejected {
+            self.rollback_mutation(&rejected.mutation_id);
+            self.rejected_count = self.rejected_count.saturating_add(1);
+            self.error = rejected.reason;
+            self.last_reason = SyncReason::Error;
+        }
+
+        for conflict in response.conflicts {
+            self.complete_mutation(&conflict.mutation_id);
+            if let Some(mut row) = conflict.server_row {
+                row.pending = false;
+                row.conflict = true;
+                self.upsert_row(row);
+            } else if let Some(key) = conflict.key {
+                self.remove_row(&key);
+            }
+            self.error = conflict.reason;
+            self.last_reason = SyncReason::Error;
+        }
+
+        for id in response.accepted {
+            self.complete_mutation(&id);
+        }
+
+        for mut row in response.rows {
+            row.pending = false;
+            row.conflict = false;
+            self.upsert_row(row);
+        }
+
+        if let Some(cursor) = response.cursor {
+            self.cursor = Some(cursor);
+        }
+
+        self.loading = false;
+        self.syncing = false;
+        self.stale = has_accepted;
+        self.recount_row_flags();
+        has_accepted
+    }
+
+    fn rollback_mutation(&mut self, id: &MutationId) {
+        let Some(index) = self
+            .pending_mutations
+            .iter()
+            .position(|pending| &pending.id == id)
+        else {
+            return;
+        };
+        let pending = self.pending_mutations.remove(index);
+        match pending.op {
+            SyncOp::Upsert => {
+                if let Some(before) = pending.before {
+                    self.upsert_row(before);
+                } else if let Some(key) = pending.key {
+                    self.remove_row(&key);
+                }
+            }
+            SyncOp::Delete | SyncOp::Reset => {
+                if pending.op == SyncOp::Reset {
+                    self.rows = pending.before_rows;
+                } else if let Some(before) = pending.before {
+                    self.upsert_row(before);
+                }
+            }
+        }
+    }
+
+    fn complete_mutation(&mut self, id: &MutationId) {
+        let Some(index) = self
+            .pending_mutations
+            .iter()
+            .position(|pending| &pending.id == id)
+        else {
+            return;
+        };
+        let pending = self.pending_mutations.remove(index);
+        if let Some(key) = pending.key {
+            if let Some(row) = self.row_by_key_mut(&key) {
+                row.pending = false;
+            }
+        }
+    }
+
+    fn upsert_row(&mut self, row: SyncRow<T>) {
+        if let Some(existing) = self
+            .rows
+            .iter_mut()
+            .find(|existing| existing.key == row.key)
+        {
+            *existing = row;
+        } else {
+            self.rows.push(row);
+        }
+    }
+
+    fn remove_row(&mut self, key: &RowKey) {
+        if let Some(index) = self.rows.iter().position(|row| &row.key == key) {
+            self.rows.remove(index);
+        }
+    }
+
+    fn row_by_key(&self, key: &RowKey) -> Option<&SyncRow<T>> {
+        self.rows.iter().find(|row| &row.key == key)
+    }
+
+    fn row_by_key_mut(&mut self, key: &RowKey) -> Option<&mut SyncRow<T>> {
+        self.rows.iter_mut().find(|row| &row.key == key)
     }
 }
 
@@ -231,7 +426,8 @@ impl<T> CollectionState<T> {
 mod tests {
     use super::*;
     use crate::{
-        RowKey, SyncChange, SyncCollectionName, SyncCursor, SyncPullResponse, SyncStreamName,
+        MutationId, RowKey, RowVersion, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
+        SyncPullResponse, SyncPushResponse, SyncRejectedMutation, SyncStreamName,
     };
 
     #[test]
@@ -392,5 +588,107 @@ mod tests {
         assert!(!state.loading);
         assert!(!state.syncing);
         assert!(!state.stale);
+    }
+
+    #[test]
+    fn optimistic_upsert_marks_row_pending() {
+        let mut state = CollectionState::<String>::default();
+        let row = SyncRow::new("post_1", "draft".to_string()).unwrap();
+
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(row),
+        );
+
+        assert_eq!(state.rows.len(), 1);
+        assert!(state.rows[0].pending);
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(state.last_reason, SyncReason::Push);
+    }
+
+    #[test]
+    fn rejected_push_rolls_back_optimistic_upsert() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "draft".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            reason: "title is required".to_string(),
+        });
+
+        assert!(!state.apply_push(response));
+
+        assert!(state.rows.is_empty());
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(state.rejected_count, 1);
+        assert_eq!(state.error, "title is required");
+    }
+
+    #[test]
+    fn accepted_push_applies_canonical_row_and_clears_pending() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "draft".to_string()).unwrap()),
+        );
+        let mut canonical = SyncRow::new("post_1", "saved".to_string())
+            .unwrap()
+            .version("v1")
+            .unwrap();
+        canonical.pending = true;
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response
+            .accepted
+            .push(MutationId::new("device_1:1").unwrap());
+        response.rows.push(canonical);
+        response.cursor = Some(SyncCursor::new("1").unwrap());
+
+        assert!(state.apply_push(response));
+
+        assert_eq!(state.rows[0].value, "saved");
+        assert!(!state.rows[0].pending);
+        assert_eq!(
+            state.rows[0].version.as_ref().unwrap(),
+            &RowVersion::new("v1").unwrap()
+        );
+        assert_eq!(state.pending_count, 0);
+        assert!(state.stale);
+        assert_eq!(state.cursor.as_ref().unwrap().as_str(), "1");
+    }
+
+    #[test]
+    fn conflict_push_marks_server_row_conflicted() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: Some(SyncRow::new("post_1", "server".to_string()).unwrap()),
+            reason: "base version is stale".to_string(),
+        });
+
+        assert!(!state.apply_push(response));
+
+        assert_eq!(state.rows[0].value, "server");
+        assert!(!state.rows[0].pending);
+        assert!(state.rows[0].conflict);
+        assert_eq!(state.conflict_count, 1);
+        assert_eq!(state.error, "base version is stale");
     }
 }
