@@ -146,6 +146,31 @@ impl<T> CollectionState<T> {
         true
     }
 
+    pub fn apply_local_snapshot(
+        &mut self,
+        rows: Vec<SyncRow<T>>,
+        cursor: Option<SyncCursor>,
+        pending_count: u64,
+    ) -> bool {
+        if rows.is_empty() && cursor.is_none() && pending_count == 0 {
+            return false;
+        }
+
+        self.rows = rows;
+        self.cursor = cursor;
+        self.loading = false;
+        self.syncing = false;
+        self.stale = true;
+        self.error.clear();
+        self.version = self.version.saturating_add(1);
+        self.last_reason = SyncReason::Initial;
+        self.recount_row_flags();
+        if pending_count > self.pending_count {
+            self.pending_count = pending_count;
+        }
+        true
+    }
+
     pub fn apply_error(&mut self, request: SyncRequest, error: impl ToString) -> bool {
         if !self.is_current(request) {
             return false;
@@ -468,6 +493,27 @@ mod tests {
         assert_eq!(state.rows[0].value, "hello");
         assert_eq!(state.cursor.as_ref().unwrap().as_str(), "1");
         assert!(!state.loading);
+    }
+
+    #[test]
+    fn local_snapshot_marks_rows_stale_until_network_pull() {
+        let mut state = CollectionState::<String>::default();
+        let row = SyncRow::new("post_1", "cached".to_string()).unwrap();
+
+        assert!(state.apply_local_snapshot(
+            vec![row.clone()],
+            Some(SyncCursor::new("cursor_1").unwrap()),
+            2,
+        ));
+
+        assert_eq!(state.rows, vec![row]);
+        assert_eq!(state.cursor.unwrap().as_str(), "cursor_1");
+        assert!(state.stale);
+        assert!(!state.loading);
+        assert!(!state.syncing);
+        assert_eq!(state.version, 1);
+        assert_eq!(state.pending_count, 2);
+        assert_eq!(state.last_reason, SyncReason::Initial);
     }
 
     #[test]

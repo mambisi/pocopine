@@ -11,7 +11,8 @@ use std::rc::Rc;
 use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine_sync::{
-    sync_plugin, CollectionState, SyncCollectionName, SyncOpenRequest, SyncOpenResponse,
+    sync_plugin, CollectionState, LocalSnapshotBatch, MemoryLocalStore, SyncChange,
+    SyncCollectionName, SyncCursor, SyncLocalStore, SyncOp, SyncOpenRequest, SyncOpenResponse,
     SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncRow, SyncStreamName, SYNC_OPEN_PATH,
     SYNC_PULL_PATH,
 };
@@ -153,6 +154,120 @@ async fn open_validates_stream_then_pull_renders_snapshot() {
             .unwrap_or_default(),
         "1"
     );
+
+    host.remove();
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+
+    let store = MemoryLocalStore::new();
+    store
+        .save_snapshot(LocalSnapshotBatch::new(
+            SyncStreamName::new(STREAM).unwrap(),
+            SyncCollectionName::new(COLLECTION).unwrap(),
+            vec![SyncRow::new(
+                "post_1",
+                serde_json::json!({
+                    "id": "post_1",
+                    "title": "Cached locally"
+                }),
+            )
+            .unwrap()],
+            Some(SyncCursor::new("cached_cursor").unwrap()),
+        ))
+        .await
+        .unwrap();
+
+    let seen_pull_cursor = Rc::new(RefCell::new(None::<String>));
+    let seen_pull_cursor_for_middleware = seen_pull_cursor.clone();
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| {
+            let seen_pull_cursor = seen_pull_cursor_for_middleware.clone();
+            async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => {
+                        let request: SyncOpenRequest = serde_json::from_str(&req.body).unwrap();
+                        assert_eq!(request.streams[0].as_str(), STREAM);
+                        let response = SyncOpenResponse::new(vec![SyncOpenStream {
+                            stream: SyncStreamName::new(STREAM).unwrap(),
+                            collection: SyncCollectionName::new(COLLECTION).unwrap(),
+                            cursor: None,
+                        }]);
+                        Ok(json_response(response))
+                    }
+                    SYNC_PULL_PATH => {
+                        let request: SyncPullRequest = serde_json::from_str(&req.body).unwrap();
+                        *seen_pull_cursor.borrow_mut() =
+                            request.cursor.as_ref().map(ToString::to_string);
+                        assert_eq!(request.cursor.as_ref().unwrap().as_str(), "cached_cursor");
+
+                        let response = SyncPullResponse::incremental(
+                            SyncStreamName::new(STREAM).unwrap(),
+                            SyncCollectionName::new(COLLECTION).unwrap(),
+                            vec![SyncChange {
+                                stream: SyncStreamName::new(STREAM).unwrap(),
+                                collection: SyncCollectionName::new(COLLECTION).unwrap(),
+                                key: Some(pocopine_sync::RowKey::new("post_2").unwrap()),
+                                op: SyncOp::Upsert,
+                                row: Some(
+                                    SyncRow::new(
+                                        "post_2",
+                                        BrowserPost {
+                                            id: "post_2".to_string(),
+                                            title: "Loaded incrementally".to_string(),
+                                        },
+                                    )
+                                    .unwrap(),
+                                ),
+                                cursor: SyncCursor::new("cursor_2").unwrap(),
+                            }],
+                            Some(SyncCursor::new("cursor_2").unwrap()),
+                        );
+                        Ok(json_response(response))
+                    }
+                    other => Err(pocopine::ServerError::Network(format!(
+                        "unexpected sync browser test request: {other}"
+                    ))),
+                }
+            }
+        },
+    );
+
+    let document = window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_attribute("pp-app", "").unwrap();
+    host.set_inner_html("<sync-browser-board></sync-browser-board>");
+    document.body().unwrap().append_child(&host).unwrap();
+
+    App::new()
+        .plugin(
+            sync_plugin()
+                .with_live_wakeup(false)
+                .local_store(store.clone()),
+        )
+        .register::<SyncBrowserBoard>()
+        .run();
+
+    settle().await;
+
+    assert_eq!(seen_pull_cursor.borrow().as_deref(), Some("cached_cursor"));
+    assert_eq!(
+        host.query_selector(".row-count")
+            .unwrap()
+            .unwrap()
+            .text_content()
+            .unwrap_or_default(),
+        "2"
+    );
+    let persisted = store
+        .hydrate_stream(&SyncStreamName::new(STREAM).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(persisted.cursor.unwrap().as_str(), "cursor_2");
+    assert_eq!(persisted.rows.len(), 2);
 
     host.remove();
     pocopine::fetch::__reset_middleware_chain_for_test();

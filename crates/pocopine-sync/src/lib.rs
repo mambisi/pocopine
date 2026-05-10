@@ -33,7 +33,7 @@ pub use protocol::{
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
 
-pub use client::{sync_plugin, SyncClient, SyncClientPlugin, SyncCollection};
+pub use client::{sync_plugin, SyncClient, SyncClientPlugin, SyncCollection, SyncLocalStoreHandle};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use memory::{MemorySyncState, MemorySyncStream};
