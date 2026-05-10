@@ -6,13 +6,16 @@ The first implementation is intentionally small:
 - the server owns named sync streams,
 - the browser opens an authorized stream, then pulls a snapshot or
   incremental changes with a cursor,
+- the browser can push server-confirmed optimistic mutations with stable
+  mutation ids,
 - `pocopine-live` is used only as a wake-up signal,
-- the data payload still moves through `POST /__pocopine/sync/v1/pull`.
+- committed stream data still moves through `POST /__pocopine/sync/v1/pull`.
 
-This is not the full offline store yet. IndexedDB persistence,
-optimistic mutation replay, SQLx-backed adapters, and CDC integrations
-remain future work. The current API gives us the protocol boundary and a
-browser state model that those backends can plug into later.
+This is not the full offline store yet. IndexedDB durability,
+cross-reload mutation replay, SQLx-backed adapters, and CDC integrations
+remain future work. The current API gives us the protocol boundary,
+server-confirmed mutations, and a browser state model that those backends
+can plug into later.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
@@ -296,28 +299,40 @@ Templates read `CollectionState<T>` directly:
 </ol>
 ```
 
-## 6. Mutate Then Invalidate
+## 6. Push Optimistic Mutations
 
-Server functions can mutate the source and publish a wake-up after the
-write succeeds:
+`SyncCollection::push` applies an optimistic row locally, sends a stable
+mutation id to `/__pocopine/sync/v1/push`, then applies the server's
+accepted, rejected, or conflict response. Accepted pushes also wake live
+listeners through the sync server's event backend, so other tabs pull the
+committed stream changes.
 
 ```rust
-#[pocopine::server(public)]
-pub async fn create_post(title: String, body: String) -> ServerResult<Post> {
-    let post = insert_post(title, body)?;
+pub fn create(&mut self) {
+    let post = Post {
+        id: "post_local_1".to_string(),
+        title: self.title.clone(),
+        body: self.body.clone(),
+    };
+    let result = build_create_mutation(post)
+        .and_then(|(mutation, optimistic)| {
+            self.plugin::<pocopine_sync::SyncClient>()
+                .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
+                .stream(POSTS_STREAM)
+                .and_then(|collection| collection.push(mutation, Some(optimistic)))
+        });
 
-    posts_stream()
-        .upsert(post.id.clone(), post.clone())
-        .map_err(|err| ServerError::App(err.to_string()))?;
-
-    invalidate_posts().await;
-    Ok(post)
+    if let Err(err) = result {
+        self.posts.set_error(err.to_string());
+    }
 }
 ```
 
-Do not publish before the mutation commits. If wake-up publishing fails
-after a successful mutation, log it and return the mutation result; the
-next manual pull or page load should still see the committed data.
+Stream sources own validation and write policy. In the reference memory
+source, invalid payloads are returned in `rejected`, stale
+`base_version` values are returned in `conflicts`, and accepted upserts
+append an incremental stream change. Production sources should keep the
+same rule: do not emit a live wake-up until the mutation has committed.
 
 ## 7. Run The Example
 

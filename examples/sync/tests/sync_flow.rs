@@ -6,10 +6,11 @@ use pocopine_server::axum::body::Body;
 use pocopine_server::axum::http::{Request, StatusCode};
 use pocopine_server::Server;
 use pocopine_sync::{
-    sync_server_plugin, sync_stream_tag, SyncPullMode, SyncPullRequest, SyncPullResponse,
-    SyncStreamName, SYNC_PULL_PATH,
+    sync_server_plugin, sync_stream_tag, ClientMutation, MutationId, RowKey, SyncOp, SyncPullMode,
+    SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncStreamName,
+    SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
-use sync_example::{create_post, live_backend, sync_server, Post, POSTS_STREAM};
+use sync_example::{live_backend, sync_server, Post, POSTS_STREAM};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -54,12 +55,18 @@ async fn sync_pull_and_live_wakeup_share_the_stream_topic() {
     assert!(ready.contains("event: ready"));
     assert!(ready.contains("query:sync:stream:posts_for_user"));
 
-    create_post(
-        "CI sync wake-up".to_string(),
-        "incremental pull should receive this row".to_string(),
+    let pushed = push_post(
+        &app,
+        Post {
+            id: "post_from_push".to_string(),
+            title: "CI sync wake-up".to_string(),
+            body: "incremental pull should receive this row".to_string(),
+        },
     )
-    .await
-    .unwrap();
+    .await;
+    assert_eq!(pushed.accepted[0].as_str(), "ci:post_from_push");
+    assert!(pushed.rejected.is_empty());
+    assert!(pushed.conflicts.is_empty());
 
     let invalidation = read_sse_frame(&mut body).await;
     assert!(invalidation.contains("event: query.invalidated"));
@@ -74,6 +81,37 @@ async fn sync_pull_and_live_wakeup_share_the_stream_topic() {
             .map(|row| row.value.title == "CI sync wake-up")
             .unwrap_or(false)
     }));
+}
+
+async fn push_post(app: &pocopine_server::axum::Router, post: Post) -> SyncPushResponse<Post> {
+    let request = SyncPushRequest::new(
+        SyncStreamName::new(POSTS_STREAM).unwrap(),
+        [ClientMutation {
+            id: MutationId::new(format!("ci:{}", post.id)).unwrap(),
+            key: Some(RowKey::new(post.id.clone()).unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: post,
+        }],
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(SYNC_PUSH_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let outer: pocopine::ServerResult<SyncPushResponse<Post>> =
+        serde_json::from_slice(&bytes).unwrap();
+    outer.unwrap()
 }
 
 async fn pull_posts(

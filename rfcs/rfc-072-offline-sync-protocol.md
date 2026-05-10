@@ -23,6 +23,10 @@ Initial implementation has started in `pocopine-sync`:
   stream guard passes,
 - browser `sync_plugin()`, `SyncClient`, and `CollectionState<T>`,
 - browser `SyncClient::open()` calls `/open` before the first `/pull`,
+- browser `SyncCollection::push()` applies optimistic rows and handles
+  accepted, rejected, and conflict push outcomes,
+- `MemorySyncStream` accepts upsert/delete/reset pushes with stable
+  mutation-id dedupe,
 - live wake-up integration through `pocopine-live` query-tag topics,
 - runnable memory-backed example in `examples/sync`,
 - Firefox wasm smoke coverage for `open -> pull -> render`.
@@ -31,7 +35,7 @@ Current model: `/open` is discovery/validation, not a session grant.
 Every `/open`, `/pull`, and `/push` request runs the stream guard
 independently, so skipping `/open` does not bypass access control.
 
-Still future work: durable browser storage, optimistic mutation replay,
+Still future work: durable browser storage, cross-reload mutation replay,
 conflict resolution UI, SQLx/database adapters, CDC sources, and
 query-driven stream parameters.
 
