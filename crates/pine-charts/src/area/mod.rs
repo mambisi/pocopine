@@ -7,8 +7,9 @@ use crate::animation::{
 };
 use crate::cartesian::{
     centered_plot_y, chart_hover_payload, optional_domain, plot_rect_from_edges,
-    pointer_event_svg_point, CartesianChartState, CartesianGuideFields, CartesianGuideUpdate,
-    CartesianHoverFields, ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
+    pointer_event_svg_point, tooltip_aria_hidden, tooltip_mode, CartesianChartState,
+    CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, ChartStateFields,
+    PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::events::{ChartHoverEnd, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT};
@@ -197,6 +198,8 @@ pub struct PineAreaChart {
     pub animation_easing: String,
     #[prop]
     pub tooltip: String,
+    pub tooltip_mode: String,
+    pub tooltip_aria_hidden: String,
     pub animation_style: String,
     pub exit_generation: u32,
     pub state: String,
@@ -258,6 +261,8 @@ impl Default for PineAreaChart {
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
             tooltip: "default".into(),
+            tooltip_mode: "default".into(),
+            tooltip_aria_hidden: "true".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -303,6 +308,7 @@ impl Default for PineAreaChart {
 impl PineAreaChart {
     fn on_setup(&mut self) {
         self.update_animation_style();
+        self.sync_tooltip_state();
         self.recompute();
     }
 
@@ -319,6 +325,11 @@ impl PineAreaChart {
     #[watch(animation_easing)]
     fn on_animation_easing(&mut self, _: String, _: Option<String>) {
         self.update_animation_style();
+    }
+
+    #[watch(tooltip)]
+    fn on_tooltip(&mut self, _: String, _: Option<String>) {
+        self.sync_tooltip_state();
     }
 
     #[watch(points)]
@@ -391,6 +402,7 @@ impl PineAreaChart {
     pub fn clear_hover(&mut self) {
         let was_visible = self.hover_visible;
         self.hover_fields().clear();
+        self.sync_tooltip_state();
         if was_visible {
             pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("area"));
         }
@@ -400,6 +412,12 @@ impl PineAreaChart {
 impl PineAreaChart {
     fn update_animation_style(&mut self) {
         self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
+    fn sync_tooltip_state(&mut self) {
+        self.tooltip_mode = tooltip_mode(&self.tooltip).into();
+        self.tooltip_aria_hidden =
+            tooltip_aria_hidden(&self.tooltip_mode, self.hover_visible).into();
     }
 
     fn recompute(&mut self) {
@@ -544,6 +562,7 @@ impl PineAreaChart {
         let update = sample.hover_update(self.plot_rect(), self.width, self.height);
         let hover = chart_hover_payload("area", &update);
         self.hover_fields().apply(update);
+        self.sync_tooltip_state();
         pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 

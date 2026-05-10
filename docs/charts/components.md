@@ -587,6 +587,10 @@ authoritative for interaction, donut radius changes, and half-donut morphs.
   visibility: visible;
 }
 
+.pine-chart-root[data-tooltip="none"] .pine-chart-tooltip {
+  display: none;
+}
+
 .pine-chart-tooltip[data-tooltip-x="left"] {
   transform: translate(calc(-100% - 10px), calc(-100% - 10px));
 }

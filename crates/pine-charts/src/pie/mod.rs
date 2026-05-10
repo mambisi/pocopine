@@ -8,8 +8,8 @@ use crate::animation::{
     animation_duration_ms, animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING,
 };
 use crate::cartesian::{
-    pointer_event_svg_point, step_key, CartesianHoverPlacement, ChartStateFields,
-    DEFAULT_EMPTY_MESSAGE,
+    pointer_event_svg_point, step_key, tooltip_aria_hidden, tooltip_mode, CartesianHoverPlacement,
+    ChartStateFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{
@@ -338,6 +338,8 @@ pub struct PinePieChart {
     pub animation_easing: String,
     #[prop]
     pub tooltip: String,
+    pub tooltip_mode: String,
+    pub tooltip_aria_hidden: String,
     pub animation_style: String,
     pub animation_generation: u32,
     pub animating_slices: bool,
@@ -399,6 +401,8 @@ impl Default for PinePieChart {
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
             tooltip: "default".into(),
+            tooltip_mode: "default".into(),
+            tooltip_aria_hidden: "true".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -447,6 +451,7 @@ impl Default for PinePieChart {
 impl PinePieChart {
     fn on_setup(&mut self) {
         self.update_animation_style();
+        self.sync_tooltip_state();
         self.recompute();
     }
 
@@ -463,6 +468,11 @@ impl PinePieChart {
     #[watch(animation_easing)]
     fn on_animation_easing(&mut self, _: String, _: Option<String>) {
         self.update_animation_style();
+    }
+
+    #[watch(tooltip)]
+    fn on_tooltip(&mut self, _: String, _: Option<String>) {
+        self.sync_tooltip_state();
     }
 
     #[watch(data)]
@@ -547,6 +557,7 @@ impl PinePieChart {
         self.hover_placement_y = "above".into();
         self.hover_style.clear();
         self.hover_slice = SvgPieSlice::default();
+        self.sync_tooltip_state();
         if was_visible {
             pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("pie"));
         }
@@ -582,6 +593,12 @@ impl PinePieChart {
 impl PinePieChart {
     fn update_animation_style(&mut self) {
         self.animation_style = animation_style(self.animation_duration, &self.animation_easing);
+    }
+
+    fn sync_tooltip_state(&mut self) {
+        self.tooltip_mode = tooltip_mode(&self.tooltip).into();
+        self.tooltip_aria_hidden =
+            tooltip_aria_hidden(&self.tooltip_mode, self.hover_visible).into();
     }
 
     fn recompute(&mut self) {
@@ -1039,6 +1056,7 @@ impl PinePieChart {
         self.hover_style = update.placement.style;
         self.sync_hover_slice();
         self.update_hover_overlay_visibility();
+        self.sync_tooltip_state();
         pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 
