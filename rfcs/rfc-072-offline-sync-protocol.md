@@ -31,21 +31,22 @@ Initial implementation has started in `pocopine-sync`:
   stored mutations, and persists pull responses through `SyncLocalStore`,
 - `SyncCollection::push()` enqueues mutations before the network request
   and persists accepted/rejected/conflict outcomes,
-- `pocopine-sync-sqlite` owns the SQLite local-store schema and native
-  SQLite implementation for tests/host use,
+- `pocopine-sync-sqlite` owns the SQLite local-store schema, native
+  SQLite implementation, and browser SQLite WASM/OPFS implementation,
 - `MemorySyncStream` accepts upsert/delete/reset pushes with stable
   mutation-id dedupe,
 - live wake-up integration through `pocopine-live` query-tag topics,
 - runnable memory-backed example in `examples/sync`,
-- Firefox wasm smoke coverage for `open -> pull -> render`.
+- Firefox wasm smoke coverage for `open -> pull -> render` and the
+  SQLite OPFS local store.
 
 Current model: `/open` is discovery/validation, not a session grant.
 Every `/open`, `/pull`, and `/push` request runs the stream guard
 independently, so skipping `/open` does not bypass access control.
 
-Still future work: browser SQLite WASM/OPFS worker binding,
-cross-reload mutation replay in the browser, conflict resolution UI,
-SQLx/database adapters, CDC sources, and query-driven stream parameters.
+Still future work: conflict resolution UI, SQLx/database adapters, CDC
+sources, query-driven stream parameters, and production guidance for
+storage-denied browser environments.
 The local-store implementation plan is documented in
 [`docs/sync-local-store-plan.md`](../docs/sync-local-store-plan.md):
 SQLite-first local storage, with SQLx kept as a later host/server
@@ -637,10 +638,13 @@ Mutation payloads and row payloads are not logged.
 
 ### Phase D2 - SQLite local store
 
-- Add `pocopine-sync-sqlite`.
+- Add `pocopine-sync-sqlite`. Implemented.
 - Use SQLite WASM + OPFS behind a worker boundary in browsers.
+  Implemented with an embedded worker and browser smoke coverage.
 - Persist stream cursors, rows, and pending mutations transactionally.
-- Hydrate collections from local SQLite before network pull.
+  Implemented for native SQLite and browser SQLite.
+- Hydrate collections from local SQLite before network pull. Implemented
+  through the `SyncLocalStore` client hook.
 
 ### Phase E - Advanced conflict handling
 

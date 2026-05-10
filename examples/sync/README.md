@@ -27,12 +27,14 @@ or `guarded_stream_with(...)`.
 The create form uses short client-local ids for readability; production
 apps should use server-assigned ids or client-side UUIDs so multiple tabs
 and devices do not collide.
-Future database adapters should keep this same browser stream while
-replacing the server-side source.
+Durable browser local storage lives in `pocopine-sync-sqlite`; this
+example keeps the default memory local store so the demo has no storage
+requirements.
 
 Checks:
 
 ```bash
 cargo test -p sync-example
 wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
+wasm-pack test --firefox --headless crates/pocopine-sync-sqlite --test wasm_sqlite_store
 ```
