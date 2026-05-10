@@ -80,8 +80,9 @@ MutationId = "{device_id}:{counter}"
 ```
 
 `SyncDeviceId` is generated once and persisted by the local store.
-`SyncSessionId` is process/page-load scoped. Mutation counters are durable
-per device so retried writes keep stable idempotency keys.
+`SyncSessionId` is process/page-load scoped. The persisted local identity
+also stores the next mutation counter. Stores must advance that counter
+durably before exposing a mutation id that can be sent to the server.
 
 This keeps mutation ids stable across reloads and avoids the current
 example-only `post_local_{n}` pattern becoming a production habit.
@@ -93,42 +94,30 @@ should cover these operations:
 
 ```rust
 pub trait SyncLocalStore {
-    fn load_identity(&self) -> SyncBoxFuture<'_, Option<SyncDeviceId>>;
-    fn save_identity(&self, id: SyncDeviceId) -> SyncBoxFuture<'_, ()>;
+    fn load_identity(&self) -> SyncLocalFuture<'_, Option<SyncLocalIdentity>>;
+    fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()>;
 
     fn hydrate_stream(
         &self,
         stream: &SyncStreamName,
-    ) -> SyncBoxFuture<'_, LocalStreamSnapshot>;
+    ) -> SyncLocalFuture<'_, LocalStreamSnapshot>;
 
-    fn save_snapshot(
-        &self,
-        stream: &SyncStreamName,
-        snapshot: LocalSnapshotBatch,
-    ) -> SyncBoxFuture<'_, ()>;
+    fn save_snapshot(&self, snapshot: LocalSnapshotBatch) -> SyncLocalFuture<'_, ()>;
 
-    fn apply_changes(
-        &self,
-        stream: &SyncStreamName,
-        changes: LocalChangeBatch,
-    ) -> SyncBoxFuture<'_, ()>;
+    fn apply_changes(&self, changes: LocalChangeBatch) -> SyncLocalFuture<'_, ()>;
 
     fn enqueue_mutation(
         &self,
         stream: &SyncStreamName,
-        mutation: SyncMutation,
-    ) -> SyncBoxFuture<'_, ()>;
+        mutation: ClientMutation<serde_json::Value>,
+    ) -> SyncLocalFuture<'_, ()>;
 
-    fn mark_push_result(
-        &self,
-        stream: &SyncStreamName,
-        result: SyncPushResult,
-    ) -> SyncBoxFuture<'_, ()>;
+    fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()>;
 
     fn pending_mutations(
         &self,
         stream: &SyncStreamName,
-    ) -> SyncBoxFuture<'_, Vec<SyncMutation>>;
+    ) -> SyncLocalFuture<'_, Vec<ClientMutation<serde_json::Value>>>;
 }
 ```
 
