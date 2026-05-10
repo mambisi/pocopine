@@ -239,6 +239,9 @@ jobs:
           - name: pine
             crate: crates/pine
             args: ""
+          - name: pocopine-sync-client
+            crate: crates/pocopine-sync
+            args: --test client_browser
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -312,6 +315,7 @@ jobs:
           - examples/hn
           - examples/site
           - examples/spa
+          - examples/sync
           - examples/tailwind
           - examples/todo
           - examples/website

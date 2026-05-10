@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[cfg(target_arch = "wasm32")]
-use crate::{sync_shape_tag, SyncPullRequest, SyncPullResponse};
+use crate::{sync_shape_tag, SyncOpenRequest, SyncOpenResponse, SyncPullRequest, SyncPullResponse};
 
 /// Selector from an app-owned component/store into one sync collection field.
 pub type CollectionSelector<C, T> = for<'a> fn(&'a mut C) -> &'a mut CollectionState<T>;
@@ -204,7 +204,11 @@ where
 
         let handle = self.handle.clone();
         let selector = self.selector;
-        start_pull(
+        let live_wakeup = self.live_wakeup.then(|| LiveWakeupOptions {
+            live_endpoint: self.live_endpoint.clone(),
+            with_credentials: self.with_credentials,
+        });
+        start_open_then_pull(
             scope_id,
             handle.clone(),
             selector,
@@ -212,52 +216,9 @@ where
             shape.clone(),
             self.cursor.clone(),
             SyncReason::Initial,
-            false,
+            live_wakeup,
         );
-
-        if !self.live_wakeup {
-            return Ok(());
-        }
-
-        let live_tag = sync_shape_tag(shape.as_str());
-        let endpoint = self.endpoint.clone();
-        let mut refresh = pocopine_live::LiveRefresh::scoped()
-            .query_tag(live_tag, move |event| {
-                let reason = if matches!(event.live_event, pocopine_live::LiveEvent::Gap { .. }) {
-                    SyncReason::Gap
-                } else {
-                    SyncReason::Live
-                };
-                start_pull(
-                    scope_id,
-                    handle.clone(),
-                    selector,
-                    endpoint.clone(),
-                    shape.clone(),
-                    None,
-                    reason,
-                    true,
-                );
-            })
-            .on_error({
-                let handle = self.handle.clone();
-                let selector = self.selector;
-                move |event| {
-                    handle.update(|state| {
-                        selector(state)
-                            .set_error(format!("live wake-up failed: {:?}", event.target));
-                    });
-                }
-            })
-            .with_credentials(self.with_credentials);
-
-        if let Some(live_endpoint) = self.live_endpoint {
-            refresh = refresh.endpoint(live_endpoint);
-        }
-
-        refresh
-            .open()
-            .map_err(|err| SyncError::client(err.to_string()))
+        Ok(())
     }
 
     fn pull_impl(self, reason: SyncReason, live_event: bool) -> SyncResult<()> {
@@ -297,6 +258,165 @@ where
         self.touch_host_fields();
         let _ = self.shape_value()?;
         Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct LiveWakeupOptions {
+    live_endpoint: Option<String>,
+    with_credentials: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_open_then_pull<C, T>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    endpoint: String,
+    shape: SyncShapeName,
+    cursor: Option<SyncCursor>,
+    reason: SyncReason,
+    live_wakeup: Option<LiveWakeupOptions>,
+) where
+    C: 'static,
+    T: serde::de::DeserializeOwned + 'static,
+{
+    let open_url = endpoint_path(&endpoint, "open");
+    let pull_url = endpoint_path(&endpoint, "pull");
+
+    pocopine_core::spawn_for_scope(scope_id, async move {
+        let request_token = handle.update(|state| {
+            let collection = selector(state);
+            let cursor = cursor.or_else(|| collection.cursor.clone());
+            let token = if collection.version == 0 {
+                collection.begin_initial()
+            } else {
+                collection.begin_pull(reason)
+            };
+            (cursor, token)
+        });
+        let (cursor, token) = request_token;
+
+        let open_request = SyncOpenRequest::new([shape.clone()]);
+        let open_result = pocopine_core::fetch::call::<SyncOpenRequest, SyncOpenResponse>(
+            &open_url,
+            &open_request,
+        )
+        .await;
+        if let Err(err) = open_result.and_then(|response| validate_open_response(response, &shape))
+        {
+            handle.update(|state| {
+                selector(state).apply_error(token, err);
+            });
+            return;
+        }
+
+        if let Some(live_wakeup) = live_wakeup {
+            open_live_wakeup(
+                scope_id,
+                handle.clone(),
+                selector,
+                endpoint.clone(),
+                shape.clone(),
+                live_wakeup,
+            );
+        }
+
+        let request = SyncPullRequest::new(shape).cursor(cursor);
+        let result =
+            pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
+                .await;
+        handle.update(|state| {
+            let collection = selector(state);
+            match result {
+                Ok(response) => {
+                    collection.apply_pull(token, response);
+                }
+                Err(err) => {
+                    collection.apply_error(token, err);
+                }
+            }
+        });
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_live_wakeup<C, T>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    endpoint: String,
+    shape: SyncShapeName,
+    options: LiveWakeupOptions,
+) where
+    C: 'static,
+    T: serde::de::DeserializeOwned + 'static,
+{
+    let live_tag = sync_shape_tag(shape.as_str());
+    let mut refresh = pocopine_live::LiveRefresh::scoped()
+        .query_tag(live_tag, {
+            let handle = handle.clone();
+            let endpoint = endpoint.clone();
+            let shape = shape.clone();
+            move |event| {
+                let reason = if matches!(event.live_event, pocopine_live::LiveEvent::Gap { .. }) {
+                    SyncReason::Gap
+                } else {
+                    SyncReason::Live
+                };
+                start_pull(
+                    scope_id,
+                    handle.clone(),
+                    selector,
+                    endpoint.clone(),
+                    shape.clone(),
+                    None,
+                    reason,
+                    true,
+                );
+            }
+        })
+        .on_error({
+            let handle = handle.clone();
+            move |event| {
+                handle.update(|state| {
+                    selector(state).set_error(format!("live wake-up failed: {:?}", event.target));
+                });
+            }
+        })
+        .with_credentials(options.with_credentials);
+
+    if let Some(live_endpoint) = options.live_endpoint {
+        refresh = refresh.endpoint(live_endpoint);
+    }
+
+    match refresh.open_unscoped() {
+        Ok(subscription) => {
+            pocopine_core::on_scope_unmount_for(scope_id, move || drop(subscription));
+        }
+        Err(err) => {
+            handle.update(|state| {
+                selector(state).set_error(format!("live wake-up failed: {err}"));
+            });
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_open_response(
+    response: SyncOpenResponse,
+    shape: &SyncShapeName,
+) -> Result<(), pocopine_core::ServerError> {
+    if response
+        .shapes
+        .iter()
+        .any(|accepted| accepted.shape == *shape)
+    {
+        Ok(())
+    } else {
+        Err(pocopine_core::ServerError::Forbidden(format!(
+            "sync shape was not opened: {shape}"
+        )))
     }
 }
 

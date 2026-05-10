@@ -3350,6 +3350,8 @@ name = "pocopine-sync"
 version = "0.1.0"
 dependencies = [
  "http-body-util",
+ "js-sys",
+ "pocopine",
  "pocopine-core",
  "pocopine-events",
  "pocopine-live",
@@ -3359,6 +3361,10 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

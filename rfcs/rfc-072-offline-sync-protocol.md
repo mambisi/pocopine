@@ -17,8 +17,10 @@ Initial implementation has started in `pocopine-sync`:
 - `/__pocopine/sync/v1/open`, `/pull`, and `/push` protocol routes,
 - `SyncServer`, `SyncShapeSource`, and `MemorySyncShape`,
 - browser `sync_plugin()`, `SyncClient`, and `CollectionState<T>`,
+- browser `SyncClient::open()` calls `/open` before the first `/pull`,
 - live wake-up integration through `pocopine-live` query-tag topics,
-- runnable memory-backed example in `examples/sync`.
+- runnable memory-backed example in `examples/sync`,
+- Firefox wasm smoke coverage for `open -> pull -> render`.
 
 Still future work: durable browser storage, optimistic mutation replay,
 conflict resolution UI, SQLx/database adapters, CDC sources, and
