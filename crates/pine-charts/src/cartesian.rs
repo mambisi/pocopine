@@ -207,6 +207,17 @@ pub(crate) fn tooltip_aria_hidden(mode: &str, hover_visible: bool) -> &'static s
     }
 }
 
+pub(crate) fn sync_tooltip_fields(
+    tooltip: &str,
+    hover_visible: bool,
+    mode: &mut String,
+    aria_hidden: &mut String,
+) {
+    let next_mode = tooltip_mode(tooltip);
+    *mode = next_mode.into();
+    *aria_hidden = tooltip_aria_hidden(next_mode, hover_visible).into();
+}
+
 pub(crate) struct CartesianHoverFields<'a> {
     pub visible: &'a mut bool,
     pub x: &'a mut f64,

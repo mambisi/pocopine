@@ -7,14 +7,13 @@ use crate::animation::{
 };
 use crate::cartesian::{
     centered_plot_y, chart_hover_payload, optional_domain, plot_rect_from_edges,
-    pointer_event_svg_point, step_key, tooltip_aria_hidden, tooltip_mode, CartesianChartState,
+    pointer_event_svg_point, step_key, sync_tooltip_fields, CartesianChartState,
     CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields, ChartStateFields,
     PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{ChartError, ChartResult};
 use crate::events::{
-    ChartHoverEnd, ChartSelection, ChartSelectionEnd, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
-    CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
+    ChartHoverEnd, ChartSelection, ChartSelectionKeys, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
@@ -417,9 +416,7 @@ impl PineAreaChart {
 
     pub fn select_sample(&mut self, key: String) {
         if let Some(selection) = self.selection_for_sample(&key) {
-            self.focused_key = key.clone();
-            self.selected_key = key;
-            pocopine::emit(CHART_SELECT_EVENT, selection);
+            self.selection_keys().select(key, selection);
         }
     }
 
@@ -435,15 +432,14 @@ impl PineAreaChart {
         if self.focused_key.is_empty() {
             self.step_sample_focus(1);
         }
-        if let Some(selection) = self.selection_for_sample(&self.focused_key) {
-            self.selected_key = self.focused_key.clone();
-            pocopine::emit(CHART_SELECT_EVENT, selection);
+        let key = self.focused_key.clone();
+        if let Some(selection) = self.selection_for_sample(&key) {
+            self.selection_keys().select(key, selection);
         }
     }
 
     pub fn clear_selection(&mut self) {
-        self.focused_key.clear();
-        self.clear_selected_key();
+        self.selection_keys().clear();
     }
 }
 
@@ -453,9 +449,12 @@ impl PineAreaChart {
     }
 
     fn sync_tooltip_state(&mut self) {
-        self.tooltip_mode = tooltip_mode(&self.tooltip).into();
-        self.tooltip_aria_hidden =
-            tooltip_aria_hidden(&self.tooltip_mode, self.hover_visible).into();
+        sync_tooltip_fields(
+            &self.tooltip,
+            self.hover_visible,
+            &mut self.tooltip_mode,
+            &mut self.tooltip_aria_hidden,
+        );
     }
 
     fn recompute(&mut self) {
@@ -665,19 +664,13 @@ impl PineAreaChart {
     }
 
     fn reconcile_selection(&mut self) {
-        if !self.has_sample_key(&self.focused_key) {
-            self.focused_key.clear();
-        }
-        if !self.has_sample_key(&self.selected_key) {
-            self.clear_selected_key();
-        }
+        let has_focused = self.has_sample_key(&self.focused_key);
+        let has_selected = self.has_sample_key(&self.selected_key);
+        self.selection_keys().reconcile(has_focused, has_selected);
     }
 
-    fn clear_selected_key(&mut self) {
-        let key = std::mem::take(&mut self.selected_key);
-        if !key.is_empty() {
-            pocopine::emit(CHART_SELECT_END_EVENT, ChartSelectionEnd::new("area", key));
-        }
+    fn selection_keys(&mut self) -> ChartSelectionKeys<'_> {
+        ChartSelectionKeys::new("area", &mut self.focused_key, &mut self.selected_key)
     }
 
     fn hover_fields(&mut self) -> CartesianHoverFields<'_> {
