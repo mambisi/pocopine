@@ -3346,6 +3346,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-sync"
+version = "0.1.0"
+dependencies = [
+ "http-body-util",
+ "pocopine-core",
+ "pocopine-events",
+ "pocopine-live",
+ "pocopine-server",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4559,6 +4575,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "sync-example"
+version = "0.1.0"
+dependencies = [
+ "pocopine",
+ "pocopine-events",
+ "pocopine-live",
+ "pocopine-logging",
+ "pocopine-server",
+ "pocopine-sync",
+ "serde",
+ "tokio",
+ "wasm-bindgen",
 ]
 
 [[package]]
