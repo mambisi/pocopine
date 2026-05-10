@@ -83,7 +83,9 @@ accessible announcement.
 The built-in tooltip remains the default. Set `tooltip="none"` on a chart to
 hide the built-in tooltip while keeping hover crosshairs, markers, data
 attributes, and hover events active. Applications can then render a custom
-tooltip block, overlay, or portal from the event payload:
+tooltip block, overlay, or portal from the event payload. Because Pine Charts
+does not ship a stylesheet, include the `[data-tooltip="none"]` suppression rule
+from [Interaction](interaction.md) when styling the built-in tooltip.
 
 ```html
 <pine-area-chart
