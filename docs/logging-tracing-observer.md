@@ -453,7 +453,13 @@ observed_field_1_value_string = "/settings"
 The current tracing emission reserves eight slots. If an event carries more
 fields, `observed_field_count` still records the full count and
 `observed_field_overflowed` is set to `true`; keep framework events coarse and
-stable rather than shipping wide payloads.
+stable rather than shipping wide payloads. Pocopine also emits one warning per
+process the first time an event overflows the reserved slots.
+
+`pocopine::logging::log_event()` and `pocopine::observe::emit_tracing()` do not
+apply redaction. They emit the event as supplied. For analytics or telemetry
+sinks that must strip private fields, use `AnalyticsClient` or call
+`ObservedEvent::redacted(...)` before emitting.
 
 ## Analytics and telemetry
 

@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tracing::Level;
@@ -384,6 +385,7 @@ impl Default for RedactionPolicy {
 }
 
 const OBSERVED_TRACING_FIELD_SLOTS: usize = 8;
+static OBSERVED_TRACING_OVERFLOW_WARNED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 struct ObservedTracingField<'a> {
@@ -547,8 +549,24 @@ impl<'a> ObservedTracing<'a> {
     }
 }
 
+/// Emits an observed event into `tracing`.
+///
+/// This function preserves the event exactly as supplied. It does not apply
+/// redaction; call [`ObservedEvent::redacted`] first, or emit through
+/// `pocopine-analytics`, when private fields must be stripped before export.
 pub fn emit_tracing(event: &ObservedEvent) {
     let observed = ObservedTracing::new(event);
+
+    if observed.field_overflowed && !OBSERVED_TRACING_OVERFLOW_WARNED.swap(true, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            target: "pocopine.log",
+            event_name = observed.event_name(),
+            observed_field_count = observed.field_count,
+            observed_field_slots = OBSERVED_TRACING_FIELD_SLOTS as u64,
+            "observed event field slots overflowed; extra fields omitted from tracing output"
+        );
+    }
 
     macro_rules! emit_at_level {
         ($target:literal, $level:expr, $observed:expr) => {{
