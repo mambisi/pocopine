@@ -502,9 +502,14 @@ events, rejects new events when full, and exposes counters for pending,
 enqueued, dropped, delivered, and failed operations:
 
 ```rust
-use pocopine::analytics::{AnalyticsClient, BoundedAnalyticsSink};
+use pocopine::analytics::{
+    AnalyticsClient, BoundedAnalyticsSink, JsonLinesAnalyticsSink,
+};
 
-let exporter = BoundedAnalyticsSink::new(my_exporter_sink, 1024);
+let exporter = BoundedAnalyticsSink::new(
+    JsonLinesAnalyticsSink::stdout(),
+    1024,
+);
 let metrics = exporter.clone();
 
 let analytics = AnalyticsClient::new()
@@ -525,6 +530,24 @@ if !report.all_succeeded() {
 Call `analytics.flush()` during graceful shutdown to drain the queued events
 into the wrapped sink. Flush keeps going after per-event exporter errors and
 counts those failures in the wrapper metrics.
+
+`JsonLinesAnalyticsSink` writes one `ObservedEvent` JSON object per line. When
+it is attached to `AnalyticsClient`, it receives the event after the client's
+redaction policy has run. This is the simplest host exporter for container
+logs, AWS CloudWatch log agents, Cloudflare-style log pipelines, and local
+smoke tests. Use
+`JsonLinesAnalyticsSink::stdout()`, `::stderr()`, `::file(path)`, or
+`::new(writer)` for a custom `std::io::Write`.
+
+Run the smoke binary:
+
+```sh
+cargo run -p observability-smoke --bin analytics_exporter
+```
+
+For OTLP, use the structured `tracing` fields described above and
+`pocopine-logging`'s `logging-otlp` feature. For JSON-log agents, consume the
+same `observed_context_*` and `observed_field_*` keys from the JSON formatter.
 
 ## Browser vendor bridges
 
