@@ -6,6 +6,7 @@
 //! and installing the host server plugin.
 
 mod error;
+mod local_memory;
 mod local_store;
 mod protocol;
 mod state;
@@ -17,6 +18,7 @@ mod memory;
 mod server;
 
 pub use error::{SyncError, SyncResult};
+pub use local_memory::MemoryLocalStore;
 pub use local_store::{
     LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
     MutationIdGenerator, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore,

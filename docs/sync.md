@@ -24,6 +24,11 @@ memory implementation to pin semantics, then add SQLite WASM/OPFS as the
 browser durable store. SQLx comes later as a host/server adapter, not as
 the browser-local SQLite layer.
 
+The crate currently exposes `SyncLocalStore` and `MemoryLocalStore` so
+the storage contract can be tested without a browser database. Automatic
+`SyncCollection` hydration, persisted mutation replay, and SQLite
+WASM/OPFS durability are the next implementation steps.
+
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
 same PR.
