@@ -36,6 +36,9 @@ looks the way it does — the code itself tells you *what*.
 - [`live.md`](./live.md) — live invalidation tutorial: SSE streams,
   collection/query refresh callbacks, server topic policies, and the
   example/test files that must stay in sync with live API changes.
+- [`sync.md`](./sync.md) — sync tutorial: explicit `pocopine-sync`
+  extension setup, server shapes, cursor pulls, live wake-up wiring, and
+  the current memory-backed example.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.
@@ -69,6 +72,8 @@ Example apps:
 - [`examples/blog/`](../examples/blog/) — `App` + `#[server]` + axum server bin.
 - [`examples/live/`](../examples/live/) — `pocopine-live` SSE invalidation
   with collection/query refetch callbacks.
+- [`examples/sync/`](../examples/sync/) — `pocopine-sync` cursor pulls
+  with `pocopine-live` wake-ups.
 - [`examples/observability-smoke/`](../examples/observability-smoke/) — OTLP trace export smoke server.
 - [`examples/spa/`](../examples/spa/) — `App::route` + `<pp-outlet>` + `pp-route` + `$route`.
 - [`examples/site/`](../examples/site/) — the marketing page, dogfooded.

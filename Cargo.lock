@@ -4581,6 +4581,7 @@ dependencies = [
 name = "sync-example"
 version = "0.1.0"
 dependencies = [
+ "http-body-util",
  "pocopine",
  "pocopine-events",
  "pocopine-live",
@@ -4588,7 +4589,10 @@ dependencies = [
  "pocopine-server",
  "pocopine-sync",
  "serde",
+ "serde_json",
  "tokio",
+ "tower",
+ "tracing",
  "wasm-bindgen",
 ]
 
