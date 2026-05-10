@@ -11,11 +11,18 @@ The first implementation is intentionally small:
 - `pocopine-live` is used only as a wake-up signal,
 - committed stream data still moves through `POST /__pocopine/sync/v1/pull`.
 
-This is not the full offline store yet. IndexedDB durability,
-cross-reload mutation replay, SQLx-backed adapters, and CDC integrations
-remain future work. The current API gives us the protocol boundary,
-server-confirmed mutations, and a browser state model that those backends
-can plug into later.
+This is not the full offline store yet. Durable browser storage,
+cross-reload mutation replay, SQLx-backed server adapters, and CDC
+integrations remain future work. The current API gives us the protocol
+boundary, server-confirmed mutations, and a browser state model that
+those backends can plug into later.
+
+The planned local-first storage path is documented in
+[`sync-local-store-plan.md`](./sync-local-store-plan.md). The short
+version: add a Pocopine-owned `SyncLocalStore` contract first, ship a
+memory implementation to pin semantics, then add SQLite WASM/OPFS as the
+browser durable store. SQLx comes later as a host/server adapter, not as
+the browser-local SQLite layer.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the

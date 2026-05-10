@@ -39,6 +39,9 @@ looks the way it does — the code itself tells you *what*.
 - [`sync.md`](./sync.md) — sync tutorial: explicit `pocopine-sync`
   extension setup, server shapes, cursor pulls, live wake-up wiring, and
   the current memory-backed example.
+- [`sync-local-store-plan.md`](./sync-local-store-plan.md) — next sync
+  phase plan: `SyncLocalStore`, durable client identity, SQLite-first
+  browser storage, and SQLx as a later host/server adapter.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.

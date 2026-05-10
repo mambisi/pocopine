@@ -35,9 +35,13 @@ Current model: `/open` is discovery/validation, not a session grant.
 Every `/open`, `/pull`, and `/push` request runs the stream guard
 independently, so skipping `/open` does not bypass access control.
 
-Still future work: durable browser storage, cross-reload mutation replay,
-conflict resolution UI, SQLx/database adapters, CDC sources, and
-query-driven stream parameters.
+Still future work: the `SyncLocalStore` contract, durable browser
+storage, cross-reload mutation replay, conflict resolution UI,
+SQLx/database adapters, CDC sources, and query-driven stream parameters.
+The next implementation phase is documented in
+[`docs/sync-local-store-plan.md`](../docs/sync-local-store-plan.md):
+SQLite-first local storage, with SQLx kept as a later host/server
+adapter.
 
 ## 1. Summary
 
@@ -296,20 +300,30 @@ collection.apply_server_reset(snapshot, cursor);
 These operations update live queries immediately and reconcile any
 pending optimistic overlay for the same key.
 
-### 6.6 Storage adapters
+### 6.6 Local store adapters
 
-The frontend store starts with memory and IndexedDB adapters:
+The frontend store starts with a Pocopine-owned `SyncLocalStore`
+contract and a memory implementation for tests:
 
 ```rust
-pub trait ClientSyncStore {
-    async fn load_collection(&self, collection: &str) -> SyncResult<ClientSnapshot>;
-    async fn save_changes(&self, batch: ClientChangeBatch) -> SyncResult<()>;
-    async fn load_pending_mutations(&self) -> SyncResult<Vec<ClientMutation>>;
+pub trait SyncLocalStore {
+    async fn hydrate_stream(&self, stream: &str) -> SyncResult<ClientSnapshot>;
+    async fn save_snapshot(&self, batch: ClientSnapshotBatch) -> SyncResult<()>;
+    async fn apply_changes(&self, batch: ClientChangeBatch) -> SyncResult<()>;
+    async fn enqueue_mutation(&self, mutation: ClientMutation) -> SyncResult<()>;
+    async fn load_pending_mutations(&self, stream: &str) -> SyncResult<Vec<ClientMutation>>;
 }
 ```
 
-The memory adapter is valid for tests and ephemeral views. IndexedDB is
-the default browser persistence path for offline-capable apps.
+The memory adapter is valid for tests and ephemeral views. The durable
+browser implementation should be SQLite-first through SQLite WASM and
+OPFS, behind a worker boundary. IndexedDB may still be useful as a
+fallback or thin storage substrate, but it is not the primary query
+engine for the TanStack DB-like direction.
+
+SQLx is a separate host/server adapter. It should not sit underneath the
+browser local store, because browser SQLite uses the SQLite WASM/OPFS
+runtime shape rather than SQLx's native SQLite driver.
 
 ### 6.7 Framework integration
 
@@ -598,9 +612,17 @@ Mutation payloads and row payloads are not logged.
 
 ### Phase D - Local store helpers
 
-- Add IndexedDB browser persistence.
+- Add `SyncLocalStore` and a memory implementation.
+- Add stable device identity and durable mutation id generation.
 - Support optimistic writes with mutation id replay.
 - Add transaction state and conflict metadata exposed to components.
+
+### Phase D2 - SQLite local store
+
+- Add `pocopine-sync-sqlite`.
+- Use SQLite WASM + OPFS behind a worker boundary in browsers.
+- Persist stream cursors, rows, and pending mutations transactionally.
+- Hydrate collections from local SQLite before network pull.
 
 ### Phase E - Advanced conflict handling
 
@@ -633,5 +655,6 @@ Mutation payloads and row payloads are not logged.
 - TanStack DB overview: https://tanstack.com/db/latest/docs/overview
 - TanStack DB live queries: https://tanstack.com/db/latest/docs/guides/live-queries
 - TanStack DB mutations: https://tanstack.com/db/latest/docs/guides/mutations
+- SQLite WASM persistence and OPFS: https://sqlite.org/wasm/doc/trunk/persistence.md
 - SQLx repository and README: https://github.com/launchbadge/sqlx
 - SQLx `query!` macro and offline mode: https://docs.rs/sqlx/latest/sqlx/macro.query.html
