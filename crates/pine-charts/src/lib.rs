@@ -44,8 +44,9 @@ pub use cartesian_chart::{
 };
 pub use error::{ChartError, ChartResult};
 pub use events::{
-    ChartHover, ChartHoverEnd, ChartSelection, LegendToggle, CHART_HOVER_END_EVENT,
-    CHART_HOVER_EVENT, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionEnd, LegendToggle,
+    CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
+    LEGEND_TOGGLE_EVENT,
 };
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use layered::{

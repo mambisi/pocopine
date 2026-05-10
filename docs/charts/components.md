@@ -199,7 +199,10 @@ let legend_items = area_legend_items(&series);
 ```
 
 Area fills close to the bottom of the plot rectangle. If an application needs a
-semantic zero baseline, set an explicit `y_min="0"` domain.
+semantic zero baseline, set an explicit `y_min="0"` domain. When
+`show_markers="true"` is set, area markers can be selected by click or by
+keyboard from the chart root and emit the same `pp:chart:select` /
+`pp:chart:select-end` events as line markers.
 
 ## Bar Chart
 

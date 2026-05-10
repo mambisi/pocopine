@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const CHART_SELECT_EVENT: &str = "pp:chart:select";
+pub const CHART_SELECT_END_EVENT: &str = "pp:chart:select-end";
 pub const CHART_HOVER_EVENT: &str = "pp:chart:hover";
 pub const CHART_HOVER_END_EVENT: &str = "pp:chart:hover-end";
 pub const LEGEND_TOGGLE_EVENT: &str = "pp:chart:legend-toggle";
@@ -16,77 +17,148 @@ fn from_event_detail<T: DeserializeOwned>(event: wasm_bindgen::JsValue) -> Optio
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartSelection {
     pub chart: String,
+    pub kind: String,
     pub key: String,
     pub label: String,
+    pub aria_label: String,
     pub series: String,
     pub category: String,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub value: Option<f64>,
     pub percentage: Option<f64>,
+    pub x_label: String,
+    pub y_label: String,
+    pub value_label: String,
+    pub percentage_label: String,
 }
 
 impl ChartSelection {
+    #[allow(clippy::too_many_arguments)]
     pub fn xy(
         chart: impl Into<String>,
         key: impl Into<String>,
         label: impl Into<String>,
+        aria_label: impl Into<String>,
         series: impl Into<String>,
         x: f64,
         y: f64,
+        x_label: impl Into<String>,
+        y_label: impl Into<String>,
     ) -> Self {
         Self {
             chart: chart.into(),
+            kind: "xy".into(),
             key: key.into(),
             label: label.into(),
+            aria_label: aria_label.into(),
             series: series.into(),
             category: String::new(),
             x: Some(x),
             y: Some(y),
             value: None,
             percentage: None,
+            x_label: x_label.into(),
+            y_label: y_label.into(),
+            value_label: String::new(),
+            percentage_label: String::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn category(
         chart: impl Into<String>,
         key: impl Into<String>,
         label: impl Into<String>,
+        aria_label: impl Into<String>,
         category: impl Into<String>,
         series: impl Into<String>,
         value: f64,
+        value_label: impl Into<String>,
     ) -> Self {
         Self {
             chart: chart.into(),
+            kind: "category".into(),
             key: key.into(),
             label: label.into(),
+            aria_label: aria_label.into(),
             series: series.into(),
             category: category.into(),
             x: None,
             y: None,
             value: Some(value),
             percentage: None,
+            x_label: String::new(),
+            y_label: String::new(),
+            value_label: value_label.into(),
+            percentage_label: String::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn share(
         chart: impl Into<String>,
         key: impl Into<String>,
         label: impl Into<String>,
+        aria_label: impl Into<String>,
         value: f64,
+        value_label: impl Into<String>,
         percentage: f64,
+        percentage_label: impl Into<String>,
     ) -> Self {
         Self {
             chart: chart.into(),
+            kind: "share".into(),
             key: key.into(),
             label: label.into(),
+            aria_label: aria_label.into(),
             series: String::new(),
             category: String::new(),
             x: None,
             y: None,
             value: Some(value),
             percentage: Some(percentage),
+            x_label: String::new(),
+            y_label: String::new(),
+            value_label: value_label.into(),
+            percentage_label: percentage_label.into(),
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_event_value(event: wasm_bindgen::JsValue) -> Option<Self> {
+        from_event_detail(event)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_event_value(_: wasm_bindgen::JsValue) -> Option<Self> {
+        None
+    }
+}
+
+/// Payload for `pp:chart:select-end`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartSelectionEnd {
+    pub chart: String,
+    pub key: String,
+}
+
+impl ChartSelectionEnd {
+    pub fn new(chart: impl Into<String>, key: impl Into<String>) -> Self {
+        Self {
+            chart: chart.into(),
+            key: key.into(),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_event_value(event: wasm_bindgen::JsValue) -> Option<Self> {
+        from_event_detail(event)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_event_value(_: wasm_bindgen::JsValue) -> Option<Self> {
+        None
     }
 }
 
