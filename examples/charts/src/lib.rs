@@ -52,6 +52,9 @@ pub struct ChartDemo {
     pub custom_tooltip_title: String,
     pub custom_tooltip_value: String,
     pub custom_tooltip_meta: String,
+    pub custom_tooltip_x: String,
+    pub custom_tooltip_y: String,
+    pub custom_tooltip_style: String,
 }
 
 impl Default for ChartDemo {
@@ -104,6 +107,9 @@ impl Default for ChartDemo {
             custom_tooltip_title: "Custom tooltip".into(),
             custom_tooltip_value: "Hover the trend area".into(),
             custom_tooltip_meta: "Built with pp:chart:hover".into(),
+            custom_tooltip_x: "right".into(),
+            custom_tooltip_y: "above".into(),
+            custom_tooltip_style: String::new(),
         }
     }
 }
@@ -286,6 +292,9 @@ impl ChartDemo {
         };
         self.custom_tooltip_value = format!("Week {}: {}", hover.x_label, hover.y_label);
         self.custom_tooltip_meta = hover.aria_label;
+        self.custom_tooltip_x = hover.tooltip_x;
+        self.custom_tooltip_y = hover.tooltip_y;
+        self.custom_tooltip_style = hover.tooltip_style;
     }
 
     pub fn hide_custom_tooltip(&mut self) {

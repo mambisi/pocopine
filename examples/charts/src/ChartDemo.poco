@@ -201,30 +201,35 @@
           </div>
         </div>
       </header>
-      <pine-chart-responsive class="chart-panel" aspect_ratio="1.55" min_height="220">
-        <pine-area-chart label="Trend area"
-                         pp-bind:series="area_series"
-                         x_label="Week"
-                         y_label="Volume"
-                         animate="true"
-                         animation_duration="180"
-                         animation_easing="ease-out"
-                         show_markers="true"
-                         tooltip="none"
-                         @pp:chart:hover="show_custom_tooltip"
-                         @pp:chart:hover-end="hide_custom_tooltip"></pine-area-chart>
-      </pine-chart-responsive>
+      <div class="chart-panel chart-panel--custom-tooltip">
+        <pine-chart-responsive aspect_ratio="1.55" min_height="220">
+          <pine-area-chart label="Trend area"
+                           pp-bind:series="area_series"
+                           x_label="Week"
+                           y_label="Volume"
+                           animate="true"
+                           animation_duration="180"
+                           animation_easing="ease-out"
+                           show_markers="true"
+                           tooltip="none"
+                           @pp:chart:hover="show_custom_tooltip"
+                           @pp:chart:hover-end="hide_custom_tooltip"></pine-area-chart>
+        </pine-chart-responsive>
 
-      <div class="chart-custom-tooltip"
-           role="status"
-           aria-live="polite"
-           :data-visible="custom_tooltip_visible">
-        <span class="chart-custom-tooltip-title"
-              pp-text="custom_tooltip_title"></span>
-        <strong class="chart-custom-tooltip-value"
-                pp-text="custom_tooltip_value"></strong>
-        <span class="chart-custom-tooltip-meta"
-              pp-text="custom_tooltip_meta"></span>
+        <div class="chart-custom-tooltip"
+             role="status"
+             aria-live="polite"
+             :data-visible="custom_tooltip_visible"
+             :data-tooltip-x="custom_tooltip_x"
+             :data-tooltip-y="custom_tooltip_y"
+             :style="custom_tooltip_visible ? custom_tooltip_style : ''">
+          <span class="chart-custom-tooltip-title"
+                pp-text="custom_tooltip_title"></span>
+          <strong class="chart-custom-tooltip-value"
+                  pp-text="custom_tooltip_value"></strong>
+          <span class="chart-custom-tooltip-meta"
+                pp-text="custom_tooltip_meta"></span>
+        </div>
       </div>
 
       <pine-chart-legend class="chart-card-legend"
