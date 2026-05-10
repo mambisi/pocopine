@@ -1,0 +1,153 @@
+.sync-board {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 24px;
+  padding: 32px;
+  color: #182026;
+  background: #f6f8f7;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.composer,
+.feed {
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #4d6b57;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 24px;
+  font-size: 2.25rem;
+  line-height: 1.05;
+}
+
+.composer__form {
+  display: grid;
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-weight: 650;
+}
+
+input,
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #c9d4ce;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #182026;
+  background: #fff;
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid #1f5a42;
+  border-radius: 6px;
+  padding: 9px 13px;
+  color: #fff;
+  background: #1f5a42;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  color: #1f5a42;
+  background: #fff;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.feed__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.status,
+.counter {
+  border: 1px solid #d5ded9;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #fff;
+  font-size: 0.88rem;
+}
+
+.error,
+.empty {
+  margin: 12px 0;
+  color: #73351f;
+  font-weight: 650;
+}
+
+.posts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.post {
+  min-width: 0;
+  border: 1px solid #dbe3df;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+}
+
+.post__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #60736a;
+  font-size: 0.8rem;
+}
+
+.post h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.post p {
+  margin: 0;
+  color: #3e4a44;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .sync-board {
+    grid-template-columns: 1fr;
+    padding: 20px;
+  }
+}

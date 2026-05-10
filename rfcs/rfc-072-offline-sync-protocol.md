@@ -8,6 +8,22 @@
 | **Builds on** | [RFC 071](./rfc-071-event-spine-and-live-invalidation.md) |
 | **Related** | [RFC 002](./rfc-002-app-stores-servers.md), [RFC 069](./rfc-069-observability.md), [RFC 073](./rfc-073-yrs-collaboration.md) |
 
+## Implementation Status
+
+Initial implementation has started in `pocopine-sync`:
+
+- explicit extension crate, not a `pocopine` core feature,
+- target-specific browser and host modules in one crate,
+- `/__pocopine/sync/v1/open`, `/pull`, and `/push` protocol routes,
+- `SyncServer`, `SyncShapeSource`, and `MemorySyncShape`,
+- browser `sync_plugin()`, `SyncClient`, and `CollectionState<T>`,
+- live wake-up integration through `pocopine-live` query-tag topics,
+- runnable memory-backed example in `examples/sync`.
+
+Still future work: durable browser storage, optimistic mutation replay,
+conflict resolution UI, SQLx/database adapters, CDC sources, and
+query-driven shape parameters.
+
 ## 1. Summary
 
 Pocopine should treat sync as a protocol, not just a notification stream.
