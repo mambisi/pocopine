@@ -420,6 +420,25 @@ impl PineAreaChart {
         }
     }
 
+    pub fn select_hovered_or_clear(&mut self) {
+        if self.hover_visible {
+            let key = nearest_line_sample_at(
+                &self.samples,
+                Point {
+                    x: self.hover_x,
+                    y: self.hover_y,
+                },
+            )
+            .map(|sample| sample.key.clone());
+            if let Some(key) = key {
+                self.select_sample(key);
+                return;
+            }
+        }
+
+        self.clear_selection();
+    }
+
     pub fn focus_next_sample(&mut self) {
         self.step_sample_focus(1);
     }

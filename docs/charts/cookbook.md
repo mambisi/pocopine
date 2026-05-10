@@ -88,6 +88,112 @@ The important rule is that the responsive component owns the chart pixel box.
 Application CSS can decorate the panel, but should not force the SVG to
 `width: 100%; height: 100%`; doing so can stretch text and circular marks.
 
+## Custom Tooltip And Drilldown
+
+Use `tooltip="none"` when the built-in tooltip is too small for the product UI.
+The chart still owns hit testing, crosshair placement, hover markers, keyboard
+selection, and typed event payloads. The application owns the HTML surface.
+
+```html
+<section class="metric-card">
+  <pine-chart-responsive aspect_ratio="1.7" min_height="220">
+    <pine-area-chart
+      label="Render latency"
+      pp-bind:series="latency_series"
+      x_label="Week"
+      y_label="Latency"
+      show_markers="true"
+      tooltip="none"
+      @pp:chart:hover="show_latency_tooltip"
+      @pp:chart:hover-end="hide_latency_tooltip"
+      @pp:chart:select="show_latency_detail"
+      @pp:chart:select-end="hide_latency_detail"></pine-area-chart>
+  </pine-chart-responsive>
+
+  <div
+    class="metric-tooltip"
+    role="status"
+    aria-live="polite"
+    :data-visible="tooltip_visible"
+    :style="tooltip_visible ? tooltip_style : ''">
+    <strong pp-text="tooltip_value"></strong>
+    <span pp-text="tooltip_meta"></span>
+  </div>
+
+  <aside
+    class="metric-detail"
+    role="status"
+    aria-live="polite"
+    :data-visible="detail_visible">
+    <strong pp-text="detail_value"></strong>
+    <span pp-text="detail_meta"></span>
+  </aside>
+</section>
+```
+
+```rust
+use pine_charts::{ChartHover, ChartSelection};
+use pocopine::prelude::JsValue;
+
+pub fn show_latency_tooltip(&mut self, event: JsValue) {
+    let Some(hover) = ChartHover::from_event_value(event) else {
+        return;
+    };
+
+    self.tooltip_visible = true;
+    self.tooltip_value = format!("{}: {}", hover.x_label, hover.y_label);
+    self.tooltip_meta = hover.aria_label;
+    self.tooltip_style = hover.tooltip_style;
+}
+
+pub fn hide_latency_tooltip(&mut self) {
+    self.tooltip_visible = false;
+}
+
+pub fn show_latency_detail(&mut self, event: JsValue) {
+    let Some(selection) = ChartSelection::from_event_value(event) else {
+        return;
+    };
+
+    self.detail_visible = true;
+    self.detail_value = match selection.kind.as_str() {
+        "xy" => format!("{}: {}", selection.x_label, selection.y_label),
+        "category" => format!("{}: {}", selection.category, selection.value_label),
+        "share" => format!("{} ({})", selection.value_label, selection.percentage_label),
+        _ => selection.label,
+    };
+    self.detail_meta = format!("Selected {}", selection.key);
+}
+
+pub fn hide_latency_detail(&mut self) {
+    self.detail_visible = false;
+}
+```
+
+```css
+.metric-card {
+  position: relative;
+}
+
+.pine-chart-root[data-tooltip="none"] .pine-chart-tooltip {
+  display: none;
+}
+
+.metric-tooltip {
+  left: var(--pine-chart-tooltip-x);
+  opacity: 0;
+  position: absolute;
+  top: var(--pine-chart-tooltip-y);
+  transform: translate(10px, calc(-100% - 10px));
+  visibility: hidden;
+}
+
+.metric-tooltip[data-visible="true"] {
+  opacity: 1;
+  visibility: visible;
+}
+```
+
 ## Half Donut Progress
 
 Half donuts use the same `PinePieChart` component as full donuts. The angle
