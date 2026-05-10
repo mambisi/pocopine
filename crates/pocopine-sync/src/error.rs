@@ -49,7 +49,9 @@ impl SyncError {
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidValue { field, value } => write!(f, "invalid sync {field}: {value:?}"),
+            Self::InvalidValue { field, value } => {
+                write!(f, "invalid sync {field}: {:?}", display_value(value))
+            }
             Self::UnknownShape(shape) => write!(f, "unknown sync shape: {shape}"),
             Self::Unsupported(msg) => write!(f, "unsupported sync operation: {msg}"),
             Self::Gap(cursor) => write!(f, "sync cursor is no longer resumable: {cursor}"),
@@ -66,4 +68,13 @@ impl From<serde_json::Error> for SyncError {
     fn from(err: serde_json::Error) -> Self {
         Self::Json(err)
     }
+}
+
+fn display_value(value: &str) -> String {
+    const MAX_DISPLAY_CHARS: usize = 80;
+    let mut preview = value.chars().take(MAX_DISPLAY_CHARS).collect::<String>();
+    if value.chars().count() > MAX_DISPLAY_CHARS {
+        preview.push_str("...");
+    }
+    preview
 }

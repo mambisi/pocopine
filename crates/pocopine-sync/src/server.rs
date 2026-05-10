@@ -21,6 +21,11 @@ use crate::{
 pub type SyncBoxFuture<'a, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'a>>;
 
 /// Server-side source for one registered sync shape.
+///
+/// Registered shapes are pullable through the sync routes. Until a source
+/// implements its own authorization or the host app mounts sync behind an
+/// auth boundary, `/open` is validation/discovery and `/pull` remains
+/// callable for any registered shape.
 pub trait SyncShapeSource: Send + Sync + 'static {
     /// Server-registered shape name.
     fn shape(&self) -> &crate::SyncShapeName;
@@ -149,6 +154,10 @@ impl SyncServerBuilder {
 }
 
 /// Server plugin that mounts sync routes and provides [`SyncServer`].
+///
+/// Installing this plugin exposes `/__pocopine/sync/v1/open`, `/pull`, and
+/// `/push` for every registered shape. Shape sources are responsible for
+/// tenant filtering, authorization, and cursor policy in this first slice.
 #[derive(Clone)]
 pub struct SyncServerPlugin {
     sync: SyncServer,
@@ -224,31 +233,33 @@ fn server_error(error: SyncError) -> ServerError {
         SyncError::UnknownShape(_) => ServerError::Forbidden(error.to_string()),
         SyncError::Unsupported(_) => ServerError::BadRequest(error.to_string()),
         SyncError::Gap(_) => ServerError::BadRequest(error.to_string()),
-        SyncError::Json(_) => ServerError::BadRequest(error.to_string()),
-        SyncError::Client(_) | SyncError::Backend(_) => ServerError::App(error.to_string()),
+        SyncError::Json(err) => {
+            tracing::error!(target: "pocopine.log", error = %err, "sync json error");
+            ServerError::App("sync internal error".to_string())
+        }
+        SyncError::Client(msg) | SyncError::Backend(msg) => {
+            tracing::error!(target: "pocopine.log", error = %msg, "sync backend error");
+            ServerError::App("sync internal error".to_string())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt;
+    use pocopine_core::ServerError;
     use pocopine_server::axum::body::Body;
     use pocopine_server::axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
     use super::*;
-    use crate::{MemorySyncShape, SyncPullMode, SyncRow, SyncShapeName, SYNC_PROTOCOL_V1};
+    use crate::{
+        MemorySyncShape, SyncPullMode, SyncPushRequest, SyncRow, SyncShapeName, SYNC_PROTOCOL_V1,
+    };
 
     #[tokio::test]
-    async fn server_plugin_mounts_pull_route() {
-        pocopine_server::__reset_for_test();
-        let posts = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
-        posts.upsert("post_1", "hello".to_string()).unwrap();
-        let sync = SyncServer::builder().shape(posts).build();
-        let router = pocopine_server::Server::new(pocopine_server::axum::Router::new())
-            .plugin(sync_server_plugin(sync))
-            .try_finalize()
-            .unwrap();
+    async fn pull_route_is_public_for_registered_shapes() {
+        let router = router_with_posts_shape();
 
         let request = SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap());
         let response = router
@@ -272,5 +283,87 @@ mod tests {
         let mut expected = SyncRow::new("post_1", "hello".to_string()).unwrap();
         expected.version = Some(crate::RowVersion::new("v1").unwrap());
         assert_eq!(response.rows, vec![expected]);
+    }
+
+    #[tokio::test]
+    async fn pull_unknown_shape_returns_forbidden() {
+        let router = router_with_posts_shape();
+
+        let request = SyncPullRequest::new(SyncShapeName::new("unknown_shape").unwrap());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(SYNC_PULL_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let outer: ServerResult<SyncPullResponse<String>> = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            outer,
+            Err(ServerError::Forbidden(message)) if message.contains("unknown sync shape")
+        ));
+    }
+
+    #[tokio::test]
+    async fn default_push_returns_unsupported_bad_request() {
+        let router = router_with_posts_shape();
+
+        let request = SyncPushRequest::<String> {
+            protocol: SYNC_PROTOCOL_V1.to_string(),
+            shape: SyncShapeName::new("posts_for_tenant").unwrap(),
+            mutations: Vec::new(),
+        };
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(SYNC_PUSH_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let outer: ServerResult<SyncPushResponse<String>> = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            outer,
+            Err(ServerError::BadRequest(message))
+                if message.contains("unsupported sync operation")
+        ));
+    }
+
+    #[test]
+    fn server_error_hides_internal_details() {
+        assert!(matches!(
+            server_error(SyncError::backend("lock poisoned with internal detail")),
+            ServerError::App(message) if message == "sync internal error"
+        ));
+
+        let json_err = serde_json::from_str::<serde_json::Value>("not-json").unwrap_err();
+        assert!(matches!(
+            server_error(SyncError::Json(json_err)),
+            ServerError::App(message) if message == "sync internal error"
+        ));
+    }
+
+    fn router_with_posts_shape() -> pocopine_server::axum::Router {
+        pocopine_server::__reset_for_test();
+        let posts = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
+        posts.upsert("post_1", "hello".to_string()).unwrap();
+        let sync = SyncServer::builder().shape(posts).build();
+        pocopine_server::Server::new(pocopine_server::axum::Router::new())
+            .plugin(sync_server_plugin(sync))
+            .try_finalize()
+            .unwrap()
     }
 }

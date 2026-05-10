@@ -407,6 +407,13 @@ fn validate_open_response(
     response: SyncOpenResponse,
     shape: &SyncShapeName,
 ) -> Result<(), pocopine_core::ServerError> {
+    if response.protocol != crate::SYNC_PROTOCOL_V1 {
+        return Err(pocopine_core::ServerError::BadRequest(format!(
+            "unsupported sync protocol: {}",
+            response.protocol
+        )));
+    }
+
     if response
         .shapes
         .iter()

@@ -95,6 +95,10 @@ Database-backed apps should hide authorization, tenant filters, delete
 privacy, and cursor validation inside their source implementation.
 Browsers only ask for registered shape names.
 
+`MemorySyncShape<T>` is not a production backend. It keeps an unbounded
+in-memory change log and uses one process-local lock. Use it for tests,
+examples, and explicit single-process demos.
+
 ## 3. Build The Sync Server
 
 `SyncServer` owns the registered shapes and optionally shares the live
@@ -170,6 +174,13 @@ async fn main() -> std::io::Result<()> {
 The default live topic policy is deny-all. `sync.live_topics()` returns
 only the wake-up topics for registered shapes.
 
+This first sync slice does not make `/open` a server-side session
+boundary. A registered shape is pullable through `/pull`; `/open`
+validates discovery and gives the client metadata before the first pull.
+Production shape sources must enforce auth, tenant filtering, and cursor
+policy themselves, or the host app must mount sync behind an auth
+boundary.
+
 ## 5. Install The Browser Plugin
 
 Install `sync_plugin()` in the app. Live wake-up is opt-in:
@@ -183,6 +194,10 @@ pub fn main() {
         .run();
 }
 ```
+
+`sync_plugin()` sends fetches without browser credentials by default. If
+an app opts into `.with_credentials(true)`, the server must provide the
+same CSRF protections it uses for any credentialed JSON POST endpoint.
 
 Components store synced rows in `CollectionState<T>`:
 

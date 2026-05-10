@@ -22,9 +22,15 @@ Initial implementation has started in `pocopine-sync`:
 - runnable memory-backed example in `examples/sync`,
 - Firefox wasm smoke coverage for `open -> pull -> render`.
 
-Still future work: durable browser storage, optimistic mutation replay,
-conflict resolution UI, SQLx/database adapters, CDC sources, and
-query-driven shape parameters.
+Current limitation: registered shapes are pullable through `/pull`;
+`/open` is a discovery/validation step, not a server-side session grant.
+Shape-level guards remain part of the RFC target model and must be
+enforced inside shape sources or in front of the sync server until that
+follow-up lands.
+
+Still future work: shape auth/guards, durable browser storage,
+optimistic mutation replay, conflict resolution UI, SQLx/database
+adapters, CDC sources, and query-driven shape parameters.
 
 ## 1. Summary
 
