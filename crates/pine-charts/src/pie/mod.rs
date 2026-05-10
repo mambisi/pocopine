@@ -13,8 +13,8 @@ use crate::cartesian::{
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{
-    ChartHover, ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
-    CHART_SELECT_EVENT,
+    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionEnd, CHART_HOVER_END_EVENT,
+    CHART_HOVER_EVENT, CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::LegendItem;
@@ -222,8 +222,11 @@ impl SvgPieSlice {
             "pie",
             self.key.clone(),
             self.aria_label.clone(),
+            self.aria_label.clone(),
             self.value,
+            self.value_label.clone(),
             self.percentage,
+            self.percentage_label.clone(),
         )
     }
 
@@ -587,6 +590,11 @@ impl PinePieChart {
             self.selected_key = self.focused_key.clone();
             pocopine::emit(CHART_SELECT_EVENT, selection);
         }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.clear_selected_key();
     }
 }
 
@@ -1082,13 +1090,15 @@ impl PinePieChart {
             self.focused_key.clear();
         }
         if !self.has_slice_key(&self.selected_key) {
-            self.selected_key.clear();
+            self.clear_selected_key();
         }
     }
 
-    fn clear_selection(&mut self) {
-        self.focused_key.clear();
-        self.selected_key.clear();
+    fn clear_selected_key(&mut self) {
+        let key = std::mem::take(&mut self.selected_key);
+        if !key.is_empty() {
+            pocopine::emit(CHART_SELECT_END_EVENT, ChartSelectionEnd::new("pie", key));
+        }
     }
 
     fn state_fields(&mut self) -> ChartStateFields<'_> {

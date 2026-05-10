@@ -16,7 +16,8 @@
       @keydown.arrow-left.prevent="focus_prev_sample"
       @keydown.arrow-up.prevent="focus_prev_sample"
       @keydown.enter.prevent="select_focused_sample"
-      @keydown.space.prevent="select_focused_sample">
+      @keydown.space.prevent="select_focused_sample"
+      @keydown.escape.prevent="clear_selection">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
@@ -25,7 +26,8 @@
        aria-hidden="true"
        focusable="false"
        @pointermove="on_pointer_move"
-       @pointerleave="clear_hover">
+       @pointerleave="clear_hover"
+       @click="clear_selection">
     <g pp-show="ready"
        class="pine-chart-grid"
        data-layer="grid"

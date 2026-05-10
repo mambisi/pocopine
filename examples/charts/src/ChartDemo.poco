@@ -213,7 +213,9 @@
                            show_markers="true"
                            tooltip="none"
                            @pp:chart:hover="show_custom_tooltip"
-                           @pp:chart:hover-end="hide_custom_tooltip"></pine-area-chart>
+                           @pp:chart:hover-end="hide_custom_tooltip"
+                           @pp:chart:select="show_selection_detail"
+                           @pp:chart:select-end="hide_selection_detail"></pine-area-chart>
         </pine-chart-responsive>
 
         <div class="chart-custom-tooltip"
@@ -230,6 +232,18 @@
           <span class="chart-custom-tooltip-meta"
                 pp-text="custom_tooltip_meta"></span>
         </div>
+      </div>
+
+      <div class="chart-selection-detail"
+           role="status"
+           aria-live="polite"
+           :data-visible="selection_visible">
+        <span class="chart-selection-detail-title"
+              pp-text="selection_title"></span>
+        <strong class="chart-selection-detail-value"
+                pp-text="selection_value"></strong>
+        <span class="chart-selection-detail-meta"
+              pp-text="selection_meta"></span>
       </div>
 
       <pine-chart-legend class="chart-card-legend"

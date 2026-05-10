@@ -11,7 +11,8 @@ use crate::cartesian::{
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{
-    ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_EVENT,
+    ChartHoverEnd, ChartSelection, ChartSelectionEnd, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
@@ -258,9 +259,12 @@ impl LineChartSample {
             chart,
             self.key.clone(),
             self.aria_label.clone(),
+            self.aria_label.clone(),
             self.series_label.clone(),
             self.data_x,
             self.data_y,
+            self.x_label.clone(),
+            self.y_label.clone(),
         )
     }
 }
@@ -621,6 +625,11 @@ impl PineLineChart {
             pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
+
+    pub fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.clear_selected_key();
+    }
 }
 
 impl PineLineChart {
@@ -790,13 +799,15 @@ impl PineLineChart {
             self.focused_key.clear();
         }
         if !self.has_sample_key(&self.selected_key) {
-            self.selected_key.clear();
+            self.clear_selected_key();
         }
     }
 
-    fn clear_selection(&mut self) {
-        self.focused_key.clear();
-        self.selected_key.clear();
+    fn clear_selected_key(&mut self) {
+        let key = std::mem::take(&mut self.selected_key);
+        if !key.is_empty() {
+            pocopine::emit(CHART_SELECT_END_EVENT, ChartSelectionEnd::new("line", key));
+        }
     }
 
     fn hover_fields(&mut self) -> CartesianHoverFields<'_> {

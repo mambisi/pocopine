@@ -5,24 +5,29 @@ usually connect to detail panels, filters, or route changes.
 
 ## Selection
 
-Line markers, scatter points, bars, and pie/donut slices emit
+Line markers, area markers, scatter points, bars, and pie/donut slices emit
 `pp:chart:select` when selected by pointer or keyboard. The event payload is
 `ChartSelection`:
 
 ```rust
-use pine_charts::ChartSelection;
+use pine_charts::{ChartSelection, ChartSelectionEnd};
 ```
 
 Payload fields:
 
-- `chart`: `"line"`, `"scatter"`, `"bar"`, or `"pie"`
+- `chart`: `"line"`, `"area"`, `"scatter"`, `"bar"`, or `"pie"`
+- `kind`: `"xy"`, `"category"`, or `"share"`
 - `key`: stable rendered mark key
-- `label`: human-readable mark label
+- `label`: human-readable selection label
+- `aria_label`: rendered mark accessibility label
 - `series`: series label when present
 - `category`: categorical label for bars
 - `x` / `y`: numeric coordinates for line and scatter charts
 - `value`: numeric value for bars and pie/donut slices
 - `percentage`: share percentage for pie/donut slices
+- `x_label` / `y_label`: formatted point coordinates for `xy` selections
+- `value_label`: formatted value for `category` and `share` selections
+- `percentage_label`: formatted percentage for `share` selections
 
 Template listeners use the event name directly:
 
@@ -32,6 +37,13 @@ Template listeners use the event name directly:
   show_markers="true"
   @pp:chart:select="show_detail"></pine-line-chart>
 ```
+
+Selection is persistent: the selected mark keeps `data-selected` and
+`aria-selected="true"` until another mark is selected or selection is cleared.
+Charts emit `pp:chart:select-end` with `ChartSelectionEnd { chart, key }` when
+selection is cleared by Escape, a background chart click, or a data update that
+removes the selected mark. Use `pp:chart:select` for drilldown/detail panels and
+`pp:chart:select-end` to close those panels.
 
 ## Hover
 

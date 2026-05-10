@@ -2,8 +2,8 @@ use pine_charts::{
     area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
     set_area_series_visible, set_bar_series_visible, set_pie_slice_visible,
     set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartHover,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
-    LegendToggle,
+    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries,
+    ChartSelection, LegendItem, LegendToggle,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,10 @@ pub struct ChartDemo {
     pub custom_tooltip_x: String,
     pub custom_tooltip_y: String,
     pub custom_tooltip_style: String,
+    pub selection_visible: bool,
+    pub selection_title: String,
+    pub selection_value: String,
+    pub selection_meta: String,
 }
 
 impl Default for ChartDemo {
@@ -110,6 +114,10 @@ impl Default for ChartDemo {
             custom_tooltip_x: "right".into(),
             custom_tooltip_y: "above".into(),
             custom_tooltip_style: String::new(),
+            selection_visible: false,
+            selection_title: "Select a point".into(),
+            selection_value: "Click a marker or use keyboard selection.".into(),
+            selection_meta: "Selection emits pp:chart:select".into(),
         }
     }
 }
@@ -299,6 +307,29 @@ impl ChartDemo {
 
     pub fn hide_custom_tooltip(&mut self) {
         self.custom_tooltip_visible = false;
+    }
+
+    pub fn show_selection_detail(&mut self, event: JsValue) {
+        let Some(selection) = ChartSelection::from_event_value(event) else {
+            return;
+        };
+        self.selection_visible = true;
+        self.selection_title = if selection.series.is_empty() {
+            selection.chart
+        } else {
+            selection.series
+        };
+        self.selection_value = match selection.kind.as_str() {
+            "xy" => format!("{}: {}", selection.x_label, selection.y_label),
+            "category" => format!("{}: {}", selection.category, selection.value_label),
+            "share" => format!("{} · {}", selection.value_label, selection.percentage_label),
+            _ => selection.label,
+        };
+        self.selection_meta = format!("Selected {}", selection.key);
+    }
+
+    pub fn hide_selection_detail(&mut self) {
+        self.selection_visible = false;
     }
 }
 

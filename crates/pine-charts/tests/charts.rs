@@ -9,8 +9,8 @@ use std::rc::Rc;
 use pine_charts::{
     line_legend_items, set_line_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries,
     ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
-    LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_EVENT,
-    LEGEND_TOGGLE_EVENT,
+    LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_END_EVENT,
+    CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -1385,6 +1385,20 @@ async fn area_chart_renders_fills_lines_and_hover_metadata() {
     assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
     assert_eq!(hover_label.borrow().as_deref(), Some("x 1, y 0"));
 
+    assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    let selected_kind = listen_string_field(&chart, CHART_SELECT_EVENT, "kind");
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
+    let selected_x = listen_string_field(&chart, CHART_SELECT_EVENT, "x_label");
+    let first_marker = markers.get(0).unwrap().dyn_into::<Element>().unwrap();
+    dispatch_click(&first_marker);
+    settle().await;
+
+    assert!(first_marker.has_attribute("data-focused"));
+    assert!(first_marker.has_attribute("data-selected"));
+    assert_eq!(selected_kind.borrow().as_deref(), Some("xy"));
+    assert_eq!(selected_label.borrow().as_deref(), Some("Actual: x 0, y 0"));
+    assert_eq!(selected_x.borrow().as_deref(), Some("0"));
+
     host.remove();
 }
 
@@ -1515,7 +1529,10 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
 
     let chart = host.query_selector(".pine-line-chart").unwrap().unwrap();
     assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    let selected_kind = listen_string_field(&chart, CHART_SELECT_EVENT, "kind");
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
+    let selected_x = listen_string_field(&chart, CHART_SELECT_EVENT, "x_label");
+    let cleared_key = listen_string_field(&chart, CHART_SELECT_END_EVENT, "key");
 
     let markers = host.query_selector_all(".pine-chart-marker").unwrap();
     assert_eq!(markers.length(), 3);
@@ -1527,7 +1544,9 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
 
     assert!(second.has_attribute("data-focused"));
     assert!(second.has_attribute("data-selected"));
+    assert_eq!(selected_kind.borrow().as_deref(), Some("xy"));
     assert_eq!(selected_label.borrow().as_deref(), Some("x 5, y 10"));
+    assert_eq!(selected_x.borrow().as_deref(), Some("5"));
 
     dispatch_keydown(&chart, "ArrowRight");
     settle().await;
@@ -1543,6 +1562,13 @@ async fn line_chart_supports_marker_selection_and_keyboard_focus() {
     assert!(third.has_attribute("data-selected"));
     assert!(!second.has_attribute("data-selected"));
     assert_eq!(selected_label.borrow().as_deref(), Some("x 10, y 5"));
+
+    dispatch_keydown(&chart, "Escape");
+    settle().await;
+
+    assert!(!third.has_attribute("data-selected"));
+    let third_key = third.get_attribute("data-key");
+    assert_eq!(cleared_key.borrow().as_deref(), third_key.as_deref());
 
     host.remove();
 }

@@ -44,12 +44,13 @@ hovered rect receives `data-hovered`; the tooltip exposes `data-category`,
 variables as line, scatter, and area charts. Bars do not render a crosshair by
 default because the rect itself is the hover target.
 
-Line markers, scatter points, bars, and pie/donut slices also expose a small
-selection contract. The chart root is keyboard focusable. Arrow keys move an
-internal focused item, and Enter or Space selects it. Pointer clicks select the
-clicked marker, point, bar, or slice. Selection emits a bubbling
-`pp:chart:select` event from the selected mark/root. Rendered selectable marks
-expose:
+Line markers, area markers, scatter points, bars, and pie/donut slices also
+expose a small selection contract. The chart root is keyboard focusable. Arrow
+keys move an internal focused item, Enter or Space selects it, and Escape clears
+selection. Pointer clicks select the clicked marker, point, bar, or slice;
+background chart clicks clear selection. Selection emits a bubbling
+`pp:chart:select` event, and clearing emits `pp:chart:select-end`. Rendered
+selectable marks expose:
 
 - `data-key`
 - `data-focused`
@@ -60,6 +61,8 @@ Line selection is marker-based, so visible point marks require
 `show_markers="true"`. Keyboard selection still tracks the sampled line data,
 but an application only gets visible selected/focused line marks when markers
 are rendered.
+
+Area selection follows the same marker-based model as line selection.
 
 Pie and donut hover follows the same hook-first model as bars: the hovered slice
 receives `data-hovered`, and the tooltip exposes `data-label`, `data-value`, and

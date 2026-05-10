@@ -18,7 +18,8 @@
       @keydown.arrow-left.prevent="focus_prev_slice"
       @keydown.arrow-up.prevent="focus_prev_slice"
       @keydown.enter.prevent="select_focused_slice"
-      @keydown.space.prevent="select_focused_slice">
+      @keydown.space.prevent="select_focused_slice"
+      @keydown.escape.prevent="clear_selection">
   <svg class="pine-chart-svg"
        :width="width"
        :height="height"
@@ -27,7 +28,8 @@
        aria-hidden="true"
        focusable="false"
        @pointermove="on_pointer_move"
-       @pointerleave="clear_hover">
+       @pointerleave="clear_hover"
+       @click="clear_selection">
     <g class="pine-chart-pie-slices" data-layer="series">
       <template pp-for="slice in slices" pp-key="slice.key">
         <g class="pine-chart-pie-slice-group"

@@ -11,8 +11,8 @@ use crate::cartesian::{
 };
 use crate::error::{finite, ChartError, ChartResult};
 use crate::events::{
-    ChartHover, ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
-    CHART_SELECT_EVENT,
+    ChartHover, ChartHoverEnd, ChartSelection, ChartSelectionEnd, CHART_HOVER_END_EVENT,
+    CHART_HOVER_EVENT, CHART_SELECT_END_EVENT, CHART_SELECT_EVENT,
 };
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility, LegendItem};
@@ -242,9 +242,11 @@ impl SvgBar {
             "bar",
             self.key.clone(),
             self.aria_label.clone(),
+            self.aria_label.clone(),
             self.category_label.clone(),
             display_series_label(&self.series_label),
             self.value,
+            format_tick(self.value),
         )
     }
 
@@ -844,6 +846,11 @@ impl PineBarChart {
             pocopine::emit(CHART_SELECT_EVENT, selection);
         }
     }
+
+    pub fn clear_selection(&mut self) {
+        self.focused_key.clear();
+        self.clear_selected_key();
+    }
 }
 
 impl PineBarChart {
@@ -1048,13 +1055,15 @@ impl PineBarChart {
             self.focused_key.clear();
         }
         if !self.has_bar_key(&self.selected_key) {
-            self.selected_key.clear();
+            self.clear_selected_key();
         }
     }
 
-    fn clear_selection(&mut self) {
-        self.focused_key.clear();
-        self.selected_key.clear();
+    fn clear_selected_key(&mut self) {
+        let key = std::mem::take(&mut self.selected_key);
+        if !key.is_empty() {
+            pocopine::emit(CHART_SELECT_END_EVENT, ChartSelectionEnd::new("bar", key));
+        }
     }
 }
 
