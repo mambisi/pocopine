@@ -2,8 +2,8 @@
 //!
 //! This is an explicit sync extension crate. It is not re-exported from
 //! `pocopine` core. The crate owns the SQLite schema and local-store
-//! semantics; browser OPFS support will use the same API once the SQLite
-//! WASM worker binding lands.
+//! semantics. Native builds use `rusqlite`; browser builds use SQLite WASM
+//! with an OPFS worker through the same `SyncLocalStore` API.
 
 mod schema;
 

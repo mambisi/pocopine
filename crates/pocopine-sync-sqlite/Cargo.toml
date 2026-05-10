@@ -12,3 +12,13 @@ serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures = "0.3"
+js-sys = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+sqlite-wasm = "0.1.4"
+wasm-bindgen = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

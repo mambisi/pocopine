@@ -11,29 +11,31 @@ The first implementation is intentionally small:
 - `pocopine-live` is used only as a wake-up signal,
 - committed stream data still moves through `POST /__pocopine/sync/v1/pull`.
 
-This is not the full offline store yet. Durable browser storage,
-cross-reload mutation replay, SQLx-backed server adapters, and CDC
-integrations remain future work. The current API gives us the protocol
-boundary, server-confirmed mutations, and a browser state model that
-those backends can plug into later.
+This is not the full offline database system yet. The first durable local
+store exists as an explicit SQLite extension crate; SQLx-backed server
+adapters, CDC integrations, richer conflict UI, and query-driven streams
+remain future work. The current API gives us the protocol boundary,
+server-confirmed mutations, and a browser state model that those
+backends can plug into later.
 
 The planned local-first storage path is documented in
 [`sync-local-store-plan.md`](./sync-local-store-plan.md). The short
 version: add a Pocopine-owned `SyncLocalStore` contract first, ship a
 memory implementation to pin semantics, then add SQLite WASM/OPFS as the
-browser durable store. SQLx comes later as a host/server adapter, not as
+browser durable store. That SQLite store now lives in
+`pocopine-sync-sqlite`. SQLx comes later as a host/server adapter, not as
 the browser-local SQLite layer.
 
 The crate currently exposes `SyncLocalStore` and `MemoryLocalStore` so
 the storage contract can be tested without a browser database.
 `SyncCollection::open()` hydrates cached rows before the network pull and
-replays pending stored mutations. SQLite WASM/OPFS durability is the next
-implementation step.
+replays pending stored mutations.
 
-`pocopine-sync-sqlite` now owns the SQLite schema and includes a native
-SQLite implementation for tests and host/native apps. Browser builds
-compile against the same crate but return a clear unsupported error until
-the SQLite WASM + OPFS worker binding lands.
+`pocopine-sync-sqlite` owns the SQLite schema and includes both a native
+SQLite implementation for tests/host/native apps and a browser SQLite
+WASM + OPFS implementation. The browser adapter uses an embedded SQLite
+worker and serializes operations through a page-local gate because the
+underlying SQLite WASM worker is singleton-shaped.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
@@ -78,6 +80,16 @@ tracing = { workspace = true }
 `pocopine-sync` has target-specific modules internally. The browser gets
 the client plugin and protocol/state types. The host gets the server
 plugin and source traits.
+
+For durable local storage, depend on the SQLite adapter directly:
+
+```toml
+[dependencies]
+pocopine-sync-sqlite = { workspace = true }
+```
+
+Do not route this through a `pocopine` core feature. Sync backends remain
+explicit extension crates.
 
 ## 2. Define A Stream
 
@@ -268,15 +280,27 @@ local-store contract active for tests and demos but does not survive page
 reloads. Apps can provide another store explicitly:
 
 ```rust
+let local_store = pocopine_sync_sqlite::SqliteLocalStore::new();
+
 App::new()
     .plugin(
         pocopine_sync::sync_plugin()
             .with_live_wakeup(true)
-            .local_store(my_store),
+            .local_store(local_store),
     )
     .register::<SyncBoard>()
     .run();
 ```
+
+Browser SQLite uses OPFS through an embedded SQLite worker. Apps may
+choose a database filename with
+`SqliteLocalStore::with_database_name("my_app_sync.sqlite3")`; names are
+validated as OPFS filenames rather than paths. If the browser denies
+persistent storage, the store reports a client error and the app can fall
+back to `MemoryLocalStore` or surface an offline-storage warning.
+
+Native apps can use the same crate with
+`SqliteLocalStore::open_path(path)` or `SqliteLocalStore::open_in_memory()`.
 
 Components store synced rows in `CollectionState<T>`:
 
@@ -320,8 +344,9 @@ stream's wake-up topic and pulls again whenever the server invalidates
 that stream. `pull()` can be called manually for refresh buttons.
 
 Pending mutations found in the local store are replayed after `open`
-passes and before the authoritative pull. This is the first anti-entropy
-hook; the durable SQLite backend will make it useful across reloads.
+passes and before the authoritative pull. With `MemoryLocalStore` this is
+useful inside one page lifetime. With `pocopine-sync-sqlite`, it also
+survives reloads in browsers that support OPFS.
 
 Templates read `CollectionState<T>` directly:
 
@@ -407,6 +432,12 @@ Firefox and verifies `open -> pull -> render`:
 wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 ```
 
+For the SQLite OPFS browser smoke test:
+
+```bash
+wasm-pack test --firefox --headless crates/pocopine-sync-sqlite --test wasm_sqlite_store
+```
+
 ## Protocol Boundary
 
 - `open` validates stream names and reports registered stream metadata.
@@ -438,9 +469,8 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 Keep these as separate adapter crates:
 
 - `pocopine-sync-sqlx` for compile-time checked SQL streams,
-- `pocopine-sync-sqlite` for SQLite local storage. The crate currently
-  ships the schema plus native SQLite implementation; browser durability
-  will use SQLite WASM/OPFS behind the same `SyncLocalStore` contract,
+- `pocopine-sync-sqlite` for SQLite local storage on native targets and
+  browser OPFS through SQLite WASM,
 - `pocopine-sync-redis` only if we need a shared server-side change log.
 
 Those crates should implement the same protocol contracts rather than
