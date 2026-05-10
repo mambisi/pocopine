@@ -30,7 +30,7 @@ struct MemoryStreamState {
     collection: Option<SyncCollectionName>,
     cursor: Option<crate::SyncCursor>,
     rows: BTreeMap<RowKey, SyncRow<serde_json::Value>>,
-    pending: BTreeMap<crate::MutationId, ClientMutation<serde_json::Value>>,
+    pending: Vec<ClientMutation<serde_json::Value>>,
 }
 
 impl MemoryLocalStore {
@@ -78,7 +78,7 @@ impl SyncLocalStore for MemoryLocalStore {
                 collection: state.collection.clone(),
                 cursor: state.cursor.clone(),
                 rows: state.rows.values().cloned().collect(),
-                pending_mutations: state.pending.values().cloned().collect(),
+                pending_mutations: state.pending.clone(),
             })
         }))
     }
@@ -138,7 +138,15 @@ impl SyncLocalStore for MemoryLocalStore {
         let stream = stream.clone();
         Self::ready(self.with_inner(|inner| {
             let state = inner.streams.entry(stream).or_default();
-            state.pending.insert(mutation.id.clone(), mutation);
+            if let Some(existing) = state
+                .pending
+                .iter_mut()
+                .find(|existing| existing.id == mutation.id)
+            {
+                *existing = mutation;
+            } else {
+                state.pending.push(mutation);
+            }
             Ok(())
         }))
     }
@@ -154,15 +162,19 @@ impl SyncLocalStore for MemoryLocalStore {
             }
 
             for id in result.accepted {
-                state.pending.remove(&id);
+                state.pending.retain(|mutation| mutation.id != id);
             }
 
             for rejected in result.rejected {
-                state.pending.remove(&rejected.mutation_id);
+                state
+                    .pending
+                    .retain(|mutation| mutation.id != rejected.mutation_id);
             }
 
             for conflict in result.conflicts {
-                state.pending.remove(&conflict.mutation_id);
+                state
+                    .pending
+                    .retain(|mutation| mutation.id != conflict.mutation_id);
                 if let Some(mut row) = conflict.server_row {
                     row.pending = false;
                     row.conflict = true;
@@ -194,7 +206,7 @@ impl SyncLocalStore for MemoryLocalStore {
             Ok(inner
                 .streams
                 .get(&stream)
-                .map(|state| state.pending.values().cloned().collect())
+                .map(|state| state.pending.clone())
                 .unwrap_or_default())
         }))
     }
@@ -366,6 +378,36 @@ mod tests {
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
         assert_eq!(snapshot.rows, vec![row]);
         assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_2");
+    }
+
+    #[tokio::test]
+    async fn memory_store_pending_mutations_preserve_enqueue_order() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+
+        for id in ["device_abc:10", "device_abc:2", "device_abc:1"] {
+            store
+                .enqueue_mutation(
+                    &stream,
+                    ClientMutation {
+                        id: MutationId::new(id).unwrap(),
+                        key: Some(RowKey::new("post_1").unwrap()),
+                        op: SyncOp::Upsert,
+                        base_version: None,
+                        payload: serde_json::json!({ "id": id }),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let pending = store.pending_mutations(&stream).await.unwrap();
+        let ids: Vec<_> = pending
+            .iter()
+            .map(|mutation| mutation.id.as_str())
+            .collect();
+
+        assert_eq!(ids, vec!["device_abc:10", "device_abc:2", "device_abc:1"]);
     }
 
     #[tokio::test]
@@ -604,7 +646,10 @@ mod tests {
         assert_eq!(snapshot.rows.len(), 1);
         assert!(snapshot.rows[0].conflict);
         assert!(!snapshot.rows[0].pending);
-        assert_eq!(snapshot.rows[0].value, serde_json::json!({"title": "Local"}));
+        assert_eq!(
+            snapshot.rows[0].value,
+            serde_json::json!({"title": "Local"})
+        );
     }
 
     #[tokio::test]

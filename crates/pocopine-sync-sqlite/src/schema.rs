@@ -1,5 +1,5 @@
 /// Current Pocopine sync SQLite schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Metadata table for device identity and internal settings.
 pub const META_TABLE: &str = "__pocopine_meta";
@@ -41,8 +41,9 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
         primary key (stream, row_key)
     )",
     "create table if not exists __pocopine_mutations (
+        enqueue_seq integer primary key autoincrement,
         stream text not null,
-        mutation_id text primary key,
+        mutation_id text not null unique,
         row_key text,
         base_version text,
         op text not null,
@@ -55,7 +56,7 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
     "create index if not exists __pocopine_rows_by_stream
         on __pocopine_rows (stream)",
     "create index if not exists __pocopine_mutations_by_stream_status
-        on __pocopine_mutations (stream, status, created_at_ms)",
+        on __pocopine_mutations (stream, status, enqueue_seq)",
 ];
 
 /// SQL upsert used for stream cursor metadata.
@@ -112,7 +113,7 @@ pub const SELECT_PENDING_MUTATIONS_SQL: &str =
     "select mutation_id, row_key, base_version, op, payload
     from __pocopine_mutations
     where stream = ?1 and status = 'pending'
-    order by created_at_ms asc, mutation_id asc";
+    order by enqueue_seq asc";
 
 /// SQL query used to hydrate rows for a stream.
 pub const SELECT_ROWS_SQL: &str = "select row_key, version, payload, pending, conflict

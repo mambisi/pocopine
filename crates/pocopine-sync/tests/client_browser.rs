@@ -318,13 +318,13 @@ async fn open_replays_pending_mutations_before_pull() {
             let pull_cursor_seen = pull_cursor_for_mw.clone();
             async move {
                 match req.url.as_str() {
-                    SYNC_OPEN_PATH => Ok(json_response(SyncOpenResponse::new(vec![
-                        SyncOpenStream {
+                    SYNC_OPEN_PATH => {
+                        Ok(json_response(SyncOpenResponse::new(vec![SyncOpenStream {
                             stream: SyncStreamName::new(STREAM).unwrap(),
                             collection: SyncCollectionName::new(COLLECTION).unwrap(),
                             cursor: None,
-                        },
-                    ]))),
+                        }])))
+                    }
                     SYNC_PUSH_PATH => {
                         *push_seen.borrow_mut() += 1;
                         let request: SyncPushRequest<serde_json::Value> =
@@ -339,8 +339,7 @@ async fn open_replays_pending_mutations_before_pull() {
                         let mut response = SyncPushResponse::<BrowserPost>::new(
                             SyncStreamName::new(STREAM).unwrap(),
                         );
-                        response.collection =
-                            Some(SyncCollectionName::new(COLLECTION).unwrap());
+                        response.collection = Some(SyncCollectionName::new(COLLECTION).unwrap());
                         response
                             .accepted
                             .push(MutationId::new("device_browser:42").unwrap());
@@ -359,8 +358,7 @@ async fn open_replays_pending_mutations_before_pull() {
                     }
                     SYNC_PULL_PATH => {
                         *pull_seen.borrow_mut() += 1;
-                        let request: SyncPullRequest =
-                            serde_json::from_str(&req.body).unwrap();
+                        let request: SyncPullRequest = serde_json::from_str(&req.body).unwrap();
                         *pull_cursor_seen.borrow_mut() =
                             request.cursor.as_ref().map(ToString::to_string);
                         let response = SyncPullResponse::<BrowserPost>::incremental(
