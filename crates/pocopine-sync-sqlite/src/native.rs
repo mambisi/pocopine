@@ -757,7 +757,7 @@ mod tests {
                 key text primary key,
                 value text not null
             );
-            insert into __pocopine_meta (key, value) values ('schema_version', '2');",
+            insert into __pocopine_meta (key, value) values ('schema_version', '999');",
         )
         .unwrap();
 
@@ -832,8 +832,7 @@ mod tests {
                     key: Some(RowKey::new("ignored").unwrap()),
                     op: SyncOp::Upsert,
                     row: Some(
-                        SyncRow::new("ignored", serde_json::json!({"title": "Pre-reset"}))
-                            .unwrap(),
+                        SyncRow::new("ignored", serde_json::json!({"title": "Pre-reset"})).unwrap(),
                     ),
                     cursor: cursor.clone(),
                 },
@@ -888,23 +887,30 @@ mod tests {
     fn sqlite_store_pending_mutations_preserve_enqueue_order() {
         let store = SqliteLocalStore::open_in_memory().unwrap();
         let stream = SyncStreamName::new("posts").unwrap();
-        for index in 1..=3 {
+        for id in ["device_abc:10", "device_abc:2", "device_abc:1"] {
             block(store.enqueue_mutation(
                 &stream,
                 ClientMutation {
-                    id: MutationId::new(format!("device_abc:{index}")).unwrap(),
-                    key: Some(RowKey::new(format!("post_{index}")).unwrap()),
+                    id: MutationId::new(id).unwrap(),
+                    key: Some(RowKey::new("post_1").unwrap()),
                     op: SyncOp::Upsert,
                     base_version: None,
-                    payload: serde_json::json!({"index": index}),
+                    payload: serde_json::json!({"id": id}),
                 },
             ))
             .unwrap();
         }
+        store
+            .with_conn(|conn| {
+                conn.execute("update __pocopine_mutations set created_at_ms = 42", [])
+                    .map_err(sqlite_error)?;
+                Ok(())
+            })
+            .unwrap();
 
         let pending = block(store.pending_mutations(&stream)).unwrap();
         let ids: Vec<_> = pending.iter().map(|m| m.id.as_str().to_string()).collect();
-        assert_eq!(ids, vec!["device_abc:1", "device_abc:2", "device_abc:3"]);
+        assert_eq!(ids, vec!["device_abc:10", "device_abc:2", "device_abc:1"]);
     }
 
     #[test]
