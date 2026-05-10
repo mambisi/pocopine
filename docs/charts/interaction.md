@@ -21,6 +21,7 @@ sampled point by SVG x/y distance and exposes:
 - `.pine-chart-tooltip-x`
 - `.pine-chart-tooltip-y`
 - `data-hover`
+- `data-tooltip="default|none"`
 - `data-tooltip-x="left|right"`
 - `data-tooltip-y="above|below"`
 - `data-x`
@@ -32,6 +33,9 @@ The chart owns sampled-point lookup, crosshair geometry, marker coordinates, and
 tooltip data attributes. Tooltip coordinates are emitted as percentages so they
 scale with responsive SVG sizing. Applications own colors, marker radius
 overrides, tooltip positioning, typography, borders, shadows, and transitions.
+Set `tooltip="none"` when the application should render its own tooltip from
+`pp:chart:hover` / `pp:chart:hover-end` events. That suppresses only the built-in
+HTML tooltip; hover markers, crosshairs, and data attributes still update.
 
 Bar charts use the same pointer coordinate conversion, but they select the
 painted SVG rect under the pointer instead of the nearest numeric sample. The

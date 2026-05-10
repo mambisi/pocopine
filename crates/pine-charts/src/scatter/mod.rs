@@ -3,12 +3,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::animation::{animation_style, DEFAULT_ANIMATION_DURATION_MS, DEFAULT_ANIMATION_EASING};
 use crate::cartesian::{
-    nearest_sample_by_point, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
-    step_key, CartesianChartState, CartesianGuideFields, CartesianGuideUpdate,
-    CartesianHoverFields, ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
+    chart_hover_payload, nearest_sample_by_point, optional_domain, plot_rect_from_edges,
+    pointer_event_svg_point, step_key, CartesianChartState, CartesianGuideFields,
+    CartesianGuideUpdate, CartesianHoverFields, ChartStateFields, PlotEdgeFields,
+    DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{ChartError, ChartResult};
-use crate::events::{ChartSelection, CHART_SELECT_EVENT};
+use crate::events::{
+    ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_EVENT,
+};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::line::{ChartLineSeries, ChartPoint, LineChartGeometry, LineChartOptions};
@@ -187,6 +190,8 @@ pub struct PineScatterChart {
     pub animation_duration: f64,
     #[prop]
     pub animation_easing: String,
+    #[prop]
+    pub tooltip: String,
     pub animation_style: String,
     pub state: String,
     pub view_box: String,
@@ -248,6 +253,7 @@ impl Default for PineScatterChart {
             animate: false,
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            tooltip: "default".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -380,7 +386,11 @@ impl PineScatterChart {
     }
 
     pub fn clear_hover(&mut self) {
+        let was_visible = self.hover_visible;
         self.hover_fields().clear();
+        if was_visible {
+            pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("scatter"));
+        }
     }
 
     pub fn select_sample(&mut self, key: String) {
@@ -496,7 +506,9 @@ impl PineScatterChart {
             return;
         };
         let update = sample.hover_update(self.plot_rect(), self.width, self.height);
+        let hover = chart_hover_payload("scatter", &update);
         self.hover_fields().apply(update);
+        pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 
     fn plot_rect(&self) -> ChartRect {

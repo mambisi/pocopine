@@ -9,7 +9,10 @@ use crate::cartesian::{
     ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
-use crate::events::{ChartSelection, CHART_SELECT_EVENT};
+use crate::events::{
+    ChartHover, ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_SELECT_EVENT,
+};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility, LegendItem};
 use crate::scale::{BandScale, LinearScale};
@@ -587,6 +590,8 @@ pub struct PineBarChart {
     pub animation_duration: f64,
     #[prop]
     pub animation_easing: String,
+    #[prop]
+    pub tooltip: String,
     pub animation_style: String,
     pub state: String,
     pub view_box: String,
@@ -646,6 +651,7 @@ impl Default for PineBarChart {
             animate: false,
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            tooltip: "default".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -785,6 +791,7 @@ impl PineBarChart {
     }
 
     pub fn clear_hover(&mut self) {
+        let was_visible = self.hover_visible;
         self.hover_visible = false;
         self.hover_key.clear();
         self.hover_category.clear();
@@ -795,6 +802,9 @@ impl PineBarChart {
         self.hover_placement_x = "right".into();
         self.hover_placement_y = "above".into();
         self.hover_style.clear();
+        if was_visible {
+            pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("bar"));
+        }
     }
 
     pub fn select_bar(&mut self, key: String) {
@@ -933,6 +943,19 @@ impl PineBarChart {
     }
 
     fn apply_hover(&mut self, update: BarHoverUpdate) {
+        let hover = ChartHover::category(
+            "bar",
+            update.key.clone(),
+            update.category.clone(),
+            update.aria_label.clone(),
+            update.category.clone(),
+            update.series.clone(),
+            update.value,
+            update.value_label.clone(),
+            update.placement.x,
+            update.placement.y,
+            update.placement.style.clone(),
+        );
         self.hover_visible = true;
         self.hover_key = update.key;
         self.hover_category = update.category;
@@ -943,6 +966,7 @@ impl PineBarChart {
         self.hover_placement_x = update.placement.x.into();
         self.hover_placement_y = update.placement.y.into();
         self.hover_style = update.placement.style;
+        pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 
     fn plot_rect(&self) -> ChartRect {

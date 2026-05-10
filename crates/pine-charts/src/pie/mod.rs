@@ -12,7 +12,10 @@ use crate::cartesian::{
     DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{finite, ChartError, ChartResult};
-use crate::events::{ChartSelection, CHART_SELECT_EVENT};
+use crate::events::{
+    ChartHover, ChartHoverEnd, ChartSelection, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_SELECT_EVENT,
+};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::LegendItem;
 use crate::svg::format_tick;
@@ -333,6 +336,8 @@ pub struct PinePieChart {
     pub animation_duration: f64,
     #[prop]
     pub animation_easing: String,
+    #[prop]
+    pub tooltip: String,
     pub animation_style: String,
     pub animation_generation: u32,
     pub animating_slices: bool,
@@ -393,6 +398,7 @@ impl Default for PinePieChart {
             animate: false,
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            tooltip: "default".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -527,6 +533,7 @@ impl PinePieChart {
     }
 
     pub fn clear_hover(&mut self) {
+        let was_visible = self.hover_visible;
         self.hover_visible = false;
         self.hover_overlay_visible = false;
         self.hover_key.clear();
@@ -540,6 +547,9 @@ impl PinePieChart {
         self.hover_placement_y = "above".into();
         self.hover_style.clear();
         self.hover_slice = SvgPieSlice::default();
+        if was_visible {
+            pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("pie"));
+        }
     }
 
     pub fn select_slice(&mut self, key: String) {
@@ -1003,6 +1013,19 @@ impl PinePieChart {
     }
 
     fn apply_hover(&mut self, update: PieHoverUpdate) {
+        let hover = ChartHover::share(
+            "pie",
+            update.key.clone(),
+            update.label.clone(),
+            update.aria_label.clone(),
+            update.value,
+            update.value_label.clone(),
+            update.percentage,
+            update.percentage_label.clone(),
+            update.placement.x,
+            update.placement.y,
+            update.placement.style.clone(),
+        );
         self.hover_visible = true;
         self.hover_key = update.key;
         self.hover_label = update.label;
@@ -1016,6 +1039,7 @@ impl PinePieChart {
         self.hover_style = update.placement.style;
         self.sync_hover_slice();
         self.update_hover_overlay_visibility();
+        pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 
     fn sync_hover_slice(&mut self) {

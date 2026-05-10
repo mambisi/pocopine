@@ -1,8 +1,9 @@
 use pine_charts::{
     area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
     set_area_series_visible, set_bar_series_visible, set_pie_slice_visible,
-    set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartLayerPoint,
-    ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem, LegendToggle,
+    set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartHover,
+    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
+    LegendToggle,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,10 @@ pub struct ChartDemo {
     pub pie_end_angle: f64,
     pub pie_center_label: String,
     pub pie_center_value: String,
+    pub custom_tooltip_visible: bool,
+    pub custom_tooltip_title: String,
+    pub custom_tooltip_value: String,
+    pub custom_tooltip_meta: String,
 }
 
 impl Default for ChartDemo {
@@ -95,6 +100,10 @@ impl Default for ChartDemo {
             pie_end_angle: 270.0,
             pie_center_label: "Total".into(),
             pie_center_value,
+            custom_tooltip_visible: false,
+            custom_tooltip_title: "Custom tooltip".into(),
+            custom_tooltip_value: "Hover the trend area".into(),
+            custom_tooltip_meta: "Built with pp:chart:hover".into(),
         }
     }
 }
@@ -263,6 +272,24 @@ impl ChartDemo {
             self.pie_legend = pine_charts::pie_legend_items(&self.pie_data);
             self.update_pie_center();
         }
+    }
+
+    pub fn show_custom_tooltip(&mut self, event: JsValue) {
+        let Some(hover) = ChartHover::from_event_value(event) else {
+            return;
+        };
+        self.custom_tooltip_visible = true;
+        self.custom_tooltip_title = if hover.series.is_empty() {
+            hover.chart
+        } else {
+            hover.series
+        };
+        self.custom_tooltip_value = format!("Week {}: {}", hover.x_label, hover.y_label);
+        self.custom_tooltip_meta = hover.aria_label;
+    }
+
+    pub fn hide_custom_tooltip(&mut self) {
+        self.custom_tooltip_visible = false;
     }
 }
 
