@@ -93,17 +93,8 @@ pub fn show_custom_tooltip(&mut self, event: JsValue) {
     };
 
     self.custom_tooltip_visible = true;
-    self.custom_tooltip_title = if hover.series.is_empty() {
-        hover.chart
-    } else {
-        hover.series
-    };
-    self.custom_tooltip_value = match hover.kind.as_str() {
-        "xy" => format!("{}: {}", hover.x_label, hover.y_label),
-        "category" => format!("{}: {}", hover.category, hover.value_label),
-        "share" => format!("{} ({})", hover.value_label, hover.percentage_label),
-        _ => hover.label,
-    };
+    self.custom_tooltip_title = hover.series_or_chart().into();
+    self.custom_tooltip_value = hover.display_value();
     self.custom_tooltip_x = hover.tooltip_x;
     self.custom_tooltip_y = hover.tooltip_y;
     self.custom_tooltip_style = hover.tooltip_style;
@@ -164,17 +155,8 @@ pub fn show_selection_detail(&mut self, event: JsValue) {
     };
 
     self.selection_visible = true;
-    self.selection_title = if selection.series.is_empty() {
-        selection.chart
-    } else {
-        selection.series
-    };
-    self.selection_value = match selection.kind.as_str() {
-        "xy" => format!("{}: {}", selection.x_label, selection.y_label),
-        "category" => format!("{}: {}", selection.category, selection.value_label),
-        "share" => format!("{} ({})", selection.value_label, selection.percentage_label),
-        _ => selection.label,
-    };
+    self.selection_title = selection.series_or_chart().into();
+    self.selection_value = selection.display_value();
     self.selection_meta = format!("Selected {}", selection.key);
 }
 

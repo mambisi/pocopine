@@ -141,7 +141,7 @@ pub fn show_latency_tooltip(&mut self, event: JsValue) {
     };
 
     self.tooltip_visible = true;
-    self.tooltip_value = format!("{}: {}", hover.x_label, hover.y_label);
+    self.tooltip_value = hover.display_value();
     self.tooltip_meta = hover.aria_label;
     self.tooltip_style = hover.tooltip_style;
 }
@@ -156,12 +156,7 @@ pub fn show_latency_detail(&mut self, event: JsValue) {
     };
 
     self.detail_visible = true;
-    self.detail_value = match selection.kind.as_str() {
-        "xy" => format!("{}: {}", selection.x_label, selection.y_label),
-        "category" => format!("{}: {}", selection.category, selection.value_label),
-        "share" => format!("{} ({})", selection.value_label, selection.percentage_label),
-        _ => selection.label,
-    };
+    self.detail_value = selection.display_value();
     self.detail_meta = format!("Selected {}", selection.key);
 }
 
