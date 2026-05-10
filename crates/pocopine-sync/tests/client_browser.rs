@@ -11,10 +11,10 @@ use std::rc::Rc;
 use js_sys::Promise;
 use pocopine::prelude::*;
 use pocopine_sync::{
-    sync_plugin, CollectionState, LocalSnapshotBatch, MemoryLocalStore, SyncChange,
-    SyncCollectionName, SyncCursor, SyncLocalStore, SyncOp, SyncOpenRequest, SyncOpenResponse,
-    SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncRow, SyncStreamName, SYNC_OPEN_PATH,
-    SYNC_PULL_PATH,
+    sync_plugin, ClientMutation, CollectionState, LocalSnapshotBatch, MemoryLocalStore, MutationId,
+    RowKey, SyncChange, SyncCollectionName, SyncCursor, SyncLocalStore, SyncOp, SyncOpenRequest,
+    SyncOpenResponse, SyncOpenStream, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, SyncRow, SyncStreamName, SYNC_OPEN_PATH, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
@@ -268,6 +268,157 @@ async fn open_hydrates_local_store_and_pulls_from_cached_cursor() {
         .unwrap();
     assert_eq!(persisted.cursor.unwrap().as_str(), "cursor_2");
     assert_eq!(persisted.rows.len(), 2);
+
+    host.remove();
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn open_replays_pending_mutations_before_pull() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+
+    let store = MemoryLocalStore::new();
+    let stream = SyncStreamName::new(STREAM).unwrap();
+    let collection = SyncCollectionName::new(COLLECTION).unwrap();
+
+    store
+        .save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![SyncRow::new(
+                "post_1",
+                serde_json::json!({"id": "post_1", "title": "Cached"}),
+            )
+            .unwrap()],
+            Some(SyncCursor::new("cached_cursor").unwrap()),
+        ))
+        .await
+        .unwrap();
+
+    let pending = ClientMutation {
+        id: MutationId::new("device_browser:42").unwrap(),
+        key: Some(RowKey::new("post_2").unwrap()),
+        op: SyncOp::Upsert,
+        base_version: None,
+        payload: serde_json::json!({"id": "post_2", "title": "Pending"}),
+    };
+    store.enqueue_mutation(&stream, pending).await.unwrap();
+
+    let push_seen = Rc::new(RefCell::new(0u32));
+    let pull_seen = Rc::new(RefCell::new(0u32));
+    let pull_cursor_seen = Rc::new(RefCell::new(None::<String>));
+    let push_seen_for_mw = push_seen.clone();
+    let pull_seen_for_mw = pull_seen.clone();
+    let pull_cursor_for_mw = pull_cursor_seen.clone();
+
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| {
+            let push_seen = push_seen_for_mw.clone();
+            let pull_seen = pull_seen_for_mw.clone();
+            let pull_cursor_seen = pull_cursor_for_mw.clone();
+            async move {
+                match req.url.as_str() {
+                    SYNC_OPEN_PATH => Ok(json_response(SyncOpenResponse::new(vec![
+                        SyncOpenStream {
+                            stream: SyncStreamName::new(STREAM).unwrap(),
+                            collection: SyncCollectionName::new(COLLECTION).unwrap(),
+                            cursor: None,
+                        },
+                    ]))),
+                    SYNC_PUSH_PATH => {
+                        *push_seen.borrow_mut() += 1;
+                        let request: SyncPushRequest<serde_json::Value> =
+                            serde_json::from_str(&req.body).unwrap();
+                        assert_eq!(request.mutations.len(), 1);
+                        assert_eq!(request.mutations[0].id.as_str(), "device_browser:42");
+                        assert_eq!(
+                            request.mutations[0].key.as_ref().unwrap().as_str(),
+                            "post_2"
+                        );
+
+                        let mut response = SyncPushResponse::<BrowserPost>::new(
+                            SyncStreamName::new(STREAM).unwrap(),
+                        );
+                        response.collection =
+                            Some(SyncCollectionName::new(COLLECTION).unwrap());
+                        response
+                            .accepted
+                            .push(MutationId::new("device_browser:42").unwrap());
+                        response.rows.push(
+                            SyncRow::new(
+                                "post_2",
+                                BrowserPost {
+                                    id: "post_2".to_string(),
+                                    title: "Confirmed".to_string(),
+                                },
+                            )
+                            .unwrap(),
+                        );
+                        response.cursor = Some(SyncCursor::new("after_replay").unwrap());
+                        Ok(json_response(response))
+                    }
+                    SYNC_PULL_PATH => {
+                        *pull_seen.borrow_mut() += 1;
+                        let request: SyncPullRequest =
+                            serde_json::from_str(&req.body).unwrap();
+                        *pull_cursor_seen.borrow_mut() =
+                            request.cursor.as_ref().map(ToString::to_string);
+                        let response = SyncPullResponse::<BrowserPost>::incremental(
+                            SyncStreamName::new(STREAM).unwrap(),
+                            SyncCollectionName::new(COLLECTION).unwrap(),
+                            Vec::new(),
+                            Some(SyncCursor::new("after_pull").unwrap()),
+                        );
+                        Ok(json_response(response))
+                    }
+                    other => Err(pocopine::ServerError::Network(format!(
+                        "unexpected sync browser test request: {other}"
+                    ))),
+                }
+            }
+        },
+    );
+
+    let document = window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_attribute("pp-app", "").unwrap();
+    host.set_inner_html("<sync-browser-board></sync-browser-board>");
+    document.body().unwrap().append_child(&host).unwrap();
+
+    App::new()
+        .plugin(
+            sync_plugin()
+                .with_live_wakeup(false)
+                .local_store(store.clone()),
+        )
+        .register::<SyncBrowserBoard>()
+        .run();
+
+    settle().await;
+
+    assert_eq!(
+        *push_seen.borrow(),
+        1,
+        "open should replay one pending mutation before pulling"
+    );
+    assert_eq!(*pull_seen.borrow(), 1, "pull runs once after replay");
+    assert_eq!(
+        pull_cursor_seen.borrow().as_deref(),
+        Some("cached_cursor"),
+        "pull continues from the cached cursor that was loaded before replay"
+    );
+
+    let persisted = store.hydrate_stream(&stream).await.unwrap();
+    assert!(
+        persisted.pending_mutations.is_empty(),
+        "accepted mutations should be cleared from the queue"
+    );
+    assert_eq!(persisted.cursor.unwrap().as_str(), "after_pull");
+    assert_eq!(
+        persisted.rows.len(),
+        2,
+        "local store should hold cached + replay-confirmed rows"
+    );
 
     host.remove();
     pocopine::fetch::__reset_middleware_chain_for_test();

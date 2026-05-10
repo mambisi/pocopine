@@ -771,6 +771,188 @@ mod tests {
             .contains("incompatible sync sqlite schema version"));
     }
 
+    #[test]
+    fn sqlite_store_save_snapshot_replaces_previous_rows() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![
+                SyncRow::new("post_1", serde_json::json!({"title": "Old1"})).unwrap(),
+                SyncRow::new("post_2", serde_json::json!({"title": "Old2"})).unwrap(),
+            ],
+            Some(SyncCursor::new("cursor_1").unwrap()),
+        )))
+        .unwrap();
+
+        let replacement =
+            SyncRow::new("post_3", serde_json::json!({"title": "Only survivor"})).unwrap();
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            collection,
+            vec![replacement.clone()],
+            Some(SyncCursor::new("cursor_2").unwrap()),
+        )))
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.rows, vec![replacement]);
+        assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_2");
+    }
+
+    #[test]
+    fn sqlite_store_apply_changes_reset_then_upsert_keeps_only_post_reset_rows() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![
+                SyncRow::new("old_1", serde_json::json!({"title": "Old1"})).unwrap(),
+                SyncRow::new("old_2", serde_json::json!({"title": "Old2"})).unwrap(),
+            ],
+            Some(SyncCursor::new("cursor_1").unwrap()),
+        )))
+        .unwrap();
+
+        let cursor = SyncCursor::new("cursor_2").unwrap();
+        let after_reset =
+            SyncRow::new("post_after", serde_json::json!({"title": "After"})).unwrap();
+        block(store.apply_changes(LocalChangeBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![
+                SyncChange {
+                    stream: stream.clone(),
+                    collection: collection.clone(),
+                    key: Some(RowKey::new("ignored").unwrap()),
+                    op: SyncOp::Upsert,
+                    row: Some(
+                        SyncRow::new("ignored", serde_json::json!({"title": "Pre-reset"}))
+                            .unwrap(),
+                    ),
+                    cursor: cursor.clone(),
+                },
+                SyncChange {
+                    stream: stream.clone(),
+                    collection: collection.clone(),
+                    key: None,
+                    op: SyncOp::Reset,
+                    row: None,
+                    cursor: cursor.clone(),
+                },
+                SyncChange {
+                    stream: stream.clone(),
+                    collection,
+                    key: Some(after_reset.key.clone()),
+                    op: SyncOp::Upsert,
+                    row: Some(after_reset.clone()),
+                    cursor: cursor.clone(),
+                },
+            ],
+            Some(cursor),
+        )))
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.rows, vec![after_reset]);
+    }
+
+    #[test]
+    fn sqlite_store_mark_push_cursor_only_without_prior_meta_errors() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+
+        let err = block(store.mark_push_result(LocalPushResult {
+            stream: stream.clone(),
+            collection: None,
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+            rows: Vec::new(),
+            conflicts: Vec::new(),
+            cursor: Some(SyncCursor::new("orphan_cursor").unwrap()),
+        }))
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("cannot persist sync push cursor"),
+            "expected error about missing stream metadata, got: {err}"
+        );
+    }
+
+    #[test]
+    fn sqlite_store_pending_mutations_preserve_enqueue_order() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        for index in 1..=3 {
+            block(store.enqueue_mutation(
+                &stream,
+                ClientMutation {
+                    id: MutationId::new(format!("device_abc:{index}")).unwrap(),
+                    key: Some(RowKey::new(format!("post_{index}")).unwrap()),
+                    op: SyncOp::Upsert,
+                    base_version: None,
+                    payload: serde_json::json!({"index": index}),
+                },
+            ))
+            .unwrap();
+        }
+
+        let pending = block(store.pending_mutations(&stream)).unwrap();
+        let ids: Vec<_> = pending.iter().map(|m| m.id.as_str().to_string()).collect();
+        assert_eq!(ids, vec!["device_abc:1", "device_abc:2", "device_abc:3"]);
+    }
+
+    #[test]
+    fn sqlite_store_apply_changes_delete_missing_key_is_noop() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+        block(store.save_snapshot(LocalSnapshotBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![SyncRow::new("post_1", serde_json::json!({"title": "Kept"})).unwrap()],
+            None,
+        )))
+        .unwrap();
+
+        let cursor = SyncCursor::new("cursor_2").unwrap();
+        block(store.apply_changes(LocalChangeBatch::new(
+            stream.clone(),
+            collection.clone(),
+            vec![SyncChange {
+                stream: stream.clone(),
+                collection,
+                key: Some(RowKey::new("never_existed").unwrap()),
+                op: SyncOp::Delete,
+                row: None,
+                cursor: cursor.clone(),
+            }],
+            Some(cursor),
+        )))
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.rows.len(), 1);
+        assert_eq!(snapshot.rows[0].key.as_str(), "post_1");
+    }
+
+    #[test]
+    fn sqlite_store_hydrate_returns_empty_for_unknown_stream() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("never_seen").unwrap();
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.stream, stream);
+        assert!(snapshot.collection.is_none());
+        assert!(snapshot.cursor.is_none());
+        assert!(snapshot.rows.is_empty());
+        assert!(snapshot.pending_mutations.is_empty());
+    }
+
     fn block<T>(future: SyncLocalFuture<'_, T>) -> SyncResult<T> {
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
