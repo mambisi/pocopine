@@ -30,10 +30,7 @@ impl SyncRequest {
 /// Serializable state for one synced collection.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-#[serde(bound(
-    serialize = "T: Serialize",
-    deserialize = "T: Default + Deserialize<'de>"
-))]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct CollectionState<T> {
     pub rows: Vec<SyncRow<T>>,
     pub loading: bool,
@@ -52,6 +49,7 @@ pub struct CollectionState<T> {
 }
 
 impl<T> Default for CollectionState<T> {
+    // Manual impl avoids the `T: Default` bound that `derive(Default)` would add.
     fn default() -> Self {
         Self {
             rows: Vec::new(),
@@ -177,6 +175,8 @@ impl<T> CollectionState<T> {
     }
 
     fn apply_changes(&mut self, changes: Vec<SyncChange<T>>) -> bool {
+        // Linear scans are deliberate for this first small-collection state
+        // container; larger local stores should move to an indexed backend.
         let mut rows_changed = false;
         for change in changes {
             match change.op {

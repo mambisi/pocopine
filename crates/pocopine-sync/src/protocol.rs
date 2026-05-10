@@ -1,24 +1,36 @@
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{SyncError, SyncResult};
 
 /// Current sync protocol identifier.
 pub const SYNC_PROTOCOL_V1: &str = "pocopine.sync.v1";
+/// Maximum length, in bytes, accepted for protocol token strings.
+pub const MAX_SYNC_TOKEN_LEN: usize = 1024;
+
+macro_rules! sync_path {
+    ($suffix:literal) => {
+        concat!("/__pocopine/sync/v1", $suffix)
+    };
+}
 
 /// Default sync endpoint prefix mounted by the server plugin.
-pub const SYNC_ENDPOINT_PREFIX: &str = "/__pocopine/sync/v1";
+pub const SYNC_ENDPOINT_PREFIX: &str = sync_path!("");
 /// Open endpoint path.
-pub const SYNC_OPEN_PATH: &str = "/__pocopine/sync/v1/open";
+pub const SYNC_OPEN_PATH: &str = sync_path!("/open");
 /// Pull endpoint path.
-pub const SYNC_PULL_PATH: &str = "/__pocopine/sync/v1/pull";
+pub const SYNC_PULL_PATH: &str = sync_path!("/pull");
 /// Push endpoint path.
-pub const SYNC_PUSH_PATH: &str = "/__pocopine/sync/v1/push";
+pub const SYNC_PUSH_PATH: &str = sync_path!("/push");
 
 fn validate_token(field: &'static str, value: String) -> SyncResult<String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed != value || value.chars().any(char::is_control) {
+    if value.len() > MAX_SYNC_TOKEN_LEN
+        || trimmed.is_empty()
+        || trimmed != value
+        || value.chars().any(char::is_control)
+    {
         return Err(SyncError::invalid_value(field, value));
     }
     Ok(value)
@@ -27,8 +39,7 @@ fn validate_token(field: &'static str, value: String) -> SyncResult<String> {
 macro_rules! opaque_string_type {
     ($name:ident, $field:literal, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
+        #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub struct $name(String);
 
         impl $name {
@@ -46,6 +57,25 @@ macro_rules! opaque_string_type {
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(self.as_str())
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::new(value).map_err(serde::de::Error::custom)
             }
         }
 
@@ -333,6 +363,15 @@ mod tests {
         assert!(SyncShapeName::new("").is_err());
         assert!(SyncShapeName::new(" posts").is_err());
         assert!(SyncShapeName::new("posts\nbad").is_err());
+        assert!(SyncShapeName::new("x".repeat(MAX_SYNC_TOKEN_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn deserializes_tokens_through_validation() {
+        let shape: SyncShapeName = serde_json::from_str("\"posts_for_tenant\"").unwrap();
+        assert_eq!(shape.as_str(), "posts_for_tenant");
+        assert!(serde_json::from_str::<SyncShapeName>("\" posts\"").is_err());
+        assert!(serde_json::from_str::<SyncShapeName>("\"posts\\nbad\"").is_err());
     }
 
     #[test]
@@ -341,5 +380,15 @@ mod tests {
             sync_shape_tag("posts_for_tenant"),
             "sync:shape:posts_for_tenant"
         );
+    }
+
+    #[test]
+    fn endpoint_paths_share_prefix() {
+        assert!(SYNC_OPEN_PATH.starts_with(SYNC_ENDPOINT_PREFIX));
+        assert!(SYNC_OPEN_PATH.ends_with("/open"));
+        assert!(SYNC_PULL_PATH.starts_with(SYNC_ENDPOINT_PREFIX));
+        assert!(SYNC_PULL_PATH.ends_with("/pull"));
+        assert!(SYNC_PUSH_PATH.starts_with(SYNC_ENDPOINT_PREFIX));
+        assert!(SYNC_PUSH_PATH.ends_with("/push"));
     }
 }

@@ -20,8 +20,8 @@ pub use protocol::{
     sync_shape_tag, ClientMutation, MutationId, RowKey, RowVersion, SyncChange, SyncCollectionName,
     SyncConflict, SyncCursor, SyncOp, SyncOpenRequest, SyncOpenResponse, SyncOpenShape,
     SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRow,
-    SyncShapeName, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1, SYNC_PULL_PATH,
-    SYNC_PUSH_PATH,
+    SyncShapeName, MAX_SYNC_TOKEN_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1,
+    SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 pub use state::{CollectionState, SyncReason, SyncRequest};
 

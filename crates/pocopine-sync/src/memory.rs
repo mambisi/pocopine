@@ -29,6 +29,10 @@ impl<T> Default for Inner<T> {
 }
 
 /// In-memory source for tests, examples, and explicit single-process apps.
+///
+/// This source keeps an unbounded in-memory change log and serializes all
+/// access through one lock. It is a reference implementation, not a durable
+/// production backend.
 #[derive(Clone, Debug)]
 pub struct MemorySyncShape<T> {
     shape: SyncShapeName,
@@ -60,6 +64,8 @@ where
         let cursor = SyncCursor::new(version.to_string())?;
         let row = SyncRow::new(key.into(), value)?.version(format!("v{version}"))?;
         inner.rows.insert(row.key.as_str().to_string(), row.clone());
+        // Unbounded by design for the reference source; production adapters
+        // should retain changes according to their own cursor window policy.
         inner.changes.push(SyncChange {
             shape: self.shape.clone(),
             collection: self.collection.clone(),
@@ -129,20 +135,17 @@ where
             .as_str()
             .parse::<u64>()
             .map_err(|_| SyncError::Gap(after.to_string()))?;
-        let changes = inner
-            .changes
-            .iter()
-            .filter(|change| {
-                change
-                    .cursor
-                    .as_str()
-                    .parse::<u64>()
-                    .map(|cursor| cursor > after)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .map(change_to_value)
-            .collect::<SyncResult<Vec<_>>>()?;
+        let mut changes = Vec::new();
+        for change in &inner.changes {
+            let cursor = change
+                .cursor
+                .as_str()
+                .parse::<u64>()
+                .map_err(|_| SyncError::backend("memory sync change cursor is not numeric"))?;
+            if cursor > after {
+                changes.push(change_to_value(change.clone())?);
+            }
+        }
 
         Ok(SyncPullResponse::incremental(
             self.shape.clone(),
@@ -232,5 +235,43 @@ mod tests {
             second.changes[0].row.as_ref().unwrap().key.as_str(),
             "post_2"
         );
+    }
+
+    #[test]
+    fn memory_shape_returns_delete_and_reset_changes() {
+        let shape = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
+        shape.upsert("post_1", "one".to_string()).unwrap();
+        let first = shape
+            .pull_value(SyncPullRequest::new(
+                SyncShapeName::new("posts_for_tenant").unwrap(),
+            ))
+            .unwrap();
+
+        shape.delete("post_1").unwrap();
+        shape.reset().unwrap();
+
+        let second = shape
+            .pull_value(
+                SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap())
+                    .cursor(first.cursor.clone()),
+            )
+            .unwrap();
+        assert_eq!(second.mode, SyncPullMode::Incremental);
+        assert_eq!(second.changes.len(), 2);
+        assert_eq!(second.changes[0].op, SyncOp::Delete);
+        assert_eq!(second.changes[0].key.as_ref().unwrap().as_str(), "post_1");
+        assert_eq!(second.changes[1].op, SyncOp::Reset);
+    }
+
+    #[test]
+    fn memory_shape_reports_gap_for_non_numeric_cursor() {
+        let shape = MemorySyncShape::<String>::new("posts_for_tenant", "posts").unwrap();
+        let err = shape
+            .pull_value(
+                SyncPullRequest::new(SyncShapeName::new("posts_for_tenant").unwrap())
+                    .cursor(Some(SyncCursor::new("not_numeric").unwrap())),
+            )
+            .unwrap_err();
+        assert!(matches!(err, SyncError::Gap(cursor) if cursor == "not_numeric"));
     }
 }
