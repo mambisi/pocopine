@@ -19,6 +19,8 @@ struct Inner<T> {
     version: u64,
     rows: BTreeMap<String, SyncRow<T>>,
     changes: Vec<SyncChange<T>>,
+    // Unbounded by design for the reference source. Durable adapters should
+    // persist mutation ids with an explicit retention policy.
     accepted_mutations: BTreeSet<String>,
 }
 
@@ -36,7 +38,8 @@ impl<T> Default for Inner<T> {
 /// In-memory source for tests, examples, and explicit single-process apps.
 ///
 /// This source keeps an unbounded in-memory change log and serializes all
-/// access through one lock. It is a reference implementation, not a durable
+/// access through one lock. Accepted mutation ids are also retained without
+/// bounds for idempotency. It is a reference implementation, not a durable
 /// production backend.
 #[derive(Clone, Debug)]
 pub struct MemorySyncStream<T> {

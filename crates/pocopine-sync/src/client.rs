@@ -281,6 +281,7 @@ where
             stream,
             mutation,
             optimistic,
+            !self.live_wakeup,
         );
         Ok(())
     }
@@ -543,6 +544,7 @@ fn start_push<C, T, M>(
     stream: SyncStreamName,
     mutation: ClientMutation<M>,
     optimistic: Option<SyncRow<T>>,
+    pull_after_accept: bool,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + 'static,
@@ -580,7 +582,7 @@ fn start_push<C, T, M>(
             }
         });
 
-        if should_pull {
+        if should_pull && pull_after_accept {
             start_pull(
                 scope_id,
                 handle,

@@ -58,6 +58,8 @@ pub struct CollectionState<T> {
     pub version: u64,
     pub refresh_count: u64,
     pub live_event_count: u64,
+    /// Number of in-flight mutations or pending row flags. This includes
+    /// mutations like optimistic deletes where no pending row remains visible.
     pub pending_count: u64,
     pub conflict_count: u64,
     pub rejected_count: u64,
@@ -310,25 +312,33 @@ where
 
     pub fn apply_push(&mut self, response: SyncPushResponse<T>) -> bool {
         let has_accepted = !response.accepted.is_empty();
+        let rejected_total = response.rejected.len();
+        let conflict_total = response.conflicts.len();
+        let mut first_failure = None;
 
         for rejected in response.rejected {
+            if first_failure.is_none() {
+                first_failure = Some(rejected.reason.clone());
+            }
             self.rollback_mutation(&rejected.mutation_id);
             self.rejected_count = self.rejected_count.saturating_add(1);
-            self.error = rejected.reason;
-            self.last_reason = SyncReason::Error;
         }
 
         for conflict in response.conflicts {
+            if first_failure.is_none() {
+                first_failure = Some(conflict.reason.clone());
+            }
             self.complete_mutation(&conflict.mutation_id);
             if let Some(mut row) = conflict.server_row {
                 row.pending = false;
                 row.conflict = true;
                 self.upsert_row(row);
             } else if let Some(key) = conflict.key {
-                self.remove_row(&key);
+                if let Some(row) = self.row_by_key_mut(&key) {
+                    row.pending = false;
+                    row.conflict = true;
+                }
             }
-            self.error = conflict.reason;
-            self.last_reason = SyncReason::Error;
         }
 
         for id in response.accepted {
@@ -343,6 +353,11 @@ where
 
         if let Some(cursor) = response.cursor {
             self.cursor = Some(cursor);
+        }
+
+        if let Some(reason) = first_failure {
+            self.error = push_failure_message(rejected_total, conflict_total, reason);
+            self.last_reason = SyncReason::Error;
         }
 
         self.loading = false;
@@ -420,6 +435,13 @@ where
     fn row_by_key_mut(&mut self, key: &RowKey) -> Option<&mut SyncRow<T>> {
         self.rows.iter_mut().find(|row| &row.key == key)
     }
+}
+
+fn push_failure_message(rejected: usize, conflicted: usize, first_reason: String) -> String {
+    if rejected + conflicted == 1 {
+        return first_reason;
+    }
+    format!("{rejected} rejected, {conflicted} conflicted; first: {first_reason}")
 }
 
 #[cfg(test)]
@@ -690,5 +712,132 @@ mod tests {
         assert!(state.rows[0].conflict);
         assert_eq!(state.conflict_count, 1);
         assert_eq!(state.error, "base version is stale");
+    }
+
+    #[test]
+    fn conflict_without_server_row_keeps_local_row_visible() {
+        let mut state = CollectionState::<String>::default();
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:1").unwrap(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "local".to_string()).unwrap()),
+        );
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            server_row: None,
+            reason: "base version is stale".to_string(),
+        });
+
+        assert!(!state.apply_push(response));
+
+        assert_eq!(state.rows[0].value, "local");
+        assert!(!state.rows[0].pending);
+        assert!(state.rows[0].conflict);
+        assert_eq!(state.conflict_count, 1);
+    }
+
+    #[test]
+    fn multiple_push_failures_report_counts_and_first_reason() {
+        let mut state = CollectionState::<String>::default();
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            reason: "first rejection".to_string(),
+        });
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:2").unwrap(),
+            key: Some(RowKey::new("post_2").unwrap()),
+            reason: "second rejection".to_string(),
+        });
+        response.conflicts.push(SyncConflict {
+            mutation_id: MutationId::new("device_1:3").unwrap(),
+            key: Some(RowKey::new("post_3").unwrap()),
+            server_row: None,
+            reason: "conflict".to_string(),
+        });
+
+        assert!(!state.apply_push(response));
+
+        assert_eq!(
+            state.error,
+            "2 rejected, 1 conflicted; first: first rejection"
+        );
+        assert_eq!(state.rejected_count, 2);
+    }
+
+    #[test]
+    fn rejected_delete_rolls_back_removed_row() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![SyncRow::new("post_1", "loaded".to_string()).unwrap()],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:delete").unwrap(),
+            SyncOp::Delete,
+            Some(RowKey::new("post_1").unwrap()),
+            None,
+        );
+        assert!(state.rows.is_empty());
+        assert_eq!(state.pending_count, 1);
+
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:delete").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            reason: "cannot delete".to_string(),
+        });
+        state.apply_push(response);
+
+        assert_eq!(state.rows[0].value, "loaded");
+        assert_eq!(state.pending_count, 0);
+    }
+
+    #[test]
+    fn rejected_reset_restores_previous_rows() {
+        let mut state = CollectionState::<String>::default();
+        let initial = state.begin_initial();
+        state.apply_pull(
+            initial,
+            SyncPullResponse::snapshot(
+                SyncStreamName::new("posts").unwrap(),
+                SyncCollectionName::new("posts").unwrap(),
+                vec![
+                    SyncRow::new("post_1", "one".to_string()).unwrap(),
+                    SyncRow::new("post_2", "two".to_string()).unwrap(),
+                ],
+                Some(SyncCursor::new("1").unwrap()),
+            ),
+        );
+        state.apply_optimistic_mutation(
+            MutationId::new("device_1:reset").unwrap(),
+            SyncOp::Reset,
+            None,
+            None,
+        );
+        assert!(state.rows.is_empty());
+
+        let mut response = SyncPushResponse::new(SyncStreamName::new("posts").unwrap());
+        response.rejected.push(SyncRejectedMutation {
+            mutation_id: MutationId::new("device_1:reset").unwrap(),
+            key: None,
+            reason: "cannot reset".to_string(),
+        });
+        state.apply_push(response);
+
+        assert_eq!(state.rows.len(), 2);
+        assert_eq!(state.rows[0].value, "one");
+        assert_eq!(state.rows[1].value, "two");
+        assert_eq!(state.pending_count, 0);
     }
 }
