@@ -92,6 +92,15 @@ Payload fields:
 `label` for concise custom UI and `aria_label` when mirroring the chart's
 accessible announcement.
 
+`ChartHover` and `ChartSelection` also expose small formatting helpers for
+custom UI:
+
+- `series_or_chart()` returns the series label when present, otherwise the chart
+  kind.
+- `display_value()` formats the populated value fields for the payload kind:
+  `<x_label>: <y_label>`, `<category>: <value_label>`, or
+  `<value_label> (<percentage_label>)`.
+
 The built-in tooltip remains the default. Set `tooltip="none"` on a chart to
 hide the built-in tooltip while keeping hover crosshairs, markers, data
 attributes, and hover events active. Applications can then render a custom
@@ -115,8 +124,8 @@ pub fn show_tooltip(&mut self, event: JsValue) {
     let Some(hover) = ChartHover::from_event_value(event) else {
         return;
     };
-    self.tooltip_title = hover.series;
-    self.tooltip_value = format!("{}: {}", hover.x_label, hover.y_label);
+    self.tooltip_title = hover.series_or_chart().into();
+    self.tooltip_value = hover.display_value();
 }
 ```
 
