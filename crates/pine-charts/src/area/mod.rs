@@ -6,11 +6,12 @@ use crate::animation::{
     DEFAULT_ANIMATION_EASING,
 };
 use crate::cartesian::{
-    centered_plot_y, optional_domain, plot_rect_from_edges, pointer_event_svg_point,
-    CartesianChartState, CartesianGuideFields, CartesianGuideUpdate, CartesianHoverFields,
-    ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
+    centered_plot_y, chart_hover_payload, optional_domain, plot_rect_from_edges,
+    pointer_event_svg_point, CartesianChartState, CartesianGuideFields, CartesianGuideUpdate,
+    CartesianHoverFields, ChartStateFields, PlotEdgeFields, DEFAULT_EMPTY_MESSAGE,
 };
 use crate::error::{ChartError, ChartResult};
+use crate::events::{ChartHoverEnd, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT};
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::legend::{series_label_or_default, series_legend_items_with_visibility};
 use crate::line::{
@@ -194,6 +195,8 @@ pub struct PineAreaChart {
     pub animation_duration: f64,
     #[prop]
     pub animation_easing: String,
+    #[prop]
+    pub tooltip: String,
     pub animation_style: String,
     pub exit_generation: u32,
     pub state: String,
@@ -254,6 +257,7 @@ impl Default for PineAreaChart {
             animate: false,
             animation_duration: DEFAULT_ANIMATION_DURATION_MS,
             animation_easing: DEFAULT_ANIMATION_EASING.into(),
+            tooltip: "default".into(),
             animation_style: animation_style(
                 DEFAULT_ANIMATION_DURATION_MS,
                 DEFAULT_ANIMATION_EASING,
@@ -385,7 +389,11 @@ impl PineAreaChart {
     }
 
     pub fn clear_hover(&mut self) {
+        let was_visible = self.hover_visible;
         self.hover_fields().clear();
+        if was_visible {
+            pocopine::emit(CHART_HOVER_END_EVENT, ChartHoverEnd::new("area"));
+        }
     }
 }
 
@@ -534,7 +542,9 @@ impl PineAreaChart {
             return;
         };
         let update = sample.hover_update(self.plot_rect(), self.width, self.height);
+        let hover = chart_hover_payload("area", &update);
         self.hover_fields().apply(update);
+        pocopine::emit(CHART_HOVER_EVENT, hover);
     }
 
     fn plot_rect(&self) -> ChartRect {

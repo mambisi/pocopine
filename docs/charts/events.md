@@ -33,6 +33,61 @@ Template listeners use the event name directly:
   @pp:chart:select="show_detail"></pine-line-chart>
 ```
 
+## Hover
+
+Line, scatter, area, bar, and pie/donut charts emit `pp:chart:hover` while the
+pointer is over an interactive chart mark. Pointer exit emits
+`pp:chart:hover-end`. The hover payload is `ChartHover`:
+
+```rust
+use pine_charts::ChartHover;
+use pocopine::prelude::JsValue;
+```
+
+Payload fields:
+
+- `chart`: `"line"`, `"scatter"`, `"area"`, `"bar"`, or `"pie"`
+- `kind`: `"xy"`, `"category"`, or `"share"`
+- `key`
+- `label`
+- `aria_label`
+- `series`
+- `category`
+- `x` / `y`
+- `value`
+- `percentage`
+- `x_label` / `y_label`
+- `value_label`
+- `percentage_label`
+- `tooltip_x` / `tooltip_y`
+- `tooltip_style`
+
+The built-in tooltip remains the default. Set `tooltip="none"` on a chart to
+hide the built-in tooltip while keeping hover crosshairs, markers, data
+attributes, and hover events active. Applications can then render a custom
+tooltip block, overlay, or portal from the event payload:
+
+```html
+<pine-area-chart
+  pp-bind:series="series"
+  tooltip="none"
+  @pp:chart:hover="show_tooltip"
+  @pp:chart:hover-end="hide_tooltip"></pine-area-chart>
+```
+
+```rust
+use pine_charts::ChartHover;
+use pocopine::prelude::JsValue;
+
+pub fn show_tooltip(&mut self, event: JsValue) {
+    let Some(hover) = ChartHover::from_event_value(event) else {
+        return;
+    };
+    self.tooltip_title = hover.series;
+    self.tooltip_value = format!("{}: {}", hover.x_label, hover.y_label);
+}
+```
+
 ## Legend Toggles
 
 `PineChartLegend` can be made interactive with `interactive="true"`. Interactive

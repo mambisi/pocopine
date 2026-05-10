@@ -105,6 +105,8 @@ is mapped to the nearest sampled point in SVG space. For multi-series charts,
 that means nearest x/y distance, not just nearest x position. The component owns
 the nearest-point state and geometry variables, while the application owns
 tooltip placement and visual styling.
+Set `tooltip="none"` to suppress the built-in tooltip and render a custom block
+from the `pp:chart:hover` event payload instead.
 
 Set `show_markers="true"` when every sampled point should render as a visible
 SVG marker. Markers are opt-in so dense line charts do not accidentally produce
@@ -424,6 +426,7 @@ The component emits stable hooks:
 - `.pine-chart-status-empty`
 - `data-state="empty|ready|invalid"`
 - `data-hover`
+- `data-tooltip="default|none"`
 - `data-animate="true|false"`
 - `data-animation-duration`
 - `data-animation-easing`

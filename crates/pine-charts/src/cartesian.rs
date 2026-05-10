@@ -1,6 +1,7 @@
 use wasm_bindgen::JsCast;
 
 use crate::error::{finite, ChartError, ChartResult};
+use crate::events::ChartHover;
 use crate::geometry::{ChartMargins, ChartRect, Point};
 use crate::scale::LinearScale;
 use crate::svg::{format_tick, SvgAxisLabel, SvgLine, SvgTickLabel};
@@ -147,6 +148,7 @@ pub(crate) enum CartesianChartState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CartesianHoverSample {
+    pub key: String,
     pub point: Point,
     pub data_x: f64,
     pub data_y: f64,
@@ -169,6 +171,23 @@ impl CartesianHoverUpdate {
             sample,
         }
     }
+}
+
+pub(crate) fn chart_hover_payload(chart: &str, update: &CartesianHoverUpdate) -> ChartHover {
+    ChartHover::xy(
+        chart,
+        update.sample.key.clone(),
+        update.sample.aria_label.clone(),
+        update.sample.aria_label.clone(),
+        update.sample.series.clone(),
+        update.sample.data_x,
+        update.sample.data_y,
+        update.sample.x_label.clone(),
+        update.sample.y_label.clone(),
+        update.placement.x,
+        update.placement.y,
+        update.placement.style.clone(),
+    )
 }
 
 pub(crate) struct CartesianHoverFields<'a> {

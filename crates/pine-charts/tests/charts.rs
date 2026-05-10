@@ -9,7 +9,8 @@ use std::rc::Rc;
 use pine_charts::{
     line_legend_items, set_line_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries,
     ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
-    LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_EVENT,
+    LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -179,6 +180,19 @@ fn listen_bool_field(
     seen
 }
 
+fn listen_event_count(target: &Element, event_name: &str) -> Rc<Cell<u32>> {
+    let seen = Rc::new(Cell::new(0_u32));
+    let seen_for_listener = seen.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        seen_for_listener.set(seen_for_listener.get() + 1);
+    });
+    target
+        .add_event_listener_with_callback(event_name, cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+    seen
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
@@ -214,6 +228,41 @@ impl Default for LineChartFixture {
 
 #[handlers]
 impl LineChartFixture {}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-line-chart class="custom-tooltip-line"
+                   label="Sales"
+                   width="100"
+                   height="100"
+                   margin_top="0"
+                   margin_right="0"
+                   margin_bottom="0"
+                   margin_left="0"
+                   show_markers="true"
+                   tooltip="none"
+                   pp-bind:points="points"></pine-line-chart>
+</div>
+"#)]
+struct CustomTooltipLineChartFixture {
+    points: Vec<ChartPoint>,
+}
+
+impl Default for CustomTooltipLineChartFixture {
+    fn default() -> Self {
+        Self {
+            points: vec![
+                ChartPoint::new(0.0, 0.0),
+                ChartPoint::new(5.0, 10.0),
+                ChartPoint::new(10.0, 5.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl CustomTooltipLineChartFixture {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r##"
@@ -1403,6 +1452,50 @@ async fn line_chart_shows_crosshair_and_tooltip_on_pointer_move() {
 }
 
 #[wasm_bindgen_test]
+async fn line_chart_emits_hover_events_and_allows_custom_tooltips() {
+    let host = mount_fixture::<CustomTooltipLineChartFixture>();
+    settle().await;
+
+    let chart = host
+        .query_selector(".custom-tooltip-line")
+        .unwrap()
+        .unwrap();
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_label = listen_string_field(&chart, CHART_HOVER_EVENT, "label");
+    let hover_x = listen_string_field(&chart, CHART_HOVER_EVENT, "x_label");
+    let hover_y = listen_string_field(&chart, CHART_HOVER_EVENT, "y_label");
+    let hover_end_count = listen_event_count(&chart, CHART_HOVER_END_EVENT);
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    dispatch_pointer_move(&svg, 50.0, 50.0);
+    settle().await;
+
+    let tooltip = host.query_selector(".pine-chart-tooltip").unwrap().unwrap();
+    assert_eq!(
+        tooltip.get_attribute("aria-hidden").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        tooltip.get_attribute("style").as_deref(),
+        Some("display: none;")
+    );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("line"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("xy"));
+    assert_eq!(hover_label.borrow().as_deref(), Some("x 5, y 10"));
+    assert_eq!(hover_x.borrow().as_deref(), Some("5"));
+    assert_eq!(hover_y.borrow().as_deref(), Some("10"));
+
+    let leave = web_sys::PointerEvent::new("pointerleave").unwrap();
+    svg.dispatch_event(&leave).unwrap();
+    settle().await;
+
+    assert_eq!(hover_end_count.get(), 1);
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
 async fn line_chart_supports_marker_selection_and_keyboard_focus() {
     let host = mount_fixture::<LineChartFixture>();
     settle().await;
@@ -1827,6 +1920,10 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
     let chart = host.query_selector(".pine-bar-chart").unwrap().unwrap();
     assert!(!chart.has_attribute("data-hover"));
     let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_category = listen_string_field(&chart, CHART_HOVER_EVENT, "category");
+    let hover_value = listen_string_field(&chart, CHART_HOVER_EVENT, "value_label");
 
     let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
     dispatch_pointer_move(&svg, 10.0, 90.0);
@@ -1854,6 +1951,10 @@ async fn bar_chart_shows_tooltip_on_pointer_move() {
         tooltip.get_attribute("data-tooltip-x").as_deref(),
         Some("right")
     );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("bar"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("category"));
+    assert_eq!(hover_category.borrow().as_deref(), Some("A"));
+    assert_eq!(hover_value.borrow().as_deref(), Some("2"));
 
     dispatch_click(&first);
     settle().await;

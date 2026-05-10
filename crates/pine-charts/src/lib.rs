@@ -43,7 +43,10 @@ pub use cartesian_chart::{
     PineChartGrid, PineLineSeries, PineScatterSeries, PineXAxis, PineYAxis,
 };
 pub use error::{ChartError, ChartResult};
-pub use events::{ChartSelection, LegendToggle, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT};
+pub use events::{
+    ChartHover, ChartHoverEnd, ChartSelection, LegendToggle, CHART_HOVER_END_EVENT,
+    CHART_HOVER_EVENT, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+};
 pub use geometry::{ChartMargins, ChartRect, Point};
 pub use layered::{
     render_layer_chart, ChartLayerGuide, ChartLayerIcon, ChartLayerLabel, ChartLayerLine,
