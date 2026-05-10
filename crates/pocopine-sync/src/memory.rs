@@ -169,6 +169,7 @@ where
     {
         let mut inner = self.lock()?;
         let mut response = SyncPushResponse::new(self.stream.clone());
+        response.collection = Some(self.collection.clone());
 
         for mutation in request.mutations {
             if inner.accepted_mutations.contains(mutation.id.as_str()) {

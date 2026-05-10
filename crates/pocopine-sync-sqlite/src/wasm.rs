@@ -136,10 +136,22 @@ async fn ensure_database(database_name: &str) -> SyncResult<()> {
         SQLITE_STARTED.with(|started| *started.borrow_mut() = true);
     }
 
-    let already_open = sqlite_wasm::is_open()
-        && SQLITE_CURRENT_DATABASE
-            .with(|current| current.borrow().as_deref() == Some(database_name));
-    if !already_open {
+    if sqlite_wasm::is_open() {
+        let current = SQLITE_CURRENT_DATABASE.with(|current| current.borrow().clone());
+        match current.as_deref() {
+            Some(current) if current == database_name => {}
+            Some(current) => {
+                return Err(SyncError::client(format!(
+                    "pocopine-sync-sqlite supports one open browser SQLite database per page; {current:?} is already open"
+                )));
+            }
+            None => {
+                return Err(SyncError::client(
+                    "pocopine-sync-sqlite cannot attach because another SQLite WASM database is already open",
+                ));
+            }
+        }
+    } else {
         sqlite_wasm::open(database_name).await.map_err(js_error)?;
         SQLITE_CURRENT_DATABASE
             .with(|current| *current.borrow_mut() = Some(database_name.to_string()));
@@ -160,6 +172,7 @@ async fn bootstrap_schema() -> SyncResult<()> {
     for sql in BOOTSTRAP_SQL {
         exec(sql, Vec::new()).await?;
     }
+    validate_schema_version().await?;
     upsert_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string()).await
 }
 
@@ -180,6 +193,23 @@ async fn load_identity() -> SyncResult<Option<SyncLocalIdentity>> {
         .unwrap_or(1);
 
     SyncLocalIdentity::with_next_counter(SyncDeviceId::new(device_id)?, next_counter).map(Some)
+}
+
+async fn validate_schema_version() -> SyncResult<()> {
+    let Some(existing) = select_meta(META_SCHEMA_VERSION).await? else {
+        return Ok(());
+    };
+    let version = existing.parse::<u32>().map_err(|_| {
+        SyncError::backend(format!(
+            "invalid sync sqlite schema version in local store: {existing}"
+        ))
+    })?;
+    if version != SCHEMA_VERSION {
+        return Err(SyncError::backend(format!(
+            "incompatible sync sqlite schema version: found {version}, expected {SCHEMA_VERSION}"
+        )));
+    }
+    Ok(())
 }
 
 async fn save_identity(identity: SyncLocalIdentity) -> SyncResult<()> {
@@ -260,18 +290,22 @@ async fn apply_changes(changes: LocalChangeBatch) -> SyncResult<()> {
     exec("BEGIN IMMEDIATE TRANSACTION", Vec::new()).await?;
     let result = async {
         let now = epoch_ms();
-        upsert_stream(
-            &changes.stream,
-            &changes.collection,
-            changes.cursor.as_ref(),
-            now,
-        )
-        .await?;
-        for change in changes.changes {
+        let stream = changes.stream;
+        upsert_stream(&stream, &changes.collection, changes.cursor.as_ref(), now).await?;
+        let changes = changes_after_last_reset(changes.changes);
+        if changes.had_reset {
+            exec(
+                DELETE_STREAM_ROWS_SQL,
+                vec![JsValue::from_str(stream.as_str())],
+            )
+            .await?;
+        }
+
+        for change in changes.items {
             match change.op {
                 SyncOp::Upsert => {
                     if let Some(row) = change.row {
-                        upsert_row(&changes.stream, &row, now).await?;
+                        upsert_row(&stream, &row, now).await?;
                     }
                 }
                 SyncOp::Delete => {
@@ -279,7 +313,7 @@ async fn apply_changes(changes: LocalChangeBatch) -> SyncResult<()> {
                         exec(
                             DELETE_ROW_SQL,
                             vec![
-                                JsValue::from_str(changes.stream.as_str()),
+                                JsValue::from_str(stream.as_str()),
                                 JsValue::from_str(key.as_str()),
                             ],
                         )
@@ -287,13 +321,8 @@ async fn apply_changes(changes: LocalChangeBatch) -> SyncResult<()> {
                     }
                 }
                 SyncOp::Reset => {
-                    exec(
-                        DELETE_STREAM_ROWS_SQL,
-                        vec![JsValue::from_str(changes.stream.as_str())],
-                    )
-                    .await?;
                     if let Some(row) = change.row {
-                        upsert_row(&changes.stream, &row, now).await?;
+                        upsert_row(&stream, &row, now).await?;
                     }
                 }
             }
@@ -328,7 +357,9 @@ async fn mark_push_result(result: LocalPushResult) -> SyncResult<()> {
     let tx_result = async {
         let now = epoch_ms();
 
-        if let Some(cursor) = result.cursor {
+        if let Some(collection) = result.collection.as_ref() {
+            upsert_stream(&result.stream, collection, result.cursor.as_ref(), now).await?;
+        } else if let Some(cursor) = result.cursor.as_ref() {
             exec(
                 "update __pocopine_streams set cursor = ?2, updated_at_ms = ?3 where stream = ?1",
                 vec![
@@ -338,6 +369,12 @@ async fn mark_push_result(result: LocalPushResult) -> SyncResult<()> {
                 ],
             )
             .await?;
+            if stream_exists(&result.stream).await?.is_none() {
+                return Err(SyncError::backend(format!(
+                    "cannot persist sync push cursor for stream {} before stream metadata exists",
+                    result.stream
+                )));
+            }
         }
 
         for id in result.accepted {
@@ -485,6 +522,11 @@ async fn select_meta(key: &str) -> SyncResult<Option<String>> {
         .transpose()
 }
 
+async fn stream_exists(stream: &SyncStreamName) -> SyncResult<Option<()>> {
+    let rows = query_rows(SELECT_STREAM_SQL, vec![JsValue::from_str(stream.as_str())]).await?;
+    Ok(rows.first().map(|_| ()))
+}
+
 async fn delete_mutation(mutation_id: &str) -> SyncResult<()> {
     exec(DELETE_MUTATION_SQL, vec![JsValue::from_str(mutation_id)]).await
 }
@@ -546,6 +588,7 @@ fn optional_string(row: &Value, field: &'static str) -> SyncResult<Option<String
 
 fn bool_from_int(row: &Value, field: &'static str) -> SyncResult<bool> {
     match row.get(field) {
+        Some(Value::Bool(value)) => Ok(*value),
         Some(Value::Number(value)) => value
             .as_i64()
             .map(|value| value != 0)
@@ -579,6 +622,30 @@ fn op_from_str(value: &str) -> SyncResult<SyncOp> {
         other => Err(SyncError::backend(format!(
             "invalid sync mutation op in sqlite store: {other}"
         ))),
+    }
+}
+
+struct LocalChanges {
+    had_reset: bool,
+    items: Vec<pocopine_sync::SyncChange<serde_json::Value>>,
+}
+
+fn changes_after_last_reset(
+    changes: Vec<pocopine_sync::SyncChange<serde_json::Value>>,
+) -> LocalChanges {
+    let Some(index) = changes
+        .iter()
+        .rposition(|change| change.op == SyncOp::Reset)
+    else {
+        return LocalChanges {
+            had_reset: false,
+            items: changes,
+        };
+    };
+
+    LocalChanges {
+        had_reset: true,
+        items: changes.into_iter().skip(index).collect(),
     }
 }
 

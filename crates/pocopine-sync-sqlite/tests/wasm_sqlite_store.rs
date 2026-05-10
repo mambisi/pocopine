@@ -59,6 +59,7 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
     store
         .mark_push_result(LocalPushResult {
             stream: stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
             accepted: vec![MutationId::new("device_browser:3").unwrap()],
             rejected: Vec::new(),
             rows: vec![
@@ -77,6 +78,29 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
     let updated = store.hydrate_stream(&stream).await.unwrap();
     assert_eq!(updated.cursor.unwrap().as_str(), "cursor_2");
     assert_eq!(updated.rows[0].value["title"], "Updated");
+
+    let push_first_stream = SyncStreamName::new("push_first").unwrap();
+    store
+        .mark_push_result(LocalPushResult {
+            stream: push_first_stream.clone(),
+            collection: Some(SyncCollectionName::new("posts").unwrap()),
+            accepted: vec![MutationId::new("device_browser:4").unwrap()],
+            rejected: Vec::new(),
+            rows: vec![
+                SyncRow::new("post_2", serde_json::json!({"title": "Push first"}))
+                    .unwrap()
+                    .version("row_1")
+                    .unwrap(),
+            ],
+            conflicts: Vec::new(),
+            cursor: Some(SyncCursor::new("cursor_push_first").unwrap()),
+        })
+        .await
+        .unwrap();
+
+    let push_first = store.hydrate_stream(&push_first_stream).await.unwrap();
+    assert_eq!(push_first.cursor.unwrap().as_str(), "cursor_push_first");
+    assert_eq!(push_first.rows.len(), 1);
 
     let _ = sqlite_wasm::close().await;
 }

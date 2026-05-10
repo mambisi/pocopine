@@ -325,11 +325,14 @@ async fn push_handler(
         let (ctx, request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
         let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
         stream.authorize(ctx.clone()).await?;
-        let response = stream
+        let mut response = stream
             .source
             .push(ctx, request)
             .await
             .map_err(server_error)?;
+        if response.collection.is_none() {
+            response.collection = Some(stream.source.collection().clone());
+        }
         if !response.accepted.is_empty() {
             if let Err(err) = sync.invalidate_stream(response.stream.as_str()).await {
                 tracing::warn!(

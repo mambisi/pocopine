@@ -102,8 +102,12 @@ impl SyncLocalStore for MemoryLocalStore {
             let state = inner.streams.entry(changes.stream).or_default();
             state.collection = Some(changes.collection);
             state.cursor = changes.cursor;
+            let changes = changes_after_last_reset(changes.changes);
+            if changes.had_reset {
+                state.rows.clear();
+            }
 
-            for change in changes.changes {
+            for change in changes.items {
                 match change.op {
                     SyncOp::Upsert => {
                         if let Some(row) = change.row {
@@ -116,7 +120,6 @@ impl SyncLocalStore for MemoryLocalStore {
                         }
                     }
                     SyncOp::Reset => {
-                        state.rows.clear();
                         if let Some(row) = change.row {
                             state.rows.insert(row.key.clone(), row);
                         }
@@ -143,7 +146,12 @@ impl SyncLocalStore for MemoryLocalStore {
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
         Self::ready(self.with_inner(|inner| {
             let state = inner.streams.entry(result.stream).or_default();
-            state.cursor = result.cursor;
+            if let Some(collection) = result.collection {
+                state.collection = Some(collection);
+            }
+            if let Some(cursor) = result.cursor {
+                state.cursor = Some(cursor);
+            }
 
             for id in result.accepted {
                 state.pending.remove(&id);
@@ -189,6 +197,28 @@ impl SyncLocalStore for MemoryLocalStore {
                 .map(|state| state.pending.values().cloned().collect())
                 .unwrap_or_default())
         }))
+    }
+}
+
+struct LocalChanges {
+    had_reset: bool,
+    items: Vec<crate::SyncChange<serde_json::Value>>,
+}
+
+fn changes_after_last_reset(changes: Vec<crate::SyncChange<serde_json::Value>>) -> LocalChanges {
+    let Some(index) = changes
+        .iter()
+        .rposition(|change| change.op == SyncOp::Reset)
+    else {
+        return LocalChanges {
+            had_reset: false,
+            items: changes,
+        };
+    };
+
+    LocalChanges {
+        had_reset: true,
+        items: changes.into_iter().skip(index).collect(),
     }
 }
 
