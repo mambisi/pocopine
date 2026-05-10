@@ -314,23 +314,23 @@ fn start_pull<C, T>(
     C: 'static,
     T: serde::de::DeserializeOwned + 'static,
 {
-    let request_token = handle.update(|state| {
-        let collection = selector(state);
-        let cursor = cursor.or_else(|| collection.cursor.clone());
-        let request = SyncPullRequest::new(shape.clone()).cursor(cursor);
-        let token = if live_event {
-            collection.begin_live_pull(reason)
-        } else if collection.version == 0 {
-            collection.begin_initial()
-        } else {
-            collection.begin_pull(reason)
-        };
-        (request, token)
-    });
-    let (request, token) = request_token;
     let pull_url = endpoint_path(&endpoint, "pull");
 
     pocopine_core::spawn_for_scope(scope_id, async move {
+        let request_token = handle.update(|state| {
+            let collection = selector(state);
+            let cursor = cursor.or_else(|| collection.cursor.clone());
+            let request = SyncPullRequest::new(shape.clone()).cursor(cursor);
+            let token = if live_event {
+                collection.begin_live_pull(reason)
+            } else if collection.version == 0 {
+                collection.begin_initial()
+            } else {
+                collection.begin_pull(reason)
+            };
+            (request, token)
+        });
+        let (request, token) = request_token;
         let result =
             pocopine_core::fetch::call::<SyncPullRequest, SyncPullResponse<T>>(&pull_url, &request)
                 .await;
