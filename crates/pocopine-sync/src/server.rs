@@ -325,7 +325,22 @@ async fn push_handler(
         let (ctx, request) = parse_json_request::<SyncPushRequest<Value>>(request).await?;
         let stream = sync.stream(request.stream.as_str()).map_err(server_error)?;
         stream.authorize(ctx.clone()).await?;
-        stream.source.push(ctx, request).await.map_err(server_error)
+        let response = stream
+            .source
+            .push(ctx, request)
+            .await
+            .map_err(server_error)?;
+        if !response.accepted.is_empty() {
+            if let Err(err) = sync.invalidate_stream(response.stream.as_str()).await {
+                tracing::warn!(
+                    target: "pocopine.log",
+                    error = %err,
+                    stream = response.stream.as_str(),
+                    "failed to publish sync stream invalidation after push"
+                );
+            }
+        }
+        Ok(response)
     }
     .await;
     Json(result)
@@ -385,8 +400,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        MemorySyncStream, SyncCollectionName, SyncOpenRequest, SyncPullMode, SyncPushRequest,
-        SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
+        ClientMutation, MemorySyncStream, MutationId, RowKey, SyncCollectionName, SyncOp,
+        SyncOpenRequest, SyncPullMode, SyncPushRequest, SyncRow, SyncStreamName, SYNC_PROTOCOL_V1,
     };
 
     #[tokio::test]
@@ -418,21 +433,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_push_returns_unsupported_bad_request() {
+    async fn push_route_applies_memory_mutation_for_registered_streams() {
         let router = router_with_posts_stream();
 
-        let request = SyncPushRequest::<String> {
-            protocol: SYNC_PROTOCOL_V1.to_string(),
-            stream: SyncStreamName::new("posts_for_tenant").unwrap(),
-            mutations: Vec::new(),
-        };
+        let request = SyncPushRequest::new(
+            SyncStreamName::new("posts_for_tenant").unwrap(),
+            [ClientMutation {
+                id: MutationId::new("device_1:1").unwrap(),
+                key: Some(RowKey::new("post_2").unwrap()),
+                op: SyncOp::Upsert,
+                base_version: None,
+                payload: "from push".to_string(),
+            }],
+        );
         let outer: ServerResult<SyncPushResponse<String>> =
             post_json(router, SYNC_PUSH_PATH, &request, None).await;
-        assert!(matches!(
-            outer,
-            Err(ServerError::BadRequest(message))
-                if message.contains("unsupported sync operation")
-        ));
+        let response = outer.unwrap();
+        assert_eq!(response.accepted.len(), 1);
+        assert!(response.rejected.is_empty());
+        assert!(response.conflicts.is_empty());
+        assert_eq!(response.rows[0].key.as_str(), "post_2");
+        assert_eq!(response.rows[0].value, "from push");
     }
 
     #[tokio::test]
