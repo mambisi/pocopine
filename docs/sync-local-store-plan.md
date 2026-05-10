@@ -28,7 +28,9 @@ Current implementation status: the `SyncLocalStore` contract,
 place. The client runtime hydrates cached rows before network pull,
 persists pull/push outcomes into the store, and replays stored pending
 mutations during `open()`. The store is still memory-backed until the
-SQLite WASM/OPFS crate lands.
+SQLite WASM/OPFS crate lands. `pocopine-sync-sqlite` now contains the
+shared schema and a native SQLite implementation; the browser OPFS worker
+binding remains the next concrete storage step.
 
 ## Crate Boundaries
 
@@ -317,6 +319,8 @@ Files:
 Deliverables:
 
 - new extension crate,
+- shared SQLite schema and bootstrap SQL,
+- native SQLite implementation for tests and host/native apps,
 - browser SQLite WASM + OPFS worker boundary,
 - schema migration bootstrap,
 - transactional local-store implementation,
@@ -324,6 +328,8 @@ Deliverables:
 
 Tests:
 
+- native SQLite test for identity, snapshot, changes, pending replay, and
+  push outcomes,
 - wasm browser test for open database and schema bootstrap,
 - mutation queue persists across client recreation,
 - snapshot/change application is atomic,

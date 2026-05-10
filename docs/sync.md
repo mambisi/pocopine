@@ -30,6 +30,11 @@ the storage contract can be tested without a browser database.
 replays pending stored mutations. SQLite WASM/OPFS durability is the next
 implementation step.
 
+`pocopine-sync-sqlite` now owns the SQLite schema and includes a native
+SQLite implementation for tests and host/native apps. Browser builds
+compile against the same crate but return a clear unsupported error until
+the SQLite WASM + OPFS worker binding lands.
+
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
 same PR.
@@ -433,7 +438,9 @@ wasm-pack test --firefox --headless crates/pocopine-sync --test client_browser
 Keep these as separate adapter crates:
 
 - `pocopine-sync-sqlx` for compile-time checked SQL streams,
-- `pocopine-sync-sqlite` for durable browser SQLite via SQLite WASM/OPFS,
+- `pocopine-sync-sqlite` for SQLite local storage. The crate currently
+  ships the schema plus native SQLite implementation; browser durability
+  will use SQLite WASM/OPFS behind the same `SyncLocalStore` contract,
 - `pocopine-sync-redis` only if we need a shared server-side change log.
 
 Those crates should implement the same protocol contracts rather than
