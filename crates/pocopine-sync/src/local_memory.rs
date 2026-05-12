@@ -411,6 +411,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_store_duplicate_mutation_id_replaces_in_place() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let first = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: Some(RowVersion::new("row_1").unwrap()),
+            payload: serde_json::json!({"title": "First"}),
+        };
+        let second = ClientMutation {
+            id: MutationId::new("device_abc:2").unwrap(),
+            key: Some(RowKey::new("post_2").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "Second"}),
+        };
+        let replacement = ClientMutation {
+            id: first.id.clone(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: Some(RowVersion::new("row_2").unwrap()),
+            payload: serde_json::json!({"title": "Replacement"}),
+        };
+
+        store.enqueue_mutation(&stream, first).await.unwrap();
+        store
+            .enqueue_mutation(&stream, second.clone())
+            .await
+            .unwrap();
+        store
+            .enqueue_mutation(&stream, replacement.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.pending_mutations(&stream).await.unwrap(),
+            vec![replacement, second]
+        );
+    }
+
+    #[tokio::test]
     async fn memory_store_marks_conflict_rows() {
         let store = MemoryLocalStore::new();
         let stream = SyncStreamName::new("posts").unwrap();
@@ -513,6 +555,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_store_push_result_preserves_cursor_when_response_has_none() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                collection.clone(),
+                vec![SyncRow::new("post_1", serde_json::json!({"title": "Old"})).unwrap()],
+                Some(SyncCursor::new("cursor_1").unwrap()),
+            ))
+            .await
+            .unwrap();
+
+        let row = SyncRow::new("post_1", serde_json::json!({"title": "New"})).unwrap();
+        let mut response = SyncPushResponse::new(stream.clone());
+        response.rows.push(row.clone());
+
+        store
+            .mark_push_result(LocalPushResult::from_response(response))
+            .await
+            .unwrap();
+
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert_eq!(snapshot.collection, Some(collection));
+        assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_1");
+        assert_eq!(snapshot.rows, vec![row]);
+    }
+
+    #[tokio::test]
+    async fn memory_store_push_result_only_clears_matching_pending_mutations() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let accepted = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "Accepted"}),
+        };
+        let rejected = ClientMutation {
+            id: MutationId::new("device_abc:2").unwrap(),
+            key: Some(RowKey::new("post_2").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "Rejected"}),
+        };
+        let still_pending = ClientMutation {
+            id: MutationId::new("device_abc:3").unwrap(),
+            key: Some(RowKey::new("post_3").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"title": "Pending"}),
+        };
+        for mutation in [accepted.clone(), rejected.clone(), still_pending.clone()] {
+            store.enqueue_mutation(&stream, mutation).await.unwrap();
+        }
+
+        let mut response = SyncPushResponse::new(stream.clone());
+        response.accepted.push(accepted.id);
+        response.rejected.push(crate::SyncRejectedMutation {
+            mutation_id: rejected.id,
+            key: rejected.key,
+            reason: "not allowed".to_string(),
+        });
+
+        store
+            .mark_push_result(LocalPushResult::from_response(response))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.pending_mutations(&stream).await.unwrap(),
+            vec![still_pending]
+        );
+    }
+
+    #[tokio::test]
     async fn memory_store_apply_changes_delete_missing_key_is_noop() {
         let store = MemoryLocalStore::new();
         let stream = SyncStreamName::new("posts").unwrap();
@@ -612,6 +732,47 @@ mod tests {
 
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
         assert_eq!(snapshot.rows, vec![after_reset]);
+    }
+
+    #[tokio::test]
+    async fn memory_store_apply_changes_reset_without_row_clears_rows() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
+        store
+            .save_snapshot(LocalSnapshotBatch::new(
+                stream.clone(),
+                collection.clone(),
+                vec![
+                    SyncRow::new("post_1", serde_json::json!({"title": "One"})).unwrap(),
+                    SyncRow::new("post_2", serde_json::json!({"title": "Two"})).unwrap(),
+                ],
+                Some(SyncCursor::new("cursor_1").unwrap()),
+            ))
+            .await
+            .unwrap();
+
+        let cursor = SyncCursor::new("cursor_2").unwrap();
+        store
+            .apply_changes(LocalChangeBatch::new(
+                stream.clone(),
+                collection,
+                vec![SyncChange {
+                    stream: stream.clone(),
+                    collection: SyncCollectionName::new("posts").unwrap(),
+                    key: None,
+                    op: SyncOp::Reset,
+                    row: None,
+                    cursor: cursor.clone(),
+                }],
+                Some(cursor),
+            ))
+            .await
+            .unwrap();
+
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert!(snapshot.rows.is_empty());
+        assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_2");
     }
 
     #[tokio::test]

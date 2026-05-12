@@ -302,6 +302,20 @@ mod tests {
     }
 
     #[test]
+    fn mutation_id_generator_rejects_counter_overflow_without_advancing() {
+        let mut generator = MutationIdGenerator::with_next_counter(
+            SyncDeviceId::new("device_abc").unwrap(),
+            u64::MAX,
+        )
+        .unwrap();
+
+        let err = generator.next_mutation_id().unwrap_err();
+
+        assert!(err.to_string().contains("next mutation counter"));
+        assert_eq!(generator.next_counter(), u64::MAX);
+    }
+
+    #[test]
     fn local_snapshot_empty_has_no_rows_or_pending_mutations() {
         let snapshot = LocalStreamSnapshot::empty(SyncStreamName::new("posts").unwrap());
 
@@ -315,8 +329,10 @@ mod tests {
     #[test]
     fn local_push_result_preserves_server_outcomes() {
         let stream = SyncStreamName::new("posts").unwrap();
+        let collection = SyncCollectionName::new("posts").unwrap();
         let row = SyncRow::new("post_1", serde_json::json!({"title": "Saved"})).unwrap();
         let mut response = SyncPushResponse::new(stream.clone());
+        response.collection = Some(collection.clone());
         response
             .accepted
             .push(MutationId::new("device_abc:1").unwrap());
@@ -331,6 +347,7 @@ mod tests {
         let result = LocalPushResult::from_response(response);
 
         assert_eq!(result.stream, stream);
+        assert_eq!(result.collection, Some(collection));
         assert_eq!(result.accepted[0].as_str(), "device_abc:1");
         assert_eq!(result.rejected[0].reason, "invalid title");
         assert_eq!(result.rows[0].key.as_str(), "post_1");
