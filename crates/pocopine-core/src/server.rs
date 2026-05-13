@@ -74,3 +74,53 @@ impl From<&str> for ServerError {
 
 /// Canonical `Result` alias for `#[server]` functions.
 pub type Result<T> = core::result::Result<T, ServerError>;
+
+const SERVER_FUNCTION_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const SERVER_FUNCTION_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = SERVER_FUNCTION_HASH_OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(SERVER_FUNCTION_HASH_PRIME);
+    }
+    hash
+}
+
+/// Returns the compiler-generated default route path for a server function.
+///
+/// The suffix is based on the Rust module path and function name so two
+/// modules can expose the same function name without colliding.
+#[doc(hidden)]
+pub fn server_function_default_path(module_path: &str, function: &str) -> String {
+    let mut key = String::with_capacity(module_path.len() + function.len() + 2);
+    key.push_str(module_path);
+    key.push_str("::");
+    key.push_str(function);
+    let hash = fnv1a64(key.as_bytes());
+
+    format!("/_pocopine/{function}_{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_function_default_path;
+
+    #[test]
+    fn default_paths_are_scoped_by_module_path() {
+        let first = server_function_default_path("app::filters", "get_filter");
+        let second = server_function_default_path("app::admin", "get_filter");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("/_pocopine/get_filter_"));
+        assert!(second.starts_with("/_pocopine/get_filter_"));
+    }
+
+    #[test]
+    fn default_paths_are_stable() {
+        assert_eq!(
+            server_function_default_path("app::filters", "get_filter"),
+            "/_pocopine/get_filter_b0e2ae5de9927498"
+        );
+    }
+}

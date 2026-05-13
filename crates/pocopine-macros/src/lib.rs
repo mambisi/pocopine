@@ -3056,13 +3056,14 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Expands to two `cfg`-gated definitions:
 ///
 /// * **wasm32** — a client stub that POSTs the arguments as JSON to
-///   `/_pocopine/<name>` and deserializes the JSON response as
+///   a generated endpoint path and deserializes the JSON response as
 ///   `Result<R, ServerError>`. The user-supplied body is discarded on
 ///   this target.
 /// * **non-wasm32** — the original user body, plus a helper
 ///   `__<name>_route(router) -> axum::Router` that registers the POST
-///   route so a server binary can mount it. `#[server(guard = path)]`
-///   runs the guard before the user body.
+///   route and an inventory entry that lets `pocopine_server::Server`
+///   mount the route automatically. `#[server(guard = path)]` runs the
+///   guard before the user body.
 ///
 /// Access policy:
 ///
@@ -3074,6 +3075,9 @@ pub fn store(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   replay-safe for middleware. Auth middleware may retry these at
 ///   most once after a successful refresh; unmarked calls remain
 ///   fail-closed.
+/// * `#[server(path = "/api/stable-name")]` opts into a public, stable
+///   route path. Without `path`, the macro uses a generated internal
+///   path scoped by module path and function name.
 /// * `#[server]` without either marker still compiles, but emits a
 ///   warning so authors do not accidentally ship unreviewed endpoints.
 ///
@@ -3089,6 +3093,7 @@ struct ServerPolicy {
     public: bool,
     guard: Option<Path>,
     idempotent: bool,
+    path: Option<LitStr>,
 }
 
 impl ServerPolicy {
@@ -3124,6 +3129,12 @@ fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
                 }
                 policy.guard = Some(parse_server_guard_value(value)?);
             }
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("path") => {
+                if policy.path.is_some() {
+                    return Err(syn::Error::new_spanned(path, "duplicate route path"));
+                }
+                policy.path = Some(parse_server_path_value(value)?);
+            }
             Meta::List(list) if list.path.is_ident("guard") => {
                 if policy.guard.is_some() {
                     return Err(syn::Error::new_spanned(list.path, "duplicate auth guard"));
@@ -3133,7 +3144,7 @@ fn parse_server_policy(attr: TokenStream) -> syn::Result<ServerPolicy> {
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "unsupported `#[server]` option; expected `public`, `idempotent`, or `guard = path`",
+                    "unsupported `#[server]` option; expected `public`, `idempotent`, `guard = path`, or `path = \"/api/name\"`",
                 ));
             }
         }
@@ -3165,6 +3176,31 @@ fn parse_server_guard_value(value: Expr) -> syn::Result<Path> {
     }
 }
 
+fn parse_server_path_value(value: Expr) -> syn::Result<LitStr> {
+    let Expr::Lit(ExprLit {
+        lit: Lit::Str(lit), ..
+    }) = value
+    else {
+        return Err(syn::Error::new_spanned(
+            value,
+            "`path` must be a string literal, for example `path = \"/api/posts\"`",
+        ));
+    };
+
+    let value = lit.value();
+    if !value.starts_with('/') {
+        return Err(syn::Error::new_spanned(lit, "`path` must start with `/`"));
+    }
+    if value.trim() != value || value.chars().any(char::is_control) {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "`path` must not contain surrounding whitespace or control characters",
+        ));
+    }
+
+    Ok(lit)
+}
+
 #[proc_macro_attribute]
 pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let policy = match parse_server_policy(attr) {
@@ -3178,8 +3214,29 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let fn_ident = sig.ident.clone();
     let fn_name_str = fn_ident.to_string();
-    let route_path = format!("/_pocopine/{fn_name_str}");
     let route_ident = format_ident!("__{fn_name_str}_route");
+    let path_ident = format_ident!("__{fn_name_str}_path");
+    let path_fn = match policy.path.as_ref() {
+        Some(path) => quote! {
+            #[doc(hidden)]
+            pub fn #path_ident() -> &'static str {
+                #path
+            }
+        },
+        None => quote! {
+            #[doc(hidden)]
+            pub fn #path_ident() -> &'static str {
+                static PATH: ::std::sync::OnceLock<::std::string::String> =
+                    ::std::sync::OnceLock::new();
+                PATH.get_or_init(|| {
+                    ::pocopine::__private::server_function_default_path(
+                        module_path!(),
+                        #fn_name_str,
+                    )
+                }).as_str()
+            }
+        },
+    };
 
     // Collect (pat_ident, type) pairs, rejecting self / ref args.
     let mut arg_idents = Vec::new();
@@ -3263,7 +3320,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[cfg(target_arch = "wasm32")]
         #sig_without_body {
             #client_call(
-                #route_path,
+                #path_ident(),
                 &#args_tuple_value,
             ).await
         }
@@ -3310,7 +3367,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ::pocopine_server::tracing::warn!(
                     target: "pocopine.log",
                     function = #fn_name_str,
-                    route = #route_path,
+                    route = #path_ident(),
                     duration_ms = __pocopine_duration_ms,
                     error_kind = __pocopine_error_kind,
                     error = %__pocopine_error,
@@ -3373,7 +3430,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::warn!(
                                 target: "pocopine.log",
                                 function = #fn_name_str,
-                                route = #route_path,
+                                route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 error_kind = "bad_request",
                                 error = %__pocopine_error,
@@ -3406,7 +3463,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine_server::tracing::warn!(
                                     target: "pocopine.log",
                                     function = #fn_name_str,
-                                    route = #route_path,
+                                    route = #path_ident(),
                                     duration_ms = __pocopine_duration_ms,
                                     body_bytes = __pocopine_body_bytes,
                                     error_kind = "bad_request",
@@ -3437,7 +3494,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::info!(
                                 target: "pocopine.trace",
                                 function = #fn_name_str,
-                                route = #route_path,
+                                route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 body_bytes = __pocopine_body_bytes,
                                 "server function completed"
@@ -3463,7 +3520,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::warn!(
                                 target: "pocopine.log",
                                 function = #fn_name_str,
-                                route = #route_path,
+                                route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 body_bytes = __pocopine_body_bytes,
                                 error_kind = __pocopine_error_kind,
@@ -3488,7 +3545,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     target: "pocopine.trace",
                     "pocopine.server_function",
                     function = #fn_name_str,
-                    route = #route_path,
+                    route = #path_ident(),
                 ))
                 .await
             },
@@ -3504,12 +3561,23 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
         pub fn #route_ident(
             router: ::pocopine_server::axum::Router,
         ) -> ::pocopine_server::axum::Router {
-            router.route(#route_path, #route_handler)
+            router.route(#path_ident(), #route_handler)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        ::pocopine_server::inventory::submit! {
+            ::pocopine_server::ServerFunctionRoute {
+                module_path: module_path!(),
+                function: #fn_name_str,
+                path: #path_ident,
+                install: #route_ident,
+            }
         }
     };
 
     let out = quote! {
         #policy_warning
+        #path_fn
         #client
         #server
     };

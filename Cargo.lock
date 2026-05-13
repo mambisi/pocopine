@@ -3501,6 +3501,7 @@ name = "pocopine-server"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
+ "inventory",
  "pocopine-auth",
  "serde",
  "serde_json",
