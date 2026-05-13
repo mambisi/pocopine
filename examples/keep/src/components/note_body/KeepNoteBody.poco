@@ -1,0 +1,36 @@
+<div class="note-body-editor" :data-kind="kind">
+  <template pp-if="kind == 'text'">
+    <pine-textarea
+      class="note-body-input"
+      placeholder="Take a note…"
+      rows="3"
+      autosize
+      pp-model:value="body"
+    ></pine-textarea>
+  </template>
+
+  <div class="cl note-body-checklist" pp-show="kind == 'checklist'">
+    <template pp-for="todo in todos" pp-key="todo.id">
+      <div class="cl-row" :data-done="todo.done">
+        <button class="cl-box" aria-label="Toggle" @click="toggle_todo(todo.id)">
+          <template pp-if="todo.done">
+            <pine-icon name="check" size="14"></pine-icon>
+          </template>
+        </button>
+        <span class="cl-txt" pp-text="todo.text"></span>
+        <button class="cl-x" aria-label="Remove" @click="remove_todo(todo.id)">
+          <pine-icon name="x" size="14"></pine-icon>
+        </button>
+      </div>
+    </template>
+    <div class="cl-row cl-add">
+      <span class="cl-box ghost" aria-hidden="true"><pine-icon name="plus" size="14"></pine-icon></span>
+      <pine-input
+        class="cl-txt"
+        placeholder="List item"
+        pp-model:value="todo_text"
+        @keydown.enter="add_todo"
+      ></pine-input>
+    </div>
+  </div>
+</div>

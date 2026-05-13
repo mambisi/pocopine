@@ -2239,6 +2239,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "keep-example"
+version = "0.1.0"
+dependencies = [
+ "http-body-util",
+ "js-sys",
+ "pine",
+ "pine-icons",
+ "pine-motion",
+ "pocopine",
+ "pocopine-events",
+ "pocopine-live",
+ "pocopine-logging",
+ "pocopine-server",
+ "pocopine-sync",
+ "pocopine-sync-sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
