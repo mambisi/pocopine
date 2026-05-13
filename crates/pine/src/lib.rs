@@ -64,6 +64,7 @@ pub mod switch;
 pub mod tabs;
 pub mod tags_input;
 pub mod text;
+pub mod textarea;
 pub mod time_field;
 pub mod time_range_field;
 pub mod toggle;
@@ -160,6 +161,7 @@ pub use tags_input::{
     PineTagsInputItemText, PineTagsInputRoot,
 };
 pub use text::PineText;
+pub use textarea::PineTextarea;
 pub use time_field::PineTimeField;
 pub use time_range_field::PineTimeRangeField;
 pub use toggle::PineToggle;
@@ -293,6 +295,7 @@ pub fn register_all() {
     PinePasswordToggleFieldInput::register();
     PinePasswordToggleFieldToggle::register();
     PineInput::register();
+    PineTextarea::register();
     PineOtpField::register();
     PineSliderRoot::register();
     PineSliderTrack::register();
