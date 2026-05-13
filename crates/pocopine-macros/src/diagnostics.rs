@@ -63,6 +63,37 @@ pub(crate) fn render_fileless_error(file_path: &str, title: &str, note: &str) ->
     format!("{}", Renderer::styled().render(message))
 }
 
+/// Render a `.poco` template error like [`render_template_error`]
+/// but with optional `help:` and `note:` footers (rustc-shaped).
+///
+/// Used when the diagnostic wants to teach the author a fix
+/// (e.g. "move the condition onto the concrete row element with
+/// `pp-show`") in addition to pointing at the offending source
+/// span.
+pub(crate) fn render_template_error_with_footers(
+    poco_src: &str,
+    file_path: &str,
+    byte_range: Range<usize>,
+    title: &str,
+    label: &str,
+    help: Option<&str>,
+    note: Option<&str>,
+) -> String {
+    let mut message = Level::Error.title(title).snippet(
+        Snippet::source(poco_src)
+            .origin(file_path)
+            .fold(true)
+            .annotation(Level::Error.span(byte_range).label(label)),
+    );
+    if let Some(h) = help {
+        message = message.footer(Level::Help.title(h));
+    }
+    if let Some(n) = note {
+        message = message.footer(Level::Note.title(n));
+    }
+    format!("{}", Renderer::styled().render(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
