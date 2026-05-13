@@ -3,6 +3,7 @@
       :aria-expanded="open ? 'true' : 'false'"
       aria-haspopup="menu"
       :data-state="open ? 'open' : 'closed'"
-      @click="toggle">
+      @pointerdown.stop
+      @click.stop="toggle">
   <slot></slot>
 </root>
