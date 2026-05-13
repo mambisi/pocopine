@@ -167,10 +167,13 @@ impl PineFieldLabel {}
     display = "contents"
 )]
 // RFC 049 — Control is a wrapper slot. Authors drop a native
-// `<input>` or a Pine input primitive here; `accepts` keeps
-// this loose while documenting `PineInput` as the canonical
-// control.
-#[slot(default, accepts = [crate::input::PineInput])]
+// `<input>` / `<textarea>` or a Pine form primitive here;
+// `accepts` keeps this loose while documenting the canonical
+// controls.
+#[slot(
+    default,
+    accepts = [crate::input::PineInput, crate::textarea::PineTextarea]
+)]
 pub struct PineFieldControl {}
 
 #[handlers]
