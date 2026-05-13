@@ -35,10 +35,10 @@ pub async fn refresh_blog_index() -> JobResult<()> {
 }
 
 /// `#[server]` generates:
-/// * on wasm32 — a client stub that POSTs `[post_id]` to
-///   `/_pocopine/get_post` and deserializes the response.
-/// * on the host — this body is the real handler, plus a
-///   `__get_post_route` helper used by `bin/server.rs`.
+/// * on wasm32 — a client stub that POSTs `[post_id]` to the
+///   generated route and deserializes the response.
+/// * on the host — this body is the real handler, and the route is
+///   registered automatically by `pocopine_server::Server`.
 #[pocopine::server(public)]
 pub async fn get_post(post_id: u32) -> ServerResult<Post> {
     #[cfg(not(target_arch = "wasm32"))]

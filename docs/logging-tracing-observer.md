@@ -259,7 +259,6 @@ async fn main() -> std::io::Result<()> {
         .expect("logging should initialize");
 
     let router = Router::new().nest_service("/", static_files("pkg"));
-    let router = my_app::__routes(router);
 
     Server::new(router)
         .plugin(server_observability_with_config(

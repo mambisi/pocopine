@@ -18,7 +18,6 @@ use pocopine_server::{static_files, Server};
 async fn main() -> std::io::Result<()> {
     let router = Router::new()
         .nest_service("/", static_files("pkg"));
-    let router = my_app::__routes(router);
 
     Server::new(router)
         .plugin(server_observability()) // installs hooks + HTTP request layer
@@ -28,8 +27,9 @@ async fn main() -> std::io::Result<()> {
 ```
 
 Plain `pocopine_server::serve(router, addr)` still works as a one-line
-wrapper — `Server::new(router).serve(addr)` under the hood — so existing
-apps don't need to migrate.
+wrapper — `Server::new(router).serve(addr)` under the hood. Do not also
+call generated `__*_route` helpers before `serve`; linked server
+functions are installed by `Server::new`.
 
 ## Writing a plugin
 
@@ -170,7 +170,7 @@ layer.
 Install layers after routes:
 
 ```rust
-Server::new(my_app::__routes(Router::new()))
+Server::new(Router::new())
     .plugin(adds_health_endpoints())          // adds /healthz
     .layer(request_event_layer())             // wraps user + health routes
     .plugin(observability_plugin(config))

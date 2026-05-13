@@ -65,9 +65,9 @@ async fn main() -> std::io::Result<()> {
     let creds = Credentials::new(secret, store, tokens);
 
     let verifier = JwtVerifier::custom(creds.verifier_config()).unwrap();
-    let router = my_app::__routes(Router::new()).with_auth(verifier);
 
-    Server::new(router)
+    Server::new(Router::new())
+        .with_auth(verifier)
         .plugin(creds)
         .serve("0.0.0.0:3000")
         .await
@@ -476,9 +476,8 @@ async fn main() -> std::io::Result<()> {
     // BEFORE installing the credentials plugin, otherwise the
     // signup/login routes added by the plugin would be wrapped in
     // the auth middleware and reject anonymous requests.
-    let router = my_app::__routes(Router::new()).with_auth(verifier);
-
-    Server::new(router)
+    Server::new(Router::new())
+        .with_auth(verifier)
         .plugin(creds)
         .serve("0.0.0.0:3000")
         .await

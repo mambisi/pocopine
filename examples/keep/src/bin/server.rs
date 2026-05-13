@@ -1,10 +1,10 @@
 #[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use keep_example::{__reset_keep_notes_route, live_backend, sync_server};
+    use keep_example::{live_backend, sync_server};
     use pocopine_live::{routes, LiveHub};
     use pocopine_logging::init_default;
-    use pocopine_server::{axum, axum::Router, serve, static_files, Server};
+    use pocopine_server::{axum, axum::Router, static_files, Server};
     use pocopine_sync::sync_server_plugin;
 
     init_default().map_err(std::io::Error::other)?;
@@ -22,15 +22,12 @@ async fn main() -> std::io::Result<()> {
         .layer(axum::middleware::map_response(
             cross_origin_isolation_headers,
         ));
-    let router = Server::new(router)
-        .plugin(sync_server_plugin(sync))
-        .try_finalize()
-        .map_err(std::io::Error::other)?;
-    let router = __reset_keep_notes_route(router);
-
     let addr = "127.0.0.1:3022";
     tracing::info!(target: "pocopine.log", %addr, "serving keep example");
-    serve(router, addr).await
+    Server::new(router)
+        .plugin(sync_server_plugin(sync))
+        .serve(addr)
+        .await
 }
 
 #[cfg(pocopine_browser)]

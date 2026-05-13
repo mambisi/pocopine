@@ -1,11 +1,11 @@
 //! HN server binary — host-only. Serves static files with SPA
-//! history-fallback and registers the two `#[server]` routes from
-//! `src/lib.rs`.
+//! history-fallback; linked `#[server]` routes are installed by
+//! `pocopine_server::Server`.
 
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use hn::{__get_item_tree_route, __search_stories_route};
+    use hn as _;
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
 
@@ -16,8 +16,6 @@ async fn main() -> std::io::Result<()> {
 
     let static_service = static_files(manifest_dir).fallback(ServeFile::new(index_path));
     let router = Router::new().fallback_service(static_service);
-    let router = __search_stories_route(router);
-    let router = __get_item_tree_route(router);
 
     let addr = "127.0.0.1:3001";
     tracing::info!(target: "pocopine.log", %addr, "serving pocopine HN");

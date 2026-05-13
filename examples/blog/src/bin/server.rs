@@ -1,14 +1,13 @@
 //! Blog server binary — host-only.
 //!
-//! Wires the static file server (serves `pkg/` + `index.html`) with the
-//! `__get_post_route` helper emitted by the `#[server]` macro. The bin
+//! Wires the static file server (serves `pkg/` + `index.html`). The bin
 //! target still exists on wasm32 for workspace consistency, but its
 //! `main` is a no-op there.
 
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use blog::__get_post_route;
+    use blog as _;
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files};
 
@@ -19,7 +18,6 @@ async fn main() -> std::io::Result<()> {
     // `pocopine dev` from the workspace root).
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let router = Router::new().fallback_service(static_files(manifest_dir));
-    let router = __get_post_route(router);
 
     let addr = "127.0.0.1:3000";
     tracing::info!(target: "pocopine.log", %addr, "serving blog example");

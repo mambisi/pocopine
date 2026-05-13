@@ -1,16 +1,15 @@
 //! Site server binary — host-only.
 //!
 //! Serves the static site files (index.html + pkg/ + the SPA
-//! history-fallback) alongside the `__submit_contact_route`
-//! helper emitted by the single `#[server]` function in
-//! `src/lib.rs`.
+//! history-fallback). Linked `#[server]` routes are installed by
+//! `pocopine_server::Server`.
 
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files, tower_http::services::ServeFile};
-    use site::__submit_contact_route;
+    use site as _;
 
     init_default().map_err(std::io::Error::other)?;
 
@@ -21,7 +20,6 @@ async fn main() -> std::io::Result<()> {
     // Static + SPA history fallback.
     let static_service = static_files(manifest_dir).fallback(ServeFile::new(index_path));
     let router = Router::new().fallback_service(static_service);
-    let router = __submit_contact_route(router);
 
     let addr = "127.0.0.1:3000";
     tracing::info!(target: "pocopine.log", %addr, "serving site");
