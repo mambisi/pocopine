@@ -358,6 +358,7 @@ struct LiveWakeupOptions {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 fn start_open_then_pull<C, T>(
     scope_id: pocopine_core::ScopeId,
     handle: Handle<C>,
@@ -577,6 +578,7 @@ fn validate_open_response(
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 fn start_pull<C, T>(
     scope_id: pocopine_core::ScopeId,
     handle: Handle<C>,
@@ -639,6 +641,7 @@ fn start_pull<C, T>(
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 fn start_push<C, T, M>(
     scope_id: pocopine_core::ScopeId,
     handle: Handle<C>,

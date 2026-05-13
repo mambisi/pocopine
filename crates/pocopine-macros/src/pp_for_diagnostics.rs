@@ -121,15 +121,13 @@ mod tests {
 
     #[test]
     fn nested_template_pp_if_inside_pp_for_emits_compile_error() {
-        let out = run(
-            r#"<div>
+        let out = run(r#"<div>
   <template pp-for="lbl in labels" pp-key="lbl">
     <template pp-if="visible">
       <label>x</label>
     </template>
   </template>
-</div>"#,
-        );
+</div>"#);
         assert!(
             out.contains("compile_error"),
             "nested <template> inside <template pp-for> must surface a compile_error: {out}"
@@ -149,15 +147,13 @@ mod tests {
         // Even without an inner pp-if/pp-else, a bare
         // <template> as the row root is rejected — the row
         // body must be a concrete element.
-        let out = run(
-            r#"<ul>
+        let out = run(r#"<ul>
   <template pp-for="x in xs" pp-key="x.id">
     <template>
       <li>plain</li>
     </template>
   </template>
-</ul>"#,
-        );
+</ul>"#);
         assert!(
             out.contains("compile_error"),
             "bare nested <template> as the row root must still emit a diagnostic"
@@ -166,13 +162,11 @@ mod tests {
 
     #[test]
     fn concrete_element_row_root_passes() {
-        let out = run(
-            r#"<ul>
+        let out = run(r#"<ul>
   <template pp-for="x in xs" pp-key="x.id">
     <li pp-show="x.visible">{{ x.name }}</li>
   </template>
-</ul>"#,
-        );
+</ul>"#);
         assert!(
             !out.contains("compile_error"),
             "the recommended shape (pp-show on a concrete row root) must pass cleanly: {out}"
@@ -185,8 +179,7 @@ mod tests {
         // rows. Nested <template> elsewhere in the document
         // (e.g. an unrelated content block) must not be
         // flagged by this scan.
-        let out = run(
-            r#"<section>
+        let out = run(r#"<section>
   <template>
     <p>just inert markup</p>
   </template>
@@ -195,8 +188,7 @@ mod tests {
       <li>{{ x }}</li>
     </template>
   </ul>
-</section>"#,
-        );
+</section>"#);
         assert!(
             !out.contains("compile_error"),
             "<template> outside a <template pp-for> must not be flagged: {out}"
@@ -210,15 +202,13 @@ mod tests {
         // deeper inside the row body is the row author's
         // problem (and runtime/parser concerns), not this
         // diagnostic's.
-        let out = run(
-            r#"<ul>
+        let out = run(r#"<ul>
   <template pp-for="x in xs" pp-key="x.id">
     <li>
       <template>nested-grandchild</template>
     </li>
   </template>
-</ul>"#,
-        );
+</ul>"#);
         assert!(
             !out.contains("compile_error"),
             "a deeper <template> inside the concrete row root must not be flagged: {out}"
@@ -232,15 +222,13 @@ mod tests {
         // disqualify, but only the inner <template pp-for>
         // (the row root) violates the rule the diagnostic
         // teaches.
-        let out = run(
-            r#"<table>
+        let out = run(r#"<table>
   <template pp-for="row in rows" pp-key="row.id">
     <template pp-for="cell in row.cells" pp-key="cell.id">
       <td>{{ cell }}</td>
     </template>
   </template>
-</table>"#,
-        );
+</table>"#);
         assert!(
             out.contains("compile_error"),
             "nested <template pp-for> as the row root must be flagged: {out}"
@@ -254,16 +242,14 @@ mod tests {
         // forbidden-directives scanner dedupes by directive
         // name; this scanner targets *positions*, so each
         // distinct site is its own diagnostic.
-        let out = run(
-            r#"<div>
+        let out = run(r#"<div>
   <template pp-for="a in xs" pp-key="a">
     <template pp-if="a.ok"><span>a</span></template>
   </template>
   <template pp-for="b in ys" pp-key="b">
     <template pp-if="b.ok"><span>b</span></template>
   </template>
-</div>"#,
-        );
+</div>"#);
         let count = out.matches("compile_error").count();
         assert_eq!(
             count, 2,
