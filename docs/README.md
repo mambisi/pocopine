@@ -24,6 +24,9 @@ looks the way it does — the code itself tells you *what*.
 - [`app-plugins.md`](./app-plugins.md) — app plugin architecture:
   install-time setup, lifecycle hook ordering, `app! { plugins: [...] }`,
   and the ownership boundary for observability/live/auth integrations.
+- [`browser-storage.md`](./browser-storage.md) — typed `localStorage`
+  helpers for small browser preferences, plus the auth-token and SSR
+  boundaries.
 - [`route-guards-and-loaders.md`](./route-guards-and-loaders.md) —
   client-side route guards, async loaders, fetch middleware, and the
   rejection-handler chain. Covers `ReturnTo` validation,
