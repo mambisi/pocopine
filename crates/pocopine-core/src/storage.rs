@@ -160,12 +160,11 @@ fn js_error_message(err: wasm_bindgen::JsValue) -> String {
     err.as_string().unwrap_or_else(|| format!("{err:?}"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn local_storage_reports_unavailable_on_host() {
         let storage = LocalStorage::<String>::new("pocopine.test");
         assert!(matches!(storage.get(), Err(StorageError::Unavailable)));
