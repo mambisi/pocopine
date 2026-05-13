@@ -30,5 +30,5 @@ pub use model::*;
 pub use store::KeepStore;
 pub use sync::reset_keep_notes;
 #[cfg(pocopine_host)]
-pub use sync::{__reset_keep_notes_route, live_backend, sync_server};
+pub use sync::{live_backend, sync_server};
 pub use utils::{focus_after_flush, now_ms, shared_layout_transition};

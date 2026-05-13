@@ -18,6 +18,7 @@ use pocopine::logging::{init_server_logging, OtlpConfig, ServerLoggingConfig};
 use pocopine_server::axum::body::{to_bytes, Body};
 use pocopine_server::axum::http::{Method, Request};
 use pocopine_server::tower::ServiceExt;
+use pocopine_server::Server;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{Response, Status};
@@ -139,7 +140,10 @@ async fn start_collector() -> TestCollector {
 
 async fn call_observe_echo(message: &str, index: usize) -> String {
     let request_body = serde_json::json!([{ "message": message }]).to_string();
-    let response = router()
+    let app = Server::new(router())
+        .try_finalize()
+        .expect("server-function routes should finalize");
+    let response = app
         .oneshot(
             Request::builder()
                 .method(Method::POST)

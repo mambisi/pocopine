@@ -136,8 +136,7 @@ allow the topics the browser may request. The default policy is deny-all.
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     use my_app::{
-        __create_post_route, __list_posts_route, __reset_posts_route, live_backend,
-        POSTS_COLLECTION, POSTS_LIST_QUERY_TAG,
+        live_backend, POSTS_COLLECTION, POSTS_LIST_QUERY_TAG,
     };
     use pocopine::live::{collection_topic, query_tag_topic, routes, LiveHub};
     use pocopine_logging::init_default;
@@ -158,9 +157,6 @@ async fn main() -> std::io::Result<()> {
     let router = Router::new()
         .merge(routes(live_hub))
         .fallback_service(static_files(manifest_dir));
-    let router = __list_posts_route(router);
-    let router = __create_post_route(router);
-    let router = __reset_posts_route(router);
 
     serve(router, "127.0.0.1:3000").await
 }

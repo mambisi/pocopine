@@ -1,10 +1,7 @@
 #[cfg(pocopine_host)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    use live_example::{
-        __create_post_route, __list_posts_route, __reset_posts_route, live_backend,
-        POSTS_COLLECTION, POSTS_LIST_QUERY_TAG,
-    };
+    use live_example::{live_backend, POSTS_COLLECTION, POSTS_LIST_QUERY_TAG};
     use pocopine::live::{collection_topic, query_tag_topic, routes, LiveHub};
     use pocopine_logging::init_default;
     use pocopine_server::{axum::Router, serve, static_files};
@@ -21,9 +18,6 @@ async fn main() -> std::io::Result<()> {
     let router = Router::new()
         .merge(routes(live_hub))
         .fallback_service(static_files(manifest_dir));
-    let router = __list_posts_route(router);
-    let router = __create_post_route(router);
-    let router = __reset_posts_route(router);
 
     let addr = "127.0.0.1:3020";
     tracing::info!(target: "pocopine.log", %addr, "serving live example");

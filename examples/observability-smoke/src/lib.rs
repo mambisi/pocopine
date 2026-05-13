@@ -22,7 +22,7 @@ pub struct EchoResponse {
     pub accepted: bool,
 }
 
-#[pocopine::server(public)]
+#[pocopine::server(public, path = "/_pocopine/observe_echo")]
 pub async fn observe_echo(request: EchoRequest) -> ServerResult<EchoResponse> {
     let message_len = request.message.len();
     let span = tracing::info_span!(
@@ -49,10 +49,9 @@ pub async fn observe_echo(request: EchoRequest) -> ServerResult<EchoResponse> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn router() -> Router {
-    let router = Router::new()
+    Router::new()
         .route("/", get(index))
-        .route("/health", get(health));
-    __observe_echo_route(router)
+        .route("/health", get(health))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

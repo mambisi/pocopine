@@ -675,9 +675,8 @@ async fn main() -> std::io::Result<()> {
     // Authorization header → JwtVerifier → Principal in extensions
     // → #[server(guard = ...)] sees a real user regardless of
     // whether they signed in via OTP, password, or OAuth.
-    let router = my_app::__routes(Router::new()).with_auth(verifier);
-
-    Server::new(router)
+    Server::new(Router::new())
+        .with_auth(verifier)
         .plugin(otp)
         .serve("0.0.0.0:3000")
         .await

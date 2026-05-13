@@ -213,7 +213,7 @@ is the real body.
 #[pocopine::server]
 pub async fn get_post(id: u32) -> ServerResult<Post> {
     // Runs on the server; on wasm32 this body is replaced with a
-    // client stub that POSTs to /_pocopine/get_post.
+    // client stub that POSTs to the generated server-function route.
     db::posts::by_id(id).await.map_err(|e| ServerError::App(e.to_string()))
 }
 ```
