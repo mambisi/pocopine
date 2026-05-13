@@ -187,14 +187,20 @@ pub struct HttpRequestFailed {
 /// HTTP layer has matched the route and before guard/body work.
 #[derive(Clone, Debug)]
 pub struct ServerFunctionStarted {
+    /// Short Rust function identifier, useful for display.
     pub function: &'static str,
+    /// Fully-qualified Rust path (`module::function`), useful for disambiguation.
+    pub function_path: &'static str,
     pub request_id: u64,
 }
 
 /// Emitted when a `#[server]` handler returns an `Ok` value.
 #[derive(Clone, Debug)]
 pub struct ServerFunctionCompleted {
+    /// Short Rust function identifier, useful for display.
     pub function: &'static str,
+    /// Fully-qualified Rust path (`module::function`), useful for disambiguation.
+    pub function_path: &'static str,
     pub request_id: u64,
     pub duration_ms: f64,
 }
@@ -206,7 +212,10 @@ pub struct ServerFunctionCompleted {
 /// (`"unauthorized"`, `"forbidden"`, `"bad_request"`, …).
 #[derive(Clone, Debug)]
 pub struct ServerFunctionRejected {
+    /// Short Rust function identifier, useful for display.
     pub function: &'static str,
+    /// Fully-qualified Rust path (`module::function`), useful for disambiguation.
+    pub function_path: &'static str,
     pub request_id: u64,
     pub status: u16,
     pub reason: &'static str,
@@ -218,7 +227,10 @@ pub struct ServerFunctionRejected {
 /// `"bad_request"`, `"network"`).
 #[derive(Clone, Debug)]
 pub struct ServerFunctionFailed {
+    /// Short Rust function identifier, useful for display.
     pub function: &'static str,
+    /// Fully-qualified Rust path (`module::function`), useful for disambiguation.
+    pub function_path: &'static str,
     pub request_id: u64,
     pub error_class: &'static str,
     pub duration_ms: f64,

@@ -168,7 +168,9 @@ fn server_observability_correlates_http_and_server_function_events_without_paylo
     assert_eq!(request_id(function_started), shared_request_id);
     assert_eq!(request_id(function_completed), shared_request_id);
     assert!(fields(function_started).contains("observed_echo"));
+    assert!(fields(function_started).contains(__observed_echo_function_path()));
     assert!(fields(function_completed).contains("observed_echo"));
+    assert!(fields(function_completed).contains(__observed_echo_function_path()));
     assert_no_values_contain(&events, &["payload-secret"]);
 }
 
@@ -218,9 +220,11 @@ fn server_observability_logs_server_function_rejections_and_failures_without_pay
     let failed = find_observed_event(&events, "pocopine.log", "server_function_failed");
 
     assert!(fields(rejected).contains("observed_echo"));
+    assert!(fields(rejected).contains(__observed_echo_function_path()));
     assert!(fields(rejected).contains("bad_request"));
     assert!(fields(rejected).contains("U64(400)"));
     assert!(fields(failed).contains("observed_fail"));
+    assert!(fields(failed).contains(__observed_fail_function_path()));
     assert!(fields(failed).contains("app"));
     assert_no_values_contain(&events, &["reject-secret", "fail-secret"]);
 }

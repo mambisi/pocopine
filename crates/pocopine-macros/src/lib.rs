@@ -3216,6 +3216,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name_str = fn_ident.to_string();
     let route_ident = format_ident!("__{fn_name_str}_route");
     let path_ident = format_ident!("__{fn_name_str}_path");
+    let function_path_ident = format_ident!("__{fn_name_str}_function_path");
     let path_fn = match policy.path.as_ref() {
         Some(path) => quote! {
             #[doc(hidden)]
@@ -3236,6 +3237,12 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }).as_str()
             }
         },
+    };
+    let function_path_fn = quote! {
+        #[doc(hidden)]
+        pub fn #function_path_ident() -> &'static str {
+            concat!(module_path!(), "::", #fn_name_str)
+        }
     };
 
     // Collect (pat_ident, type) pairs, rejecting self / ref args.
@@ -3367,6 +3374,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ::pocopine_server::tracing::warn!(
                     target: "pocopine.log",
                     function = #fn_name_str,
+                    function_path = #function_path_ident(),
                     route = #path_ident(),
                     duration_ms = __pocopine_duration_ms,
                     error_kind = __pocopine_error_kind,
@@ -3377,6 +3385,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::pocopine_server::emit(
                         ::pocopine_server::ServerFunctionRejected {
                             function: #fn_name_str,
+                            function_path: #function_path_ident(),
                             request_id: __pocopine_request_id,
                             status: __pocopine_status,
                             reason: __pocopine_error_kind,
@@ -3410,6 +3419,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                         ::pocopine_server::emit(
                             ::pocopine_server::ServerFunctionStarted {
                                 function: #fn_name_str,
+                                function_path: #function_path_ident(),
                                 request_id: __pocopine_request_id,
                             },
                         );
@@ -3430,6 +3440,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::warn!(
                                 target: "pocopine.log",
                                 function = #fn_name_str,
+                                function_path = #function_path_ident(),
                                 route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 error_kind = "bad_request",
@@ -3440,6 +3451,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine_server::emit(
                                     ::pocopine_server::ServerFunctionRejected {
                                         function: #fn_name_str,
+                                        function_path: #function_path_ident(),
                                         request_id: __pocopine_request_id,
                                         status: 400,
                                         reason: "bad_request",
@@ -3463,6 +3475,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine_server::tracing::warn!(
                                     target: "pocopine.log",
                                     function = #fn_name_str,
+                                    function_path = #function_path_ident(),
                                     route = #path_ident(),
                                     duration_ms = __pocopine_duration_ms,
                                     body_bytes = __pocopine_body_bytes,
@@ -3474,6 +3487,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     ::pocopine_server::emit(
                                         ::pocopine_server::ServerFunctionRejected {
                                             function: #fn_name_str,
+                                            function_path: #function_path_ident(),
                                             request_id: __pocopine_request_id,
                                             status: 400,
                                             reason: "bad_request",
@@ -3494,6 +3508,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::info!(
                                 target: "pocopine.trace",
                                 function = #fn_name_str,
+                                function_path = #function_path_ident(),
                                 route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 body_bytes = __pocopine_body_bytes,
@@ -3503,6 +3518,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine_server::emit(
                                     ::pocopine_server::ServerFunctionCompleted {
                                         function: #fn_name_str,
+                                        function_path: #function_path_ident(),
                                         request_id: __pocopine_request_id,
                                         duration_ms: __pocopine_duration_ms_f64,
                                     },
@@ -3520,6 +3536,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                             ::pocopine_server::tracing::warn!(
                                 target: "pocopine.log",
                                 function = #fn_name_str,
+                                function_path = #function_path_ident(),
                                 route = #path_ident(),
                                 duration_ms = __pocopine_duration_ms,
                                 body_bytes = __pocopine_body_bytes,
@@ -3531,6 +3548,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 ::pocopine_server::emit(
                                     ::pocopine_server::ServerFunctionFailed {
                                         function: #fn_name_str,
+                                        function_path: #function_path_ident(),
                                         request_id: __pocopine_request_id,
                                         error_class: __pocopine_error_kind,
                                         duration_ms: __pocopine_duration_ms_f64,
@@ -3545,6 +3563,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
                     target: "pocopine.trace",
                     "pocopine.server_function",
                     function = #fn_name_str,
+                    function_path = #function_path_ident(),
                     route = #path_ident(),
                 ))
                 .await
@@ -3578,6 +3597,7 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
     let out = quote! {
         #policy_warning
         #path_fn
+        #function_path_fn
         #client
         #server
     };
