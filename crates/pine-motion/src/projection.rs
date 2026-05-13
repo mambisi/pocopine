@@ -22,6 +22,12 @@
 //!    their intrinsic size (text, borders) doesn't distort during
 //!    the parent's scale animation — Motion's child-scale
 //!    correction, in its one-deep form.
+//! 5. Every element [`play_layout`] kicks an animation on is
+//!    stamped with `data-pp-animating="true"` for the duration
+//!    of the projection (cleared on a settle-bound timeout).
+//!    Authors hook one CSS rule to lift the in-flight element
+//!    above its siblings — z-index, pointer-events: none, etc. —
+//!    without keeping track of the WAAPI handle.
 //!
 //! ## What's *not* here (vs Motion)
 //!
@@ -46,6 +52,17 @@ use crate::spring::Spring;
 
 const LAYOUT_ID_ATTR: &str = "data-pp-layout-id";
 const LAYOUT_CHILD_ATTR: &str = "data-pp-layout-child";
+/// Set on every element [`play_layout`] kicks an animation on,
+/// cleared on a settle-bound timeout. Lets authors hook one CSS
+/// rule to lift the animating element above its siblings (z-index
+/// / pointer-events / etc.) without tracking the animation on
+/// their side. Removed once the projection has settled.
+const LAYOUT_ANIMATING_ATTR: &str = "data-pp-animating";
+
+/// Grace period added to [`Spring::settle_duration_ms`] before the
+/// `data-pp-animating` attribute is cleared. Covers small clock
+/// skew between WAAPI's internal scheduling and the timeout.
+const ANIMATING_CLEANUP_GRACE_MS: f64 = 80.0;
 
 /// Rectangle snapshot for one layout-tagged element.
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +127,7 @@ pub fn play_layout(root: &Element, snapshot: LayoutSnapshot, spring: Spring) {
     if snapshot.is_empty() {
         return;
     }
+    let mut animating: Vec<Element> = Vec::new();
     collect_tagged(root, LAYOUT_ID_ATTR, |el, id| {
         let Some(old) = snapshot.get(&id) else { return };
         let new_rect = el.get_bounding_client_rect();
@@ -140,6 +158,13 @@ pub fn play_layout(root: &Element, snapshot: LayoutSnapshot, spring: Spring) {
             let _ = html.style().set_property("transform-origin", "top left");
         }
 
+        // Stamp `data-pp-animating="true"` so authors can hook a
+        // CSS rule (z-index lift, pointer-events: none, etc.)
+        // for the duration of the projection without tracking
+        // the WAAPI handle on their side.
+        let _ = el.set_attribute(LAYOUT_ANIMATING_ATTR, "true");
+        animating.push(el.clone());
+
         animate(el, &[("transform", &from, &to)], Easing::Spring(spring));
 
         // Counter-scale one level of children so text / borders
@@ -156,6 +181,28 @@ pub fn play_layout(root: &Element, snapshot: LayoutSnapshot, spring: Spring) {
             });
         }
     });
+
+    if !animating.is_empty() {
+        let cleanup_ms = spring.settle_duration_ms() + ANIMATING_CLEANUP_GRACE_MS;
+        schedule_animating_cleanup(animating, cleanup_ms);
+    }
+}
+
+/// After the spring's settle window, pull the
+/// `data-pp-animating` flag off every element [`play_layout`]
+/// stamped. Best-effort — a missing window (SSR / non-browser
+/// host) is a no-op.
+fn schedule_animating_cleanup(els: Vec<Element>, ms: f64) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
+        for el in els {
+            let _ = el.remove_attribute(LAYOUT_ANIMATING_ATTR);
+        }
+    });
+    let _ =
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), ms as i32);
 }
 
 /// Convenience — snapshot + mutate + play in one call. Mostly for

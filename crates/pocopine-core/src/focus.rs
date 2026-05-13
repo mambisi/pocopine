@@ -63,6 +63,18 @@ pub fn focus_no_scroll(el: &HtmlElement) {
     let _ = f.call1(el.as_ref(), &opts);
 }
 
+/// Programmatic focus for a generic DOM element.
+///
+/// This is the [`Element`] counterpart to [`focus_no_scroll`]. It is
+/// useful when the caller got the target through `refs::get_on` and
+/// does not need to name a concrete `web_sys` element type.
+pub fn focus_element_no_scroll(el: &Element) {
+    let Ok(html) = el.clone().dyn_into::<HtmlElement>() else {
+        return;
+    };
+    focus_no_scroll(&html);
+}
+
 /// Blur whatever currently has focus. No-op when nothing is focused
 /// or the active element is `<body>` (browsers report `body` as
 /// `activeElement` when "nothing" is focused; blurring it has
