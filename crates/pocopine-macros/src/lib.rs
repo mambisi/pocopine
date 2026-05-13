@@ -61,6 +61,7 @@ mod slot_assertions;
 // stamps the caller injects into the source.
 mod for_plan;
 mod forbidden_directives;
+mod pp_for_diagnostics;
 mod template_plan;
 
 /// RFC 045 + RFC 050 §4.5 — read the `.poco` off disk, parse
@@ -1717,6 +1718,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => proc_macro2::TokenStream::new(),
     };
 
+    // Issue #76 — reject `<template pp-for>` rows whose direct
+    // element child is another `<template>`. Always-on.
+    let pp_for_template_child_diagnostics_tokens = match &template_ast {
+        Some(ast) => pp_for_diagnostics::emit_diagnostics(ast),
+        None => proc_macro2::TokenStream::new(),
+    };
+
     // RFC 054 — compile row plans for eligible keyed `pp-for`
     // templates and stamp the source with `data-pp-row-plan`
     // anchors so the runtime can match the directive call back
@@ -2081,6 +2089,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         // RFC 063 §4.1 deletes (`pp-cloak` today; more in
         // follow-up commits).
         #forbidden_directive_diagnostics_tokens
+
+        // Issue #76 — hard `compile_error!` for `<template pp-for>`
+        // rows whose direct element child is another `<template>`.
+        #pp_for_template_child_diagnostics_tokens
 
         #observe_impl
 
