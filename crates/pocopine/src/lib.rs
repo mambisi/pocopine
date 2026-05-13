@@ -10,7 +10,7 @@ pub use pocopine_auth::{AuthUser, Permission, Principal, Role, Session};
 #[allow(deprecated)]
 pub use pocopine_core::InjectKey;
 pub use pocopine_core::{
-    animate, dom, events, focus, id, profiler, refs, scroll_lock, text, tick, timers,
+    animate, dom, events, focus, id, profiler, refs, scroll_lock, storage, text, tick, timers,
 };
 pub use pocopine_core::{
     append_list_inline, assert_registry_clean, batch, computed, current_effect, current_scope_id,
@@ -30,15 +30,15 @@ pub use pocopine_core::{
     ComponentUnmounted, ComponentVTable, Computed, ContextKey, ContextMarker, Doc, DomEventName,
     EffectId, EffectOptions, El, Elapsed, Emit, ForComponent, Handle, Hook, HostEl, Inject,
     IsTeleported, LifecycleContext, LifecyclePhase, ListenerHandle, Loader, LoaderContext,
-    LoaderError, MountEpoch, NearestParent, Parent, ParentId, Plugin, PluginValidationError,
-    Plugins, Refs, RegisteredComponent, RegistryError, RegistryErrorKind, ReturnTo, RouteComponent,
-    RouteConfig, RouteContext, RouteErrorSurface, RouteGuard, RouteGuardDecision, RouteLoader,
-    RouteNavigationCompleted, RouteNavigationFailed, RouteNavigationStarted, RouteRejection,
-    RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
-    RouteTargetError, RouteToken, RwSignal, Scope, ScopeId, ScopePath, ServerError,
-    ServerFunctionClientCompleted, ServerFunctionClientFailed, ServerFunctionClientStarted,
-    ServerResult, Setter, Signal, SignalId, Store, StoreHandle, SubtreeHandle, TagName, TaskHandle,
-    TeleportHost, TypedEl, Win,
+    LoaderError, LocalStorage, MountEpoch, NearestParent, Parent, ParentId, Plugin,
+    PluginValidationError, Plugins, Refs, RegisteredComponent, RegistryError, RegistryErrorKind,
+    ReturnTo, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
+    RouteGuardDecision, RouteLoader, RouteNavigationCompleted, RouteNavigationFailed,
+    RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
+    RouteRejectionHandler, RouteTarget, RouteTargetError, RouteToken, RwSignal, Scope, ScopeId,
+    ScopePath, ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
+    ServerFunctionClientStarted, ServerResult, Setter, Signal, SignalId, StorageError, Store,
+    StoreHandle, SubtreeHandle, TagName, TaskHandle, TeleportHost, TypedEl, Win,
 };
 #[doc(inline)]
 pub use pocopine_core::{create_context, inject_key};
@@ -94,14 +94,14 @@ pub mod prelude {
         AppBootFailed, AppBootStarted, AppPlugin, AuthUser, Component, ComponentEvent,
         ComponentMounted, ComponentPluginExt, ComponentReady, ComponentSetup, ComponentState,
         ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, ForComponent, Handle, Hook,
-        Inject, JobError, JobResult, Loader, LoaderContext, LoaderError, NearestParent, Parent,
-        Permission, Plugin, PluginValidationError, Plugins, Principal, ReturnTo, Role,
-        RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
+        Inject, JobError, JobResult, Loader, LoaderContext, LoaderError, LocalStorage,
+        NearestParent, Parent, Permission, Plugin, PluginValidationError, Plugins, Principal,
+        ReturnTo, Role, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
         RouteGuardDecision, RouteLoader, RouteNavigationCompleted, RouteNavigationFailed,
         RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
         RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
         ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
-        ServerFunctionClientStarted, ServerResult, Setter, Signal, Store,
+        ServerFunctionClientStarted, ServerResult, Setter, Signal, StorageError, Store,
     };
     pub use wasm_bindgen::prelude::*;
 }

@@ -101,6 +101,7 @@ features = [
     "ResizeObserverEntry",
     "ResizeObserverOptions",
     "Response",
+    "Storage",
     "StorageEvent",
     "SubmitEvent",
     "Text",

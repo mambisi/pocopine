@@ -45,6 +45,7 @@ pub mod server;
 pub mod signal;
 pub mod slot_fragment;
 pub mod slot_scope;
+pub mod storage;
 pub mod store;
 pub mod styles;
 pub mod task;
@@ -113,6 +114,7 @@ pub use scope::{
 };
 pub use server::{Result as ServerResult, ServerError};
 pub use signal::{rw_signal, signal, RwSignal, Setter, Signal};
+pub use storage::{LocalStorage, StorageError};
 pub use store::{register_store_scope, store, store_scope, stores_object, Store, StoreHandle};
 pub use styles::inject_style;
 pub use task::{
