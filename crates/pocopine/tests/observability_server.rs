@@ -268,20 +268,56 @@ fn find_observed_event<'a>(
         })
 }
 
-fn fields(event: &CapturedEvent) -> &str {
-    event
-        .field("fields")
-        .expect("observed event should capture fields")
+fn fields(event: &CapturedEvent) -> String {
+    if let Some(fields) = event.field("fields") {
+        return fields.to_owned();
+    }
+
+    let slots = event
+        .field("observed_field_slots")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut rendered = String::new();
+    for index in 0..slots {
+        if event.field(&format!("observed_field_{index}_present")) != Some("true") {
+            continue;
+        }
+        let name = event
+            .field(&format!("observed_field_{index}_name"))
+            .unwrap_or("");
+        let value = observed_field_value(event, index).unwrap_or_default();
+        rendered.push_str(name);
+        rendered.push('=');
+        rendered.push_str(&value);
+        rendered.push(';');
+    }
+    rendered
 }
 
-fn context(event: &CapturedEvent) -> &str {
-    event
-        .field("context")
-        .expect("observed event should capture context")
+fn context(event: &CapturedEvent) -> String {
+    if let Some(context) = event.field("context") {
+        return context.to_owned();
+    }
+
+    [
+        event.field("observed_context_service"),
+        event.field("observed_context_environment"),
+        event.field("observed_context_route"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 fn request_id(event: &CapturedEvent) -> u64 {
     let fields = fields(event);
+    if let Some(value) = observed_named_field_value(event, "request_id") {
+        return value
+            .parse()
+            .unwrap_or_else(|_| panic!("request_id is not numeric: {fields}"));
+    }
+
     let needle = "\"request_id\": ObservedField { value: U64(";
     let start = fields
         .find(needle)
@@ -294,6 +330,45 @@ fn request_id(event: &CapturedEvent) -> u64 {
     rest[..end]
         .parse()
         .unwrap_or_else(|_| panic!("request_id is not numeric: {fields}"))
+}
+
+fn observed_named_field_value(event: &CapturedEvent, name: &str) -> Option<String> {
+    let slots = event
+        .field("observed_field_slots")
+        .and_then(|value| value.parse::<usize>().ok())?;
+    for index in 0..slots {
+        if event.field(&format!("observed_field_{index}_name")) == Some(name) {
+            return observed_field_raw_value(event, index);
+        }
+    }
+    None
+}
+
+fn observed_field_value(event: &CapturedEvent, index: usize) -> Option<String> {
+    let kind = event.field(&format!("observed_field_{index}_kind"))?;
+    let raw = observed_field_raw_value(event, index)?;
+    Some(match kind {
+        "u64" => format!("U64({raw})"),
+        "i64" => format!("I64({raw})"),
+        "f64" => format!("F64({raw})"),
+        "bool" => format!("Bool({raw})"),
+        _ => raw,
+    })
+}
+
+fn observed_field_raw_value(event: &CapturedEvent, index: usize) -> Option<String> {
+    let kind = event.field(&format!("observed_field_{index}_kind"))?;
+    let suffix = match kind {
+        "u64" => "u64",
+        "i64" => "i64",
+        "f64" => "f64",
+        "bool" => "bool",
+        "string" => "string",
+        _ => return None,
+    };
+    event
+        .field(&format!("observed_field_{index}_value_{suffix}"))
+        .map(ToOwned::to_owned)
 }
 
 fn assert_no_values_contain(events: &[CapturedEvent], needles: &[&str]) {
