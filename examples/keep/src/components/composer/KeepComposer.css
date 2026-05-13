@@ -1,0 +1,55 @@
+/* ─── composer ─── */
+
+.composer-wrap {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto 32px;
+}
+
+.composer {
+  background: var(--c-default-bg);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, .30), 0 1px 3px 1px rgba(60, 64, 67, .15);
+  transition: background .15s, border-color .15s;
+}
+
+.composer.collapsed {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 4px 0 16px;
+}
+
+.cmp-input {
+  flex: 1;
+  height: 100%;
+  text-align: left;
+  color: var(--fg-2);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.cmp-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.composer.expanded {
+  padding: 12px 16px 8px;
+}
+
+.composer.expanded[data-color="default"] { background: var(--c-default-bg); }
+.composer.expanded[data-color="coral"]   { background: var(--c-coral-bg); }
+.composer.expanded[data-color="peach"]   { background: var(--c-peach-bg); }
+.composer.expanded[data-color="sand"]    { background: var(--c-sand-bg); }
+.composer.expanded[data-color="mint"]    { background: var(--c-mint-bg); }
+.composer.expanded[data-color="sage"]    { background: var(--c-sage-bg); }
+.composer.expanded[data-color="fog"]     { background: var(--c-fog-bg); }
+.composer.expanded[data-color="storm"]   { background: var(--c-storm-bg); }
+.composer.expanded[data-color="dusk"]    { background: var(--c-dusk-bg); }
+.composer.expanded[data-color="blossom"] { background: var(--c-blossom-bg); }
+.composer.expanded[data-color="clay"]    { background: var(--c-clay-bg); }
+.composer.expanded[data-color="chalk"]   { background: var(--c-chalk-bg); }

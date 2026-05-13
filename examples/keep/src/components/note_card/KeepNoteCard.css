@@ -1,0 +1,400 @@
+/* ─── note card ─── */
+
+.note-shell {
+  position: relative;
+  width: 100%;
+  padding-top: 10px;
+}
+
+.note {
+  position: relative;
+  break-inside: avoid;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 600px;
+  overflow: hidden;
+  margin: 0;
+  padding: 10px 12px 40px;
+  border-radius: 8px;
+  background: var(--card-bg, var(--c-default-bg));
+  box-shadow: var(--shadow-card);
+  transition: box-shadow .15s;
+  cursor: default;
+}
+
+.note:hover { box-shadow: var(--shadow-card-hover); }
+
+/* Hide the source card while the editor modal is open for it.
+   `visibility: hidden` keeps the masonry slot intact (so other
+   cards don't reflow) and pine-motion's snapshot still reads the
+   correct rect from getBoundingClientRect. */
+.note[data-shared="true"] {
+  visibility: hidden;
+}
+
+/* While pine-motion's projection is in flight the morphing
+   card gets translated across the page; without a stacking-
+   context bump it slides *under* its masonry siblings on the
+   way back to its slot. play_layout stamps
+   `data-pp-animating="true"` for the duration of the spring
+   and clears it on a settle-bound timeout. */
+.note[data-pp-animating="true"] {
+  /* Sit above the topbar (30), label-pop / command-content (60),
+     and any other in-page chrome the spring's translate could
+     drift the card across. Below the dropdown menu portal layer
+     (1000) since those should never be open during a card
+     transition anyway. */
+  z-index: 100;
+  pointer-events: none;
+}
+
+.note[data-color="default"] { --card-bg: var(--c-default-bg); box-shadow: 0 0 0 1px var(--line-2); }
+.note[data-color="default"]:hover { box-shadow: var(--shadow-card-hover); }
+.note[data-color="coral"]   { --card-bg: var(--c-coral-bg); }
+.note[data-color="peach"]   { --card-bg: var(--c-peach-bg); }
+.note[data-color="sand"]    { --card-bg: var(--c-sand-bg); }
+.note[data-color="mint"]    { --card-bg: var(--c-mint-bg); }
+.note[data-color="sage"]    { --card-bg: var(--c-sage-bg); }
+.note[data-color="fog"]     { --card-bg: var(--c-fog-bg); }
+.note[data-color="storm"]   { --card-bg: var(--c-storm-bg); }
+.note[data-color="dusk"]    { --card-bg: var(--c-dusk-bg); }
+.note[data-color="blossom"] { --card-bg: var(--c-blossom-bg); }
+.note[data-color="clay"]    { --card-bg: var(--c-clay-bg); }
+.note[data-color="chalk"]   { --card-bg: var(--c-chalk-bg); }
+
+.note[data-pending="true"] {
+  outline: 1px dashed rgba(60, 64, 67, .35);
+  outline-offset: -2px;
+}
+
+.note[data-conflict="true"] {
+  outline: 1px solid #c2410c;
+  outline-offset: -2px;
+}
+
+.note[data-selected="true"] {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    var(--shadow-card-hover);
+}
+
+.note[data-selection-active="true"] {
+  cursor: pointer;
+}
+
+.note-pin {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--fg-2);
+  opacity: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+
+.note:hover .note-pin,
+.note-pin[data-on="true"] { opacity: 1; }
+.note-pin:hover { background: var(--card-overlay); color: var(--fg); }
+
+.note-select {
+  position: absolute;
+  top: 0;
+  left: -10px;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, .92);
+  border-radius: 999px;
+  background: rgba(32, 33, 36, .56);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  opacity: 0;
+  transform: scale(.88);
+  transition: opacity .12s, transform .12s, background .12s, border-color .12s;
+}
+
+.note-select pine-icon {
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.note-shell:hover .note-select,
+.note-shell[data-selected="true"] .note-select,
+.note-shell[data-selection-active="true"] .note-select {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.note-select[data-on="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+
+.note-select[data-on="true"] pine-icon {
+  opacity: 1;
+}
+
+.note-select:hover {
+  background: rgba(32, 33, 36, .72);
+}
+
+.note-select[data-on="true"]:hover {
+  background: var(--accent);
+}
+
+.note[data-selection-active="true"] .note-actions {
+  display: none;
+}
+
+.note-title {
+  flex: 0 0 auto;
+  margin: 4px 28px 8px 4px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.003em;
+  word-break: break-word;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.note-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 4px 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 20;
+  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
+}
+
+.note-labels {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 4px 0;
+  max-height: 58px;
+  overflow: hidden;
+}
+
+.chip {
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--card-overlay);
+  color: var(--fg);
+}
+
+.note[data-color="default"] .chip {
+  background: var(--card-overlay-soft);
+}
+
+.note-actions {
+  display: none;
+}
+
+.note-title {
+  flex: 0 0 auto;
+  margin: 4px 28px 8px 4px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.003em;
+  word-break: break-word;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.note-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 4px 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 20;
+  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
+}
+
+.note-labels {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 4px 0;
+  max-height: 58px;
+  overflow: hidden;
+}
+
+.chip {
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--card-overlay);
+  color: var(--fg);
+}
+
+.note[data-color="default"] .chip {
+  background: var(--card-overlay-soft);
+}
+
+/* Editable label chips inside the composer + editor — chip with a
+   trailing × button. Reuse .chip's pill base. */
+.label-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+.label-chips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+}
+.chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.chip-x:hover { background: var(--card-overlay); color: var(--fg); }
+
+/* Label-picker popover */
+.label-pop {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  padding: 8px 0;
+  background: var(--surface-pop);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+  font-size: 13px;
+  z-index: 60;
+}
+
+.label-pop__h {
+  padding: 0 12px 6px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.label-pop__input {
+  margin: 0 12px 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  outline: 0;
+}
+.label-pop__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.label-pop__list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.label-pop__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.label-pop__row:hover { background: var(--hover); }
+.label-pop__row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.label-pop__create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 6px 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.label-pop__create:hover { background: var(--hover); }
+.label-pop__create pine-icon { color: var(--accent); }
+
+.note-actions {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.note:hover .note-actions { opacity: 1; }
+.note .note-actions .ic-btn,
+.note .note-actions .pine-dm-trigger {
+  width: 32px;
+  height: 32px;
+  color: var(--fg-2);
+}
+.note .note-actions .ic-btn:hover,
+.note .note-actions .pine-dm-trigger:hover,
+.note .note-actions .pine-dm-trigger:focus-visible,
+.note .note-actions .pine-dm-trigger[data-state="open"] {
+  background: var(--card-overlay);
+  color: var(--fg);
+}

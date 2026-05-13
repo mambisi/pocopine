@@ -1,0 +1,84 @@
+/* ─── checklist ─── */
+
+.note > .cl {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cl { padding: 4px 0 0; }
+
+.cl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  min-height: 24px;
+}
+
+.cl-row[data-done="true"] .cl-txt {
+  color: var(--fg-3);
+  text-decoration: line-through;
+}
+
+.cl-box {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--fg-2);
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-2);
+  background: transparent;
+  transition: background .12s, color .12s, border-color .12s;
+}
+
+.cl-box:hover {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.cl-row[data-done="true"] .cl-box {
+  background: var(--fg-2);
+  color: var(--card-bg);
+  border-color: var(--fg-2);
+}
+
+.cl-box.ghost { border-style: dashed; }
+
+.cl-txt {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 0;
+  word-break: break-word;
+}
+
+.note > .cl .cl-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.cl-x {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--fg-2);
+  opacity: 0;
+}
+
+.cl-row:hover .cl-x { opacity: 1; }
+.cl-x:hover { background: var(--card-overlay); color: var(--fg); }
+.cl-add { opacity: .65; }
+.cl-add:focus-within { opacity: 1; }

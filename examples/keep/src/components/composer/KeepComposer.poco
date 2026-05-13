@@ -1,0 +1,21 @@
+<div class="composer-wrap">
+  <div class="composer collapsed" pp-show="!$store.keep.composer_open">
+    <button class="cmp-input" @click="expand_text">Take a note…</button>
+    <div class="cmp-tools">
+      <button class="ic-btn" aria-label="New list" @click="expand_todo">
+        <pine-icon name="list-check" size="20"></pine-icon>
+      </button>
+      <button class="ic-btn" aria-label="New text note" @click="expand_text">
+        <pine-icon name="pencil" size="20"></pine-icon>
+      </button>
+    </div>
+  </div>
+
+  <div
+    class="composer expanded"
+    pp-show="$store.keep.composer_open"
+    :data-color="$store.keep.draft_color"
+  >
+    <keep-note-form></keep-note-form>
+  </div>
+</div>

@@ -1,0 +1,144 @@
+<div
+  class="note-shell"
+  :data-selected="selected"
+  :data-selection-active="selection_active"
+>
+  <button
+    class="note-select"
+    :data-on="selected"
+    :aria-label="selected ? 'Deselect note' : 'Select note'"
+    @pointerdown.stop
+    @click.stop="toggle_selection"
+  >
+    <pine-icon name="check" size="13"></pine-icon>
+  </button>
+
+  <article
+    class="note"
+    :data-color="color"
+    :data-pinned="pinned"
+    :data-pending="pending"
+    :data-conflict="conflict"
+    :data-selected="selected"
+    :data-selection-active="selection_active"
+    :data-pp-layout-id="'card-' + note_id"
+    :data-shared="$store.keep.editor_open && $store.keep.editor_data.id == note_id"
+    @click="open"
+  >
+    <button class="note-pin" :data-on="pinned" aria-label="Pin" @pointerdown.stop @click.stop="pin">
+      <pine-icon name="pin" :variant="pinned ? 'filled' : 'outline'" size="18"></pine-icon>
+    </button>
+
+  <h3 class="note-title" pp-show="title" pp-text="title"></h3>
+  <p class="note-body" pp-show="body" pp-text="body"></p>
+
+  <div class="cl" pp-show="todos.length">
+    <template pp-for="todo in todos" pp-key="todo.id">
+      <div class="cl-row" :data-done="todo.done">
+        <button class="cl-box" aria-label="Toggle" @pointerdown.stop @click.stop="check_todo(todo.id)">
+          <template pp-if="todo.done">
+            <pine-icon name="check" size="14"></pine-icon>
+          </template>
+        </button>
+        <span class="cl-txt" pp-text="todo.text"></span>
+      </div>
+    </template>
+  </div>
+
+  <div class="note-labels" pp-show="labels.length">
+    <template pp-for="label in labels" pp-key="label">
+      <span class="chip" pp-text="label"></span>
+    </template>
+  </div>
+
+  <div class="note-actions" @pointerdown.stop @click.stop>
+    <pine-popover-root pp-model:open="label_picker_open">
+      <pine-popover-trigger class="ic-btn" aria-label="Labels" @pointerdown.stop>
+        <pine-icon name="tag" size="18"></pine-icon>
+      </pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content class="label-pop" side="top" align="start" side_offset="6">
+          <div class="label-pop__h">Label note</div>
+          <input
+            class="label-pop__input"
+            placeholder="Enter label name"
+            pp-model="label_query"
+            @keydown.enter="create_label"
+          />
+          <div class="label-pop__list">
+            <template pp-for="label in label_options" pp-key="label.name">
+              <label class="label-pop__row" pp-show="label.visible">
+                <input
+                  type="checkbox"
+                  :checked="label.selected"
+                  @change="toggle_label(label.name)"
+                />
+                <span pp-text="label.name"></span>
+              </label>
+            </template>
+          </div>
+          <button
+            class="label-pop__create"
+            pp-show="label_can_create"
+            @click="create_label"
+          >
+            <pine-icon name="plus" size="14"></pine-icon>
+            <span>Create &ldquo;<span pp-text="label_query"></span>&rdquo;</span>
+          </button>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
+
+    <pine-popover-root pp-model:open="color_picker_open">
+      <pine-popover-trigger class="ic-btn" aria-label="Background options">
+        <pine-icon name="palette" size="18"></pine-icon>
+      </pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content class="palette palette--popover" side="top" align="start" side_offset="6">
+          <button class="sw sw-default" :data-on="color == 'default'" @click="pick_color('default')" aria-label="Default"><span class="sw-x" aria-hidden="true">⊘</span></button>
+          <button class="sw sw-coral" :data-on="color == 'coral'" @click="pick_color('coral')" aria-label="Coral"></button>
+          <button class="sw sw-peach" :data-on="color == 'peach'" @click="pick_color('peach')" aria-label="Peach"></button>
+          <button class="sw sw-sand" :data-on="color == 'sand'" @click="pick_color('sand')" aria-label="Sand"></button>
+          <button class="sw sw-mint" :data-on="color == 'mint'" @click="pick_color('mint')" aria-label="Mint"></button>
+          <button class="sw sw-sage" :data-on="color == 'sage'" @click="pick_color('sage')" aria-label="Sage"></button>
+          <button class="sw sw-fog" :data-on="color == 'fog'" @click="pick_color('fog')" aria-label="Fog"></button>
+          <button class="sw sw-storm" :data-on="color == 'storm'" @click="pick_color('storm')" aria-label="Storm"></button>
+          <button class="sw sw-dusk" :data-on="color == 'dusk'" @click="pick_color('dusk')" aria-label="Dusk"></button>
+          <button class="sw sw-blossom" :data-on="color == 'blossom'" @click="pick_color('blossom')" aria-label="Blossom"></button>
+          <button class="sw sw-clay" :data-on="color == 'clay'" @click="pick_color('clay')" aria-label="Clay"></button>
+          <button class="sw sw-chalk" :data-on="color == 'chalk'" @click="pick_color('chalk')" aria-label="Chalk"></button>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
+    <button class="ic-btn" aria-label="Archive" @pointerdown.stop @click.stop="archive">
+      <pine-icon name="archive" size="18"></pine-icon>
+    </button>
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger aria-label="More" @pointerdown.stop>
+        <pine-icon name="dots-vertical" size="18"></pine-icon>
+      </pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content side="bottom" align="start" side_offset="6">
+          <pine-dropdown-menu-item class="danger" @click="delete">
+            <pine-icon name="trash" size="18"></pine-icon>
+            <span>Delete note</span>
+          </pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="open_labels">
+            <pine-icon name="tag" size="18"></pine-icon>
+            <span>Add label</span>
+          </pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="copy">
+            <pine-icon name="copy" size="18"></pine-icon>
+            <span>Make a copy</span>
+          </pine-dropdown-menu-item>
+          <pine-dropdown-menu-item @click="toggle_checkboxes">
+            <pine-icon name="list-check" size="18"></pine-icon>
+            <span pp-text="todos.length ? 'Hide checkboxes' : 'Show checkboxes'"></span>
+          </pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+  </div>
+
+  </article>
+</div>

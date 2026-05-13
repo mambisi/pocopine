@@ -1,0 +1,108 @@
+<div
+  class="note-form"
+  :data-color="color"
+  data-pp-outside-exempt=".composer.collapsed,.modal-note .note-pin,.palette--popover,.label-pop"
+  @click.outside="save"
+>
+  <pine-input
+    class="note-title-input"
+    placeholder="Title"
+    pp-model:value="title"
+    @keydown.ctrl.enter="save"
+    @keydown.meta.enter="save"
+    @keydown.escape="cancel"
+  ></pine-input>
+
+  <keep-note-body
+    pp-bind:kind="kind"
+    pp-model:body="body"
+    pp-model:todos="todos"
+    pp-model:todo-text="todo_text"
+    @keydown.ctrl.enter="save"
+    @keydown.meta.enter="save"
+    @keydown.escape="cancel"
+  ></keep-note-body>
+
+  <div class="label-chips" pp-show="labels.length">
+    <template pp-for="lbl in labels" pp-key="lbl">
+      <span class="chip">
+        <span pp-text="lbl"></span>
+        <button class="chip-x" aria-label="Remove label" @click="toggle_label(lbl)">
+          <pine-icon name="x" size="12"></pine-icon>
+        </button>
+      </span>
+    </template>
+  </div>
+
+  <div class="note-form-foot">
+    <div class="note-form-foot-tools">
+      <button class="ic-btn" aria-label="Convert (text ↔ checklist)" @click="toggle_kind">
+        <pine-icon :name="kind == 'text' ? 'list-check' : 'notes'" size="18"></pine-icon>
+      </button>
+
+      <pine-popover-root pp-model:open="color_picker_open">
+        <pine-popover-trigger class="ic-btn" aria-label="Background options">
+          <pine-icon name="palette" size="18"></pine-icon>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content class="palette palette--popover" side="top" align="start" side_offset="6">
+            <button class="sw sw-default" :data-on="color == 'default'" @click="pick_color('default')" aria-label="Default"><span class="sw-x" aria-hidden="true">⊘</span></button>
+            <button class="sw sw-coral" :data-on="color == 'coral'" @click="pick_color('coral')" aria-label="Coral"></button>
+            <button class="sw sw-peach" :data-on="color == 'peach'" @click="pick_color('peach')" aria-label="Peach"></button>
+            <button class="sw sw-sand" :data-on="color == 'sand'" @click="pick_color('sand')" aria-label="Sand"></button>
+            <button class="sw sw-mint" :data-on="color == 'mint'" @click="pick_color('mint')" aria-label="Mint"></button>
+            <button class="sw sw-sage" :data-on="color == 'sage'" @click="pick_color('sage')" aria-label="Sage"></button>
+            <button class="sw sw-fog" :data-on="color == 'fog'" @click="pick_color('fog')" aria-label="Fog"></button>
+            <button class="sw sw-storm" :data-on="color == 'storm'" @click="pick_color('storm')" aria-label="Storm"></button>
+            <button class="sw sw-dusk" :data-on="color == 'dusk'" @click="pick_color('dusk')" aria-label="Dusk"></button>
+            <button class="sw sw-blossom" :data-on="color == 'blossom'" @click="pick_color('blossom')" aria-label="Blossom"></button>
+            <button class="sw sw-clay" :data-on="color == 'clay'" @click="pick_color('clay')" aria-label="Clay"></button>
+            <button class="sw sw-chalk" :data-on="color == 'chalk'" @click="pick_color('chalk')" aria-label="Chalk"></button>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+
+      <pine-popover-root pp-model:open="label_picker_open">
+        <pine-popover-trigger class="ic-btn" aria-label="Labels">
+          <pine-icon name="tag" size="18"></pine-icon>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content class="label-pop" side="top" align="start" side_offset="6">
+            <div class="label-pop__h">Label note</div>
+            <pine-input
+              class="label-pop__input"
+              placeholder="Enter label name"
+              pp-model:value="label_query"
+              @keydown.enter="create_label"
+            ></pine-input>
+            <div class="label-pop__list">
+              <template pp-for="label in label_options" pp-key="label.name">
+                <label class="label-pop__row" pp-show="label.visible">
+                  <input
+                    type="checkbox"
+                    :checked="label.selected"
+                    @change="toggle_label(label.name)"
+                  />
+                  <span pp-text="label.name"></span>
+                </label>
+              </template>
+            </div>
+            <button
+              class="label-pop__create"
+              pp-show="label_can_create"
+              @click="create_label"
+            >
+              <pine-icon name="plus" size="14"></pine-icon>
+              <span>Create &ldquo;<span pp-text="label_query"></span>&rdquo;</span>
+            </button>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
+
+      <button class="ic-btn" pp-show="mode == 'editor'" aria-label="Archive" @click="archive">
+        <pine-icon name="archive" size="18"></pine-icon>
+      </button>
+    </div>
+    <button class="note-form-close" @click="save">Close</button>
+  </div>
+</div>
