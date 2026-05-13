@@ -19,6 +19,14 @@
     </button>
 
     <div class="tb-right">
+      <button
+        class="ic-btn"
+        :aria-label="$store.keep.view_mode == 'list' ? 'Switch to grid view' : 'Switch to list view'"
+        :data-on="$store.keep.view_mode == 'list'"
+        @click="cycle_view_mode"
+      >
+        <pine-icon :name="$store.keep.view_mode == 'list' ? 'layout-grid' : 'layout-list'" size="20"></pine-icon>
+      </button>
       <button class="ic-btn" aria-label="Pull" @click="refresh">
         <pine-icon name="refresh" size="20"></pine-icon>
       </button>
@@ -142,15 +150,15 @@
       </button>
     </aside>
 
-    <main class="main">
+    <main class="main" :data-view="$store.keep.view_mode">
       <p class="error" pp-show="$store.keep.notes.error" pp-text="$store.keep.notes.error"></p>
 
-      <keep-composer pp-show="$store.keep.section_kind == 'notes'"></keep-composer>
+      <keep-composer pp-show="$store.keep.section_kind == 'notes' && $store.keep.view_mode == 'masonry'"></keep-composer>
 
-      <h2 class="section-title" pp-show="$store.keep.section_kind == 'archive'">Archive</h2>
-      <h2 class="section-title" pp-show="$store.keep.section_kind == 'label'" pp-text="$store.keep.section_label"></h2>
+      <h2 class="section-title" pp-show="$store.keep.section_kind == 'archive' && $store.keep.view_mode == 'masonry'">Archive</h2>
+      <h2 class="section-title" pp-show="$store.keep.section_kind == 'label' && $store.keep.view_mode == 'masonry'" pp-text="$store.keep.section_label"></h2>
 
-      <section class="grid-section">
+      <section class="grid-section" pp-show="$store.keep.view_mode == 'masonry'">
         <div class="grid-h">PINNED</div>
         <div class="masonry">
           <template pp-for="row in $store.keep.pinned_notes" pp-key="row.key">
@@ -172,7 +180,7 @@
         </div>
       </section>
 
-      <section class="grid-section">
+      <section class="grid-section" pp-show="$store.keep.view_mode == 'masonry'">
         <div class="grid-h">OTHERS</div>
         <div class="masonry">
           <template pp-for="row in $store.keep.other_notes" pp-key="row.key">
@@ -194,7 +202,78 @@
         </div>
       </section>
 
-      <div class="empty" pp-show="!$store.keep.notes.loading && !$store.keep.pinned_notes.length && !$store.keep.other_notes.length">
+      <div class="list-layout" pp-show="$store.keep.view_mode == 'list'">
+        <aside class="list-pane">
+          <h2 class="list-section-title" pp-show="$store.keep.section_kind == 'archive'">Archive</h2>
+          <h2 class="list-section-title" pp-show="$store.keep.section_kind == 'label'" pp-text="$store.keep.section_label"></h2>
+
+          <div class="list-group" pp-show="$store.keep.pinned_notes.length">
+            <div class="list-group-h">PINNED</div>
+            <template pp-for="row in $store.keep.pinned_notes" pp-key="row.key">
+              <button
+                class="list-row"
+                :data-color="row.value.color"
+                :data-on="row.value.id == $store.keep.editor_data.id && $store.keep.editor_open"
+                :data-pending="row.pending"
+                @click="open_note_in_list(row.value.id)"
+              >
+                <span class="list-row__title" pp-text="row.value.title || 'Untitled note'"></span>
+                <span class="list-row__preview" pp-show="row.value.body" pp-text="row.value.body"></span>
+                <span class="list-row__preview list-row__preview--todos" pp-show="row.value.todos.length">
+                  <pine-icon name="list-check" size="14"></pine-icon>
+                  <span pp-text="row.value.todos.length + ' items'"></span>
+                </span>
+                <span class="list-row__labels" pp-show="row.value.labels.length">
+                  <template pp-for="lbl in row.value.labels" pp-key="lbl">
+                    <span class="list-row__chip" pp-text="lbl"></span>
+                  </template>
+                </span>
+              </button>
+            </template>
+          </div>
+
+          <div class="list-group" pp-show="$store.keep.other_notes.length">
+            <div class="list-group-h" pp-show="$store.keep.pinned_notes.length">OTHERS</div>
+            <template pp-for="row in $store.keep.other_notes" pp-key="row.key">
+              <button
+                class="list-row"
+                :data-color="row.value.color"
+                :data-on="row.value.id == $store.keep.editor_data.id && $store.keep.editor_open"
+                :data-pending="row.pending"
+                @click="open_note_in_list(row.value.id)"
+              >
+                <span class="list-row__title" pp-text="row.value.title || 'Untitled note'"></span>
+                <span class="list-row__preview" pp-show="row.value.body" pp-text="row.value.body"></span>
+                <span class="list-row__preview list-row__preview--todos" pp-show="row.value.todos.length">
+                  <pine-icon name="list-check" size="14"></pine-icon>
+                  <span pp-text="row.value.todos.length + ' items'"></span>
+                </span>
+                <span class="list-row__labels" pp-show="row.value.labels.length">
+                  <template pp-for="lbl in row.value.labels" pp-key="lbl">
+                    <span class="list-row__chip" pp-text="lbl"></span>
+                  </template>
+                </span>
+              </button>
+            </template>
+          </div>
+
+          <p class="list-empty" pp-show="!$store.keep.pinned_notes.length && !$store.keep.other_notes.length && !$store.keep.notes.loading">
+            No notes in this section.
+          </p>
+        </aside>
+
+        <section class="list-detail" :data-color="$store.keep.editor_data.color">
+          <div class="list-detail__placeholder" pp-show="!$store.keep.editor_open">
+            <pine-icon name="notes" size="64"></pine-icon>
+            <p>Select a note to view its contents.</p>
+          </div>
+          <div class="list-detail__form" pp-show="$store.keep.editor_open">
+            <keep-note-form></keep-note-form>
+          </div>
+        </section>
+      </div>
+
+      <div class="empty" pp-show="!$store.keep.notes.loading && !$store.keep.pinned_notes.length && !$store.keep.other_notes.length && $store.keep.view_mode == 'masonry'">
         <pine-icon name="bulb" size="120"></pine-icon>
         <p>Notes you add appear here.</p>
       </div>

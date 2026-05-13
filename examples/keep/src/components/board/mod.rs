@@ -12,8 +12,11 @@ use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    composer::KeepComposer, editor::KeepEditor, note_body::KeepNoteBody, note_card::KeepNoteCard,
-    note_form::KeepNoteForm,
+    composer::KeepComposer,
+    editor::KeepEditor,
+    note_body::KeepNoteBody,
+    note_card::KeepNoteCard,
+    note_form::{KeepNoteForm, KeepNoteFormContext, KEEP_NOTE_FORM_CONTEXT},
 };
 use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
 
@@ -62,6 +65,16 @@ pub struct KeepBoard {
 
 #[handlers]
 impl KeepBoard {
+    pub fn on_setup(&mut self) {
+        // The list-detail right pane embeds a bare <keep-note-form>
+        // directly inside the board (no shell wrapper between them),
+        // so the board provides the editor-mode context here.
+        // KeepComposer and KeepEditor each shadow this with their
+        // own provider, so only the inline detail form picks this
+        // up; composer / modal forms keep their existing modes.
+        KEEP_NOTE_FORM_CONTEXT.provide(KeepNoteFormContext::EDITOR_MODAL);
+    }
+
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let command = handle.clone();
         handle.watch_field::<bool, _>("command_open", move |open, prev| {
@@ -239,6 +252,14 @@ impl KeepBoard {
 
     pub fn toggle_theme(&mut self) {
         pocopine::store::<KeepStore>().update(KeepStore::toggle_theme);
+    }
+
+    pub fn cycle_view_mode(&mut self) {
+        pocopine::store::<KeepStore>().update(KeepStore::cycle_view_mode);
+    }
+
+    pub fn open_note_in_list(&mut self, note_id: String) {
+        pocopine::store::<KeepStore>().update(move |s| s.open_editor(note_id));
     }
 
     pub fn delete_all_notes(&mut self) {

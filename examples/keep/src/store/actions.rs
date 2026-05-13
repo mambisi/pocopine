@@ -5,7 +5,8 @@ use crate::KeepTodo;
 use super::{
     theme::{load_theme_preference, save_theme_preference},
     view::{format_todo_line, parse_todo_line, KeepEditorData},
-    KeepStore,
+    view_mode::save_view_mode_preference,
+    KeepStore, KeepViewMode,
 };
 
 #[handlers]
@@ -75,6 +76,35 @@ impl KeepStore {
     pub fn toggle_theme(&mut self) {
         self.theme = self.theme.toggled();
         save_theme_preference(self.theme);
+    }
+
+    /// Swap the board between masonry and list-detail layouts.
+    /// When switching to list mode and no editor is open, select the
+    /// first visible note so the right pane isn't empty.
+    pub fn cycle_view_mode(&mut self) {
+        self.view_mode = self.view_mode.toggled();
+        save_view_mode_preference(self.view_mode);
+        match self.view_mode {
+            KeepViewMode::List => {
+                self.clear_selection();
+                self.cancel_composer();
+                if !self.editor_open {
+                    if let Some(first) = self
+                        .pinned_notes
+                        .first()
+                        .map(|row| row.value.id.clone())
+                        .or_else(|| self.other_notes.first().map(|row| row.value.id.clone()))
+                    {
+                        self.open_editor(first);
+                    }
+                }
+            }
+            KeepViewMode::Masonry => {
+                if self.editor_open {
+                    self.cancel_editor();
+                }
+            }
+        }
     }
 
     pub fn add_label(&mut self, label: String) {
