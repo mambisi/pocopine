@@ -67,7 +67,7 @@ async fn good_token_reaches_guarded_handler() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/_pocopine/whoami")
+                .uri(__whoami_path())
                 .header("content-type", "application/json")
                 .header("authorization", "Bearer good-token")
                 .body(Body::from(r#"["world"]"#))
@@ -90,7 +90,7 @@ async fn missing_token_falls_through_as_anonymous_and_guard_rejects() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/_pocopine/whoami")
+                .uri(__whoami_path())
                 .header("content-type", "application/json")
                 .body(Body::from(r#"["world"]"#))
                 .unwrap(),
@@ -116,7 +116,7 @@ async fn provider_error_treated_as_anonymous_and_guard_rejects() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/_pocopine/whoami")
+                .uri(__whoami_path())
                 .header("content-type", "application/json")
                 .header("authorization", "Bearer bad-token")
                 .body(Body::from(r#"["world"]"#))
@@ -148,7 +148,7 @@ async fn with_auth_arc_shares_a_single_provider_handle() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/_pocopine/whoami")
+                .uri(__whoami_path())
                 .header("content-type", "application/json")
                 .header("authorization", "Bearer good-token")
                 .body(Body::from(r#"["world"]"#))

@@ -9,11 +9,13 @@
 //! ```no_run
 //! use pocopine_server::{axum::Router, static_files, Server};
 //!
-//! # mod app { pub fn __get_post_route(r: pocopine_server::axum::Router) -> pocopine_server::axum::Router { r } }
+//! # mod my_app {}
+//! // Link the app crate once so its `#[server]` inventory entries are present.
+//! use my_app as _;
+//!
 //! #[tokio::main]
 //! async fn main() -> std::io::Result<()> {
 //!     let router = Router::new().fallback_service(static_files("pkg"));
-//!     let router = app::__get_post_route(router);
 //!     Server::new(router).serve("0.0.0.0:3000").await
 //! }
 //! ```
@@ -21,14 +23,19 @@
 //! Plain [`crate::serve`] still works as a one-liner wrapper.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::Router;
+use pocopine_auth::AuthProvider;
 use tower::Layer;
 use tower::Service;
 
 use crate::plugin::{
     self, PluginRegistry, PluginValidationError, ServerBootFailed, ServerBootStarted, ServerHook,
     ServerListening,
+};
+use crate::{
+    auth_middleware, install_server_functions, ServerFunctionRouteConflict, SharedAuthProvider,
 };
 
 /// App-level extension point on the host side.
@@ -78,17 +85,23 @@ pub struct Server {
     router: Router,
     plugins: PluginRegistry,
     installing_plugin: Option<&'static str>,
+    server_function_conflicts: Vec<ServerFunctionRouteConflict>,
 }
 
 impl Server {
     /// Wrap `router` in a builder. Plugin work composes on top; the
     /// router itself remains the user's source of truth for route
     /// composition, fallback services, and `with_state` calls.
+    ///
+    /// All linked `#[server]` functions are installed before plugin
+    /// work starts, so later [`Self::layer`] calls wrap those routes.
     pub fn new(router: Router) -> Self {
+        let (router, server_function_conflicts) = install_server_functions(router);
         Self {
             router,
             plugins: PluginRegistry::default(),
             installing_plugin: None,
+            server_function_conflicts,
         }
     }
 
@@ -112,6 +125,26 @@ impl Server {
     /// name both providers in the diagnostic.
     pub fn provide_plugin<T: Send + Sync + 'static>(mut self, service: T) -> Self {
         self.plugins.provide(service, self.installing_plugin);
+        self
+    }
+
+    /// Install an [`AuthProvider`] as request middleware.
+    ///
+    /// This is the preferred auth entry point for normal apps because
+    /// [`Self::new`] has already installed all linked `#[server]`
+    /// routes. The middleware therefore wraps server-function routes
+    /// and lets guarded functions read authenticated principals from
+    /// `RequestContext`.
+    pub fn with_auth<P: AuthProvider + 'static>(self, provider: P) -> Self {
+        self.with_auth_arc(Arc::new(provider))
+    }
+
+    /// Install a pre-`Arc`'d auth provider.
+    pub fn with_auth_arc(mut self, provider: SharedAuthProvider) -> Self {
+        self.router = self.router.layer(axum::middleware::from_fn_with_state(
+            provider,
+            auth_middleware,
+        ));
         self
     }
 
@@ -141,7 +174,7 @@ impl Server {
     /// adds routes, install middleware last:
     ///
     /// ```ignore
-    /// Server::new(my_app::__routes(Router::new()))
+    /// Server::new(Router::new())
     ///     .plugin(plugin_that_adds_health_routes())
     ///     .layer(request_event_layer())   // wraps user routes + health routes
     ///     .serve(addr).await
@@ -233,8 +266,19 @@ impl Server {
     #[doc(hidden)]
     pub fn try_finalize(self) -> std::io::Result<Router> {
         let Self {
-            router, plugins, ..
+            router,
+            plugins,
+            server_function_conflicts,
+            ..
         } = self;
+
+        if !server_function_conflicts.is_empty() {
+            log_server_function_route_conflicts(&server_function_conflicts);
+            plugin::activate(PluginRegistry::default());
+            return Err(server_function_route_conflict_error(
+                &server_function_conflicts,
+            ));
+        }
 
         if let Err(errors) = plugins.validate() {
             log_plugin_validation_errors(&errors);
@@ -332,5 +376,34 @@ fn plugin_validation_error(errors: &[PluginValidationError]) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
         format!("pocopine server: plugin configuration invalid: {summary}"),
+    )
+}
+
+fn log_server_function_route_conflicts(errors: &[ServerFunctionRouteConflict]) {
+    tracing::error!(
+        target: "pocopine.log",
+        count = errors.len(),
+        "pocopine server: server-function routes are invalid; refusing to bind"
+    );
+    for err in errors {
+        tracing::error!(
+            target: "pocopine.log",
+            path = err.path,
+            first = %err.first,
+            second = %err.second,
+            "duplicate server-function route path"
+        );
+    }
+}
+
+fn server_function_route_conflict_error(errors: &[ServerFunctionRouteConflict]) -> std::io::Error {
+    let summary = errors
+        .iter()
+        .map(|err| format!("{} used by {} and {}", err.path, err.first, err.second))
+        .collect::<Vec<_>>()
+        .join("; ");
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("pocopine server: server-function route conflict: {summary}"),
     )
 }

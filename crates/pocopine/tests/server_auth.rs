@@ -63,7 +63,7 @@ fn request_context_extracts_user_from_extensions() {
 
     let ctx = pocopine::auth::RequestContext::from_parts(
         Method::GET,
-        Uri::from_static("/_pocopine/admin_echo"),
+        Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),
         extensions,
     );
@@ -81,7 +81,7 @@ fn protected_macro_guard_checks_inline_policy() {
 
     let allowed = pocopine::auth::RequestContext::new(
         Method::POST,
-        Uri::from_static("/_pocopine/admin_echo"),
+        Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),
     )
     .with_user(AuthUser::new("admin").with_role(Role::admin()));
@@ -89,7 +89,7 @@ fn protected_macro_guard_checks_inline_policy() {
 
     let denied = pocopine::auth::RequestContext::new(
         Method::POST,
-        Uri::from_static("/_pocopine/admin_echo"),
+        Uri::from_static(__admin_echo_path()),
         HeaderMap::new(),
     )
     .with_user(AuthUser::new("user").with_role(Role::user()));
@@ -119,7 +119,7 @@ fn oversized_body_returns_bad_request() {
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/_pocopine/public_echo")
+                        .uri(__public_echo_path())
                         .header("content-type", "application/json")
                         .body(Body::from(oversized_body))
                         .unwrap(),
@@ -138,7 +138,7 @@ fn oversized_body_returns_bad_request() {
         capture.events_with_message("pocopine.log", "server function request body read failed");
     let event = events
         .iter()
-        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .find(|event| event.field("route") == Some(__public_echo_path()))
         .expect("body-read failure event should be captured");
 
     assert_eq!(event.field("function"), Some("public_echo"));
@@ -174,7 +174,7 @@ fn malformed_body_returns_bad_request_and_emits_parse_log_without_payload() {
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/_pocopine/public_echo")
+                        .uri(__public_echo_path())
                         .header("content-type", "application/json")
                         .body(Body::from("\"parse-secret\""))
                         .unwrap(),
@@ -193,7 +193,7 @@ fn malformed_body_returns_bad_request_and_emits_parse_log_without_payload() {
         capture.events_with_message("pocopine.log", "server function request body parse failed");
     let event = events
         .iter()
-        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .find(|event| event.field("route") == Some(__public_echo_path()))
         .expect("body-parse failure event should be captured");
 
     assert_eq!(event.field("function"), Some("public_echo"));
@@ -231,7 +231,7 @@ fn server_function_route_emits_trace_without_payload() {
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/_pocopine/public_echo")
+                        .uri(__public_echo_path())
                         .header("content-type", "application/json")
                         .body(Body::from("[\"hello\"]"))
                         .unwrap(),
@@ -249,7 +249,7 @@ fn server_function_route_emits_trace_without_payload() {
     let events = capture.events_with_message("pocopine.trace", "server function completed");
     let event = events
         .iter()
-        .find(|event| event.field("route") == Some("/_pocopine/public_echo"))
+        .find(|event| event.field("route") == Some(__public_echo_path()))
         .expect("server function completion event should be captured");
 
     assert_eq!(event.field("function"), Some("public_echo"));
@@ -282,7 +282,7 @@ fn server_function_guard_rejection_emits_log_without_payload() {
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/_pocopine/guarded_echo")
+                        .uri(__guarded_echo_path())
                         .header("content-type", "application/json")
                         .body(Body::from("[\"guard-secret\"]"))
                         .unwrap(),
@@ -301,7 +301,7 @@ fn server_function_guard_rejection_emits_log_without_payload() {
         capture.events_with_message("pocopine.log", "server function guard rejected request");
     let event = events
         .iter()
-        .find(|event| event.field("route") == Some("/_pocopine/guarded_echo"))
+        .find(|event| event.field("route") == Some(__guarded_echo_path()))
         .expect("guard rejection event should be captured");
 
     assert_eq!(event.field("function"), Some("guarded_echo"));
@@ -337,7 +337,7 @@ fn server_function_app_failure_emits_log_without_payload() {
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
-                        .uri("/_pocopine/failing_echo")
+                        .uri(__failing_echo_path())
                         .header("content-type", "application/json")
                         .body(Body::from("[\"fail-input\"]"))
                         .unwrap(),
@@ -355,7 +355,7 @@ fn server_function_app_failure_emits_log_without_payload() {
     let events = capture.events_with_message("pocopine.log", "server function failed");
     let event = events
         .iter()
-        .find(|event| event.field("route") == Some("/_pocopine/failing_echo"))
+        .find(|event| event.field("route") == Some(__failing_echo_path()))
         .expect("server function failure event should be captured");
 
     assert_eq!(event.field("function"), Some("failing_echo"));

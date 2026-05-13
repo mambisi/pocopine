@@ -113,6 +113,7 @@ pub mod __private {
     pub use pocopine_core::registry::{
         clear_active_phf_registry_for_test, set_active_phf_registry,
     };
+    pub use pocopine_core::server::server_function_default_path;
     pub use pocopine_core::{
         compile_template, component_computed, computed as runtime_computed, inject_pp_data,
         inject_style, mark_registered, register_component_with_mount, register_row_plans,

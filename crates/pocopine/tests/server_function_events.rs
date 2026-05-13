@@ -137,19 +137,23 @@ async fn guarded(text: String) -> ServerResult<String> {
 }
 
 fn build_public_router() -> Router {
-    let router = Router::new();
-    let router = __echo_route(router);
-    __fail_with_app_route(router)
+    Router::new()
 }
 
 fn build_guarded_router() -> Router {
-    let router = Router::new();
-    let router = __guarded_route(router);
-    router.with_auth(StubProvider)
+    Router::new()
 }
 
 fn finalize(router: Router, events: EventLog) -> Router {
     Server::new(router)
+        .plugin(server_function_event_plugin(events))
+        .try_finalize()
+        .expect("plugin validation succeeds")
+}
+
+fn finalize_with_auth(router: Router, events: EventLog) -> Router {
+    Server::new(router)
+        .router_mut(|router| router.with_auth(StubProvider))
         .plugin(server_function_event_plugin(events))
         .try_finalize()
         .expect("plugin validation succeeds")
@@ -180,7 +184,7 @@ async fn successful_call_emits_started_then_completed_with_shared_request_id() {
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/echo")
+            .uri(__echo_path())
             .header("content-type", "application/json")
             .body(Body::from("[\"hi\"]"))
             .unwrap(),
@@ -223,7 +227,7 @@ async fn app_error_emits_failed_with_error_class() {
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/fail_with_app")
+            .uri(__fail_with_app_path())
             .header("content-type", "application/json")
             .body(Body::from("[\"x\"]"))
             .unwrap(),
@@ -259,7 +263,7 @@ async fn body_parse_failure_emits_rejected_with_bad_request() {
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/echo")
+            .uri(__echo_path())
             .header("content-type", "application/json")
             .body(Body::from("not json"))
             .unwrap(),
@@ -287,13 +291,13 @@ async fn guard_rejection_emits_rejected_with_unauthorized() {
     pocopine_server::__reset_for_test();
 
     let events = EventLog::default();
-    let router = finalize(build_guarded_router(), events.clone());
+    let router = finalize_with_auth(build_guarded_router(), events.clone());
 
     let response = send(
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/guarded")
+            .uri(__guarded_path())
             .header("content-type", "application/json")
             .body(Body::from("[\"hi\"]"))
             .unwrap(),
@@ -324,13 +328,13 @@ async fn guarded_call_with_good_token_emits_started_then_completed() {
     pocopine_server::__reset_for_test();
 
     let events = EventLog::default();
-    let router = finalize(build_guarded_router(), events.clone());
+    let router = finalize_with_auth(build_guarded_router(), events.clone());
 
     let response = send(
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/guarded")
+            .uri(__guarded_path())
             .header("content-type", "application/json")
             .header("authorization", "Bearer good")
             .body(Body::from("[\"hi\"]"))
@@ -379,7 +383,7 @@ async fn server_function_events_self_allocate_request_id_without_http_layer() {
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/echo")
+            .uri(__echo_path())
             .header("content-type", "application/json")
             .body(Body::from("[\"first\"]"))
             .unwrap(),
@@ -391,7 +395,7 @@ async fn server_function_events_self_allocate_request_id_without_http_layer() {
         &router,
         Request::builder()
             .method(Method::POST)
-            .uri("/_pocopine/echo")
+            .uri(__echo_path())
             .header("content-type", "application/json")
             .body(Body::from("[\"second\"]"))
             .unwrap(),

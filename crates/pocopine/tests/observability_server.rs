@@ -135,12 +135,12 @@ fn server_observability_correlates_http_and_server_function_events_without_paylo
 
     capture.run(|| {
         rt.block_on(async {
-            let router = finalize(__observed_echo_route(Router::new()));
+            let router = finalize(Router::new());
             let response = send(
                 &router,
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/_pocopine/observed_echo")
+                    .uri(__observed_echo_path())
                     .header("content-type", "application/json")
                     .body(Body::from("[\"payload-secret\"]"))
                     .unwrap(),
@@ -185,13 +185,13 @@ fn server_observability_logs_server_function_rejections_and_failures_without_pay
 
     capture.run(|| {
         rt.block_on(async {
-            let router = finalize(__observed_fail_route(__observed_echo_route(Router::new())));
+            let router = finalize(Router::new());
 
             let rejected = send(
                 &router,
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/_pocopine/observed_echo")
+                    .uri(__observed_echo_path())
                     .header("content-type", "application/json")
                     .body(Body::from("\"reject-secret\""))
                     .unwrap(),
@@ -203,7 +203,7 @@ fn server_observability_logs_server_function_rejections_and_failures_without_pay
                 &router,
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/_pocopine/observed_fail")
+                    .uri(__observed_fail_path())
                     .header("content-type", "application/json")
                     .body(Body::from("[\"fail-secret\"]"))
                     .unwrap(),

@@ -9,18 +9,21 @@
 //! ```no_run
 //! use pocopine_server::{axum::{self, Router}, serve, static_files};
 //!
-//! # mod app { pub fn __get_post_route(r: pocopine_server::axum::Router) -> pocopine_server::axum::Router { r } }
+//! # mod my_app {}
+//! // Link the app crate once so its `#[server]` inventory entries are present.
+//! use my_app as _;
+//!
 //! #[tokio::main]
 //! async fn main() -> std::io::Result<()> {
 //!     let router = Router::new()
 //!         .nest_service("/", static_files("pkg"))
 //!         .merge(Router::new());
-//!     let router = app::__get_post_route(router);
 //!     serve(router, "0.0.0.0:3000").await
 //! }
 //! ```
 
 pub use axum;
+pub use inventory;
 pub use serde_json;
 pub use tokio;
 pub use tower;
@@ -30,6 +33,7 @@ pub use tracing;
 mod observability;
 pub mod plugin;
 mod server;
+mod server_functions;
 
 pub use observability::request_event_layer;
 pub use plugin::{
@@ -44,6 +48,9 @@ pub use plugin::{
     ServerHook, ServerListening, ServerPluginHandle,
 };
 pub use server::{Server, ServerPlugin};
+pub use server_functions::{
+    install_server_functions, ServerFunctionRoute, ServerFunctionRouteConflict,
+};
 
 #[doc(hidden)]
 pub use plugin::__reset_for_test;
@@ -175,13 +182,19 @@ async fn auth_middleware(
     next.run(req).await
 }
 
-/// Extension trait that installs an [`AuthProvider`] on an axum
+/// Extension trait that installs an [`AuthProvider`] on a raw axum
 /// [`Router`] in one line.
 ///
-/// **Install after routes.** `Router::layer` (which this calls
-/// under the hood) only wraps the routes that exist at the call
-/// site — routes added afterwards silently bypass the middleware.
-/// Always call `with_auth` last:
+/// Normal applications should prefer [`Server::with_auth`], because
+/// [`Server::new`] first installs all linked `#[server]` routes and
+/// then the builder method wraps them. This raw-router extension is
+/// still useful for tests and custom routers that manually install
+/// routes.
+///
+/// **Install after routes.** `Router::layer` (which this calls under
+/// the hood) only wraps the routes that exist at the call site —
+/// routes added afterwards silently bypass the middleware. Always call
+/// `with_auth` last:
 ///
 /// ```no_run
 /// # use pocopine_server::{axum::Router, RouterAuthExt};
@@ -192,11 +205,8 @@ async fn auth_middleware(
 /// #         -> AuthFuture<'a, Option<AuthUser>>
 /// #     { Box::pin(async { Ok(None) }) }
 /// # }
-/// # mod app { pub fn __whoami_route(r: pocopine_server::axum::Router)
-/// #     -> pocopine_server::axum::Router { r } }
 /// let router = Router::new();
-/// let router = app::__whoami_route(router);
-/// // ... register all server-function routes first ...
+/// // ... manually register routes first ...
 /// let router = router.with_auth(StubProvider);
 /// ```
 ///
@@ -230,7 +240,9 @@ impl RouterAuthExt for Router {
 ///
 /// Compatibility wrapper around [`Server::new(router).serve(addr)`].
 /// New code should prefer the builder so plugins can install
-/// services, hooks, and tower layers before bind.
+/// services, hooks, and tower layers before bind. Do not pre-install
+/// generated `__*_route` helpers before calling this wrapper; linked
+/// server functions are installed automatically.
 pub async fn serve(router: Router, addr: &str) -> std::io::Result<()> {
     Server::new(router).serve(addr).await
 }
