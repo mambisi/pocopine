@@ -394,6 +394,7 @@ mod server {
                     .priority(EventPriority::Low)
                     .context(self.context())
                     .field("function", event.function, FieldPrivacy::Public)
+                    .field("function_path", event.function_path, FieldPrivacy::Public)
                     .field("request_id", event.request_id, FieldPrivacy::Public),
             );
         }
@@ -405,6 +406,7 @@ mod server {
                 ObservedEvent::trace("server_function_completed")
                     .context(self.context())
                     .field("function", event.function, FieldPrivacy::Public)
+                    .field("function_path", event.function_path, FieldPrivacy::Public)
                     .field("request_id", event.request_id, FieldPrivacy::Public)
                     .field("duration_ms", event.duration_ms, FieldPrivacy::Public),
             );
@@ -418,6 +420,7 @@ mod server {
                     .priority(EventPriority::High)
                     .context(self.context())
                     .field("function", event.function, FieldPrivacy::Public)
+                    .field("function_path", event.function_path, FieldPrivacy::Public)
                     .field("request_id", event.request_id, FieldPrivacy::Public)
                     .field("status", event.status as u64, FieldPrivacy::Public)
                     .field("reason", event.reason, FieldPrivacy::Public),
@@ -432,6 +435,7 @@ mod server {
                     .priority(EventPriority::High)
                     .context(self.context())
                     .field("function", event.function, FieldPrivacy::Public)
+                    .field("function_path", event.function_path, FieldPrivacy::Public)
                     .field("request_id", event.request_id, FieldPrivacy::Public)
                     .field("error_class", event.error_class, FieldPrivacy::Public)
                     .field("duration_ms", event.duration_ms, FieldPrivacy::Public),

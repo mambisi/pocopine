@@ -208,6 +208,8 @@ async fn successful_call_emits_started_then_completed_with_shared_request_id() {
 
     assert_eq!(started.function, "echo");
     assert_eq!(completed.function, "echo");
+    assert_eq!(started.function_path, __echo_function_path());
+    assert_eq!(completed.function_path, __echo_function_path());
     assert_eq!(
         started.request_id, completed.request_id,
         "started/completed must share request_id (HTTP layer correlation)"
@@ -242,6 +244,7 @@ async fn app_error_emits_failed_with_error_class() {
     });
     let failed = failed.expect("expected ServerFunctionFailed");
     assert_eq!(failed.function, "fail_with_app");
+    assert_eq!(failed.function_path, __fail_with_app_function_path());
     assert_eq!(failed.error_class, "app");
 
     let completed = log.iter().any(|e| matches!(e, Event::Completed(_)));
@@ -278,6 +281,7 @@ async fn body_parse_failure_emits_rejected_with_bad_request() {
     });
     let rejected = rejected.expect("expected ServerFunctionRejected");
     assert_eq!(rejected.function, "echo");
+    assert_eq!(rejected.function_path, __echo_function_path());
     assert_eq!(rejected.status, 400);
     assert_eq!(rejected.reason, "bad_request");
 
@@ -312,6 +316,7 @@ async fn guard_rejection_emits_rejected_with_unauthorized() {
     });
     let rejected = rejected.expect("expected ServerFunctionRejected for missing bearer");
     assert_eq!(rejected.function, "guarded");
+    assert_eq!(rejected.function_path, __guarded_function_path());
     assert_eq!(rejected.status, 401);
     assert_eq!(rejected.reason, "unauthorized");
 

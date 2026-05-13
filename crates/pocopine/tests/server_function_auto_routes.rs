@@ -31,6 +31,18 @@ async fn custom_echo(value: String) -> ServerResult<String> {
 #[test]
 fn default_route_paths_are_module_scoped() {
     assert_ne!(__auto_echo_path(), nested::__auto_echo_path());
+    assert_ne!(
+        __auto_echo_function_path(),
+        nested::__auto_echo_function_path()
+    );
+    assert!(matches!(
+        __auto_echo_function_path().strip_suffix("::auto_echo"),
+        Some(module) if module.ends_with("server_function_auto_routes")
+    ));
+    assert!(matches!(
+        nested::__auto_echo_function_path().strip_suffix("::auto_echo"),
+        Some(module) if module.ends_with("server_function_auto_routes::nested")
+    ));
     assert!(matches!(
         __auto_echo_path().strip_prefix("/_pocopine/auto_echo_"),
         Some(suffix) if suffix.len() == 16

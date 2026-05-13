@@ -288,6 +288,10 @@ hooks into `ObservedEvent`s:
 | `ServerFunctionRejected` | `server_function_rejected` log |
 | `ServerFunctionFailed` | `server_function_failed` log |
 
+Server-function events include both `function` (the short Rust function
+identifier for display) and `function_path` (the fully-qualified
+`module::function` path for debugging collisions and same-name handlers).
+
 HTTP events report axum's matched route pattern, such as `/posts/:id`, rather
 than the concrete request path. Headers, cookies, query strings, request
 bodies, response bodies, and raw server-function payloads are never exported by
