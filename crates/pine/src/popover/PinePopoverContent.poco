@@ -2,6 +2,7 @@
       class="pine-popover-content"
       pp-ref="content"
       data-state="open"
+      @pointerdown.outside="on_outside"
       @click.outside="on_outside"
       @keydown.escape.prevent="on_escape">
   <slot></slot>

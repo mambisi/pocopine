@@ -3,6 +3,7 @@
       pp-ref="menu"
       data-state="open"
       pp-roving
+      @pointerdown.outside="close"
       @click.outside="close"
       @keydown.escape.prevent="close">
   <slot></slot>
