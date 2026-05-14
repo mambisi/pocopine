@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::{
     can_create_label, format_todo_line, label_picker_options_for, parse_todo_line, KeepEditorData,
-    KeepFormNote, KeepLabelOption, KeepStore,
+    KeepFormNote, KeepLabelOption, KeepStore, KeepViewMode,
 };
 use crate::KeepTodo;
 
@@ -95,7 +95,16 @@ impl KeepNoteForm {
                 move |data, prev| {
                     let previous = prev.cloned().unwrap_or_default();
                     if data.id != previous.id {
-                        schedule_load_editor(h.clone());
+                        // List-detail row switch: persist the form's
+                        // local edits against the previous note before
+                        // overwriting them with the new row's data.
+                        let is_list = pocopine::store::<KeepStore>()
+                            .with(|s| s.view_mode == KeepViewMode::List);
+                        if is_list && !previous.id.is_empty() {
+                            schedule_save_then_load(h.clone());
+                        } else {
+                            schedule_load_editor(h.clone());
+                        }
                     } else if data.pinned != previous.pinned {
                         schedule_sync_editor_pin(h.clone());
                     }
@@ -131,6 +140,18 @@ impl KeepNoteForm {
                 s.save_form_note(form);
             });
         }
+    }
+
+    /// Click-outside auto-save. In the list-detail pane the right
+    /// pane is permanently mounted, so every click on the topbar,
+    /// sidebar, or list rows would otherwise generate a no-op
+    /// upsert. List mode auto-saves on row switch instead (handled
+    /// by the editor_data id watcher in `on_ready`).
+    pub fn auto_save(&mut self) {
+        if pocopine::store::<KeepStore>().with(|s| s.view_mode == KeepViewMode::List) {
+            return;
+        }
+        self.save();
     }
 
     pub fn cancel(&mut self) {
@@ -231,6 +252,18 @@ fn schedule_reset_draft(handle: pocopine::Handle<KeepNoteForm>) {
 fn schedule_load_editor(handle: pocopine::Handle<KeepNoteForm>) {
     pocopine::tick::next(move || {
         handle.update(KeepNoteForm::load_editor_from_store);
+    });
+}
+
+fn schedule_save_then_load(handle: pocopine::Handle<KeepNoteForm>) {
+    pocopine::tick::next(move || {
+        handle.update(|form| {
+            let snapshot = form.collect_fields();
+            if !snapshot.note_id.is_empty() {
+                pocopine::store::<KeepStore>().update(move |s| s.save_form_note(snapshot));
+            }
+            form.load_editor_from_store();
+        });
     });
 }
 

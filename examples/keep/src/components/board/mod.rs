@@ -262,6 +262,11 @@ impl KeepBoard {
         pocopine::store::<KeepStore>().update(move |s| s.open_editor(note_id));
     }
 
+    pub fn create_list_note(&mut self) {
+        pocopine::store::<KeepStore>().update(KeepStore::create_blank_note);
+        focus_after_flush(".list-detail__form .note-title-input input");
+    }
+
     pub fn delete_all_notes(&mut self) {
         pocopine::store::<KeepStore>().update(KeepStore::reset);
     }

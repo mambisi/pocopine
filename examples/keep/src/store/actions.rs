@@ -396,6 +396,45 @@ impl KeepStore {
         }
     }
 
+    // ─── list-detail ───
+
+    /// Create an empty note and open it in the list-detail right
+    /// pane. Bear-style flow: clicking + spawns a blank row the
+    /// user can immediately type into.
+    pub fn create_blank_note(&mut self) {
+        self.clear_selection();
+        self.cancel_composer();
+        self.next_local_id = self.next_local_id.saturating_add(1);
+        let id = format!("note_{}_{}", crate::now_ms(), self.next_local_id);
+        let note = crate::KeepNote {
+            id: id.clone(),
+            title: String::new(),
+            body: String::new(),
+            color: "default".into(),
+            pinned: false,
+            archived: false,
+            todos: Vec::new(),
+            labels: Vec::new(),
+            updated_at_ms: crate::now_ms(),
+        };
+        match self.push_upsert(note, None, "create") {
+            Ok(()) => {
+                self.status.clear();
+                self.notes.clear_error();
+                self.open_editor(id);
+            }
+            Err(err) => {
+                self.status = "save failed".into();
+                self.notes.set_error(err.to_string());
+            }
+        }
+    }
+
+    pub fn set_search_query(&mut self, query: String) {
+        self.search_query = query;
+        self.rebuild_visible_notes();
+    }
+
     // ─── editor (detail dialog) ───
 
     pub fn open_editor(&mut self, note_id: String) {

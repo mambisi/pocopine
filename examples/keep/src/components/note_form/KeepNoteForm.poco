@@ -2,7 +2,7 @@
   class="note-form"
   :data-color="color"
   data-pp-outside-exempt=".composer.collapsed,.modal-note .note-pin,.palette--popover,.label-pop"
-  @click.outside="save"
+  @click.outside="auto_save"
 >
   <pine-input
     class="note-title-input"
