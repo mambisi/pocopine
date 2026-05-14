@@ -322,7 +322,7 @@ keep-list-detail {
   margin: 0 0 4px;
   padding: 0 0 12px;
   border-bottom: 1px solid var(--line);
-  justify-content: flex-start;
+  justify-content: space-between;
   background: transparent;
 }
 
