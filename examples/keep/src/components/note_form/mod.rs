@@ -110,6 +110,15 @@ impl KeepNoteForm {
                     }
                 },
             );
+
+            // Late-mount case: when entering list-detail mode the
+            // store auto-opens the first visible note *before* this
+            // form mounts, so the watchers above are registered
+            // after the false→true editor_open transition has
+            // already happened. Trigger an explicit load so the
+            // right pane shows the active note on first render.
+            // The helper is a no-op when editor_open is false.
+            schedule_load_editor(handle.clone());
         }
 
         let picker = handle.clone();

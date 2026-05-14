@@ -177,15 +177,11 @@ keep-list-detail {
 }
 
 .list-row[data-on="true"] {
-  background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+  background: color-mix(in srgb, var(--fg-3) 14%, transparent);
 }
 
 .list-row[data-on="true"]::before {
   background: var(--accent);
-}
-
-.list-row[data-on="true"] .list-row__title {
-  color: var(--accent-on);
 }
 
 .list-row[data-pending="true"] .list-row__title::after {
