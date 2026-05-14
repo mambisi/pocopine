@@ -230,6 +230,21 @@ impl KeepNoteForm {
         });
     }
 
+    pub fn delete(&mut self) {
+        if self.mode != "editor" || self.note_id.is_empty() {
+            return;
+        }
+        self.close_popovers();
+        let id = self.note_id.clone();
+        crate::shared_layout_transition(move |s| {
+            s.delete_note(id);
+            // Drop the editor: the row is gone from `notes.rows`,
+            // so any list-detail / modal pane should fall back to
+            // the empty placeholder.
+            s.cancel_editor();
+        });
+    }
+
     pub fn toggle_label(&mut self, label: String) {
         if let Some(pos) = self.labels.iter().position(|existing| existing == &label) {
             self.labels.remove(pos);

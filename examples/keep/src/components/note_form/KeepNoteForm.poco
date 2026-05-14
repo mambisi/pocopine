@@ -103,6 +103,11 @@
         <pine-icon name="archive" size="18"></pine-icon>
       </button>
     </div>
-    <button class="note-form-close" @click="save">Close</button>
+    <div class="note-form-foot-end">
+      <button class="ic-btn note-form-delete" pp-show="mode == 'editor'" aria-label="Delete note" @click="delete">
+        <pine-icon name="trash" size="18"></pine-icon>
+      </button>
+      <button class="note-form-close" @click="save">Close</button>
+    </div>
   </div>
 </div>

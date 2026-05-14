@@ -61,6 +61,30 @@
   flex-wrap: wrap;
 }
 
+.note-form-foot-end {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.note-form-delete {
+  color: #b42318;
+}
+
+.note-form-delete:hover {
+  background: color-mix(in srgb, #b42318 12%, transparent);
+  color: #b42318;
+}
+
+body:has(.keep-app[data-theme="dark"]) .note-form-delete {
+  color: #fda29b;
+}
+
+body:has(.keep-app[data-theme="dark"]) .note-form-delete:hover {
+  background: color-mix(in srgb, #fda29b 14%, transparent);
+  color: #fda29b;
+}
+
 .note-form-close {
   height: 36px;
   padding: 0 24px;
