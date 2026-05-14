@@ -44,6 +44,8 @@ pub fn main() {
         "bell",
         "user",
         "corner-down-right",
+        "layout-grid",
+        "layout-list",
     ];
     App::new()
         .plugin(sync_client_plugin())
