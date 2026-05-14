@@ -402,7 +402,17 @@ impl KeepStore {
     /// pane. Bear-style flow: clicking + spawns a blank row the
     /// user can immediately type into. `kind` decides whether the
     /// inline form opens in text or checklist mode.
+    ///
+    /// Snaps the section back to Notes and clears any active
+    /// search query so the freshly created row is guaranteed to
+    /// be visible in the left pane. Otherwise a `+` press from
+    /// the Archive section, or while the user has typed a
+    /// search term, would create a note that doesn't match the
+    /// current view filter and never shows up as selected.
     pub fn create_blank_note(&mut self, kind: String) {
+        self.search_query.clear();
+        self.section_kind = "notes".into();
+        self.section_label.clear();
         self.clear_selection();
         self.cancel_composer();
         self.next_local_id = self.next_local_id.saturating_add(1);

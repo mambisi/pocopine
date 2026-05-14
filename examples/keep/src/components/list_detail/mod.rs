@@ -33,6 +33,15 @@ impl KeepListDetail {
 
     pub fn open_note(&mut self, note_id: String) {
         pocopine::store::<KeepStore>().update(move |s| s.open_editor(note_id));
+        // Mirror Bear / Apple Notes: clicking a row drops the caret
+        // straight into the body so the user can type immediately.
+        let is_checklist =
+            pocopine::store::<KeepStore>().with(|s| s.editor_data.kind == "checklist");
+        crate::focus_after_flush(if is_checklist {
+            ".list-detail__form .cl-add .cl-txt"
+        } else {
+            ".list-detail__form textarea.pine-textarea"
+        });
     }
 
     pub fn create_note(&mut self) {
