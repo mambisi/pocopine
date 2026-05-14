@@ -1,4 +1,4 @@
-<div class="modal-back" pp-show="$store.keep.editor_open && $store.keep.view_mode == 'masonry'">
+<div class="modal-back" pp-show="$store.keep.editor_open">
   <div class="modal-note" :data-color="$store.keep.editor_data.color" :data-pp-layout-id="'card-' + $store.keep.editor_data.id" @click.stop>
     <button class="note-pin" :data-on="$store.keep.editor_data.pinned" aria-label="Pin" @click="toggle_pin">
       <pine-icon name="pin" :variant="$store.keep.editor_data.pinned ? 'filled' : 'outline'" size="20"></pine-icon>

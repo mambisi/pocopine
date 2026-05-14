@@ -24,7 +24,8 @@ pub mod sync;
 pub mod utils;
 
 pub use components::{
-    KeepBoard, KeepComposer, KeepEditor, KeepNoteBody, KeepNoteCard, KeepNoteForm,
+    KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepNoteBody,
+    KeepNoteCard, KeepNoteForm,
 };
 pub use model::*;
 pub use store::KeepStore;

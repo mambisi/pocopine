@@ -1,0 +1,355 @@
+keep-list-detail {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.list-layout {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+}
+
+.list-pane {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.list-pane__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 16px 8px;
+}
+
+.list-pane__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--fg);
+}
+
+.list-pane__new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--fg-2);
+  transition: background .12s ease, color .12s ease;
+}
+
+.list-pane__new:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.list-pane__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 12px;
+  padding: 0 10px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  transition: border-color .12s ease, background .12s ease;
+}
+
+.list-pane__search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2));
+  background: var(--surface);
+}
+
+.list-pane__search > pine-icon {
+  flex: 0 0 auto;
+  color: var(--fg-3);
+}
+
+.list-pane__search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.list-pane__search input::placeholder {
+  color: var(--fg-3);
+}
+
+.list-pane__search input::-webkit-search-cancel-button { appearance: none; }
+
+.list-pane__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--fg-3);
+}
+
+.list-pane__search-clear:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.list-pane__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+.list-pane__scroll::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.list-pane__scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+
+.list-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 12px;
+}
+
+.list-group-h {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  margin: 12px 12px 6px;
+}
+
+.list-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px 10px 14px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+
+.list-row::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+
+.list-row:hover {
+  background: var(--hover);
+}
+
+.list-row[data-on="true"] {
+  background: color-mix(in srgb, var(--accent-soft) 65%, transparent);
+}
+
+.list-row[data-on="true"]::before {
+  background: var(--accent);
+}
+
+.list-row[data-on="true"] .list-row__title {
+  color: var(--accent-on);
+}
+
+.list-row[data-pending="true"] .list-row__title::after {
+  content: "";
+  display: inline-block;
+  margin-left: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .55;
+  vertical-align: middle;
+}
+
+.list-row__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-row__preview {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-height: 34px;
+}
+
+.list-row__preview--todos {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-height: none;
+  color: var(--fg-3);
+}
+
+.list-row__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.list-row__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--fg-2);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.list-empty {
+  margin: 32px 12px;
+  color: var(--fg-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.list-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 48px 56px;
+  overflow-y: auto;
+  background: var(--bg-page);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+.list-detail::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.list-detail::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+
+.list-detail__placeholder {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--fg-3);
+}
+
+.list-detail__placeholder p {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.list-detail__placeholder svg {
+  color: var(--fg-3);
+  opacity: 0.4;
+}
+
+.list-detail__form {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.list-detail__form .note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+}
+
+/* Bear-style: action toolbar pinned above the title + body instead
+   of the modal's bottom-footer placement. Hide the Close button
+   entirely — list-detail persists on row switch, not via Close. */
+.list-detail__form .note-form-foot {
+  position: static;
+  order: -1;
+  margin: 0 0 4px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+  justify-content: flex-start;
+  background: transparent;
+}
+
+.list-detail__form .note-form-close {
+  display: none;
+}
+
+.list-detail__form .note-title-input {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+}
+
+@media (max-width: 1100px) {
+  .list-detail { padding: 36px 40px; }
+}
+
+@media (max-width: 880px) {
+  .list-pane { flex: 0 0 272px; }
+  .list-detail { padding: 28px 24px; }
+}
+
+@media (max-width: 680px) {
+  .list-pane { flex: 0 0 220px; }
+  .list-detail { padding: 20px 16px; }
+}

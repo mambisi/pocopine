@@ -1,7 +1,8 @@
 use pocopine::prelude::*;
 
 use crate::{
-    KeepBoard, KeepComposer, KeepEditor, KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
+    KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepNoteBody,
+    KeepNoteCard, KeepNoteForm, KeepStore,
 };
 
 fn sync_client_plugin() -> pocopine_sync::SyncClientPlugin {
@@ -72,6 +73,8 @@ pub fn main() {
         .register::<pine::PinePopoverPortal>()
         .register::<pine::PinePopoverContent>()
         .register::<KeepBoard>()
+        .register::<KeepGridLayout>()
+        .register::<KeepListDetail>()
         .register::<KeepComposer>()
         .register::<KeepNoteCard>()
         .register::<KeepEditor>()
