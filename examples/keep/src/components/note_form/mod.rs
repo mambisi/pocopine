@@ -56,6 +56,18 @@ impl KeepNoteForm {
             .unwrap_or(KeepNoteFormContext::DRAFT_COMPOSER);
         self.mode = ctx.mode.into();
         self.reset_draft("text");
+
+        // Synchronous load for the editor-mode mount-after-set case
+        // (list-detail's `cycle_view_mode` auto-opens the first
+        // visible note *before* this form mounts). Without this the
+        // first paint shows blank inputs because the editor_open /
+        // editor_data watchers in `on_ready` are registered after
+        // those store fields have already settled — they miss the
+        // transition entirely. Reading the store via `with(...)` is
+        // a read-only borrow that's safe inside `on_setup`.
+        if self.mode == "editor" {
+            self.load_editor_from_store();
+        }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
