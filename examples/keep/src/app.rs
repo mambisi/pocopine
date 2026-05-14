@@ -68,6 +68,7 @@ pub fn main() {
         .register::<pine::PineDropdownMenuSeparator>()
         .register::<pine::PineDropdownMenuLabel>()
         .register::<pine::PineInput>()
+        .register::<pine::PineTextarea>()
         .register::<pine::PinePopoverRoot>()
         .register::<pine::PinePopoverTrigger>()
         .register::<pine::PinePopoverPortal>()
