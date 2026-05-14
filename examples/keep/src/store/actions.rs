@@ -428,23 +428,36 @@ impl KeepStore {
             labels: Vec::new(),
             updated_at_ms: crate::now_ms(),
         };
+        // `push_upsert` lands its optimistic row asynchronously
+        // (it runs inside `spawn_for_scope`), so calling
+        // `open_editor(id)` right after would hit `notes.rows`
+        // before the row arrives and silently no-op — the new
+        // note would never become the selected detail. Set
+        // `editor_data` directly from the local `note` value
+        // instead, then push. The form's `editor_data` watcher
+        // fires on the id change and loads immediately; the
+        // optimistic row joins `pinned_notes`/`other_notes`
+        // moments later via the usual rebuild and the list-row
+        // `:data-on=` finds its match.
+        self.editor_data = KeepEditorData::from_note(note.clone());
+        if kind == "checklist" {
+            // KeepEditorData::from_note derives kind from
+            // todos.is_empty(); a fresh note has no todos so it
+            // would always land in "text".
+            self.editor_data.kind = "checklist".into();
+        }
+        self.editor_open = true;
+
         match self.push_upsert(note, None, "create") {
             Ok(()) => {
                 self.status.clear();
                 self.notes.clear_error();
-                self.open_editor(id);
-                // `KeepEditorData::from_note` derives kind from
-                // todos.is_empty(); a fresh note has no todos so it
-                // would always land in "text". Force the explicit
-                // kind so the inline form picks up the right body
-                // editor on first paint.
-                if kind == "checklist" {
-                    self.editor_data.kind = "checklist".into();
-                }
             }
             Err(err) => {
                 self.status = "save failed".into();
                 self.notes.set_error(err.to_string());
+                self.editor_open = false;
+                self.clear_editor_fields();
             }
         }
     }
