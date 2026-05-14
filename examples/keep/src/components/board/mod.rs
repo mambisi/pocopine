@@ -84,22 +84,40 @@ impl KeepBoard {
             if is_typing_target() {
                 return;
             }
+            let is_list = pocopine::store::<KeepStore>()
+                .with(|s| s.view_mode == crate::store::KeepViewMode::List);
             match ev.key().to_lowercase().as_str() {
                 "c" => {
                     ev.prevent_default();
-                    pocopine::store::<KeepStore>().update(|s| {
-                        s.show_notes();
-                        s.expand_composer_text();
-                    });
-                    focus_after_flush(".composer.expanded textarea");
+                    if is_list {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.create_blank_note("text".into());
+                        });
+                        focus_after_flush(".list-detail__form textarea.pine-textarea");
+                    } else {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.expand_composer_text();
+                        });
+                        focus_after_flush(".composer.expanded textarea");
+                    }
                 }
                 "l" => {
                     ev.prevent_default();
-                    pocopine::store::<KeepStore>().update(|s| {
-                        s.show_notes();
-                        s.expand_composer_todo();
-                    });
-                    focus_after_flush(".composer.expanded .cl-add .cl-txt");
+                    if is_list {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.create_blank_note("checklist".into());
+                        });
+                        focus_after_flush(".list-detail__form .cl-add .cl-txt");
+                    } else {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.expand_composer_todo();
+                        });
+                        focus_after_flush(".composer.expanded .cl-add .cl-txt");
+                    }
                 }
                 _ => {}
             }

@@ -400,8 +400,9 @@ impl KeepStore {
 
     /// Create an empty note and open it in the list-detail right
     /// pane. Bear-style flow: clicking + spawns a blank row the
-    /// user can immediately type into.
-    pub fn create_blank_note(&mut self) {
+    /// user can immediately type into. `kind` decides whether the
+    /// inline form opens in text or checklist mode.
+    pub fn create_blank_note(&mut self, kind: String) {
         self.clear_selection();
         self.cancel_composer();
         self.next_local_id = self.next_local_id.saturating_add(1);
@@ -422,6 +423,14 @@ impl KeepStore {
                 self.status.clear();
                 self.notes.clear_error();
                 self.open_editor(id);
+                // `KeepEditorData::from_note` derives kind from
+                // todos.is_empty(); a fresh note has no todos so it
+                // would always land in "text". Force the explicit
+                // kind so the inline form picks up the right body
+                // editor on first paint.
+                if kind == "checklist" {
+                    self.editor_data.kind = "checklist".into();
+                }
             }
             Err(err) => {
                 self.status = "save failed".into();

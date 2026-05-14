@@ -36,8 +36,8 @@ impl KeepListDetail {
     }
 
     pub fn create_note(&mut self) {
-        pocopine::store::<KeepStore>().update(KeepStore::create_blank_note);
-        crate::focus_after_flush(".list-detail__form .note-title-input input");
+        pocopine::store::<KeepStore>().update(|s| s.create_blank_note("text".into()));
+        crate::focus_after_flush(".list-detail__form textarea.pine-textarea");
     }
 
     pub fn clear_search(&mut self) {
