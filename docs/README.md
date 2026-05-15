@@ -45,6 +45,11 @@ looks the way it does — the code itself tells you *what*.
 - [`sync-local-store-plan.md`](./sync-local-store-plan.md) — next sync
   phase plan: `SyncLocalStore`, durable client identity, SQLite-first
   browser storage, and SQLx as a later host/server adapter.
+- [`sync-crud.md`](./sync-crud.md) — planned `pocopine-sync-crud`
+  helper layer: `CrudSource`, `ResourceId`, proc-macro generated typed
+  CRUD methods, `_with_options` escape hatches, fluent options methods
+  for advanced call sites, offline mutation lifecycle, and the boundary
+  that keeps Pocopine out of ORM territory.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —
   browser console logging, backend logging, structured observed
   events, analytics sinks, privacy labels, and target filtering.
