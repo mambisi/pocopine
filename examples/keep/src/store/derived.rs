@@ -12,12 +12,14 @@ impl KeepStore {
     ) -> (
         String,
         String,
+        String,
         Vec<String>,
         Vec<pocopine_sync::SyncRow<KeepNote>>,
     ) {
         (
             self.section_kind.clone(),
             self.section_label.clone(),
+            self.search_query.clone(),
             self.selected_note_ids.clone(),
             self.notes.rows.clone(),
         )
@@ -53,14 +55,32 @@ impl KeepStore {
     }
 
     fn note_is_visible(&self, note: &KeepNote) -> bool {
-        match self.section_kind.as_str() {
+        let in_section = match self.section_kind.as_str() {
             "notes" => !note.archived,
             "archive" => note.archived,
             "label" => {
                 !note.archived && note.labels.iter().any(|label| label == &self.section_label)
             }
             _ => false,
+        };
+        if !in_section {
+            return false;
         }
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        let q = query.to_lowercase();
+        note.title.to_lowercase().contains(&q)
+            || note.body.to_lowercase().contains(&q)
+            || note
+                .labels
+                .iter()
+                .any(|label| label.to_lowercase().contains(&q))
+            || note
+                .todos
+                .iter()
+                .any(|todo| todo.text.to_lowercase().contains(&q))
     }
 
     pub fn remember_labels(&mut self, labels: Vec<String>) {

@@ -5,7 +5,8 @@ use crate::KeepTodo;
 use super::{
     theme::{load_theme_preference, save_theme_preference},
     view::{format_todo_line, parse_todo_line, KeepEditorData},
-    KeepStore,
+    view_mode::save_view_mode_preference,
+    KeepStore, KeepViewMode,
 };
 
 #[handlers]
@@ -75,6 +76,35 @@ impl KeepStore {
     pub fn toggle_theme(&mut self) {
         self.theme = self.theme.toggled();
         save_theme_preference(self.theme);
+    }
+
+    /// Swap the board between masonry and list-detail layouts.
+    /// When switching to list mode and no editor is open, select the
+    /// first visible note so the right pane isn't empty.
+    pub fn cycle_view_mode(&mut self) {
+        self.view_mode = self.view_mode.toggled();
+        save_view_mode_preference(self.view_mode);
+        match self.view_mode {
+            KeepViewMode::List => {
+                self.clear_selection();
+                self.cancel_composer();
+                if !self.editor_open {
+                    if let Some(first) = self
+                        .pinned_notes
+                        .first()
+                        .map(|row| row.value.id.clone())
+                        .or_else(|| self.other_notes.first().map(|row| row.value.id.clone()))
+                    {
+                        self.open_editor(first);
+                    }
+                }
+            }
+            KeepViewMode::Masonry => {
+                if self.editor_open {
+                    self.cancel_editor();
+                }
+            }
+        }
     }
 
     pub fn add_label(&mut self, label: String) {
@@ -364,6 +394,77 @@ impl KeepStore {
                 note.color = color;
             });
         }
+    }
+
+    // ─── list-detail ───
+
+    /// Create an empty note and open it in the list-detail right
+    /// pane. Bear-style flow: clicking + spawns a blank row the
+    /// user can immediately type into. `kind` decides whether the
+    /// inline form opens in text or checklist mode.
+    ///
+    /// Snaps the section back to Notes and clears any active
+    /// search query so the freshly created row is guaranteed to
+    /// be visible in the left pane. Otherwise a `+` press from
+    /// the Archive section, or while the user has typed a
+    /// search term, would create a note that doesn't match the
+    /// current view filter and never shows up as selected.
+    pub fn create_blank_note(&mut self, kind: String) {
+        self.search_query.clear();
+        self.section_kind = "notes".into();
+        self.section_label.clear();
+        self.clear_selection();
+        self.cancel_composer();
+        self.next_local_id = self.next_local_id.saturating_add(1);
+        let id = format!("note_{}_{}", crate::now_ms(), self.next_local_id);
+        let note = crate::KeepNote {
+            id: id.clone(),
+            title: String::new(),
+            body: String::new(),
+            color: "default".into(),
+            pinned: false,
+            archived: false,
+            todos: Vec::new(),
+            labels: Vec::new(),
+            updated_at_ms: crate::now_ms(),
+        };
+        // `push_upsert` lands its optimistic row asynchronously
+        // (it runs inside `spawn_for_scope`), so calling
+        // `open_editor(id)` right after would hit `notes.rows`
+        // before the row arrives and silently no-op — the new
+        // note would never become the selected detail. Set
+        // `editor_data` directly from the local `note` value
+        // instead, then push. The form's `editor_data` watcher
+        // fires on the id change and loads immediately; the
+        // optimistic row joins `pinned_notes`/`other_notes`
+        // moments later via the usual rebuild and the list-row
+        // `:data-on=` finds its match.
+        self.editor_data = KeepEditorData::from_note(note.clone());
+        if kind == "checklist" {
+            // KeepEditorData::from_note derives kind from
+            // todos.is_empty(); a fresh note has no todos so it
+            // would always land in "text".
+            self.editor_data.kind = "checklist".into();
+        }
+        self.editor_open = true;
+
+        match self.push_upsert(note, None, "create") {
+            Ok(()) => {
+                self.status.clear();
+                self.notes.clear_error();
+            }
+            Err(err) => {
+                self.status = "save failed".into();
+                self.notes.set_error(err.to_string());
+                self.editor_open = false;
+                self.clear_editor_fields();
+            }
+        }
+    }
+
+    pub fn set_search_query(&mut self, query: String) {
+        self.search_query = query;
+        self.rebuild_visible_notes();
     }
 
     // ─── editor (detail dialog) ───

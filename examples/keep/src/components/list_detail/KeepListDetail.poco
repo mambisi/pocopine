@@ -1,0 +1,97 @@
+<div class="list-layout">
+  <aside class="list-pane">
+    <header class="list-pane__head">
+      <h2 class="list-pane__title" pp-show="$store.keep.section_kind == 'notes'">Notes</h2>
+      <h2 class="list-pane__title" pp-show="$store.keep.section_kind == 'archive'">Archive</h2>
+      <h2 class="list-pane__title" pp-show="$store.keep.section_kind == 'label'" pp-text="$store.keep.section_label"></h2>
+      <button class="list-pane__new" type="button" aria-label="New note" @click="create_note">
+        <pine-icon name="pencil" size="18"></pine-icon>
+      </button>
+    </header>
+
+    <div class="list-pane__search">
+      <pine-icon name="search" size="16"></pine-icon>
+      <input
+        type="search"
+        placeholder="Search notes"
+        pp-model="$store.keep.search_query"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button
+        class="list-pane__search-clear"
+        type="button"
+        pp-show="$store.keep.search_query"
+        aria-label="Clear search"
+        @click="clear_search"
+      >
+        <pine-icon name="x" size="14"></pine-icon>
+      </button>
+    </div>
+
+    <div class="list-pane__scroll">
+      <div class="list-group" pp-show="$store.keep.pinned_notes.length">
+        <div class="list-group-h">Pinned</div>
+        <template pp-for="row in $store.keep.pinned_notes" pp-key="row.key">
+          <button
+            class="list-row"
+            :data-on="row.value.id == $store.keep.editor_data.id && $store.keep.editor_open"
+            :data-pending="row.pending"
+            @click="open_note(row.value.id)"
+          >
+            <span class="list-row__title" pp-text="row.value.title || 'Untitled note'"></span>
+            <span class="list-row__preview" pp-show="row.value.body" pp-text="row.value.body"></span>
+            <span class="list-row__preview list-row__preview--todos" pp-show="row.value.todos.length">
+              <pine-icon name="list-check" size="14"></pine-icon>
+              <span pp-text="row.value.todos.length + ' items'"></span>
+            </span>
+            <span class="list-row__labels" pp-show="row.value.labels.length">
+              <template pp-for="lbl in row.value.labels" pp-key="lbl">
+                <span class="list-row__chip" pp-text="lbl"></span>
+              </template>
+            </span>
+          </button>
+        </template>
+      </div>
+
+      <div class="list-group" pp-show="$store.keep.other_notes.length">
+        <div class="list-group-h" pp-show="$store.keep.pinned_notes.length">Notes</div>
+        <template pp-for="row in $store.keep.other_notes" pp-key="row.key">
+          <button
+            class="list-row"
+            :data-on="row.value.id == $store.keep.editor_data.id && $store.keep.editor_open"
+            :data-pending="row.pending"
+            @click="open_note(row.value.id)"
+          >
+            <span class="list-row__title" pp-text="row.value.title || 'Untitled note'"></span>
+            <span class="list-row__preview" pp-show="row.value.body" pp-text="row.value.body"></span>
+            <span class="list-row__preview list-row__preview--todos" pp-show="row.value.todos.length">
+              <pine-icon name="list-check" size="14"></pine-icon>
+              <span pp-text="row.value.todos.length + ' items'"></span>
+            </span>
+            <span class="list-row__labels" pp-show="row.value.labels.length">
+              <template pp-for="lbl in row.value.labels" pp-key="lbl">
+                <span class="list-row__chip" pp-text="lbl"></span>
+              </template>
+            </span>
+          </button>
+        </template>
+      </div>
+
+      <p class="list-empty" pp-show="!$store.keep.pinned_notes.length && !$store.keep.other_notes.length && !$store.keep.notes.loading">
+        <span pp-show="!$store.keep.search_query">No notes in this section.</span>
+        <span pp-show="$store.keep.search_query">No notes match &ldquo;<span pp-text="$store.keep.search_query"></span>&rdquo;.</span>
+      </p>
+    </div>
+  </aside>
+
+  <section class="list-detail">
+    <div class="list-detail__placeholder" pp-show="!$store.keep.editor_open">
+      <pine-icon name="notes" size="64"></pine-icon>
+      <p>Select a note or press the pencil to start a new one.</p>
+    </div>
+    <div class="list-detail__form" pp-show="$store.keep.editor_open">
+      <keep-note-form></keep-note-form>
+    </div>
+  </section>
+</div>

@@ -15,12 +15,15 @@ mod labels;
 mod mutations;
 mod theme;
 mod view;
+mod view_mode;
 
 pub use labels::{can_create_label, label_options_for, label_picker_options_for, KeepLabelOption};
 use theme::load_theme_preference;
 pub use theme::KeepTheme;
 pub(crate) use view::{format_todo_line, parse_todo_line, KeepFormNote};
 pub use view::{KeepCommandNote, KeepEditorData, KeepNoteCardRow};
+use view_mode::load_view_mode_preference;
+pub use view_mode::KeepViewMode;
 
 #[derive(Serialize, Deserialize)]
 #[store(name = "keep")]
@@ -46,6 +49,7 @@ pub struct KeepStore {
     pub search_query: String,
     pub command_label_query: String,
     pub theme: KeepTheme,
+    pub view_mode: KeepViewMode,
     pub labels: Vec<String>,
     pub selected_note_ids: Vec<String>,
     pub selection_label: String,
@@ -83,6 +87,7 @@ impl Default for KeepStore {
             search_query: String::new(),
             command_label_query: String::new(),
             theme: load_theme_preference(),
+            view_mode: load_view_mode_preference(),
             labels: Vec::new(),
             selected_note_ids: Vec::new(),
             selection_label: String::new(),

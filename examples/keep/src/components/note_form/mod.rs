@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::{
     can_create_label, format_todo_line, label_picker_options_for, parse_todo_line, KeepEditorData,
-    KeepFormNote, KeepLabelOption, KeepStore,
+    KeepFormNote, KeepLabelOption, KeepStore, KeepViewMode,
 };
 use crate::KeepTodo;
 
@@ -56,6 +56,18 @@ impl KeepNoteForm {
             .unwrap_or(KeepNoteFormContext::DRAFT_COMPOSER);
         self.mode = ctx.mode.into();
         self.reset_draft("text");
+
+        // Synchronous load for the editor-mode mount-after-set case
+        // (list-detail's `cycle_view_mode` auto-opens the first
+        // visible note *before* this form mounts). Without this the
+        // first paint shows blank inputs because the editor_open /
+        // editor_data watchers in `on_ready` are registered after
+        // those store fields have already settled — they miss the
+        // transition entirely. Reading the store via `with(...)` is
+        // a read-only borrow that's safe inside `on_setup`.
+        if self.mode == "editor" {
+            self.load_editor_from_store();
+        }
     }
 
     pub fn on_ready(&self, handle: pocopine::Handle<Self>) {
@@ -95,12 +107,30 @@ impl KeepNoteForm {
                 move |data, prev| {
                     let previous = prev.cloned().unwrap_or_default();
                     if data.id != previous.id {
-                        schedule_load_editor(h.clone());
+                        // List-detail row switch: persist the form's
+                        // local edits against the previous note before
+                        // overwriting them with the new row's data.
+                        let is_list = pocopine::store::<KeepStore>()
+                            .with(|s| s.view_mode == KeepViewMode::List);
+                        if is_list && !previous.id.is_empty() {
+                            schedule_save_then_load(h.clone());
+                        } else {
+                            schedule_load_editor(h.clone());
+                        }
                     } else if data.pinned != previous.pinned {
                         schedule_sync_editor_pin(h.clone());
                     }
                 },
             );
+
+            // Late-mount case: when entering list-detail mode the
+            // store auto-opens the first visible note *before* this
+            // form mounts, so the watchers above are registered
+            // after the false→true editor_open transition has
+            // already happened. Trigger an explicit load so the
+            // right pane shows the active note on first render.
+            // The helper is a no-op when editor_open is false.
+            schedule_load_editor(handle.clone());
         }
 
         let picker = handle.clone();
@@ -131,6 +161,18 @@ impl KeepNoteForm {
                 s.save_form_note(form);
             });
         }
+    }
+
+    /// Click-outside auto-save. In the list-detail pane the right
+    /// pane is permanently mounted, so every click on the topbar,
+    /// sidebar, or list rows would otherwise generate a no-op
+    /// upsert. List mode auto-saves on row switch instead (handled
+    /// by the editor_data id watcher in `on_ready`).
+    pub fn auto_save(&mut self) {
+        if pocopine::store::<KeepStore>().with(|s| s.view_mode == KeepViewMode::List) {
+            return;
+        }
+        self.save();
     }
 
     pub fn cancel(&mut self) {
@@ -188,6 +230,21 @@ impl KeepNoteForm {
         });
     }
 
+    pub fn delete(&mut self) {
+        if self.mode != "editor" || self.note_id.is_empty() {
+            return;
+        }
+        self.close_popovers();
+        let id = self.note_id.clone();
+        crate::shared_layout_transition(move |s| {
+            s.delete_note(id);
+            // Drop the editor: the row is gone from `notes.rows`,
+            // so any list-detail / modal pane should fall back to
+            // the empty placeholder.
+            s.cancel_editor();
+        });
+    }
+
     pub fn toggle_label(&mut self, label: String) {
         if let Some(pos) = self.labels.iter().position(|existing| existing == &label) {
             self.labels.remove(pos);
@@ -231,6 +288,18 @@ fn schedule_reset_draft(handle: pocopine::Handle<KeepNoteForm>) {
 fn schedule_load_editor(handle: pocopine::Handle<KeepNoteForm>) {
     pocopine::tick::next(move || {
         handle.update(KeepNoteForm::load_editor_from_store);
+    });
+}
+
+fn schedule_save_then_load(handle: pocopine::Handle<KeepNoteForm>) {
+    pocopine::tick::next(move || {
+        handle.update(|form| {
+            let snapshot = form.collect_fields();
+            if !snapshot.note_id.is_empty() {
+                pocopine::store::<KeepStore>().update(move |s| s.save_form_note(snapshot));
+            }
+            form.load_editor_from_store();
+        });
     });
 }
 

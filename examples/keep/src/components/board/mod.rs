@@ -5,16 +5,13 @@ use pine::{
     PineCommandOverlay, PineCommandPortal, PineCommandRoot, PineDropdownMenuContent,
     PineDropdownMenuItem, PineDropdownMenuLabel, PineDropdownMenuPortal, PineDropdownMenuRoot,
     PineDropdownMenuSeparator, PineDropdownMenuTrigger, PineInput, PinePopoverContent,
-    PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger, PineTextarea,
+    PinePopoverPortal, PinePopoverRoot, PinePopoverTrigger,
 };
 use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{
-    composer::KeepComposer, editor::KeepEditor, note_body::KeepNoteBody, note_card::KeepNoteCard,
-    note_form::KeepNoteForm,
-};
+use crate::components::{grid_layout::KeepGridLayout, list_detail::KeepListDetail};
 use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
 
 /// Top-level component. Owns nothing except the sync wiring; every
@@ -26,11 +23,8 @@ use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
     role = "panel",
     uses = [
         PineIcon,
-        KeepComposer,
-        KeepNoteCard,
-        KeepEditor,
-        KeepNoteForm,
-        KeepNoteBody,
+        KeepGridLayout,
+        KeepListDetail,
         PineCommandRoot,
         PineCommandPortal,
         PineCommandOverlay,
@@ -51,7 +45,6 @@ use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
         PinePopoverTrigger,
         PinePopoverPortal,
         PinePopoverContent,
-        PineTextarea,
     ]
 )]
 pub struct KeepBoard {
@@ -91,22 +84,40 @@ impl KeepBoard {
             if is_typing_target() {
                 return;
             }
+            let is_list = pocopine::store::<KeepStore>()
+                .with(|s| s.view_mode == crate::store::KeepViewMode::List);
             match ev.key().to_lowercase().as_str() {
                 "c" => {
                     ev.prevent_default();
-                    pocopine::store::<KeepStore>().update(|s| {
-                        s.show_notes();
-                        s.expand_composer_text();
-                    });
-                    focus_after_flush(".composer.expanded textarea");
+                    if is_list {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.create_blank_note("text".into());
+                        });
+                        focus_after_flush(".list-detail__form textarea.pine-textarea");
+                    } else {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.expand_composer_text();
+                        });
+                        focus_after_flush(".composer.expanded textarea");
+                    }
                 }
                 "l" => {
                     ev.prevent_default();
-                    pocopine::store::<KeepStore>().update(|s| {
-                        s.show_notes();
-                        s.expand_composer_todo();
-                    });
-                    focus_after_flush(".composer.expanded .cl-add .cl-txt");
+                    if is_list {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.create_blank_note("checklist".into());
+                        });
+                        focus_after_flush(".list-detail__form .cl-add .cl-txt");
+                    } else {
+                        pocopine::store::<KeepStore>().update(|s| {
+                            s.show_notes();
+                            s.expand_composer_todo();
+                        });
+                        focus_after_flush(".composer.expanded .cl-add .cl-txt");
+                    }
                 }
                 _ => {}
             }
@@ -239,6 +250,10 @@ impl KeepBoard {
 
     pub fn toggle_theme(&mut self) {
         pocopine::store::<KeepStore>().update(KeepStore::toggle_theme);
+    }
+
+    pub fn cycle_view_mode(&mut self) {
+        pocopine::store::<KeepStore>().update(KeepStore::cycle_view_mode);
     }
 
     pub fn delete_all_notes(&mut self) {

@@ -2,7 +2,7 @@ use pocopine::prelude::*;
 
 use crate::{KeepNote, KeepTag};
 
-use super::{labels::normalize_labels, view::KeepFormNote, KeepStore};
+use super::{labels::normalize_labels, view::KeepFormNote, KeepStore, KeepViewMode};
 
 impl KeepStore {
     pub(crate) fn save_form_note(&mut self, form: KeepFormNote) {
@@ -51,8 +51,13 @@ impl KeepStore {
             return;
         }
 
-        self.editor_open = false;
-        self.clear_editor_fields();
+        // In list-detail mode the right pane stays mounted on save,
+        // so the form keeps the just-persisted values visible. The
+        // modal mode dismisses the dialog as usual.
+        if self.view_mode != KeepViewMode::List {
+            self.editor_open = false;
+            self.clear_editor_fields();
+        }
         self.update_note(&note_id, "edit", |note| {
             note.title = title;
             note.body = body;

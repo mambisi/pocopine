@@ -1,7 +1,8 @@
 use pocopine::prelude::*;
 
 use crate::{
-    KeepBoard, KeepComposer, KeepEditor, KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
+    KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepNoteBody,
+    KeepNoteCard, KeepNoteForm, KeepStore,
 };
 
 fn sync_client_plugin() -> pocopine_sync::SyncClientPlugin {
@@ -44,6 +45,8 @@ pub fn main() {
         "bell",
         "user",
         "corner-down-right",
+        "layout-grid",
+        "layout-list",
     ];
     App::new()
         .plugin(sync_client_plugin())
@@ -65,11 +68,14 @@ pub fn main() {
         .register::<pine::PineDropdownMenuSeparator>()
         .register::<pine::PineDropdownMenuLabel>()
         .register::<pine::PineInput>()
+        .register::<pine::PineTextarea>()
         .register::<pine::PinePopoverRoot>()
         .register::<pine::PinePopoverTrigger>()
         .register::<pine::PinePopoverPortal>()
         .register::<pine::PinePopoverContent>()
         .register::<KeepBoard>()
+        .register::<KeepGridLayout>()
+        .register::<KeepListDetail>()
         .register::<KeepComposer>()
         .register::<KeepNoteCard>()
         .register::<KeepEditor>()

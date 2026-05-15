@@ -19,6 +19,14 @@
     </button>
 
     <div class="tb-right">
+      <button
+        class="ic-btn"
+        :aria-label="$store.keep.view_mode == 'list' ? 'Switch to grid view' : 'Switch to list view'"
+        :data-on="$store.keep.view_mode == 'list'"
+        @click="cycle_view_mode"
+      >
+        <pine-icon :name="$store.keep.view_mode == 'list' ? 'layout-grid' : 'layout-list'" size="20"></pine-icon>
+      </button>
       <button class="ic-btn" aria-label="Pull" @click="refresh">
         <pine-icon name="refresh" size="20"></pine-icon>
       </button>
@@ -142,68 +150,17 @@
       </button>
     </aside>
 
-    <main class="main">
+    <main class="main" :data-view="$store.keep.view_mode">
       <p class="error" pp-show="$store.keep.notes.error" pp-text="$store.keep.notes.error"></p>
 
-      <keep-composer pp-show="$store.keep.section_kind == 'notes'"></keep-composer>
-
-      <h2 class="section-title" pp-show="$store.keep.section_kind == 'archive'">Archive</h2>
-      <h2 class="section-title" pp-show="$store.keep.section_kind == 'label'" pp-text="$store.keep.section_label"></h2>
-
-      <section class="grid-section">
-        <div class="grid-h">PINNED</div>
-        <div class="masonry">
-          <template pp-for="row in $store.keep.pinned_notes" pp-key="row.key">
-            <keep-note-card
-              pp-bind:note-id="row.value.id"
-              pp-bind:title="row.value.title"
-              pp-bind:body="row.value.body"
-              pp-bind:color="row.value.color"
-              pp-bind:pinned="row.value.pinned"
-              pp-bind:archived="row.value.archived"
-              pp-bind:todos="row.value.todos"
-              pp-bind:labels="row.value.labels"
-              pp-bind:pending="row.pending"
-              pp-bind:conflict="row.conflict"
-              pp-bind:selected="row.selected"
-              pp-bind:selection-active="row.selection_active"
-            ></keep-note-card>
-          </template>
-        </div>
-      </section>
-
-      <section class="grid-section">
-        <div class="grid-h">OTHERS</div>
-        <div class="masonry">
-          <template pp-for="row in $store.keep.other_notes" pp-key="row.key">
-            <keep-note-card
-              pp-bind:note-id="row.value.id"
-              pp-bind:title="row.value.title"
-              pp-bind:body="row.value.body"
-              pp-bind:color="row.value.color"
-              pp-bind:pinned="row.value.pinned"
-              pp-bind:archived="row.value.archived"
-              pp-bind:todos="row.value.todos"
-              pp-bind:labels="row.value.labels"
-              pp-bind:pending="row.pending"
-              pp-bind:conflict="row.conflict"
-              pp-bind:selected="row.selected"
-              pp-bind:selection-active="row.selection_active"
-            ></keep-note-card>
-          </template>
-        </div>
-      </section>
-
-      <div class="empty" pp-show="!$store.keep.notes.loading && !$store.keep.pinned_notes.length && !$store.keep.other_notes.length">
-        <pine-icon name="bulb" size="120"></pine-icon>
-        <p>Notes you add appear here.</p>
-      </div>
-
-      <p class="empty" pp-show="$store.keep.notes.loading">Loading notes…</p>
+      <template pp-if="$store.keep.view_mode == 'masonry'">
+        <keep-grid-layout></keep-grid-layout>
+      </template>
+      <template pp-if="$store.keep.view_mode == 'list'">
+        <keep-list-detail></keep-list-detail>
+      </template>
     </main>
   </div>
-
-  <keep-editor></keep-editor>
 
   <div class="selection-bar" pp-show="$store.keep.selected_note_ids.length" @pointerdown.stop @click.stop>
     <span class="selection-bar__count" pp-text="$store.keep.selection_label"></span>
