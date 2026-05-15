@@ -37,6 +37,15 @@ WASM + OPFS implementation. The browser adapter uses an embedded SQLite
 worker and serializes operations through a page-local gate because the
 underlying SQLite WASM worker is singleton-shaped.
 
+The planned CRUD helper layer is documented in
+[`sync-crud.md`](./sync-crud.md). It should live in
+`pocopine-sync-crud`, not `pocopine-db`: the crate provides a
+`CrudSource` trait, `ResourceId` identity boundary, proc-macro generated
+typed CRUD methods, `_with_options` escape hatches, fluent options
+methods for advanced call sites, offline mutation queue wiring, and
+conflict recovery helpers while leaving SQL and persistence ownership
+with the app.
+
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the
 same PR.
