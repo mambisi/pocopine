@@ -879,15 +879,16 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 - tests for accepted, rejected, conflict, missing-version-mapper, and
   duplicate-replay flows,
 - route-level integration coverage proving a CRUD resource registered with
-  `SyncServer` serves `/pull` and `/push` through the normal sync plugin.
+  `SyncServer` serves `/pull` and `/push` through the normal sync plugin,
+- customer-style SQLx documentation showing explicit app-owned `list`,
+  `get`, `create`, `save`, and `remove` queries.
 
 Still left before the macro layer:
 
 - generated CRUD methods that use `TransactionRunner` to pair a source
   write and durable mutation-log record in one database transaction,
 - generated CRUD methods that map `WritePolicy::RequireOnline` to the
-  low-level online-only sync push helpers,
-- one customer-style non-macro example using explicit SQLx.
+  low-level online-only sync push helpers.
 
 The third PR should add the macro layer once the runtime contract is
 stable:
