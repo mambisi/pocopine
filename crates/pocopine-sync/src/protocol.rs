@@ -60,6 +60,20 @@ macro_rules! opaque_string_type {
             }
         }
 
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = SyncError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::new(value)
+            }
+        }
+
         impl Serialize for $name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
@@ -183,6 +197,24 @@ impl<T> SyncRow<T> {
     pub fn version(mut self, version: impl Into<String>) -> SyncResult<Self> {
         self.version = Some(RowVersion::new(version)?);
         Ok(self)
+    }
+
+    /// Attach an already validated row version.
+    pub fn row_version(mut self, version: RowVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    /// Mark whether this row is waiting for a local push outcome.
+    pub fn pending(mut self, pending: bool) -> Self {
+        self.pending = pending;
+        self
+    }
+
+    /// Mark whether this row is showing a server conflict.
+    pub fn conflict(mut self, conflict: bool) -> Self {
+        self.conflict = conflict;
+        self
     }
 }
 
@@ -337,6 +369,84 @@ pub struct ClientMutation<M> {
     pub payload: M,
 }
 
+impl<M> ClientMutation<M> {
+    /// Build a mutation with a caller-supplied id.
+    pub fn new(id: MutationId, op: SyncOp, payload: M) -> Self {
+        Self {
+            id,
+            key: None,
+            op,
+            base_version: None,
+            payload,
+        }
+    }
+
+    /// Build an upsert mutation with a caller-supplied id.
+    pub fn upsert(id: MutationId, payload: M) -> Self {
+        Self::new(id, SyncOp::Upsert, payload)
+    }
+
+    /// Build a delete mutation with a caller-supplied id.
+    pub fn delete(id: MutationId, payload: M) -> Self {
+        Self::new(id, SyncOp::Delete, payload)
+    }
+
+    /// Build a reset mutation with a caller-supplied id.
+    pub fn reset(id: MutationId, payload: M) -> Self {
+        Self::new(id, SyncOp::Reset, payload)
+    }
+
+    /// Build a mutation scoped to a row.
+    pub fn for_row(
+        id: MutationId,
+        op: SyncOp,
+        key: impl Into<String>,
+        payload: M,
+    ) -> SyncResult<Self> {
+        Self::new(id, op, payload).key(key)
+    }
+
+    /// Build an upsert mutation scoped to a row.
+    pub fn upsert_row(id: MutationId, key: impl Into<String>, payload: M) -> SyncResult<Self> {
+        Self::upsert(id, payload).key(key)
+    }
+
+    /// Build a delete mutation scoped to a row.
+    pub fn delete_row(id: MutationId, key: impl Into<String>, payload: M) -> SyncResult<Self> {
+        Self::delete(id, payload).key(key)
+    }
+
+    /// Attach a row key.
+    pub fn key(mut self, key: impl Into<String>) -> SyncResult<Self> {
+        self.key = Some(RowKey::new(key)?);
+        Ok(self)
+    }
+
+    /// Attach an already validated row key.
+    pub fn row_key(mut self, key: RowKey) -> Self {
+        self.key = Some(key);
+        self
+    }
+
+    /// Attach a base row version for conflict detection.
+    pub fn base_version(mut self, version: impl Into<String>) -> SyncResult<Self> {
+        self.base_version = Some(RowVersion::new(version)?);
+        Ok(self)
+    }
+
+    /// Attach an already validated base row version.
+    pub fn row_version(mut self, version: RowVersion) -> Self {
+        self.base_version = Some(version);
+        self
+    }
+
+    /// Attach an optional already validated base row version.
+    pub fn base_row_version(mut self, version: Option<RowVersion>) -> Self {
+        self.base_version = version;
+        self
+    }
+}
+
 /// Client mutation before the local store reserves a durable mutation id.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
@@ -373,6 +483,21 @@ impl<M> ClientMutationDraft<M> {
         Self::new(SyncOp::Reset, payload)
     }
 
+    /// Build a draft mutation scoped to a row.
+    pub fn for_row(op: SyncOp, key: impl Into<String>, payload: M) -> SyncResult<Self> {
+        Self::new(op, payload).key(key)
+    }
+
+    /// Build an upsert draft scoped to a row.
+    pub fn upsert_row(key: impl Into<String>, payload: M) -> SyncResult<Self> {
+        Self::upsert(payload).key(key)
+    }
+
+    /// Build a delete draft scoped to a row.
+    pub fn delete_row(key: impl Into<String>, payload: M) -> SyncResult<Self> {
+        Self::delete(payload).key(key)
+    }
+
     /// Attach a row key.
     pub fn key(mut self, key: impl Into<String>) -> SyncResult<Self> {
         self.key = Some(RowKey::new(key)?);
@@ -394,6 +519,12 @@ impl<M> ClientMutationDraft<M> {
     /// Attach an already validated base row version.
     pub fn row_version(mut self, version: RowVersion) -> Self {
         self.base_version = Some(version);
+        self
+    }
+
+    /// Attach an optional already validated base row version.
+    pub fn base_row_version(mut self, version: Option<RowVersion>) -> Self {
+        self.base_version = version;
         self
     }
 
@@ -498,6 +629,14 @@ mod tests {
     }
 
     #[test]
+    fn token_types_parse_and_borrow_as_str() {
+        let stream: SyncStreamName = "posts_for_tenant".parse().unwrap();
+
+        assert_eq!(stream.as_ref(), "posts_for_tenant");
+        assert!("bad\nstream".parse::<SyncStreamName>().is_err());
+    }
+
+    #[test]
     fn validates_device_and_session_ids() {
         assert!(SyncDeviceId::new("device_abc").is_ok());
         assert!(SyncSessionId::new("session_abc").is_ok());
@@ -528,6 +667,52 @@ mod tests {
             sync_stream_tag("posts_for_tenant"),
             "sync:stream:posts_for_tenant"
         );
+    }
+
+    #[test]
+    fn sync_row_helpers_attach_version_and_flags() {
+        let version = RowVersion::new("row_1").unwrap();
+        let row = SyncRow::new("post_1", "hello".to_string())
+            .unwrap()
+            .row_version(version.clone())
+            .pending(true)
+            .conflict(true);
+
+        assert_eq!(row.version, Some(version));
+        assert!(row.pending);
+        assert!(row.conflict);
+    }
+
+    #[test]
+    fn client_mutation_helpers_build_row_scoped_mutations() {
+        let id = MutationId::new("device_abc:1").unwrap();
+        let version = RowVersion::new("row_1").unwrap();
+
+        let mutation = ClientMutation::upsert_row(id.clone(), "post_1", "payload")
+            .unwrap()
+            .base_row_version(Some(version.clone()));
+
+        assert_eq!(mutation.id, id);
+        assert_eq!(mutation.key.unwrap().as_str(), "post_1");
+        assert_eq!(mutation.op, SyncOp::Upsert);
+        assert_eq!(mutation.base_version, Some(version));
+        assert_eq!(mutation.payload, "payload");
+    }
+
+    #[test]
+    fn client_mutation_draft_helpers_build_row_scoped_mutations() {
+        let id = MutationId::new("device_abc:1").unwrap();
+        let version = RowVersion::new("row_1").unwrap();
+
+        let mutation = ClientMutationDraft::delete_row("post_1", ())
+            .unwrap()
+            .base_row_version(Some(version.clone()))
+            .with_id(id.clone());
+
+        assert_eq!(mutation.id, id);
+        assert_eq!(mutation.key.unwrap().as_str(), "post_1");
+        assert_eq!(mutation.op, SyncOp::Delete);
+        assert_eq!(mutation.base_version, Some(version));
     }
 
     #[test]

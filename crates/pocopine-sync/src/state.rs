@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    MutationId, RowKey, SyncChange, SyncCursor, SyncOp, SyncPullMode, SyncPullResponse,
+    MutationId, RowKey, RowVersion, SyncChange, SyncCursor, SyncOp, SyncPullMode, SyncPullResponse,
     SyncPushResponse, SyncRow,
 };
 
@@ -199,6 +199,31 @@ impl<T> CollectionState<T> {
         self.last_reason = reason;
     }
 
+    /// Return whether this collection currently has no rows.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Return the row with the given sync row key.
+    pub fn row(&self, key: &RowKey) -> Option<&SyncRow<T>> {
+        self.rows.iter().find(|row| &row.key == key)
+    }
+
+    /// Return the mutable row with the given sync row key.
+    pub fn row_mut(&mut self, key: &RowKey) -> Option<&mut SyncRow<T>> {
+        self.rows.iter_mut().find(|row| &row.key == key)
+    }
+
+    /// Return the current server-issued row version, if one is known.
+    pub fn row_version(&self, key: &RowKey) -> Option<&RowVersion> {
+        self.row(key).and_then(|row| row.version.as_ref())
+    }
+
+    /// Clone the current row version for use as a mutation base version.
+    pub fn base_version(&self, key: &RowKey) -> Option<RowVersion> {
+        self.row_version(key).cloned()
+    }
+
     pub fn is_current(&self, request: SyncRequest) -> bool {
         self.request_generation == request.generation
     }
@@ -291,7 +316,7 @@ where
         key: Option<RowKey>,
         optimistic: Option<SyncRow<T>>,
     ) {
-        let before = key.as_ref().and_then(|key| self.row_by_key(key).cloned());
+        let before = key.as_ref().and_then(|key| self.row(key).cloned());
         let before_rows = if op == SyncOp::Reset {
             self.rows.clone()
         } else {
@@ -359,7 +384,7 @@ where
                 row.conflict = true;
                 self.upsert_row(row);
             } else if let Some(key) = conflict.key {
-                if let Some(row) = self.row_by_key_mut(&key) {
+                if let Some(row) = self.row_mut(&key) {
                     row.pending = false;
                     row.conflict = true;
                 }
@@ -429,7 +454,7 @@ where
         };
         let pending = self.pending_mutations.remove(index);
         if let Some(key) = pending.key {
-            if let Some(row) = self.row_by_key_mut(&key) {
+            if let Some(row) = self.row_mut(&key) {
                 row.pending = false;
             }
         }
@@ -451,14 +476,6 @@ where
         if let Some(index) = self.rows.iter().position(|row| &row.key == key) {
             self.rows.remove(index);
         }
-    }
-
-    fn row_by_key(&self, key: &RowKey) -> Option<&SyncRow<T>> {
-        self.rows.iter().find(|row| &row.key == key)
-    }
-
-    fn row_by_key_mut(&mut self, key: &RowKey) -> Option<&mut SyncRow<T>> {
-        self.rows.iter_mut().find(|row| &row.key == key)
     }
 }
 
@@ -514,6 +531,27 @@ mod tests {
         assert_eq!(state.version, 1);
         assert_eq!(state.pending_count, 2);
         assert_eq!(state.last_reason, SyncReason::Initial);
+    }
+
+    #[test]
+    fn row_helpers_expose_current_row_and_base_version() {
+        let mut state = CollectionState::<String>::default();
+        let key = RowKey::new("post_1").unwrap();
+        let version = RowVersion::new("row_1").unwrap();
+        let row = SyncRow::new("post_1", "cached".to_string())
+            .unwrap()
+            .row_version(version.clone());
+
+        assert!(state.is_empty());
+        state.apply_local_snapshot(vec![row], Some(SyncCursor::new("cursor_1").unwrap()), 0);
+
+        assert!(!state.is_empty());
+        assert_eq!(state.row(&key).unwrap().value, "cached");
+        assert_eq!(state.row_version(&key), Some(&version));
+        assert_eq!(state.base_version(&key), Some(version));
+
+        state.row_mut(&key).unwrap().pending = true;
+        assert!(state.row(&key).unwrap().pending);
     }
 
     #[test]
