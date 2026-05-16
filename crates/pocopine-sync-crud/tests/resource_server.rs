@@ -16,11 +16,13 @@ use pocopine_server::{
     Server,
 };
 use pocopine_sync::{
-    sync_server_plugin, ClientMutation, MutationId, SyncPullMode, SyncPullRequest,
+    sync_server_plugin, ClientMutation, MutationId, RowVersion, SyncPullMode, SyncPullRequest,
     SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncStreamName, SYNC_PULL_PATH,
     SYNC_PUSH_PATH,
 };
-use pocopine_sync_crud::{async_trait, resource, CrudMutationPayload, CrudSource};
+use pocopine_sync_crud::{
+    async_trait, resource, CrudMutationPayload, CrudRemoveResult, CrudSource, CrudWriteResult,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -59,9 +61,20 @@ impl CrudSource for Customers {
     type Row = Customer;
     type Draft = CustomerDraft;
 
-    async fn list(&self, ctx: RequestContext) -> pocopine_sync::SyncResult<Vec<Self::Row>> {
+    async fn list(
+        &self,
+        ctx: RequestContext,
+        limit: usize,
+    ) -> pocopine_sync::SyncResult<Vec<Self::Row>> {
         let _ = ctx;
-        Ok(self.rows.lock().unwrap().values().cloned().collect())
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 
     async fn get(
@@ -94,21 +107,41 @@ impl CrudSource for Customers {
         ctx: RequestContext,
         id: Self::Id,
         draft: Self::Draft,
-    ) -> pocopine_sync::SyncResult<Self::Row> {
+        base_version: Option<RowVersion>,
+    ) -> pocopine_sync::SyncResult<CrudWriteResult<Self::Row>> {
         let _ = ctx;
         let mut rows = self.rows.lock().unwrap();
         let row = rows
             .get_mut(&id)
             .ok_or_else(|| pocopine_sync::SyncError::backend("missing customer"))?;
+        if let Some(base_version) = &base_version {
+            if base_version.as_str() != row.version.to_string() {
+                return Ok(CrudWriteResult::stale(Some(row.clone())));
+            }
+        }
         row.name = draft.name;
         row.version = row.version.saturating_add(1);
-        Ok(row.clone())
+        Ok(CrudWriteResult::applied(row.clone()))
     }
 
-    async fn remove(&self, ctx: RequestContext, id: Self::Id) -> pocopine_sync::SyncResult<()> {
+    async fn remove(
+        &self,
+        ctx: RequestContext,
+        id: Self::Id,
+        base_version: Option<RowVersion>,
+    ) -> pocopine_sync::SyncResult<CrudRemoveResult<Self::Row>> {
         let _ = ctx;
-        self.rows.lock().unwrap().remove(&id);
-        Ok(())
+        let mut rows = self.rows.lock().unwrap();
+        if let Some(base_version) = &base_version {
+            let Some(row) = rows.get(&id) else {
+                return Ok(CrudRemoveResult::stale(None));
+            };
+            if base_version.as_str() != row.version.to_string() {
+                return Ok(CrudRemoveResult::stale(Some(row.clone())));
+            }
+        }
+        rows.remove(&id);
+        Ok(CrudRemoveResult::applied())
     }
 }
 
