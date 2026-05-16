@@ -4209,6 +4209,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocopine-sync-crud"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "pocopine-auth",
+ "pocopine-sync",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "pocopine-sync-indexdb"
 version = "0.1.0"
 dependencies = [
