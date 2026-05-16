@@ -5,8 +5,8 @@ use pocopine_core::{App, AppPlugin, Handle};
 use serde_json::Value;
 
 use crate::{
-    ClientMutation, CollectionState, MemoryLocalStore, SyncCursor, SyncError, SyncLocalStore,
-    SyncReason, SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
+    ClientMutation, ClientMutationDraft, CollectionState, MemoryLocalStore, SyncCursor, SyncError,
+    SyncLocalStore, SyncReason, SyncResult, SyncRow, SyncStreamName, SYNC_ENDPOINT_PREFIX,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -212,6 +212,21 @@ where
         self.push_impl(mutation, optimistic)
     }
 
+    /// Reserve a durable mutation id, push one draft mutation, and apply an
+    /// optional optimistic row while the server confirms, rejects, or
+    /// conflicts the write.
+    pub fn push_with_generated_id<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize,
+        M: serde::Serialize + 'static,
+    {
+        self.push_with_generated_id_impl(mutation, optimistic)
+    }
+
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
         self.stream
             .clone()
@@ -315,6 +330,35 @@ where
         );
         Ok(())
     }
+
+    fn push_with_generated_id_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
+            SyncError::client(
+                "SyncCollection::push_with_generated_id used outside a component handler/lifecycle hook",
+            )
+        })?;
+        start_push_with_generated_id(
+            scope_id,
+            self.handle,
+            self.selector,
+            self.endpoint,
+            self.local_store,
+            stream,
+            mutation,
+            optimistic,
+            !self.live_wakeup,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -338,6 +382,21 @@ where
     fn push_impl<M>(
         self,
         mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let _ = self.stream_value()?;
+        let _ = (mutation, optimistic);
+        Ok(())
+    }
+
+    fn push_with_generated_id_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
         optimistic: Option<SyncRow<T>>,
     ) -> SyncResult<()>
     where
@@ -659,90 +718,168 @@ fn start_push<C, T, M>(
 {
     let push_url = endpoint_path(&endpoint, "push");
     let pull_endpoint = endpoint.clone();
-    let mutation_id = mutation.id.clone();
-    let mutation_op = mutation.op;
-    let mutation_key = mutation.key.clone();
 
     pocopine_core::spawn_for_scope(scope_id, async move {
-        let local_mutation = match mutation_to_value(&mutation) {
-            Ok(mutation) => mutation,
+        run_push(
+            scope_id,
+            handle,
+            selector,
+            push_url,
+            pull_endpoint,
+            local_store,
+            stream,
+            mutation,
+            optimistic,
+            pull_after_accept,
+        )
+        .await;
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+fn start_push_with_generated_id<C, T, M>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    endpoint: String,
+    local_store: SyncLocalStoreHandle,
+    stream: SyncStreamName,
+    mutation: ClientMutationDraft<M>,
+    optimistic: Option<SyncRow<T>>,
+    pull_after_accept: bool,
+) where
+    C: 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+    M: serde::Serialize + 'static,
+{
+    let push_url = endpoint_path(&endpoint, "push");
+    let pull_endpoint = endpoint.clone();
+
+    pocopine_core::spawn_for_scope(scope_id, async move {
+        let mutation_id = match local_store.reserve_mutation_id().await {
+            Ok(id) => id,
             Err(err) => {
                 handle.update(|state| {
-                    selector(state).set_error(format!("sync mutation encode failed: {err}"));
+                    selector(state).set_error(format!("sync mutation id allocation failed: {err}"));
                 });
                 return;
             }
         };
-        if let Err(err) = local_store.enqueue_mutation(&stream, local_mutation).await {
+        run_push(
+            scope_id,
+            handle,
+            selector,
+            push_url,
+            pull_endpoint,
+            local_store,
+            stream,
+            mutation.with_id(mutation_id),
+            optimistic,
+            pull_after_accept,
+        )
+        .await;
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+async fn run_push<C, T, M>(
+    scope_id: pocopine_core::ScopeId,
+    handle: Handle<C>,
+    selector: CollectionSelector<C, T>,
+    push_url: String,
+    pull_endpoint: String,
+    local_store: SyncLocalStoreHandle,
+    stream: SyncStreamName,
+    mutation: ClientMutation<M>,
+    optimistic: Option<SyncRow<T>>,
+    pull_after_accept: bool,
+) where
+    C: 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+    M: serde::Serialize + 'static,
+{
+    let mutation_id = mutation.id.clone();
+    let mutation_op = mutation.op;
+    let mutation_key = mutation.key.clone();
+
+    let local_mutation = match mutation_to_value(&mutation) {
+        Ok(mutation) => mutation,
+        Err(err) => {
             handle.update(|state| {
-                selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
+                selector(state).set_error(format!("sync mutation encode failed: {err}"));
             });
             return;
         }
-
+    };
+    if let Err(err) = local_store.enqueue_mutation(&stream, local_mutation).await {
         handle.update(|state| {
-            selector(state).apply_optimistic_mutation(
-                mutation_id,
-                mutation_op,
-                mutation_key,
-                optimistic,
-            );
+            selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
         });
+        return;
+    }
 
-        let request = SyncPushRequest::new(stream.clone(), [mutation]);
-        let result = pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(
-            &push_url, &request,
-        )
-        .await;
-        let mut local_error = None;
-        let result = match result {
-            Ok(response) => {
-                match local_push_result_from_response(&response) {
-                    Ok(result) => {
-                        if let Err(err) = local_store.mark_push_result(result).await {
-                            local_error =
-                                Some(format!("local sync push result persist failed: {err}"));
-                        }
+    handle.update(|state| {
+        selector(state).apply_optimistic_mutation(
+            mutation_id,
+            mutation_op,
+            mutation_key,
+            optimistic,
+        );
+    });
+
+    let request = SyncPushRequest::new(stream.clone(), [mutation]);
+    let result =
+        pocopine_core::fetch::call::<SyncPushRequest<M>, SyncPushResponse<T>>(&push_url, &request)
+            .await;
+    let mut local_error = None;
+    let result = match result {
+        Ok(response) => {
+            match local_push_result_from_response(&response) {
+                Ok(result) => {
+                    if let Err(err) = local_store.mark_push_result(result).await {
+                        local_error = Some(format!("local sync push result persist failed: {err}"));
                     }
-                    Err(err) => {
-                        local_error = Some(format!("local sync push result encode failed: {err}"));
-                    }
-                }
-                Ok(response)
-            }
-            Err(err) => Err(err),
-        };
-        let should_pull = handle.update(|state| {
-            let collection = selector(state);
-            match result {
-                Ok(response) => {
-                    let should_pull = collection.apply_push(response);
-                    if let Some(error) = local_error {
-                        collection.set_error(error);
-                    }
-                    should_pull
                 }
                 Err(err) => {
-                    collection.set_error(err.to_string());
-                    false
+                    local_error = Some(format!("local sync push result encode failed: {err}"));
                 }
             }
-        });
-
-        if should_pull && pull_after_accept {
-            start_pull(
-                scope_id,
-                handle,
-                selector,
-                pull_endpoint,
-                local_store,
-                stream,
-                None,
-                SyncReason::Push,
-                false,
-            );
+            Ok(response)
+        }
+        Err(err) => Err(err),
+    };
+    let should_pull = handle.update(|state| {
+        let collection = selector(state);
+        match result {
+            Ok(response) => {
+                let should_pull = collection.apply_push(response);
+                if let Some(error) = local_error {
+                    collection.set_error(error);
+                }
+                should_pull
+            }
+            Err(err) => {
+                collection.set_error(err.to_string());
+                false
+            }
         }
     });
+
+    if should_pull && pull_after_accept {
+        start_pull(
+            scope_id,
+            handle,
+            selector,
+            pull_endpoint,
+            local_store,
+            stream,
+            None,
+            SyncReason::Push,
+            false,
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

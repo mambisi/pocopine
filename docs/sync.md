@@ -359,10 +359,10 @@ passes and before the authoritative pull. With `MemoryLocalStore` this is
 useful inside one page lifetime. With `pocopine-sync-sqlite`, it also
 survives reloads in browsers that support OPFS.
 
-`SyncLocalIdentity` and `MutationIdGenerator` are available for apps that
-want stable device-scoped mutation ids today. The current
-`SyncCollection::push` method still expects the app to provide
-`ClientMutation::id`; automatic id allocation is a follow-up API.
+`SyncCollection::push_with_generated_id` reserves a durable
+device-scoped mutation id before enqueueing a mutation. Apps that need
+full control can still build a `ClientMutation` and call
+`SyncCollection::push` directly.
 
 Templates read `CollectionState<T>` directly:
 
@@ -385,8 +385,9 @@ Templates read `CollectionState<T>` directly:
 
 ## 6. Push Optimistic Mutations
 
-`SyncCollection::push` first enqueues the mutation in the local store,
-then applies an optimistic row locally, sends a stable mutation id to
+`SyncCollection::push_with_generated_id` reserves and persists the next
+mutation id, enqueues the mutation in the local store, applies an
+optimistic row locally, sends the stable mutation id to
 `/__pocopine/sync/v1/push`, and applies the server's accepted, rejected,
 or conflict response. Accepted pushes also wake live listeners through
 the sync server's event backend, so other tabs pull the committed stream
@@ -404,7 +405,9 @@ pub fn create(&mut self) {
             self.plugin::<pocopine_sync::SyncClient>()
                 .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
                 .stream(POSTS_STREAM)
-                .and_then(|collection| collection.push(mutation, Some(optimistic)))
+                .and_then(|collection| {
+                    collection.push_with_generated_id(mutation, Some(optimistic))
+                })
         });
 
     if let Err(err) = result {
