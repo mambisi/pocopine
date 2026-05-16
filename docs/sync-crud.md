@@ -493,20 +493,24 @@ recommended path; `_with_options` and fluent options methods exist for
 cases where defaults are not enough.
 
 Generated options structs remain useful as the explicit data shape behind
-both `_with_options` and the fluent options methods:
+both `_with_options` and the fluent options methods. Their default write
+policy is `WritePolicy::QueueOffline`:
 
 ```rust
 pub struct CreateOptions<Row> {
     pub optimistic: Option<Row>,
+    pub write_policy: pocopine_sync_crud::WritePolicy,
 }
 
 pub struct SaveOptions<Row> {
     pub base_version: Option<pocopine_sync::RowVersion>,
     pub optimistic: Option<Row>,
+    pub write_policy: pocopine_sync_crud::WritePolicy,
 }
 
 pub struct RemoveOptions {
     pub base_version: Option<pocopine_sync::RowVersion>,
+    pub write_policy: pocopine_sync_crud::WritePolicy,
 }
 ```
 
@@ -578,6 +582,128 @@ adapters, and generated ergonomics. It should map resource ids into
 sync row keys, then call the lower-level sync helpers rather than
 constructing protocol structs by hand.
 
+## Transactions And Online Policy
+
+CRUD needs a transaction boundary for server-side writes and custom
+domain operations. Pocopine should provide the transaction lifecycle, but
+the app still owns the database code. The rule is simple:
+
+```text
+begin transaction
+  -> run user CRUD/repository/domain code
+  -> commit on success
+  -> rollback on error
+  -> after commit, publish sync/live invalidations
+```
+
+Live invalidation must happen after the commit. If the wake-up publish
+fails, Pocopine should log it or route it through an outbox/job later; it
+must not roll back an already committed database transaction.
+
+The public transaction API should make the transaction the visible owner
+of the operation:
+
+```rust
+customers
+    .transaction_options()
+    .require_online()
+    .run(ctx, |tx| async move {
+        let customer = tx
+            .with(customers)
+            .create(customer_id, CustomerDraft { name, email })
+            .await?;
+
+        tx.with(audit_log)
+            .record(customer.id, "created")
+            .await?;
+
+        Ok(customer)
+    })
+    .await?;
+```
+
+Use `tx.with(resource)` as the public verb. It is short, reads naturally
+for CRUD resources and custom repositories, and avoids forcing every
+resource method to grow an `_in` variant. Internally, the binding trait
+can be named around `bind`, but users should not need to call it:
+
+```rust
+pub trait TransactionBindable<Tx> {
+    type Bound<'tx>
+    where
+        Self: 'tx,
+        Tx: 'tx;
+
+    fn bind<'tx>(&'tx self, tx: &'tx mut Tx) -> Self::Bound<'tx>;
+}
+```
+
+The exact Rust lifetime shape should be settled against SQLx before it
+ships, but the author-facing API should stay:
+
+```rust
+tx.with(customers).create(id, draft).await?;
+tx.with(customers).save(id, draft).await?;
+tx.with(customers).remove(id).await?;
+tx.with(customers).get(id).await?;
+```
+
+Single CRUD mutations should transact independently on the server. If a
+pending queue replays five mutations and the third conflicts, the first
+two should remain committed. Apps that require all-or-nothing behavior
+should model that as one explicit domain operation, then run it through
+the transaction API.
+
+Offline writes and server-required writes are different policies:
+
+```rust
+pub enum WritePolicy {
+    QueueOffline,
+    RequireOnline,
+}
+```
+
+`QueueOffline` is the local-first default. It reserves a durable mutation
+id, enqueues the mutation locally, applies optimistic UI, and replays the
+write later when the app can reach the server.
+
+`RequireOnline` means server-confirmed before success. If the request
+cannot reach the server, the operation fails locally and nothing is
+queued. This is the right policy for payments, inventory reservations,
+uniqueness-sensitive changes, permission-sensitive admin changes, and
+multi-row invariants that should not be replayed later from an offline
+queue.
+
+Generated simple methods should keep `QueueOffline` as the default:
+
+```rust
+customers.create(id, draft)?;
+customers.save(id, draft)?;
+customers.remove(id)?;
+```
+
+Advanced call sites can opt into server-required behavior:
+
+```rust
+customers
+    .save_options()
+    .require_online()
+    .base_version(row_version)
+    .send(customer.id, draft)?;
+```
+
+The transaction options API should use the same policy vocabulary:
+
+```rust
+customers
+    .transaction_options()
+    .require_online()
+    .run(ctx, |tx| async move {
+        tx.with(customers).save(customer.id, draft).await
+    })
+    .await?;
+```
+
 ## Offline Contract
 
 With a durable local store installed, CRUD operations are offline-capable:
@@ -619,25 +745,42 @@ If `get` returns `None`, the client should treat the row as gone or not
 visible. It should not assume the caller is allowed to know which case it
 is.
 
-## First Implementation Slice
+## Implementation Slices
 
-The first `pocopine-sync-crud` PR should include:
+The first `pocopine-sync-crud` PR should avoid proc-macro complexity and
+ship the testable contract:
 
 - crate scaffold,
 - `CrudSource` trait,
 - `ResourceId` trait with built-in UUID/string/integer implementations,
+- CRUD payload types for create/save/remove,
+- queued/outcome/status types,
+- `WritePolicy` and transaction options,
+- transaction binding API using `tx.with(resource)` publicly and `bind`
+  internally,
+- non-macro server stream adapter using `list`, `get`, `create`,
+  `save`, `remove`,
+- server-side per-mutation transaction handling,
+- integration with `SyncCollection::push_with_generated_id` for automatic
+  durable mutation id allocation,
+- use of `CollectionState` row/base-version helpers for save/remove
+  defaults,
+- tests for queued, require-online, accepted, rejected, and conflict
+  flows,
+- docs and one customer-style non-macro example using explicit SQLx.
+
+The second PR should add the macro layer once the runtime contract is
+stable:
+
 - `#[resource(name = "...")]` proc macro,
-- server stream adapter using `list`, `get`, `create`, `save`, `remove`,
 - generated typed client resource module,
 - generated create/save/remove client methods with good defaults,
 - generated create/save/remove `_with_options` methods,
 - generated `OpenOptions`-style fluent options methods for advanced call
   sites,
-- integration with `SyncCollection::push_with_generated_id` for automatic
-  durable mutation id allocation,
-- use of `CollectionState` row/base-version helpers for save/remove
-  defaults,
-- docs and one customer-style example using explicit SQLx.
+- generated `transaction_options().require_online().run(...)` helper,
+- macro tests proving the generated code calls the same runtime
+  contracts as the non-macro implementation.
 
 The macro should generate CRUD/sync glue only. It must not generate SQL,
 infer schema, or hide the app's database handle.
