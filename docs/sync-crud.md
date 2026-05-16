@@ -83,7 +83,10 @@ The first crate slice provides the reusable contracts:
 - `resource(name, source)?.id(...).version(...).mutation_log(...)` for
   registering a non-macro `CrudSource` as a `pocopine-sync` stream,
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids
-  are explicit and replayed writes do not silently run twice.
+  are explicit and replayed writes do not silently run twice,
+- low-level `pocopine-sync` online-only push helpers that give
+  `WritePolicy::RequireOnline` a runtime target without changing the
+  queue-offline default.
 
 The crate deliberately does not yet generate typed client modules. The
 non-macro adapter is the runtime contract the later proc macro should
@@ -839,6 +842,7 @@ the testable contract:
 - helper APIs for optimistic rows,
 - unit tests for ids, payload mapping, write policies, queued outcomes,
   and transaction binding,
+- low-level sync helpers for online-only push behavior,
 - docs for the next non-macro and macro slices.
 
 The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
@@ -857,8 +861,8 @@ Still left before the macro layer:
 
 - server-side per-mutation transaction helpers that pair a source write
   and durable mutation-log record in one database transaction,
-- `RequireOnline` client behavior that fails instead of queueing when
-  the server is unavailable,
+- generated CRUD methods that map `WritePolicy::RequireOnline` to the
+  low-level online-only sync push helpers,
 - one customer-style non-macro example using explicit SQLx.
 
 The third PR should add the macro layer once the runtime contract is

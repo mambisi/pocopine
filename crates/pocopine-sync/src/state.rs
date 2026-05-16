@@ -417,6 +417,17 @@ where
         has_accepted
     }
 
+    pub fn apply_push_error(&mut self, id: &MutationId, error: impl ToString) -> bool {
+        self.rollback_mutation(id);
+        self.loading = false;
+        self.syncing = false;
+        self.stale = self.version > 0 || self.stale;
+        self.error = error.to_string();
+        self.last_reason = SyncReason::Error;
+        self.recount_row_flags();
+        true
+    }
+
     fn rollback_mutation(&mut self, id: &MutationId) {
         let Some(index) = self
             .pending_mutations
@@ -923,5 +934,26 @@ mod tests {
         assert_eq!(state.rows[0].value, "one");
         assert_eq!(state.rows[1].value, "two");
         assert_eq!(state.pending_count, 0);
+    }
+
+    #[test]
+    fn push_error_rolls_back_optimistic_mutation() {
+        let mut state = CollectionState::<String>::default();
+        let mutation_id = MutationId::new("device_1:online").unwrap();
+        state.apply_optimistic_mutation(
+            mutation_id.clone(),
+            SyncOp::Upsert,
+            Some(RowKey::new("post_1").unwrap()),
+            Some(SyncRow::new("post_1", "draft".to_string()).unwrap()),
+        );
+        assert_eq!(state.rows.len(), 1);
+        assert_eq!(state.pending_count, 1);
+
+        assert!(state.apply_push_error(&mutation_id, "network error: offline"));
+
+        assert!(state.rows.is_empty());
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(state.error, "network error: offline");
+        assert_eq!(state.last_reason, SyncReason::Error);
     }
 }
