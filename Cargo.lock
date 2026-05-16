@@ -4213,9 +4213,12 @@ name = "pocopine-sync-crud"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "http 1.4.0",
  "pocopine-auth",
  "pocopine-sync",
  "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 

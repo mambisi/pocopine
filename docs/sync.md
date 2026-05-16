@@ -40,9 +40,10 @@ underlying SQLite WASM worker is singleton-shaped.
 The CRUD helper layer is documented in [`sync-crud.md`](./sync-crud.md).
 It lives in `pocopine-sync-crud`, not `pocopine-db`: the crate starts
 with the `CrudSource` trait, `ResourceId` identity boundary, CRUD
-mutation payloads, write-policy types, and transaction binding contract.
-The non-macro runtime adapter and proc-macro generated typed CRUD
-methods come next. SQL and persistence ownership stay with the app.
+mutation payloads, write-policy types, transaction binding contract, and
+non-macro `resource(...).id(...).mutation_log(...)` sync-stream adapter.
+Proc-macro generated typed CRUD methods come next. SQL and persistence
+ownership stay with the app.
 
 The runnable source of truth is [`examples/sync`](../examples/sync/).
 When the sync API changes, update this document and the example in the

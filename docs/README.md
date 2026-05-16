@@ -54,7 +54,7 @@ looks the way it does — the code itself tells you *what*.
   browser storage, and SQLx as a later host/server adapter.
 - [`sync-crud.md`](./sync-crud.md) — `pocopine-sync-crud` helper layer:
   `CrudSource`, `ResourceId`, CRUD mutation payloads, write policies,
-  transaction binding, the planned non-macro runtime adapter, proc-macro
+  transaction binding, the non-macro runtime adapter, planned proc-macro
   generated typed CRUD methods, and the boundary that keeps Pocopine out
   of ORM territory.
 - [`logging-tracing-observer.md`](./logging-tracing-observer.md) —

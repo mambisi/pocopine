@@ -79,11 +79,15 @@ The first crate slice provides the reusable contracts:
 - `CreateOptions`, `SaveOptions`, `RemoveOptions`, `WritePolicy`, and
   `QueuedStatus` for the client lifecycle the generated API will expose,
 - `Transaction` plus `TransactionBindable` so the public transaction API
-  can stay `tx.with(resource)`.
+  can stay `tx.with(resource)`,
+- `resource(name, source)?.id(...).version(...).mutation_log(...)` for
+  registering a non-macro `CrudSource` as a `pocopine-sync` stream,
+- `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids
+  are explicit and replayed writes do not silently run twice.
 
-The crate deliberately does not yet generate modules or register server
-streams. The next runtime slice should add the non-macro adapter after
-the transaction and mutation-idempotency contract is explicit.
+The crate deliberately does not yet generate typed client modules. The
+non-macro adapter is the runtime contract the later proc macro should
+target.
 
 The current manual client shape is intentionally low level:
 
@@ -432,23 +436,41 @@ default sync stream, local collection name, and live wake-up namespace.
 ```rust
 let customers = pocopine_sync_crud::resource("customers", Customers {
     pool: pool.clone(),
-})
+})?
 .id(|row: &Customer| row.id)
-.guard(pocopine_auth::require_auth());
+.version(|row: &Customer| row.version)
+.mutation_log(CustomerMutationLog { pool: pool.clone() });
+
+let sync = pocopine_sync::SyncServer::builder()
+    .guarded_stream(customers, pocopine_auth::require_auth())
+    .events(live_backend)
+    .build();
 
 let server = pocopine_server::Server::new(router)
-    .plugin(
-        pocopine_sync_crud::plugin()
-            .resource(customers)
-            .events(live_backend),
-    )
+    .plugin(pocopine_sync::sync_server_plugin(sync))
     .try_finalize()?;
 ```
 
 There is no separate `stream "customers"` setting in the first version.
-The stream name is automatic from the resource name. If a later version
-needs stream overrides, they should be added only after a real use case
-proves the need.
+The stream name and collection name are automatic from the resource
+name. If a later version needs stream overrides, they should be added
+only after a real use case proves the need.
+
+The adapter requires a mutation log before it implements
+`SyncStreamSource`. This is deliberate: a replayed `MutationId` must not
+run `create`, `save`, or `remove` twice. `MemoryCrudMutationLog` is
+available for tests and single-process demos:
+
+```rust
+let customers = pocopine_sync_crud::resource("customers", Customers::new())?
+    .id(|row: &Customer| row.id)
+    .version(|row: &Customer| row.version)
+    .memory_mutation_log();
+```
+
+Production apps should implement `CrudMutationLog` against the same
+database as the `CrudSource`, and record accepted mutation ids in the
+same transaction as the row write.
 
 ## Generated Client API
 
@@ -819,18 +841,24 @@ the testable contract:
   and transaction binding,
 - docs for the next non-macro and macro slices.
 
-The second PR should add the non-macro runtime adapter:
+The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 
-- resource registration against `SyncServer`,
+- resource registration against `SyncServer` through the existing
+  `pocopine-sync` server plugin,
 - snapshot pull through `list` and row id extraction,
+- optional row-version mapping for base-version conflict checks,
 - push routing for `create`, `save`, and `remove`,
-- a clear per-mutation idempotency contract so replayed mutation ids do
-  not duplicate writes,
-- server-side per-mutation transaction handling,
-- `RequireOnline` behavior that fails instead of queueing when the
-  server is unavailable,
-- tests for queued, require-online, accepted, rejected, conflict, and
-  duplicate-replay flows,
+- `CrudMutationLog` so accepted mutation ids are explicit and replayed
+  mutation ids do not duplicate writes,
+- tests for accepted, rejected, conflict, missing-version-mapper, and
+  duplicate-replay flows.
+
+Still left before the macro layer:
+
+- server-side per-mutation transaction helpers that pair a source write
+  and durable mutation-log record in one database transaction,
+- `RequireOnline` client behavior that fails instead of queueing when
+  the server is unavailable,
 - one customer-style non-macro example using explicit SQLx.
 
 The third PR should add the macro layer once the runtime contract is

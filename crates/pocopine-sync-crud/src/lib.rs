@@ -13,6 +13,8 @@ mod row;
 mod transaction;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod resource;
+#[cfg(not(target_arch = "wasm32"))]
 mod source;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,7 +23,16 @@ pub use id::{new_id, ResourceId};
 pub use mutation::{CreatePayload, CrudMutationPayload, RemovePayload, SavePayload};
 pub use options::{CreateOptions, RemoveOptions, SaveOptions, TransactionOptions, WritePolicy};
 pub use outcome::{CrudOutcome, Queued, QueuedStatus};
+#[cfg(not(target_arch = "wasm32"))]
+pub use resource::{
+    resource, CrudAcceptedMutation, CrudMutationLog, CrudResource, CrudResourceBuilder,
+    MemoryCrudMutationLog, MissingMutationLog, NoRowVersion, RowVersionValue,
+};
 pub use row::optimistic_row;
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::CrudSource;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub use resource::RowVersionOf;
 pub use transaction::{Transaction, TransactionBindable};
