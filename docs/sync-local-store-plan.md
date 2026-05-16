@@ -104,9 +104,10 @@ durably before exposing a mutation id that can be sent to the server.
 This keeps mutation ids stable across reloads and avoids the current
 example-only `post_local_{n}` pattern becoming a production habit.
 
-The first client API remains explicit: apps pass `ClientMutation::id` to
-`SyncCollection::push`. Automatic id allocation from `SyncLocalIdentity`
-is a future helper layered on this storage slot.
+Apps can still pass an explicit `ClientMutation::id` to
+`SyncCollection::push` when they need full control. The normal local-first
+path should use `SyncCollection::push_with_generated_id`, which reserves
+the next durable id from `SyncLocalStore` before enqueueing the mutation.
 
 ## Store Contract Sketch
 

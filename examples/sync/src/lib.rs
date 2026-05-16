@@ -141,7 +141,9 @@ impl SyncBoard {
             self.plugin::<pocopine_sync::SyncClient>()
                 .collection(pocopine::this::<Self>(), |s: &mut Self| &mut s.posts)
                 .stream(POSTS_STREAM)
-                .and_then(|collection| collection.push(mutation, Some(optimistic)))
+                .and_then(|collection| {
+                    collection.push_with_generated_id(mutation, Some(optimistic))
+                })
         });
 
         match result {
@@ -193,17 +195,10 @@ impl SyncBoard {
 fn build_create_mutation(
     post: Post,
 ) -> pocopine_sync::SyncResult<(
-    pocopine_sync::ClientMutation<Post>,
+    pocopine_sync::ClientMutationDraft<Post>,
     pocopine_sync::SyncRow<Post>,
 )> {
-    let key = pocopine_sync::RowKey::new(post.id.clone())?;
-    let mutation = pocopine_sync::ClientMutation {
-        id: pocopine_sync::MutationId::new(format!("create_post:{}", post.id))?,
-        key: Some(key),
-        op: pocopine_sync::SyncOp::Upsert,
-        base_version: None,
-        payload: post.clone(),
-    };
+    let mutation = pocopine_sync::ClientMutationDraft::upsert(post.clone()).key(post.id.clone())?;
     let optimistic = pocopine_sync::SyncRow::new(post.id.clone(), post)?;
     Ok((mutation, optimistic))
 }

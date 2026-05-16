@@ -337,6 +337,78 @@ pub struct ClientMutation<M> {
     pub payload: M,
 }
 
+/// Client mutation before the local store reserves a durable mutation id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
+pub struct ClientMutationDraft<M> {
+    pub key: Option<RowKey>,
+    pub op: SyncOp,
+    pub base_version: Option<RowVersion>,
+    pub payload: M,
+}
+
+impl<M> ClientMutationDraft<M> {
+    /// Build a draft mutation for the given operation.
+    pub fn new(op: SyncOp, payload: M) -> Self {
+        Self {
+            key: None,
+            op,
+            base_version: None,
+            payload,
+        }
+    }
+
+    /// Build an upsert draft.
+    pub fn upsert(payload: M) -> Self {
+        Self::new(SyncOp::Upsert, payload)
+    }
+
+    /// Build a delete draft.
+    pub fn delete(payload: M) -> Self {
+        Self::new(SyncOp::Delete, payload)
+    }
+
+    /// Build a reset draft.
+    pub fn reset(payload: M) -> Self {
+        Self::new(SyncOp::Reset, payload)
+    }
+
+    /// Attach a row key.
+    pub fn key(mut self, key: impl Into<String>) -> SyncResult<Self> {
+        self.key = Some(RowKey::new(key)?);
+        Ok(self)
+    }
+
+    /// Attach an already validated row key.
+    pub fn row_key(mut self, key: RowKey) -> Self {
+        self.key = Some(key);
+        self
+    }
+
+    /// Attach a base row version for conflict detection.
+    pub fn base_version(mut self, version: impl Into<String>) -> SyncResult<Self> {
+        self.base_version = Some(RowVersion::new(version)?);
+        Ok(self)
+    }
+
+    /// Attach an already validated base row version.
+    pub fn row_version(mut self, version: RowVersion) -> Self {
+        self.base_version = Some(version);
+        self
+    }
+
+    /// Convert this draft into a wire mutation after an id is reserved.
+    pub fn with_id(self, id: MutationId) -> ClientMutation<M> {
+        ClientMutation {
+            id,
+            key: self.key,
+            op: self.op,
+            base_version: self.base_version,
+            payload: self.payload,
+        }
+    }
+}
+
 /// Push request for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "M: Serialize", deserialize = "M: Deserialize<'de>"))]
