@@ -24,6 +24,19 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
 
     store.save_identity(identity.clone()).await.unwrap();
     assert_eq!(store.load_identity().await.unwrap(), Some(identity));
+    assert_eq!(
+        store.reserve_mutation_id().await.unwrap().as_str(),
+        "device_browser:3"
+    );
+    assert_eq!(
+        store
+            .load_identity()
+            .await
+            .unwrap()
+            .unwrap()
+            .next_mutation_counter,
+        4
+    );
 
     store
         .save_snapshot(LocalSnapshotBatch::new(
@@ -41,7 +54,7 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
     assert_eq!(snapshot.rows, vec![row]);
 
     let mutation = ClientMutation {
-        id: MutationId::new("device_browser:3").unwrap(),
+        id: MutationId::new("device_browser:4").unwrap(),
         key: Some(RowKey::new("post_1").unwrap()),
         op: SyncOp::Upsert,
         base_version: Some(pocopine_sync::RowVersion::new("row_1").unwrap()),
@@ -60,7 +73,7 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
         .mark_push_result(LocalPushResult {
             stream: stream.clone(),
             collection: Some(SyncCollectionName::new("posts").unwrap()),
-            accepted: vec![MutationId::new("device_browser:3").unwrap()],
+            accepted: vec![MutationId::new("device_browser:4").unwrap()],
             rejected: Vec::new(),
             rows: vec![
                 SyncRow::new("post_1", serde_json::json!({"title": "Updated"}))
@@ -84,7 +97,7 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
         .mark_push_result(LocalPushResult {
             stream: push_first_stream.clone(),
             collection: Some(SyncCollectionName::new("posts").unwrap()),
-            accepted: vec![MutationId::new("device_browser:4").unwrap()],
+            accepted: vec![MutationId::new("device_browser:5").unwrap()],
             rejected: Vec::new(),
             rows: vec![
                 SyncRow::new("post_2", serde_json::json!({"title": "Push first"}))

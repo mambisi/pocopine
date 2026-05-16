@@ -3,9 +3,10 @@ use std::{cell::RefCell, collections::BTreeSet, fmt, rc::Rc};
 use futures::lock::Mutex as AsyncMutex;
 use js_sys::{Array, Reflect};
 use pocopine_sync::{
-    ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    RowKey, RowVersion, SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture,
-    SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
+    SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncResult, SyncRow, SyncStreamName,
 };
 use serde_json::Value;
 use wasm_bindgen::{JsCast, JsValue};
@@ -95,6 +96,10 @@ impl SyncLocalStore for SqliteLocalStore {
 
     fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()> {
         self.run(save_identity(identity))
+    }
+
+    fn reserve_mutation_id(&self) -> SyncLocalFuture<'_, MutationId> {
+        self.run(reserve_mutation_id())
     }
 
     fn hydrate_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, LocalStreamSnapshot> {
@@ -224,6 +229,26 @@ async fn save_identity(identity: SyncLocalIdentity) -> SyncResult<()> {
     }
     .await;
     finish_transaction(result).await
+}
+
+async fn reserve_mutation_id() -> SyncResult<MutationId> {
+    exec("BEGIN IMMEDIATE TRANSACTION", Vec::new()).await?;
+    let result = async {
+        let identity = match load_identity().await? {
+            Some(identity) => identity,
+            None => SyncLocalIdentity::new(generate_sync_device_id()?),
+        };
+        let (id, advanced) = identity.reserve_mutation_id()?;
+        upsert_meta(META_DEVICE_ID, advanced.device_id.as_str()).await?;
+        upsert_meta(
+            META_NEXT_MUTATION_COUNTER,
+            &advanced.next_mutation_counter.to_string(),
+        )
+        .await?;
+        Ok(id)
+    }
+    .await;
+    finish_transaction_value(result).await
 }
 
 async fn hydrate_stream(stream: SyncStreamName) -> SyncResult<LocalStreamSnapshot> {
@@ -534,6 +559,19 @@ async fn delete_mutation(mutation_id: &str) -> SyncResult<()> {
 async fn finish_transaction(result: SyncResult<()>) -> SyncResult<()> {
     match result {
         Ok(()) => exec("COMMIT", Vec::new()).await,
+        Err(err) => {
+            let _ = exec("ROLLBACK", Vec::new()).await;
+            Err(err)
+        }
+    }
+}
+
+async fn finish_transaction_value<T>(result: SyncResult<T>) -> SyncResult<T> {
+    match result {
+        Ok(value) => {
+            exec("COMMIT", Vec::new()).await?;
+            Ok(value)
+        }
         Err(err) => {
             let _ = exec("ROLLBACK", Vec::new()).await;
             Err(err)

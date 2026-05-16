@@ -20,16 +20,16 @@ mod server;
 pub use error::{SyncError, SyncResult};
 pub use local_memory::MemoryLocalStore;
 pub use local_store::{
-    LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    MutationIdGenerator, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore,
+    generate_sync_device_id, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationIdGenerator, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore,
 };
 pub use protocol::{
-    sync_stream_tag, ClientMutation, MutationId, RowKey, RowVersion, SyncChange,
-    SyncCollectionName, SyncConflict, SyncCursor, SyncDeviceId, SyncOp, SyncOpenRequest,
-    SyncOpenResponse, SyncOpenStream, SyncPullMode, SyncPullRequest, SyncPullResponse,
-    SyncPushRequest, SyncPushResponse, SyncRejectedMutation, SyncRow, SyncSessionId,
-    SyncStreamName, MAX_SYNC_TOKEN_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH, SYNC_PROTOCOL_V1,
-    SYNC_PULL_PATH, SYNC_PUSH_PATH,
+    sync_stream_tag, ClientMutation, ClientMutationDraft, MutationId, RowKey, RowVersion,
+    SyncChange, SyncCollectionName, SyncConflict, SyncCursor, SyncDeviceId, SyncOp,
+    SyncOpenRequest, SyncOpenResponse, SyncOpenStream, SyncPullMode, SyncPullRequest,
+    SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation, SyncRow,
+    SyncSessionId, SyncStreamName, MAX_SYNC_TOKEN_LEN, SYNC_ENDPOINT_PREFIX, SYNC_OPEN_PATH,
+    SYNC_PROTOCOL_V1, SYNC_PULL_PATH, SYNC_PUSH_PATH,
 };
 pub use state::{CollectionState, PendingMutation, SyncReason, SyncRequest};
 
