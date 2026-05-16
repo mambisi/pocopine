@@ -6,9 +6,10 @@ use std::{
 };
 
 use pocopine_sync::{
-    ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    RowKey, RowVersion, SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture,
-    SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
+    SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncResult, SyncRow, SyncStreamName,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
@@ -67,6 +68,10 @@ impl SyncLocalStore for SqliteLocalStore {
 
     fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()> {
         Self::ready(self.with_conn(|conn| save_identity(conn, identity)))
+    }
+
+    fn reserve_mutation_id(&self) -> SyncLocalFuture<'_, MutationId> {
+        Self::ready(self.with_conn(reserve_mutation_id))
     }
 
     fn hydrate_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, LocalStreamSnapshot> {
@@ -178,6 +183,41 @@ fn save_identity(conn: &mut Connection, identity: SyncLocalIdentity) -> SyncResu
         &identity.next_mutation_counter.to_string(),
     )?;
     tx.commit().map_err(sqlite_error)
+}
+
+fn reserve_mutation_id(conn: &mut Connection) -> SyncResult<MutationId> {
+    let tx = conn.transaction().map_err(sqlite_error)?;
+    let identity = match load_identity_from_tx(&tx)? {
+        Some(identity) => identity,
+        None => SyncLocalIdentity::new(generate_sync_device_id()?),
+    };
+    let (id, advanced) = identity.reserve_mutation_id()?;
+    upsert_meta(&tx, META_DEVICE_ID, advanced.device_id.as_str())?;
+    upsert_meta(
+        &tx,
+        META_NEXT_MUTATION_COUNTER,
+        &advanced.next_mutation_counter.to_string(),
+    )?;
+    tx.commit().map_err(sqlite_error)?;
+    Ok(id)
+}
+
+fn load_identity_from_tx(tx: &Transaction<'_>) -> SyncResult<Option<SyncLocalIdentity>> {
+    let Some(device_id) = select_meta_tx(tx, META_DEVICE_ID)? else {
+        return Ok(None);
+    };
+    let next_counter = select_meta_tx(tx, META_NEXT_MUTATION_COUNTER)?
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                SyncError::backend(format!(
+                    "invalid sync next mutation counter in sqlite store: {value}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(1);
+
+    SyncLocalIdentity::with_next_counter(SyncDeviceId::new(device_id)?, next_counter).map(Some)
 }
 
 fn hydrate_stream(
@@ -478,6 +518,16 @@ fn select_meta(conn: &Connection, key: &str) -> SyncResult<Option<String>> {
     .map_err(sqlite_error)
 }
 
+fn select_meta_tx(tx: &Transaction<'_>, key: &str) -> SyncResult<Option<String>> {
+    tx.query_row(
+        "select value from __pocopine_meta where key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(sqlite_error)
+}
+
 fn delete_mutation(tx: &Transaction<'_>, mutation_id: &str) -> SyncResult<()> {
     tx.execute(DELETE_MUTATION_SQL, params![mutation_id])
         .map_err(sqlite_error)?;
@@ -559,6 +609,40 @@ mod tests {
         block(store.save_identity(identity.clone())).unwrap();
 
         assert_eq!(block(store.load_identity()).unwrap(), Some(identity));
+    }
+
+    #[test]
+    fn sqlite_store_reserves_mutation_ids_and_persists_counter() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let identity =
+            SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_abc").unwrap(), 9)
+                .unwrap();
+        block(store.save_identity(identity)).unwrap();
+
+        let first = block(store.reserve_mutation_id()).unwrap();
+        let second = block(store.reserve_mutation_id()).unwrap();
+
+        assert_eq!(first.as_str(), "device_abc:9");
+        assert_eq!(second.as_str(), "device_abc:10");
+        assert_eq!(
+            block(store.load_identity())
+                .unwrap()
+                .unwrap()
+                .next_mutation_counter,
+            11
+        );
+    }
+
+    #[test]
+    fn sqlite_store_reserve_creates_identity_when_missing() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+
+        let id = block(store.reserve_mutation_id()).unwrap();
+        let identity = block(store.load_identity()).unwrap().unwrap();
+
+        assert!(id.as_str().starts_with(identity.device_id.as_str()));
+        assert!(id.as_str().ends_with(":1"));
+        assert_eq!(identity.next_mutation_counter, 2);
     }
 
     #[test]

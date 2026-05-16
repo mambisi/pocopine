@@ -49,6 +49,30 @@ impl SyncLocalIdentity {
     pub fn mutation_id_generator(&self) -> SyncResult<MutationIdGenerator> {
         MutationIdGenerator::with_next_counter(self.device_id.clone(), self.next_mutation_counter)
     }
+
+    /// Reserve the current mutation id and return the advanced identity.
+    ///
+    /// Stores use this to persist the incremented counter before exposing the
+    /// id to client code. If the counter cannot advance, no id is returned.
+    pub fn reserve_mutation_id(&self) -> SyncResult<(MutationId, Self)> {
+        let next_mutation_counter = self
+            .next_mutation_counter
+            .checked_add(1)
+            .ok_or_else(|| SyncError::invalid_value("next mutation counter", "overflow"))?;
+        let id = MutationId::new(format!("{}:{}", self.device_id, self.next_mutation_counter))?;
+        Ok((
+            id,
+            Self {
+                device_id: self.device_id.clone(),
+                next_mutation_counter,
+            },
+        ))
+    }
+}
+
+/// Generate a fresh sync device identity.
+pub fn generate_sync_device_id() -> SyncResult<SyncDeviceId> {
+    SyncDeviceId::new(format!("device_{}", uuid::Uuid::new_v4().simple()))
 }
 
 /// Deterministic mutation id generator for one persisted device id.
@@ -212,16 +236,18 @@ impl LocalPushResult {
 /// result operations atomically. The local store improves durability and
 /// startup latency; it is not an authorization boundary.
 ///
-/// `load_identity` and `save_identity` expose the durable identity slot used
-/// by apps or future Pocopine client helpers to allocate stable mutation ids.
-/// The current `SyncCollection::push` API remains id-explicit: callers still
-/// provide `ClientMutation::id` themselves.
+/// `reserve_mutation_id` is the safe allocation boundary for stable mutation
+/// ids. Implementations must persist the incremented counter before returning
+/// the id, so a reload or failed network request cannot reuse it.
 pub trait SyncLocalStore {
     /// Load the persisted client identity, if this store has one.
     fn load_identity(&self) -> SyncLocalFuture<'_, Option<SyncLocalIdentity>>;
 
     /// Persist the client identity and next mutation counter.
     fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()>;
+
+    /// Reserve a durable mutation id for the local device.
+    fn reserve_mutation_id(&self) -> SyncLocalFuture<'_, MutationId>;
 
     /// Hydrate locally cached rows and pending mutations for a stream.
     fn hydrate_stream(&self, stream: &SyncStreamName) -> SyncLocalFuture<'_, LocalStreamSnapshot>;
@@ -273,6 +299,39 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("next mutation counter"));
+    }
+
+    #[test]
+    fn local_identity_reserves_mutation_id_and_advances_counter() {
+        let identity =
+            SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_abc").unwrap(), 7)
+                .unwrap();
+
+        let (id, advanced) = identity.reserve_mutation_id().unwrap();
+
+        assert_eq!(id.as_str(), "device_abc:7");
+        assert_eq!(advanced.device_id.as_str(), "device_abc");
+        assert_eq!(advanced.next_mutation_counter, 8);
+    }
+
+    #[test]
+    fn local_identity_rejects_counter_overflow_without_id() {
+        let identity = SyncLocalIdentity::with_next_counter(
+            SyncDeviceId::new("device_abc").unwrap(),
+            u64::MAX,
+        )
+        .unwrap();
+
+        let err = identity.reserve_mutation_id().unwrap_err();
+
+        assert!(err.to_string().contains("next mutation counter"));
+    }
+
+    #[test]
+    fn generate_sync_device_id_returns_valid_device_token() {
+        let id = generate_sync_device_id().unwrap();
+
+        assert!(id.as_str().starts_with("device_"));
     }
 
     #[test]
