@@ -6,17 +6,19 @@
        and the menu's `position: fixed` would anchor to the
        portal instead of the viewport — dragging the sub-menu
        down to wherever the teleported portal landed in body
-       flow. The menu itself already owns its own `transform`
-       via `pp-anchor`, so translating it via the preset stacks
-       cleanly with the anchor positioning. -->
+       flow. The menu is anchored programmatically after pp-if
+       mounts, so the transition belongs on this inner surface. -->
   <div class="pine-dm-sub-portal">
     <root role="menu"
           class="pine-dm-sub-content"
           pp-ref="menu"
           data-state="open"
+          :data-pine-dm-sub-content="sub_id"
+          :data-pine-dm-sub-content-root="root_id"
           pp-transition="slide-down"
-          pp-anchor:right-start.offset.2.flip="anchor"
           pp-roving
+          @pointerdown.stop="isolate_interaction"
+          @click.stop="isolate_interaction"
           @keydown.escape.prevent="close"
           @keydown.arrow-left.prevent="close">
       <slot></slot>

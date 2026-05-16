@@ -7,6 +7,9 @@
       :data-state="open ? 'open' : 'closed'"
       :aria-disabled="disabled"
       :data-disabled="disabled"
-      @click="on_select">
+      @click="on_select"
+      @keydown.enter.prevent="on_select"
+      @keydown.space.prevent="on_select"
+      @keydown.arrow-right.prevent="open">
   <slot></slot>
 </root>

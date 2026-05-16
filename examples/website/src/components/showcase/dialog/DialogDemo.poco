@@ -7,10 +7,7 @@
       </pine-dialog-trigger>
       <pine-dialog-portal>
         <pine-dialog-overlay></pine-dialog-overlay>
-        <!-- `pp-transition="none"` disables the preset's class-swap
-             machinery so the demo CSS can drive the enter animation
-             via native `@starting-style`. See styles.css. -->
-        <pine-dialog-content pp-transition="none">
+        <pine-dialog-content>
           <pine-dialog-title>Delete file?</pine-dialog-title>
           <pine-dialog-description>This action cannot be undone.</pine-dialog-description>
           <div class="row" style="margin-top:1rem;justify-content:flex-end">

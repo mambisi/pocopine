@@ -39,13 +39,11 @@
    * Feels snappier than `cubic-bezier(0, 0, 0.2, 1)` at the same
    * duration. */
   --pp-tx-easing: cubic-bezier(0.16, 1, 0.3, 1);
-  /* `fade` is the overlay/backdrop preset — keep it noticeably
-   * faster than scale/slide so the backdrop snaps in while the
-   * focal Content takes its full duration. The two start
-   * together; fade finishes early and Content's tail overlaps
-   * the settled overlay. Mirrors Material/Apple HIG behaviour. */
-  --pp-tx-fade-duration: 100ms;
-  --pp-tx-fade-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  /* `fade` is the overlay/backdrop preset. Keep it aligned with
+   * the content duration so dimmed backgrounds do not snap in or
+   * disappear before the foreground panel settles. */
+  --pp-tx-fade-duration: 180ms;
+  --pp-tx-fade-easing: cubic-bezier(0.16, 1, 0.3, 1);
   --pp-tx-collapse-duration: 180ms;
   --pp-tx-collapse-easing: cubic-bezier(0.4, 0, 0.2, 1);
   --pp-tx-flip-duration: 320ms;
@@ -56,6 +54,7 @@
 .pp-tx-fade-base {
   transition: opacity var(--pp-tx-fade-duration, var(--pp-tx-duration))
               var(--pp-tx-fade-easing, var(--pp-tx-easing));
+  will-change: opacity;
 }
 .pp-tx-fade-from { opacity: 0; }
 .pp-tx-fade-to   { opacity: 1; }
@@ -76,6 +75,8 @@
               var(--pp-tx-fade-scale-easing, var(--pp-tx-easing)),
               transform var(--pp-tx-fade-scale-duration, var(--pp-tx-duration))
               var(--pp-tx-fade-scale-easing, var(--pp-tx-easing));
+  transform-origin: center;
+  will-change: opacity, transform;
 }
 .pp-tx-fade-scale-from { opacity: 0; transform: scale(0.94); }
 .pp-tx-fade-scale-to   { opacity: 1; transform: scale(1); }

@@ -4,6 +4,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use pocopine::prelude::*;
+use std::cell::Cell;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{window, Element, HtmlElement, HtmlInputElement};
@@ -117,6 +120,80 @@ async fn sleep_ms(ms: i32) {
             w.set_timeout_with_callback_and_timeout_and_arguments_0(resolve.unchecked_ref(), ms);
     });
     let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+}
+
+fn text_for(root: &Element, selector: &str) -> String {
+    root.query_selector(selector)
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .inner_text()
+        .trim()
+        .to_string()
+}
+
+fn install_body_click_counter() -> Rc<Cell<u32>> {
+    let count = Rc::new(Cell::new(0));
+    let seen = count.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |_| seen.set(seen.get() + 1)));
+    let body = doc().body().unwrap();
+    let target: &web_sys::EventTarget = body.as_ref();
+    target
+        .add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+    count
+}
+
+fn prevent_event_counter(target: &Element, event: &str) -> Rc<Cell<u32>> {
+    let count = Rc::new(Cell::new(0));
+    let seen = count.clone();
+    let cb: Closure<dyn FnMut(web_sys::Event)> =
+        Closure::wrap(Box::new(move |ev: web_sys::Event| {
+            seen.set(seen.get() + 1);
+            ev.prevent_default();
+        }));
+    let target: &web_sys::EventTarget = target.as_ref();
+    target
+        .add_event_listener_with_callback(event, cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+    count
+}
+
+fn dispatch_body_pointerdown() {
+    let init = web_sys::PointerEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::PointerEvent::new_with_event_init_dict("pointerdown", &init).unwrap();
+    doc().body().unwrap().dispatch_event(&ev).unwrap();
+}
+
+fn dispatch_body_click() {
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict("click", &init).unwrap();
+    doc().body().unwrap().dispatch_event(&ev).unwrap();
+}
+
+fn dispatch_pointer_click(target: &Element) {
+    for event in ["pointerdown", "pointerup"] {
+        let init = web_sys::PointerEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::PointerEvent::new_with_event_init_dict(event, &init).unwrap();
+        target.dispatch_event(&ev).unwrap();
+    }
+    for event in ["mousedown", "mouseup", "click"] {
+        let init = web_sys::MouseEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        let ev = web_sys::MouseEvent::new_with_mouse_event_init_dict(event, &init).unwrap();
+        target.dispatch_event(&ev).unwrap();
+    }
 }
 
 // ─── PineButton ───────────────────────────────────────────────────
@@ -678,6 +755,243 @@ async fn compound_menu_injects_through_slot_owner_when_nested() {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[component(template_inline = r#"
 <div>
+  <div class="dm-card" @click="card_click">
+    <span class="dm-card-clicks" pp-text="card_clicks"></span>
+    <pine-dropdown-menu-root>
+      <pine-dropdown-menu-trigger class="dm-trigger">Actions</pine-dropdown-menu-trigger>
+      <pine-dropdown-menu-portal>
+        <pine-dropdown-menu-content>
+          <pine-dropdown-menu-label>Menu</pine-dropdown-menu-label>
+          <pine-dropdown-menu-item class="dm-item">Item</pine-dropdown-menu-item>
+        </pine-dropdown-menu-content>
+      </pine-dropdown-menu-portal>
+    </pine-dropdown-menu-root>
+  </div>
+</div>
+"#)]
+struct DropdownClickableParentHost {
+    card_clicks: u32,
+}
+
+#[handlers]
+impl DropdownClickableParentHost {
+    pub fn card_click(&mut self) {
+        self.card_clicks += 1;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_isolates_trigger_and_content_inside_clickable_parent() {
+    let host = mount_fixture::<DropdownClickableParentHost>();
+    tick().await;
+
+    let body_clicks = install_body_click_counter();
+    let trigger = host
+        .query_selector(".dm-trigger")
+        .unwrap()
+        .expect("trigger rendered");
+
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "trigger click opens the menu"
+    );
+    assert_eq!(text_for(&host, ".dm-card-clicks"), "0");
+    assert_eq!(body_clicks.get(), 0, "trigger click does not leak");
+
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "re-clicking the trigger closes instead of re-opening via outside-dismiss race"
+    );
+    assert_eq!(text_for(&host, ".dm-card-clicks"), "0");
+    assert_eq!(body_clicks.get(), 0, "trigger re-click stays isolated");
+
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("menu reopened");
+    menu.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "clicking inside content does not outside-dismiss"
+    );
+    assert_eq!(text_for(&host, ".dm-card-clicks"), "0");
+    assert_eq!(
+        body_clicks.get(),
+        0,
+        "content click does not bubble to the page"
+    );
+
+    doc()
+        .body()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "body click outside closes the menu"
+    );
+    assert_eq!(body_clicks.get(), 1, "outside click still reaches the page");
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_outside_events_are_preventable() {
+    let host = mount_fixture::<DropdownClickableParentHost>();
+    tick().await;
+
+    let trigger = host.query_selector(".dm-trigger").unwrap().unwrap();
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("menu opened");
+    let pointer_count = prevent_event_counter(&menu, "pp:pointer-down-outside");
+    dispatch_body_pointerdown();
+    tick().await;
+    tick().await;
+    assert_eq!(pointer_count.get(), 1);
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "preventing pp:pointer-down-outside keeps the menu open"
+    );
+
+    let interact_count = prevent_event_counter(&menu, "pp:interact-outside");
+    dispatch_body_click();
+    tick().await;
+    tick().await;
+    assert_eq!(interact_count.get(), 1);
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "preventing pp:interact-outside keeps the menu open"
+    );
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    menu.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "Escape still closes after prevented outside events"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <button class="dm-model-open" @click="open_it">open</button>
+  <span class="dm-model-state" pp-text="menu_open ? 'open' : 'closed'"></span>
+  <pine-dropdown-menu-root pp-model:open="menu_open">
+    <pine-dropdown-menu-trigger class="dm-model-trigger">menu</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-item class="dm-model-item">Item</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct DropdownModelHost {
+    menu_open: bool,
+}
+
+#[handlers]
+impl DropdownModelHost {
+    pub fn open_it(&mut self) {
+        self.menu_open = true;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_pp_model_open_round_trips_through_parent() {
+    let host = mount_fixture::<DropdownModelHost>();
+    tick().await;
+
+    assert_eq!(text_for(&host, ".dm-model-state"), "closed");
+    host.query_selector(".dm-model-open")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let menu = doc()
+        .query_selector("ul[role=\"menu\"].pine-dm-content")
+        .unwrap()
+        .expect("menu opened from parent pp-model field");
+    assert_eq!(text_for(&host, ".dm-model-state"), "open");
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    menu.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        text_for(&host, ".dm-model-state"),
+        "closed",
+        "Root.close emitted through pp-model:open"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "menu unmounted after model-backed close"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
   <pine-dropdown-menu-root>
     <pine-dropdown-menu-trigger class="pv-trig">open</pine-dropdown-menu-trigger>
     <pine-dropdown-menu-portal>
@@ -748,6 +1062,44 @@ async fn dropdown_menu_item_pp_select_preventable_keeps_menu_open() {
             .unwrap()
             .is_none(),
         "menu dismisses when nothing prevents pp:select"
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_items_activate_from_keyboard() {
+    let host = mount_fixture::<CompoundMenuHost>();
+    tick().await;
+
+    host.query_selector("pine-dropdown-menu-trigger button")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let item = doc()
+        .query_selector(".m-a")
+        .unwrap()
+        .expect("item rendered");
+    let item_li = item.query_selector("li").unwrap().unwrap_or(item);
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Enter");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    item_li.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "Enter on a focused menuitem activates Item.on_select and closes the menu"
     );
 
     host.remove();
@@ -1138,6 +1490,404 @@ async fn dropdown_menu_sub_opens_anchored_to_sub_trigger() {
     host.remove();
 }
 
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_opens_from_arrow_right_and_focuses_first_item() {
+    let host = mount_fixture::<SubMenuHost>();
+    tick().await;
+
+    host.query_selector(".sub-root-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let sub_trig = doc()
+        .query_selector(".s-sub-t")
+        .unwrap()
+        .expect("sub trigger rendered");
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("ArrowRight");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    sub_trig.dispatch_event(&ev).unwrap();
+    for _ in 0..5 {
+        tick().await;
+    }
+
+    let sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("sub-content opened from ArrowRight");
+    let active = doc().active_element().unwrap();
+    assert!(
+        sub_menu.contains(Some(active.as_ref())),
+        "submenu open moves focus inside the submenu"
+    );
+    assert_eq!(
+        active.get_attribute("tabindex").as_deref(),
+        Some("0"),
+        "focused submenu item is the roving tab stop"
+    );
+    assert_eq!(
+        sub_menu
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .style()
+            .get_property_value("position")
+            .unwrap_or_default(),
+        "fixed",
+        "submenu content is anchored programmatically after opening"
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_click_toggle_reopens_after_close() {
+    let host = mount_fixture::<SubMenuHost>();
+    tick().await;
+
+    host.query_selector(".sub-root-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+
+    let sub_trig = doc()
+        .query_selector(".s-sub-t")
+        .unwrap()
+        .expect("sub trigger rendered");
+    sub_trig.clone().dyn_into::<HtmlElement>().unwrap().click();
+    for _ in 0..5 {
+        tick().await;
+    }
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_some(),
+        "first submenu trigger click opens the submenu"
+    );
+
+    sub_trig.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_none(),
+        "second submenu trigger click closes the submenu"
+    );
+
+    sub_trig.dyn_into::<HtmlElement>().unwrap().click();
+    for _ in 0..5 {
+        tick().await;
+    }
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_some(),
+        "third submenu trigger click reopens the submenu after close"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="file-root-t">File</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content side="top" align="start" side_offset="8">
+        <pine-dropdown-menu-arrow></pine-dropdown-menu-arrow>
+        <pine-dropdown-menu-item @click="action_bump">New file</pine-dropdown-menu-item>
+        <pine-dropdown-menu-item @click="action_bump">Open...</pine-dropdown-menu-item>
+        <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+        <pine-dropdown-menu-sub>
+          <pine-dropdown-menu-sub-trigger class="file-sub-t">Share to</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-content>
+            <pine-dropdown-menu-item @click="action_bump">Email...</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_bump">Slack...</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item @click="action_bump">Copy link</pine-dropdown-menu-item>
+          </pine-dropdown-menu-sub-content>
+        </pine-dropdown-menu-sub>
+        <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
+        <pine-dropdown-menu-item class="file-quit" @click="action_bump">Quit</pine-dropdown-menu-item>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct FileDropdownSubMenuHost {
+    bumps: u32,
+}
+
+#[handlers]
+impl FileDropdownSubMenuHost {
+    pub fn action_bump(&mut self) {
+        self.bumps += 1;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_file_sub_click_toggle_reopens_after_close() {
+    let host = mount_fixture::<FileDropdownSubMenuHost>();
+    tick().await;
+
+    let file_trigger = host.query_selector(".file-root-t").unwrap().unwrap();
+    dispatch_pointer_click(&file_trigger);
+    tick().await;
+    tick().await;
+
+    let sub_trig = doc()
+        .query_selector(".file-sub-t")
+        .unwrap()
+        .expect("file submenu trigger rendered");
+    dispatch_pointer_click(&sub_trig);
+    for _ in 0..5 {
+        tick().await;
+    }
+    let first_sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("File submenu opens on first click");
+    assert_eq!(
+        first_sub_menu
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .style()
+            .get_property_value("position")
+            .unwrap_or_default(),
+        "fixed",
+        "File submenu is anchored on first open"
+    );
+
+    dispatch_pointer_click(&sub_trig);
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_none(),
+        "File submenu closes on second click"
+    );
+
+    dispatch_pointer_click(&sub_trig);
+    for _ in 0..5 {
+        tick().await;
+    }
+    let reopened_sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("File submenu reopens on third click");
+    assert_eq!(
+        reopened_sub_menu
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+            .style()
+            .get_property_value("position")
+            .unwrap_or_default(),
+        "fixed",
+        "File submenu is re-anchored after a full close/reopen"
+    );
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_closes_submenu_before_parent_content() {
+    let host = mount_fixture::<FileDropdownSubMenuHost>();
+    tick().await;
+
+    let file_trigger = host.query_selector(".file-root-t").unwrap().unwrap();
+    dispatch_pointer_click(&file_trigger);
+    tick().await;
+    tick().await;
+
+    let sub_trig = doc()
+        .query_selector(".file-sub-t")
+        .unwrap()
+        .expect("file submenu trigger rendered");
+    dispatch_pointer_click(&sub_trig);
+    for _ in 0..5 {
+        tick().await;
+    }
+    assert_eq!(
+        sub_trig.get_attribute("data-state").as_deref(),
+        Some("open"),
+        "submenu starts open"
+    );
+
+    let quit = doc()
+        .query_selector(".file-quit")
+        .unwrap()
+        .expect("outer menu item rendered");
+    dispatch_pointer_click(&quit);
+    tick().await;
+    tick().await;
+
+    assert_eq!(
+        sub_trig.get_attribute("data-state").as_deref(),
+        Some("closed"),
+        "root close asks the submenu to close first"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "parent content remains mounted until the next animation frame"
+    );
+
+    sleep_ms(40).await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "parent content closes after the submenu was told to leave"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="svp-root-t">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content>
+        <pine-dropdown-menu-sub>
+          <pine-dropdown-menu-sub-trigger class="svp-sub-t">More...</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-content>
+            <pine-dropdown-menu-item class="svp-keep">Keep open</pine-dropdown-menu-item>
+            <pine-dropdown-menu-item class="svp-close">Close</pine-dropdown-menu-item>
+          </pine-dropdown-menu-sub-content>
+        </pine-dropdown-menu-sub>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct SubPreventableSelectHost {}
+#[handlers]
+impl SubPreventableSelectHost {}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_select_prevent_keeps_parent_and_sub_open() {
+    let host = mount_fixture::<SubPreventableSelectHost>();
+    tick().await;
+
+    host.query_selector(".svp-root-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    doc()
+        .query_selector(".svp-sub-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    for _ in 0..5 {
+        tick().await;
+    }
+
+    let sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("submenu opened");
+    let keep = sub_menu
+        .query_selector(".svp-keep")
+        .unwrap()
+        .expect("prevented submenu item rendered");
+    let select_count = prevent_event_counter(&keep, "pp:select");
+    let body_clicks = install_body_click_counter();
+    keep.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    assert_eq!(select_count.get(), 1);
+    assert_eq!(
+        body_clicks.get(),
+        0,
+        "submenu content click is isolated from page-level bubbling"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "preventing submenu item select keeps the parent menu open"
+    );
+    assert!(
+        doc()
+            .query_selector("ul.pine-dm-sub-content")
+            .unwrap()
+            .is_some(),
+        "preventing submenu item select keeps the submenu open"
+    );
+
+    let sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("submenu still open");
+    sub_menu
+        .query_selector(".svp-close")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert_eq!(
+        doc()
+            .query_selector(".svp-sub-t")
+            .unwrap()
+            .expect("submenu trigger still rendered during close handoff")
+            .get_attribute("data-state")
+            .as_deref(),
+        Some("closed"),
+        "unprevented submenu item select asks the submenu to close first"
+    );
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_some(),
+        "parent menu remains mounted for the submenu close handoff"
+    );
+
+    sleep_ms(40).await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("ul[role=\"menu\"].pine-dm-content")
+            .unwrap()
+            .is_none(),
+        "unprevented submenu item select still closes the parent menu"
+    );
+
+    host.remove();
+}
+
 // Closing the outer menu while a sub is open must NOT leak its
 // teleported portal in `<body>`. Prior bug: Sub's DOM was
 // inside the outer portal, so outer close destroyed Sub's
@@ -1172,10 +1922,8 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
 
     // Open outer, open sub, close outer. Repeat — without the
     // cleanup, each cycle adds an orphan `.pine-dm-sub-portal`
-    // to body. Close via a body click (outer Content's
-    // `@click.outside` fires) rather than re-clicking the
-    // trigger — a trigger-click-while-open races with its own
-    // `@click.outside` closer and nets to no state change.
+    // to body. Close via a body click so this stays focused on
+    // the outside-dismiss teardown path.
     let body = doc().body().unwrap();
     for _ in 0..3 {
         let outer_trig = host.query_selector(".sc-root-t").unwrap().unwrap();
@@ -1191,6 +1939,10 @@ async fn dropdown_menu_sub_cleanup_on_outer_close() {
         tick().await;
         body.clone().dyn_into::<HtmlElement>().unwrap().click();
         tick().await;
+        tick().await;
+        // Root close deliberately gives any open submenu one frame
+        // to start its leave before the parent content leaves.
+        sleep_ms(220).await;
         tick().await;
     }
 
@@ -1251,6 +2003,69 @@ async fn dropdown_menu_arrow_mirrors_content_side() {
         arrow.get_attribute("aria-hidden").as_deref(),
         Some("true"),
         "arrow is decorative"
+    );
+
+    host.remove();
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-dropdown-menu-root>
+    <pine-dropdown-menu-trigger class="sar-root-t">open</pine-dropdown-menu-trigger>
+    <pine-dropdown-menu-portal>
+      <pine-dropdown-menu-content side="bottom">
+        <pine-dropdown-menu-sub>
+          <pine-dropdown-menu-sub-trigger class="sar-sub-t">More...</pine-dropdown-menu-sub-trigger>
+          <pine-dropdown-menu-sub-content side="left" align="end" side_offset="10">
+            <pine-dropdown-menu-arrow class="sar-arrow"></pine-dropdown-menu-arrow>
+            <pine-dropdown-menu-item>Nested</pine-dropdown-menu-item>
+          </pine-dropdown-menu-sub-content>
+        </pine-dropdown-menu-sub>
+      </pine-dropdown-menu-content>
+    </pine-dropdown-menu-portal>
+  </pine-dropdown-menu-root>
+</div>
+"#)]
+struct SubArrowMenuHost {}
+#[handlers]
+impl SubArrowMenuHost {}
+
+#[wasm_bindgen_test]
+async fn dropdown_menu_sub_arrow_mirrors_subcontent_side() {
+    let host = mount_fixture::<SubArrowMenuHost>();
+    tick().await;
+    host.query_selector(".sar-root-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    doc()
+        .query_selector(".sar-sub-t")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    for _ in 0..5 {
+        tick().await;
+    }
+
+    let sub_menu = doc()
+        .query_selector("ul.pine-dm-sub-content")
+        .unwrap()
+        .expect("submenu opened");
+    let arrow = sub_menu
+        .query_selector(".sar-arrow")
+        .unwrap()
+        .expect("submenu arrow rendered");
+    assert_eq!(
+        arrow.get_attribute("data-side").as_deref(),
+        Some("left"),
+        "submenu arrow mirrors SubContent's side, not the outer menu's side"
     );
 
     host.remove();
@@ -1720,6 +2535,171 @@ async fn popover_opens_anchors_and_closes_on_escape() {
     host.remove();
 }
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <div class="pc-card" @click="card_click">
+    <span class="pc-card-clicks" pp-text="card_clicks"></span>
+    <pine-popover-root>
+      <pine-popover-trigger class="pc-trigger">Open</pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content>
+          <button class="pc-inside">Inside</button>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
+  </div>
+</div>
+"#)]
+struct PopoverClickableParentHost {
+    card_clicks: u32,
+}
+
+#[handlers]
+impl PopoverClickableParentHost {
+    pub fn card_click(&mut self) {
+        self.card_clicks += 1;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn popover_isolates_trigger_and_content_inside_clickable_parent() {
+    let host = mount_fixture::<PopoverClickableParentHost>();
+    tick().await;
+
+    let body_clicks = install_body_click_counter();
+    let trigger = host
+        .query_selector(".pc-trigger")
+        .unwrap()
+        .expect("trigger rendered");
+
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_some(),
+        "trigger click opens the popover"
+    );
+    assert_eq!(text_for(&host, ".pc-card-clicks"), "0");
+    assert_eq!(body_clicks.get(), 0, "trigger click does not leak");
+
+    trigger.clone().dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_none(),
+        "re-clicking the trigger closes instead of re-opening via outside-dismiss race"
+    );
+    assert_eq!(text_for(&host, ".pc-card-clicks"), "0");
+    assert_eq!(body_clicks.get(), 0, "trigger re-click stays isolated");
+
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+    let inside = doc()
+        .query_selector(".pc-inside")
+        .unwrap()
+        .expect("inside button rendered");
+    inside.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_some(),
+        "clicking inside content does not outside-dismiss"
+    );
+    assert_eq!(text_for(&host, ".pc-card-clicks"), "0");
+    assert_eq!(
+        body_clicks.get(),
+        0,
+        "content click does not bubble to the page"
+    );
+
+    doc()
+        .body()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_none(),
+        "body click outside closes the popover"
+    );
+    assert_eq!(body_clicks.get(), 1, "outside click still reaches the page");
+
+    host.remove();
+}
+
+#[wasm_bindgen_test]
+async fn popover_outside_events_are_preventable() {
+    let host = mount_fixture::<PopoverClickableParentHost>();
+    tick().await;
+
+    let trigger = host.query_selector(".pc-trigger").unwrap().unwrap();
+    trigger.dyn_into::<HtmlElement>().unwrap().click();
+    tick().await;
+    tick().await;
+
+    let popover = doc()
+        .query_selector("[role=\"dialog\"].pine-popover-content")
+        .unwrap()
+        .expect("popover opened");
+    let pointer_count = prevent_event_counter(&popover, "pp:pointer-down-outside");
+    dispatch_body_pointerdown();
+    tick().await;
+    tick().await;
+    assert_eq!(pointer_count.get(), 1);
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_some(),
+        "preventing pp:pointer-down-outside keeps the popover open"
+    );
+
+    let interact_count = prevent_event_counter(&popover, "pp:interact-outside");
+    dispatch_body_click();
+    tick().await;
+    tick().await;
+    assert_eq!(interact_count.get(), 1);
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_some(),
+        "preventing pp:interact-outside keeps the popover open"
+    );
+
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_key("Escape");
+    init.set_bubbles(true);
+    let ev = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init).unwrap();
+    popover.dispatch_event(&ev).unwrap();
+    tick().await;
+    tick().await;
+    assert!(
+        doc()
+            .query_selector("[role=\"dialog\"].pine-popover-content")
+            .unwrap()
+            .is_none(),
+        "Escape still closes after prevented outside events"
+    );
+
+    host.remove();
+}
+
 // ─── PineDialog (pp-model:open round-trip) ────────────────────────
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -1996,6 +2976,20 @@ async fn dialog_teleports_traps_focus_and_locks_scroll() {
         .query_selector("[role=\"dialog\"].pine-dialog-content")
         .unwrap()
         .expect("dialog role element rendered");
+    assert_eq!(
+        dialog.get_attribute("pp-transition:enter").as_deref(),
+        Some("pp-tx-fade-scale-base"),
+        "dialog content keeps the built-in card fade-scale transition"
+    );
+    let overlay = doc()
+        .query_selector(".pine-dialog-overlay")
+        .unwrap()
+        .expect("dialog overlay rendered");
+    assert_eq!(
+        overlay.get_attribute("pp-transition:enter").as_deref(),
+        Some("pp-tx-fade-base"),
+        "dialog overlay keeps the built-in background fade transition"
+    );
 
     // ARIA wiring: aria-labelledby + aria-describedby point at
     // rendered Title / Description.
