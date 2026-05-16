@@ -855,7 +855,9 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 - `CrudMutationLog` so accepted mutation ids are explicit and replayed
   mutation ids do not duplicate writes,
 - tests for accepted, rejected, conflict, missing-version-mapper, and
-  duplicate-replay flows.
+  duplicate-replay flows,
+- route-level integration coverage proving a CRUD resource registered with
+  `SyncServer` serves `/pull` and `/push` through the normal sync plugin.
 
 Still left before the macro layer:
 

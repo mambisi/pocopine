@@ -17,5 +17,9 @@ pocopine-auth = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+http-body-util = "0.1"
 http = { workspace = true }
+pocopine-core = { workspace = true }
+pocopine-server = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
