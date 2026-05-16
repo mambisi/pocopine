@@ -556,6 +556,28 @@ create/save:
 5. marks conflict if the server reports a stale version,
 6. clears pending state on acceptance.
 
+## Pre-CRUD Sync Helpers
+
+`pocopine-sync` owns the low-level pieces that the CRUD macro should
+target. The CRUD crate should not rebuild these contracts:
+
+- token newtypes such as `RowKey`, `RowVersion`, `MutationId`, and
+  `SyncStreamName` implement `Display`, `FromStr`, and `AsRef<str>`,
+- `ClientMutation` supports explicit-id construction for advanced or
+  server-owned flows,
+- `ClientMutationDraft` supports row-scoped drafts for the normal
+  generated-id path,
+- `SyncRow` has helpers for attaching an already validated row version
+  and local `pending` / `conflict` flags,
+- `CollectionState` exposes current row and base-version lookups so
+  generated save/remove defaults can use the locally known version
+  without duplicating state scans.
+
+This keeps `pocopine-sync-crud` focused on resource typing, source
+adapters, and generated ergonomics. It should map resource ids into
+sync row keys, then call the lower-level sync helpers rather than
+constructing protocol structs by hand.
+
 ## Offline Contract
 
 With a durable local store installed, CRUD operations are offline-capable:
@@ -611,7 +633,10 @@ The first `pocopine-sync-crud` PR should include:
 - generated create/save/remove `_with_options` methods,
 - generated `OpenOptions`-style fluent options methods for advanced call
   sites,
-- automatic durable mutation id allocation,
+- integration with `SyncCollection::push_with_generated_id` for automatic
+  durable mutation id allocation,
+- use of `CollectionState` row/base-version helpers for save/remove
+  defaults,
 - docs and one customer-style example using explicit SQLx.
 
 The macro should generate CRUD/sync glue only. It must not generate SQL,
