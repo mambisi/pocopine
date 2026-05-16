@@ -78,8 +78,9 @@ The first crate slice provides the reusable contracts:
   push drafts,
 - `CreateOptions`, `SaveOptions`, `RemoveOptions`, `WritePolicy`, and
   `QueuedStatus` for the client lifecycle the generated API will expose,
-- `Transaction` plus `TransactionBindable` so the public transaction API
-  can stay `tx.with(resource)`,
+- `Transaction`, `TransactionBindable`, `TransactionRunner`, and
+  `TransactionOptions::run(...)` so the public transaction API can stay
+  `tx.with(resource)` while the app owns begin/commit/rollback,
 - `resource(name, source)?.id(...).version(...).mutation_log(...)` for
   registering a non-macro `CrudSource` as a `pocopine-sync` stream,
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids
@@ -717,8 +718,27 @@ pub trait TransactionBindable<Tx> {
 }
 ```
 
-The exact Rust lifetime shape should be settled against SQLx before it
-ships, but the author-facing API should stay:
+The shipped helper contract is:
+
+```rust
+pub type TransactionFuture<'tx, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = pocopine_sync::SyncResult<T>> + Send + 'tx>>;
+
+pub trait TransactionRunner: Send + Sync + 'static {
+    type Tx: Send + 'static;
+
+    fn transaction<'runner, T, F>(&'runner self, f: F) -> TransactionFuture<'runner, T>
+    where
+        T: Send + 'runner,
+        F: for<'tx> FnOnce(Transaction<'tx, Self::Tx>) -> TransactionFuture<'tx, T>
+            + Send
+            + 'runner;
+}
+```
+
+The app/database adapter implements `TransactionRunner` by beginning a
+transaction, calling the closure, committing on `Ok`, and rolling back on
+`Err`. The author-facing operation body stays:
 
 ```rust
 tx.with(customers).create(id, draft).await?;
@@ -837,6 +857,8 @@ the testable contract:
 - `WritePolicy` and transaction options,
 - transaction binding API using `tx.with(resource)` publicly and `bind`
   internally,
+- transaction lifecycle API using `TransactionRunner` and
+  `TransactionOptions::run(...)`,
 - mapping into `SyncCollection::push_with_generated_id` through
   `ClientMutationDraft`,
 - helper APIs for optimistic rows,
@@ -861,8 +883,8 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 
 Still left before the macro layer:
 
-- server-side per-mutation transaction helpers that pair a source write
-  and durable mutation-log record in one database transaction,
+- generated CRUD methods that use `TransactionRunner` to pair a source
+  write and durable mutation-log record in one database transaction,
 - generated CRUD methods that map `WritePolicy::RequireOnline` to the
   low-level online-only sync push helpers,
 - one customer-style non-macro example using explicit SQLx.

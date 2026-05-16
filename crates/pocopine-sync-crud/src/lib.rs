@@ -35,4 +35,4 @@ pub use source::CrudSource;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use resource::RowVersionOf;
-pub use transaction::{Transaction, TransactionBindable};
+pub use transaction::{Transaction, TransactionBindable, TransactionFuture, TransactionRunner};

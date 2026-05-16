@@ -42,6 +42,8 @@ It lives in `pocopine-sync-crud`, not `pocopine-db`: the crate starts
 with the `CrudSource` trait, `ResourceId` identity boundary, CRUD
 mutation payloads, write-policy types, transaction binding contract, and
 non-macro `resource(...).id(...).mutation_log(...)` sync-stream adapter.
+Its transaction runner contract gives database adapters a tested
+begin/commit/rollback shape without turning Pocopine into an ORM.
 Proc-macro generated typed CRUD methods come next. SQL and persistence
 ownership stay with the app.
 
