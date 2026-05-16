@@ -64,6 +64,18 @@ impl ResourceId for uuid::Uuid {
     }
 }
 
+/// Generate a local-first id for a resource id type.
+///
+/// This is the function generated resource modules should call from their
+/// `new_id()` helper. Types that cannot safely allocate client-side ids return
+/// [`SyncError::Unsupported`](pocopine_sync::SyncError::Unsupported).
+pub fn new_id<Id>() -> SyncResult<Id>
+where
+    Id: ResourceId,
+{
+    Id::generate_local()
+}
+
 /// Whether a CRUD write may queue offline or must be confirmed by the server.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -543,10 +555,19 @@ mod tests {
 
     #[test]
     fn uuid_resource_id_can_generate_local_ids() {
-        let id = uuid::Uuid::generate_local().unwrap();
+        let id = new_id::<uuid::Uuid>().unwrap();
         let row_key = id.to_row_key().unwrap();
 
         assert_eq!(uuid::Uuid::from_row_key(&row_key).unwrap(), id);
+    }
+
+    #[test]
+    fn integer_resource_ids_do_not_generate_local_ids_by_default() {
+        let err = new_id::<i64>().unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("does not support local generation"));
     }
 
     #[test]

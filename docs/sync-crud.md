@@ -70,8 +70,8 @@ test double
 
 The first crate slice provides the reusable contracts:
 
-- `ResourceId` for converting app ids to sync row keys and generating
-  local-first ids when the id type supports it,
+- `ResourceId` and `new_id::<Id>()` for converting app ids to sync row
+  keys and generating local-first ids when the id type supports it,
 - `CrudSource` for app-owned server persistence code,
 - `CrudMutationPayload::{create, save, remove}` and
   `into_sync_draft(...)` for mapping CRUD writes into `pocopine-sync`
@@ -88,9 +88,9 @@ the transaction and mutation-idempotency contract is explicit.
 The current manual client shape is intentionally low level:
 
 ```rust
-use pocopine_sync_crud::{CrudMutationPayload, ResourceId};
+use pocopine_sync_crud::{new_id, CrudMutationPayload};
 
-let id = uuid::Uuid::generate_local()?;
+let id = new_id::<uuid::Uuid>()?;
 let payload = CrudMutationPayload::create(id.clone(), CustomerDraft { name, email });
 let optimistic = pocopine_sync_crud::optimistic_row(&id, customer)?;
 
@@ -282,8 +282,9 @@ Built-in implementations should cover common app/database ids:
   `ResourceId` in the app, using a stable string format that does not
   depend on a database vendor.
 
-The generated resource module can expose `new_id()` when
-`Id::generate_local()` is supported:
+The generated resource module can expose `new_id()` by calling
+`pocopine_sync_crud::new_id::<Id>()` when the id type supports local
+generation:
 
 ```rust
 let customer_id = customers::new_id()?;
