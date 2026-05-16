@@ -49,9 +49,14 @@ looks the way it does — the code itself tells you *what*.
 - [`sync.md`](./sync.md) — sync tutorial: explicit `pocopine-sync`
   extension setup, server shapes, cursor pulls, live wake-up wiring, and
   the current memory-backed example.
-- [`sync-local-store-plan.md`](./sync-local-store-plan.md) — next sync
-  phase plan: `SyncLocalStore`, durable client identity, SQLite-first
-  browser storage, and SQLx as a later host/server adapter.
+- [`sync-local-store-plan.md`](./sync-local-store-plan.md) — local-store
+  implementation plan and status: `SyncLocalStore`, durable client
+  identity, SQLite browser/native storage, and SQLx as a later
+  host/server adapter.
+- [`sync-local-first-roadmap.md`](./sync-local-first-roadmap.md) —
+  current roadmap for turning the shipped sync protocol, local store, and
+  SQLite backend into a database-agnostic local-first sync engine without
+  becoming a sync database.
 - [`sync-crud.md`](./sync-crud.md) — `pocopine-sync-crud` helper layer:
   `CrudSource`, `ResourceId`, CRUD mutation payloads, write policies,
   transaction binding, the non-macro runtime adapter, planned proc-macro

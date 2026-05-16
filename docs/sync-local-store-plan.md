@@ -1,8 +1,11 @@
 # Sync Local Store Plan
 
-This is the next sync phase after the guarded stream protocol and
-mutation push flow. The goal is to make Pocopine sync local-first without
-turning framework core into a database toolkit.
+This document tracks the local-store phase after the guarded stream
+protocol and mutation push flow. The goal is to make Pocopine sync
+local-first without turning framework core into a database toolkit.
+
+For the broader roadmap after the SQLite local store foundation, see
+[`sync-local-first-roadmap.md`](./sync-local-first-roadmap.md).
 
 The stable contract is a Pocopine sync store abstraction. SQLite is the
 first serious durable implementation. SQLx is a later host/server adapter,
