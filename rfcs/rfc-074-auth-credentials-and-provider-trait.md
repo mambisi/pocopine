@@ -21,11 +21,10 @@ vibe-coder building a first app):
    session tokens.
 
 2. **An extensible `Provider` trait** in `pocopine-auth-jwt` so
-   third-party crates can ship a typed config struct that
-   materializes a `JwtConfig`. Pocopine ships one in-tree provider
-   (Firebase) as the canonical example; community-maintained
-   crates publish `pocopine-auth-jwt-<vendor>` for everything
-   else.
+   apps, tutorials, or third-party crates can ship a typed config
+   struct that materializes a `JwtConfig`. Pocopine keeps the
+   verifier engine vendor-neutral; provider examples can live in
+   docs/tutorials without becoming maintained framework crates.
 
 ```rust
 // First-party email + password — no third-party signup needed.
@@ -38,7 +37,7 @@ let router = my_app::__server_routes(router);
 let router = auth.install_routes(router);
 let router = router.with_auth(JwtVerifier::custom(auth.verifier_config())?);
 
-// Or: third-party identity provider via the Provider trait.
+// Or: external identity provider via the Provider trait.
 let verifier = JwtVerifier::from_provider(Firebase::new("my-project"))?;
 let router = router.with_auth(verifier);
 ```
@@ -65,16 +64,18 @@ builds an app from zero" UX:
 - A drop-in email + password provider that compiles in <1 minute,
   works with an in-memory store for local dev, and swaps to a
   durable store via one line.
-- A `Provider` trait that lets third-party crates ship typed
-  config structs (`Firebase`, `Okta`, `Cognito`, …) and integrate
-  with `JwtVerifier::from_provider` without a PR to pocopine.
+- A `Provider` trait that lets apps, tutorials, or third-party
+  crates ship typed config structs (`Firebase`, `Okta`, `Cognito`,
+  …) and integrate with `JwtVerifier::from_provider` without a PR
+  to pocopine.
 - Argon2id with OWASP-aligned defaults for the credentials path.
   No password-cleartext-on-disk surface anywhere.
 - Constant-time login (no user-enumeration timing oracle).
 - Email verification + password reset flows, both with hashed
   ephemeral tokens.
-- One in-tree `Provider` (Firebase) as the canonical example
-  third-party crates copy.
+- Provider examples should stay in docs/tutorials or external
+  crates; the framework should not maintain vendor-specific JWT
+  preset crates by default.
 
 ## 4. Non-goals
 
@@ -151,7 +152,7 @@ impl JwtVerifier {
 }
 ```
 
-### 5.3 Canonical in-tree provider — `Firebase`
+### 5.3 Example tutorial provider — `Firebase`
 
 ```rust
 /// Firebase identity verifier configuration.
@@ -215,8 +216,9 @@ impl Provider for Firebase {
 
 ### 5.3.1 Integration test contract for providers
 
-**Every in-tree provider ships with a recorded-token integration
-test.** No exceptions. The test:
+**Every published reusable provider should ship with a recorded-token
+integration test.** No exceptions for third-party crates or copied
+tutorial providers. The test:
 
 1. Generates a test RSA keypair.
 2. Synthesizes a JWKS document containing the test public key.
@@ -635,8 +637,8 @@ Documented in the credentials module rustdoc and
 
 This RFC is additive. No breaking changes to existing crates:
 
-- `pocopine-auth-jwt` gains a new `Provider` trait + an in-tree
-  `Firebase` provider. No existing API changes.
+- `pocopine-auth-jwt` gains a new `Provider` trait. No existing
+  API changes and no in-tree vendor provider crate.
 - `pocopine-auth-credentials` is a new crate. Apps opt in.
 - The `pocopine` umbrella gains
   `pocopine::auth::credentials` (host-only) and
@@ -644,8 +646,9 @@ This RFC is additive. No breaking changes to existing crates:
 
 Recommended ship sequence (each its own PR):
 
-1. **PR-1: `Provider` trait + `Firebase` provider.** ~300 LOC
-   plus integration test using synthesized JWKS. ~1 day.
+1. **PR-1: `Provider` trait + provider docs.** Add the trait and
+   document the app/tutorial pattern for Firebase-style providers.
+   ~1 day.
 2. **PR-2: `pocopine-auth-credentials` core (no email).**
    `User`, `UserStore`, `TokenStore`, `MemoryUserStore`,
    `MemoryTokenStore`, `Credentials::new` /

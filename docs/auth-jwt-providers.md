@@ -1,10 +1,11 @@
 # JWT providers — adding a vendor preset
 
 The pocopine `JwtVerifier` accepts any OIDC-shaped JWT issuer
-through a typed `Provider` config struct. One in-tree provider
-(Firebase) ships in `pocopine-auth-jwt`; everything else lives in
-its own community-maintained crate following the
-`pocopine-auth-jwt-<vendor>` naming convention.
+through a typed `Provider` config struct. Provider configs can
+live directly in your app, in tutorial code, or in
+community-maintained crates following the
+`pocopine-auth-jwt-<vendor>` naming convention. The framework
+keeps `pocopine-auth-jwt` vendor-neutral.
 
 This page is the contract for adding a new provider. RFC-074 §5.2
 and §5.3 cover the design rationale; this doc is the cookbook.
@@ -111,10 +112,10 @@ runtime discovery — Rust's `impl Trait` does the work.
 
 ## The mandatory integration test
 
-**Every provider — in-tree or third-party — ships a recorded-token
-integration test.** No exceptions; this is RFC-074 §5.3.1, encoded
-because the original RFC-070 §5.9 presets shipped without tests
-and at least one was subtly wrong.
+**Every reusable provider should ship a recorded-token integration
+test.** No exceptions for published crates; this is RFC-074 §5.3.1,
+encoded because the original RFC-070 §5.9 presets shipped without
+tests and at least one was subtly wrong.
 
 The test pattern (synthesize a keypair → inject as static JWKS →
 sign a token → verify round-trip):
@@ -123,8 +124,7 @@ sign a token → verify round-trip):
 // In your `pocopine-auth-jwt-okta` crate's tests/okta_provider.rs:
 use pocopine_auth_jwt::{JwtVerifier, KeySource, Provider};
 use pocopine_auth_jwt_okta::Okta;
-// ... (see crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs
-//      for the full pattern)
+// ... synth_keypair and sign_with are normal test helpers.
 
 #[tokio::test]
 async fn okta_round_trips_a_valid_token() {
@@ -150,21 +150,18 @@ defends against:
 - Wrong issuer (attacker-controlled IdP host).
 - Missing `kid` in the JWKS (key rotation gap).
 
-The full pattern lives in
-[`crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs`](../crates/pocopine-auth-jwt-firebase/tests/firebase_provider.rs);
-copy that file and adjust for your provider.
+Keep the helper code local to the provider crate or tutorial. The
+important part is that verification exercises the provider's exact
+issuer, audience, key source, algorithm, and claim-map choices.
 
-## Bundled providers
+## Bundled Providers
 
-In-tree provider crates follow the `pocopine-auth-jwt-<vendor>`
-naming convention and version independently from the verifier
-engine. Apps add one Cargo dep per provider they use:
+None. Pocopine intentionally does not maintain in-tree vendor
+provider crates. Firebase, Clerk, Auth0, Okta, Cognito, and similar
+providers should be wired in app code, tutorial code, or external
+crates using the `Provider` contract above.
 
-| Provider | Crate | Notes |
-|---|---|---|
-| Firebase ID token | [`pocopine-auth-jwt-firebase`](../crates/pocopine-auth-jwt-firebase) | RS256, `Authorization: Bearer` only. SSR `__session` cookies use a different JWKS URL — out of scope. |
-
-## Community providers
+## Community Providers
 
 If you maintain a third-party provider crate, open a PR adding a
 row here. The bar is one passing integration test against the

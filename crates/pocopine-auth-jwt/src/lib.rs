@@ -5,22 +5,21 @@
 //! plug into via a declarative [`JwtConfig`].
 //!
 //! Provider-specific presets implement the [`Provider`] trait
-//! (RFC-074 §5.2) and ship in their own `pocopine-auth-jwt-<vendor>`
-//! crates so the engine has zero vendor coupling. The Firebase
-//! preset, for example, lives in `pocopine-auth-jwt-firebase`:
+//! (RFC-074 §5.2) in app code, tutorial code, or external
+//! `pocopine-auth-jwt-<vendor>` crates so the engine has zero
+//! vendor coupling:
 //!
 //! ```ignore
 //! use pocopine_auth_jwt::JwtVerifier;
-//! use pocopine_auth_jwt_firebase::Firebase;
+//! use my_app::auth::Firebase;
 //!
 //! let verifier = JwtVerifier::from_provider(
 //!     Firebase::new("my-project-id"),
 //! )?;
 //! ```
 //!
-//! See `docs/auth-jwt-providers.md` for the contract a provider
-//! crate implements and the curated list of bundled +
-//! community-maintained crates.
+//! See `docs/auth-jwt-providers.md` for the provider contract
+//! and guidance for app-local or community-maintained presets.
 //!
 //! For custom OIDC issuers without a preset, configure the
 //! verifier directly:

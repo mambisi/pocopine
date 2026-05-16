@@ -8,11 +8,11 @@
 //!
 //! Why a trait instead of plain functions:
 //!
-//! - **IDE discoverability.** Hover over `Firebase` and see every
-//!   config field; `..Default::default()` works for partial
+//! - **IDE discoverability.** Hover over a provider config and see
+//!   every field; `..Default::default()` works for partial
 //!   overrides.
 //! - **`#[non_exhaustive]` for safe field additions.** Adding an
-//!   optional field on `Firebase` (e.g. `tenant: Option<String>`
+//!   optional field (e.g. `tenant: Option<String>`
 //!   for Multi-Tenancy) doesn't break callers because they're
 //!   forced to use struct-update syntax.
 //! - **Builder methods belong on the config**, not on the verifier.

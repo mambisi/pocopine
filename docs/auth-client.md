@@ -1,7 +1,8 @@
 # Wasm-side auth — `pocopine-auth-client`
 
-The wasm-side companion to the credentials core / Firebase preset /
-Clerk preset / etc. Seven surfaces:
+The wasm-side companion to the credentials core and external IdP
+integrations (Firebase, Clerk, Auth0, app-issued JWTs, etc.). Seven
+surfaces:
 
 - **Token slot.** `set_token` / `clear_token` / `active_token`
   manage a process-global `Option<String>` the bearer middleware

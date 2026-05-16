@@ -30,9 +30,6 @@ base64 = "0.22"
 # follow-up could share fixtures across providers if it gets slow.
 rsa = "0.9"
 rand = "0.8"
-# Wiremock backs the JWKS-resolver tests. The static-JWKS tests
-# in `firebase_provider.rs` exercise claim-map / iss / aud /
-# alg pinning without HTTP; this is the missing live-fetch
-# coverage (cache hit, kid-miss refresh, cooldown rate limit,
-# server-side errors).
+# Wiremock backs the JWKS-resolver tests: cache hit,
+# kid-miss refresh, cooldown rate limit, and server-side errors.
 wiremock = "0.6"

@@ -1,9 +1,7 @@
 // Live JWKS-fetch tests against a wiremock HTTP server.
 //
-// The static-JWKS tests in `firebase_provider.rs` cover claim-map
-// / iss / aud / algorithm pinning without ever leaving process.
-// This file covers the orthogonal axis: the actual `JwksResolver`
-// fetch, cache, and refresh behavior.
+// These tests cover the live HTTP axis of `JwksResolver`: fetch,
+// cache, and refresh behavior.
 //
 // Scenarios:
 //

@@ -37,8 +37,8 @@ const COUNTER_VERIFICATIONS: &str = "auth.jwt.verifications";
 const COUNTER_REJECTIONS: &str = "auth.jwt.rejections";
 
 /// JWT verifier implementing [`AuthProvider`]. Construct via a
-/// preset (`JwtVerifier::firebase`, etc.) or
-/// [`JwtVerifier::custom`].
+/// [`JwtVerifier::from_provider`] with an app or third-party
+/// provider config, or [`JwtVerifier::custom`].
 #[derive(Clone)]
 pub struct JwtVerifier {
     inner: Arc<VerifierInner>,
@@ -54,13 +54,13 @@ struct VerifierInner {
 impl JwtVerifier {
     /// Build a verifier from any [`Provider`](crate::Provider)
     /// — a typed provider config that materializes a
-    /// `JwtConfig`. Provider crates ship under the
-    /// `pocopine-auth-jwt-<vendor>` naming convention, e.g.
-    /// `pocopine-auth-jwt-firebase`.
+    /// `JwtConfig`. Provider configs can live in the app, in
+    /// tutorial code, or in third-party crates under the
+    /// `pocopine-auth-jwt-<vendor>` naming convention.
     ///
     /// ```ignore
     /// use pocopine_auth_jwt::JwtVerifier;
-    /// use pocopine_auth_jwt_firebase::Firebase;
+    /// use my_app::auth::Firebase;
     /// let verifier = JwtVerifier::from_provider(Firebase::new("my-project"))?;
     /// ```
     pub fn from_provider<P: crate::provider::Provider>(provider: P) -> Result<Self, JwtAuthError> {
@@ -68,7 +68,7 @@ impl JwtVerifier {
     }
 
     /// Build a verifier from a custom config. Use the preset
-    /// constructors (`firebase`, `clerk`, …) when possible.
+    /// config when a provider-specific wrapper is not useful.
     ///
     /// Validates the config (algorithm pinning, key/alg consistency,
     /// non-empty whitelists) and returns an error on violation.
