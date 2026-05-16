@@ -4214,11 +4214,15 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "http 1.4.0",
+ "http-body-util",
  "pocopine-auth",
+ "pocopine-core",
+ "pocopine-server",
  "pocopine-sync",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "uuid",
 ]
 
