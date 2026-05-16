@@ -1,3 +1,12 @@
+use std::{future::Future, pin::Pin};
+
+use pocopine_sync::SyncResult;
+
+use crate::TransactionOptions;
+
+/// Boxed future returned by transaction runners and bound transaction code.
+pub type TransactionFuture<'tx, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'tx>>;
+
 /// Transaction wrapper that binds resources to an active transaction handle.
 pub struct Transaction<'tx, Tx> {
     raw: &'tx mut Tx,
@@ -30,9 +39,46 @@ pub trait TransactionBindable<Tx>: Sized {
     fn bind<'tx>(self, tx: &'tx mut Tx) -> Self::Bound<'tx>;
 }
 
+/// App/database owned transaction lifecycle.
+///
+/// Implementations should begin a database transaction, call the supplied
+/// closure with [`Transaction`], commit on `Ok`, and roll back on `Err`.
+/// Pocopine owns the contract shape; the app still owns the concrete database
+/// handle and transaction implementation.
+pub trait TransactionRunner: Send + Sync + 'static {
+    type Tx: Send + 'static;
+
+    fn transaction<'runner, T, F>(&'runner self, f: F) -> TransactionFuture<'runner, T>
+    where
+        T: Send + 'runner,
+        F: for<'tx> FnOnce(Transaction<'tx, Self::Tx>) -> TransactionFuture<'tx, T>
+            + Send
+            + 'runner;
+}
+
+impl TransactionOptions {
+    /// Run work inside an app-provided transaction lifecycle.
+    ///
+    /// The current options value is carried through this API so generated CRUD
+    /// helpers can use the same fluent shape for queue-offline and
+    /// require-online transaction calls. The database transaction lifecycle is
+    /// delegated to the supplied [`TransactionRunner`].
+    pub async fn run<R, T, F>(&self, runner: &R, f: F) -> SyncResult<T>
+    where
+        R: TransactionRunner,
+        T: Send,
+        F: for<'tx> FnOnce(Transaction<'tx, R::Tx>) -> TransactionFuture<'tx, T> + Send,
+    {
+        let _ = self.write_policy;
+        runner.transaction(f).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pocopine_sync::SyncError;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn transaction_with_uses_bind_contract() {
@@ -65,5 +111,92 @@ mod tests {
         tx.with(Audit).record("created");
 
         assert_eq!(tx.raw().log, vec!["created"]);
+    }
+
+    #[tokio::test]
+    async fn transaction_options_run_commits_on_success_and_rolls_back_on_error() {
+        #[derive(Clone, Default)]
+        struct FakeDb {
+            events: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        struct RawTx {
+            events: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        impl TransactionRunner for FakeDb {
+            type Tx = RawTx;
+
+            fn transaction<'runner, T, F>(&'runner self, f: F) -> TransactionFuture<'runner, T>
+            where
+                T: Send + 'runner,
+                F: for<'tx> FnOnce(Transaction<'tx, Self::Tx>) -> TransactionFuture<'tx, T>
+                    + Send
+                    + 'runner,
+            {
+                Box::pin(async move {
+                    self.events.lock().unwrap().push("begin");
+                    let mut raw = RawTx {
+                        events: self.events.clone(),
+                    };
+                    let result = f(Transaction::new(&mut raw)).await;
+                    if result.is_ok() {
+                        self.events.lock().unwrap().push("commit");
+                    } else {
+                        self.events.lock().unwrap().push("rollback");
+                    }
+                    result
+                })
+            }
+        }
+
+        struct Audit;
+
+        struct AuditInTx<'tx> {
+            tx: &'tx mut RawTx,
+        }
+
+        impl<'tx> AuditInTx<'tx> {
+            fn record(self, message: &'static str) {
+                self.tx.events.lock().unwrap().push(message);
+            }
+        }
+
+        impl TransactionBindable<RawTx> for Audit {
+            type Bound<'tx> = AuditInTx<'tx>;
+
+            fn bind<'tx>(self, tx: &'tx mut RawTx) -> Self::Bound<'tx> {
+                AuditInTx { tx }
+            }
+        }
+
+        let db = FakeDb::default();
+        let value = TransactionOptions::new()
+            .run(&db, |mut tx| {
+                Box::pin(async move {
+                    tx.with(Audit).record("write");
+                    Ok::<_, SyncError>("ok")
+                })
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(value, "ok");
+
+        let err = TransactionOptions::new()
+            .run(&db, |mut tx| {
+                Box::pin(async move {
+                    tx.with(Audit).record("fail");
+                    Err::<(), _>(SyncError::backend("boom"))
+                })
+            })
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("boom"));
+        assert_eq!(
+            db.events.lock().unwrap().as_slice(),
+            ["begin", "write", "commit", "begin", "fail", "rollback"]
+        );
     }
 }
