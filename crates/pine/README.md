@@ -29,3 +29,29 @@ fn main() {
 ```
 
 See `examples/pine-demo` for each component in use.
+
+## Overlay Event Contract
+
+Popover and DropdownMenu triggers isolate `pointerdown` and `click`
+events by default, so embedding them in clickable cards, rows, or
+tiles does not trigger the parent surface. Their content surfaces also
+stop internal pointer/click bubbling; normal page-level bubbling still
+occurs for true outside clicks.
+
+Outside interactions are preventable before the primitive closes:
+
+```html
+<pine-popover-content @pp:pointer-down-outside.prevent="keep_open">
+  ...
+</pine-popover-content>
+```
+
+- `pp:pointer-down-outside` fires before outside pointerdown dismissal.
+- `pp:interact-outside` fires before outside click/interact dismissal.
+- Calling `preventDefault()` on either event keeps the overlay open.
+- Clicking the trigger while open is exempt from outside-dismiss, so it
+  toggles closed exactly once.
+
+Application code may still need capture-phase or gesture-specific
+guards for custom drag/select surfaces, but ordinary overlay
+trigger/content click-through is owned by the Pine primitive.

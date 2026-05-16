@@ -25,15 +25,31 @@
 //! Content auto-anchors to its Trigger via RFC-027 inject + the
 //! `on_setup` lifecycle — no selector required.
 
-use crate::compound;
+use crate::{compound, overlay};
 use pocopine::prelude::*;
-use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field_scoped};
+use pocopine::{create_context, current_scope_id, focus, refs, watch_scope_field_scoped, ScopeId};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 const SLUG: &str = "dm";
 const SUB_SLUG: &str = "dm-sub";
+const SUB_CONTENT_ATTR: &str = "data-pine-dm-sub-content";
+const SUB_CONTENT_ROOT_ATTR: &str = "data-pine-dm-sub-content-root";
+const MENU_ITEM_SELECTOR: &str =
+    "[role=\"menuitem\"], [role=\"menuitemradio\"], [role=\"menuitemcheckbox\"]";
+
+fn sub_content_selector(root_scope: ScopeId) -> String {
+    format!("[{SUB_CONTENT_ROOT_ATTR}=\"{}\"]", root_scope.0)
+}
+
+fn outside_exempt_selector(root_scope: ScopeId) -> String {
+    format!(
+        "{}, {}",
+        compound::trigger_selector(root_scope, SLUG),
+        sub_content_selector(root_scope)
+    )
+}
 
 // Provide/inject key for the Root handle.
 create_context!(ROOT: Handle<PineDropdownMenuRoot>);
@@ -53,8 +69,10 @@ create_context!(ROOT: Handle<PineDropdownMenuRoot>);
 pub struct PineDropdownMenuRoot {
     /// Open state. Two-way bindable via `pp-model:open="current"`
     /// on the tag.
-    #[prop]
+    #[model]
     pub open: bool,
+    pub closing: bool,
+    pub open_submenus: u32,
 }
 
 #[handlers]
@@ -74,14 +92,43 @@ impl PineDropdownMenuRoot {
 
     pub fn open_menu(&mut self) {
         self.open = true;
+        self.closing = false;
+        self.open_submenus = 0;
     }
 
     pub fn close(&mut self) {
+        if !self.open {
+            self.closing = false;
+            self.open_submenus = 0;
+            return;
+        }
+
+        if self.open_submenus > 0 && !self.closing {
+            self.closing = true;
+            let root = this::<Self>();
+            pocopine::tick::next_frame(move || {
+                root.update(|r: &mut PineDropdownMenuRoot| {
+                    if r.closing {
+                        r.open = false;
+                        r.closing = false;
+                        r.open_submenus = 0;
+                    }
+                });
+            });
+            return;
+        }
+
         self.open = false;
+        self.closing = false;
+        self.open_submenus = 0;
     }
 
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        if self.open {
+            self.close();
+        } else {
+            self.open_menu();
+        }
     }
 }
 
@@ -228,7 +275,7 @@ impl PineDropdownMenuContent {
         if let Some(root) = ROOT.inject() {
             let _ = menu.set_attribute(
                 "data-pp-outside-exempt",
-                &compound::trigger_selector(root.scope_id(), SLUG),
+                &outside_exempt_selector(root.scope_id()),
             );
         }
 
@@ -256,6 +303,22 @@ impl PineDropdownMenuContent {
             root.update(|r: &mut PineDropdownMenuRoot| r.close());
         }
     }
+
+    pub fn on_pointer_down_outside(&mut self) {
+        if overlay::dispatch_pointer_down_outside() {
+            return;
+        }
+        self.close();
+    }
+
+    pub fn on_interact_outside(&mut self) {
+        if overlay::dispatch_interact_outside() {
+            return;
+        }
+        self.close();
+    }
+
+    pub fn isolate_interaction(&mut self) {}
 }
 
 // ── Item ──────────────────────────────────────────────────────────
@@ -312,7 +375,7 @@ fn dispatch_pp_select() -> bool {
 ///
 /// v0 is click-to-open (no hover-intent timers). Escape in
 /// SubContent closes just the sub, not the outer menu.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[component(
     template = "PineDropdownMenuSub.poco",
     role = "scope",
@@ -324,6 +387,20 @@ fn dispatch_pp_select() -> bool {
 #[slot(default, only = [PineDropdownMenuSubTrigger, PineDropdownMenuSubContent])]
 pub struct PineDropdownMenuSub {
     pub open: bool,
+    pub content_side: String,
+    pub content_align: String,
+    pub content_side_offset: f64,
+}
+
+impl Default for PineDropdownMenuSub {
+    fn default() -> Self {
+        Self {
+            open: false,
+            content_side: "right".into(),
+            content_align: "start".into(),
+            content_side_offset: 2.0,
+        }
+    }
 }
 
 create_context!(SUB: Handle<PineDropdownMenuSub>);
@@ -334,11 +411,37 @@ impl PineDropdownMenuSub {
         SUB.provide(this::<Self>());
     }
 
-    pub fn close(&mut self) {
-        self.open = false;
+    fn on_ready(&self, handle: pocopine::Handle<Self>) {
+        let Some(root) = ROOT.inject() else { return };
+        watch_scope_field_scoped::<bool, _>(root.scope_id(), "closing", move |&closing, _| {
+            if closing {
+                handle.update(|s: &mut PineDropdownMenuSub| s.set_open(false));
+            }
+        });
     }
+
+    fn set_open(&mut self, next: bool) {
+        if self.open == next {
+            return;
+        }
+        self.open = next;
+        if let Some(root) = ROOT.inject() {
+            root.update(|r: &mut PineDropdownMenuRoot| {
+                if next {
+                    r.open_submenus = r.open_submenus.saturating_add(1);
+                } else {
+                    r.open_submenus = r.open_submenus.saturating_sub(1);
+                }
+            });
+        }
+    }
+
+    pub fn close(&mut self) {
+        self.set_open(false);
+    }
+
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        self.set_open(!self.open);
     }
 }
 
@@ -372,7 +475,23 @@ impl PineDropdownMenuSubTrigger {
         // Item-select dismissal. Item.on_select still fires first
         // via native bubble if the author stacked handlers.
         if let Some(sub) = SUB.inject() {
-            sub.update(|s: &mut PineDropdownMenuSub| s.toggle());
+            let is_open = sub.update(|s: &mut PineDropdownMenuSub| {
+                s.set_open(!s.open);
+                s.open
+            });
+            if is_open {
+                prepare_open_sub_content_from_sub(&sub);
+            }
+        }
+    }
+
+    pub fn open(&mut self) {
+        if self.disabled {
+            return;
+        }
+        if let Some(sub) = SUB.inject() {
+            sub.update(|s: &mut PineDropdownMenuSub| s.set_open(true));
+            prepare_open_sub_content_from_sub(&sub);
         }
     }
 }
@@ -398,6 +517,8 @@ impl PineDropdownMenuSubTrigger {
 pub struct PineDropdownMenuSubContent {
     pub open: bool,
     pub anchor: String,
+    pub sub_id: String,
+    pub root_id: String,
     #[prop]
     pub side: String,
     #[prop]
@@ -411,6 +532,8 @@ impl Default for PineDropdownMenuSubContent {
         Self {
             open: false,
             anchor: String::new(),
+            sub_id: String::new(),
+            root_id: String::new(),
             // Submenus conventionally pop out to the right.
             side: "right".into(),
             align: "start".into(),
@@ -423,24 +546,60 @@ impl Default for PineDropdownMenuSubContent {
 impl PineDropdownMenuSubContent {
     fn on_setup(&mut self) {
         if let Some(sub) = SUB.inject() {
-            self.anchor = compound::trigger_selector(sub.scope_id(), SUB_SLUG);
+            let sub_scope = sub.scope_id();
+            self.anchor = compound::trigger_selector(sub_scope, SUB_SLUG);
+            self.sub_id = sub_scope.0.to_string();
             self.open = sub.with(|s| s.open);
+            let side = self.side.clone();
+            let align = self.align.clone();
+            let side_offset = self.side_offset;
+            sub.update(|s: &mut PineDropdownMenuSub| {
+                s.content_side = side;
+                s.content_align = align;
+                s.content_side_offset = side_offset;
+            });
         }
+        if let Some(root) = ROOT.inject() {
+            self.root_id = root.scope_id().0.to_string();
+        }
+        CONTENT_SIDE.provide(self.side.clone());
     }
 
     fn on_ready(&self, handle: pocopine::Handle<Self>) {
         let Some(sub) = SUB.inject() else { return };
         let sub_scope = sub.scope_id();
+        let content_scope = handle.scope_id();
+        let root_scope = ROOT.inject().map(|root| root.scope_id());
+        let side = self.side.clone();
+        let align = self.align.clone();
+        let side_offset = self.side_offset;
         // Watch for the sub's open transitions so roving-focus +
-        // auto-focus can run when the menu mounts. pp-anchor is
-        // handled declaratively in the template; we only need to
-        // forward `open` into self.
+        // auto-focus + programmatic anchoring can run after the
+        // pp-if subtree mounts.
         watch_scope_field_scoped::<bool, _>(sub_scope, "open", move |&is_open, _| {
             handle.update(|s| s.open = is_open);
             if is_open {
-                focus_first_sub_item();
+                prepare_open_sub_content(
+                    content_scope,
+                    root_scope,
+                    sub_scope,
+                    side.clone(),
+                    align.clone(),
+                    side_offset,
+                );
             }
         });
+
+        if sub.with(|s| s.open) {
+            prepare_open_sub_content(
+                content_scope,
+                root_scope,
+                sub_scope,
+                self.side.clone(),
+                self.align.clone(),
+                self.side_offset,
+            );
+        }
     }
 
     pub fn close(&mut self) {
@@ -448,23 +607,110 @@ impl PineDropdownMenuSubContent {
             sub.update(|s: &mut PineDropdownMenuSub| s.close());
         }
     }
+
+    pub fn isolate_interaction(&mut self) {}
 }
 
-/// Give keyboard focus to the first enabled item in the sub
-/// menu once it mounts. Runs via `tick::next` so pp-if has
-/// actually cloned + walked the teleported subtree before we
-/// query for the menu ref.
-fn focus_first_sub_item() {
-    pocopine::tick::next(|| {
-        let Some(scope) = current_scope_id() else {
+/// Finish submenu setup once its pp-if subtree has cloned and
+/// walked: stamp it into the parent dismiss boundary, anchor it
+/// to the sub-trigger, and move focus into the first enabled item.
+fn prepare_open_sub_content_from_sub(sub: &Handle<PineDropdownMenuSub>) {
+    let sub_scope = sub.scope_id();
+    let root_scope = ROOT.inject().map(|root| root.scope_id());
+    let (side, align, side_offset) = sub.with(|s| {
+        (
+            s.content_side.clone(),
+            s.content_align.clone(),
+            s.content_side_offset,
+        )
+    });
+    prepare_open_sub_content(sub_scope, root_scope, sub_scope, side, align, side_offset);
+}
+
+fn prepare_open_sub_content(
+    content_scope: ScopeId,
+    root_scope: Option<ScopeId>,
+    sub_scope: ScopeId,
+    side: String,
+    align: String,
+    side_offset: f64,
+) {
+    prepare_open_sub_content_attempt(
+        content_scope,
+        root_scope,
+        sub_scope,
+        side,
+        align,
+        side_offset,
+        0,
+    );
+}
+
+fn prepare_open_sub_content_attempt(
+    content_scope: ScopeId,
+    root_scope: Option<ScopeId>,
+    sub_scope: ScopeId,
+    side: String,
+    align: String,
+    side_offset: f64,
+    attempt: u8,
+) {
+    pocopine::tick::next(move || {
+        let ready_menu = resolve_open_sub_content_menu(content_scope, sub_scope).and_then(|menu| {
+            let has_items = menu
+                .query_selector(MENU_ITEM_SELECTOR)
+                .ok()
+                .flatten()
+                .is_some();
+            if has_items || attempt >= 5 {
+                Some(menu)
+            } else {
+                None
+            }
+        });
+
+        let Some(menu) = ready_menu else {
+            if attempt < 5 {
+                prepare_open_sub_content_attempt(
+                    content_scope,
+                    root_scope,
+                    sub_scope,
+                    side,
+                    align,
+                    side_offset,
+                    attempt + 1,
+                );
+            }
             return;
         };
-        let Some(menu) = refs::get_on(scope, "menu") else {
-            return;
-        };
+
+        if let Some(root_scope) = root_scope {
+            let _ = menu.set_attribute(SUB_CONTENT_ROOT_ATTR, &root_scope.0.to_string());
+        }
+
         init_roving_tabindex(&menu);
         focus::auto_focus_first(&menu);
+
+        if let Ok(floater) = menu.clone().dyn_into::<web_sys::HtmlElement>() {
+            compound::install_anchor_to_trigger(
+                &floater,
+                sub_scope,
+                SUB_SLUG,
+                &side,
+                &align,
+                side_offset,
+                true,
+            );
+        }
     });
+}
+
+fn resolve_open_sub_content_menu(content_scope: ScopeId, sub_scope: ScopeId) -> Option<Element> {
+    let selector = format!("[{SUB_CONTENT_ATTR}=\"{}\"]", sub_scope.0);
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.query_selector(&selector).ok().flatten())
+        .or_else(|| refs::get_on(content_scope, "menu"))
 }
 
 // ── Arrow ─────────────────────────────────────────────────────────
@@ -826,9 +1072,7 @@ impl PineDropdownMenuLabel {
 /// `pp-roving`. Runs after the slot materialises so the items
 /// are in the DOM.
 fn init_roving_tabindex(menu: &Element) {
-    let Ok(items) = menu.query_selector_all(
-        "[role=\"menuitem\"], [role=\"menuitemradio\"], [role=\"menuitemcheckbox\"]",
-    ) else {
+    let Ok(items) = menu.query_selector_all(MENU_ITEM_SELECTOR) else {
         return;
     };
     let mut first_enabled: Option<Element> = None;

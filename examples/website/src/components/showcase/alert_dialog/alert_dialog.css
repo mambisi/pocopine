@@ -17,13 +17,6 @@ pine-alert-dialog-content {
   justify-content: center;
   z-index: 51;
   pointer-events: none;
-  opacity: 1;
-  transition: opacity 160ms ease-out;
-}
-@starting-style {
-  pine-alert-dialog-content {
-    opacity: 0;
-  }
 }
 .pine-alert-dialog-content {
   pointer-events: auto;
@@ -35,7 +28,7 @@ pine-alert-dialog-content {
   border-radius: var(--radius);
   padding: 1.5rem;
   box-shadow: var(--shadow);
+  transform-origin: center;
 }
 .pine-alert-dialog-title       { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.25rem; }
 .pine-alert-dialog-description { color: var(--fg-muted); margin: 0 0 1rem; }
-

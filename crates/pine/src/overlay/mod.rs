@@ -13,12 +13,32 @@
 //! true and [`deactivate`] on close / unmount. Pass `modal=true`
 //! to acquire scroll-lock + focus trap (Dialog); `modal=false`
 //! for non-modal overlays (Popover).
+//!
+//! Popover and DropdownMenu also share the cancelable outside
+//! interaction event contract here. Their template-level
+//! `@*.outside` listeners call the dispatch helpers before
+//! closing so authors can use `@pp:pointer-down-outside.prevent`
+//! or `@pp:interact-outside.prevent` on the Content primitive.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use pocopine::{focus, scroll_lock, ScopeId};
+use pocopine::{emit_cancelable, focus, scroll_lock, ScopeId};
 use web_sys::Element;
+
+/// Fired before an outside pointerdown dismisses an overlay.
+///
+/// The event is cancelable; `preventDefault()` keeps the overlay
+/// open and suppresses that primitive's default outside-dismiss
+/// action.
+pub const POINTER_DOWN_OUTSIDE_EVENT: &str = "pp:pointer-down-outside";
+
+/// Fired before a click/interact outside dismisses an overlay.
+///
+/// This covers the post-pointer activation step, matching Radix's
+/// "interact outside" terminology while still travelling through
+/// normal browser `CustomEvent.detail` plumbing.
+pub const INTERACT_OUTSIDE_EVENT: &str = "pp:interact-outside";
 
 thread_local! {
     static RUNTIMES: RefCell<HashMap<ScopeId, OverlayRuntime>> =
@@ -30,6 +50,20 @@ struct OverlayRuntime {
     trap: Option<focus::TrapHandle>,
     saved: Option<focus::Saved>,
     scroll_locked: bool,
+}
+
+/// Dispatch [`POINTER_DOWN_OUTSIDE_EVENT`] from the current
+/// Content element. Returns `true` when an author prevented the
+/// default dismiss action.
+pub fn dispatch_pointer_down_outside() -> bool {
+    emit_cancelable(POINTER_DOWN_OUTSIDE_EVENT, ())
+}
+
+/// Dispatch [`INTERACT_OUTSIDE_EVENT`] from the current Content
+/// element. Returns `true` when an author prevented the default
+/// dismiss action.
+pub fn dispatch_interact_outside() -> bool {
+    emit_cancelable(INTERACT_OUTSIDE_EVENT, ())
 }
 
 /// Install focus management + optional scroll-lock for an

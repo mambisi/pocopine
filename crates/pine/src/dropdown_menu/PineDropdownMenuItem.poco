@@ -3,6 +3,8 @@
       tabindex="-1"
       :aria-disabled="disabled"
       :data-disabled="disabled"
-      @click="on_select">
+      @click="on_select"
+      @keydown.enter.prevent="on_select"
+      @keydown.space.prevent="on_select">
   <slot></slot>
 </root>

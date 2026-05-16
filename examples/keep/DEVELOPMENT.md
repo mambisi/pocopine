@@ -382,7 +382,9 @@ becomes the default.
 
 Cards open on click, but toolbar buttons inside cards should not open the
 card. Use `@pointerdown.stop` and `@click.stop` on card toolbars and action
-buttons that should consume the event.
+buttons that should consume the event. Pine overlay primitives already isolate
+their own triggers and content, so only the surrounding toolbar or non-overlay
+actions need app-level stops.
 
 The pattern is:
 
@@ -394,8 +396,7 @@ The pattern is:
 
 Use this for:
 
-- color picker buttons,
-- label picker buttons,
+- toolbar groups that mix overlay and non-overlay actions,
 - archive/delete actions,
 - multi-select controls.
 

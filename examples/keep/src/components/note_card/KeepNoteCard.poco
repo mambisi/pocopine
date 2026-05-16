@@ -53,7 +53,7 @@
 
   <div class="note-actions" @pointerdown.stop @click.stop>
     <pine-popover-root pp-model:open="label_picker_open">
-      <pine-popover-trigger class="ic-btn" aria-label="Labels" @pointerdown.stop>
+      <pine-popover-trigger class="ic-btn" aria-label="Labels">
         <pine-icon name="tag" size="18"></pine-icon>
       </pine-popover-trigger>
       <pine-popover-portal>
@@ -114,7 +114,7 @@
       <pine-icon name="archive" size="18"></pine-icon>
     </button>
     <pine-dropdown-menu-root>
-      <pine-dropdown-menu-trigger aria-label="More" @pointerdown.stop>
+      <pine-dropdown-menu-trigger aria-label="More">
         <pine-icon name="dots-vertical" size="18"></pine-icon>
       </pine-dropdown-menu-trigger>
       <pine-dropdown-menu-portal>

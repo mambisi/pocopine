@@ -234,14 +234,21 @@ impl PinePopoverContent {
         }
     }
 
-    pub fn on_outside(&mut self) {
-        if let Some(root) = ROOT.inject() {
-            let dismiss = root.with(|r| r.dismiss_on_outside);
-            if dismiss {
-                root.update(|r: &mut PinePopoverRoot| r.close());
-            }
+    pub fn on_pointer_down_outside(&mut self) {
+        if overlay::dispatch_pointer_down_outside() {
+            return;
         }
+        close_popover_on_outside();
     }
+
+    pub fn on_interact_outside(&mut self) {
+        if overlay::dispatch_interact_outside() {
+            return;
+        }
+        close_popover_on_outside();
+    }
+
+    pub fn isolate_interaction(&mut self) {}
 
     pub fn on_escape(&mut self) {
         if let Some(root) = ROOT.inject() {
@@ -249,6 +256,15 @@ impl PinePopoverContent {
             if dismiss {
                 root.update(|r: &mut PinePopoverRoot| r.close());
             }
+        }
+    }
+}
+
+fn close_popover_on_outside() {
+    if let Some(root) = ROOT.inject() {
+        let dismiss = root.with(|r| r.dismiss_on_outside);
+        if dismiss {
+            root.update(|r: &mut PinePopoverRoot| r.close());
         }
     }
 }
