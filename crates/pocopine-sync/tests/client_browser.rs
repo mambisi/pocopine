@@ -120,6 +120,57 @@ impl SyncBrowserPushBoard {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "sync-browser-online-push-board",
+    template_inline = r#"
+    <section class="sync-browser-online-push-board">
+      <p class="error" pp-text="posts.error"></p>
+      <ol class="posts">
+        <template pp-for="row in posts.rows" pp-key="row.key">
+          <li class="post" pp-text="row.value.title"></li>
+        </template>
+      </ol>
+    </section>
+    "#
+)]
+struct SyncBrowserOnlinePushBoard {
+    posts: CollectionState<BrowserPost>,
+}
+
+#[handlers]
+impl SyncBrowserOnlinePushBoard {
+    pub fn on_mount(&mut self) {
+        let post = BrowserPost {
+            id: "post_online".to_string(),
+            title: "Online-only push".to_string(),
+        };
+        let result = ClientMutationDraft::upsert(post.clone())
+            .key(post.id.clone())
+            .map(|mutation| {
+                (
+                    mutation,
+                    SyncRow::new(post.id.clone(), post)
+                        .expect("test optimistic row should be valid"),
+                )
+            })
+            .and_then(|(mutation, optimistic)| {
+                self.plugin::<pocopine_sync::SyncClient>()
+                    .collection(pocopine::this::<Self>(), |state: &mut Self| {
+                        &mut state.posts
+                    })
+                    .stream(STREAM)
+                    .and_then(|collection| {
+                        collection.push_with_generated_id_online(mutation, Some(optimistic))
+                    })
+            });
+
+        if let Err(err) = result {
+            self.posts.set_error(err.to_string());
+        }
+    }
+}
+
 #[wasm_bindgen_test(async)]
 async fn open_validates_stream_then_pull_renders_snapshot() {
     pocopine::fetch::__reset_middleware_chain_for_test();
@@ -572,6 +623,100 @@ async fn push_with_generated_id_reserves_identity_before_enqueue() {
         .unwrap();
     assert!(persisted.pending_mutations.is_empty());
     assert_eq!(persisted.rows[0].value["title"], "Confirmed generated id");
+
+    host.remove();
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
+
+#[wasm_bindgen_test(async)]
+async fn online_push_failure_does_not_queue_pending_mutation() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+
+    let store = MemoryLocalStore::new();
+    store
+        .save_identity(
+            SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_browser").unwrap(), 42)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let push_seen = Rc::new(RefCell::new(0u32));
+    let push_seen_for_mw = push_seen.clone();
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| {
+            let push_seen = push_seen_for_mw.clone();
+            async move {
+                match req.url.as_str() {
+                    SYNC_PUSH_PATH => {
+                        *push_seen.borrow_mut() += 1;
+                        let request: SyncPushRequest<BrowserPost> =
+                            serde_json::from_str(&req.body).unwrap();
+                        assert_eq!(request.mutations.len(), 1);
+                        assert_eq!(request.mutations[0].id.as_str(), "device_browser:42");
+                        Err(pocopine::ServerError::Network(
+                            "offline in online-only test".to_string(),
+                        ))
+                    }
+                    other => Err(pocopine::ServerError::Network(format!(
+                        "unexpected sync browser test request: {other}"
+                    ))),
+                }
+            }
+        },
+    );
+
+    let document = window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_attribute("pp-app", "").unwrap();
+    host.set_inner_html("<sync-browser-online-push-board></sync-browser-online-push-board>");
+    document.body().unwrap().append_child(&host).unwrap();
+
+    App::new()
+        .plugin(
+            sync_plugin()
+                .with_live_wakeup(false)
+                .local_store(store.clone()),
+        )
+        .register::<SyncBrowserOnlinePushBoard>()
+        .run();
+
+    settle().await;
+
+    assert_eq!(*push_seen.borrow(), 1);
+    assert_eq!(
+        store
+            .load_identity()
+            .await
+            .unwrap()
+            .unwrap()
+            .next_mutation_counter,
+        43,
+        "online-only pushes still reserve durable ids and may skip them"
+    );
+    let persisted = store
+        .hydrate_stream(&SyncStreamName::new(STREAM).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        persisted.pending_mutations.is_empty(),
+        "online-only failure must not queue a replayable mutation"
+    );
+    assert!(
+        persisted.rows.is_empty(),
+        "online-only optimistic rows are not persisted as local cache rows"
+    );
+    assert!(
+        host.query_selector(".post").unwrap().is_none(),
+        "failed online-only optimistic row should roll back from component state"
+    );
+    let error = host
+        .query_selector(".error")
+        .unwrap()
+        .unwrap()
+        .text_content()
+        .unwrap_or_default();
+    assert!(error.contains("offline in online-only test"));
 
     host.remove();
     pocopine::fetch::__reset_middleware_chain_for_test();

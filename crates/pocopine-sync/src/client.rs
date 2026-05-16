@@ -212,6 +212,25 @@ where
         self.push_impl(mutation, optimistic)
     }
 
+    /// Push one client mutation without adding it to the durable offline queue.
+    ///
+    /// This is the low-level primitive for writes that must be confirmed by
+    /// the server before the caller treats them as successful. The optional
+    /// optimistic row is visible during the request, but it is rolled back if
+    /// the request fails before the server returns an accepted, rejected, or
+    /// conflict response.
+    pub fn push_online<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize,
+        M: serde::Serialize + 'static,
+    {
+        self.push_online_impl(mutation, optimistic)
+    }
+
     /// Reserve a durable mutation id, push one draft mutation, and apply an
     /// optional optimistic row while the server confirms, rejects, or
     /// conflicts the write.
@@ -225,6 +244,24 @@ where
         M: serde::Serialize + 'static,
     {
         self.push_with_generated_id_impl(mutation, optimistic)
+    }
+
+    /// Reserve a durable mutation id and push one draft mutation without
+    /// adding it to the durable offline queue.
+    ///
+    /// The mutation id counter is still persisted before the request starts, so
+    /// a failed request may skip an id. Skipping is intentional: the id must not
+    /// be reused after a browser crash or network failure.
+    pub fn push_with_generated_id_online<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize,
+        M: serde::Serialize + 'static,
+    {
+        self.push_with_generated_id_online_impl(mutation, optimistic)
     }
 
     fn stream_value(&self) -> SyncResult<SyncStreamName> {
@@ -327,6 +364,37 @@ where
             mutation,
             optimistic,
             !self.live_wakeup,
+            true,
+        );
+        Ok(())
+    }
+
+    fn push_online_impl<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
+            SyncError::client(
+                "SyncCollection::push_online used outside a component handler/lifecycle hook",
+            )
+        })?;
+        start_push(
+            scope_id,
+            self.handle,
+            self.selector,
+            self.endpoint,
+            self.local_store,
+            stream,
+            mutation,
+            optimistic,
+            !self.live_wakeup,
+            false,
         );
         Ok(())
     }
@@ -356,6 +424,37 @@ where
             mutation,
             optimistic,
             !self.live_wakeup,
+            true,
+        );
+        Ok(())
+    }
+
+    fn push_with_generated_id_online_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        let stream = self.stream_value()?;
+        let scope_id = pocopine_core::current_scope_id().ok_or_else(|| {
+            SyncError::client(
+                "SyncCollection::push_with_generated_id_online used outside a component handler/lifecycle hook",
+            )
+        })?;
+        start_push_with_generated_id(
+            scope_id,
+            self.handle,
+            self.selector,
+            self.endpoint,
+            self.local_store,
+            stream,
+            mutation,
+            optimistic,
+            !self.live_wakeup,
+            false,
         );
         Ok(())
     }
@@ -394,7 +493,37 @@ where
         Ok(())
     }
 
+    fn push_online_impl<M>(
+        self,
+        mutation: ClientMutation<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let _ = self.stream_value()?;
+        let _ = (mutation, optimistic);
+        Ok(())
+    }
+
     fn push_with_generated_id_impl<M>(
+        self,
+        mutation: ClientMutationDraft<M>,
+        optimistic: Option<SyncRow<T>>,
+    ) -> SyncResult<()>
+    where
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
+        M: serde::Serialize + 'static,
+    {
+        self.touch_host_fields();
+        let _ = self.stream_value()?;
+        let _ = (mutation, optimistic);
+        Ok(())
+    }
+
+    fn push_with_generated_id_online_impl<M>(
         self,
         mutation: ClientMutationDraft<M>,
         optimistic: Option<SyncRow<T>>,
@@ -711,6 +840,7 @@ fn start_push<C, T, M>(
     mutation: ClientMutation<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
+    queue_offline: bool,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -731,6 +861,7 @@ fn start_push<C, T, M>(
             mutation,
             optimistic,
             pull_after_accept,
+            queue_offline,
         )
         .await;
     });
@@ -748,6 +879,7 @@ fn start_push_with_generated_id<C, T, M>(
     mutation: ClientMutationDraft<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
+    queue_offline: bool,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -777,6 +909,7 @@ fn start_push_with_generated_id<C, T, M>(
             mutation.with_id(mutation_id),
             optimistic,
             pull_after_accept,
+            queue_offline,
         )
         .await;
     });
@@ -795,6 +928,7 @@ async fn run_push<C, T, M>(
     mutation: ClientMutation<M>,
     optimistic: Option<SyncRow<T>>,
     pull_after_accept: bool,
+    queue_offline: bool,
 ) where
     C: 'static,
     T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
@@ -804,25 +938,28 @@ async fn run_push<C, T, M>(
     let mutation_op = mutation.op;
     let mutation_key = mutation.key.clone();
 
-    let local_mutation = match mutation_to_value(&mutation) {
-        Ok(mutation) => mutation,
-        Err(err) => {
+    if queue_offline {
+        let local_mutation = match mutation_to_value(&mutation) {
+            Ok(mutation) => mutation,
+            Err(err) => {
+                handle.update(|state| {
+                    selector(state).set_error(format!("sync mutation encode failed: {err}"));
+                });
+                return;
+            }
+        };
+        if let Err(err) = local_store.enqueue_mutation(&stream, local_mutation).await {
             handle.update(|state| {
-                selector(state).set_error(format!("sync mutation encode failed: {err}"));
+                selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
             });
             return;
         }
-    };
-    if let Err(err) = local_store.enqueue_mutation(&stream, local_mutation).await {
-        handle.update(|state| {
-            selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
-        });
-        return;
     }
 
+    let optimistic_mutation_id = mutation_id.clone();
     handle.update(|state| {
         selector(state).apply_optimistic_mutation(
-            mutation_id,
+            optimistic_mutation_id,
             mutation_op,
             mutation_key,
             optimistic,
@@ -861,7 +998,11 @@ async fn run_push<C, T, M>(
                 should_pull
             }
             Err(err) => {
-                collection.set_error(err.to_string());
+                if queue_offline {
+                    collection.set_error(err.to_string());
+                } else {
+                    collection.apply_push_error(&mutation_id, err.to_string());
+                }
                 false
             }
         }

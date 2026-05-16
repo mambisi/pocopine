@@ -363,6 +363,14 @@ device-scoped mutation id before enqueueing a mutation. Apps that need
 full control can still build a `ClientMutation` and call
 `SyncCollection::push` directly.
 
+For writes that must not replay later from an offline queue, use
+`SyncCollection::push_online` or
+`SyncCollection::push_with_generated_id_online`. These methods still
+apply the optional optimistic row while the request is in flight, but
+they do not persist the mutation as pending local work. If the network or
+server call fails before a push response arrives, the optimistic state is
+rolled back and the collection records the error.
+
 Templates read `CollectionState<T>` directly:
 
 ```html
@@ -414,6 +422,13 @@ pub fn create(&mut self) {
     }
 }
 ```
+
+`push_online` and `push_with_generated_id_online` use the same protocol
+request and response shape, but skip the durable pending queue. The
+device mutation counter is still advanced before a generated-id online
+push begins, so a failed online request may leave a gap in mutation ids.
+That is intentional; mutation ids must never be reused after a crash or
+network failure.
 
 Stream sources own validation and write policy. In the reference memory
 source, invalid payloads are returned in `rejected`, stale
