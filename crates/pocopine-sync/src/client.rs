@@ -973,14 +973,17 @@ async fn run_push<C, T, M>(
     let mut local_error = None;
     let result = match result {
         Ok(response) => {
-            match local_push_result_from_response(&response) {
-                Ok(result) => {
-                    if let Err(err) = local_store.mark_push_result(result).await {
-                        local_error = Some(format!("local sync push result persist failed: {err}"));
+            if queue_offline {
+                match local_push_result_from_response(&response) {
+                    Ok(result) => {
+                        if let Err(err) = local_store.mark_push_result(result).await {
+                            local_error =
+                                Some(format!("local sync push result persist failed: {err}"));
+                        }
                     }
-                }
-                Err(err) => {
-                    local_error = Some(format!("local sync push result encode failed: {err}"));
+                    Err(err) => {
+                        local_error = Some(format!("local sync push result encode failed: {err}"));
+                    }
                 }
             }
             Ok(response)

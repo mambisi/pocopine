@@ -3,14 +3,17 @@ use std::sync::{Arc, Mutex};
 
 use pocopine_auth::RequestContext;
 use pocopine_sync::{
-    MutationId, RowVersion, SyncBoxFuture, SyncCollectionName, SyncConflict, SyncError,
-    SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse, SyncRejectedMutation,
-    SyncResult, SyncRow, SyncStreamName, SyncStreamSource,
+    MutationId, RowKey, RowVersion, SyncBoxFuture, SyncCollectionName, SyncConflict, SyncError,
+    SyncOp, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse,
+    SyncRejectedMutation, SyncResult, SyncRow, SyncStreamName, SyncStreamSource,
 };
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{CrudMutationPayload, CrudSource, ResourceId};
+use crate::{CrudMutationPayload, CrudRemoveResult, CrudSource, CrudWriteResult, ResourceId};
+
+/// Default maximum rows returned by one CRUD snapshot pull.
+pub const DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT: usize = 1_000;
 
 /// Start building a CRUD-backed sync stream.
 ///
@@ -25,6 +28,7 @@ where
         stream: SyncStreamName::new(name.clone())?,
         collection: SyncCollectionName::new(name)?,
         source,
+        max_snapshot_rows: DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
     })
 }
 
@@ -33,12 +37,24 @@ pub struct CrudResourceBuilder<S> {
     stream: SyncStreamName,
     collection: SyncCollectionName,
     source: S,
+    max_snapshot_rows: usize,
 }
 
 impl<S> CrudResourceBuilder<S>
 where
     S: CrudSource,
 {
+    /// Set the maximum rows a snapshot pull may return.
+    pub fn max_snapshot_rows(mut self, limit: usize) -> SyncResult<Self> {
+        if limit == 0 {
+            return Err(SyncError::client(
+                "CRUD max snapshot rows must be greater than zero",
+            ));
+        }
+        self.max_snapshot_rows = limit;
+        Ok(self)
+    }
+
     /// Attach the row id extractor for this resource.
     pub fn id<IdOf>(self, id_of: IdOf) -> CrudResource<S, IdOf>
     where
@@ -48,6 +64,7 @@ where
             stream: self.stream,
             collection: self.collection,
             source: self.source,
+            max_snapshot_rows: self.max_snapshot_rows,
             id_of,
             version_of: NoRowVersion,
             mutation_log: MissingMutationLog,
@@ -60,6 +77,7 @@ pub struct CrudResource<S, IdOf, VersionOf = NoRowVersion, Log = MissingMutation
     stream: SyncStreamName,
     collection: SyncCollectionName,
     source: S,
+    max_snapshot_rows: usize,
     id_of: IdOf,
     version_of: VersionOf,
     mutation_log: Log,
@@ -82,6 +100,7 @@ where
             stream: self.stream,
             collection: self.collection,
             source: self.source,
+            max_snapshot_rows: self.max_snapshot_rows,
             id_of: self.id_of,
             version_of,
             mutation_log: self.mutation_log,
@@ -96,7 +115,9 @@ where
     /// Attach a mutation log used to dedupe replayed accepted mutations.
     ///
     /// Production logs should be backed by the same database as the source and
-    /// recorded in the same transaction as the row write.
+    /// recorded in the same transaction as the row write. The non-macro
+    /// adapter exposes the pieces explicitly; generated database adapters are
+    /// expected to bind the row write and log insert into one transaction.
     pub fn mutation_log<Log>(self, mutation_log: Log) -> CrudResource<S, IdOf, VersionOf, Log>
     where
         Log: CrudMutationLog<S::Row>,
@@ -105,6 +126,7 @@ where
             stream: self.stream,
             collection: self.collection,
             source: self.source,
+            max_snapshot_rows: self.max_snapshot_rows,
             id_of: self.id_of,
             version_of: self.version_of,
             mutation_log,
@@ -147,25 +169,37 @@ impl RowVersionValue for Option<RowVersion> {
 
 impl RowVersionValue for String {
     fn into_row_version(self) -> SyncResult<Option<RowVersion>> {
-        Ok(Some(RowVersion::new(self)?))
+        if self.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(RowVersion::new(self)?))
+        }
     }
 }
 
 impl RowVersionValue for Option<String> {
     fn into_row_version(self) -> SyncResult<Option<RowVersion>> {
-        self.map(RowVersion::new).transpose()
+        self.filter(|version| !version.is_empty())
+            .map(RowVersion::new)
+            .transpose()
     }
 }
 
 impl RowVersionValue for &str {
     fn into_row_version(self) -> SyncResult<Option<RowVersion>> {
-        Ok(Some(RowVersion::new(self)?))
+        if self.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(RowVersion::new(self)?))
+        }
     }
 }
 
 impl RowVersionValue for Option<&str> {
     fn into_row_version(self) -> SyncResult<Option<RowVersion>> {
-        self.map(RowVersion::new).transpose()
+        self.filter(|version| !version.is_empty())
+            .map(RowVersion::new)
+            .transpose()
     }
 }
 
@@ -189,17 +223,17 @@ macro_rules! integer_row_version {
 
 integer_row_version!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
 
-#[doc(hidden)]
+/// Row-version extractor used by [`CrudResource::version`].
+///
+/// Users normally pass a closure to [`CrudResource::version`] and never
+/// implement this trait by hand. It is public because the configured resource
+/// type mentions it in its generic bounds.
 pub trait RowVersionOf<Row>: Send + Sync + 'static {
-    fn tracks_versions(&self) -> bool;
+    /// Return the row version to expose in sync responses.
     fn row_version(&self, row: &Row) -> SyncResult<Option<RowVersion>>;
 }
 
 impl<Row> RowVersionOf<Row> for NoRowVersion {
-    fn tracks_versions(&self) -> bool {
-        false
-    }
-
     fn row_version(&self, row: &Row) -> SyncResult<Option<RowVersion>> {
         let _ = row;
         Ok(None)
@@ -211,10 +245,6 @@ where
     F: Fn(&Row) -> V + Send + Sync + 'static,
     V: RowVersionValue,
 {
-    fn tracks_versions(&self) -> bool {
-        true
-    }
-
     fn row_version(&self, row: &Row) -> SyncResult<Option<RowVersion>> {
         (self)(row).into_row_version()
     }
@@ -222,18 +252,34 @@ where
 
 /// Accepted mutation entry stored by a [`CrudMutationLog`].
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrudAcceptedMutation<Row> {
+pub struct CrudAcceptedMutation {
     pub mutation_id: MutationId,
-    pub row: Option<SyncRow<Row>>,
+    pub op: SyncOp,
+    pub key: Option<RowKey>,
+    pub payload: Value,
 }
 
-impl<Row> CrudAcceptedMutation<Row> {
-    pub fn new(mutation_id: MutationId, row: Option<SyncRow<Row>>) -> Self {
-        Self { mutation_id, row }
+impl CrudAcceptedMutation {
+    pub fn new(mutation_id: MutationId, op: SyncOp, key: Option<RowKey>, payload: Value) -> Self {
+        Self {
+            mutation_id,
+            op,
+            key,
+            payload,
+        }
+    }
+
+    fn matches(&self, op: SyncOp, key: Option<&RowKey>, payload: &Value) -> bool {
+        self.op == op && self.key.as_ref() == key && self.payload == *payload
     }
 }
 
 /// Idempotency log for CRUD mutations.
+///
+/// Production implementations must scope lookups to the same authorization
+/// domain as the underlying source, for example `(tenant_id, mutation_id)`.
+/// The adapter intentionally does not return cached rows on dedupe hits; it
+/// only acknowledges exact replay of the same accepted mutation.
 #[async_trait::async_trait]
 pub trait CrudMutationLog<Row>: Send + Sync + 'static
 where
@@ -243,19 +289,20 @@ where
         &self,
         ctx: &RequestContext,
         mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation<Row>>>;
+    ) -> SyncResult<Option<CrudAcceptedMutation>>;
 
     async fn record_accepted_mutation(
         &self,
         ctx: &RequestContext,
-        accepted: CrudAcceptedMutation<Row>,
+        accepted: CrudAcceptedMutation,
     ) -> SyncResult<()>;
 }
 
 /// Process-local mutation log for tests and single-process demos.
 #[derive(Clone, Debug)]
 pub struct MemoryCrudMutationLog<Row> {
-    accepted: Arc<Mutex<BTreeMap<String, CrudAcceptedMutation<Row>>>>,
+    accepted: Arc<Mutex<BTreeMap<String, CrudAcceptedMutation>>>,
+    _marker: std::marker::PhantomData<fn() -> Row>,
 }
 
 impl<Row> Default for MemoryCrudMutationLog<Row> {
@@ -268,6 +315,7 @@ impl<Row> MemoryCrudMutationLog<Row> {
     pub fn new() -> Self {
         Self {
             accepted: Arc::new(Mutex::new(BTreeMap::new())),
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -281,7 +329,7 @@ where
         &self,
         ctx: &RequestContext,
         mutation_id: &MutationId,
-    ) -> SyncResult<Option<CrudAcceptedMutation<Row>>> {
+    ) -> SyncResult<Option<CrudAcceptedMutation>> {
         let _ = ctx;
         let accepted = self
             .accepted
@@ -293,7 +341,7 @@ where
     async fn record_accepted_mutation(
         &self,
         ctx: &RequestContext,
-        accepted: CrudAcceptedMutation<Row>,
+        accepted: CrudAcceptedMutation,
     ) -> SyncResult<()> {
         let _ = ctx;
         let mut entries = self
@@ -353,7 +401,14 @@ where
             return Err(SyncError::UnknownStream(request.stream.to_string()));
         }
 
-        let rows = self.source.list(ctx).await?;
+        let rows = self.source.list(ctx, self.max_snapshot_rows).await?;
+        if rows.len() > self.max_snapshot_rows {
+            return Err(SyncError::backend(format!(
+                "CRUD source returned {} rows, exceeding max snapshot row limit {}",
+                rows.len(),
+                self.max_snapshot_rows
+            )));
+        }
         let rows = rows
             .into_iter()
             .map(|row| self.row_to_value(row))
@@ -380,22 +435,32 @@ where
         response.collection = Some(self.collection.clone());
 
         for mutation in request.mutations {
+            let mutation_id = mutation.id.clone();
+            let key = mutation.key.clone();
+            let op = mutation.op;
+            let base_version = mutation.base_version;
+            let payload_value = mutation.payload;
+
             if let Some(accepted) = self
                 .mutation_log
-                .accepted_mutation(&ctx, &mutation.id)
+                .accepted_mutation(&ctx, &mutation_id)
                 .await?
             {
-                response.accepted.push(mutation.id);
-                if let Some(row) = accepted.row {
-                    response.rows.push(row_to_value(row)?);
+                if accepted.matches(op, key.as_ref(), &payload_value) {
+                    response.accepted.push(mutation_id);
+                } else {
+                    response.rejected.push(SyncRejectedMutation {
+                        mutation_id,
+                        key,
+                        reason: "mutation id was already accepted with different contents"
+                            .to_string(),
+                    });
                 }
                 continue;
             }
 
-            let mutation_id = mutation.id.clone();
-            let key = mutation.key.clone();
             let payload = match serde_json::from_value::<CrudMutationPayload<S::Id, S::Draft>>(
-                mutation.payload,
+                payload_value.clone(),
             ) {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -408,7 +473,7 @@ where
                 }
             };
 
-            if payload.sync_op() != mutation.op {
+            if payload.sync_op() != op {
                 response.rejected.push(SyncRejectedMutation {
                     mutation_id,
                     key,
@@ -418,10 +483,10 @@ where
             }
 
             let expected_key = payload.id().to_row_key()?;
-            if mutation.key.as_ref() != Some(&expected_key) {
+            if key.as_ref() != Some(&expected_key) {
                 response.rejected.push(SyncRejectedMutation {
                     mutation_id,
-                    key: mutation.key,
+                    key,
                     reason: "CRUD mutation row key does not match payload id".to_string(),
                 });
                 continue;
@@ -431,8 +496,8 @@ where
                 .apply_payload(
                     &ctx,
                     mutation_id,
-                    expected_key,
-                    mutation.base_version,
+                    expected_key.clone(),
+                    base_version,
                     payload,
                 )
                 .await?
@@ -441,7 +506,12 @@ where
                     self.mutation_log
                         .record_accepted_mutation(
                             &ctx,
-                            CrudAcceptedMutation::new(mutation_id.clone(), row.clone()),
+                            CrudAcceptedMutation::new(
+                                mutation_id.clone(),
+                                op,
+                                Some(expected_key),
+                                payload_value,
+                            ),
                         )
                         .await?;
                     response.accepted.push(mutation_id);
@@ -488,94 +558,56 @@ where
                 })
             }
             CrudMutationPayload::Save(payload) => {
-                if let Some(conflict) = self
-                    .conflict_for_base_version(
-                        ctx,
-                        mutation_id.clone(),
-                        Some(key.clone()),
-                        payload.id.clone(),
-                        base_version,
-                    )
-                    .await?
-                {
-                    return Ok(CrudApplyOutcome::Conflict(conflict));
-                }
-
-                let row = self
+                let outcome = self
                     .source
-                    .save(ctx.clone(), payload.id, payload.draft)
+                    .save(ctx.clone(), payload.id, payload.draft, base_version)
                     .await?;
-                let row = self.row_to_sync(row)?;
-                Ok(CrudApplyOutcome::Accepted {
-                    mutation_id,
-                    row: Some(row),
-                })
+                match outcome {
+                    CrudWriteResult::Applied(row) => {
+                        let row = self.row_to_sync(row)?;
+                        Ok(CrudApplyOutcome::Accepted {
+                            mutation_id,
+                            row: Some(row),
+                        })
+                    }
+                    CrudWriteResult::Conflict(conflict) => Ok(CrudApplyOutcome::Conflict(
+                        self.source_conflict(mutation_id, Some(key), conflict)?,
+                    )),
+                }
             }
             CrudMutationPayload::Remove(payload) => {
-                if let Some(conflict) = self
-                    .conflict_for_base_version(
-                        ctx,
-                        mutation_id.clone(),
-                        Some(key.clone()),
-                        payload.id.clone(),
-                        base_version,
-                    )
-                    .await?
-                {
-                    return Ok(CrudApplyOutcome::Conflict(conflict));
+                let outcome = self
+                    .source
+                    .remove(ctx.clone(), payload.id, base_version)
+                    .await?;
+                match outcome {
+                    CrudRemoveResult::Applied => Ok(CrudApplyOutcome::Accepted {
+                        mutation_id,
+                        row: None,
+                    }),
+                    CrudRemoveResult::Conflict(conflict) => Ok(CrudApplyOutcome::Conflict(
+                        self.source_conflict(mutation_id, Some(key), conflict)?,
+                    )),
                 }
-
-                self.source.remove(ctx.clone(), payload.id).await?;
-                Ok(CrudApplyOutcome::Accepted {
-                    mutation_id,
-                    row: None,
-                })
             }
         }
     }
 
-    async fn conflict_for_base_version(
+    fn source_conflict(
         &self,
-        ctx: &RequestContext,
         mutation_id: MutationId,
         key: Option<pocopine_sync::RowKey>,
-        id: S::Id,
-        base_version: Option<RowVersion>,
-    ) -> SyncResult<Option<SyncConflict<S::Row>>> {
-        let Some(base_version) = base_version else {
-            return Ok(None);
-        };
-
-        if !self.version_of.tracks_versions() {
-            return Ok(Some(SyncConflict {
-                mutation_id,
-                key,
-                server_row: None,
-                reason: "base version requires a CRUD resource version mapper".to_string(),
-            }));
-        }
-
-        let server_row = self.source.get(ctx.clone(), id).await?;
-        let Some(server_row) = server_row else {
-            return Ok(Some(SyncConflict {
-                mutation_id,
-                key,
-                server_row: None,
-                reason: "base version is stale".to_string(),
-            }));
-        };
-
-        let server_version = self.version_of.row_version(&server_row)?;
-        if server_version.as_ref() == Some(&base_version) {
-            return Ok(None);
-        }
-
-        Ok(Some(SyncConflict {
+        conflict: crate::CrudConflict<S::Row>,
+    ) -> SyncResult<SyncConflict<S::Row>> {
+        Ok(SyncConflict {
             mutation_id,
             key,
-            server_row: Some(self.row_to_sync(server_row)?),
-            reason: "base version is stale".to_string(),
-        }))
+            server_row: conflict
+                .server_row
+                .map(|row| self.row_to_sync(row))
+                .transpose()?,
+            reason: conflict.reason,
+        })
     }
 
     fn row_to_sync(&self, row: S::Row) -> SyncResult<SyncRow<S::Row>> {
@@ -655,9 +687,17 @@ mod tests {
     struct Posts {
         rows: Arc<Mutex<BTreeMap<String, Post>>>,
         calls: Arc<Mutex<Vec<String>>>,
+        ignore_list_limit: bool,
     }
 
     impl Posts {
+        fn ignoring_list_limit() -> Self {
+            Self {
+                ignore_list_limit: true,
+                ..Self::default()
+            }
+        }
+
         fn insert(&self, post: Post) {
             self.rows.lock().unwrap().insert(post.id.clone(), post);
         }
@@ -677,10 +717,14 @@ mod tests {
         type Row = Post;
         type Draft = PostDraft;
 
-        async fn list(&self, ctx: RequestContext) -> SyncResult<Vec<Self::Row>> {
+        async fn list(&self, ctx: RequestContext, limit: usize) -> SyncResult<Vec<Self::Row>> {
             let _ = ctx;
             let rows = self.rows.lock().unwrap();
-            Ok(rows.values().cloned().collect())
+            if self.ignore_list_limit {
+                Ok(rows.values().cloned().collect())
+            } else {
+                Ok(rows.values().take(limit).cloned().collect())
+            }
         }
 
         async fn get(&self, ctx: RequestContext, id: Self::Id) -> SyncResult<Option<Self::Row>> {
@@ -710,23 +754,43 @@ mod tests {
             ctx: RequestContext,
             id: Self::Id,
             draft: Self::Draft,
-        ) -> SyncResult<Self::Row> {
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudWriteResult<Self::Row>> {
             let _ = ctx;
-            self.record(format!("save:{id}"));
             let mut rows = self.rows.lock().unwrap();
             let row = rows
                 .get_mut(&id)
                 .ok_or_else(|| SyncError::backend("missing post"))?;
+            if let Some(base_version) = &base_version {
+                if base_version.as_str() != row.version.to_string() {
+                    return Ok(CrudWriteResult::stale(Some(row.clone())));
+                }
+            }
+            self.record(format!("save:{id}"));
             row.title = draft.title;
             row.version += 1;
-            Ok(row.clone())
+            Ok(CrudWriteResult::applied(row.clone()))
         }
 
-        async fn remove(&self, ctx: RequestContext, id: Self::Id) -> SyncResult<()> {
+        async fn remove(
+            &self,
+            ctx: RequestContext,
+            id: Self::Id,
+            base_version: Option<RowVersion>,
+        ) -> SyncResult<CrudRemoveResult<Self::Row>> {
             let _ = ctx;
+            let mut rows = self.rows.lock().unwrap();
+            if let Some(base_version) = base_version {
+                let Some(row) = rows.get(&id) else {
+                    return Ok(CrudRemoveResult::stale(None));
+                };
+                if base_version.as_str() != row.version.to_string() {
+                    return Ok(CrudRemoveResult::stale(Some(row.clone())));
+                }
+            }
             self.record(format!("remove:{id}"));
-            self.rows.lock().unwrap().remove(&id);
-            Ok(())
+            rows.remove(&id);
+            Ok(CrudRemoveResult::applied())
         }
     }
 
@@ -795,6 +859,38 @@ mod tests {
         assert_eq!(response.rows[0].key.as_str(), "post_1");
         assert_eq!(response.rows[0].version.as_ref().unwrap().as_str(), "7");
         assert_eq!(response.rows[0].value["title"], "hello");
+    }
+
+    #[tokio::test]
+    async fn snapshot_pull_errors_if_source_exceeds_limit() {
+        let posts = Posts::ignoring_list_limit();
+        posts.insert(Post {
+            id: "post_1".to_string(),
+            title: "one".to_string(),
+            version: 1,
+        });
+        posts.insert(Post {
+            id: "post_2".to_string(),
+            title: "two".to_string(),
+            version: 1,
+        });
+        let resource = resource("posts", posts)
+            .unwrap()
+            .max_snapshot_rows(1)
+            .unwrap()
+            .id(|post: &Post| post.id.clone())
+            .version(|post: &Post| post.version)
+            .memory_mutation_log();
+
+        let err = resource
+            .pull(
+                ctx(),
+                SyncPullRequest::new(SyncStreamName::new("posts").unwrap()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("exceeding max snapshot row limit"));
     }
 
     #[tokio::test]
@@ -872,7 +968,79 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.accepted.len(), 1);
-        assert_eq!(response.rows.len(), 1);
+        assert!(
+            response.rows.is_empty(),
+            "dedupe hits acknowledge exact replay without returning cached rows"
+        );
+        assert_eq!(posts.calls(), vec!["create:post_1"]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_mutation_id_with_different_contents_is_rejected() {
+        let posts = Posts::default();
+        let resource = posts_resource(posts.clone());
+        let first = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "first".to_string(),
+            },
+        )
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device_1:1").unwrap());
+        resource.push(ctx(), push_request([first])).await.unwrap();
+
+        let changed = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "changed".to_string(),
+            },
+        )
+        .into_sync_draft()
+        .unwrap()
+        .with_id(MutationId::new("device_1:1").unwrap());
+        let response = resource.push(ctx(), push_request([changed])).await.unwrap();
+
+        assert!(response.accepted.is_empty());
+        assert_eq!(response.rejected.len(), 1);
+        assert!(response.rejected[0]
+            .reason
+            .contains("already accepted with different contents"));
+        assert_eq!(posts.calls(), vec!["create:post_1"]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_mutation_id_with_different_key_is_rejected() {
+        let posts = Posts::default();
+        let resource = posts_resource(posts.clone());
+        let payload = CrudMutationPayload::create(
+            "post_1".to_string(),
+            PostDraft {
+                title: "first".to_string(),
+            },
+        );
+        let first = payload
+            .clone()
+            .into_sync_draft()
+            .unwrap()
+            .with_id(MutationId::new("device_1:1").unwrap());
+        resource.push(ctx(), push_request([first])).await.unwrap();
+
+        let replay_with_other_key = payload
+            .into_sync_draft()
+            .unwrap()
+            .row_key(RowKey::new("post_2").unwrap())
+            .with_id(MutationId::new("device_1:1").unwrap());
+        let response = resource
+            .push(ctx(), push_request([replay_with_other_key]))
+            .await
+            .unwrap();
+
+        assert!(response.accepted.is_empty());
+        assert_eq!(response.rejected.len(), 1);
+        assert!(response.rejected[0]
+            .reason
+            .contains("already accepted with different contents"));
         assert_eq!(posts.calls(), vec!["create:post_1"]);
     }
 
@@ -961,9 +1129,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.conflicts.len(), 1);
-        assert!(response.conflicts[0]
-            .reason
-            .contains("requires a CRUD resource version mapper"));
+        assert_eq!(response.conflicts[0].reason, "base version is stale");
         assert!(posts.calls().is_empty());
+    }
+
+    #[test]
+    fn empty_string_row_versions_are_treated_as_missing() {
+        assert!(String::new().into_row_version().unwrap().is_none());
+        assert!(Option::<String>::Some(String::new())
+            .into_row_version()
+            .unwrap()
+            .is_none());
+        assert!("".into_row_version().unwrap().is_none());
+        assert!(Option::<&str>::Some("")
+            .into_row_version()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn snapshot_row_limit_rejects_zero() {
+        let err = match resource("posts", Posts::default())
+            .unwrap()
+            .max_snapshot_rows(0)
+        {
+            Ok(_) => panic!("zero max snapshot rows should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("greater than zero"));
     }
 }

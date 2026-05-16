@@ -369,9 +369,10 @@ For writes that must not replay later from an offline queue, use
 `SyncCollection::push_online` or
 `SyncCollection::push_with_generated_id_online`. These methods still
 apply the optional optimistic row while the request is in flight, but
-they do not persist the mutation as pending local work. If the network or
-server call fails before a push response arrives, the optimistic state is
-rolled back and the collection records the error.
+they do not persist the mutation as pending local work and do not write
+push outcomes into the local store. If the network or server call fails
+before a push response arrives, the optimistic state is rolled back and
+the collection records the error.
 
 Templates read `CollectionState<T>` directly:
 
@@ -426,11 +427,17 @@ pub fn create(&mut self) {
 ```
 
 `push_online` and `push_with_generated_id_online` use the same protocol
-request and response shape, but skip the durable pending queue. The
-device mutation counter is still advanced before a generated-id online
+request and response shape, but skip the durable pending queue and do not
+write accepted/rejected/conflict outcomes into the local store. A
+successful online-only push updates the mounted component state from the
+server response; after a reload, canonical state comes from the next pull.
+The device mutation counter is still advanced before a generated-id online
 push begins, so a failed online request may leave a gap in mutation ids.
 That is intentional; mutation ids must never be reused after a crash or
-network failure.
+network failure. These helpers are online-confirmation helpers, not
+business idempotency for payment or inventory-style side effects. If the
+server commits and the response is lost, a manual retry gets a new
+mutation id; those domains still need an app-level idempotency key.
 
 Stream sources own validation and write policy. In the reference memory
 source, invalid payloads are returned in `rejected`, stale

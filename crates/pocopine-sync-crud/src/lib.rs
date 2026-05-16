@@ -27,12 +27,12 @@ pub use outcome::{CrudOutcome, Queued, QueuedStatus};
 pub use resource::{
     resource, CrudAcceptedMutation, CrudMutationLog, CrudResource, CrudResourceBuilder,
     MemoryCrudMutationLog, MissingMutationLog, NoRowVersion, RowVersionValue,
+    DEFAULT_CRUD_SNAPSHOT_ROW_LIMIT,
 };
 pub use row::optimistic_row;
 #[cfg(not(target_arch = "wasm32"))]
-pub use source::CrudSource;
+pub use source::{CrudConflict, CrudRemoveResult, CrudSource, CrudWriteResult};
 
 #[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
 pub use resource::RowVersionOf;
 pub use transaction::{Transaction, TransactionBindable, TransactionFuture, TransactionRunner};

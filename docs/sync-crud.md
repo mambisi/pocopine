@@ -201,6 +201,7 @@ pub trait CrudSource: Send + Sync + 'static {
     async fn list(
         &self,
         ctx: pocopine_auth::RequestContext,
+        limit: usize,
     ) -> pocopine_sync::SyncResult<Vec<Self::Row>>;
 
     async fn get(
@@ -221,15 +222,22 @@ pub trait CrudSource: Send + Sync + 'static {
         ctx: pocopine_auth::RequestContext,
         id: Self::Id,
         draft: Self::Draft,
-    ) -> pocopine_sync::SyncResult<Self::Row>;
+        base_version: Option<pocopine_sync::RowVersion>,
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudWriteResult<Self::Row>>;
 
     async fn remove(
         &self,
         ctx: pocopine_auth::RequestContext,
         id: Self::Id,
-    ) -> pocopine_sync::SyncResult<()>;
+        base_version: Option<pocopine_sync::RowVersion>,
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudRemoveResult<Self::Row>>;
 }
 ```
+
+`list` receives the maximum row count the adapter will return in one
+snapshot response. Put that limit into the database query. `save` and
+`remove` receive the caller's base row version and must check it in the
+same database operation as the write.
 
 `ResourceId` is the identity boundary. It keeps database identity policy out
 of the sync protocol while still giving the CRUD layer one place to
@@ -330,16 +338,19 @@ impl pocopine_sync_crud::CrudSource for Customers {
     async fn list(
         &self,
         ctx: pocopine_auth::RequestContext,
+        limit: usize,
     ) -> pocopine_sync::SyncResult<Vec<Customer>> {
         sqlx::query_as!(
             Customer,
             r#"
-            select id, tenant_id, name, email
+            select id, tenant_id, name, email, version
             from customers
             where tenant_id = $1
             order by name
+            limit $2
             "#,
-            ctx.tenant_id()
+            ctx.tenant_id(),
+            limit as i64
         )
         .fetch_all(&self.pool)
         .await
@@ -354,7 +365,7 @@ impl pocopine_sync_crud::CrudSource for Customers {
         sqlx::query_as!(
             Customer,
             r#"
-            select id, tenant_id, name, email
+            select id, tenant_id, name, email, version
             from customers
             where id = $1 and tenant_id = $2
             "#,
@@ -377,7 +388,7 @@ impl pocopine_sync_crud::CrudSource for Customers {
             r#"
             insert into customers (id, tenant_id, name, email)
             values ($1, $2, $3, $4)
-            returning id, tenant_id, name, email
+            returning id, tenant_id, name, email, version
             "#,
             id,
             ctx.tenant_id(),
@@ -394,40 +405,63 @@ impl pocopine_sync_crud::CrudSource for Customers {
         ctx: pocopine_auth::RequestContext,
         id: uuid::Uuid,
         draft: CustomerDraft,
-    ) -> pocopine_sync::SyncResult<Customer> {
-        sqlx::query_as!(
+        base_version: Option<pocopine_sync::RowVersion>,
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudWriteResult<Customer>> {
+        let row = sqlx::query_as!(
             Customer,
             r#"
             update customers
-            set name = $2, email = $3
-            where id = $1 and tenant_id = $4
-            returning id, tenant_id, name, email
+            set name = $2, email = $3, version = version + 1
+            where id = $1
+              and tenant_id = $4
+              and ($5::text is null or version::text = $5)
+            returning id, tenant_id, name, email, version
             "#,
             id,
             draft.name,
             draft.email,
-            ctx.tenant_id()
+            ctx.tenant_id(),
+            base_version.as_ref().map(|version| version.as_str())
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(|err| pocopine_sync::SyncError::backend(err.to_string()))
+        .map_err(|err| pocopine_sync::SyncError::backend(err.to_string()))?;
+
+        if let Some(row) = row {
+            return Ok(pocopine_sync_crud::CrudWriteResult::applied(row));
+        }
+
+        let server_row = self.get(ctx, id).await?;
+        Ok(pocopine_sync_crud::CrudWriteResult::stale(server_row))
     }
 
     async fn remove(
         &self,
         ctx: pocopine_auth::RequestContext,
         id: uuid::Uuid,
-    ) -> pocopine_sync::SyncResult<()> {
-        sqlx::query!(
-            "delete from customers where id = $1 and tenant_id = $2",
+        base_version: Option<pocopine_sync::RowVersion>,
+    ) -> pocopine_sync::SyncResult<pocopine_sync_crud::CrudRemoveResult<Customer>> {
+        let result = sqlx::query!(
+            r#"
+            delete from customers
+            where id = $1
+              and tenant_id = $2
+              and ($3::text is null or version::text = $3)
+            "#,
             id,
-            ctx.tenant_id()
+            ctx.tenant_id(),
+            base_version.as_ref().map(|version| version.as_str())
         )
         .execute(&self.pool)
         .await
         .map_err(|err| pocopine_sync::SyncError::backend(err.to_string()))?;
 
-        Ok(())
+        if result.rows_affected() == 1 {
+            return Ok(pocopine_sync_crud::CrudRemoveResult::applied());
+        }
+
+        let server_row = self.get(ctx, id).await?;
+        Ok(pocopine_sync_crud::CrudRemoveResult::stale(server_row))
     }
 }
 ```
@@ -474,7 +508,16 @@ let customers = pocopine_sync_crud::resource("customers", Customers::new())?
 
 Production apps should implement `CrudMutationLog` against the same
 database as the `CrudSource`, and record accepted mutation ids in the
-same transaction as the row write.
+same transaction as the row write. The idempotency lookup must be scoped
+to the same authorization domain as the source query, for example
+`(tenant_id, mutation_id)`, not only `mutation_id`.
+
+On replay, the adapter only acknowledges an accepted mutation id when the
+operation, row id, and serialized payload are an exact match for the
+previously accepted mutation. It intentionally does not return cached rows
+from the mutation log; the next pull is the source of canonical row data.
+This avoids leaking a row accepted under one principal into another
+principal's retry path.
 
 ## Generated Client API
 
@@ -768,10 +811,11 @@ write later when the app can reach the server.
 
 `RequireOnline` means server-confirmed before success. If the request
 cannot reach the server, the operation fails locally and nothing is
-queued. This is the right policy for payments, inventory reservations,
-uniqueness-sensitive changes, permission-sensitive admin changes, and
-multi-row invariants that should not be replayed later from an offline
-queue.
+queued. It is not a business idempotency guarantee: if the server commits
+and the response is lost, a manual retry gets a new mutation id. Use
+`RequireOnline` when offline replay is the wrong UX, and add an app-level
+idempotency key for payment, inventory, uniqueness-sensitive, or other
+side-effecting domains.
 
 Generated simple methods should keep `QueueOffline` as the default:
 
@@ -871,13 +915,16 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 
 - resource registration against `SyncServer` through the existing
   `pocopine-sync` server plugin,
-- snapshot pull through `list` and row id extraction,
-- optional row-version mapping for base-version conflict checks,
+- snapshot pull through bounded `list(limit)` and row id extraction,
+- source-owned atomic base-version checks for save/remove conflict
+  detection,
 - push routing for `create`, `save`, and `remove`,
 - `CrudMutationLog` so accepted mutation ids are explicit and replayed
   mutation ids do not duplicate writes,
-- tests for accepted, rejected, conflict, missing-version-mapper, and
-  duplicate-replay flows,
+- exact replay validation so a reused mutation id with different
+  operation, row id, or payload is rejected,
+- tests for accepted, rejected, conflict, snapshot-limit, empty-version,
+  and duplicate-replay flows,
 - route-level integration coverage proving a CRUD resource registered with
   `SyncServer` serves `/pull` and `/push` through the normal sync plugin,
 - customer-style SQLx documentation showing explicit app-owned `list`,
@@ -885,8 +932,9 @@ The second `pocopine-sync-crud` PR adds the non-macro runtime adapter:
 
 Still left before the macro layer:
 
-- generated CRUD methods that use `TransactionRunner` to pair a source
-  write and durable mutation-log record in one database transaction,
+- generated CRUD methods and source adapters that use `TransactionRunner`
+  or an app-owned SQL transaction to pair a source write and durable
+  mutation-log record in one database transaction,
 - generated CRUD methods that map `WritePolicy::RequireOnline` to the
   low-level online-only sync push helpers.
 

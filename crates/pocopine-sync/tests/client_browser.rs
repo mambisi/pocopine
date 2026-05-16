@@ -722,6 +722,93 @@ async fn online_push_failure_does_not_queue_pending_mutation() {
     pocopine::fetch::__reset_middleware_chain_for_test();
 }
 
+#[wasm_bindgen_test(async)]
+async fn online_push_success_updates_state_without_persisting_local_outcome() {
+    pocopine::fetch::__reset_middleware_chain_for_test();
+
+    let store = MemoryLocalStore::new();
+    store
+        .save_identity(
+            SyncLocalIdentity::with_next_counter(SyncDeviceId::new("device_browser").unwrap(), 42)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    pocopine::fetch::install_middleware(
+        move |req: pocopine::fetch::FetchRequest, _next: pocopine::fetch::FetchNext| async move {
+            match req.url.as_str() {
+                SYNC_PUSH_PATH => {
+                    let request: SyncPushRequest<BrowserPost> =
+                        serde_json::from_str(&req.body).unwrap();
+                    assert_eq!(request.mutations.len(), 1);
+                    assert_eq!(request.mutations[0].id.as_str(), "device_browser:42");
+
+                    let mut response =
+                        SyncPushResponse::<BrowserPost>::new(SyncStreamName::new(STREAM).unwrap());
+                    response.collection = Some(SyncCollectionName::new(COLLECTION).unwrap());
+                    response
+                        .accepted
+                        .push(MutationId::new("device_browser:42").unwrap());
+                    response.rows.push(
+                        SyncRow::new(
+                            "post_online",
+                            BrowserPost {
+                                id: "post_online".to_string(),
+                                title: "Confirmed online-only".to_string(),
+                            },
+                        )
+                        .unwrap(),
+                    );
+                    Ok(json_response(response))
+                }
+                other => Err(pocopine::ServerError::Network(format!(
+                    "unexpected sync browser test request: {other}"
+                ))),
+            }
+        },
+    );
+
+    let document = window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_attribute("pp-app", "").unwrap();
+    host.set_inner_html("<sync-browser-online-push-board></sync-browser-online-push-board>");
+    document.body().unwrap().append_child(&host).unwrap();
+
+    App::new()
+        .plugin(
+            sync_plugin()
+                .with_live_wakeup(false)
+                .local_store(store.clone()),
+        )
+        .register::<SyncBrowserOnlinePushBoard>()
+        .run();
+
+    settle().await;
+
+    let post = host
+        .query_selector(".post")
+        .unwrap()
+        .expect("confirmed online-only row should render");
+    assert_eq!(
+        post.text_content().unwrap_or_default(),
+        "Confirmed online-only"
+    );
+
+    let persisted = store
+        .hydrate_stream(&SyncStreamName::new(STREAM).unwrap())
+        .await
+        .unwrap();
+    assert!(persisted.pending_mutations.is_empty());
+    assert!(
+        persisted.rows.is_empty(),
+        "online-only success updates component state but does not write local-store outcomes"
+    );
+
+    host.remove();
+    pocopine::fetch::__reset_middleware_chain_for_test();
+}
+
 fn json_response<T: Serialize>(value: T) -> pocopine::fetch::FetchResponse {
     pocopine::fetch::FetchResponse {
         status: 200,
