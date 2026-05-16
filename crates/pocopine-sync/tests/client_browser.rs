@@ -96,12 +96,12 @@ impl SyncBrowserPushBoard {
         };
         let result = ClientMutationDraft::upsert(post.clone())
             .key(post.id.clone())
-            .and_then(|mutation| {
-                Ok((
+            .map(|mutation| {
+                (
                     mutation,
                     SyncRow::new(post.id.clone(), post)
                         .expect("test optimistic row should be valid"),
-                ))
+                )
             })
             .and_then(|(mutation, optimistic)| {
                 self.plugin::<pocopine_sync::SyncClient>()

@@ -88,7 +88,7 @@ mutations before the hydrated row reflects every pending edit.
 
 ## Identity And Mutation Ids
 
-The next phase should add stable client identity:
+The local store now owns stable client identity:
 
 ```text
 SyncDeviceId
@@ -118,6 +118,8 @@ should cover these operations:
 pub trait SyncLocalStore {
     fn load_identity(&self) -> SyncLocalFuture<'_, Option<SyncLocalIdentity>>;
     fn save_identity(&self, identity: SyncLocalIdentity) -> SyncLocalFuture<'_, ()>;
+
+    fn reserve_mutation_id(&self) -> SyncLocalFuture<'_, MutationId>;
 
     fn hydrate_stream(
         &self,
