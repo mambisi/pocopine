@@ -1,7 +1,9 @@
 # Sync CRUD Design
 
-`pocopine-sync-crud` is a planned helper crate on top of
-`pocopine-sync`. It is not an ORM and it is not `pocopine-db`.
+`pocopine-sync-crud` is an explicit helper crate on top of
+`pocopine-sync`. It starts with the typed contracts that the non-macro
+runtime adapter and later proc macro will target. It is not an ORM and
+it is not `pocopine-db`.
 
 The crate should centralize the sync mutation lifecycle for ordinary CRUD
 apps while leaving persistence as normal Rust code. Apps still write
@@ -46,6 +48,10 @@ pocopine-sync-sqlite
 
 pocopine-sync-crud
   typed CRUD source trait
+  resource id boundary
+  create/save/remove mutation payloads
+  write policy and queued/outcome status types
+  transaction binding contract
   proc-macro generated resource module
   typed client CRUD methods
   mapping from CRUD operations to sync push/pull
@@ -59,6 +65,42 @@ SQLite with rusqlite/sqlx
 custom repository
 test double
 ```
+
+## What Exists Now
+
+The first crate slice provides the reusable contracts:
+
+- `ResourceId` for converting app ids to sync row keys and generating
+  local-first ids when the id type supports it,
+- `CrudSource` for app-owned server persistence code,
+- `CrudMutationPayload::{create, save, remove}` and
+  `into_sync_draft(...)` for mapping CRUD writes into `pocopine-sync`
+  push drafts,
+- `CreateOptions`, `SaveOptions`, `RemoveOptions`, `WritePolicy`, and
+  `QueuedStatus` for the client lifecycle the generated API will expose,
+- `Transaction` plus `TransactionBindable` so the public transaction API
+  can stay `tx.with(resource)`.
+
+The crate deliberately does not yet generate modules or register server
+streams. The next runtime slice should add the non-macro adapter after
+the transaction and mutation-idempotency contract is explicit.
+
+The current manual client shape is intentionally low level:
+
+```rust
+use pocopine_sync_crud::{CrudMutationPayload, ResourceId};
+
+let id = uuid::Uuid::generate_local()?;
+let payload = CrudMutationPayload::create(id.clone(), CustomerDraft { name, email });
+let optimistic = pocopine_sync_crud::optimistic_row(&id, customer)?;
+
+customers_collection.push_with_generated_id(
+    payload.into_sync_draft()?,
+    Some(optimistic),
+)?;
+```
+
+That is the code the macro should hide later.
 
 ## Proc Macro Shape
 
@@ -198,22 +240,33 @@ pub trait ResourceId:
     + Send
     + Sync
     + 'static
-where
-    <Self as std::str::FromStr>::Err: std::fmt::Display,
 {
     fn generate_local() -> pocopine_sync::SyncResult<Self> {
         Err(pocopine_sync::SyncError::unsupported(
             "this resource id does not support local generation",
         ))
     }
+
+    fn to_row_key(&self) -> pocopine_sync::SyncResult<pocopine_sync::RowKey> {
+        pocopine_sync::RowKey::new(self.to_string())
+    }
+
+    fn from_row_key(row_key: &pocopine_sync::RowKey) -> pocopine_sync::SyncResult<Self> {
+        Self::from_str(row_key.as_str()).map_err(|_| {
+            pocopine_sync::SyncError::client(format!(
+                "invalid resource id: {}",
+                row_key.as_str()
+            ))
+        })
+    }
 }
 ```
 
-The generated CRUD code encodes ids with `id.to_string()` and decodes
-queued ids with `Self::from_str(...)`, mapping parse failures into
-`SyncError`. That keeps common Rust id types usable without wrapper
-methods. Requiring `Into<String>` would be too narrow because foreign
-types such as `uuid::Uuid` implement `Display` and `FromStr`, but not
+The CRUD code encodes ids with `id.to_string()` and decodes queued ids
+with `Self::from_str(...)`, mapping parse failures into `SyncError`.
+That keeps common Rust id types usable without wrapper methods.
+Requiring `Into<String>` would be too narrow because foreign types such
+as `uuid::Uuid` implement `Display` and `FromStr`, but not
 `Into<String>`.
 
 Built-in implementations should cover common app/database ids:
@@ -634,7 +687,7 @@ pub trait TransactionBindable<Tx> {
         Self: 'tx,
         Tx: 'tx;
 
-    fn bind<'tx>(&'tx self, tx: &'tx mut Tx) -> Self::Bound<'tx>;
+    fn bind<'tx>(self, tx: &'tx mut Tx) -> Self::Bound<'tx>;
 }
 ```
 
@@ -747,8 +800,8 @@ is.
 
 ## Implementation Slices
 
-The first `pocopine-sync-crud` PR should avoid proc-macro complexity and
-ship the testable contract:
+The first `pocopine-sync-crud` PR avoids proc-macro complexity and ships
+the testable contract:
 
 - crate scaffold,
 - `CrudSource` trait,
@@ -758,18 +811,28 @@ ship the testable contract:
 - `WritePolicy` and transaction options,
 - transaction binding API using `tx.with(resource)` publicly and `bind`
   internally,
-- non-macro server stream adapter using `list`, `get`, `create`,
-  `save`, `remove`,
-- server-side per-mutation transaction handling,
-- integration with `SyncCollection::push_with_generated_id` for automatic
-  durable mutation id allocation,
-- use of `CollectionState` row/base-version helpers for save/remove
-  defaults,
-- tests for queued, require-online, accepted, rejected, and conflict
-  flows,
-- docs and one customer-style non-macro example using explicit SQLx.
+- mapping into `SyncCollection::push_with_generated_id` through
+  `ClientMutationDraft`,
+- helper APIs for optimistic rows,
+- unit tests for ids, payload mapping, write policies, queued outcomes,
+  and transaction binding,
+- docs for the next non-macro and macro slices.
 
-The second PR should add the macro layer once the runtime contract is
+The second PR should add the non-macro runtime adapter:
+
+- resource registration against `SyncServer`,
+- snapshot pull through `list` and row id extraction,
+- push routing for `create`, `save`, and `remove`,
+- a clear per-mutation idempotency contract so replayed mutation ids do
+  not duplicate writes,
+- server-side per-mutation transaction handling,
+- `RequireOnline` behavior that fails instead of queueing when the
+  server is unavailable,
+- tests for queued, require-online, accepted, rejected, conflict, and
+  duplicate-replay flows,
+- one customer-style non-macro example using explicit SQLx.
+
+The third PR should add the macro layer once the runtime contract is
 stable:
 
 - `#[resource(name = "...")]` proc macro,
