@@ -15,6 +15,10 @@ use std::sync::Arc;
 use crate::extension::{KeyBindings, NamedCommand, RichTextExtension};
 use crate::extensions::default_extensions;
 use crate::inputrules::{input_rules as input_rules_plugin, InputRule};
+use crate::markdown::{
+    MarkEmitter as MarkdownMarkEmitter, MarkdownParseRule, NodeEmitter as MarkdownNodeEmitter,
+    ParseMatch as MarkdownParseMatch,
+};
 use crate::model::Schema;
 use crate::state::Plugin;
 
@@ -221,6 +225,10 @@ impl RuntimeBuilder {
         let mut list_item_types: HashSet<String> = HashSet::new();
         let mut node_views = NodeViewRegistry::new();
         let mut input_rules: Vec<InputRule> = Vec::new();
+        let mut markdown_node_emitters: HashMap<String, MarkdownNodeEmitter> = HashMap::new();
+        let mut markdown_mark_emitters: HashMap<String, MarkdownMarkEmitter> = HashMap::new();
+        let mut markdown_parse_rules: HashMap<MarkdownParseMatch, Arc<MarkdownParseRule>> =
+            HashMap::new();
 
         // Iteration order: user extensions FIRST, then base
         // extensions whose name isn't shadowed by a user extension.
@@ -250,6 +258,22 @@ impl RuntimeBuilder {
             }
             for rule in ext.input_rules() {
                 input_rules.push(rule);
+            }
+            // Markdown emitters: same user-first / first-wins
+            // semantics as commands. A user extension's emitter
+            // for `task_item` shadows the default
+            // TaskListExtension's entry for the same node type
+            // because user extensions are iterated first.
+            for (type_name, emitter) in ext.markdown_node_emitters() {
+                markdown_node_emitters.entry(type_name).or_insert(emitter);
+            }
+            for (type_name, emitter) in ext.markdown_mark_emitters() {
+                markdown_mark_emitters.entry(type_name).or_insert(emitter);
+            }
+            for rule in ext.markdown_parse_rules() {
+                markdown_parse_rules
+                    .entry(rule.matches)
+                    .or_insert_with(|| Arc::new(rule));
             }
         }
 
@@ -304,6 +328,9 @@ impl RuntimeBuilder {
             plugins,
             list_item_types,
             input_rules,
+            markdown_node_emitters,
+            markdown_mark_emitters,
+            markdown_parse_rules,
         })
     }
 }

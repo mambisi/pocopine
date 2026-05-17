@@ -32,6 +32,10 @@ use std::sync::Arc;
 
 use crate::extension::{KeyBindingFactory, NamedCommand, RichTextExtension};
 use crate::inputrules::InputRule;
+use crate::markdown::{
+    MarkEmitter as MarkdownMarkEmitter, MarkdownParseRule, NodeEmitter as MarkdownNodeEmitter,
+    ParseMatch as MarkdownParseMatch,
+};
 use crate::model::Schema;
 use crate::state::Plugin;
 
@@ -61,6 +65,9 @@ pub struct EditorRuntime {
     pub(crate) plugins: Vec<Plugin>,
     pub(crate) list_item_types: HashSet<String>,
     pub(crate) input_rules: Vec<InputRule>,
+    pub(crate) markdown_node_emitters: HashMap<String, MarkdownNodeEmitter>,
+    pub(crate) markdown_mark_emitters: HashMap<String, MarkdownMarkEmitter>,
+    pub(crate) markdown_parse_rules: HashMap<MarkdownParseMatch, Arc<MarkdownParseRule>>,
 }
 
 impl EditorRuntime {
@@ -144,6 +151,57 @@ impl EditorRuntime {
     /// before defaulting to a plain text insert.
     pub fn input_rules(&self) -> &[InputRule] {
         &self.input_rules
+    }
+
+    /// Build a [`crate::markdown::MarkdownSerializer`] pre-populated
+    /// with this runtime's per-node-type markdown emitters.
+    ///
+    /// The emitter table is pre-folded at build time with **user-
+    /// first** precedence (same semantics as commands / keymaps):
+    /// a user extension whose `markdown_node_emitters()` returns
+    /// an entry for `task_item` shadows the default
+    /// `TaskListExtension`'s entry for the same node type. This
+    /// call just clones the pre-built table into a fresh serializer
+    /// — cheap because every emitter is held by `Arc`.
+    pub fn markdown_serializer(&self) -> crate::markdown::MarkdownSerializer {
+        let mut serializer = crate::markdown::MarkdownSerializer::new();
+        for (type_name, emitter) in &self.markdown_node_emitters {
+            serializer = serializer.register_node(type_name.clone(), emitter.clone());
+        }
+        for (type_name, emitter) in &self.markdown_mark_emitters {
+            serializer = serializer.register_mark(type_name.clone(), emitter.clone());
+        }
+        serializer
+    }
+
+    /// Build a [`crate::markdown::MarkdownParser`] for this
+    /// runtime, pre-populated with parse rules contributed by
+    /// every extension's
+    /// [`crate::extension::RichTextExtension::markdown_parse_rules`].
+    /// Extension-contributed rules SHADOW the parser's built-in
+    /// handling for the same event, so apps can override default
+    /// behavior (in addition to recognizing novel shapes like
+    /// tables or callouts).
+    ///
+    /// The schema accompanying the parser is `self.schema()`, so
+    /// task-list parsing automatically adapts: schemas that
+    /// declare `task_list`/`task_item` get proper task nodes;
+    /// schemas that don't fall back to `bullet_list` (logged as
+    /// a warning).
+    pub fn markdown_parser(&self) -> crate::markdown::MarkdownParser {
+        use crate::markdown::{ParseMatch, TagKind};
+        let mut parser = crate::markdown::MarkdownParser::new();
+        parser.rules = self.markdown_parse_rules.clone();
+        // Enable `ENABLE_TABLES` only when a Table parse rule is
+        // registered — otherwise pipe-table markdown would be
+        // tokenized into Tag::Table* events the walker can't
+        // handle, dropping cells into loose paragraphs.
+        if parser.rules.contains_key(&ParseMatch::Tag(TagKind::Table)) {
+            parser
+                .options
+                .insert(pulldown_cmark::Options::ENABLE_TABLES);
+        }
+        parser
     }
 }
 

@@ -13,9 +13,11 @@ use serde_json::{json, Value};
 
 use crate::commands::{wrap_in_list, BoxedCommand};
 use crate::extension::{ExtensionNodeView, NamedCommand, RichTextExtension};
+use crate::markdown::{EventSink, NodeEmitter};
 use crate::model::{Attrs, NodeSpec};
 use crate::state::{EditorState, Transaction};
 use crate::transform::{AttrStep, Step};
+use pulldown_cmark::{Event as MdEvent, Tag as MdTag, TagEnd as MdTagEnd};
 
 /// Default custom-element selector identifying where pocopine should
 /// inject content children inside a node-view component. Apps that
@@ -135,5 +137,37 @@ impl RichTextExtension for TaskListExtension {
 
     fn list_item_types(&self) -> &'static [&'static str] {
         &["task_item"]
+    }
+
+    fn markdown_node_emitters(&self) -> Vec<(String, NodeEmitter)> {
+        // `task_list` renders as a bullet list whose items each
+        // open with a GFM `[ ] ` / `[x] ` marker. The
+        // `TaskListMarker` event is recognized by
+        // `pulldown_cmark_to_cmark` and emits as `[ ]` or `[x]`
+        // followed by a space — exactly the shape GFM expects.
+        vec![
+            (
+                "task_list".into(),
+                Arc::new(|node, _parent, _index, sink: &mut EventSink<'_>| {
+                    sink.push(MdEvent::Start(MdTag::List(None)));
+                    sink.render_content(node);
+                    sink.push(MdEvent::End(MdTagEnd::List(false)));
+                }),
+            ),
+            (
+                "task_item".into(),
+                Arc::new(|node, _parent, _index, sink: &mut EventSink<'_>| {
+                    let checked = node
+                        .attrs()
+                        .get("checked")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    sink.push(MdEvent::Start(MdTag::Item));
+                    sink.push(MdEvent::TaskListMarker(checked));
+                    sink.render_content(node);
+                    sink.push(MdEvent::End(MdTagEnd::Item));
+                }),
+            ),
+        ]
     }
 }

@@ -23,8 +23,18 @@
     <button @mousedown.prevent pp-on:click="redo" title="Redo">↷</button>
     <span class="sep"></span>
     <button @mousedown.prevent pp-on:click="reset">Reset</button>
+    <button @mousedown.prevent pp-on:click="export_markdown" data-test="export-md">Export MD</button>
   </div>
   <pine-rich-text-root debug-json="true" pp-bind:initial-doc="initial_doc"></pine-rich-text-root>
+  <details class="exported-markdown-wrap">
+    <summary>Exported markdown</summary>
+    <pre data-test="exported-markdown">{{ exported_markdown }}</pre>
+  </details>
+  <details class="import-markdown-wrap">
+    <summary>Import markdown</summary>
+    <textarea data-test="import-markdown-input" pp-ref="import_textarea" placeholder="Paste markdown here…" rows="4"></textarea>
+    <button @mousedown.prevent pp-on:click="import_markdown" data-test="import-md">Import MD</button>
+  </details>
   <div class="comment-box-label">Comment box (minimal runtime — paragraphs + basic marks only):</div>
   <pine-rich-text-root runtime="comment" data-test="comment-editor"></pine-rich-text-root>
 </div>

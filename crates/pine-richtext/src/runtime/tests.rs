@@ -682,3 +682,275 @@ fn node_view_spec_through_runtime_carries_content_selector() {
     assert_eq!(spec.tag, "pine-p");
     assert_eq!(spec.content_selector.as_deref(), Some("[data-content]"));
 }
+
+#[test]
+fn markdown_serializer_picks_up_extension_emitters() {
+    // Phase 6 C2: `EditorRuntime::markdown_serializer()` folds
+    // each extension's `markdown_node_emitters()` into a fresh
+    // `MarkdownSerializer`. `TaskListExtension` ships emitters
+    // for `task_list` and `task_item` that render GFM task lists.
+    use crate::extensions::TaskListExtension;
+
+    let rt = RuntimeBuilder::new().with(TaskListExtension::new()).build();
+    let serializer = rt.markdown_serializer();
+    assert!(
+        serializer.nodes.contains_key("task_list"),
+        "task_list emitter should be registered",
+    );
+    assert!(
+        serializer.nodes.contains_key("task_item"),
+        "task_item emitter should be registered",
+    );
+}
+
+#[test]
+fn user_markdown_emitter_shadows_default_first_wins() {
+    // Codex C2 P2: a user extension whose `markdown_node_emitters()`
+    // contributes an entry for an already-registered node type
+    // must shadow the default. The builder folds emitters
+    // user-first / first-wins to match the same semantics as
+    // commands and keymaps.
+    use crate::extensions::TaskListExtension;
+    use crate::markdown::{EventSink, NodeEmitter};
+    use pulldown_cmark::{Event as MdEvent, Tag as MdTag, TagEnd as MdTagEnd};
+    use std::sync::Arc;
+
+    struct CustomTaskExt;
+    impl RichTextExtension for CustomTaskExt {
+        fn name(&self) -> &str {
+            "custom-task-emitter"
+        }
+        fn markdown_node_emitters(&self) -> Vec<(String, NodeEmitter)> {
+            vec![(
+                "task_item".into(),
+                Arc::new(|node, _parent, _index, sink: &mut EventSink<'_>| {
+                    // Distinct sentinel so the test can detect the
+                    // user emitter ran instead of the default.
+                    sink.push(MdEvent::Start(MdTag::Item));
+                    sink.push(MdEvent::Text("CUSTOM-MARKER ".into()));
+                    sink.render_content(node);
+                    sink.push(MdEvent::End(MdTagEnd::Item));
+                }),
+            )]
+        }
+    }
+
+    // Build with the default extension chain (which includes
+    // `TaskListExtension` contributing `task_item`+`task_list`
+    // emitters) and add `CustomTaskExt` as a separate user
+    // extension. User-first folding must let CustomTaskExt's
+    // `task_item` emitter shadow the default.
+    let rt = RuntimeBuilder::new().with(CustomTaskExt).build();
+    let schema = rt.schema();
+
+    let para_text = schema.text("body".to_string(), Vec::new()).unwrap();
+    let para = schema
+        .node("paragraph", Attrs::new(), Fragment::from(para_text))
+        .unwrap();
+    let mut attrs = Attrs::new();
+    attrs.insert("checked".into(), json!(false));
+    let item = schema
+        .node("task_item", attrs, Fragment::from(para))
+        .unwrap();
+    let list = schema
+        .node("task_list", Attrs::new(), Fragment::from(item))
+        .unwrap();
+    let doc = schema
+        .node("doc", Attrs::new(), Fragment::from(list))
+        .unwrap();
+
+    let out = rt.markdown_serializer().serialize(&doc).unwrap();
+    assert!(
+        out.contains("CUSTOM-MARKER body"),
+        "user emitter must shadow the default, got: {out}",
+    );
+    assert!(
+        !out.contains("[ ] body"),
+        "default GFM emitter must not have run, got: {out}",
+    );
+
+    // Suppress unused-import warning: TaskListExtension is
+    // pulled in only because it provides the default emitter
+    // we're proving the user can override.
+    let _ = TaskListExtension::new();
+}
+
+#[test]
+fn task_list_extension_emits_gfm_task_list_markdown() {
+    // Build a doc containing a task_list with one checked + one
+    // unchecked item, then serialize via the runtime's
+    // markdown serializer. The output must use GFM `- [ ] ` /
+    // `- [x] ` markers.
+    use crate::extensions::TaskListExtension;
+
+    let rt = RuntimeBuilder::new().with(TaskListExtension::new()).build();
+    let schema = rt.schema();
+
+    let para_text = schema.text("a thing".to_string(), Vec::new()).unwrap();
+    let para = schema
+        .node("paragraph", Attrs::new(), Fragment::from(para_text))
+        .unwrap();
+
+    let mut unchecked_attrs = Attrs::new();
+    unchecked_attrs.insert("checked".into(), json!(false));
+    let unchecked = schema
+        .node("task_item", unchecked_attrs, Fragment::from(para.clone()))
+        .unwrap();
+
+    let mut checked_attrs = Attrs::new();
+    checked_attrs.insert("checked".into(), json!(true));
+    let para2_text = schema.text("done".to_string(), Vec::new()).unwrap();
+    let para2 = schema
+        .node("paragraph", Attrs::new(), Fragment::from(para2_text))
+        .unwrap();
+    let checked = schema
+        .node("task_item", checked_attrs, Fragment::from(para2))
+        .unwrap();
+
+    let list = schema
+        .node(
+            "task_list",
+            Attrs::new(),
+            Fragment::from(vec![unchecked, checked]),
+        )
+        .unwrap();
+    let doc = schema
+        .node("doc", Attrs::new(), Fragment::from(list))
+        .unwrap();
+
+    let serializer = rt.markdown_serializer();
+    let out = serializer.serialize(&doc).unwrap();
+    assert!(
+        out.contains("[ ] a thing"),
+        "expected unchecked GFM marker, got: {out}",
+    );
+    assert!(
+        out.contains("[x] done"),
+        "expected checked GFM marker, got: {out}",
+    );
+}
+
+#[test]
+fn extension_can_contribute_both_mark_emitter_and_parse_rule() {
+    // Phase 6 C4: prove the pluggable contract works end-to-end
+    // for a custom mark. A fake `StrikethroughExtension` declares
+    // a `strike` mark type, contributes a `markdown_mark_emitters`
+    // entry that wraps text in `Tag::Strikethrough`, AND
+    // contributes a `markdown_parse_rules` entry that builds the
+    // mark from `Tag::Strikethrough` events on import. Symmetric:
+    // export the model → serialized markdown → reparse → same
+    // mark.
+    use crate::markdown::{
+        MarkEmitter, MarkRender, MarkdownParseRule, ParseMapping, ParseMatch, TagKind,
+    };
+    use crate::model::{Fragment, Mark, MarkSpec};
+    use pulldown_cmark::{Tag as MdTag, TagEnd as MdTagEnd};
+    use std::sync::Arc;
+
+    struct StrikethroughExt;
+    impl RichTextExtension for StrikethroughExt {
+        fn name(&self) -> &str {
+            "strikethrough"
+        }
+        fn marks(&self) -> Vec<MarkSpec> {
+            vec![MarkSpec::new("strike")]
+        }
+        fn markdown_mark_emitters(&self) -> Vec<(String, MarkEmitter)> {
+            vec![(
+                "strike".into(),
+                Arc::new(|_mark| MarkRender::Wrap(MdTag::Strikethrough)),
+            )]
+        }
+        fn markdown_parse_rules(&self) -> Vec<MarkdownParseRule> {
+            vec![MarkdownParseRule {
+                matches: ParseMatch::Tag(TagKind::Strikethrough),
+                maps_to: ParseMapping::Mark {
+                    mark_type: "strike".into(),
+                    get_attrs: None,
+                },
+            }]
+        }
+    }
+
+    let rt = RuntimeBuilder::new().with(StrikethroughExt).build();
+    let schema = rt.schema();
+
+    // Build a doc with the custom mark applied.
+    let strike = Mark::new("strike", Attrs::new());
+    let text = schema.text("gone".to_string(), vec![strike]).unwrap();
+    let para = schema
+        .node("paragraph", Attrs::new(), Fragment::from(text))
+        .unwrap();
+    let doc = schema
+        .node("doc", Attrs::new(), Fragment::from(para))
+        .unwrap();
+
+    // Export: serializer uses the registered mark emitter →
+    // wraps text in Tag::Strikethrough → pulldown-cmark-to-cmark
+    // renders as `~~gone~~`.
+    let out = rt.markdown_serializer().serialize(&doc).unwrap();
+    assert!(out.contains("~~gone~~"), "got: {out}");
+
+    // Import: parser sees Tag::Strikethrough events and the
+    // contributed rule builds the `strike` mark.
+    let reparsed = rt.markdown_parser().parse(&out, schema).unwrap();
+    // Find the text node and check its marks.
+    fn find_marked_text<'a>(node: &'a Node, mark_name: &str) -> Option<&'a Node> {
+        if node.type_name() == "text" && node.marks().iter().any(|m| m.type_name() == mark_name) {
+            return Some(node);
+        }
+        for child in node.content().iter() {
+            if let Some(found) = find_marked_text(child, mark_name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let text_with_mark = find_marked_text(&reparsed, "strike").expect("strike mark on round-trip");
+    assert_eq!(text_with_mark.text(), Some("gone"));
+
+    // Silence the unused-import warning: we suppress this by
+    // explicitly referencing TagEnd, since the parse rule
+    // engine handles open/close itself.
+    let _ = MdTagEnd::Strikethrough;
+}
+
+#[test]
+fn pipe_table_markdown_without_table_rule_preserves_text() {
+    // Codex C4 P2: when no `TagKind::Table` parse rule is
+    // registered, the runtime parser must NOT enable
+    // `pulldown_cmark::Options::ENABLE_TABLES`. Otherwise
+    // pipe-table source like `| A | B |\n|---|---|\n| 1 | 2 |`
+    // tokenizes into Tag::Table / Tag::TableRow / Tag::TableCell
+    // events that the walker drops, leaving only the cell text
+    // as loose paragraphs.
+    //
+    // With tables disabled, pulldown-cmark treats the same
+    // source as plain text — the pipes survive as paragraph
+    // content. This preserves user data even when the schema
+    // doesn't support tables.
+    let rt = RuntimeBuilder::new().build();
+    let md = "| Header A | Header B |\n|----------|----------|\n| cell 1   | cell 2   |\n";
+    let doc = rt.markdown_parser().parse(md, rt.schema()).unwrap();
+
+    let mut all_text = String::new();
+    fn gather(node: &Node, out: &mut String) {
+        if let Some(t) = node.text() {
+            out.push_str(t);
+            return;
+        }
+        for c in node.content().iter() {
+            gather(c, out);
+        }
+    }
+    gather(&doc, &mut all_text);
+
+    // Both header AND cell content must survive — preferably
+    // verbatim with pipes, but at minimum the four data points.
+    for needle in ["Header A", "Header B", "cell 1", "cell 2"] {
+        assert!(
+            all_text.contains(needle),
+            "table content `{needle}` must survive import even without a table rule, got: {all_text:?}",
+        );
+    }
+}

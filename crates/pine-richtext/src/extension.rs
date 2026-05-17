@@ -160,4 +160,53 @@ pub trait RichTextExtension: 'static + Send + Sync {
     fn input_rules(&self) -> Vec<crate::inputrules::InputRule> {
         Vec::new()
     }
+
+    /// Markdown emitter overrides for custom node types this
+    /// extension contributes. Each entry is `(node_type_name,
+    /// emitter)`. The folded list is consumed by
+    /// [`crate::runtime::EditorRuntime::markdown_serializer`] when
+    /// apps build a serializer from the runtime — letting custom
+    /// node types render to markdown without the app having to
+    /// register an emitter manually.
+    ///
+    /// Empty by default — extensions whose node types are already
+    /// covered by `markdown::MarkdownSerializer`'s built-in walker
+    /// (paragraph, heading, blockquote, lists, code_block, image,
+    /// hard_break) need no overrides. Extensions adding novel
+    /// shapes (task lists, callouts, mention chips) supply
+    /// emitters that push the right pulldown-cmark events.
+    fn markdown_node_emitters(&self) -> Vec<(String, crate::markdown::NodeEmitter)> {
+        Vec::new()
+    }
+
+    /// Markdown emitter overrides for mark types this extension
+    /// contributes. Each entry is `(mark_type_name, emitter)`
+    /// where the emitter returns a [`crate::markdown::MarkRender`]
+    /// — either a `Tag` pair the inner content is wrapped in, or
+    /// an atomic `Event` that replaces the text run.
+    ///
+    /// Empty by default. The built-in `em` / `strong` / `link` /
+    /// `code` marks are handled inside the serializer when no
+    /// emitter overrides them; extensions adding strikethrough,
+    /// highlight, underline-as-HTML, etc. register here.
+    fn markdown_mark_emitters(&self) -> Vec<(String, crate::markdown::MarkEmitter)> {
+        Vec::new()
+    }
+
+    /// Markdown parse rules this extension contributes. Each rule
+    /// claims a specific pulldown-cmark event and describes how
+    /// to map it to a model construct (block, mark, leaf, or a
+    /// custom callback). The folded rule table is consumed by
+    /// [`crate::runtime::EditorRuntime::markdown_parser`].
+    ///
+    /// Empty by default. Extensions with novel shapes register
+    /// rules here so apps can import markdown matching those
+    /// shapes; built-in CommonMark shapes (paragraph, heading,
+    /// list, image, …) work without any rule because the parser
+    /// has built-in handling. Rules SHADOW the built-in handling
+    /// if they claim the same event, so extensions can also
+    /// override defaults.
+    fn markdown_parse_rules(&self) -> Vec<crate::markdown::MarkdownParseRule> {
+        Vec::new()
+    }
 }
