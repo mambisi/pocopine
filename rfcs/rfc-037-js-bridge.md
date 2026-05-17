@@ -17,10 +17,10 @@ component:
 
 - **`.poco`** — template, unchanged.
 - **`.rs`** — component state + Rust handlers, unchanged.
-- **`.client.js`** — optional sibling file that default-exports
-  a factory `(scope) => { … }`. Gets the full npm ecosystem.
-  Gains a narrow, typed bridge to the component's proxy state
-  and lifecycle.
+- **`.client.js` / `.client.ts`** — optional sibling file that
+  default-exports a factory `(scope) => { … }`. Gets the npm
+  ecosystem through the Pocopine CLI-managed pipeline. Gains a
+  narrow bridge to the component lifecycle.
 
 Crucially the bridge is **opt-in per component**. 95% of
 components never touch it; components that do get scoped access
@@ -58,9 +58,10 @@ src/
   FirebaseAuth.poco          <!-- template, as today -->
   FirebaseAuth.rs            // component state + Rust handlers
   FirebaseAuth.client.js     // optional island
+  FirebaseAuth.client.ts     // also accepted; no TSX/JSX
 ```
 
-Presence of the `.client.js` is sensed by the `#[component]`
+Presence of the `.client.js` / `.client.ts` is sensed by the `#[component]`
 macro via an explicit arg:
 
 ```rust
@@ -538,10 +539,12 @@ Cleared by `walker::release_subtree` alongside refs/slots/effects.
 
 ### 8.1 Package management
 
-Authors keep `Cargo.toml` + `package.json` at the project root
-as they already do. Pocopine doesn't reinvent either package
-manager; the CLI only *consumes* `target/` (cargo) and
-`node_modules/` (pnpm) at bundle time.
+Authors keep `Cargo.toml` + a root `package.json` only when the
+project has client modules. Pocopine owns the front door:
+authors use `pocopine js ...`, `pocopine build`, and
+`pocopine dev`, not ad-hoc esbuild/Vite/npm scripts. Under the
+hood, the CLI consumes `target/` from cargo and `node_modules/`
+from the detected JS package manager.
 
 #### Canonical JS package manager: **pnpm**
 
@@ -567,45 +570,55 @@ why it specifically fits a Rust-adjacent audience):
 - Avoid: yarn berry PnP (virtual-path rewriting has caused real
   breakage with `wasm-pack`-generated packages).
 
-Teams that inherit or need to migrate to a different manager
-aren't blocked — the runtime only needs `node_modules/` to
-exist, regardless of who populated it.
+Teams that inherit a different lockfile are not blocked, but the
+normal command remains `pocopine js ...`. The package manager is
+an implementation detail the CLI invokes.
 
-#### Pass-through subcommands — cargo + JS
+Teams that do not want Pocopine to infer global tools can add a
+repo-local `.pocopine.toml`:
+
+```toml
+[tools]
+cargo = { command = "cargo", args = ["+stable"] }
+rustc = { command = "rustc", args = ["+stable"] }
+wasm-pack = "/opt/tools/wasm-pack"
+package-manager = "pnpm"
+node = "node"
+tailwindcss = "tailwindcss"
+```
+
+The value may be a plain binary/path string or `{ command, args }`.
+The CLI uses these commands directly instead of going through npm
+scripts or shell aliases. This keeps Pocopine as the front door while
+still letting teams pin wrappers, toolchains, or package-manager
+choices.
+
+#### Managed JS subcommands
 
 ```
-# Rust — always cargo, one tool, no detection.
-pocopine cargo add serde
-pocopine cargo add --features=derive serde
-pocopine cargo update
-
-# JS — pnpm by default, explicit names for migrating teams.
-pocopine js add firebase            # → pnpm add firebase (canonical)
-pocopine pnpm add stripe            # explicit
-pocopine npm  install posthog-js    # explicit (inherited npm repo)
-pocopine yarn add @sentry/browser   # explicit (inherited yarn repo)
-pocopine bun  add some-sdk          # explicit
+pocopine js init                    # create/update package.json toolkit
+pocopine js install                 # install through detected manager
+pocopine js add firebase            # add runtime dependency
+pocopine js add -D some-dev-tool    # add dev dependency
 ```
 
 `pocopine js add` auto-detects via lockfile (`pnpm-lock.yaml` →
 pnpm, `yarn.lock` → yarn, `bun.lockb` → bun, default → pnpm).
-The named subcommands forward args verbatim to the named tool
-in the project root.
+The CLI also ensures the project has the small client toolkit
+dependency it owns (`esbuild`) before bundling.
 
-Authors who want raw `cargo` / `pnpm` can skip the wrappers
-entirely; nothing in the build pipeline depends on them.
-
-On `pocopine serve`: if `node_modules/` is absent the CLI runs
-the detected install command once before starting the bundler,
-so new contributors don't hit a stale-import error on first
-run. `cargo build` runs unconditionally via the existing serve
-path.
+On `pocopine build`, `pocopine run`, and `pocopine dev`, if
+client modules exist and `node_modules/` is absent, the CLI runs
+the detected install command once before invoking the bundler.
+`cargo build` / `wasm-pack build` stays on the existing path.
 
 ### 8.2 Bundling
 
 The CLI grows a tiny "client bundler" step:
 
-1. Scan `src/**/*.client.js`.
+1. Scan `src/**/*.client.js` and `src/**/*.client.ts`. Reject
+   `.client.jsx` / `.client.tsx`; Pocopine does not host other UI
+   frameworks.
 2. Emit a thin entry file:
    ```js
    import firebaseAuth from "./FirebaseAuth.client.js";
@@ -617,20 +630,28 @@ The CLI grows a tiny "client bundler" step:
 3. Run esbuild:
    ```
    esbuild _generated/client-entry.js \
-     --bundle --format=esm --outfile=dist/app-client.js
+     --bundle --format=esm --outfile=pkg/pocopine-client.js
    ```
-4. Inject `<script type="module" src="/dist/app-client.js">`
-   into the served HTML.
+4. In static-server mode, inject
+   `<script type="module" src="/pkg/pocopine-client.js">` into
+   served HTML when the bundle exists.
 
-Dev server watches `*.client.js` and rebundles on save. No
+Dev server watches `*.client.js` / `*.client.ts` and rebundles on save. No
 separate `package.json` in each component dir — one root
 `package.json` with the SDKs the app uses.
+
+Package-file changes (`package.json`, `pnpm-lock.yaml`,
+`package-lock.json`, `yarn.lock`, `bun.lockb`, `bun.lock`) trigger a
+client dependency install followed by a client rebundle in dev mode.
+Rust/template changes still rebuild wasm; client-module changes do not
+force a wasm rebuild.
 
 ## 9. Error / edge cases
 
 | Scenario | Behaviour |
 |---|---|
-| `.client.js` missing but macro declares `client = "..."` | Compile-time error (file not found). |
+| `.client.js` / `.client.ts` missing but macro declares `client = "..."` | Compile-time error (file not found). |
+| `.client.jsx` / `.client.tsx` present | Build error. Pocopine supports imperative JS/TS SDK interop, not JSX/TSX or alternate UI framework islands. |
 | Factory throws | Logged as `console.error`; mount continues; Rust `js::call` returns `NoIsland`. |
 | Factory returns non-object | Dev warning; treated as `{}` (no RPCs, no hooks). |
 | Factory is async | Supported — the `await` lands in `mounted()` (top-level imports stay synchronous — use dynamic `import()` inside `mounted` for late-loaded SDKs). |
@@ -638,24 +659,25 @@ separate `package.json` in each component dir — one root
 | Same component mounted twice | Each mount gets a fresh `ScopeWrap` + island invocation. |
 | Teleport / `pp-if` re-mount | `onUnmount` → `onMount` sequence fires per mount. Island must be idempotent. |
 | SSR hydration | Out of scope — SSR doesn't run the island; first client mount initialises it. |
-| Build without esbuild | Users who can't run esbuild (e.g. WASM-only toolchain) can hand-bundle and publish as a single `.js` file. The runtime just needs `window.__pp_client_modules[name]` populated. |
+| Build without JS tooling installed | CLI emits a tool-specific error with the `pocopine js install` path. The normal workflow stays inside Pocopine commands. |
 
 ## 10. Implementation plan
 
 Three PRs, independently mergeable:
 
-**PR 1 — runtime + macro.**
+**PR 1 — CLI toolkit + bundling.**
+- `pocopine-cli` — `pocopine js init/install/add`, scan
+  `.client.js` / `.client.ts`, reject TSX/JSX, generate the
+  entry file, drive esbuild through the managed package
+  manager, and inject `/pkg/pocopine-client.js` in static mode.
+- Dev-server reload path mirrors the Rust hot-reload.
+
+**PR 2 — runtime + macro.**
 - `crates/pocopine-core/src/js_bridge.rs` — `ScopeWrap` struct +
   per-scope `JsIsland` side-table + lifecycle hook calls from
   walker mount/release.
 - `#[component]` macro — parse `client = "..."`, emit a tag-name
   registration + the `.client.js` path as build-time metadata.
-- No CLI change yet — authors hand-inject the bundle.
-
-**PR 2 — CLI bundling.**
-- `pocopine-cli` — scan `*.client.js`, generate entry, drive
-  esbuild. Watch mode. Inject `<script>` into served HTML.
-- Dev-server reload path mirrors the Rust hot-reload.
 
 **PR 3 — ergonomics.**
 - `pocopine::js::call<T>(name, args)` wrapper with
@@ -669,9 +691,11 @@ Three PRs, independently mergeable:
 
 ## 11. Out of scope
 
-- **TypeScript per-component.** Authors wanting `.client.ts`
-  can run their own tsc/esbuild pipeline; the runtime only sees
-  the built `.js`.
+- **TSX/JSX and UI-framework islands.** `.client.ts` is accepted
+  as typed JavaScript input to the Pocopine-managed bundler.
+  `.client.tsx`, `.client.jsx`, React/Vue/Svelte/Solid/Preact
+  mounting, and framework hydration inside Pocopine are out of
+  scope.
 - **Server-side rendering of islands.** Islands are
   client-only; SSR emits an empty shell, hydration runs the
   factory.

@@ -21,7 +21,8 @@ but normal component templates mount through macro-generated install
 code.
 Templates live in plain HTML files (`.poco`), styles in plain CSS
 files, logic in plain Rust files. No mixed-language SFCs, no virtual
-DOM, no JavaScript toolchain.
+DOM, and no JavaScript toolchain unless you opt into Pocopine-managed
+`.client.js` / `.client.ts` modules.
 
 > Status: **pre-1.0 / experimental.** The API is still moving; every
 > breaking change lands in an RFC under [`rfcs/`](./rfcs/).
@@ -101,6 +102,9 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Tailwind-friendly transitions.** `pp-transition:enter`,
   `enter-start`, `enter-end` (and leave variants) — class strings go
   straight through, no custom CSS language.
+* **Optional client modules.** `.client.js` / `.client.ts` files can
+  import npm SDKs through the Pocopine CLI-managed esbuild path. No
+  TSX/JSX or framework islands.
 
 ## Performance
 
@@ -146,6 +150,27 @@ one install covers all three.
 
 ```bash
 cargo install pocopine-cli
+```
+
+From a source checkout, use the repo helper:
+
+```bash
+./install.sh
+pocopine doctor --path .
+```
+
+If a project needs wrappers or pinned tool paths, add a local
+`.pocopine.toml`. Pocopine reads this file instead of guessing from
+global tools, without shelling out through npm scripts:
+
+```toml
+[tools]
+cargo = { command = "cargo", args = ["+stable"] }
+rustc = { command = "rustc", args = ["+stable"] }
+wasm-pack = "/opt/tools/wasm-pack"
+package-manager = "pnpm"
+node = "node"
+tailwindcss = "tailwindcss"
 ```
 
 ### 2. Scaffold an app
