@@ -168,7 +168,7 @@ impl AppPlugin for KeepFirebaseAuthPlugin {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use pocopine::{ClientModule, ScopeId};
+    use pocopine::ScopeId;
 
     use super::{FirebaseAuthUser, KeepFirebaseAuth};
 
@@ -207,8 +207,8 @@ mod wasm {
         }
     }
 
-    fn module() -> Result<ClientModule, String> {
-        ClientModule::required("firebase").map_err(|err| err.to_string())
+    fn module() -> Result<crate::client_modules::firebase::Module, String> {
+        crate::client_modules::firebase::required().map_err(|err| err.to_string())
     }
 }
 

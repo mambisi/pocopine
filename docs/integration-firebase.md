@@ -1,13 +1,13 @@
 # Integration Firebase
 
 This guide shows the app-level Firebase Auth pattern Pocopine wants:
-the Firebase web SDK stays in a tiny `.client.js` adapter, while
+the Firebase web SDK stays in a tiny typed `.client.ts` adapter, while
 Pocopine components, stores, route guards, and `pocopine-auth-client`
 own the application state.
 
 The Keep example is the reference implementation:
 
-- [`examples/keep/src/Firebase.client.js`](../examples/keep/src/Firebase.client.js)
+- [`examples/keep/src/Firebase.client.ts`](../examples/keep/src/Firebase.client.ts)
 - [`examples/keep/src/firebase_auth.rs`](../examples/keep/src/firebase_auth.rs)
 - [`examples/keep/src/components/login/`](../examples/keep/src/components/login/)
 - [`examples/keep/src/components/auth_gate/`](../examples/keep/src/components/auth_gate/)
@@ -16,7 +16,7 @@ The Keep example is the reference implementation:
 
 ```
 Firebase web SDK
-  -> src/Firebase.client.js
+  -> src/Firebase.client.ts
   -> ClientModule::required("firebase")
   -> app-owned auth extension
   -> pocopine-auth-client::AuthSession
@@ -47,14 +47,15 @@ The CLI owns the JavaScript toolkit path. Use `pocopine js ...`,
 `pocopine build`, and `pocopine dev` instead of adding separate npm
 scripts for Pocopine-managed client modules.
 
-## Step 2 - create `src/Firebase.client.js`
+## Step 2 - create `src/Firebase.client.ts`
 
-The filename matters. `src/Firebase.client.js` registers as the
+The filename matters. `src/Firebase.client.ts` registers as the
 client module named `firebase`, so Rust can call
 `ClientModule::required("firebase")`.
 
-```js
+```ts
 import { initializeApp } from "firebase/app";
+import type { User } from "firebase/auth";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -76,7 +77,15 @@ const provider = new GoogleAuthProvider();
 
 provider.setCustomParameters({ prompt: "select_account" });
 
-async function userPayload(user) {
+type FirebaseAuthUser = {
+  token: string;
+  uid: string;
+  email: string | null;
+  name: string | null;
+  photoUrl: string | null;
+};
+
+async function userPayload(user: User | null): Promise<FirebaseAuthUser | null> {
   if (!user) {
     return null;
   }
@@ -91,22 +100,22 @@ async function userPayload(user) {
 }
 
 export default {
-  async signIn() {
+  async signIn(): Promise<FirebaseAuthUser | null> {
     const credential = await signInWithPopup(auth, provider);
     return userPayload(credential.user);
   },
 
-  async signOut() {
+  async signOut(): Promise<null> {
     await firebaseSignOut(auth);
     return null;
   },
 
-  async initialUser() {
+  async initialUser(): Promise<FirebaseAuthUser | null> {
     await auth.authStateReady();
     return userPayload(auth.currentUser);
   },
 
-  onAuthStateChanged(callback) {
+  onAuthStateChanged(callback: (user: FirebaseAuthUser | null) => void): () => void {
     return onAuthStateChanged(auth, async (user) => {
       callback(await userPayload(user));
     });

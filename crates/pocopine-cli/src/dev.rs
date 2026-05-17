@@ -183,14 +183,14 @@ fn is_client_module_path(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    name.ends_with(".client.js") || name.ends_with(".client.ts")
+    name.ends_with(".client.ts")
 }
 
 fn is_unsupported_client_module_path(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    name.ends_with(".client.jsx") || name.ends_with(".client.tsx")
+    name.ends_with(".client.js") || name.ends_with(".client.jsx") || name.ends_with(".client.tsx")
 }
 
 fn is_package_file(name: &str) -> bool {

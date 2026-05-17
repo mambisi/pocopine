@@ -22,7 +22,7 @@ code.
 Templates live in plain HTML files (`.poco`), styles in plain CSS
 files, logic in plain Rust files. No mixed-language SFCs, no virtual
 DOM, and no JavaScript toolchain unless you opt into Pocopine-managed
-`.client.js` / `.client.ts` modules.
+typed `.client.ts` modules.
 
 > Status: **pre-1.0 / experimental.** The API is still moving; every
 > breaking change lands in an RFC under [`rfcs/`](./rfcs/).
@@ -102,9 +102,9 @@ That's the whole counter. No virtual DOM, no build step beyond
 * **Tailwind-friendly transitions.** `pp-transition:enter`,
   `enter-start`, `enter-end` (and leave variants) — class strings go
   straight through, no custom CSS language.
-* **Optional client modules.** `.client.js` / `.client.ts` files can
-  import npm SDKs through the Pocopine CLI-managed esbuild path. No
-  TSX/JSX or framework islands.
+* **Optional client modules.** Typed `.client.ts` files can import npm
+  SDKs through the Pocopine CLI-managed esbuild path. No TSX/JSX,
+  untyped managed modules, or framework islands.
 
 ## Performance
 

@@ -1,17 +1,16 @@
 # Client Modules And Node Packages
 
 Pocopine apps do not need JavaScript tooling by default. When a project opts
-into `.client.js` or `.client.ts` files, the CLI owns the small JavaScript
-toolkit path so authors still use Pocopine commands as the front door.
+into typed `.client.ts` files, the CLI owns the small JavaScript toolkit path
+so authors still use Pocopine commands as the front door.
 
 ## Contract
 
-- Put optional client modules under `src/` as `*.client.js` or
-  `*.client.ts`.
+- Put optional managed client modules under `src/` as `*.client.ts`.
 - Use one project-root `package.json` and one project-root `node_modules/`.
 - Import npm packages normally from client modules:
 
-  ```js
+  ```ts
   import { initializeApp } from "firebase/app";
 
   const app = initializeApp({ projectId: "my-project" });
@@ -23,17 +22,17 @@ toolkit path so authors still use Pocopine commands as the front door.
   };
   ```
 
-- Do not use `.client.jsx`, `.client.tsx`, React/Vue/Svelte/Solid/Preact
-  islands, or framework-owned hydration. Pocopine accepts imperative JS/TS SDK
-  integration only.
+- Do not use `.client.js`, `.client.jsx`, `.client.tsx`,
+  React/Vue/Svelte/Solid/Preact islands, or framework-owned hydration.
+  Pocopine managed modules are typed TypeScript SDK adapters.
 
-The CLI scans `src/**/*.client.js` and `src/**/*.client.ts`, writes a generated
-entry file under `target/pocopine/client-modules/`, bundles it with esbuild, and
-serves `/pkg/pocopine-client.js` beside the wasm package.
+The CLI scans `src/**/*.client.ts`, writes a generated entry file under
+`target/pocopine/client-modules/`, bundles it with esbuild, and serves
+`/pkg/pocopine-client.js` beside the wasm package.
 
 ## Rust Access
 
-Application code should treat `.client.js` / `.client.ts` as a small SDK adapter.
+Application code should treat `.client.ts` as a small SDK adapter.
 Pocopine exposes the bundled default export through `ClientModule` so Rust
 components and app plugins do not need to write raw `wasm-bindgen` reflection
 code:
@@ -63,10 +62,40 @@ fn subscribe(
 }
 ```
 
-The module name comes from the filename. `src/Firebase.client.js` registers as
+The module name comes from the filename. `src/Firebase.client.ts` registers as
 `firebase`, and `src/FirebaseAuth.client.ts` registers as `firebase-auth`.
 Names are normalized to kebab case, so `FirebaseAuth.client.ts` and
 `firebase-auth.client.ts` collide; the CLI reports that as a build error.
+
+## Generated Rust Bindings
+
+Apps can add the build helper so Cargo and rust-analyzer see generated module
+facades:
+
+```rust
+// build.rs
+fn main() {
+    pocopine_client_build::generate().unwrap();
+}
+```
+
+```rust
+// src/lib.rs
+pub mod client_modules {
+    pocopine::include_client_modules!();
+}
+```
+
+Today the generated facade removes the stringly module lookup:
+
+```rust
+let firebase = crate::client_modules::firebase::required()?;
+let user = firebase.call_async::<Option<FirebaseUser>>("signIn").await?;
+```
+
+The next codegen layer will extract the explicit TypeScript API from the
+`.client.ts` default export and generate typed method wrappers on top of the
+same facade.
 
 ## Commands
 
@@ -80,9 +109,9 @@ pocopine dev
 ```
 
 `pocopine js init` creates or updates `package.json` with the managed esbuild
-dependency. `pocopine js install` installs through the detected package
-manager. `pocopine build`, `run`, and `dev` install missing client-toolkit
-dependencies before bundling when client modules are present.
+and TypeScript dependencies. `pocopine js install` installs through the
+detected package manager. `pocopine build`, `run`, and `dev` install missing
+client-toolkit dependencies before bundling when client modules are present.
 
 ## Package Manager Selection
 
@@ -116,8 +145,7 @@ uses the configured command directly; it does not require npm scripts.
 `pocopine dev` watches:
 
 - Rust/template files under `src/` and rebuilds wasm.
-- `.client.js` / `.client.ts` files and rebundles only
-  `/pkg/pocopine-client.js`.
+- `.client.ts` files and rebundles only `/pkg/pocopine-client.js`.
 - `package.json` and supported lockfiles, then reruns install and rebundles the
   client bundle.
 

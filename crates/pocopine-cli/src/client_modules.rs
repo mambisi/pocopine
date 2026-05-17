@@ -1,8 +1,8 @@
-use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use pocopine_client_codegen::{self as client_codegen, DiscoveryPolicy};
 use serde_json::{json, Map, Value};
 
 use crate::tools;
@@ -13,6 +13,7 @@ const CLIENT_BUNDLE_PATH: &str = "pkg/pocopine-client.js";
 const GENERATED_DIR: &str = "target/pocopine/client-modules";
 const ENTRY_FILE: &str = "entry.js";
 const DEFAULT_ESBUILD_VERSION: &str = "^0.25.0";
+const DEFAULT_TYPESCRIPT_VERSION: &str = "^5.0.0";
 
 pub fn init(project: &Path) -> Result<()> {
     let project = project
@@ -49,7 +50,7 @@ pub fn build(project: &Path, release: bool) -> Result<usize> {
     let project = project
         .canonicalize()
         .with_context(|| format!("resolve {}", project.display()))?;
-    let modules = discover_client_modules(&project)?;
+    let modules = client_codegen::discover_client_modules(&project, DiscoveryPolicy::TypedOnly)?;
     let bundle_path = project.join(CLIENT_BUNDLE_PATH);
     if modules.is_empty() {
         remove_stale_bundle(&bundle_path)?;
@@ -58,7 +59,7 @@ pub fn build(project: &Path, release: bool) -> Result<usize> {
 
     ensure_package_json(&project)?;
     ensure_node_modules(&project)?;
-    let entry = write_entry(&project, &modules)?;
+    let entry = client_codegen::write_runtime_entry(&project, &modules, GENERATED_DIR, ENTRY_FILE)?;
     if let Some(parent) = bundle_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -106,8 +107,10 @@ pub(crate) struct Status {
     pub(crate) module_count: usize,
     pub(crate) package_json: bool,
     pub(crate) has_esbuild_dependency: bool,
+    pub(crate) has_typescript_dependency: bool,
     pub(crate) node_modules: bool,
     pub(crate) local_esbuild: bool,
+    pub(crate) local_typescript: bool,
     pub(crate) package_manager: PackageManager,
     pub(crate) package_manager_source: PackageManagerSource,
     pub(crate) package_manager_overridden: bool,
@@ -119,9 +122,11 @@ pub(crate) fn status(project: &Path) -> Result<Status> {
     let project = project
         .canonicalize()
         .with_context(|| format!("resolve {}", project.display()))?;
-    let modules = discover_client_modules(&project)?;
+    let modules = client_codegen::discover_client_modules(&project, DiscoveryPolicy::TypedOnly)?;
     let package_json = project.join("package.json").is_file();
     let has_esbuild_dependency = package_json_has_dependency(&project, "esbuild")?.unwrap_or(false);
+    let has_typescript_dependency =
+        package_json_has_dependency(&project, "typescript")?.unwrap_or(false);
     let package_manager = detect_package_manager(&project);
     let project_tools = tools::ProjectTools::load(&project)?;
     let package_manager_command = project_tools.package_manager(package_manager.manager.binary());
@@ -129,178 +134,16 @@ pub(crate) fn status(project: &Path) -> Result<Status> {
         module_count: modules.len(),
         package_json,
         has_esbuild_dependency,
+        has_typescript_dependency,
         node_modules: project.join("node_modules").is_dir(),
         local_esbuild: local_esbuild(&project).is_some(),
+        local_typescript: local_typescript(&project).is_some(),
         package_manager: package_manager.manager,
         package_manager_source: package_manager.source,
         package_manager_overridden: project_tools.package_manager_override().is_some(),
         package_manager_conflicts: package_manager.conflicts,
         package_manager_command,
     })
-}
-
-#[derive(Clone, Debug)]
-struct ClientModule {
-    path: PathBuf,
-    name: String,
-}
-
-fn discover_client_modules(project: &Path) -> Result<Vec<ClientModule>> {
-    let src = project.join("src");
-    if !src.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut modules = Vec::new();
-    discover_in(&src, &mut modules)?;
-    modules.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let mut seen = HashSet::new();
-    for module in &modules {
-        if !seen.insert(module.name.clone()) {
-            bail!(
-                "duplicate client module name `{}` from {}; rename one file so each .client module maps to a unique component tag",
-                module.name,
-                module.path.display()
-            );
-        }
-    }
-    Ok(modules)
-}
-
-fn discover_in(dir: &Path, out: &mut Vec<ClientModule>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if entry.file_type()?.is_dir() {
-            if matches!(
-                name.as_ref(),
-                "target" | "node_modules" | ".git" | "pkg" | "dist" | ".idea" | ".vscode"
-            ) {
-                continue;
-            }
-            discover_in(&path, out)?;
-            continue;
-        }
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let file_name = name.as_ref();
-        if file_name.ends_with(".client.jsx") || file_name.ends_with(".client.tsx") {
-            bail!(
-                "unsupported client module `{}`: Pocopine supports .client.js and .client.ts only; JSX/TSX and UI-framework islands are intentionally out of scope",
-                path.display()
-            );
-        }
-        if file_name.ends_with(".client.js") || file_name.ends_with(".client.ts") {
-            out.push(ClientModule {
-                name: client_module_name(file_name)?,
-                path,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn client_module_name(file_name: &str) -> Result<String> {
-    let base = file_name
-        .strip_suffix(".client.js")
-        .or_else(|| file_name.strip_suffix(".client.ts"))
-        .unwrap_or(file_name);
-    let name = to_kebab_case(base);
-    if name.is_empty() {
-        bail!("client module filename `{file_name}` does not contain a component name");
-    }
-    Ok(name)
-}
-
-fn to_kebab_case(input: &str) -> String {
-    let mut out = String::new();
-    let mut prev_is_sep = true;
-    let mut prev_is_lower_or_digit = false;
-    for ch in input.chars() {
-        if ch == '_' || ch == '-' || ch == ' ' {
-            if !prev_is_sep {
-                out.push('-');
-            }
-            prev_is_sep = true;
-            prev_is_lower_or_digit = false;
-            continue;
-        }
-        if ch.is_ascii_uppercase() {
-            if prev_is_lower_or_digit && !prev_is_sep {
-                out.push('-');
-            }
-            out.push(ch.to_ascii_lowercase());
-            prev_is_sep = false;
-            prev_is_lower_or_digit = false;
-            continue;
-        }
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            prev_is_sep = false;
-            prev_is_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
-        }
-    }
-    out.trim_matches('-').to_string()
-}
-
-fn write_entry(project: &Path, modules: &[ClientModule]) -> Result<PathBuf> {
-    let generated = project.join(GENERATED_DIR);
-    std::fs::create_dir_all(&generated)
-        .with_context(|| format!("create {}", generated.display()))?;
-    let entry = generated.join(ENTRY_FILE);
-    let mut source = String::new();
-    for (idx, module) in modules.iter().enumerate() {
-        let rel = relative_import_path(&generated, &module.path);
-        source.push_str(&format!("import * as __pp_client_{idx} from \"{rel}\";\n"));
-    }
-    source.push_str("\nconst R = (window.__pp_client_modules ??= {});\n");
-    for (idx, module) in modules.iter().enumerate() {
-        let name = serde_json::to_string(&module.name)?;
-        source.push_str(&format!(
-            "if (\"default\" in __pp_client_{idx}) R[{name}] = __pp_client_{idx}.default;\n"
-        ));
-    }
-    source.push_str("export default R;\n");
-    std::fs::write(&entry, source).with_context(|| format!("write {}", entry.display()))?;
-    Ok(entry)
-}
-
-fn relative_import_path(from_dir: &Path, target: &Path) -> String {
-    let from = normal_components(from_dir);
-    let to = normal_components(target);
-    let common = from
-        .iter()
-        .zip(to.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let mut parts: Vec<String> = Vec::new();
-    for _ in common..from.len() {
-        parts.push("..".into());
-    }
-    parts.extend(to[common..].iter().cloned());
-    let mut path = parts.join("/");
-    if !path.starts_with('.') {
-        path = format!("./{path}");
-    }
-    path
-}
-
-fn normal_components(path: &Path) -> Vec<String> {
-    path.components()
-        .filter_map(|c| match c {
-            Component::Normal(s) => Some(s.to_string_lossy().to_string()),
-            Component::ParentDir => Some("..".into()),
-            Component::CurDir => None,
-            Component::RootDir | Component::Prefix(_) => {
-                Some(c.as_os_str().to_string_lossy().to_string())
-            }
-        })
-        .collect()
 }
 
 fn run_esbuild(project: &Path, entry: &Path, output: &Path, release: bool) -> Result<()> {
@@ -333,10 +176,18 @@ fn esbuild_command(project: &Path) -> Result<Command> {
 }
 
 fn local_esbuild(project: &Path) -> Option<PathBuf> {
+    local_node_bin(project, "esbuild")
+}
+
+fn local_typescript(project: &Path) -> Option<PathBuf> {
+    local_node_bin(project, "tsc")
+}
+
+fn local_node_bin(project: &Path, bin: &str) -> Option<PathBuf> {
     let bin = if cfg!(windows) {
-        project.join("node_modules/.bin/esbuild.cmd")
+        project.join(format!("node_modules/.bin/{bin}.cmd"))
     } else {
-        project.join("node_modules/.bin/esbuild")
+        project.join(format!("node_modules/.bin/{bin}"))
     };
     bin.is_file().then_some(bin)
 }
@@ -378,6 +229,14 @@ fn ensure_package_json(project: &Path) -> Result<()> {
         );
         changed = true;
     }
+    if !has_dependency(root, "typescript") {
+        let dev_deps = object_field(root, "devDependencies")?;
+        dev_deps.insert(
+            "typescript".into(),
+            Value::String(DEFAULT_TYPESCRIPT_VERSION.into()),
+        );
+        changed = true;
+    }
 
     if changed {
         let text = serde_json::to_string_pretty(&value)?;
@@ -408,7 +267,10 @@ fn object_field<'a>(
 }
 
 fn ensure_node_modules(project: &Path) -> Result<()> {
-    if project.join("node_modules").is_dir() && local_esbuild(project).is_some() {
+    if project.join("node_modules").is_dir()
+        && local_esbuild(project).is_some()
+        && local_typescript(project).is_some()
+    {
         return Ok(());
     }
     println!("▶ installing Pocopine client toolkit dependencies");
@@ -618,12 +480,15 @@ mod tests {
     #[test]
     fn client_names_follow_component_kebab_case() {
         assert_eq!(
-            client_module_name("FirebaseAuth.client.js").unwrap(),
+            client_codegen::client_module_name("FirebaseAuth.client.ts").unwrap(),
             "firebase-auth"
         );
-        assert_eq!(client_module_name("PostHog.client.ts").unwrap(), "post-hog");
         assert_eq!(
-            client_module_name("pine-post-hog.client.js").unwrap(),
+            client_codegen::client_module_name("PostHog.client.ts").unwrap(),
+            "post-hog"
+        );
+        assert_eq!(
+            client_codegen::client_module_name("pine-post-hog.client.ts").unwrap(),
             "pine-post-hog"
         );
     }
@@ -633,7 +498,7 @@ mod tests {
         let from = Path::new("/app/target/pocopine/client-modules");
         let to = Path::new("/app/src/components/FirebaseAuth.client.ts");
         assert_eq!(
-            relative_import_path(from, to),
+            client_codegen::relative_import_path(from, to),
             "../../../src/components/FirebaseAuth.client.ts"
         );
     }
@@ -649,17 +514,12 @@ mod tests {
         );
         let root = std::env::temp_dir().join(unique);
         std::fs::create_dir_all(root.join("src")).unwrap();
-        let module_path = root.join("src/Firebase.client.js");
-        std::fs::write(&module_path, "initializeFirebase();").unwrap();
+        std::fs::write(root.join("src/Firebase.client.ts"), "initializeFirebase();").unwrap();
 
-        let entry = write_entry(
-            &root,
-            &[ClientModule {
-                path: module_path,
-                name: "firebase".into(),
-            }],
-        )
-        .unwrap();
+        let modules =
+            client_codegen::discover_client_modules(&root, DiscoveryPolicy::TypedOnly).unwrap();
+        let entry = client_codegen::write_runtime_entry(&root, &modules, GENERATED_DIR, ENTRY_FILE)
+            .unwrap();
         let source = std::fs::read_to_string(entry).unwrap();
         assert!(source.contains("import * as __pp_client_0"));
         assert!(source.contains("if (\"default\" in __pp_client_0)"));
@@ -689,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_accepts_ts_and_rejects_tsx() {
+    fn discovery_requires_ts_and_rejects_tsx() {
         let unique = format!(
             "pocopine-cli-discover-test-{}",
             std::time::SystemTime::now()
@@ -704,16 +564,30 @@ mod tests {
             "export default () => ({})",
         )
         .unwrap();
-        let modules = discover_client_modules(&root).unwrap();
+        let modules =
+            client_codegen::discover_client_modules(&root, DiscoveryPolicy::TypedOnly).unwrap();
         assert_eq!(modules.len(), 1);
-        assert_eq!(modules[0].name, "firebase-auth");
+        assert_eq!(modules[0].name(), "firebase-auth");
+
+        std::fs::write(
+            root.join("src/Legacy.client.js"),
+            "export default () => ({})",
+        )
+        .unwrap();
+        let err = client_codegen::discover_client_modules(&root, DiscoveryPolicy::TypedOnly)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be typed"));
+        std::fs::remove_file(root.join("src/Legacy.client.js")).unwrap();
 
         std::fs::write(
             root.join("src/ReactThing.client.tsx"),
             "export default () => ({})",
         )
         .unwrap();
-        let err = discover_client_modules(&root).unwrap_err().to_string();
+        let err = client_codegen::discover_client_modules(&root, DiscoveryPolicy::TypedOnly)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("TSX"));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -806,7 +680,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
         std::fs::write(
-            root.join("src/Tiny.client.js"),
+            root.join("src/Tiny.client.ts"),
             r#"import { value } from "tiny-sdk";
 export default () => ({ value });
 "#,
@@ -827,8 +701,8 @@ for arg in "$@"; do
     *) if [ -z "$entry" ]; then entry="$arg"; fi ;;
   esac
 done
-grep -q 'Tiny.client.js' "$entry"
-grep -q 'tiny-sdk' src/Tiny.client.js
+grep -q 'Tiny.client.ts' "$entry"
+grep -q 'tiny-sdk' src/Tiny.client.ts
 printf '/* fake esbuild bundle */\n' > "$out"
 "#,
         )
@@ -836,6 +710,11 @@ printf '/* fake esbuild bundle */\n' > "$out"
         let mut permissions = std::fs::metadata(&esbuild).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&esbuild, permissions).unwrap();
+        let tsc = root.join("node_modules/.bin/tsc");
+        std::fs::write(&tsc, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = std::fs::metadata(&tsc).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&tsc, permissions).unwrap();
 
         let bundled = build(&root, false).unwrap();
         assert_eq!(bundled, 1);

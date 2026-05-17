@@ -16,16 +16,18 @@ logic" rule. Phase 1 shipped a **client module adapter** model:
 
 - **`.poco`** — template, unchanged.
 - **`.rs`** — component state, handlers, stores, and app plugins.
-- **`.client.js` / `.client.ts`** — optional browser-only module
-  that imports npm packages normally and default-exports a plain
-  object of functions/subscriptions. The Pocopine CLI owns package
-  installation and esbuild bundling.
+- **`.client.ts`** — optional browser-only module that imports npm
+  packages normally and default-exports a typed plain object of
+  functions/subscriptions. The Pocopine CLI owns package
+  installation, type extraction, generated Rust bindings, and
+  esbuild bundling.
 
 The earlier per-component `ctx` factory/island design is deferred.
 The shipped model is deliberately smaller: SDK adapters are module
-singletons, and Rust reaches them through `ClientModule`. That is
-enough for Firebase, analytics, and other imperative SDKs without
-introducing a second reactive ownership surface.
+singletons. Rust reaches them through `ClientModule` today and through
+generated facades as the typed extractor lands. That is enough for
+Firebase, analytics, and other imperative SDKs without introducing a
+second reactive ownership surface.
 
 ## 2. Motivation
 
@@ -56,18 +58,16 @@ guards, and stores.
 
 ```
 src/
-  Firebase.client.js         // browser SDK adapter
-  Firebase.client.ts         // also accepted; no TSX/JSX
+  Firebase.client.ts         // typed browser SDK adapter
   firebase_auth.rs           // Rust wrapper around ClientModule
   components/Login.poco      // normal Pocopine UI
 ```
 
-The CLI scans `src/**/*.client.js` and `src/**/*.client.ts`.
-No component macro argument is required. No `.client` files means
-zero JavaScript bundling cost. When files exist, the generated
-bundle registers their default exports by filename-derived names:
-`Firebase.client.js` becomes `firebase`, and
-`FirebaseAuth.client.ts` becomes `firebase-auth`.
+The CLI scans `src/**/*.client.ts`. No component macro argument is
+required. No `.client.ts` files means zero JavaScript bundling cost.
+When files exist, the generated bundle registers their default exports
+by filename-derived names: `Firebase.client.ts` becomes `firebase`,
+and `FirebaseAuth.client.ts` becomes `firebase-auth`.
 
 ## 4. Author surface (JS side)
 
@@ -75,9 +75,10 @@ Phase 1 uses a plain module object. Functions are callable from
 Rust via `ClientModule::call_async`; subscription functions are
 adapted with `ClientModule::subscribe`.
 
-```js
-// Firebase.client.js
+```ts
+// Firebase.client.ts
 import { initializeApp } from "firebase/app";
+import type { User } from "firebase/auth";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -90,7 +91,15 @@ const app = initializeApp({ projectId: "my-project" });
 const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 
-async function userPayload(user) {
+type FirebaseUser = {
+  token: string;
+  uid: string;
+  email: string | null;
+  name: string | null;
+  photoUrl: string | null;
+};
+
+async function userPayload(user: User | null): Promise<FirebaseUser | null> {
   if (!user) {
     return null;
   }
@@ -104,22 +113,22 @@ async function userPayload(user) {
 }
 
 export default {
-  async signIn() {
+  async signIn(): Promise<FirebaseUser | null> {
     const credential = await signInWithPopup(auth, provider);
     return userPayload(credential.user);
   },
 
-  async signOut() {
+  async signOut(): Promise<null> {
     await firebaseSignOut(auth);
     return null;
   },
 
-  async initialUser() {
+  async initialUser(): Promise<FirebaseUser | null> {
     await auth.authStateReady();
     return userPayload(auth.currentUser);
   },
 
-  onAuthStateChanged(callback) {
+  onAuthStateChanged(callback: (user: FirebaseUser | null) => void): () => void {
     return onAuthStateChanged(auth, async (user) => {
       callback(await userPayload(user));
     });
@@ -129,6 +138,8 @@ export default {
 
 The module should not mutate Pocopine stores or render UI. It returns
 plain JSON and unsubscribe functions. Rust owns the application model.
+Managed modules are typed TypeScript by design; untyped `.client.js`
+is not part of the stable managed-module contract.
 
 ## 5. Author surface (Rust side)
 
@@ -165,6 +176,35 @@ impl FirebaseAuth {
 
 Uses `serde-wasm-bindgen` for the return-type round-trip, same
 as `#[server]`.
+
+### Generated facades
+
+`pocopine-client-build` lets `build.rs` generate Rust module facades
+into `OUT_DIR`, so rust-analyzer and `cargo check` can see the module
+names without running the full dev server:
+
+```rust
+// build.rs
+fn main() {
+    pocopine_client_build::generate().unwrap();
+}
+
+// src/lib.rs
+pub mod client_modules {
+    pocopine::include_client_modules!();
+}
+```
+
+The first generated layer is intentionally thin:
+
+```rust
+let firebase = crate::client_modules::firebase::required()?;
+let user = firebase.call_async::<Option<FirebaseUser>>("signIn").await?;
+```
+
+The next extractor phase will read explicit TypeScript signatures and
+generate typed methods (`firebase.sign_in().await?`) on top of that
+same facade.
 
 ## 6. Deferred scoped-island design
 
@@ -325,9 +365,9 @@ const.
 ┌──────────────────────────────────────────────────────────┐
 │ Build-time                                               │
 │                                                          │
-│  FirebaseAuth.client.js  ─┐                              │
-│  PostHog.client.js        ├─ esbuild bundle ─► app.js    │
-│  Other.client.js          │                              │
+│  FirebaseAuth.client.ts  ─┐                              │
+│  PostHog.client.ts        ├─ esbuild bundle ─► app.js    │
+│  Other.client.ts          │                              │
 │                          (bare-import resolution via     │
 │                           npm; tree-shaking; source      │
 │                           maps; minification)            │
@@ -527,13 +567,13 @@ the detected install command once before invoking the bundler.
 
 The CLI grows a tiny "client bundler" step:
 
-1. Scan `src/**/*.client.js` and `src/**/*.client.ts`. Reject
-   `.client.jsx` / `.client.tsx`; Pocopine does not host other UI
-   frameworks.
+1. Scan `src/**/*.client.ts`. Reject `.client.js`, `.client.jsx`,
+   and `.client.tsx`; Pocopine managed modules are typed SDK adapters,
+   not untyped globals or other UI frameworks.
 2. Emit a thin entry file:
    ```js
-   import firebaseAuth from "./FirebaseAuth.client.js";
-   import postHog      from "./PostHog.client.js";
+   import firebaseAuth from "./FirebaseAuth.client.ts";
+   import postHog      from "./PostHog.client.ts";
    const R = (window.__pp_client_modules ??= {});
    R["firebase-auth"] = firebaseAuth;
    R["pine-post-hog"] = postHog;
@@ -547,7 +587,7 @@ The CLI grows a tiny "client bundler" step:
    `<script type="module" src="/pkg/pocopine-client.js">` into
    served HTML when the bundle exists.
 
-Dev server watches `*.client.js` / `*.client.ts` and rebundles on save. No
+Dev server watches `*.client.ts` and rebundles on save. No
 separate `package.json` in each component dir — one root
 `package.json` with the SDKs the app uses.
 
@@ -561,8 +601,8 @@ force a wasm rebuild.
 
 | Scenario | Behaviour |
 |---|---|
-| `.client.js` / `.client.ts` missing but macro declares `client = "..."` | Compile-time error (file not found). |
-| `.client.jsx` / `.client.tsx` present | Build error. Pocopine supports imperative JS/TS SDK interop, not JSX/TSX or alternate UI framework islands. |
+| `.client.js` present | Build error. Managed modules must be typed `.client.ts` files. |
+| `.client.jsx` / `.client.tsx` present | Build error. Pocopine supports imperative TypeScript SDK interop, not JSX/TSX or alternate UI framework islands. |
 | Factory throws | Logged as `console.error`; mount continues; Rust `js::call` returns `NoIsland`. |
 | Factory returns non-object | Dev warning; treated as `{}` (no RPCs, no hooks). |
 | Factory is async | Supported — the `await` lands in `mounted()` (top-level imports stay synchronous — use dynamic `import()` inside `mounted` for late-loaded SDKs). |
@@ -578,27 +618,26 @@ Three PRs, independently mergeable:
 
 **PR 1 — CLI toolkit + bundling.**
 - `pocopine-cli` — `pocopine js init/install/add`, scan
-  `.client.js` / `.client.ts`, reject TSX/JSX, generate the
-  entry file, drive esbuild through the managed package
+  typed `.client.ts`, reject JS/TSX/JSX, generate the entry
+  file, drive esbuild through the managed package
   manager, and inject `/pkg/pocopine-client.js` in static mode.
 - Dev-server reload path mirrors the Rust hot-reload.
 
-**PR 2 — runtime + macro.**
-- `crates/pocopine-core/src/js_bridge.rs` — `ScopeWrap` struct +
-  per-scope `JsIsland` side-table + lifecycle hook calls from
-  walker mount/release.
-- `#[component]` macro — parse `client = "..."`, emit a tag-name
-  registration + the `.client.js` path as build-time metadata.
+**PR 2 — generated facade foundation.**
+- `pocopine-client-codegen` — shared module discovery, schema IR,
+  generated Rust facade code, and runtime-entry writing.
+- `pocopine-client-build` — `build.rs` helper that writes
+  `pocopine_client_modules.rs` to `OUT_DIR` and emits
+  `cargo:rerun-if-changed` lines for rust-analyzer.
+- `pocopine::include_client_modules!()` — app-side include helper.
 
-**PR 3 — ergonomics.**
-- `pocopine::js::call<T>(name, args)` wrapper with
-  `serde-wasm-bindgen` return-type parsing.
-- Optional `#[js_handler]` sugar that generates the dispatch
-  boilerplate:
-  ```rust
-  #[js_handler]
-  pub fn sign_in_with_popup() { /* macro fills body */ }
-  ```
+**PR 3 — TypeScript API extraction.**
+- Use the TypeScript compiler API, not a hand-rolled parser.
+- Extract only the public `defineClientModule` / default-export facade:
+  async JSON-returning methods and callback subscriptions.
+- Generate typed Rust methods over the existing `ClientModule` runtime.
+- Reject `any`, DOM/class instances, functions except subscription
+  callbacks, and imported SDK handle types such as `FirebaseApp`.
 
 ## 12. Out of scope
 
@@ -610,21 +649,15 @@ Three PRs, independently mergeable:
 - **Server-side rendering of islands.** Islands are
   client-only; SSR emits an empty shell, hydration runs the
   factory.
-- **Auto-bind of npm packages to Rust handles.** The bridge is
-  string-named + promise-returning; no attempt to magically
-  wrap JS types as Rust structs. That's a different RFC.
-- **Shared module singletons.** If two components both import
-  Firebase, the bundler tree-shares the module — standard
-  esbuild behaviour — but pocopine doesn't guarantee it.
-  Authors who want a singleton make a shared `firebase.js` and
-  import from both islands.
+- **Full SDK binding generation.** Only DTOs and methods that cross the
+  Pocopine bridge are generated. Firebase/Stripe/etc handles stay
+  private in the `.client.ts` closure.
 
 ## 13. Open questions
 
-1. **Naming.** `.client.js` vs `.island.js` vs `.js` (bare).
-   Leaning `.client.js` — matches SvelteKit / Nuxt / Remix
-   convention enough that npm-eco authors pattern-match
-   immediately.
+1. **Naming.** `.client.ts` is the stable managed-module suffix.
+   `.client.js` was useful during the initial runtime bridge spike,
+   but generated Rust bindings need a typed boundary.
 
 2. **`onMount` ordering relative to Rust `on_mount`.** Both fire
    post-walk. Proposal: **Rust `on_mount` first**, then JS
