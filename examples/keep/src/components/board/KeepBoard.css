@@ -176,6 +176,7 @@ body:has(.keep-app[data-theme="dark"]) {
    honor `width: 100%` from their flex/masonry parents. */
 keep-composer,
 keep-editor,
+keep-login,
 keep-note-form,
 keep-note-body,
 keep-note-card {
@@ -360,20 +361,6 @@ textarea {
   height: 24px;
   background: var(--line);
   margin: 0 8px;
-}
-
-.avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #f6e2dd, #d3bfdb);
-  color: #5e2750;
-  font-weight: 600;
-  font-size: 15px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 6px;
 }
 
 .pine-dm-trigger {

@@ -1,7 +1,7 @@
 <div class="keep-app" :data-theme="$store.keep.theme">
   <header class="topbar">
     <div class="tb-left">
-      <button class="ic-btn lg" aria-label="Menu" @click="toggle_sidebar">
+      <button class="ic-btn lg" aria-label="Menu" pp-show="$store.keep.auth_signed_in" @click="toggle_sidebar">
         <pine-icon name="menu-2" size="22"></pine-icon>
       </button>
       <div class="brand">
@@ -12,7 +12,7 @@
       </div>
     </div>
 
-    <button class="tb-command" type="button" aria-label="Search notes" @click="open_command">
+    <button class="tb-command" type="button" aria-label="Search notes" pp-show="$store.keep.auth_signed_in" @click="open_command">
       <pine-icon name="search" size="20"></pine-icon>
       <span>Search notes</span>
       <kbd>⌘K</kbd>
@@ -21,16 +21,17 @@
     <div class="tb-right">
       <button
         class="ic-btn"
+        pp-show="$store.keep.auth_signed_in"
         :aria-label="$store.keep.view_mode == 'list' ? 'Switch to grid view' : 'Switch to list view'"
         :data-on="$store.keep.view_mode == 'list'"
         @click="cycle_view_mode"
       >
         <pine-icon :name="$store.keep.view_mode == 'list' ? 'layout-grid' : 'layout-list'" size="20"></pine-icon>
       </button>
-      <button class="ic-btn" aria-label="Pull" @click="refresh">
+      <button class="ic-btn" aria-label="Pull" pp-show="$store.keep.auth_signed_in" @click="refresh">
         <pine-icon name="refresh" size="20"></pine-icon>
       </button>
-      <pine-dropdown-menu-root>
+      <pine-dropdown-menu-root pp-show="$store.keep.auth_signed_in">
         <pine-dropdown-menu-trigger>
           <pine-icon name="settings" size="20"></pine-icon>
           <span class="sr-only">Settings</span>
@@ -43,166 +44,168 @@
               <span pp-text="$store.keep.theme == 'dark' ? 'Change theme: light' : 'Change theme: dark'"></span>
             </pine-dropdown-menu-item>
             <pine-dropdown-menu-separator></pine-dropdown-menu-separator>
-            <pine-dropdown-menu-item class="danger" @click="delete_all_notes">
+            <pine-dropdown-menu-item class="danger" pp-show="$store.keep.auth_signed_in" @click="delete_all_notes">
               <pine-icon name="trash" size="18"></pine-icon>
               <span>Reset database</span>
             </pine-dropdown-menu-item>
           </pine-dropdown-menu-content>
         </pine-dropdown-menu-portal>
       </pine-dropdown-menu-root>
-      <span class="avatar" aria-label="Account">M</span>
+      <keep-login pp-show="$store.keep.auth_signed_in"></keep-login>
     </div>
   </header>
 
-  <pine-command-root shortcut="Mod+k" pp-model:open="command_open">
-    <pine-command-portal>
-      <pine-command-overlay></pine-command-overlay>
-      <pine-command-content class="keep-command" pp-transition="none">
-        <pine-command-input placeholder="Search notes or create…"></pine-command-input>
-        <pine-command-list>
-          <pine-command-item value="new note create text" @pp:command:select="cmd_new_note">
-            <span class="cmd-row">
-              <pine-icon name="pencil" size="18"></pine-icon>
-              <span>New note</span>
-              <kbd class="cmd-kbd">C</kbd>
-            </span>
-          </pine-command-item>
-          <pine-command-item value="new todo checklist list task" @pp:command:select="cmd_new_todo">
-            <span class="cmd-row">
-              <pine-icon name="list-check" size="18"></pine-icon>
-              <span>New todo</span>
-              <kbd class="cmd-kbd">L</kbd>
-            </span>
-          </pine-command-item>
-          <pine-command-item value="new label tag add label create" @pp:command:select.prevent="cmd_show_label_create">
-            <span class="cmd-row cmd-label-create">
-              <pine-icon name="tag" size="18"></pine-icon>
-              <span>Create new label</span>
-            </span>
-          </pine-command-item>
-
-          <div class="cmd-inline-create" pp-show="command_label_create_open" role="group" aria-label="Create new label">
-            <span class="cmd-row cmd-label-create">
-              <pine-icon name="corner-down-right" size="18"></pine-icon>
-              <input
-                class="cmd-inline-input"
-                placeholder="Label name"
-                pp-model="$store.keep.command_label_query"
-                @click.stop
-                @pointerdown.stop
-                @keydown.enter.prevent.stop="cmd_create_label_inline"
-              />
-              <button
-                class="cmd-inline-action"
-                aria-label="Create label"
-                @click.stop="cmd_create_label_inline"
-                @pointerdown.stop
-              >
-                <pine-icon name="plus" size="14"></pine-icon>
-              </button>
-            </span>
-          </div>
-
-          <div class="cmd-separator" role="separator" aria-hidden="true"></div>
-
-          <template pp-for="note in $store.keep.command_notes" pp-key="note.id">
-            <pine-command-item
-              :value="note.search_value"
-              @pp:command:select="cmd_open_note(note.id)"
-            >
-              <span class="cmd-row cmd-note">
-                <pine-icon :name="note.has_todos ? 'list-check' : 'notes'" size="18"></pine-icon>
-                <span>
-                  <strong pp-text="note.title || 'Untitled note'"></strong>
-                  <small pp-text="note.body"></small>
-                </span>
+  <keep-auth-gate>
+    <pine-command-root shortcut="Mod+k" pp-model:open="command_open">
+      <pine-command-portal>
+        <pine-command-overlay></pine-command-overlay>
+        <pine-command-content class="keep-command" pp-transition="none">
+          <pine-command-input placeholder="Search notes or create…"></pine-command-input>
+          <pine-command-list>
+            <pine-command-item value="new note create text" @pp:command:select="cmd_new_note">
+              <span class="cmd-row">
+                <pine-icon name="pencil" size="18"></pine-icon>
+                <span>New note</span>
+                <kbd class="cmd-kbd">C</kbd>
               </span>
             </pine-command-item>
-          </template>
+            <pine-command-item value="new todo checklist list task" @pp:command:select="cmd_new_todo">
+              <span class="cmd-row">
+                <pine-icon name="list-check" size="18"></pine-icon>
+                <span>New todo</span>
+                <kbd class="cmd-kbd">L</kbd>
+              </span>
+            </pine-command-item>
+            <pine-command-item value="new label tag add label create" @pp:command:select.prevent="cmd_show_label_create">
+              <span class="cmd-row cmd-label-create">
+                <pine-icon name="tag" size="18"></pine-icon>
+                <span>Create new label</span>
+              </span>
+            </pine-command-item>
 
-          <pine-command-empty>No matching notes or actions.</pine-command-empty>
-        </pine-command-list>
-      </pine-command-content>
-    </pine-command-portal>
-  </pine-command-root>
+            <div class="cmd-inline-create" pp-show="command_label_create_open" role="group" aria-label="Create new label">
+              <span class="cmd-row cmd-label-create">
+                <pine-icon name="corner-down-right" size="18"></pine-icon>
+                <input
+                  class="cmd-inline-input"
+                  placeholder="Label name"
+                  pp-model="$store.keep.command_label_query"
+                  @click.stop
+                  @pointerdown.stop
+                  @keydown.enter.prevent.stop="cmd_create_label_inline"
+                />
+                <button
+                  class="cmd-inline-action"
+                  aria-label="Create label"
+                  @click.stop="cmd_create_label_inline"
+                  @pointerdown.stop
+                >
+                  <pine-icon name="plus" size="14"></pine-icon>
+                </button>
+              </span>
+            </div>
 
-  <div class="shell">
-    <aside class="sidebar" :data-wide="$store.keep.sidebar_expanded">
-      <button class="sb-row" :data-on="$store.keep.section_kind == 'notes'" @click="show_notes">
-        <span class="sb-ic" aria-hidden="true"><pine-icon name="bulb" size="22"></pine-icon></span>
-        <span class="sb-lbl">Notes</span>
-      </button>
+            <div class="cmd-separator" role="separator" aria-hidden="true"></div>
 
-      <template pp-for="label in $store.keep.labels" pp-key="label">
-        <button
-          class="sb-row"
-          :data-on="$store.keep.section_kind == 'label' && $store.keep.section_label == label"
-          @click="show_label(label)"
-        >
-          <span class="sb-ic" aria-hidden="true"><pine-icon name="tag" size="22"></pine-icon></span>
-          <span class="sb-lbl" pp-text="label"></span>
+            <template pp-for="note in $store.keep.command_notes" pp-key="note.id">
+              <pine-command-item
+                :value="note.search_value"
+                @pp:command:select="cmd_open_note(note.id)"
+              >
+                <span class="cmd-row cmd-note">
+                  <pine-icon :name="note.has_todos ? 'list-check' : 'notes'" size="18"></pine-icon>
+                  <span>
+                    <strong pp-text="note.title || 'Untitled note'"></strong>
+                    <small pp-text="note.body"></small>
+                  </span>
+                </span>
+              </pine-command-item>
+            </template>
+
+            <pine-command-empty>No matching notes or actions.</pine-command-empty>
+          </pine-command-list>
+        </pine-command-content>
+      </pine-command-portal>
+    </pine-command-root>
+
+    <div class="shell">
+      <aside class="sidebar" :data-wide="$store.keep.sidebar_expanded">
+        <button class="sb-row" :data-on="$store.keep.section_kind == 'notes'" @click="show_notes">
+          <span class="sb-ic" aria-hidden="true"><pine-icon name="bulb" size="22"></pine-icon></span>
+          <span class="sb-lbl">Notes</span>
         </button>
-      </template>
 
-      <button class="sb-row" :data-on="$store.keep.section_kind == 'archive'" @click="show_archive">
-        <span class="sb-ic" aria-hidden="true"><pine-icon name="archive" size="22"></pine-icon></span>
-        <span class="sb-lbl">Archive</span>
+        <template pp-for="label in $store.keep.labels" pp-key="label">
+          <button
+            class="sb-row"
+            :data-on="$store.keep.section_kind == 'label' && $store.keep.section_label == label"
+            @click="show_label(label)"
+          >
+            <span class="sb-ic" aria-hidden="true"><pine-icon name="tag" size="22"></pine-icon></span>
+            <span class="sb-lbl" pp-text="label"></span>
+          </button>
+        </template>
+
+        <button class="sb-row" :data-on="$store.keep.section_kind == 'archive'" @click="show_archive">
+          <span class="sb-ic" aria-hidden="true"><pine-icon name="archive" size="22"></pine-icon></span>
+          <span class="sb-lbl">Archive</span>
+        </button>
+      </aside>
+
+      <main class="main" :data-view="$store.keep.view_mode">
+        <p class="error" pp-show="$store.keep.notes.error" pp-text="$store.keep.notes.error"></p>
+
+        <template pp-if="$store.keep.view_mode == 'masonry'">
+          <keep-grid-layout></keep-grid-layout>
+        </template>
+        <template pp-if="$store.keep.view_mode == 'list'">
+          <keep-list-detail></keep-list-detail>
+        </template>
+      </main>
+    </div>
+
+    <div class="selection-bar" pp-show="$store.keep.selected_note_ids.length" @pointerdown.stop @click.stop>
+      <span class="selection-bar__count" pp-text="$store.keep.selection_label"></span>
+
+      <button class="selection-action" aria-label="Pin selected" @click="pin_selected">
+        <pine-icon name="pin" size="18"></pine-icon>
       </button>
-    </aside>
 
-    <main class="main" :data-view="$store.keep.view_mode">
-      <p class="error" pp-show="$store.keep.notes.error" pp-text="$store.keep.notes.error"></p>
+      <pine-popover-root pp-model:open="selection_color_open">
+        <pine-popover-trigger class="selection-action" aria-label="Background options">
+          <pine-icon name="palette" size="18"></pine-icon>
+        </pine-popover-trigger>
+        <pine-popover-portal>
+          <pine-popover-content class="palette palette--selection" side="top" align="center" side_offset="10">
+            <button class="sw sw-default" @click="pick_selected_color('default')" aria-label="Default"><span class="sw-x" aria-hidden="true">⊘</span></button>
+            <button class="sw sw-coral" @click="pick_selected_color('coral')" aria-label="Coral"></button>
+            <button class="sw sw-peach" @click="pick_selected_color('peach')" aria-label="Peach"></button>
+            <button class="sw sw-sand" @click="pick_selected_color('sand')" aria-label="Sand"></button>
+            <button class="sw sw-mint" @click="pick_selected_color('mint')" aria-label="Mint"></button>
+            <button class="sw sw-sage" @click="pick_selected_color('sage')" aria-label="Sage"></button>
+            <button class="sw sw-fog" @click="pick_selected_color('fog')" aria-label="Fog"></button>
+            <button class="sw sw-storm" @click="pick_selected_color('storm')" aria-label="Storm"></button>
+            <button class="sw sw-dusk" @click="pick_selected_color('dusk')" aria-label="Dusk"></button>
+            <button class="sw sw-blossom" @click="pick_selected_color('blossom')" aria-label="Blossom"></button>
+            <button class="sw sw-clay" @click="pick_selected_color('clay')" aria-label="Clay"></button>
+            <button class="sw sw-chalk" @click="pick_selected_color('chalk')" aria-label="Chalk"></button>
+          </pine-popover-content>
+        </pine-popover-portal>
+      </pine-popover-root>
 
-      <template pp-if="$store.keep.view_mode == 'masonry'">
-        <keep-grid-layout></keep-grid-layout>
-      </template>
-      <template pp-if="$store.keep.view_mode == 'list'">
-        <keep-list-detail></keep-list-detail>
-      </template>
-    </main>
-  </div>
+      <button class="selection-action" aria-label="Archive selected" @click="archive_selected">
+        <pine-icon name="archive" size="18"></pine-icon>
+      </button>
 
-  <div class="selection-bar" pp-show="$store.keep.selected_note_ids.length" @pointerdown.stop @click.stop>
-    <span class="selection-bar__count" pp-text="$store.keep.selection_label"></span>
+      <button class="selection-action danger" aria-label="Delete selected" @click="delete_selected">
+        <pine-icon name="trash" size="18"></pine-icon>
+      </button>
 
-    <button class="selection-action" aria-label="Pin selected" @click="pin_selected">
-      <pine-icon name="pin" size="18"></pine-icon>
-    </button>
+      <span class="selection-divider" aria-hidden="true"></span>
 
-    <pine-popover-root pp-model:open="selection_color_open">
-      <pine-popover-trigger class="selection-action" aria-label="Background options">
-        <pine-icon name="palette" size="18"></pine-icon>
-      </pine-popover-trigger>
-      <pine-popover-portal>
-        <pine-popover-content class="palette palette--selection" side="top" align="center" side_offset="10">
-          <button class="sw sw-default" @click="pick_selected_color('default')" aria-label="Default"><span class="sw-x" aria-hidden="true">⊘</span></button>
-          <button class="sw sw-coral" @click="pick_selected_color('coral')" aria-label="Coral"></button>
-          <button class="sw sw-peach" @click="pick_selected_color('peach')" aria-label="Peach"></button>
-          <button class="sw sw-sand" @click="pick_selected_color('sand')" aria-label="Sand"></button>
-          <button class="sw sw-mint" @click="pick_selected_color('mint')" aria-label="Mint"></button>
-          <button class="sw sw-sage" @click="pick_selected_color('sage')" aria-label="Sage"></button>
-          <button class="sw sw-fog" @click="pick_selected_color('fog')" aria-label="Fog"></button>
-          <button class="sw sw-storm" @click="pick_selected_color('storm')" aria-label="Storm"></button>
-          <button class="sw sw-dusk" @click="pick_selected_color('dusk')" aria-label="Dusk"></button>
-          <button class="sw sw-blossom" @click="pick_selected_color('blossom')" aria-label="Blossom"></button>
-          <button class="sw sw-clay" @click="pick_selected_color('clay')" aria-label="Clay"></button>
-          <button class="sw sw-chalk" @click="pick_selected_color('chalk')" aria-label="Chalk"></button>
-        </pine-popover-content>
-      </pine-popover-portal>
-    </pine-popover-root>
-
-    <button class="selection-action" aria-label="Archive selected" @click="archive_selected">
-      <pine-icon name="archive" size="18"></pine-icon>
-    </button>
-
-    <button class="selection-action danger" aria-label="Delete selected" @click="delete_selected">
-      <pine-icon name="trash" size="18"></pine-icon>
-    </button>
-
-    <span class="selection-divider" aria-hidden="true"></span>
-
-    <button class="selection-action" aria-label="Clear selection" @click="clear_selection">
-      <pine-icon name="x" size="18"></pine-icon>
-    </button>
-  </div>
+      <button class="selection-action" aria-label="Clear selection" @click="clear_selection">
+        <pine-icon name="x" size="18"></pine-icon>
+      </button>
+    </div>
+  </keep-auth-gate>
 </div>

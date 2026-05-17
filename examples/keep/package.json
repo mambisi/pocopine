@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "firebase": "11.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

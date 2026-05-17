@@ -21,15 +21,19 @@ required-features = []
 pine = { path = "../../crates/pine" }
 pine-icons = { path = "../../crates/pine-icons" }
 pocopine = { path = "../../crates/pocopine" }
+pocopine-auth-client = { workspace = true }
 pocopine-sync = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 pine-motion = { path = "../../crates/pine-motion" }
+pocopine-sync-indexdb = { workspace = true }
 pocopine-sync-sqlite = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pocopine-events = { workspace = true }
@@ -37,7 +41,6 @@ pocopine-live = { workspace = true }
 pocopine-logging = { workspace = true }
 pocopine-server = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
-serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

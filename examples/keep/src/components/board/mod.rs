@@ -11,7 +11,10 @@ use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{grid_layout::KeepGridLayout, list_detail::KeepListDetail};
+use crate::components::{
+    auth_gate::KeepAuthGate, grid_layout::KeepGridLayout, list_detail::KeepListDetail,
+    login::KeepLogin,
+};
 use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
 
 /// Top-level component. Owns nothing except the sync wiring; every
@@ -45,12 +48,15 @@ use crate::{focus_after_flush, KeepStore, KEEP_STREAM, KEEP_TAGS_STREAM};
         PinePopoverTrigger,
         PinePopoverPortal,
         PinePopoverContent,
+        KeepAuthGate,
+        KeepLogin,
     ]
 )]
 pub struct KeepBoard {
     pub command_open: bool,
     pub command_label_create_open: bool,
     pub selection_color_open: bool,
+    pub sync_opened: bool,
 }
 
 #[handlers]
@@ -82,6 +88,9 @@ impl KeepBoard {
                 return;
             }
             if is_typing_target() {
+                return;
+            }
+            if !pocopine::store::<KeepStore>().with(|s| s.auth_signed_in) {
                 return;
             }
             let is_list = pocopine::store::<KeepStore>()
@@ -122,6 +131,19 @@ impl KeepBoard {
                 _ => {}
             }
         });
+
+        let sync_board = handle.clone();
+        pocopine::store::<KeepStore>().observe(
+            |store| store.auth_signed_in,
+            move |signed_in, _| {
+                if *signed_in {
+                    open_sync_if_needed_deferred(sync_board.clone());
+                }
+            },
+        );
+        if pocopine::store::<KeepStore>().with(|store| store.auth_signed_in) {
+            open_sync_if_needed_deferred(handle);
+        }
     }
 
     pub fn on_mount(&mut self) {
@@ -142,6 +164,13 @@ impl KeepBoard {
         pocopine::store::<KeepStore>().observe(KeepStore::note_view_signature, |_, _| {
             pocopine::store::<KeepStore>().update(KeepStore::rebuild_visible_notes);
         });
+    }
+
+    fn open_sync_if_needed(&mut self) {
+        if self.sync_opened {
+            return;
+        }
+        self.sync_opened = true;
 
         // Hook sync to the store: notes lives on KeepStore, so the sync
         // collection's selector mutably borrows the store, not the board.
@@ -257,6 +286,9 @@ impl KeepBoard {
     }
 
     pub fn delete_all_notes(&mut self) {
+        if !pocopine::store::<KeepStore>().with(|s| s.auth_signed_in) {
+            return;
+        }
         pocopine::store::<KeepStore>().update(KeepStore::reset);
     }
 
@@ -284,6 +316,13 @@ impl KeepBoard {
         self.selection_color_open = false;
         pocopine::store::<KeepStore>().update(move |s| s.set_selected_color(color));
     }
+}
+
+fn open_sync_if_needed_deferred(handle: pocopine::Handle<KeepBoard>) {
+    let scope = handle.scope_id();
+    pocopine::spawn_for_scope(scope, async move {
+        handle.update(KeepBoard::open_sync_if_needed);
+    });
 }
 
 /// True when the document's currently focused element is something
