@@ -1,6 +1,6 @@
 //! Wasm-side auth surface for pocopine.
 //!
-//! Seven surfaces:
+//! Eight surfaces:
 //!
 //! - **Token slot.** [`set_token`], [`clear_token`], and [`active_token`]
 //!   manage a process-global `Option<String>`.
@@ -22,6 +22,11 @@
 //!   token survives reload. Provided impls in [`storage`]:
 //!   `InMemory` (default no-op), `LocalStorage`, `SessionStorage`.
 //!   Wired via [`AuthPluginBuilder::with_token_storage`].
+//! - **Session snapshot persistence.** Pluggable
+//!   [`SessionSnapshotStorage`] for optimistic identity restore.
+//!   Snapshots let route shells render immediately after a reload
+//!   while Firebase, `/me`, or another provider confirms the real
+//!   session. They are UI continuity hints, not authorization proof.
 //! - **Cross-tab session coordination.** Sign-in / sign-out in tab A
 //!   propagates to peer tabs of the same origin via a
 //!   `BroadcastChannel`. Opt-in via
@@ -122,8 +127,8 @@ mod test_util;
 
 pub use plugin::{auth_plugin, predicate_guard, AuthPluginBuilder, DEFAULT_RETURN_TO_PARAM};
 pub use refresh::{TokenRefresh, TokenRefreshFuture};
-pub use session::{active_principal, active_session, AuthSession};
-pub use storage::TokenStorage;
+pub use session::{active_principal, active_session, AuthSession, AuthSessionSnapshot};
+pub use storage::{SessionSnapshotStorage, TokenStorage};
 
 use std::cell::Cell;
 use std::sync::Mutex;

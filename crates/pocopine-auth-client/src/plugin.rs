@@ -7,7 +7,9 @@
 //!
 //! 1. `provide_plugin(AuthSession::new())` so any component can
 //!    extract the session via `Plugin<AuthSession>` /
-//!    `Option<Plugin<AuthSession>>` per RFC-076.
+//!    `Option<Plugin<AuthSession>>` per RFC-076. Apps with an async
+//!    client-side provider can opt into a pending initial session with
+//!    [`AuthPluginBuilder::wait_for_initial_auth_check`].
 //! 2. `route_rejection_handler` mapping `RouteRejection::Unauthorized`
 //!    to a redirect to the configured login route, optionally
 //!    appending the validated [`ReturnTo`] under a configurable query
@@ -22,7 +24,7 @@
 
 use std::rc::Rc;
 
-use pocopine_auth::{Decision, Predicate};
+use pocopine_auth::{Decision, Predicate, Principal};
 use pocopine_core::{
     App, AppPlugin, ReturnTo, RouteContext, RouteGuard, RouteGuardDecision, RouteRejection,
     RouteRejectionAction, RouteRejectionContext, RouteRejectionHandler, RouteTarget,
@@ -30,7 +32,10 @@ use pocopine_core::{
 
 use crate::refresh::{set_refresh, TokenRefresh};
 use crate::session::{active_principal, AuthSession};
-use crate::storage::{install_storage, TokenStorage};
+use crate::storage::{
+    current_session_snapshot_storage, install_session_snapshot_storage, install_storage,
+    SessionSnapshotStorage, TokenStorage,
+};
 
 /// Default query parameter name used for the post-login redirect
 /// intent. Configurable per-app via
@@ -62,8 +67,10 @@ pub struct AuthPluginBuilder {
     login_route: Option<String>,
     return_to_query_param: &'static str,
     install_bearer_middleware: bool,
+    wait_for_initial_auth_check: bool,
     token_refresh: Option<Rc<dyn TokenRefresh>>,
     token_storage: Option<Rc<dyn TokenStorage>>,
+    session_snapshot_storage: Option<Rc<dyn SessionSnapshotStorage>>,
     cross_tab_sync: bool,
 }
 
@@ -73,8 +80,10 @@ impl Default for AuthPluginBuilder {
             login_route: None,
             return_to_query_param: DEFAULT_RETURN_TO_PARAM,
             install_bearer_middleware: false,
+            wait_for_initial_auth_check: false,
             token_refresh: None,
             token_storage: None,
+            session_snapshot_storage: None,
             cross_tab_sync: false,
         }
     }
@@ -111,6 +120,25 @@ impl AuthPluginBuilder {
     /// `BearerMiddleware` regardless of how many install paths fired.
     pub fn with_bearer_middleware(mut self, install: bool) -> Self {
         self.install_bearer_middleware = install;
+        self
+    }
+
+    /// Start the provided [`AuthSession`] in a pending state so
+    /// `predicate_guard(...)` pauses route navigation until the app's
+    /// browser-side auth provider has checked persisted state at least
+    /// once.
+    ///
+    /// Use this for client-only providers such as Firebase where the
+    /// provider has its own local session store. Once the provider
+    /// finishes its first check, call [`AuthSession::sign_in`],
+    /// [`AuthSession::sign_out`], [`AuthSession::set_principal`], or
+    /// [`AuthSession::mark_ready`]. Any of those wakes the router and
+    /// re-runs the paused guard.
+    ///
+    /// Off by default so apps without an async client provider do not
+    /// accidentally leave guarded routes pending forever.
+    pub fn wait_for_initial_auth_check(mut self, wait: bool) -> Self {
+        self.wait_for_initial_auth_check = wait;
         self
     }
 
@@ -169,6 +197,17 @@ impl AuthPluginBuilder {
         self
     }
 
+    /// Persist an optimistic identity snapshot for instant reload
+    /// continuity. A restored snapshot lets guarded route shells render
+    /// while an async provider/server check confirms the real session.
+    ///
+    /// This does not make the snapshot authoritative. Server functions
+    /// and provider checks still own authorization.
+    pub fn with_session_snapshot<S: SessionSnapshotStorage>(mut self, storage: S) -> Self {
+        self.session_snapshot_storage = Some(Rc::new(storage));
+        self
+    }
+
     /// Sync sign-in / sign-out across tabs of the same origin via a
     /// `BroadcastChannel`. Off by default.
     ///
@@ -216,6 +255,9 @@ impl AppPlugin for AuthPluginBuilder {
             install_storage(storage);
             crate::hydrate_from_storage();
         }
+        if let Some(storage) = self.session_snapshot_storage {
+            install_session_snapshot_storage(storage);
+        }
         if self.install_bearer_middleware {
             crate::install();
         }
@@ -223,7 +265,17 @@ impl AppPlugin for AuthPluginBuilder {
             set_refresh(refresh);
         }
 
-        let session = AuthSession::new();
+        let session = match current_session_snapshot_storage().and_then(|storage| {
+            storage
+                .load_snapshot()
+                .filter(|snapshot| snapshot.principal.is_authenticated())
+        }) {
+            Some(snapshot) => AuthSession::restoring(snapshot),
+            None if self.wait_for_initial_auth_check || crate::active_token().is_some() => {
+                AuthSession::pending()
+            }
+            None => AuthSession::new(),
+        };
         if self.cross_tab_sync {
             crate::cross_tab::install(session.clone());
         }
@@ -373,14 +425,22 @@ fn percent_encode_into(out: &mut String, s: &str) {
 /// ```
 pub fn predicate_guard<P: Predicate>(predicate: P) -> impl RouteGuard {
     move |_ctx: &RouteContext<'_>| -> RouteGuardDecision {
-        let principal = active_principal();
-        match Predicate::check(&predicate, &principal) {
-            Decision::Allow => RouteGuardDecision::Allow,
-            Decision::Deny("unauthorized") => {
-                RouteGuardDecision::Reject(RouteRejection::Unauthorized)
+        let principal = match crate::active_session() {
+            Some(session) if !session.is_ready() && !session.is_restoring() => {
+                return RouteGuardDecision::Pending;
             }
-            Decision::Deny(reason) => RouteGuardDecision::Reject(RouteRejection::Forbidden(reason)),
-        }
+            Some(session) => session.principal(),
+            None => active_principal(),
+        };
+        predicate_decision(&predicate, &principal)
+    }
+}
+
+fn predicate_decision<P: Predicate>(predicate: &P, principal: &Principal) -> RouteGuardDecision {
+    match Predicate::check(predicate, principal) {
+        Decision::Allow => RouteGuardDecision::Allow,
+        Decision::Deny("unauthorized") => RouteGuardDecision::Reject(RouteRejection::Unauthorized),
+        Decision::Deny(reason) => RouteGuardDecision::Reject(RouteRejection::Forbidden(reason)),
     }
 }
 
@@ -390,16 +450,16 @@ mod tests {
     use pocopine_auth::{require_auth, require_role, AuthUser, Role};
     use std::collections::HashMap;
 
-    fn ctx<'a>(path: &'a str) -> RouteContext<'a> {
-        // We can't construct `RouteContext` from outside the crate
-        // with named fields (it's `#[non_exhaustive]`), but the
-        // closure body of `predicate_guard` ignores the context, so
-        // the unit tests below only need to drive Predicate +
-        // session state. The router-side end-to-end behavior is
-        // covered by the wasm integration test suite in
-        // `crates/pocopine/tests/route_guards_loaders.rs`.
-        let _ = path;
-        unimplemented!("RouteContext is router-private; tests drive the predicate path directly")
+    fn with_ctx<R>(path: &str, f: impl FnOnce(&RouteContext<'_>) -> R) -> R {
+        let params = HashMap::new();
+        let query = HashMap::new();
+        let ctx = RouteContext {
+            path,
+            params: &params,
+            query: &query,
+            matched_pattern: Some("/test"),
+        };
+        f(&ctx)
     }
 
     #[test]
@@ -408,7 +468,9 @@ mod tests {
         assert!(plugin.login_route.is_none());
         assert_eq!(plugin.return_to_query_param, "redirect");
         assert!(!plugin.install_bearer_middleware);
+        assert!(!plugin.wait_for_initial_auth_check);
         assert!(plugin.token_refresh.is_none());
+        assert!(plugin.session_snapshot_storage.is_none());
     }
 
     #[test]
@@ -417,10 +479,14 @@ mod tests {
             .login_route("/signin")
             .return_to_query_param("next")
             .with_bearer_middleware(true)
+            .wait_for_initial_auth_check(true)
+            .with_session_snapshot(crate::storage::InMemory)
             .with_token_refresh(|| async { Ok("fresh".to_string()) });
         assert_eq!(plugin.login_route.as_deref(), Some("/signin"));
         assert_eq!(plugin.return_to_query_param, "next");
         assert!(plugin.install_bearer_middleware);
+        assert!(plugin.wait_for_initial_auth_check);
+        assert!(plugin.session_snapshot_storage.is_some());
         assert!(plugin.token_refresh.is_some());
     }
 
@@ -628,10 +694,44 @@ mod tests {
         assert_eq!(admin.check(&no_role), Decision::Deny("forbidden"));
     }
 
-    // Suppress unused-fn warning for the helper kept for
-    // documentation-by-code.
-    #[allow(dead_code)]
-    fn _ctx_helper_keeps_shape<'a>(p: &'a str) -> RouteContext<'a> {
-        ctx(p)
+    #[test]
+    fn predicate_guard_waits_for_pending_session() {
+        let session = AuthSession::pending();
+        crate::session::__set_test_session(Some(session.clone()));
+
+        let guard = predicate_guard(require_auth());
+        assert_eq!(
+            with_ctx("/dashboard", |ctx| guard.decide(ctx)),
+            RouteGuardDecision::Pending
+        );
+
+        session.sign_in(
+            "token",
+            pocopine_auth::Principal::from_user(AuthUser::new("u1")),
+        );
+        assert_eq!(
+            with_ctx("/dashboard", |ctx| guard.decide(ctx)),
+            RouteGuardDecision::Allow
+        );
+
+        crate::session::__set_test_session(None);
+    }
+
+    #[test]
+    fn predicate_guard_allows_restoring_session_snapshot() {
+        let snapshot = crate::AuthSessionSnapshot::new(pocopine_auth::Principal::from_user(
+            AuthUser::new("u1"),
+        ))
+        .unwrap();
+        let session = AuthSession::restoring(snapshot);
+        crate::session::__set_test_session(Some(session));
+
+        let guard = predicate_guard(require_auth());
+        assert_eq!(
+            with_ctx("/dashboard", |ctx| guard.decide(ctx)),
+            RouteGuardDecision::Allow
+        );
+
+        crate::session::__set_test_session(None);
     }
 }

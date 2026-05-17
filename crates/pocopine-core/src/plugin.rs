@@ -190,7 +190,8 @@ pub struct RouteNavigationCompleted {
 
 /// Emitted when route matching succeeds but the router cannot paint
 /// the route. `reason` is a stable identifier: `"missing_window"`,
-/// `"missing_outlet"`, `"missing_document"`, `"create_element_failed"`.
+/// `"missing_outlet"`, `"missing_document"`, `"create_element_failed"`,
+/// `"guard_pending"`, `"guard_redirected"`.
 #[derive(Clone, Debug)]
 pub struct RouteNavigationFailed {
     pub path: String,

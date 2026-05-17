@@ -9,6 +9,8 @@ description = "Wasm-side bearer-token bridge for outgoing #[server] auth: token 
 [dependencies]
 pocopine-auth = { workspace = true }
 pocopine-core = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

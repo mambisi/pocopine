@@ -1,7 +1,7 @@
 # Wasm-side auth — `pocopine-auth-client`
 
 The wasm-side companion to the credentials core and external IdP
-integrations (Firebase, Clerk, Auth0, app-issued JWTs, etc.). Seven
+integrations (Firebase, Clerk, Auth0, app-issued JWTs, etc.). Eight
 surfaces:
 
 - **Token slot.** `set_token` / `clear_token` / `active_token`
@@ -22,6 +22,10 @@ surfaces:
 - **Token persistence (`TokenStorage`).** Pluggable storage so the
   token survives reload. Provided impls: `LocalStorage`,
   `SessionStorage`, `InMemory` (default no-op).
+- **Session snapshot persistence (`SessionSnapshotStorage`).**
+  Optional optimistic identity snapshot storage for instant reload
+  continuity. Snapshots are UI continuity hints, not authorization
+  proof.
 - **Cross-tab session coordination.** Sign-in/out in one tab
   propagates to peer tabs of the same origin via `BroadcastChannel`.
 - **Reactive identity.** `AuthSession` is a plugin service the
@@ -188,7 +192,10 @@ auth_plugin()
 1. Calls `pocopine_auth_client::install()` if the builder requested it.
 2. `app.provide_plugin(AuthSession::new())` so any component can
    extract the session as `Plugin<AuthSession>` /
-   `Option<Plugin<AuthSession>>`.
+   `Option<Plugin<AuthSession>>`. With
+   `.wait_for_initial_auth_check(true)`, the session starts pending
+   and `predicate_guard(...)` pauses navigation until the provider
+   publishes the first auth result.
 3. `app.route_rejection_handler(handler)` where the handler maps
    `RouteRejection::Unauthorized` to a redirect to the configured
    login route, optionally appending the validated `ReturnTo`
@@ -199,6 +206,33 @@ that handle auth differently (a modal-only flow, an external IdP
 redirect with no return-to, an SSR-cookie-only flow) skip
 `auth_plugin()` entirely and ship their own
 `RouteRejectionHandler`.
+
+For no-SSR apps backed by browser auth providers such as Firebase,
+enable the first-check gate:
+
+```rust
+auth_plugin()
+    .wait_for_initial_auth_check(true)
+```
+
+Then, once the provider has checked its local session, call
+`AuthSession::sign_in`, `AuthSession::sign_out`,
+`AuthSession::set_principal`, or `AuthSession::mark_ready`. The router
+will re-run any guard that returned pending and continue with the
+correct signed-in or signed-out state.
+
+If you also want refreshes to feel native, add a snapshot store:
+
+```rust
+auth_plugin()
+    .wait_for_initial_auth_check(true)
+    .with_session_snapshot(LocalStorage::new("auth_snapshot"))
+```
+
+On the next page load the session starts in a restoring state from
+that snapshot, so guarded route shells can render immediately while
+Firebase, `/me`, or your provider SDK confirms the real session in
+the background.
 
 ## Step 3 — declare guarded routes
 
@@ -555,11 +589,31 @@ App::new()
 
 That's it. Three things change:
 
-1. At plugin install time, the in-memory slot is hydrated from
+1. At plugin install time, the in-memory token slot is hydrated from
    storage (`hydrate_from_storage()` runs). Returning users keep
-   their session.
+   their credential, but the `Principal` still needs provider/server
+   confirmation unless you also configure a session snapshot.
 2. `set_token` writes through to storage on every call.
 3. `clear_token` / `AuthSession::sign_out` clear storage too.
+
+### Optional session snapshot
+
+Token storage keeps a credential. Snapshot storage keeps a small
+serialized `Principal` for optimistic UI restore:
+
+```rust
+auth_plugin()
+    .with_token_storage(LocalStorage::new("auth_token"))
+    .with_session_snapshot(LocalStorage::new("auth_snapshot"))
+    .wait_for_initial_auth_check(true)
+```
+
+When a snapshot exists, `AuthSession` starts as `restoring`: guards
+can render the route shell from the cached principal, but the session
+is not considered fully confirmed until your provider calls
+`sign_in`, `sign_out`, `set_principal`, or `mark_ready`. Treat the
+snapshot as display continuity only; server functions remain the
+authorization boundary.
 
 ### Custom storage
 

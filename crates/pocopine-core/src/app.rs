@@ -186,6 +186,11 @@ impl RouteRejection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteGuardDecision {
     Allow,
+    /// Guard cannot decide yet because an async client-side
+    /// prerequisite is still hydrating. The router leaves the
+    /// current outlet untouched and waits for the owner of that
+    /// prerequisite to call [`crate::reevaluate_current`].
+    Pending,
     Reject(RouteRejection),
     Redirect(RouteTarget),
 }

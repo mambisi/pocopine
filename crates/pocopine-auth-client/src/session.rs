@@ -16,25 +16,86 @@ use std::rc::Rc;
 
 use pocopine_auth::Principal;
 use pocopine_core::Plugins;
+use serde::{Deserialize, Serialize};
+
+/// Persisted, optimistic identity snapshot used to make reloads feel
+/// native while the real browser/provider session is still being
+/// confirmed.
+///
+/// This is a continuity hint, not an authorization boundary. Server
+/// functions and provider checks still decide whether the session is
+/// actually valid.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AuthSessionSnapshot {
+    pub principal: Principal,
+}
+
+impl AuthSessionSnapshot {
+    pub fn new(principal: Principal) -> Option<Self> {
+        principal.is_authenticated().then_some(Self { principal })
+    }
+}
 
 /// Wasm-side reactive identity service. Cheap to clone — wraps an
 /// `Rc<RefCell<…>>` interior. Installed by [`crate::auth_plugin`]
 /// and read through [`active_principal`] / [`active_session`].
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthSession {
     inner: Rc<RefCell<AuthSessionInner>>,
 }
 
-#[derive(Default)]
 struct AuthSessionInner {
     principal: Principal,
     epoch: u64,
+    ready: bool,
+    restoring: bool,
+}
+
+impl Default for AuthSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AuthSession {
-    /// Build an anonymous session.
+    /// Build an anonymous session whose initial auth check has
+    /// already completed.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: Rc::new(RefCell::new(AuthSessionInner {
+                principal: Principal::anonymous(),
+                epoch: 0,
+                ready: true,
+                restoring: false,
+            })),
+        }
+    }
+
+    /// Build an anonymous session that still needs an async provider
+    /// check before route guards may decide.
+    pub fn pending() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(AuthSessionInner {
+                principal: Principal::anonymous(),
+                epoch: 0,
+                ready: false,
+                restoring: false,
+            })),
+        }
+    }
+
+    /// Build a session from an optimistic persisted snapshot. Route
+    /// guards may render from this state, but provider/server
+    /// confirmation is still pending.
+    pub fn restoring(snapshot: AuthSessionSnapshot) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(AuthSessionInner {
+                principal: snapshot.principal,
+                epoch: 0,
+                ready: false,
+                restoring: true,
+            })),
+        }
     }
 
     /// Active principal (cheap clone — `Principal` holds an
@@ -46,6 +107,48 @@ impl AuthSession {
     /// `true` when [`principal`](Self::principal) carries a user.
     pub fn is_authenticated(&self) -> bool {
         self.inner.borrow().principal.is_authenticated()
+    }
+
+    /// `true` once the app's auth provider has checked persisted
+    /// browser state at least once. Guard adapters return
+    /// `RouteGuardDecision::Pending` while this is false.
+    pub fn is_ready(&self) -> bool {
+        self.inner.borrow().ready
+    }
+
+    /// `true` when this session is rendering from a persisted
+    /// optimistic identity snapshot while the app checks the real
+    /// provider/server session in the background.
+    pub fn is_restoring(&self) -> bool {
+        self.inner.borrow().restoring
+    }
+
+    /// Snapshot the current authenticated principal for optimistic
+    /// restore on the next page load.
+    pub fn snapshot(&self) -> Option<AuthSessionSnapshot> {
+        AuthSessionSnapshot::new(self.principal())
+    }
+
+    /// Mark the initial auth check as pending. Use this before
+    /// starting an async provider hydration task if a plugin could not
+    /// know at construction time that a check was needed.
+    pub fn mark_pending(&self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.ready = false;
+        inner.restoring = false;
+        inner.epoch = inner.epoch.saturating_add(1);
+    }
+
+    /// Mark the initial auth check as complete and ask the router to
+    /// re-run any guard that paused on this session.
+    pub fn mark_ready(&self) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.ready = true;
+            inner.restoring = false;
+            inner.epoch = inner.epoch.saturating_add(1);
+        }
+        reevaluate_router();
     }
 
     /// Monotonic epoch. Bumps every time the principal changes.
@@ -64,9 +167,13 @@ impl AuthSession {
         {
             let mut inner = self.inner.borrow_mut();
             inner.principal = principal;
+            inner.ready = true;
+            inner.restoring = false;
             inner.epoch = inner.epoch.saturating_add(1);
+            persist_snapshot(&inner.principal);
         }
         crate::cross_tab::broadcast_session_changed();
+        reevaluate_router();
     }
 
     /// Bump the epoch without changing the principal. Use this when
@@ -90,11 +197,9 @@ impl AuthSession {
     }
 
     /// Sign out: clear the bearer token slot and reset the principal
-    /// to anonymous. Call [`pocopine_core::reevaluate_current`]
-    /// afterwards if a guarded route is currently mounted — the
-    /// router will rerun its guards against the new (anonymous)
-    /// `Principal` and unmount the gated component before the next
-    /// paint.
+    /// to anonymous. This also marks the initial auth check complete
+    /// and asks the router to re-run the current guard so gated
+    /// content is removed promptly.
     pub fn sign_out(&self) {
         crate::clear_token();
         self.set_principal(Principal::anonymous());
@@ -136,6 +241,22 @@ pub fn active_principal() -> Principal {
     active_session().map(|s| s.principal()).unwrap_or_default()
 }
 
+fn persist_snapshot(principal: &Principal) {
+    let Some(storage) = crate::storage::current_session_snapshot_storage() else {
+        return;
+    };
+    if let Some(snapshot) = AuthSessionSnapshot::new(principal.clone()) {
+        storage.save_snapshot(&snapshot);
+    } else {
+        storage.clear_snapshot();
+    }
+}
+
+fn reevaluate_router() {
+    #[cfg(target_arch = "wasm32")]
+    pocopine_core::reevaluate_current();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,9 +265,38 @@ mod tests {
     #[test]
     fn anonymous_session_has_no_user_and_epoch_zero() {
         let session = AuthSession::new();
+        assert!(session.is_ready());
+        assert!(!session.is_restoring());
         assert!(!session.is_authenticated());
         assert_eq!(session.epoch(), 0);
         assert!(session.principal().user().is_none());
+    }
+
+    #[test]
+    fn pending_session_blocks_until_ready() {
+        let session = AuthSession::pending();
+        assert!(!session.is_ready());
+        assert!(!session.is_restoring());
+        assert_eq!(session.epoch(), 0);
+
+        session.mark_ready();
+        assert!(session.is_ready());
+        assert!(!session.is_restoring());
+        assert_eq!(session.epoch(), 1);
+    }
+
+    #[test]
+    fn restoring_session_uses_snapshot_until_confirmed() {
+        let snapshot = AuthSessionSnapshot::new(Principal::from_user(AuthUser::new("u1"))).unwrap();
+        let session = AuthSession::restoring(snapshot);
+        assert!(!session.is_ready());
+        assert!(session.is_restoring());
+        assert!(session.is_authenticated());
+        assert_eq!(session.principal().user().unwrap().id, "u1");
+
+        session.mark_ready();
+        assert!(session.is_ready());
+        assert!(!session.is_restoring());
     }
 
     #[test]
@@ -154,6 +304,7 @@ mod tests {
         let session = AuthSession::new();
         let user = AuthUser::new("u1");
         session.set_principal(Principal::from_user(user.clone()));
+        assert!(session.is_ready());
         assert_eq!(session.epoch(), 1);
         assert!(session.is_authenticated());
         assert_eq!(session.principal().user().unwrap().id, "u1");
@@ -178,6 +329,29 @@ mod tests {
         assert_eq!(crate::active_token(), None);
         // sign_in bumped to 1; sign_out bumped to 2.
         assert_eq!(session.epoch(), 2);
+    }
+
+    #[test]
+    fn principal_changes_write_through_to_snapshot_storage() {
+        crate::storage::__reset_storage_for_test();
+        let storage = Rc::new(crate::storage::TestStorage::default());
+        crate::storage::install_session_snapshot_storage(storage.clone());
+
+        let session = AuthSession::new();
+        session.set_principal(Principal::from_user(AuthUser::new("u1")));
+        assert_eq!(
+            storage
+                .snapshot
+                .borrow()
+                .as_ref()
+                .and_then(|snapshot| snapshot.principal.user())
+                .map(|user| user.id.clone()),
+            Some("u1".to_string())
+        );
+
+        session.sign_out();
+        assert!(storage.snapshot.borrow().is_none());
+        crate::storage::__reset_storage_for_test();
     }
 
     #[test]

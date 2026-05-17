@@ -220,6 +220,11 @@ thread_local! {
     /// mounted by `finish_route_mount` when no route (and no
     /// wildcard) matched.
     static NOT_FOUND_COMPONENT: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// URL key for a navigation stopped by `RouteGuardDecision::Pending`.
+    /// When the external prerequisite later calls `reevaluate_current`,
+    /// an `Allow` decision remounts this route instead of treating the
+    /// already-empty outlet as a valid mounted page.
+    static PENDING_GUARD_NAVIGATION: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Monotonic identity of a navigation attempt. Two
@@ -479,6 +484,10 @@ pub fn route_proxy() -> JsValue {
 ///   Callers that need a forward navigation after sign-in (e.g.
 ///   "redirect to `/dashboard` post-login") should issue a separate
 ///   [`navigate`] call.
+/// - **`Pending`** → record the current URL and leave the outlet
+///   untouched. A later call to [`reevaluate_current`] after the
+///   prerequisite completes will either mount the route or take the
+///   normal redirect/reject path.
 /// - **`Redirect`** / **`Reject`** → the outlet is cleared
 ///   synchronously so any PII in the now-rejected component leaves
 ///   the DOM **before** the rejection chain paints its outcome,
@@ -508,15 +517,24 @@ pub fn reevaluate_current() {
 
     match decision {
         RouteGuardDecision::Allow => {
-            // Identity change made the user MORE privileged or the
-            // route was already permissive. Existing mount is still
-            // valid; re-mounting would tear down legitimate state.
+            if take_pending_guard_navigation(&path, &search) {
+                mount_current();
+            } else {
+                // Identity change made the user MORE privileged or
+                // the route was already permissive. Existing mount
+                // is still valid; re-mounting would tear down
+                // legitimate state.
+            }
+        }
+        RouteGuardDecision::Pending => {
+            record_pending_guard_navigation(&path, &search);
         }
         RouteGuardDecision::Redirect(_) | RouteGuardDecision::Reject(_) => {
             // Drop the rejected component synchronously so PII it
             // rendered cannot survive the next event-loop turn —
             // the rejection chain paints its outcome AFTER the
             // outlet is empty.
+            clear_pending_guard_navigation();
             clear_outlet();
             mount_current();
         }
@@ -593,7 +611,21 @@ fn mount_current() {
         if let Some(decision) = evaluate_guards(matched, &path, &query) {
             match decision {
                 RouteGuardDecision::Allow => {}
+                RouteGuardDecision::Pending => {
+                    record_pending_guard_navigation(&path, &search);
+                    if has_route_hooks {
+                        crate::plugin::emit(crate::plugin::RouteNavigationFailed {
+                            path: path.clone(),
+                            route_pattern,
+                            component: Some(matched.component_name),
+                            reason: "guard_pending",
+                            duration_ms: elapsed_since(start_ms),
+                        });
+                    }
+                    return;
+                }
                 RouteGuardDecision::Redirect(target) => {
+                    clear_pending_guard_navigation();
                     if has_route_hooks {
                         crate::plugin::emit(crate::plugin::RouteNavigationFailed {
                             path: path.clone(),
@@ -610,6 +642,7 @@ fn mount_current() {
                     return;
                 }
                 RouteGuardDecision::Reject(rejection) => {
+                    clear_pending_guard_navigation();
                     dispatch_route_rejection(
                         matched,
                         &path,
@@ -741,6 +774,8 @@ fn finish_route_mount(
     has_route_hooks: bool,
     start_ms: Option<f64>,
 ) {
+    clear_pending_guard_navigation();
+
     // Devtools hook — fires on every resolved route change, even
     // when there's no matching component (404). The router panel
     // uses this to build its recent-history view.
@@ -954,6 +989,39 @@ fn evaluate_guards(
         }
     }
     Some(RouteGuardDecision::Allow)
+}
+
+fn route_navigation_key(path: &str, search: &str) -> String {
+    if search.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}{search}")
+    }
+}
+
+fn record_pending_guard_navigation(path: &str, search: &str) {
+    PENDING_GUARD_NAVIGATION.with(|slot| {
+        *slot.borrow_mut() = Some(route_navigation_key(path, search));
+    });
+}
+
+fn clear_pending_guard_navigation() {
+    PENDING_GUARD_NAVIGATION.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
+
+fn take_pending_guard_navigation(path: &str, search: &str) -> bool {
+    let key = route_navigation_key(path, search);
+    PENDING_GUARD_NAVIGATION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_deref() == Some(key.as_str()) {
+            *slot = None;
+            true
+        } else {
+            false
+        }
+    })
 }
 
 fn handle_route_rejection(
@@ -1219,6 +1287,33 @@ mod tests {
         assert_eq!(
             evaluate_guards(&matched, "/admin", &HashMap::new()),
             Some(RouteGuardDecision::Reject(RouteRejection::Unauthorized))
+        );
+        assert!(!second_guard_called.get());
+    }
+
+    #[test]
+    fn guards_stop_at_pending() {
+        let second_guard_called = Rc::new(Cell::new(false));
+        let first_guard: Rc<dyn RouteGuard> =
+            Rc::new(|_: &RouteContext<'_>| RouteGuardDecision::Pending);
+        let second_guard_called_for_guard = Rc::clone(&second_guard_called);
+        let second_guard: Rc<dyn RouteGuard> = Rc::new(move |_: &RouteContext<'_>| {
+            second_guard_called_for_guard.set(true);
+            RouteGuardDecision::Allow
+        });
+        let matched = RouteMatch {
+            component_name: "admin",
+            route_pattern: Some("/admin"),
+            params: HashMap::new(),
+            config: RouteRuntimeConfig {
+                guards: vec![first_guard, second_guard],
+                loader: None,
+            },
+        };
+
+        assert_eq!(
+            evaluate_guards(&matched, "/admin", &HashMap::new()),
+            Some(RouteGuardDecision::Pending)
         );
         assert!(!second_guard_called.get());
     }
