@@ -39,11 +39,28 @@ lookups:
 
 ```rust
 #[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {}
+pub mod firebase {
+    use crate::FirebaseUser;
+
+    impl Module {
+        pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, Error> {
+            self.call_async("signIn").await
+        }
+
+        pub fn on_auth_state_changed(
+            &self,
+            scope: ::pocopine::ScopeId,
+            handler: impl FnMut(Result<Option<FirebaseUser>, Error>) + 'static,
+        ) -> Result<(), Error> {
+            self.subscribe(scope, "onAuthStateChanged", handler)
+        }
+    }
+}
 ```
 
-Use an empty inline module body. That keeps rustfmt from looking for a
-separate `src/firebase.rs` file before the macro expands.
+Use an inline module body, empty or with typed convenience methods. That keeps
+rustfmt from looking for a separate `src/firebase.rs` file before the macro
+expands.
 
 The module name comes from the filename. `src/Firebase.client.ts` registers as
 `firebase`, and `src/FirebaseAuth.client.ts` registers as `firebase-auth`.
@@ -63,15 +80,14 @@ struct FirebaseUser {
 }
 
 async fn sign_in() -> Result<Option<FirebaseUser>, firebase::Error> {
-    firebase::required()?.call_async("signIn").await
+    firebase::required()?.sign_in().await
 }
 
 fn subscribe(
     scope: ScopeId,
     handler: impl FnMut(Result<Option<FirebaseUser>, firebase::Error>) + 'static,
 ) -> Result<(), firebase::Error> {
-    firebase::required()?
-        .subscribe(scope, "onAuthStateChanged", handler)
+    firebase::required()?.on_auth_state_changed(scope, handler)
 }
 ```
 
@@ -83,17 +99,16 @@ cases:
 pub mod firebase {}
 ```
 
-The generated facade is intentionally thin today:
+The generated base facade is intentionally thin today:
 
 ```rust
-let user = firebase::required()?
-    .call_async::<Option<FirebaseUser>>("signIn")
-    .await?;
+let module = firebase::required()?;
+let user = module.sign_in().await?;
 ```
 
 The next codegen layer will extract the explicit TypeScript API from the
-`.client.ts` default export and generate typed method wrappers on top of the
-same facade, for example `firebase::required()?.sign_in().await?`.
+`.client.ts` default export and generate these typed method wrappers instead
+of asking authors to write the tiny `impl Module` block by hand.
 
 ## Commands
 

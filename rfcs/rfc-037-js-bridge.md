@@ -145,13 +145,19 @@ is not part of the stable managed-module contract.
 
 ```rust
 #[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {}
+pub mod firebase {
+    impl Module {
+        pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, Error> {
+            self.call_async("signIn").await
+        }
+    }
+}
 
 #[handlers]
 impl FirebaseAuth {
     pub fn click_sign_in(&mut self) {
         let module = firebase::required()?;
-        let user = module.call_async::<Option<FirebaseUser>>("signIn").await?;
+        let user = module.sign_in().await?;
         // Convert plain JSON into a Pocopine Principal and store state.
     }
 }
@@ -166,14 +172,20 @@ For reusable app code, wrap the client-module facade in an app-owned plugin:
 
 ```rust
 #[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {}
+pub mod firebase {
+    impl Module {
+        pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, Error> {
+            self.call_async("signIn").await
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct FirebaseAuth;
 
 impl FirebaseAuth {
     pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, firebase::Error> {
-        firebase::required()?.call_async("signIn").await
+        firebase::required()?.sign_in().await
     }
 }
 ```
@@ -196,12 +208,12 @@ The first facade layer is intentionally thin:
 
 ```rust
 let firebase = firebase::required()?;
-let user = firebase.call_async::<Option<FirebaseUser>>("signIn").await?;
+let user = firebase.sign_in().await?;
 ```
 
 The next extractor phase will read explicit TypeScript signatures and
-generate typed methods (`firebase.sign_in().await?`) on top of that
-same facade.
+generate typed methods like `sign_in` instead of asking authors to write
+the tiny `impl Module` block by hand.
 
 ## 6. Deferred scoped-island design
 
