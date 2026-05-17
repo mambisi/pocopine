@@ -6,6 +6,7 @@ members = [
     "crates/pine-icons",
     "crates/pine-icons-macros",
     "crates/pine-motion",
+    "crates/pine-richtext",
     "crates/pocopine",
     "crates/pocopine-analytics",
     "crates/pocopine-auth",
@@ -86,6 +87,7 @@ pocopine-sync-crud = { path = "crates/pocopine-sync-crud", version = "0.1.0" }
 pocopine-sync-indexdb = { path = "crates/pocopine-sync-indexdb", version = "0.1.0" }
 pocopine-sync-sqlite = { path = "crates/pocopine-sync-sqlite", version = "0.1.0" }
 pocopine-ts-rs = { path = "crates/pocopine-ts-rs", version = "0.1.0" }
+pine-richtext = { path = "crates/pine-richtext", version = "0.1.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

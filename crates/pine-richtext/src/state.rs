@@ -1,0 +1,1266 @@
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::model::{Fragment, Mark, Node, Schema, Slice};
+use crate::transform::{Mapping, StepMap, Transform};
+use crate::{RichTextError, RichTextResult};
+
+/// Meta key set on transactions that originated from a plugin's
+/// `append_transaction` hook. Matches upstream's `appendedTransaction` key.
+pub const META_APPENDED_TRANSACTION: &str = "appendedTransaction";
+
+/// A selection in the editor document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Selection {
+    /// Text selection with anchor/head positions.
+    Text { anchor: usize, head: usize },
+    /// Node selection anchored at the position before a node.
+    Node { anchor: usize },
+    /// Selection covering the full document.
+    All,
+}
+
+impl Selection {
+    /// Collapsed text selection.
+    pub fn text(pos: usize) -> Self {
+        Self::Text {
+            anchor: pos,
+            head: pos,
+        }
+    }
+
+    /// Text selection with explicit anchor/head.
+    pub fn text_between(anchor: usize, head: usize) -> Self {
+        Self::Text { anchor, head }
+    }
+
+    /// Find a valid cursor or node selection from a document position.
+    pub fn find_from(
+        doc: &Node,
+        schema: &Schema,
+        pos: usize,
+        dir: i8,
+        text_only: bool,
+    ) -> RichTextResult<Option<Self>> {
+        let dir = normalize_dir(dir);
+        let resolved = doc.resolve(pos)?;
+        if node_has_inline_content(schema, resolved.parent()) {
+            return Ok(Some(Self::text(pos)));
+        }
+
+        if let Some(found) = find_selection_in(
+            schema,
+            resolved.parent(),
+            pos,
+            resolved.index(resolved.depth()).unwrap_or(0),
+            dir,
+            text_only,
+        ) {
+            return Ok(Some(found));
+        }
+
+        for depth in (0..resolved.depth()).rev() {
+            let Some(node) = resolved.node(depth) else {
+                continue;
+            };
+            let found = if dir < 0 {
+                resolved.before(depth + 1).and_then(|before| {
+                    find_selection_in(
+                        schema,
+                        node,
+                        before,
+                        resolved.index(depth).unwrap_or(0),
+                        dir,
+                        text_only,
+                    )
+                })
+            } else {
+                resolved.after(depth + 1).and_then(|after| {
+                    find_selection_in(
+                        schema,
+                        node,
+                        after,
+                        resolved.index(depth).unwrap_or(0) + 1,
+                        dir,
+                        text_only,
+                    )
+                })
+            };
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Find the nearest valid cursor or node selection around a document position.
+    pub fn near(doc: &Node, schema: &Schema, pos: usize, bias: i8) -> RichTextResult<Self> {
+        let bias = normalize_dir(bias);
+        if let Some(selection) = Self::find_from(doc, schema, pos, bias, false)? {
+            return Ok(selection);
+        }
+        if let Some(selection) = Self::find_from(doc, schema, pos, -bias, false)? {
+            return Ok(selection);
+        }
+        Ok(Self::All)
+    }
+
+    /// Find the closest valid selection to the start of a document.
+    pub fn at_start(doc: &Node, schema: &Schema) -> Self {
+        find_selection_in(schema, doc, 0, 0, 1, false).unwrap_or(Self::All)
+    }
+
+    /// Find the closest valid selection to the end of a document.
+    pub fn at_end(doc: &Node, schema: &Schema) -> Self {
+        find_selection_in(
+            schema,
+            doc,
+            doc.content_size(),
+            doc.child_count(),
+            -1,
+            false,
+        )
+        .unwrap_or(Self::All)
+    }
+
+    /// Create a text selection, adjusting endpoints to nearby text positions when needed.
+    pub fn text_between_near(
+        doc: &Node,
+        schema: &Schema,
+        anchor: usize,
+        head: usize,
+        bias: Option<i8>,
+    ) -> RichTextResult<Self> {
+        let distance = anchor as isize - head as isize;
+        let bias = match (bias, distance) {
+            (_, distance) if distance > 0 => 1,
+            (_, distance) if distance < 0 => -1,
+            (Some(bias), _) => normalize_dir(bias),
+            (None, _) => 1,
+        };
+
+        let mut head_pos = head;
+        if !is_text_position(doc, schema, head)? {
+            let found = match Self::find_from(doc, schema, head, bias, true)? {
+                Some(selection) => Some(selection),
+                None => Self::find_from(doc, schema, head, -bias, true)?,
+            };
+            if let Some(Self::Text { head, .. }) = found {
+                head_pos = head;
+            } else {
+                return Self::near(doc, schema, head, bias);
+            }
+        }
+
+        let mut anchor_pos = anchor;
+        if !is_text_position(doc, schema, anchor)? {
+            if distance == 0 {
+                anchor_pos = head_pos;
+            } else {
+                let found = match Self::find_from(doc, schema, anchor, -bias, true)? {
+                    Some(selection) => Some(selection),
+                    None => Self::find_from(doc, schema, anchor, bias, true)?,
+                };
+                if let Some(Self::Text { anchor, .. }) = found {
+                    anchor_pos = if (anchor < head_pos) != (distance < 0) {
+                        head_pos
+                    } else {
+                        anchor
+                    };
+                } else {
+                    anchor_pos = head_pos;
+                }
+            }
+        }
+
+        Ok(Self::Text {
+            anchor: anchor_pos,
+            head: head_pos,
+        })
+    }
+
+    /// Node selection.
+    pub fn node(anchor: usize) -> Self {
+        Self::Node { anchor }
+    }
+
+    /// Selection start.
+    pub fn from(&self, doc: &Node) -> usize {
+        match self {
+            Self::Text { anchor, head } => (*anchor).min(*head),
+            Self::Node { anchor } => *anchor,
+            Self::All => 0,
+        }
+        .min(doc.content_size())
+    }
+
+    /// Selection end.
+    pub fn to(&self, doc: &Node) -> usize {
+        match self {
+            Self::Text { anchor, head } => (*anchor).max(*head),
+            Self::Node { anchor } => node_after(doc, *anchor)
+                .map(|node| anchor + node.node_size())
+                .unwrap_or(*anchor)
+                .min(doc.content_size()),
+            Self::All => doc.content_size(),
+        }
+    }
+
+    /// Whether this selection is empty.
+    pub fn is_empty(&self, doc: &Node) -> bool {
+        self.from(doc) == self.to(doc)
+    }
+
+    /// Map this selection through a transform mapping.
+    pub fn map(&self, mapping: &Mapping) -> Self {
+        self.map_through_maps(&mapping.maps)
+    }
+
+    fn map_through_maps(&self, maps: &[StepMap]) -> Self {
+        match self {
+            Self::Text { anchor, head } => Self::Text {
+                anchor: Mapping::map_through_maps(maps, *anchor, 1),
+                head: Mapping::map_through_maps(maps, *head, 1),
+            },
+            Self::Node { anchor } => Self::Node {
+                anchor: Mapping::map_through_maps(maps, *anchor, 1),
+            },
+            Self::All => Self::All,
+        }
+    }
+
+    /// Clamp this selection to a document's current content range.
+    pub fn clamped(&self, doc: &Node) -> Self {
+        let size = doc.content_size();
+        match self {
+            Self::Text { anchor, head } => Self::Text {
+                anchor: (*anchor).min(size),
+                head: (*head).min(size),
+            },
+            Self::Node { anchor } => Self::Node {
+                anchor: (*anchor).min(size.saturating_sub(1)),
+            },
+            Self::All => Self::All,
+        }
+    }
+
+    /// Validate this selection against a document.
+    pub fn validate(&self, doc: &Node) -> RichTextResult<()> {
+        let size = doc.content_size();
+        match self {
+            Self::Text { anchor, head } if *anchor <= size && *head <= size => Ok(()),
+            Self::Node { anchor } if *anchor < size && node_after(doc, *anchor).is_some() => Ok(()),
+            Self::All => Ok(()),
+            Self::Text { anchor, head } => Err(RichTextError::Selection(format!(
+                "text selection {anchor}..{head} exceeds document size {size}"
+            ))),
+            Self::Node { anchor } => Err(RichTextError::Selection(format!(
+                "node selection at {anchor} exceeds document size {size}"
+            ))),
+        }
+    }
+
+    /// Convert to a bookmark.
+    pub fn bookmark(&self) -> SelectionBookmark {
+        match self {
+            Self::Text { anchor, head } => SelectionBookmark::Text {
+                anchor: *anchor,
+                head: *head,
+            },
+            Self::Node { anchor } => SelectionBookmark::Node { anchor: *anchor },
+            Self::All => SelectionBookmark::All,
+        }
+    }
+}
+
+/// A normalized selection range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectionRange {
+    /// Range start.
+    pub from: usize,
+    /// Range end.
+    pub to: usize,
+}
+
+impl SelectionRange {
+    /// Create a sorted range.
+    pub fn new(anchor: usize, head: usize) -> Self {
+        Self {
+            from: anchor.min(head),
+            to: anchor.max(head),
+        }
+    }
+}
+
+/// A selection bookmark that can be mapped and resolved later.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SelectionBookmark {
+    /// Text bookmark.
+    Text { anchor: usize, head: usize },
+    /// Node bookmark.
+    Node { anchor: usize },
+    /// All-selection bookmark.
+    All,
+}
+
+impl SelectionBookmark {
+    /// Map a bookmark through a mapping.
+    pub fn map(&self, mapping: &Mapping) -> Self {
+        self.map_through_maps(&mapping.maps)
+    }
+
+    fn map_through_maps(&self, maps: &[StepMap]) -> Self {
+        match self {
+            Self::Text { anchor, head } => Self::Text {
+                anchor: Mapping::map_through_maps(maps, *anchor, 1),
+                head: Mapping::map_through_maps(maps, *head, 1),
+            },
+            Self::Node { anchor } => Self::Node {
+                anchor: Mapping::map_through_maps(maps, *anchor, 1),
+            },
+            Self::All => Self::All,
+        }
+    }
+
+    /// Resolve a bookmark to a selection.
+    pub fn resolve(&self, doc: &Node) -> RichTextResult<Selection> {
+        let selection = match self {
+            Self::Text { anchor, head } => Selection::Text {
+                anchor: *anchor,
+                head: *head,
+            },
+            Self::Node { anchor } => Selection::Node { anchor: *anchor },
+            Self::All => Selection::All,
+        };
+        selection.validate(doc)?;
+        Ok(selection)
+    }
+}
+
+fn node_after(doc: &Node, pos: usize) -> Option<Node> {
+    doc.resolve(pos).ok()?.node_after()
+}
+
+fn normalize_dir(dir: i8) -> i8 {
+    if dir < 0 {
+        -1
+    } else {
+        1
+    }
+}
+
+fn is_text_position(doc: &Node, schema: &Schema, pos: usize) -> RichTextResult<bool> {
+    Ok(node_has_inline_content(schema, doc.resolve(pos)?.parent()))
+}
+
+fn node_has_inline_content(schema: &Schema, node: &Node) -> bool {
+    schema
+        .node_type(node.type_name())
+        .is_ok_and(|node_type| node_type.inline_content(schema))
+}
+
+fn node_is_atom(schema: &Schema, node: &Node) -> bool {
+    node.is_leaf()
+        || schema
+            .node_type(node.type_name())
+            .is_ok_and(|node_type| node_type.is_atom())
+}
+
+fn find_selection_in(
+    schema: &Schema,
+    node: &Node,
+    pos: usize,
+    index: usize,
+    dir: i8,
+    text_only: bool,
+) -> Option<Selection> {
+    if node_has_inline_content(schema, node) {
+        return Some(Selection::text(pos));
+    }
+
+    if dir > 0 {
+        let mut pos = pos;
+        for child_index in index..node.child_count() {
+            let child = node.child(child_index)?;
+            if !node_is_atom(schema, child) {
+                if let Some(selection) =
+                    find_selection_in(schema, child, pos + 1, 0, dir, text_only)
+                {
+                    return Some(selection);
+                }
+            } else if !text_only && !child.is_text() {
+                return Some(Selection::node(pos));
+            }
+            pos += child.node_size();
+        }
+    } else {
+        let mut pos = pos;
+        for child_index in (0..index).rev() {
+            let child = node.child(child_index)?;
+            if !node_is_atom(schema, child) {
+                if let Some(selection) = find_selection_in(
+                    schema,
+                    child,
+                    pos.saturating_sub(1),
+                    child.child_count(),
+                    dir,
+                    text_only,
+                ) {
+                    return Some(selection);
+                }
+            } else if !text_only && !child.is_text() {
+                return Some(Selection::node(pos.saturating_sub(child.node_size())));
+            }
+            pos = pos.saturating_sub(child.node_size());
+        }
+    }
+
+    None
+}
+
+/// A document transaction.
+#[derive(Clone, Debug)]
+pub struct Transaction {
+    base_doc: Node,
+    transform: Transform,
+    selection: Option<Selection>,
+    stored_marks: Option<Vec<Mark>>,
+    meta: BTreeMap<String, Value>,
+}
+
+impl Transaction {
+    /// Start a transaction.
+    pub fn new(schema: Schema, doc: Node) -> Self {
+        Self {
+            base_doc: doc.clone(),
+            transform: Transform::new(schema, doc),
+            selection: None,
+            stored_marks: None,
+            meta: BTreeMap::new(),
+        }
+    }
+
+    /// Current transaction document.
+    pub fn doc(&self) -> &Node {
+        self.transform.doc()
+    }
+
+    /// Underlying transform.
+    pub fn transform(&self) -> &Transform {
+        &self.transform
+    }
+
+    /// Document this transaction was created from.
+    pub fn base_doc(&self) -> &Node {
+        &self.base_doc
+    }
+
+    /// Transaction mapping.
+    pub fn mapping(&self) -> Mapping {
+        self.transform.mapping()
+    }
+
+    /// Explicit selection set by the transaction.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    /// Explicit stored marks set by the transaction.
+    pub fn stored_marks(&self) -> Option<&[Mark]> {
+        self.stored_marks.as_deref()
+    }
+
+    /// Transaction metadata.
+    pub fn meta(&self, key: &str) -> Option<&Value> {
+        self.meta.get(key)
+    }
+
+    /// All metadata.
+    pub fn meta_map(&self) -> &BTreeMap<String, Value> {
+        &self.meta
+    }
+
+    /// Set transaction metadata.
+    pub fn set_meta(&mut self, key: impl Into<String>, value: Value) -> &mut Self {
+        self.meta.insert(key.into(), value);
+        self
+    }
+
+    /// Set selection.
+    pub fn set_selection(&mut self, selection: Selection) -> RichTextResult<&mut Self> {
+        selection.validate(self.doc())?;
+        if let Selection::Node { anchor } = &selection {
+            if let Some(node) = node_after(self.doc(), *anchor) {
+                if !self
+                    .transform
+                    .schema()
+                    .node_type(node.type_name())?
+                    .is_selectable()
+                {
+                    return Err(RichTextError::Selection(format!(
+                        "node type {} is not selectable",
+                        node.type_name()
+                    )));
+                }
+            }
+        }
+        self.selection = Some(selection);
+        self.stored_marks = None;
+        Ok(self)
+    }
+
+    /// Set stored marks.
+    pub fn set_stored_marks(&mut self, marks: Vec<Mark>) -> &mut Self {
+        self.stored_marks = Some(marks);
+        self
+    }
+
+    /// Replace content.
+    pub fn replace(&mut self, from: usize, to: usize, slice: Slice) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.replace(from, to, slice)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Delete content.
+    pub fn delete(&mut self, from: usize, to: usize) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.delete(from, to)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Insert content.
+    pub fn insert(&mut self, pos: usize, content: Fragment) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.insert(pos, content)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Delete the current selection.
+    pub fn delete_selection(&mut self) -> RichTextResult<&mut Self> {
+        let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        let from = selection.from(self.doc());
+        let to = selection.to(self.doc());
+        let preserved_marks = if matches!(selection, Selection::Text { .. }) && from < to {
+            let from_pos = self.doc().resolve(from)?;
+            let to_pos = self.doc().resolve(to)?;
+            from_pos.marks_across(&to_pos, self.transform.schema())
+        } else {
+            None
+        };
+
+        self.delete(from, to)?;
+        if let Some(marks) = preserved_marks {
+            self.set_stored_marks(marks);
+        }
+        Ok(self)
+    }
+
+    /// Replace the current selection with a slice.
+    pub fn replace_selection(&mut self, slice: Slice) -> RichTextResult<&mut Self> {
+        let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        let from = selection.from(self.doc());
+        let to = selection.to(self.doc());
+        let bias = slice_insertion_bias(&slice, self.transform.schema());
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.replace_range(from, to, slice)?;
+        self.map_selection_from(map_start)?;
+        self.selection_to_insertion_end(map_start, bias)?;
+        Ok(self)
+    }
+
+    /// Replace the current selection with a node.
+    pub fn replace_selection_with(&mut self, node: Node) -> RichTextResult<&mut Self> {
+        let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        let mut node = node;
+        if self
+            .transform
+            .schema()
+            .node_type(node.type_name())
+            .is_ok_and(|node_type| node_type.is_inline())
+        {
+            node = node.with_marks(self.marks_for_selection(&selection)?);
+        }
+        self.replace_selection(Slice::new(Fragment::from(node), 0, 0))
+    }
+
+    /// Replace the current selection with plain text.
+    pub fn insert_text(&mut self, text: impl Into<String>) -> RichTextResult<&mut Self> {
+        let selection = self.selection.clone().unwrap_or_else(|| Selection::text(0));
+        let marks = self.marks_for_selection(&selection)?;
+        let node = self.transform.schema().text(text, marks)?;
+        self.replace_selection_with(node)
+    }
+
+    /// Add a mark.
+    pub fn add_mark(&mut self, from: usize, to: usize, mark: Mark) -> RichTextResult<&mut Self> {
+        self.stored_marks = None;
+        self.transform.add_mark(from, to, mark)?;
+        Ok(self)
+    }
+
+    /// Remove a mark.
+    pub fn remove_mark(&mut self, from: usize, to: usize, mark: Mark) -> RichTextResult<&mut Self> {
+        self.stored_marks = None;
+        self.transform.remove_mark(from, to, mark)?;
+        Ok(self)
+    }
+
+    fn map_selection_from(&mut self, map_start: usize) -> RichTextResult<()> {
+        if let Some(selection) = &self.selection {
+            let mapped = selection
+                .map_through_maps(&self.transform.maps()[map_start..])
+                .clamped(self.doc());
+            mapped.validate(self.doc())?;
+            self.selection = Some(mapped);
+        }
+        Ok(())
+    }
+
+    fn selection_to_insertion_end(&mut self, map_start: usize, bias: i8) -> RichTextResult<()> {
+        let Some(last_index) = self.transform.maps().len().checked_sub(1) else {
+            return Ok(());
+        };
+        if last_index < map_start {
+            return Ok(());
+        }
+
+        let mut end = None;
+        self.transform.maps()[last_index].for_each(|_, _, _, new_to| {
+            if end.is_none() {
+                end = Some(new_to);
+            }
+        });
+        if let Some(end) = end {
+            self.selection = Some(Selection::near(
+                self.doc(),
+                self.transform.schema(),
+                end,
+                bias,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn marks_for_selection(&self, selection: &Selection) -> RichTextResult<Vec<Mark>> {
+        if let Some(marks) = &self.stored_marks {
+            return Ok(marks.clone());
+        }
+
+        let from = selection.from(self.doc());
+        let to = selection.to(self.doc());
+        let from_pos = self.doc().resolve(from)?;
+        if from == to {
+            Ok(from_pos.marks(self.transform.schema()))
+        } else {
+            Ok(from_pos
+                .marks_across(&self.doc().resolve(to)?, self.transform.schema())
+                .unwrap_or_default())
+        }
+    }
+}
+
+fn slice_insertion_bias(slice: &Slice, schema: &Schema) -> i8 {
+    let mut last = slice.content.as_slice().last();
+    let mut last_parent = None;
+    for _ in 0..slice.open_end {
+        last_parent = last;
+        last = last.and_then(|node| node.content().as_slice().last());
+    }
+
+    let inline_tail = last.is_some_and(|node| {
+        schema
+            .node_type(node.type_name())
+            .is_ok_and(|node_type| node_type.is_inline())
+    }) || last_parent.is_some_and(|node| {
+        schema
+            .node_type(node.type_name())
+            .is_ok_and(|node_type| node_type.inline_content(schema))
+    });
+    if inline_tail {
+        -1
+    } else {
+        1
+    }
+}
+
+/// Configuration for [`EditorState::create`].
+#[derive(Clone)]
+pub struct EditorStateConfig {
+    /// Schema.
+    pub schema: Schema,
+    /// Initial document.
+    pub doc: Node,
+    /// Initial selection. Defaults to a text cursor at position 0.
+    pub selection: Option<Selection>,
+    /// Initial stored marks.
+    pub stored_marks: Option<Vec<Mark>>,
+    /// Pure plugins.
+    pub plugins: Vec<Plugin>,
+}
+
+impl EditorStateConfig {
+    /// Create a state config.
+    pub fn new(schema: Schema, doc: Node) -> Self {
+        Self {
+            schema,
+            doc,
+            selection: None,
+            stored_marks: None,
+            plugins: Vec::new(),
+        }
+    }
+
+    /// Set selection.
+    pub fn selection(mut self, selection: Selection) -> Self {
+        self.selection = Some(selection);
+        self
+    }
+
+    /// Set plugins.
+    pub fn plugins(mut self, plugins: Vec<Plugin>) -> Self {
+        self.plugins = plugins;
+        self
+    }
+}
+
+/// Editor state with document, selection, marks, and pure plugin state.
+#[derive(Clone)]
+pub struct EditorState {
+    schema: Schema,
+    doc: Node,
+    selection: Selection,
+    stored_marks: Option<Vec<Mark>>,
+    plugins: Vec<Plugin>,
+    plugin_state: BTreeMap<String, Value>,
+}
+
+impl fmt::Debug for EditorState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EditorState")
+            .field("doc", &self.doc)
+            .field("selection", &self.selection)
+            .field("stored_marks", &self.stored_marks)
+            .field("plugin_state", &self.plugin_state)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EditorState {
+    /// Create editor state.
+    pub fn create(config: EditorStateConfig) -> RichTextResult<Self> {
+        config.schema.check_node(&config.doc)?;
+        let selection = config.selection.unwrap_or_else(|| Selection::text(0));
+        selection.validate(&config.doc)?;
+
+        let mut state = Self {
+            schema: config.schema,
+            doc: config.doc,
+            selection,
+            stored_marks: config.stored_marks,
+            plugins: config.plugins,
+            plugin_state: BTreeMap::new(),
+        };
+
+        for plugin in &state.plugins {
+            if let Some(field) = &plugin.state_field {
+                let value = field.init(&state)?;
+                state.plugin_state.insert(plugin.key.clone(), value);
+            }
+        }
+
+        Ok(state)
+    }
+
+    /// Create a transaction from this state.
+    pub fn tr(&self) -> Transaction {
+        let mut transaction = Transaction::new(self.schema.clone(), self.doc.clone());
+        transaction.selection = Some(self.selection.clone());
+        transaction.stored_marks = self.stored_marks.clone();
+        transaction
+    }
+
+    /// Schema.
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// Current document.
+    pub fn doc(&self) -> &Node {
+        &self.doc
+    }
+
+    /// Current selection.
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    /// Current stored marks.
+    pub fn stored_marks(&self) -> Option<&[Mark]> {
+        self.stored_marks.as_deref()
+    }
+
+    /// Plugin state value by key.
+    pub fn plugin_state(&self, key: &str) -> Option<&Value> {
+        self.plugin_state.get(key)
+    }
+
+    /// Apply a transaction, including append-transaction hooks.
+    pub fn apply_transaction(
+        &self,
+        transaction: Transaction,
+    ) -> RichTextResult<(Self, Vec<Transaction>)> {
+        self.apply_inner(transaction, true)
+    }
+
+    /// Apply a transaction and return only the new state.
+    pub fn apply(&self, transaction: Transaction) -> RichTextResult<Self> {
+        self.apply_transaction(transaction).map(|(state, _)| state)
+    }
+
+    /// Reconfigure plugins while preserving matching plugin state.
+    pub fn reconfigure(&self, plugins: Vec<Plugin>) -> RichTextResult<Self> {
+        let mut state = self.clone();
+        state.plugins = plugins;
+        let mut next_plugin_state = BTreeMap::new();
+        for plugin in &state.plugins {
+            if let Some(existing) = self.plugin_state.get(&plugin.key) {
+                next_plugin_state.insert(plugin.key.clone(), existing.clone());
+            } else if let Some(field) = &plugin.state_field {
+                next_plugin_state.insert(plugin.key.clone(), field.init(&state)?);
+            }
+        }
+        state.plugin_state = next_plugin_state;
+        Ok(state)
+    }
+
+    /// Serialize state in the Rust-native format.
+    pub fn to_json(&self) -> RichTextResult<Value> {
+        Ok(json!({
+            "doc": self.doc,
+            "selection": self.selection,
+            "stored_marks": self.stored_marks,
+            "plugin_state": self.plugin_state,
+        }))
+    }
+
+    /// Deserialize state in the Rust-native format.
+    pub fn from_json(schema: Schema, plugins: Vec<Plugin>, value: Value) -> RichTextResult<Self> {
+        #[derive(Deserialize)]
+        struct StateJson {
+            doc: Node,
+            selection: Option<Selection>,
+            stored_marks: Option<Vec<Mark>>,
+            #[serde(default)]
+            plugin_state: BTreeMap<String, Value>,
+        }
+
+        let decoded: StateJson = serde_json::from_value(value)?;
+        let mut state = Self::create(EditorStateConfig {
+            schema,
+            doc: decoded.doc,
+            selection: decoded.selection,
+            stored_marks: decoded.stored_marks,
+            plugins,
+        })?;
+        for (key, value) in decoded.plugin_state {
+            if state.plugins.iter().any(|plugin| plugin.key == key) {
+                state.plugin_state.insert(key, value);
+            }
+        }
+        Ok(state)
+    }
+
+    fn apply_inner(
+        &self,
+        transaction: Transaction,
+        allow_append: bool,
+    ) -> RichTextResult<(Self, Vec<Transaction>)> {
+        for plugin in &self.plugins {
+            if let Some(filter) = &plugin.filter_transaction {
+                if !(filter)(&transaction, self)? {
+                    return Ok((self.clone(), Vec::new()));
+                }
+            }
+        }
+
+        let mut next = self.apply_without_append(&transaction)?;
+        let mut transactions = vec![transaction];
+
+        if allow_append {
+            for _ in 0..16 {
+                let mut appended = None;
+                for plugin in &next.plugins {
+                    if let Some(append) = &plugin.append_transaction {
+                        if let Some(transaction) = (append)(&transactions, self, &next)? {
+                            appended = Some(transaction);
+                            break;
+                        }
+                    }
+                }
+
+                let Some(mut transaction) = appended else {
+                    break;
+                };
+                if transaction.meta(META_APPENDED_TRANSACTION).is_none() {
+                    transaction.set_meta(META_APPENDED_TRANSACTION, Value::from(0_u64));
+                }
+                let (state, mut applied) = next.apply_inner(transaction, false)?;
+                if applied.is_empty() {
+                    break;
+                }
+                next = state;
+                transactions.append(&mut applied);
+            }
+        }
+
+        Ok((next, transactions))
+    }
+
+    fn apply_without_append(&self, transaction: &Transaction) -> RichTextResult<Self> {
+        if transaction.base_doc() != self.doc() {
+            return Err(RichTextError::Transform(
+                "transaction was created from a different document".to_string(),
+            ));
+        }
+
+        let selection = transaction.selection.clone().unwrap_or_else(|| {
+            self.selection
+                .map_through_maps(transaction.transform().maps())
+                .clamped(transaction.doc())
+        });
+        selection.validate(transaction.doc())?;
+
+        let stores_marks = matches!(&selection, Selection::Text { anchor, head } if anchor == head);
+        let mut next = Self {
+            schema: self.schema.clone(),
+            doc: transaction.doc().clone(),
+            selection,
+            stored_marks: if stores_marks {
+                transaction.stored_marks.clone()
+            } else {
+                None
+            },
+            plugins: self.plugins.clone(),
+            plugin_state: self.plugin_state.clone(),
+        };
+
+        for plugin in &self.plugins {
+            if let Some(field) = &plugin.state_field {
+                let old = self
+                    .plugin_state
+                    .get(&plugin.key)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let value = field.apply(transaction, &old, self, &next)?;
+                next.plugin_state.insert(plugin.key.clone(), value);
+            }
+        }
+
+        Ok(next)
+    }
+}
+
+/// Pure plugin state field.
+pub trait StateField: Send + Sync {
+    /// Initialize plugin state.
+    fn init(&self, state: &EditorState) -> RichTextResult<Value>;
+
+    /// Apply a transaction to plugin state.
+    fn apply(
+        &self,
+        transaction: &Transaction,
+        value: &Value,
+        old_state: &EditorState,
+        new_state: &EditorState,
+    ) -> RichTextResult<Value>;
+}
+
+impl<F, G> StateField for StateFieldFns<F, G>
+where
+    F: Fn(&EditorState) -> RichTextResult<Value> + Send + Sync,
+    G: Fn(&Transaction, &Value, &EditorState, &EditorState) -> RichTextResult<Value> + Send + Sync,
+{
+    fn init(&self, state: &EditorState) -> RichTextResult<Value> {
+        (self.init)(state)
+    }
+
+    fn apply(
+        &self,
+        transaction: &Transaction,
+        value: &Value,
+        old_state: &EditorState,
+        new_state: &EditorState,
+    ) -> RichTextResult<Value> {
+        (self.apply)(transaction, value, old_state, new_state)
+    }
+}
+
+/// Closure-backed state field.
+pub struct StateFieldFns<F, G> {
+    init: F,
+    apply: G,
+}
+
+type FilterHook =
+    Arc<dyn Fn(&Transaction, &EditorState) -> RichTextResult<bool> + Send + Sync + 'static>;
+type AppendHook = Arc<
+    dyn Fn(&[Transaction], &EditorState, &EditorState) -> RichTextResult<Option<Transaction>>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+/// A pure editor plugin.
+#[derive(Clone)]
+pub struct Plugin {
+    key: String,
+    state_field: Option<Arc<dyn StateField>>,
+    filter_transaction: Option<FilterHook>,
+    append_transaction: Option<AppendHook>,
+}
+
+impl fmt::Debug for Plugin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Plugin")
+            .field("key", &self.key)
+            .field("has_state_field", &self.state_field.is_some())
+            .field("has_filter_transaction", &self.filter_transaction.is_some())
+            .field("has_append_transaction", &self.append_transaction.is_some())
+            .finish()
+    }
+}
+
+impl Plugin {
+    /// Start a plugin builder.
+    pub fn builder(key: impl Into<String>) -> PluginBuilder {
+        PluginBuilder::new(key)
+    }
+
+    /// Plugin key.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+/// Builder for [`Plugin`].
+pub struct PluginBuilder {
+    key: String,
+    state_field: Option<Arc<dyn StateField>>,
+    filter_transaction: Option<FilterHook>,
+    append_transaction: Option<AppendHook>,
+}
+
+impl PluginBuilder {
+    /// Create a plugin builder.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            state_field: None,
+            filter_transaction: None,
+            append_transaction: None,
+        }
+    }
+
+    /// Add a state field from closures.
+    pub fn state_field<F, G>(mut self, init: F, apply: G) -> Self
+    where
+        F: Fn(&EditorState) -> RichTextResult<Value> + Send + Sync + 'static,
+        G: Fn(&Transaction, &Value, &EditorState, &EditorState) -> RichTextResult<Value>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.state_field = Some(Arc::new(StateFieldFns { init, apply }));
+        self
+    }
+
+    /// Add a transaction filter hook.
+    pub fn filter_transaction<F>(mut self, filter: F) -> Self
+    where
+        F: Fn(&Transaction, &EditorState) -> RichTextResult<bool> + Send + Sync + 'static,
+    {
+        self.filter_transaction = Some(Arc::new(filter));
+        self
+    }
+
+    /// Add an append-transaction hook.
+    pub fn append_transaction<F>(mut self, append: F) -> Self
+    where
+        F: Fn(&[Transaction], &EditorState, &EditorState) -> RichTextResult<Option<Transaction>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.append_transaction = Some(Arc::new(append));
+        self
+    }
+
+    /// Finish the plugin.
+    pub fn finish(self) -> Plugin {
+        Plugin {
+            key: self.key,
+            state_field: self.state_field,
+            filter_transaction: self.filter_transaction,
+            append_transaction: self.append_transaction,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::model::{Fragment, Slice};
+    use crate::schema_basic;
+
+    fn state() -> EditorState {
+        let schema = schema_basic::schema();
+        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
+            "hello",
+            Vec::new(),
+        )
+        .unwrap()])
+        .unwrap()])
+        .unwrap();
+        EditorState::create(EditorStateConfig::new(schema, doc)).unwrap()
+    }
+
+    #[test]
+    fn transaction_maps_selection() {
+        let state = state();
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text(6)).unwrap();
+        let insert = Fragment::from(schema_basic::text("!", Vec::new()).unwrap());
+        tr.replace(6, 6, Slice::new(insert, 0, 0)).unwrap();
+
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.selection(), &Selection::text(7));
+        assert_eq!(next.doc().text_content(), "hello!");
+    }
+
+    #[test]
+    fn transaction_insert_maps_explicit_selection() {
+        let state = state();
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text(6)).unwrap();
+        let insert = Fragment::from(schema_basic::text("!", Vec::new()).unwrap());
+        tr.insert(1, insert).unwrap();
+
+        assert_eq!(tr.selection(), Some(&Selection::text(7)));
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.selection(), &Selection::text(7));
+        assert_eq!(next.doc().text_content(), "!hello");
+    }
+
+    #[test]
+    fn transaction_delete_maps_explicit_selection() {
+        let state = state();
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text(6)).unwrap();
+        tr.delete(1, 2).unwrap();
+
+        assert_eq!(tr.selection(), Some(&Selection::text(5)));
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.selection(), &Selection::text(5));
+        assert_eq!(next.doc().text_content(), "ello");
+    }
+
+    #[test]
+    fn transaction_deletes_and_replaces_current_selection() {
+        let state = state();
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text_between(2, 4)).unwrap();
+        tr.delete_selection().unwrap();
+
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.doc().text_content(), "hlo");
+        assert_eq!(next.selection(), &Selection::text(2));
+
+        let mut tr = next.tr();
+        tr.set_selection(Selection::text(2)).unwrap();
+        tr.insert_text("ey").unwrap();
+        let next = next.apply(tr).unwrap();
+        assert_eq!(next.doc().text_content(), "heylo");
+        assert_eq!(next.selection(), &Selection::text(4));
+    }
+
+    #[test]
+    fn node_selection_covers_the_selected_node_size() {
+        let state = state();
+        let selection = Selection::node(0);
+        selection.validate(state.doc()).unwrap();
+
+        assert_eq!(selection.from(state.doc()), 0);
+        assert_eq!(selection.to(state.doc()), 7);
+        assert!(!selection.is_empty(state.doc()));
+    }
+
+    #[test]
+    fn rejects_transaction_from_different_document() {
+        let state = state();
+        let mut stale_transaction = state.tr();
+        stale_transaction.delete(1, 2).unwrap();
+
+        let mut first_transaction = state.tr();
+        first_transaction.delete(2, 3).unwrap();
+        let next = state.apply(first_transaction).unwrap();
+
+        let err = next.apply(stale_transaction).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("transaction was created from a different document"));
+    }
+
+    #[test]
+    fn plugin_state_and_filter_hooks_run() {
+        let plugin = Plugin::builder("count")
+            .state_field(
+                |_| Ok(json!(0)),
+                |transaction, value, _, _| {
+                    let count = value.as_u64().unwrap_or(0);
+                    Ok(json!(count + transaction.transform().steps().len() as u64))
+                },
+            )
+            .filter_transaction(|transaction, _| {
+                Ok(transaction.meta("reject") != Some(&json!(true)))
+            })
+            .finish();
+
+        let state = state().reconfigure(vec![plugin]).unwrap();
+        let mut tr = state.tr();
+        tr.delete(1, 2).unwrap();
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.plugin_state("count"), Some(&json!(1)));
+
+        let mut rejected = next.tr();
+        rejected.set_meta("reject", json!(true));
+        let (same, applied) = next.apply_transaction(rejected).unwrap();
+        assert!(applied.is_empty());
+        assert_eq!(same.doc(), next.doc());
+    }
+
+    #[test]
+    fn state_json_round_trip() {
+        let state = state();
+        let value = state.to_json().unwrap();
+        let decoded = EditorState::from_json(schema_basic::schema(), Vec::new(), value).unwrap();
+        assert_eq!(decoded.doc(), state.doc());
+        assert_eq!(decoded.selection(), state.selection());
+    }
+}
