@@ -196,7 +196,7 @@ impl AuthSession {
     /// the peer signed in or refreshed; the local tab still needs its
     /// own provider/server identity check, so only bump the epoch to
     /// fence stale in-flight responses.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn apply_cross_tab_token_state(&self, token_present: bool) {
         if token_present {
             self.bump_epoch();
