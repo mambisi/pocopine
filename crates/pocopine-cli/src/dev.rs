@@ -3,7 +3,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
@@ -16,20 +16,41 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
 
+    let (tx, rx) = channel::<Change>();
+    let tx_w = tx.clone();
+    let project_for_watch = project.clone();
+    let mut watcher: RecommendedWatcher =
+        notify::recommended_watcher(move |res: notify::Result<Event>| {
+            if let Ok(ev) = res {
+                use notify::EventKind::*;
+                if matches!(ev.kind, Modify(_) | Create(_) | Remove(_)) {
+                    if let Some(change) = Change::from_event(&project_for_watch, &ev) {
+                        let _ = tx_w.send(change);
+                    }
+                }
+            }
+        })
+        .context("create file watcher")?;
+    let src_dir = project.join("src");
+    watcher
+        .watch(&src_dir, RecursiveMode::Recursive)
+        .with_context(|| format!("watch {}", src_dir.display()))?;
+    watcher
+        .watch(&project, RecursiveMode::NonRecursive)
+        .with_context(|| format!("watch {}", project.display()))?;
+
     // Kick off Tailwind in watch mode before serving so the first page
     // load already sees compiled CSS.
-    let tailwind_child = if let Some(tw) = cfg.tailwind.as_ref() {
+    let mut children = DevChildren::default();
+    if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
-        Some(tailwind::spawn_watch(&project, tw)?)
-    } else {
-        None
-    };
+        children.tailwind = Some(tailwind::spawn_watch(&project, tw)?);
+    }
 
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
-    let mut bin_children: Vec<server::BinChild> = Vec::new();
     match cfg.bin.as_deref() {
-        Some(bin) => bin_children.push(server::spawn_bin(
+        Some(bin) => children.bins.push(server::spawn_bin(
             &project,
             bin,
             args.release,
@@ -48,7 +69,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     }
     if let Some(worker) = cfg.worker_bin.as_deref() {
         server::validate_worker_backend_for_separate_process(true)?;
-        bin_children.push(server::spawn_bin(
+        children.bins.push(server::spawn_bin(
             &project,
             worker,
             args.release,
@@ -56,28 +77,10 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             true,
         )?);
     }
-
-    let (tx, rx) = channel::<Change>();
-    let tx_w = tx.clone();
-    let project_for_watch = project.clone();
-    let mut watcher: RecommendedWatcher =
-        notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if let Ok(ev) = res {
-                use notify::EventKind::*;
-                if matches!(ev.kind, Modify(_) | Create(_) | Remove(_)) {
-                    if let Some(change) = Change::from_event(&project_for_watch, &ev) {
-                        let _ = tx_w.send(change);
-                    }
-                }
-            }
-        })?;
-    let src_dir = project.join("src");
-    watcher.watch(&src_dir, RecursiveMode::Recursive)?;
-    watcher.watch(&project, RecursiveMode::NonRecursive)?;
     println!("👀 watching {} and package files", src_dir.display());
 
-    let result = loop {
-        if let Some(message) = server::poll_children(&mut bin_children)? {
+    loop {
+        if let Some(message) = server::poll_children(&mut children.bins)? {
             break Err(anyhow!("{message}"));
         }
         match rx.recv_timeout(Duration::from_millis(250)) {
@@ -113,15 +116,24 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         }
-    };
+    }
+}
 
-    for child in bin_children {
-        child.kill();
+#[derive(Default)]
+struct DevChildren {
+    bins: Vec<server::BinChild>,
+    tailwind: Option<tailwind::TailwindChild>,
+}
+
+impl Drop for DevChildren {
+    fn drop(&mut self) {
+        for child in self.bins.drain(..) {
+            child.kill();
+        }
+        if let Some(child) = self.tailwind.take() {
+            child.kill();
+        }
     }
-    if let Some(child) = tailwind_child {
-        child.kill();
-    }
-    result
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
