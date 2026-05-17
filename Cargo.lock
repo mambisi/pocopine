@@ -2248,11 +2248,13 @@ dependencies = [
  "pine-icons",
  "pine-motion",
  "pocopine",
+ "pocopine-auth-client",
  "pocopine-events",
  "pocopine-live",
  "pocopine-logging",
  "pocopine-server",
  "pocopine-sync",
+ "pocopine-sync-indexdb",
  "pocopine-sync-sqlite",
  "rusqlite",
  "serde",
@@ -2261,6 +2263,7 @@ dependencies = [
  "tower",
  "tracing",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -3308,6 +3311,8 @@ dependencies = [
  "js-sys",
  "pocopine-auth",
  "pocopine-core",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -3365,6 +3370,7 @@ dependencies = [
  "notify",
  "reqwest",
  "serde",
+ "serde_json",
  "tiny_http",
  "toml 0.8.23",
 ]
@@ -3513,6 +3519,21 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "pocopine-sync-indexdb"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "js-sys",
+ "pocopine-sync",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

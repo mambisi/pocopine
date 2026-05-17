@@ -1,0 +1,298 @@
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+
+use crate::client_modules;
+use crate::config::PocopineConfig;
+use crate::tools;
+
+pub struct BinChild {
+    child: Child,
+    bin: String,
+    role: BinRole,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinRole {
+    Server,
+    Worker,
+}
+
+impl BinChild {
+    pub(crate) fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl BinRole {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            BinRole::Server => "server",
+            BinRole::Worker => "worker",
+        }
+    }
+}
+
+pub fn spawn_bin(
+    path: &Path,
+    bin: &str,
+    release: bool,
+    role: BinRole,
+    default_redis_url: bool,
+) -> Result<BinChild> {
+    let project = path
+        .canonicalize()
+        .with_context(|| format!("resolve {}", path.display()))?;
+    let project_tools = tools::ProjectTools::load(&project)?;
+    let mut cmd = project_tools.cargo().command();
+    cmd.arg("run").arg("--bin").arg(bin);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&project);
+    if default_redis_url {
+        ensure_redis_env(&mut cmd);
+    }
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    println!(
+        "▶ spawning `{bin}` (cargo run --bin {bin} in {})",
+        project.display()
+    );
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn server bin `{bin}`"))?;
+    Ok(BinChild {
+        child,
+        bin: bin.into(),
+        role,
+    })
+}
+
+pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> Result<()> {
+    let backend = std::env::var("POCOPINE_JOB_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let redis_url = std::env::var("POCOPINE_REDIS_URL").ok();
+    let has_redis_url = redis_url
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+
+    match backend.as_deref() {
+        Some("memory") => bail!(
+            "`worker-bin` runs in a separate process, but POCOPINE_JOB_BACKEND=memory is process-local; use Redis for a separate worker binary or embed the worker in the server process"
+        ),
+        Some("redis") if has_redis_url => Ok(()),
+        Some("redis") if default_redis_url => Ok(()),
+        Some("redis") => bail!("`worker-bin` needs POCOPINE_REDIS_URL when POCOPINE_JOB_BACKEND=redis"),
+        Some("") => bail!("POCOPINE_JOB_BACKEND was set but empty; use `memory` or `redis`"),
+        Some(other) => bail!("unsupported POCOPINE_JOB_BACKEND `{other}`; use `memory` or `redis`"),
+        None if has_redis_url => Ok(()),
+        None if default_redis_url => Ok(()),
+        None => bail!(
+            "`worker-bin` runs in a separate process; set POCOPINE_REDIS_URL for Redis-backed jobs, or embed the worker in the server process to use the memory backend"
+        ),
+    }
+}
+
+pub fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) -> Result<()> {
+    if cfg.worker_bin.is_some() {
+        validate_worker_backend_for_separate_process(false)?;
+    }
+
+    let worker = cfg
+        .worker_bin
+        .as_deref()
+        .map(|bin| spawn_bin(path, bin, release, BinRole::Worker, false))
+        .transpose()?;
+
+    match cfg.bin.as_deref() {
+        Some(bin) => {
+            let server = spawn_bin(path, bin, release, BinRole::Server, false)?;
+            let mut children = Vec::new();
+            children.push(server);
+            if let Some(worker) = worker {
+                children.push(worker);
+            }
+            wait_for_children(children)
+        }
+        None => {
+            if let Some(worker) = worker {
+                let serve_path = path
+                    .canonicalize()
+                    .with_context(|| format!("bad serve dir: {}", path.display()))?;
+                thread::spawn(move || {
+                    if let Err(e) = serve_static(&serve_path, port) {
+                        eprintln!("server error: {e}");
+                    }
+                });
+                wait_for_children(vec![worker])
+            } else {
+                serve_static(path, port)
+            }
+        }
+    }
+}
+
+pub fn serve_static(path: &Path, port: u16) -> Result<()> {
+    let root = path
+        .canonicalize()
+        .with_context(|| format!("bad serve dir: {}", path.display()))?;
+    let (server, bound) = bind_port(port)?;
+    if bound != port {
+        eprintln!("port {port} unavailable, using {bound}");
+    }
+    println!("✓ serving {} at http://localhost:{bound}", root.display());
+    for request in server.incoming_requests() {
+        handle(&root, request);
+    }
+    Ok(())
+}
+
+pub fn poll_children(children: &mut Vec<BinChild>) -> Result<Option<String>> {
+    for index in 0..children.len() {
+        if let Some(status) = children[index]
+            .child
+            .try_wait()
+            .with_context(|| format!("poll `{}`", children[index].bin))?
+        {
+            let exited = children.remove(index);
+            return Ok(Some(format!(
+                "{} bin `{}` exited with {status}",
+                exited.role.label(),
+                exited.bin
+            )));
+        }
+    }
+    Ok(None)
+}
+
+fn ensure_redis_env(cmd: &mut Command) {
+    if std::env::var_os("POCOPINE_REDIS_URL").is_none() {
+        cmd.env("POCOPINE_REDIS_URL", "redis://127.0.0.1/");
+    }
+}
+
+fn wait_for_children(mut children: Vec<BinChild>) -> Result<()> {
+    loop {
+        for index in 0..children.len() {
+            if let Some(status) = children[index]
+                .child
+                .try_wait()
+                .with_context(|| format!("poll `{}`", children[index].bin))?
+            {
+                let exited = children.swap_remove(index);
+                for child in children {
+                    child.kill();
+                }
+                if status.success() && exited.role == BinRole::Server {
+                    return Ok(());
+                }
+                bail!(
+                    "{} bin `{}` exited with {status}",
+                    exited.role.label(),
+                    exited.bin
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn bind_port(start: u16) -> Result<(tiny_http::Server, u16)> {
+    const ATTEMPTS: u16 = 21;
+    let mut last_err: Option<String> = None;
+    for offset in 0..ATTEMPTS {
+        let Some(port) = start.checked_add(offset) else {
+            break;
+        };
+        let addr = format!("0.0.0.0:{port}");
+        match tiny_http::Server::http(&addr) {
+            Ok(s) => return Ok((s, port)),
+            Err(e) => last_err = Some(e.to_string()),
+        }
+    }
+    Err(anyhow!(
+        "could not bind any port in [{start}, {}]: {}",
+        start.saturating_add(ATTEMPTS - 1),
+        last_err.unwrap_or_default()
+    ))
+}
+
+fn handle(root: &Path, request: tiny_http::Request) {
+    let url = request.url().to_string();
+    let rel = url.split('?').next().unwrap_or("/").trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+
+    let candidate = root.join(rel);
+    let looks_like_asset = looks_like_asset_path(rel);
+
+    let canonical = candidate
+        .canonicalize()
+        .ok()
+        .filter(|p| p.starts_with(root));
+
+    // Serve the resolved path when it exists.
+    if let Some(canonical) = canonical {
+        let target = if canonical.is_dir() {
+            canonical.join("index.html")
+        } else {
+            canonical
+        };
+        if let Ok(body) = std::fs::read(&target) {
+            let mime = mime_of(&target);
+            let body = client_modules::inject_html_if_needed(root, &target, body);
+            let header =
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap();
+            let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
+            return;
+        }
+    }
+
+    // Fall back to root index.html for non-asset paths (SPA history fallback).
+    // Asset-looking paths 404 so bad imports are not masked.
+    if !looks_like_asset {
+        let fallback = root.join("index.html");
+        if let Ok(body) = std::fs::read(&fallback) {
+            let body = client_modules::inject_html_if_needed(root, &fallback, body);
+            let header = tiny_http::Header::from_bytes(
+                &b"Content-Type"[..],
+                &b"text/html; charset=utf-8"[..],
+            )
+            .unwrap();
+            let _ = request.respond(tiny_http::Response::from_data(body).with_header(header));
+            return;
+        }
+    }
+
+    let _ = request.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+}
+
+/// True when the last URL segment has a file extension. Used to decide
+/// whether an unmatched path should 404 or fall back to index.html:
+/// `/pkg/spa.js` -> 404, `/blog/42` -> index.html.
+fn looks_like_asset_path(rel: &str) -> bool {
+    let last = rel.rsplit('/').next().unwrap_or("");
+    last.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
+}
+
+fn mime_of(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "wasm" => "application/wasm",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "ico" => "image/x-icon",
+        "map" => "application/json",
+        _ => "application/octet-stream",
+    }
+}

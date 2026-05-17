@@ -11,6 +11,7 @@
 
 pub mod animate;
 pub mod app;
+pub mod client_module;
 pub mod component_computed;
 pub mod computed;
 pub mod context;
@@ -62,6 +63,7 @@ pub use app::{
     RouteLoaderFuture, RouteRejection, RouteRejectionAction, RouteRejectionContext,
     RouteRejectionHandler, RouteTarget, RouteTargetError, SubtreeHandle,
 };
+pub use client_module::{ClientModule, ClientModuleError};
 pub use computed::{computed, Computed};
 #[allow(deprecated)]
 pub use context::InjectKey;
