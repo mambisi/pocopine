@@ -1,8 +1,8 @@
 use pocopine::prelude::*;
 use wasm_bindgen::JsValue;
 
-use crate::firebase_auth::{KEEP_AUTH_SNAPSHOT_KEY, KEEP_FIREBASE_TOKEN_KEY};
 use crate::{
+    firebase::{KEEP_AUTH_SNAPSHOT_KEY, KEEP_FIREBASE_TOKEN_KEY},
     keep_firebase_auth_plugin, KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout,
     KeepListDetail, KeepLogin, KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
 };
