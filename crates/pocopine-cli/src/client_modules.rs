@@ -12,6 +12,7 @@ pub const CLIENT_BUNDLE_URL: &str = "/pkg/pocopine-client.js";
 const CLIENT_BUNDLE_PATH: &str = "pkg/pocopine-client.js";
 const GENERATED_DIR: &str = "target/pocopine/client-modules";
 const ENTRY_FILE: &str = "entry.js";
+const TSCONFIG_FILE: &str = "tsconfig.json";
 const DEFAULT_ESBUILD_VERSION: &str = "^0.25.0";
 const DEFAULT_TYPESCRIPT_VERSION: &str = "^5.0.0";
 
@@ -59,6 +60,8 @@ pub fn build(project: &Path, release: bool) -> Result<usize> {
 
     ensure_package_json(&project)?;
     ensure_node_modules(&project)?;
+    let generated_dir = project.join(GENERATED_DIR);
+    run_typescript_check(&project, &modules, &generated_dir)?;
     let entry = client_codegen::write_runtime_entry(&project, &modules, GENERATED_DIR, ENTRY_FILE)?;
     if let Some(parent) = bundle_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
@@ -168,11 +171,73 @@ fn run_esbuild(project: &Path, entry: &Path, output: &Path, release: bool) -> Re
     Ok(())
 }
 
+fn run_typescript_check(
+    project: &Path,
+    modules: &[client_codegen::ClientModule],
+    generated_dir: &Path,
+) -> Result<()> {
+    let tsconfig = write_typecheck_config(project, modules, generated_dir)?;
+    println!(
+        "▶ type-checking {} client module{} with tsc",
+        modules.len(),
+        if modules.len() == 1 { "" } else { "s" },
+    );
+    let mut cmd = typescript_command(project)?;
+    cmd.arg("--project").arg(&tsconfig);
+    cmd.current_dir(project);
+    let status = cmd
+        .status()
+        .context("invoke tsc through pocopine client toolkit")?;
+    if !status.success() {
+        bail!("client module type check failed with {status}");
+    }
+    Ok(())
+}
+
+fn write_typecheck_config(
+    project: &Path,
+    modules: &[client_codegen::ClientModule],
+    generated_dir: &Path,
+) -> Result<PathBuf> {
+    std::fs::create_dir_all(generated_dir)
+        .with_context(|| format!("create {}", generated_dir.display()))?;
+    let files: Vec<_> = modules
+        .iter()
+        .map(|module| client_codegen::relative_import_path(generated_dir, module.path()))
+        .collect();
+    let config = json!({
+        "compilerOptions": {
+            "allowJs": false,
+            "isolatedModules": true,
+            "module": "ESNext",
+            "moduleResolution": "Bundler",
+            "noEmit": true,
+            "resolveJsonModule": true,
+            "skipLibCheck": true,
+            "strict": true,
+            "target": "ES2020",
+        },
+        "files": files,
+    });
+    let path = project.join(GENERATED_DIR).join(TSCONFIG_FILE);
+    let text = serde_json::to_string_pretty(&config)?;
+    std::fs::write(&path, format!("{text}\n"))
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
 fn esbuild_command(project: &Path) -> Result<Command> {
     if let Some(local) = local_esbuild(project) {
         return Ok(Command::new(local));
     }
     package_manager_command(project, PackageAction::Exec { bin: "esbuild" })
+}
+
+fn typescript_command(project: &Path) -> Result<Command> {
+    if let Some(local) = local_typescript(project) {
+        return Ok(Command::new(local));
+    }
+    package_manager_command(project, PackageAction::Exec { bin: "tsc" })
 }
 
 fn local_esbuild(project: &Path) -> Option<PathBuf> {
@@ -529,6 +594,32 @@ mod tests {
     }
 
     #[test]
+    fn generated_typecheck_config_checks_client_modules() {
+        let unique = format!(
+            "pocopine-cli-tsconfig-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let generated = root.join(GENERATED_DIR);
+        std::fs::create_dir_all(root.join("src/firebase")).unwrap();
+        let module_path = root.join("src/firebase/Firebase.client.ts");
+        std::fs::write(&module_path, "export default {};").unwrap();
+        let modules =
+            client_codegen::discover_client_modules(&root, DiscoveryPolicy::TypedOnly).unwrap();
+
+        let config_path = write_typecheck_config(&root, &modules, &generated).unwrap();
+        let source = std::fs::read_to_string(config_path).unwrap();
+        assert!(source.contains("\"moduleResolution\": \"Bundler\""));
+        assert!(source.contains("\"strict\": true"));
+        assert!(source.contains("../../../src/firebase/Firebase.client.ts"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn injects_client_bundle_before_html_head_closes() {
         let unique = format!(
             "pocopine-cli-test-{}",
@@ -711,7 +802,16 @@ printf '/* fake esbuild bundle */\n' > "$out"
         permissions.set_mode(0o755);
         std::fs::set_permissions(&esbuild, permissions).unwrap();
         let tsc = root.join("node_modules/.bin/tsc");
-        std::fs::write(&tsc, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(
+            &tsc,
+            r#"#!/bin/sh
+set -eu
+test "$1" = "--project"
+test -f "$2"
+grep -q 'Tiny.client.ts' "$2"
+"#,
+        )
+        .unwrap();
         let mut permissions = std::fs::metadata(&tsc).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&tsc, permissions).unwrap();
