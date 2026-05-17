@@ -153,10 +153,197 @@ fn ensure_port_available(port: u16) -> Result<()> {
             drop(listener);
             Ok(())
         }
-        Err(err) if err.kind() == ErrorKind::AddrInUse => bail!(
-            "port {port} is already in use; stop the existing server or change `[package.metadata.pocopine].port`"
-        ),
+        Err(err) if err.kind() == ErrorKind::AddrInUse => {
+            let owner = port_owner(port)
+                .map(|owner| format!(" by `{}` (pid {})", owner.command, owner.pid))
+                .unwrap_or_default();
+            bail!(
+                "port {port} is already in use{owner}; stop the existing server or change `[package.metadata.pocopine].port`"
+            );
+        }
         Err(err) => Err(err).with_context(|| format!("check configured port {port}")),
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PortOwner {
+    pid: u32,
+    command: String,
+}
+
+#[cfg(target_os = "linux")]
+fn port_owner(port: u16) -> Option<PortOwner> {
+    let inodes = listening_socket_inodes(port);
+    if inodes.is_empty() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Ok(pid) = name.to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = std::fs::read_link(fd.path()) else {
+                continue;
+            };
+            let target = target.to_string_lossy();
+            let Some(inode) = target
+                .strip_prefix("socket:[")
+                .and_then(|value| value.strip_suffix(']'))
+            else {
+                continue;
+            };
+            if inodes.contains(inode) {
+                return Some(PortOwner {
+                    pid,
+                    command: process_command(pid),
+                });
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn port_owner(port: u16) -> Option<PortOwner> {
+    let output = Command::new("lsof")
+        .arg("-nP")
+        .arg(format!("-iTCP:{port}"))
+        .arg("-sTCP:LISTEN")
+        .arg("-Fpc")
+        .output()
+        .ok()?;
+    parse_lsof_owner(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+fn port_owner(port: u16) -> Option<PortOwner> {
+    let output = Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+        .ok()?;
+    let pid = parse_netstat_owner_pid(&String::from_utf8_lossy(&output.stdout), port)?;
+    let command = windows_process_command(pid).unwrap_or_else(|| "unknown".into());
+    Some(PortOwner { pid, command })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn port_owner(_port: u16) -> Option<PortOwner> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn listening_socket_inodes(port: u16) -> std::collections::HashSet<String> {
+    let mut inodes = std::collections::HashSet::new();
+    for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(contents) = std::fs::read_to_string(table) else {
+            continue;
+        };
+        for line in contents.lines().skip(1) {
+            if let Some(inode) = listening_inode_from_proc_net_line(line, port) {
+                inodes.insert(inode.to_string());
+            }
+        }
+    }
+    inodes
+}
+
+#[cfg(target_os = "linux")]
+fn process_command(pid: u32) -> String {
+    let path = PathBuf::from("/proc").join(pid.to_string()).join("comm");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|command| command.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn listening_inode_from_proc_net_line(line: &str, port: u16) -> Option<&str> {
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    let local = parts.get(1)?;
+    let state = parts.get(3)?;
+    if *state != "0A" {
+        return None;
+    }
+    let (_, port_hex) = local.rsplit_once(':')?;
+    let local_port = u16::from_str_radix(port_hex, 16).ok()?;
+    if local_port == port {
+        parts.get(9).copied()
+    } else {
+        None
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_lsof_owner(output: &str) -> Option<PortOwner> {
+    let mut pid = None;
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix('p') {
+            pid = value.parse::<u32>().ok();
+            continue;
+        }
+        if let Some(command) = line.strip_prefix('c') {
+            let command = command.trim();
+            if !command.is_empty() {
+                return Some(PortOwner {
+                    pid: pid?,
+                    command: command.into(),
+                });
+            }
+        }
+    }
+    None
+}
+
+#[cfg(any(windows, test))]
+fn parse_netstat_owner_pid(output: &str, port: u16) -> Option<u32> {
+    for line in output.lines() {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() < 5 || !parts[0].eq_ignore_ascii_case("tcp") {
+            continue;
+        }
+        if !parts[3].eq_ignore_ascii_case("LISTENING") {
+            continue;
+        }
+        if address_port(parts[1]) == Some(port) {
+            return parts[4].parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(any(windows, test))]
+fn address_port(address: &str) -> Option<u16> {
+    let (_, port) = address.rsplit_once(':')?;
+    port.parse().ok()
+}
+
+#[cfg(windows)]
+fn windows_process_command(pid: u32) -> Option<String> {
+    let filter = format!("PID eq {pid}");
+    let output = Command::new("tasklist")
+        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .output()
+        .ok()?;
+    parse_tasklist_command(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(any(windows, test))]
+fn parse_tasklist_command(output: &str) -> Option<String> {
+    let line = output
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.contains("No tasks are running"))?;
+    let command = line.trim().strip_prefix('"')?.split_once("\",")?.0.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command.into())
     }
 }
 
@@ -428,5 +615,52 @@ mod tests {
         };
 
         check_configured_port_available(&cfg).unwrap();
+    }
+
+    #[test]
+    fn proc_net_line_reports_listening_port_inode() {
+        let line = "0: 0100007F:0BCE 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 7031057 1 0000000000000000";
+
+        assert_eq!(
+            listening_inode_from_proc_net_line(line, 3022),
+            Some("7031057")
+        );
+    }
+
+    #[test]
+    fn proc_net_line_ignores_non_listening_socket() {
+        let line = "0: 0100007F:0BCE 00000000:0000 01 00000000:00000000 00:00000000 00000000 1000 0 7031057 1 0000000000000000";
+
+        assert_eq!(listening_inode_from_proc_net_line(line, 3022), None);
+    }
+
+    #[test]
+    fn lsof_output_reports_owner() {
+        let output = "p1251608\ncserver\n";
+
+        assert_eq!(
+            parse_lsof_owner(output),
+            Some(PortOwner {
+                pid: 1251608,
+                command: "server".into()
+            })
+        );
+    }
+
+    #[test]
+    fn netstat_output_reports_listening_owner() {
+        let output = "\
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    127.0.0.1:3022         0.0.0.0:0              LISTENING       1251608
+";
+
+        assert_eq!(parse_netstat_owner_pid(output, 3022), Some(1251608));
+    }
+
+    #[test]
+    fn tasklist_output_reports_command() {
+        let output = "\"server.exe\",\"1251608\",\"Console\",\"1\",\"12,344 K\"\n";
+
+        assert_eq!(parse_tasklist_command(output), Some("server.exe".into()));
     }
 }
