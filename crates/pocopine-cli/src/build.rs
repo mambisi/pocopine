@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Output;
 
 use anyhow::{bail, Context, Result};
 
@@ -59,15 +60,25 @@ fn build_bin(path: &Path, bin: &str, release: bool) -> Result<()> {
         cmd.arg("--release");
     }
     cmd.current_dir(&project);
-    println!(
-        "▶ building `{bin}` (cargo build --bin {bin} in {})",
-        project.display()
-    );
-    let status = cmd
-        .status()
+    println!("▶ building `{bin}`");
+    let output = cmd
+        .output()
         .with_context(|| format!("failed to build configured bin `{bin}`"))?;
-    if !status.success() {
-        bail!("configured bin `{bin}` failed to build with {status}");
+    if !output.status.success() {
+        print_captured_output(&output);
+        bail!(
+            "configured bin `{bin}` failed to build with {}",
+            output.status
+        );
     }
     Ok(())
+}
+
+fn print_captured_output(output: &Output) {
+    if !output.stdout.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
 }

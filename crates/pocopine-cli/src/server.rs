@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -56,11 +58,7 @@ pub fn spawn_bin(
         ensure_redis_env(&mut cmd);
     }
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    println!(
-        "▶ spawning `{bin}` ({} in {})",
-        executable.display(),
-        project.display(),
-    );
+    println!("▶ spawning `{bin}` ({})", profile_name(release));
     let child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn configured bin `{}`", executable.display()))?;
@@ -120,13 +118,46 @@ fn cargo_target_dir(project: &Path, project_tools: &tools::ProjectTools) -> Resu
 }
 
 fn bin_executable_path(target_dir: &Path, bin: &str, release: bool) -> PathBuf {
-    let profile = if release { "release" } else { "debug" };
+    let profile = profile_name(release);
     let executable = if cfg!(windows) {
         format!("{bin}.exe")
     } else {
         bin.to_string()
     };
     target_dir.join(profile).join(executable)
+}
+
+fn profile_name(release: bool) -> &'static str {
+    if release {
+        "release"
+    } else {
+        "debug"
+    }
+}
+
+pub fn check_configured_port_available(cfg: &PocopineConfig) -> Result<()> {
+    if cfg.bin.is_some() {
+        if let Some(port) = cfg.port {
+            ensure_port_available(port)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_port_available(port: u16) -> Result<()> {
+    if port == 0 {
+        return Ok(());
+    }
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::AddrInUse => bail!(
+            "port {port} is already in use; stop the existing server or change `[package.metadata.pocopine].port`"
+        ),
+        Err(err) => Err(err).with_context(|| format!("check configured port {port}")),
+    }
 }
 
 pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> Result<()> {
@@ -156,6 +187,7 @@ pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> 
 }
 
 pub fn run_project(path: &Path, cfg: &PocopineConfig, release: bool, port: u16) -> Result<()> {
+    check_configured_port_available(cfg)?;
     if cfg.worker_bin.is_some() {
         validate_worker_backend_for_separate_process(false)?;
     }
@@ -370,5 +402,31 @@ mod tests {
 
         let path = bin_executable_path(Path::new("/tmp/pocopine-target"), "server", true);
         assert!(path.ends_with(Path::new("release").join(executable)));
+    }
+
+    #[test]
+    fn configured_port_check_reports_busy_server_port() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg = PocopineConfig {
+            bin: Some("server".into()),
+            port: Some(port),
+            ..PocopineConfig::default()
+        };
+
+        let err = check_configured_port_available(&cfg).unwrap_err();
+        assert!(err.to_string().contains("already in use"));
+    }
+
+    #[test]
+    fn configured_port_check_ignores_static_mode() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg = PocopineConfig {
+            port: Some(port),
+            ..PocopineConfig::default()
+        };
+
+        check_configured_port_available(&cfg).unwrap();
     }
 }
