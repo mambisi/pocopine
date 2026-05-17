@@ -57,6 +57,7 @@ fn run_build(args: args::BuildArgs) -> Result<()> {
 fn run_project(args: args::ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
+    server::check_configured_port_available(&cfg)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;

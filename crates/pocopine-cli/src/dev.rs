@@ -12,6 +12,7 @@ use crate::{build, client_modules, config, server, tailwind};
 pub fn run(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
     let cfg = config::load(&args.path)?;
+    server::check_configured_port_available(&cfg)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
     build::configured_bins(&project, &cfg, args.release)?;
@@ -30,6 +31,7 @@ pub fn run(args: &ServeArgs) -> Result<()> {
 
     // Start the serving side. In bin mode the child owns its ports + routes.
     // In static mode the CLI owns the socket and runs on a background thread.
+    server::check_configured_port_available(&cfg)?;
     match cfg.bin.as_deref() {
         Some(bin) => children.bins.push(server::spawn_bin(
             &project,
