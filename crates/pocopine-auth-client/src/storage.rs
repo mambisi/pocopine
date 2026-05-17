@@ -1,4 +1,4 @@
-//! Pluggable bearer-token persistence.
+//! Pluggable bearer-token and optimistic session-snapshot persistence.
 //!
 //! By default the token slot is in-memory only — page reloads sign the
 //! user out. Real apps persist the token through some browser surface
@@ -25,9 +25,16 @@
 //! [`LocalStorage`] / [`SessionStorage`] impls are appropriate when
 //! that tradeoff is acceptable; document it for your app's threat
 //! model.
+//!
+//! Session snapshots use the same browser surfaces, but they persist
+//! only a serialized `Principal` for fast UI continuity. They are not
+//! authorization proof; provider/server confirmation still owns the
+//! real session state.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+
+use crate::session::AuthSessionSnapshot;
 
 /// Persistence layer for the bearer token. Implementations talk to a
 /// browser storage surface (or, for tests, an in-memory mock).
@@ -43,8 +50,25 @@ pub trait TokenStorage: 'static {
     fn clear(&self);
 }
 
+/// Persistence layer for an optimistic client-side identity snapshot.
+///
+/// Snapshots are for quick UI restore only. They must not be treated
+/// as server authorization proof.
+pub trait SessionSnapshotStorage: 'static {
+    /// Read the persisted snapshot, if one exists and can be decoded.
+    fn load_snapshot(&self) -> Option<AuthSessionSnapshot>;
+
+    /// Persist an authenticated identity snapshot.
+    fn save_snapshot(&self, snapshot: &AuthSessionSnapshot);
+
+    /// Drop the persisted identity snapshot.
+    fn clear_snapshot(&self);
+}
+
 thread_local! {
     static STORAGE: RefCell<Option<Rc<dyn TokenStorage>>> = const { RefCell::new(None) };
+    static SESSION_SNAPSHOT_STORAGE: RefCell<Option<Rc<dyn SessionSnapshotStorage>>> =
+        const { RefCell::new(None) };
 }
 
 pub(crate) fn install_storage(storage: Rc<dyn TokenStorage>) {
@@ -55,9 +79,18 @@ pub(crate) fn current_storage() -> Option<Rc<dyn TokenStorage>> {
     STORAGE.with(|s| s.borrow().clone())
 }
 
+pub(crate) fn install_session_snapshot_storage(storage: Rc<dyn SessionSnapshotStorage>) {
+    SESSION_SNAPSHOT_STORAGE.with(|s| *s.borrow_mut() = Some(storage));
+}
+
+pub(crate) fn current_session_snapshot_storage() -> Option<Rc<dyn SessionSnapshotStorage>> {
+    SESSION_SNAPSHOT_STORAGE.with(|s| s.borrow().clone())
+}
+
 #[doc(hidden)]
 pub fn __reset_storage_for_test() {
     STORAGE.with(|s| *s.borrow_mut() = None);
+    SESSION_SNAPSHOT_STORAGE.with(|s| *s.borrow_mut() = None);
 }
 
 // ─── In-memory default (no persistence) ─────────────────────────────
@@ -73,6 +106,14 @@ impl TokenStorage for InMemory {
     }
     fn save(&self, _: &str) {}
     fn clear(&self) {}
+}
+
+impl SessionSnapshotStorage for InMemory {
+    fn load_snapshot(&self) -> Option<AuthSessionSnapshot> {
+        None
+    }
+    fn save_snapshot(&self, _: &AuthSessionSnapshot) {}
+    fn clear_snapshot(&self) {}
 }
 
 // ─── Browser-side localStorage / sessionStorage ─────────────────────
@@ -96,24 +137,30 @@ impl LocalStorage {
 #[cfg(target_arch = "wasm32")]
 impl TokenStorage for LocalStorage {
     fn load(&self) -> Option<String> {
-        let storage = web_sys::window()?.local_storage().ok()??;
-        storage.get_item(&self.key).ok()?
+        load_string(BrowserStorageKind::Local, &self.key)
     }
 
     fn save(&self, token: &str) {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let _ = storage.set_item(&self.key, token);
-            }
-        }
+        save_string(BrowserStorageKind::Local, &self.key, token);
     }
 
     fn clear(&self) {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let _ = storage.remove_item(&self.key);
-            }
-        }
+        clear_string(BrowserStorageKind::Local, &self.key);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl SessionSnapshotStorage for LocalStorage {
+    fn load_snapshot(&self) -> Option<AuthSessionSnapshot> {
+        load_json(BrowserStorageKind::Local, &self.key)
+    }
+
+    fn save_snapshot(&self, snapshot: &AuthSessionSnapshot) {
+        save_json(BrowserStorageKind::Local, &self.key, snapshot);
+    }
+
+    fn clear_snapshot(&self) {
+        clear_string(BrowserStorageKind::Local, &self.key);
     }
 }
 
@@ -136,24 +183,77 @@ impl SessionStorage {
 #[cfg(target_arch = "wasm32")]
 impl TokenStorage for SessionStorage {
     fn load(&self) -> Option<String> {
-        let storage = web_sys::window()?.session_storage().ok()??;
-        storage.get_item(&self.key).ok()?
+        load_string(BrowserStorageKind::Session, &self.key)
     }
 
     fn save(&self, token: &str) {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.session_storage() {
-                let _ = storage.set_item(&self.key, token);
-            }
-        }
+        save_string(BrowserStorageKind::Session, &self.key, token);
     }
 
     fn clear(&self) {
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.session_storage() {
-                let _ = storage.remove_item(&self.key);
-            }
-        }
+        clear_string(BrowserStorageKind::Session, &self.key);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl SessionSnapshotStorage for SessionStorage {
+    fn load_snapshot(&self) -> Option<AuthSessionSnapshot> {
+        load_json(BrowserStorageKind::Session, &self.key)
+    }
+
+    fn save_snapshot(&self, snapshot: &AuthSessionSnapshot) {
+        save_json(BrowserStorageKind::Session, &self.key, snapshot);
+    }
+
+    fn clear_snapshot(&self) {
+        clear_string(BrowserStorageKind::Session, &self.key);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+enum BrowserStorageKind {
+    Local,
+    Session,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_storage(kind: BrowserStorageKind) -> Option<web_sys::Storage> {
+    let window = web_sys::window()?;
+    match kind {
+        BrowserStorageKind::Local => window.local_storage().ok()?,
+        BrowserStorageKind::Session => window.session_storage().ok()?,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_string(kind: BrowserStorageKind, key: &str) -> Option<String> {
+    browser_storage(kind)?.get_item(key).ok()?
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_string(kind: BrowserStorageKind, key: &str, value: &str) {
+    if let Some(storage) = browser_storage(kind) {
+        let _ = storage.set_item(key, value);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clear_string(kind: BrowserStorageKind, key: &str) {
+    if let Some(storage) = browser_storage(kind) {
+        let _ = storage.remove_item(key);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_json<T: serde::de::DeserializeOwned>(kind: BrowserStorageKind, key: &str) -> Option<T> {
+    serde_json::from_str(&load_string(kind, key)?).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_json<T: serde::Serialize>(kind: BrowserStorageKind, key: &str, value: &T) {
+    if let Ok(raw) = serde_json::to_string(value) {
+        save_string(kind, key, &raw);
     }
 }
 
@@ -164,6 +264,7 @@ impl TokenStorage for SessionStorage {
 #[derive(Default)]
 pub(crate) struct TestStorage {
     pub(crate) saved: std::cell::RefCell<Option<String>>,
+    pub(crate) snapshot: std::cell::RefCell<Option<AuthSessionSnapshot>>,
 }
 
 #[cfg(test)]
@@ -176,6 +277,19 @@ impl TokenStorage for TestStorage {
     }
     fn clear(&self) {
         *self.saved.borrow_mut() = None;
+    }
+}
+
+#[cfg(test)]
+impl SessionSnapshotStorage for TestStorage {
+    fn load_snapshot(&self) -> Option<AuthSessionSnapshot> {
+        self.snapshot.borrow().clone()
+    }
+    fn save_snapshot(&self, snapshot: &AuthSessionSnapshot) {
+        *self.snapshot.borrow_mut() = Some(snapshot.clone());
+    }
+    fn clear_snapshot(&self) {
+        *self.snapshot.borrow_mut() = None;
     }
 }
 
@@ -203,6 +317,22 @@ mod tests {
         assert_eq!(storage.load().as_deref(), Some("xyz"));
         storage.clear();
         assert_eq!(test.saved.borrow().as_deref(), None);
+        __reset_storage_for_test();
+    }
+
+    #[test]
+    fn install_and_read_snapshot_through_thread_local() {
+        __reset_storage_for_test();
+        let test = Rc::new(TestStorage::default());
+        install_session_snapshot_storage(test.clone());
+        let storage = current_session_snapshot_storage().expect("installed snapshot missing");
+        let principal = pocopine_auth::Principal::from_user(pocopine_auth::AuthUser::new("u1"));
+        let snapshot = AuthSessionSnapshot::new(principal).unwrap();
+        storage.save_snapshot(&snapshot);
+        assert_eq!(test.snapshot.borrow().as_ref(), Some(&snapshot));
+        assert_eq!(storage.load_snapshot(), Some(snapshot));
+        storage.clear_snapshot();
+        assert_eq!(test.snapshot.borrow().as_ref(), None);
         __reset_storage_for_test();
     }
 }
