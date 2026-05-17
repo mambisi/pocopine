@@ -17,7 +17,7 @@ The Keep example is the reference implementation:
 ```
 Firebase web SDK
   -> src/Firebase.client.ts
-  -> ClientModule::required("firebase")
+  -> #[pocopine::client_module("Firebase.client.ts")]
   -> app-owned auth extension
   -> pocopine-auth-client::AuthSession
   -> store fields and Pocopine components
@@ -50,8 +50,12 @@ scripts for Pocopine-managed client modules.
 ## Step 2 - create `src/Firebase.client.ts`
 
 The filename matters. `src/Firebase.client.ts` registers as the
-client module named `firebase`, so Rust can call
-`ClientModule::required("firebase")`.
+client module named `firebase`, so Rust can declare a matching facade:
+
+```rust
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {}
+```
 
 ```ts
 import { initializeApp } from "firebase/app";
@@ -129,12 +133,15 @@ to plain JSON values.
 
 ## Step 3 - adapt the client module in Rust
 
-Create an app-owned service that wraps `ClientModule`. This keeps
-components away from raw JavaScript reflection and makes the rest of
-the app read like Pocopine code.
+Create an app-owned service that wraps the generated `firebase` facade. This
+keeps components away from raw JavaScript reflection and makes the rest of the
+app read like Pocopine code.
 
 ```rust
-use pocopine::{App, AppPlugin, ClientModule, ScopeId};
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {}
+
+use pocopine::{App, AppPlugin, ScopeId};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -185,8 +192,7 @@ impl FirebaseAuth {
     pub fn subscribe(
         &self,
         scope: ScopeId,
-        handler: impl FnMut(Result<Option<FirebaseAuthUser>, pocopine::ClientModuleError>)
-            + 'static,
+        handler: impl FnMut(Result<Option<FirebaseAuthUser>, firebase::Error>) + 'static,
     ) -> Result<(), String> {
         module()?
             .subscribe(scope, "onAuthStateChanged", handler)
@@ -195,8 +201,8 @@ impl FirebaseAuth {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn module() -> Result<ClientModule, String> {
-    ClientModule::required("firebase").map_err(|err| err.to_string())
+fn module() -> Result<firebase::Module, String> {
+    firebase::required().map_err(|err| err.to_string())
 }
 ```
 

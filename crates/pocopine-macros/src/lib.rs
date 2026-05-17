@@ -36,7 +36,7 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     Data, DeriveInput, Expr, ExprClosure, ExprLit, Fields, FnArg, ImplItem, ItemFn, ItemImpl,
-    ItemStruct, Lit, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
+    ItemMod, ItemStruct, Lit, LitStr, Meta, MetaNameValue, Pat, PatType, Path, Token, Type,
 };
 
 // RFC 050 — compile-time `.poco` template parser + diagnostic
@@ -937,6 +937,197 @@ pub(crate) fn kebab_case(ident: &str) -> String {
         out.extend(c.to_lowercase());
     }
     out
+}
+
+struct ClientModuleArgs {
+    file: Option<LitStr>,
+    name: Option<LitStr>,
+}
+
+impl Parse for ClientModuleArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.is_empty() {
+            return Ok(Self {
+                file: None,
+                name: None,
+            });
+        }
+
+        if input.peek(LitStr) {
+            let file = input.parse()?;
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+                if !input.is_empty() {
+                    return Err(input.error(
+                        "expected only one string literal, or use `file = \"...\"` / `name = \"...\"`",
+                    ));
+                }
+            }
+            return Ok(Self {
+                file: Some(file),
+                name: None,
+            });
+        }
+
+        let entries = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
+        let mut args = Self {
+            file: None,
+            name: None,
+        };
+        for entry in entries {
+            let Some(ident) = entry.path.get_ident() else {
+                return Err(syn::Error::new_spanned(
+                    entry.path,
+                    "expected `file = \"...\"` or `name = \"...\"`",
+                ));
+            };
+            let Expr::Lit(ExprLit {
+                lit: Lit::Str(value),
+                ..
+            }) = entry.value
+            else {
+                return Err(syn::Error::new_spanned(
+                    entry.value,
+                    "client module arguments must be string literals",
+                ));
+            };
+            match ident.to_string().as_str() {
+                "file" => {
+                    if args.file.replace(value).is_some() {
+                        return Err(syn::Error::new_spanned(ident, "duplicate `file` argument"));
+                    }
+                }
+                "name" => {
+                    if args.name.replace(value).is_some() {
+                        return Err(syn::Error::new_spanned(ident, "duplicate `name` argument"));
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "expected `file = \"...\"` or `name = \"...\"`",
+                    ));
+                }
+            }
+        }
+        Ok(args)
+    }
+}
+
+fn client_module_name_from_file(file: &LitStr) -> syn::Result<String> {
+    let value = file.value();
+    let file_name = value.rsplit('/').next().unwrap_or(&value);
+    let Some(base) = file_name.strip_suffix(".client.ts") else {
+        return Err(syn::Error::new_spanned(
+            file,
+            "`#[client_module(file = ...)]` expects a `.client.ts` file",
+        ));
+    };
+    Ok(kebab_case(base))
+}
+
+/// `#[client_module]` — declare a Rust facade for a typed `.client.ts`
+/// module bundled by the Pocopine CLI.
+///
+/// ```ignore
+/// #[pocopine::client_module("Firebase.client.ts")]
+/// pub mod firebase {}
+/// ```
+#[proc_macro_attribute]
+pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = match ClientModuleArgs::parse.parse(attr) {
+        Ok(args) => args,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemMod);
+
+    if let Some((_, items)) = input.content.as_ref() {
+        if !items.is_empty() {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "`#[client_module]` owns the module body; declare it as `pub mod name {}`",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+
+    let attrs = input.attrs;
+    let vis = input.vis;
+    let ident = input.ident;
+    let module_name = match args.name {
+        Some(name) => name.value(),
+        None => match args.file {
+            Some(file) => match client_module_name_from_file(&file) {
+                Ok(name) => name,
+                Err(err) => return err.to_compile_error().into(),
+            },
+            None => kebab_case(&ident.to_string()),
+        },
+    };
+    if module_name.trim().is_empty() {
+        return syn::Error::new_spanned(
+            &ident,
+            "`#[client_module]` resolved to an empty module name",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let module_name_lit = LitStr::new(&module_name, proc_macro2::Span::call_site());
+    quote! {
+        #(#attrs)*
+        #vis mod #ident {
+            pub const NAME: &str = #module_name_lit;
+            pub type Error = ::pocopine::__private::ClientModuleError;
+
+            #[derive(Clone, Debug)]
+            pub struct Module {
+                inner: ::pocopine::__private::ClientModule,
+            }
+
+            pub fn required() -> Result<Module, Error> {
+                ::pocopine::__private::ClientModule::required(NAME)
+                    .map(|inner| Module { inner })
+            }
+
+            pub fn optional() -> Result<Option<Module>, Error> {
+                ::pocopine::__private::ClientModule::optional(NAME)
+                    .map(|module| module.map(|inner| Module { inner }))
+            }
+
+            impl Module {
+                pub fn name(&self) -> &str {
+                    self.inner.name()
+                }
+
+                #[doc(hidden)]
+                pub fn raw(&self) -> &::pocopine::__private::ClientModule {
+                    &self.inner
+                }
+
+                pub async fn call_async<T>(&self, method: impl AsRef<str>) -> Result<T, Error>
+                where
+                    T: ::serde::de::DeserializeOwned,
+                {
+                    self.inner.call_async(method).await
+                }
+
+                pub fn subscribe<T>(
+                    &self,
+                    scope: ::pocopine::ScopeId,
+                    method: impl AsRef<str>,
+                    handler: impl FnMut(Result<T, Error>) + 'static,
+                ) -> Result<(), Error>
+                where
+                    T: ::serde::de::DeserializeOwned + 'static,
+                {
+                    self.inner.subscribe(scope, method, handler)
+                }
+            }
+        }
+    }
+    .into()
 }
 
 #[derive(Clone, Copy)]

@@ -24,10 +24,10 @@ logic" rule. Phase 1 shipped a **client module adapter** model:
 
 The earlier per-component `ctx` factory/island design is deferred.
 The shipped model is deliberately smaller: SDK adapters are module
-singletons. Rust reaches them through `ClientModule` today and through
-generated facades as the typed extractor lands. That is enough for
-Firebase, analytics, and other imperative SDKs without introducing a
-second reactive ownership surface.
+singletons. Rust reaches them through explicit `#[client_module]`
+facades backed by a hidden runtime bridge. That is enough for Firebase,
+analytics, and other imperative SDKs without introducing a second
+reactive ownership surface.
 
 ## 2. Motivation
 
@@ -59,7 +59,7 @@ guards, and stores.
 ```
 src/
   Firebase.client.ts         // typed browser SDK adapter
-  firebase_auth.rs           // Rust wrapper around ClientModule
+  firebase_auth.rs           // Rust wrapper around #[client_module] facade
   components/Login.poco      // normal Pocopine UI
 ```
 
@@ -71,9 +71,9 @@ and `FirebaseAuth.client.ts` becomes `firebase-auth`.
 
 ## 4. Author surface (JS side)
 
-Phase 1 uses a plain module object. Functions are callable from
-Rust via `ClientModule::call_async`; subscription functions are
-adapted with `ClientModule::subscribe`.
+Phase 1 uses a plain module object. Functions are callable from Rust through
+the generated module facade; subscription functions are adapted through the
+same facade and scoped to Pocopine component lifetimes.
 
 ```ts
 // Firebase.client.ts
@@ -144,10 +144,13 @@ is not part of the stable managed-module contract.
 ## 5. Author surface (Rust side)
 
 ```rust
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {}
+
 #[handlers]
 impl FirebaseAuth {
     pub fn click_sign_in(&mut self) {
-        let module = pocopine::ClientModule::required("firebase")?;
+        let module = firebase::required()?;
         let user = module.call_async::<Option<FirebaseUser>>("signIn").await?;
         // Convert plain JSON into a Pocopine Principal and store state.
     }
@@ -155,21 +158,22 @@ impl FirebaseAuth {
 ```
 
 Error cases:
-- Client bundle is missing ⇒ `ClientModule::required` returns an error naming the module.
+- Client bundle is missing ⇒ `firebase::required` returns an error naming the module.
 - Function name is missing ⇒ `call_async` returns a module error.
 - Promise rejects or return value cannot deserialize ⇒ `call_async` returns a module error.
 
-For reusable app code, wrap `ClientModule` in an app-owned plugin:
+For reusable app code, wrap the client-module facade in an app-owned plugin:
 
 ```rust
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {}
+
 #[derive(Clone, Default)]
 pub struct FirebaseAuth;
 
 impl FirebaseAuth {
-    pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, pocopine::ClientModuleError> {
-        pocopine::ClientModule::required("firebase")?
-            .call_async("signIn")
-            .await
+    pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, firebase::Error> {
+        firebase::required()?.call_async("signIn").await
     }
 }
 ```
@@ -177,28 +181,21 @@ impl FirebaseAuth {
 Uses `serde-wasm-bindgen` for the return-type round-trip, same
 as `#[server]`.
 
-### Generated facades
+### Client-module facades
 
-`pocopine-client-build` lets `build.rs` generate Rust module facades
-into `OUT_DIR`, so rust-analyzer and `cargo check` can see the module
-names without running the full dev server:
+`#[pocopine::client_module]` declares the Rust facade explicitly, so
+rust-analyzer and `cargo check` can see the module without running the
+dev server or scanning the filesystem from a proc macro:
 
 ```rust
-// build.rs
-fn main() {
-    pocopine_client_build::generate().unwrap();
-}
-
-// src/lib.rs
-pub mod client_modules {
-    pocopine::include_client_modules!();
-}
+#[pocopine::client_module(file = "Firebase.client.ts")]
+pub mod firebase {}
 ```
 
-The first generated layer is intentionally thin:
+The first facade layer is intentionally thin:
 
 ```rust
-let firebase = crate::client_modules::firebase::required()?;
+let firebase = firebase::required()?;
 let user = firebase.call_async::<Option<FirebaseUser>>("signIn").await?;
 ```
 
@@ -626,16 +623,16 @@ Three PRs, independently mergeable:
 **PR 2 — generated facade foundation.**
 - `pocopine-client-codegen` — shared module discovery, schema IR,
   generated Rust facade code, and runtime-entry writing.
-- `pocopine-client-build` — `build.rs` helper that writes
-  `pocopine_client_modules.rs` to `OUT_DIR` and emits
-  `cargo:rerun-if-changed` lines for rust-analyzer.
-- `pocopine::include_client_modules!()` — app-side include helper.
+- `#[pocopine::client_module]` — app-side facade declaration for
+  one typed `.client.ts` module.
+- Low-level `ClientModule` stays hidden behind `pocopine::__private`
+  so normal app code talks to named module facades.
 
 **PR 3 — TypeScript API extraction.**
 - Use the TypeScript compiler API, not a hand-rolled parser.
 - Extract only the public `defineClientModule` / default-export facade:
   async JSON-returning methods and callback subscriptions.
-- Generate typed Rust methods over the existing `ClientModule` runtime.
+- Generate typed Rust methods over the hidden client-module runtime.
 - Reject `any`, DOM/class instances, functions except subscription
   callbacks, and imported SDK handle types such as `FirebaseApp`.
 

@@ -2249,7 +2249,6 @@ dependencies = [
  "pine-motion",
  "pocopine",
  "pocopine-auth-client",
- "pocopine-client-build",
  "pocopine-events",
  "pocopine-live",
  "pocopine-logging",

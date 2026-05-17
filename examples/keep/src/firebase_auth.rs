@@ -207,8 +207,8 @@ mod wasm {
         }
     }
 
-    fn module() -> Result<crate::client_modules::firebase::Module, String> {
-        crate::client_modules::firebase::required().map_err(|err| err.to_string())
+    fn module() -> Result<crate::firebase::Module, String> {
+        crate::firebase::required().map_err(|err| err.to_string())
     }
 }
 
