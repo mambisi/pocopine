@@ -1018,13 +1018,14 @@ impl Parse for ClientModuleArgs {
 fn client_module_name_from_file(file: &LitStr) -> syn::Result<String> {
     let value = file.value();
     let file_name = value.rsplit('/').next().unwrap_or(&value);
-    let Some(base) = file_name.strip_suffix(".client.ts") else {
+    if !file_name.ends_with(".client.ts") {
         return Err(syn::Error::new_spanned(
             file,
             "`#[client_module(file = ...)]` expects a `.client.ts` file",
         ));
-    };
-    Ok(kebab_case(base))
+    }
+    pocopine_client_codegen::client_module_name(file_name)
+        .map_err(|err| syn::Error::new_spanned(file, err.to_string()))
 }
 
 fn client_module_methods_from_file(
@@ -1060,6 +1061,20 @@ fn client_module_methods_from_file(
             ),
         )
     })
+}
+
+fn client_module_rebuild_pin_from_file(file: Option<&LitStr>) -> TokenStream2 {
+    let Some(file) = file else {
+        return quote! {};
+    };
+    let Some(path) = resolve_template_path(file) else {
+        return quote! {};
+    };
+    let path = path.canonicalize().unwrap_or(path);
+    let path = LitStr::new(&path.to_string_lossy(), Span::call_site());
+    quote! {
+        const _: &str = include_str!(#path);
+    }
 }
 
 fn client_module_method_tokens(
@@ -1133,6 +1148,15 @@ mod client_module_tests {
         assert!(tokens.contains("pub fn on_auth_state_changed"));
         assert!(tokens.contains("self . subscribe (scope , \"onAuthStateChanged\""));
     }
+
+    #[test]
+    fn client_module_names_use_codegen_rules() {
+        let file = LitStr::new("OAuth.client.ts", Span::call_site());
+        assert_eq!(client_module_name_from_file(&file).unwrap(), "oauth");
+
+        let file = LitStr::new("my_thing.client.ts", Span::call_site());
+        assert_eq!(client_module_name_from_file(&file).unwrap(), "my-thing");
+    }
 }
 
 /// `#[client_module]` — declare a Rust facade for a typed `.client.ts`
@@ -1157,6 +1181,7 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ident = input.ident;
     let user_items = input.content.map(|(_, items)| items).unwrap_or_default();
     let file = args.file.clone();
+    let client_module_rebuild_pin = client_module_rebuild_pin_from_file(file.as_ref());
     let generated_methods = match client_module_methods_from_file(file.as_ref()) {
         Ok(methods) => match client_module_method_tokens(&methods) {
             Ok(tokens) => tokens,
@@ -1187,6 +1212,8 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #(#attrs)*
         #vis mod #ident {
+            #client_module_rebuild_pin
+
             pub const NAME: &str = #module_name_lit;
             pub type Error = ::pocopine::__private::ClientModuleError;
 
