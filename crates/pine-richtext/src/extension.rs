@@ -147,4 +147,17 @@ pub trait RichTextExtension: 'static + Send + Sync {
     fn list_item_types(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// Input rules this extension contributes to the runtime's
+    /// typing-time rule list. Empty by default. The view-side
+    /// `beforeinput` hook consults the merged rule list (via the
+    /// runtime accessor) before defaulting to a plain text insert.
+    ///
+    /// Smart-typography rules (em-dash, ellipsis, smart quotes) ship
+    /// in `crate::extensions::SmartTypographyExtension`; markdown
+    /// block shortcuts (`# `, `* `, `> `, etc.) ship in
+    /// `crate::extensions::MarkdownShortcutsExtension` (Phase 5 C3).
+    fn input_rules(&self) -> Vec<crate::inputrules::InputRule> {
+        Vec::new()
+    }
 }

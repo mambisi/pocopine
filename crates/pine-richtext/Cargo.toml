@@ -34,6 +34,13 @@ view = [
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+# `regex` powers the input-rules typing-time matchers. Default
+# features off, `std` + `perf` + `unicode-perl` on. `unicode-perl` is
+# the smallest feature that gives us Unicode-aware `\s` / `\d` / `\w`
+# (needed for the canonical smart-quote patterns); the full `unicode`
+# feature would add ~250 KB of tables this crate doesn't need. The
+# `perf` feature keeps the DFA fast path for short matches.
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl"] }
 
 # Feature-gated browser-view dependencies.
 pocopine = { path = "../pocopine", optional = true }

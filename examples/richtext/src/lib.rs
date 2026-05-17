@@ -17,7 +17,9 @@ use std::sync::Arc;
 use pine_richtext::commands::BoxedCommand;
 use pine_richtext::extension;
 use pine_richtext::extension::{NamedCommand, RichTextExtension};
-use pine_richtext::extensions::{CoreMarksExtension, TaskListExtension};
+use pine_richtext::extensions::{
+    CoreMarksExtension, MarkdownShortcutsExtension, SmartTypographyExtension, TaskListExtension,
+};
 use pine_richtext::history::history_plugin;
 use pine_richtext::model::{Attrs, MarkPolicy, NodeSpec};
 use pine_richtext::runtime::{self, RuntimeBuilder};
@@ -438,6 +440,19 @@ pub fn main() {
         TaskListExtension::new().with_node_view::<PineTaskItem>(),
     ));
 
+    // Phase 5 C3 — register the predefined input-rule extensions
+    // for the doc editor. `SmartTypographyExtension` adds em-dash,
+    // ellipsis, and the four smart-quote variants;
+    // `MarkdownShortcutsExtension` adds `# ` → heading, `* ` →
+    // bullet list, `> ` → blockquote, ``` ``` ``` → code block, and
+    // `1. ` → ordered list. The comment runtime intentionally does
+    // NOT register markdown shortcuts (its minimal schema rejects
+    // headings/lists anyway) but DOES get smart typography below.
+    #[allow(deprecated)]
+    extension::register(Box::new(SmartTypographyExtension));
+    #[allow(deprecated)]
+    extension::register(Box::new(MarkdownShortcutsExtension));
+
     // The "comment" runtime — TRULY minimal: only `doc`, `paragraph`,
     // and `text` plus the standard marks. No headings, blockquotes,
     // code blocks, lists, task items, horizontal rules, images, or
@@ -450,6 +465,11 @@ pub fn main() {
         .with(CommentSchemaExtension)
         .with(CoreMarksExtension)
         .with(CommentRuntimeExtension)
+        // Smart typography is a universal nicety — comment box users
+        // get em-dash + smart quotes too. No markdown shortcuts
+        // (the comment schema rejects headings/lists/blockquotes
+        // anyway).
+        .with(SmartTypographyExtension)
         .build();
     runtime::registry::register("comment", comment);
 

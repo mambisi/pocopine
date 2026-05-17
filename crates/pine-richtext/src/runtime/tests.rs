@@ -97,10 +97,12 @@ fn runtime_builder_without_defaults_yields_minimal_schema() {
     assert!(runtime.schema().node_type("paragraph").is_ok());
     assert!(runtime.schema().node_type("bullet_list").is_err());
     assert!(runtime.schema().node_type("task_item").is_err());
-    assert!(
-        runtime.plugins().is_empty(),
-        "minimal runtime should carry no plugins (HistoryExtension dropped)"
-    );
+    // Phase 5 C2: every runtime now auto-installs the input-rules
+    // state-tracking plugin. That's the ONLY plugin a `without_defaults`
+    // build carries — extension-contributed plugins (history, etc.)
+    // are still absent.
+    let plugin_keys: Vec<&str> = runtime.plugins().iter().map(|p| p.key()).collect();
+    assert_eq!(plugin_keys, vec!["pine_richtext_input_rules"]);
     assert!(
         runtime.list_item_type_names().is_empty(),
         "minimal runtime carries no list-item types"

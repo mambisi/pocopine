@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::extension::{KeyBindings, NamedCommand, RichTextExtension};
 use crate::extensions::default_extensions;
+use crate::inputrules::{input_rules as input_rules_plugin, InputRule};
 use crate::model::Schema;
 use crate::state::Plugin;
 
@@ -95,9 +96,32 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Test-only: build the runtime with an explicit base extension
+    /// list instead of `default_extensions()`. Lets tests pin
+    /// base-vs-user precedence contracts (e.g. "user rules fire
+    /// before base rules in the merged input-rules list") by
+    /// injecting a known stub into the base chain.
+    #[cfg(test)]
+    pub(crate) fn build_with_explicit_base_for_tests(
+        self,
+        explicit_base: Vec<Arc<dyn RichTextExtension>>,
+    ) -> Arc<EditorRuntime> {
+        self.build_inner(Some(explicit_base))
+    }
+
     /// Fold the extension chain into an immutable [`EditorRuntime`].
     /// Wraps in `Arc` so multiple mounts can share one fold.
     pub fn build(self) -> Arc<EditorRuntime> {
+        self.build_inner(None)
+    }
+
+    /// Internal fold. Production path calls `build_inner(None)` to
+    /// use `default_extensions()` as the base chain; tests can pass
+    /// an explicit override.
+    fn build_inner(
+        self,
+        explicit_base: Option<Vec<Arc<dyn RichTextExtension>>>,
+    ) -> Arc<EditorRuntime> {
         let RuntimeBuilder {
             name: runtime_name,
             include_defaults,
@@ -131,11 +155,15 @@ impl RuntimeBuilder {
         // extensions in registration order. This preserves node-insertion
         // rank for content-match resolution (the same way
         // `schema_basic::schema()` does today).
-        let (base_arcs, effective): (ExtChain, ExtChain) = if include_defaults {
-            let base: ExtChain = default_extensions()
-                .into_iter()
-                .map(|boxed| -> Arc<dyn RichTextExtension> { Arc::from(boxed) })
-                .collect();
+        let (base_arcs, effective): (ExtChain, ExtChain) = if include_defaults
+            || explicit_base.is_some()
+        {
+            let base: ExtChain = explicit_base.unwrap_or_else(|| {
+                default_extensions()
+                    .into_iter()
+                    .map(|boxed| -> Arc<dyn RichTextExtension> { Arc::from(boxed) })
+                    .collect()
+            });
             let base_names: HashSet<String> = base.iter().map(|e| e.name().to_string()).collect();
 
             let mut effective: ExtChain = Vec::with_capacity(base.len() + user.len());
@@ -192,13 +220,25 @@ impl RuntimeBuilder {
         let mut key_bindings: KeyBindings = Vec::new();
         let mut list_item_types: HashSet<String> = HashSet::new();
         let mut node_views = NodeViewRegistry::new();
+        let mut input_rules: Vec<InputRule> = Vec::new();
 
-        for ext in user.iter().chain(base_arcs.iter().filter(|b| {
-            // Base extensions whose name is shadowed by a user extension
-            // were already folded above; skip them so we don't add a
-            // base binding the user's overlay supersedes.
-            !user.iter().any(|u| u.name() == b.name())
-        })) {
+        // Iteration order: user extensions FIRST, then base
+        // extensions whose name isn't shadowed by a user extension.
+        // First-wins for commands / keymaps / list-item-types means
+        // user contributions override built-in ones. Input rules
+        // are first-MATCH-wins (a typing-time regex against the
+        // cursor-adjacent text), so this same ordering means
+        // user-contributed rules take precedence over built-in
+        // rules when their patterns overlap. Documented contract:
+        // `.with(MyExt)` registers rules ahead of any base rules
+        // the runtime ships, AND ahead of any non-shadowing user
+        // extensions added later (registration-order wins among
+        // user extensions).
+        for ext in user.iter().chain(
+            base_arcs
+                .iter()
+                .filter(|b| !user.iter().any(|u| u.name() == b.name())),
+        ) {
             for (key, factory) in ext.commands() {
                 commands.entry(key).or_insert(factory);
             }
@@ -207,6 +247,9 @@ impl RuntimeBuilder {
             }
             for &name in ext.list_item_types() {
                 list_item_types.insert(name.to_string());
+            }
+            for rule in ext.input_rules() {
+                input_rules.push(rule);
             }
         }
 
@@ -224,9 +267,14 @@ impl RuntimeBuilder {
         }
 
         // Plugins: base first, then user. Same dedupe pattern as
-        // `extension::registry::merged_plugins`.
-        let mut plugins: Vec<Plugin> = Vec::new();
-        let mut seen_plugin_keys: HashSet<String> = HashSet::new();
+        // `extension::registry::merged_plugins`. The input-rules
+        // plugin is always included up-front so the rule-fire meta
+        // path + `undo_input_rule` work for every runtime,
+        // regardless of which extensions are registered. Its key
+        // (`pine_richtext_input_rules`) is reserved.
+        let mut plugins: Vec<Plugin> = vec![input_rules_plugin()];
+        let mut seen_plugin_keys: HashSet<String> =
+            plugins.iter().map(|p| p.key().to_string()).collect();
         let plugin_order = base_arcs
             .iter()
             .filter(|b| !user.iter().any(|u| u.name() == b.name()))
@@ -255,6 +303,7 @@ impl RuntimeBuilder {
             key_bindings,
             plugins,
             list_item_types,
+            input_rules,
         })
     }
 }

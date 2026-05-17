@@ -23,12 +23,15 @@
 //! get the up-to-date DOM selection that way.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, Event, InputEvent, KeyboardEvent, StaticRange};
 
 use crate::commands::{self, Command};
+use crate::inputrules::{plugin as inputrules_plugin, run_rules};
+use crate::runtime::EditorRuntime;
 use crate::state::{EditorState, Transaction};
 
 use super::selection::dom_pos_to_model;
@@ -89,9 +92,15 @@ pub fn default_keymap(runtime: &crate::runtime::EditorRuntime) -> KeyMap {
 /// independently of any extension contributions.
 fn base_keymap() -> KeyMap {
     KeyMap::new()
+        // Backspace tries `undo_input_rule` FIRST so the user's
+        // backspace right after a rule fires rolls the rule back
+        // (e.g. typing `--` → em-dash → Backspace → `--` again).
+        // The command returns `None` when no rule has fired, so the
+        // chain falls through to the normal delete path.
         .bind(
             "Backspace",
             commands::chain_commands(vec![
+                inputrules_plugin::undo_input_rule(),
                 commands::delete_selection(),
                 commands::join_backward(),
                 commands::select_node_backward(),
@@ -155,6 +164,7 @@ pub fn key_combo(event: &KeyboardEvent) -> String {
 /// closures get dropped and the listeners stop firing.
 pub fn install_listeners<F>(
     surface: Element,
+    runtime: Arc<EditorRuntime>,
     state_provider: Rc<dyn Fn() -> Option<EditorState>>,
     keymap: Rc<KeyMap>,
     dispatch: F,
@@ -206,6 +216,7 @@ where
         let surface_for_input = surface.clone();
         let state_provider = state_provider.clone();
         let dispatch = dispatch.clone();
+        let runtime_for_input = runtime.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
             let Ok(ev) = event.clone().dyn_into::<InputEvent>() else {
                 return;
@@ -220,6 +231,32 @@ where
                     let Some(state) = state_provider() else {
                         return;
                     };
+
+                    // Consult input rules FIRST. If any rule matches
+                    // the text immediately preceding the cursor plus
+                    // the just-typed character, dispatch the rule's
+                    // transaction and skip the default insert.
+                    let cursor_from = state.selection().from(state.doc());
+                    let cursor_to = state.selection().to(state.doc());
+                    let rules = runtime_for_input.input_rules();
+                    if !rules.is_empty() {
+                        if let Some(fire) = run_rules(&state, cursor_from, cursor_to, &data, rules)
+                        {
+                            let mut tr = fire.transaction;
+                            if fire.undoable {
+                                tr.set_meta(
+                                    inputrules_plugin::INPUT_RULES_PLUGIN_KEY,
+                                    inputrules_plugin::rule_fire_meta(
+                                        fire.from, fire.to, &fire.text,
+                                    ),
+                                );
+                            }
+                            ev.prevent_default();
+                            dispatch(state, tr);
+                            return;
+                        }
+                    }
+
                     let mut tr = state.tr();
                     if tr.insert_text(data).is_err() {
                         return;

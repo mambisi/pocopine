@@ -944,3 +944,174 @@ test('runtime-scoped custom command only fires on its own editor (Phase 4b C4)',
     .textContent();
   expect(commentText).toContain('✓submitted');
 });
+
+async function caretAtEndOfFirstParagraph(page) {
+  await page.evaluate(() => {
+    const p = document.querySelector(
+      'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+    );
+    const text = p.firstChild;
+    const range = document.createRange();
+    range.setStart(text, text.textContent.length);
+    range.setEnd(text, text.textContent.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    p.focus?.();
+  });
+}
+
+async function caretAtStartOfFreshParagraphAfterFirst(page) {
+  // Place caret at end of paragraph 1, press Enter to make a new empty
+  // paragraph below it, and leave the caret at the start of that fresh
+  // paragraph — the only place where `^# ` / `^* ` / `^> ` markdown
+  // shortcuts can fire (the rules require the marker to be the
+  // textblock's entire content).
+  await caretAtEndOfFirstParagraph(page);
+  await page.keyboard.press('Enter');
+}
+
+test('typing `--` triggers the em-dash smart-typography rule', async ({ page }) => {
+  // Phase 5 C4: end-to-end coverage that
+  // `SmartTypographyExtension`'s em-dash rule fires from the demo's
+  // beforeinput → run_rules path. The rule pattern is `--$`: typing
+  // the second `-` immediately after a `-` rewrites both characters
+  // to `—` (U+2014).
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtEndOfFirstParagraph(page);
+  await page.keyboard.type('--');
+
+  const firstParagraphText = await page.evaluate(
+    () =>
+      document.querySelector(
+        'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+      )?.textContent ?? '',
+  );
+  expect(firstParagraphText).toContain('—');
+  expect(firstParagraphText).not.toMatch(/--$/);
+  expect(errors).toEqual([]);
+});
+
+test('typing `"hello"` triggers smart-quote rules in both directions', async ({ page }) => {
+  // Phase 5 C4: open-quote rule fires at the start of a fresh word
+  // (`(^|[\s{\[(<'"‘“])"$` matches `"` after whitespace or
+  // SOT), close-quote rule fires when the prior char is wordy
+  // (`"$` with a word-char lookbehind). Typed `"hello"` should
+  // become `“hello”` (left + right double-quotation marks).
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtEndOfFirstParagraph(page);
+  // The end of the seeded paragraph is wordy — to exercise open-quote,
+  // type a space first so the buffer immediately before `"` is whitespace.
+  await page.keyboard.type(' "hello"');
+
+  const firstParagraphText = await page.evaluate(
+    () =>
+      document.querySelector(
+        'pine-rich-text-root:not([runtime]) p[data-pos="0"]',
+      )?.textContent ?? '',
+  );
+  expect(firstParagraphText).toContain('“hello”');
+  expect(firstParagraphText).not.toContain('"hello"');
+  expect(errors).toEqual([]);
+});
+
+test('typing `# ` at start of an empty paragraph converts it to an H1', async ({ page }) => {
+  // Phase 5 C4: `MarkdownShortcutsExtension`'s heading rule
+  // (`^(#{1,6})\s$`) converts the parent paragraph to a `heading`
+  // node with `level` matching the `#` count. The textblock must be
+  // empty before the trigger so the regex's anchor matches.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtStartOfFreshParagraphAfterFirst(page);
+  await page.keyboard.type('# Heading');
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector(
+            'pine-rich-text-root:not([runtime]) .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        return [...surface.querySelectorAll(':scope > h1')].map(
+          (el) => el.textContent,
+        );
+      }),
+    )
+    .toContain('Heading');
+  expect(errors).toEqual([]);
+});
+
+test('typing `* ` at start of an empty paragraph wraps it in a bullet list', async ({ page }) => {
+  // Phase 5 C4: bullet-list rule (`^\s*([-+*])\s$`) wraps the
+  // current textblock in `bullet_list > list_item`. The DOM
+  // materializes as `<ul><li><p>...`.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtStartOfFreshParagraphAfterFirst(page);
+  await page.keyboard.type('* item one');
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector(
+            'pine-rich-text-root:not([runtime]) .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        const bullets = [
+          ...surface.querySelectorAll(':scope > ul:not(.task-list)'),
+        ];
+        return bullets.map((ul) =>
+          [...ul.querySelectorAll(':scope > li')].map((li) => li.textContent),
+        );
+      }),
+    )
+    .toEqual(expect.arrayContaining([expect.arrayContaining(['item one'])]));
+  expect(errors).toEqual([]);
+});
+
+test('typing `> ` at start of an empty paragraph wraps it in a blockquote', async ({ page }) => {
+  // Phase 5 C4: blockquote rule (`^\s*>\s$`) wraps the current
+  // textblock in `blockquote`. The DOM materializes as
+  // `<blockquote><p>...`.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtStartOfFreshParagraphAfterFirst(page);
+  await page.keyboard.type('> a quote');
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector(
+            'pine-rich-text-root:not([runtime]) .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        return [...surface.querySelectorAll(':scope > blockquote')].map(
+          (el) => el.textContent,
+        );
+      }),
+    )
+    .toEqual(expect.arrayContaining([expect.stringContaining('a quote')]));
+  expect(errors).toEqual([]);
+});
