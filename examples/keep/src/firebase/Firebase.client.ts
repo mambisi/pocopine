@@ -8,14 +8,7 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
-
-export type FirebaseAuthUser = {
-  token: string;
-  uid: string;
-  email: string | null;
-  name: string | null;
-  photoUrl: string | null;
-};
+import type { FirebaseAuthUser } from "./bindings";
 
 type AuthStateCallback = (user: FirebaseAuthUser | null) => void;
 type Unsubscribe = () => void;
@@ -57,7 +50,7 @@ export default {
     return userPayload(credential.user);
   },
 
-  async signOut(): Promise<null> {
+  async signOut(): Promise<FirebaseAuthUser | null> {
     await firebaseSignOut(auth);
     return null;
   },

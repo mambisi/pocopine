@@ -34,7 +34,7 @@ cargo run -p pocopine-cli -- dev --path examples/keep
 ```
 
 The first run installs the example's local npm dependencies from
-`package-lock.json` so `src/Firebase.client.ts` can import the
+`package-lock.json` so `src/firebase/Firebase.client.ts` can import the
 Firebase SDK. Keep using `pocopine js --path examples/keep ...`
 instead of direct npm scripts when adding client-module dependencies.
 

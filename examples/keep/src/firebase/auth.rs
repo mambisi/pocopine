@@ -4,71 +4,13 @@
 //! session state, and app gating stay in Pocopine components and
 //! `pocopine-auth-client`.
 
-use pocopine::{App, AppPlugin, AuthUser, Plugins, Principal};
-use serde::Deserialize;
+use pocopine::{App, AppPlugin, Plugins, Principal};
 
+use super::bindings::FirebaseAuthUser;
 use crate::KeepStore;
 
 pub const KEEP_AUTH_SNAPSHOT_KEY: &str = "pocopine_keep_auth_snapshot";
 pub const KEEP_FIREBASE_TOKEN_KEY: &str = "pocopine_keep_firebase_id_token";
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct FirebaseAuthUser {
-    pub token: String,
-    pub uid: String,
-    #[serde(default, deserialize_with = "empty_string_if_null")]
-    pub email: String,
-    #[serde(default, deserialize_with = "empty_string_if_null")]
-    pub name: String,
-    #[serde(
-        default,
-        rename = "photoUrl",
-        deserialize_with = "empty_string_if_null"
-    )]
-    pub photo_url: String,
-}
-
-fn empty_string_if_null<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-impl FirebaseAuthUser {
-    pub fn display_name(&self) -> String {
-        if self.name.is_empty() {
-            self.email.clone()
-        } else {
-            self.name.clone()
-        }
-    }
-
-    pub fn initial(&self) -> String {
-        self.display_name()
-            .chars()
-            .find(|ch| !ch.is_whitespace())
-            .map(|ch| ch.to_uppercase().collect())
-            .unwrap_or_else(|| "G".to_string())
-    }
-
-    pub fn principal(&self) -> Principal {
-        let mut user = AuthUser::new(self.uid.clone());
-        if !self.email.is_empty() {
-            user = user.with_email(self.email.clone());
-        }
-        if !self.name.is_empty() {
-            user = user.with_name(self.name.clone());
-        }
-        if !self.photo_url.is_empty() {
-            user = user.with_claim(
-                "photo_url",
-                serde_json::Value::String(self.photo_url.clone()),
-            );
-        }
-        Principal::from_user(user)
-    }
-}
 
 pub fn restore_keep_auth_snapshot() -> bool {
     let Some(session) = Plugins.get::<pocopine_auth_client::AuthSession>() else {
@@ -115,8 +57,8 @@ pub fn publish_keep_auth_user(user: Option<FirebaseAuthUser>) {
             }
 
             let display_name = user.display_name();
-            let email = user.email;
-            let photo_url = user.photo_url;
+            let email = user.email.unwrap_or_default();
+            let photo_url = user.photo_url.unwrap_or_default();
             pocopine::store::<KeepStore>().update(move |store| {
                 store.set_auth_user(true, display_name, email, photo_url);
             });
@@ -201,8 +143,8 @@ mod wasm {
         }
     }
 
-    fn module() -> Result<crate::firebase::Module, String> {
-        crate::firebase::required().map_err(|err| err.to_string())
+    fn module() -> Result<crate::firebase::client::Module, String> {
+        crate::firebase::client::required().map_err(|err| err.to_string())
     }
 }
 

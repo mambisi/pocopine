@@ -6,7 +6,7 @@ use pine_icons::PineIcon;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::firebase_auth::{publish_keep_auth_user, KeepFirebaseAuth};
+use crate::firebase::{publish_keep_auth_user, FirebaseAuthUser, KeepFirebaseAuth};
 
 #[derive(Default, Serialize, Deserialize)]
 #[component(
@@ -78,10 +78,7 @@ impl KeepLogin {
 }
 
 impl KeepLogin {
-    fn apply_action_result(
-        &mut self,
-        result: Result<Option<crate::firebase_auth::FirebaseAuthUser>, String>,
-    ) {
+    fn apply_action_result(&mut self, result: Result<Option<FirebaseAuthUser>, String>) {
         self.loading = false;
         self.error.clear();
 

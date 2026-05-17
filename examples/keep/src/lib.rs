@@ -16,33 +16,7 @@
 #[cfg(target_arch = "wasm32")]
 mod app;
 pub mod components;
-#[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {
-    use crate::firebase_auth::FirebaseAuthUser;
-
-    impl Module {
-        pub async fn sign_in(&self) -> Result<Option<FirebaseAuthUser>, Error> {
-            self.call_async("signIn").await
-        }
-
-        pub async fn initial_user(&self) -> Result<Option<FirebaseAuthUser>, Error> {
-            self.call_async("initialUser").await
-        }
-
-        pub async fn sign_out(&self) -> Result<Option<FirebaseAuthUser>, Error> {
-            self.call_async("signOut").await
-        }
-
-        pub fn on_auth_state_changed(
-            &self,
-            scope: ::pocopine::ScopeId,
-            handler: impl FnMut(Result<Option<FirebaseAuthUser>, Error>) + 'static,
-        ) -> Result<(), Error> {
-            self.subscribe(scope, "onAuthStateChanged", handler)
-        }
-    }
-}
-pub mod firebase_auth;
+pub mod firebase;
 pub mod model;
 #[cfg(pocopine_host)]
 pub mod sqlite_stream;
@@ -54,7 +28,7 @@ pub use components::{
     KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepLogin,
     KeepNoteBody, KeepNoteCard, KeepNoteForm,
 };
-pub use firebase_auth::{keep_firebase_auth_plugin, FirebaseAuthUser, KeepFirebaseAuth};
+pub use firebase::{keep_firebase_auth_plugin, FirebaseAuthUser, KeepFirebaseAuth};
 pub use model::*;
 pub use store::KeepStore;
 pub use sync::reset_keep_notes;

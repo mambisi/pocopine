@@ -142,7 +142,7 @@ fn load_cached_auth_snapshot() -> Option<CachedAuth> {
         return None;
     }
     let (display_name, email, photo_url) =
-        crate::firebase_auth::keep_auth_fields_from_principal(&session.principal())?;
+        crate::firebase::keep_auth_fields_from_principal(&session.principal())?;
     Some(CachedAuth {
         display_name,
         email,
