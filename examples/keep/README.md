@@ -17,7 +17,7 @@ It demonstrates:
   every glyph,
 - optimistic sync pushes with live wake-up refreshes,
 - a Firebase web SDK client module bundled through Pocopine's
-  `.client.js` / `node_modules` path, adapted into a Pocopine auth
+  typed `.client.ts` / `node_modules` path, adapted into a Pocopine auth
   extension service and `pocopine-auth-client::AuthSession`,
 - a mixed note/checklist payload on one sync stream plus a separate
   synced tag stream for queryable labels. The sidebar registry is
@@ -34,7 +34,7 @@ cargo run -p pocopine-cli -- dev --path examples/keep
 ```
 
 The first run installs the example's local npm dependencies from
-`package-lock.json` so `src/Firebase.client.js` can import the
+`package-lock.json` so `src/Firebase.client.ts` can import the
 Firebase SDK. Keep using `pocopine js --path examples/keep ...`
 instead of direct npm scripts when adding client-module dependencies.
 

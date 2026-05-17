@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
+import type { User } from "firebase/auth";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -7,6 +8,17 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
+
+export type FirebaseAuthUser = {
+  token: string;
+  uid: string;
+  email: string | null;
+  name: string | null;
+  photoUrl: string | null;
+};
+
+type AuthStateCallback = (user: FirebaseAuthUser | null) => void;
+type Unsubscribe = () => void;
 
 const firebaseConfig = {
   apiKey: "AIzaSyBUejC7o9O-Az6T0FiP8HGpvj9znDwx0hI",
@@ -25,7 +37,7 @@ const provider = new GoogleAuthProvider();
 
 provider.setCustomParameters({ prompt: "select_account" });
 
-async function userPayload(user) {
+async function userPayload(user: User | null): Promise<FirebaseAuthUser | null> {
   if (!user) {
     return null;
   }
@@ -40,26 +52,26 @@ async function userPayload(user) {
 }
 
 export default {
-  async signIn() {
+  async signIn(): Promise<FirebaseAuthUser | null> {
     const credential = await signInWithPopup(auth, provider);
     return userPayload(credential.user);
   },
 
-  async signOut() {
+  async signOut(): Promise<null> {
     await firebaseSignOut(auth);
     return null;
   },
 
-  async currentUser() {
+  async currentUser(): Promise<FirebaseAuthUser | null> {
     return userPayload(auth.currentUser);
   },
 
-  async initialUser() {
+  async initialUser(): Promise<FirebaseAuthUser | null> {
     await auth.authStateReady();
     return userPayload(auth.currentUser);
   },
 
-  onAuthStateChanged(callback) {
+  onAuthStateChanged(callback: AuthStateCallback): Unsubscribe {
     return onAuthStateChanged(auth, async (user) => {
       try {
         callback(await userPayload(user));
@@ -70,3 +82,5 @@ export default {
     });
   },
 };
+
+void analytics;

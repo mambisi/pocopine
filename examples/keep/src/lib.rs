@@ -16,6 +16,9 @@
 #[cfg(target_arch = "wasm32")]
 mod app;
 pub mod components;
+pub mod client_modules {
+    pocopine::include_client_modules!();
+}
 pub mod firebase_auth;
 pub mod model;
 #[cfg(pocopine_host)]

@@ -12,6 +12,8 @@ members = [
     "crates/pocopine-auth-client",
     "crates/pocopine-auth-credentials",
     "crates/pocopine-auth-jwt",
+    "crates/pocopine-client-build",
+    "crates/pocopine-client-codegen",
     "crates/pocopine-cli",
     "crates/pocopine-core",
     "crates/pocopine-events",
@@ -67,6 +69,8 @@ pocopine-auth = { path = "crates/pocopine-auth", version = "0.1.0" }
 pocopine-auth-client = { path = "crates/pocopine-auth-client", version = "0.1.0" }
 pocopine-auth-credentials = { path = "crates/pocopine-auth-credentials", version = "0.1.0" }
 pocopine-auth-jwt = { path = "crates/pocopine-auth-jwt", version = "0.1.0" }
+pocopine-client-build = { path = "crates/pocopine-client-build", version = "0.1.0" }
+pocopine-client-codegen = { path = "crates/pocopine-client-codegen", version = "0.1.0" }
 pocopine-core = { path = "crates/pocopine-core", version = "0.1.0", default-features = false }
 pocopine-events = { path = "crates/pocopine-events", version = "0.1.0" }
 pocopine-expr = { path = "crates/pocopine-expr", version = "0.1.0" }

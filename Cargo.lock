@@ -2249,6 +2249,7 @@ dependencies = [
  "pine-motion",
  "pocopine",
  "pocopine-auth-client",
+ "pocopine-client-build",
  "pocopine-events",
  "pocopine-live",
  "pocopine-logging",
@@ -3369,11 +3370,29 @@ dependencies = [
  "anyhow",
  "clap",
  "notify",
+ "pocopine-client-codegen",
  "reqwest",
  "serde",
  "serde_json",
  "tiny_http",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "pocopine-client-build"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pocopine-client-codegen",
+]
+
+[[package]]
+name = "pocopine-client-codegen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

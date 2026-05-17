@@ -4,7 +4,7 @@
 //!
 //! * `build` - wraps `wasm-pack build --target web` (plus `cargo build
 //!   --bin <name>` when a server binary is configured) and bundles
-//!   `.client.js` / `.client.ts` modules when present.
+//!   typed `.client.ts` modules when present.
 //! * `run`   - build once, then either spawn the configured server bin
 //!   OR serve the project directory as static files.
 //! * `dev`   - same routing as `run`, plus a file watcher that rebuilds

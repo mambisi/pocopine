@@ -21,7 +21,7 @@ pub enum Cmd {
     Dev(ServeArgs),
     /// Check local tools and project configuration used by Pocopine.
     Doctor(DoctorArgs),
-    /// Managed JavaScript toolkit commands for `.client.js` / `.client.ts`.
+    /// Managed JavaScript toolkit commands for typed `.client.ts` modules.
     Js(JsArgs),
 }
 
@@ -77,7 +77,7 @@ pub enum JsCmd {
     Init,
     /// Install client-module dependencies through the detected package manager.
     Install,
-    /// Add npm packages for use from `.client.js` / `.client.ts` modules.
+    /// Add npm packages for use from typed `.client.ts` modules.
     Add {
         /// Add packages to devDependencies.
         #[arg(short = 'D', long)]

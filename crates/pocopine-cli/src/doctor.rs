@@ -215,6 +215,16 @@ fn check_client_modules(report: &mut Report, project: &Path, project_tools: &too
                 );
             }
 
+            if status.has_typescript_dependency {
+                report.ok("typescript config", "dependency declared");
+            } else {
+                report.warn(
+                    "typescript config",
+                    "dependency not declared",
+                    "run `pocopine js init` to add the managed TypeScript dependency",
+                );
+            }
+
             if status.node_modules && status.local_esbuild {
                 report.ok("esbuild binary", "installed in node_modules");
             } else {
@@ -222,6 +232,16 @@ fn check_client_modules(report: &mut Report, project: &Path, project_tools: &too
                     "esbuild binary",
                     "not installed locally",
                     "run `pocopine js install` before the first client-module build",
+                );
+            }
+
+            if status.node_modules && status.local_typescript {
+                report.ok("typescript binary", "installed in node_modules");
+            } else {
+                report.warn(
+                    "typescript binary",
+                    "not installed locally",
+                    "run `pocopine js install` before generating typed client-module bindings",
                 );
             }
         }
