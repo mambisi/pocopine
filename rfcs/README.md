@@ -86,3 +86,4 @@ Conventions:
 | 076 | [App plugin lifecycle](./rfc-076-app-plugin-lifecycle.md) | Implemented |
 | 077 | [Server plugin lifecycle](./rfc-077-server-plugin-lifecycle.md) | Implemented (Phase 4 typed hooks rejected) |
 | 078 | [Client route guards, loaders, and fetch middleware](./rfc-078-client-route-guards-and-loaders.md) | Implemented |
+| 079 | [`pine-richtext` TablesExtension](./rfc-079-pine-richtext-tables-extension.md) | Draft |
