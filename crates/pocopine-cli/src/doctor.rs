@@ -532,9 +532,10 @@ impl Report {
         let color = Color::auto();
         println!("{}", color.bold("pocopine doctor"));
         for check in &self.checks {
+            let level = format!("{:<7}", check.level.label());
             println!(
-                "{:<7} {:<18} {}",
-                check.level.label(&color),
+                "{} {:<18} {}",
+                check.level.paint(&color, level),
                 check.name,
                 check.detail
             );
@@ -571,11 +572,19 @@ enum Level {
 }
 
 impl Level {
-    fn label(self, color: &Color) -> String {
+    fn label(self) -> &'static str {
         match self {
-            Level::Ok => color.green("[ok]"),
-            Level::Warn => color.yellow("[warn]"),
-            Level::Fail => color.red("[fail]"),
+            Level::Ok => "[ok]",
+            Level::Warn => "[warn]",
+            Level::Fail => "[fail]",
+        }
+    }
+
+    fn paint(self, color: &Color, value: impl std::fmt::Display) -> String {
+        match self {
+            Level::Ok => color.green(value),
+            Level::Warn => color.yellow(value),
+            Level::Fail => color.red(value),
         }
     }
 }
