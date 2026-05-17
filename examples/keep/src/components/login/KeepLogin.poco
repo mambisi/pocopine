@@ -1,0 +1,48 @@
+<div class="keep-login" :data-ready="$store.keep.auth_ready" :data-signed-in="$store.keep.auth_signed_in">
+  <button
+    class="keep-login__button"
+    type="button"
+    pp-show="$store.keep.auth_ready && !$store.keep.auth_signed_in"
+    :disabled="loading"
+    @click="sign_in"
+  >
+    <pine-icon name="user" size="18"></pine-icon>
+    <span pp-text="loading ? 'Signing in…' : 'Sign in with Google'"></span>
+  </button>
+
+  <template pp-if="$store.keep.auth_signed_in">
+    <pine-popover-root>
+      <pine-popover-trigger class="keep-login__avatar-trigger" aria-label="Account">
+        <pine-avatar-root class="keep-login__avatar">
+          <pine-avatar-image :src="$store.keep.auth_photo_url" :alt="$store.keep.auth_display_name"></pine-avatar-image>
+          <pine-avatar-fallback>
+            <span pp-text="$store.keep.auth_initial"></span>
+          </pine-avatar-fallback>
+        </pine-avatar-root>
+      </pine-popover-trigger>
+      <pine-popover-portal>
+        <pine-popover-content class="keep-login__menu" side="bottom" align="end" side_offset="8">
+          <div class="keep-login__menu-head">
+            <pine-avatar-root class="keep-login__menu-avatar">
+              <pine-avatar-image :src="$store.keep.auth_photo_url" :alt="$store.keep.auth_display_name"></pine-avatar-image>
+              <pine-avatar-fallback>
+                <span pp-text="$store.keep.auth_initial"></span>
+              </pine-avatar-fallback>
+            </pine-avatar-root>
+            <span class="keep-login__identity">
+              <strong pp-text="$store.keep.auth_display_name || 'Google account'"></strong>
+              <small pp-text="$store.keep.auth_email"></small>
+            </span>
+          </div>
+
+          <button class="keep-login__sign-out" type="button" :disabled="loading" @click="sign_out">
+            <pine-icon name="logout" size="17"></pine-icon>
+            <span pp-text="loading ? 'Signing out…' : 'Sign out'"></span>
+          </button>
+        </pine-popover-content>
+      </pine-popover-portal>
+    </pine-popover-root>
+  </template>
+
+  <p class="keep-login__error" pp-show="error" pp-text="error"></p>
+</div>

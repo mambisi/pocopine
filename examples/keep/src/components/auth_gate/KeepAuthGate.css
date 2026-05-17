@@ -1,0 +1,59 @@
+:host {
+  display: block;
+}
+
+.keep-auth-gate,
+.keep-auth-gate__main {
+  display: block;
+  min-height: calc(100vh - var(--topbar-h));
+}
+
+.auth-gate {
+  min-height: calc(100vh - var(--topbar-h));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  background:
+    linear-gradient(180deg, transparent, rgba(52, 168, 83, .06)),
+    var(--bg-page);
+}
+
+.auth-gate__panel {
+  display: flex;
+  width: min(420px, 100%);
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.auth-gate__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--accent-on);
+}
+
+.auth-gate h1 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.auth-gate p {
+  margin: -4px 0 4px;
+  color: var(--fg-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-gate__error {
+  color: #b42318;
+}

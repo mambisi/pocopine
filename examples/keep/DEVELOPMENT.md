@@ -409,7 +409,9 @@ were only visible after mount:
 - click-through from card toolbar buttons,
 - missing labels after refresh,
 - CSS selector misses after splitting Pine input/textarea styles,
-- OPFS failures without cross-origin isolation headers.
+- Firebase popup auth failures when cross-origin isolation headers block
+  the hosted auth iframe,
+- OPFS failures when testing the explicit cross-origin-isolated mode.
 
 Minimum verification after UI changes:
 
@@ -425,6 +427,11 @@ Then run the example:
 ```bash
 cargo run -p pocopine-cli -- dev --path examples/keep
 ```
+
+To verify the OPFS cache path specifically, run with
+`POCOPINE_KEEP_CROSS_ORIGIN_ISOLATED=1`. Keep the default command for
+Firebase login verification, because the hosted auth iframe needs the
+non-isolated mode.
 
 Browser smoke checklist:
 

@@ -1,0 +1,33 @@
+<div class="keep-auth-gate" :data-ready="$store.keep.auth_ready" :data-signed-in="$store.keep.auth_signed_in">
+  <template pp-if="!$store.keep.auth_ready">
+    <section class="auth-gate" pp-transition="fade">
+      <div class="auth-gate__panel" pp-transition="fade-scale">
+        <div class="auth-gate__mark" aria-hidden="true">
+          <pine-icon name="user" size="28"></pine-icon>
+        </div>
+        <h1>Opening Keep</h1>
+        <p>Checking your Google session.</p>
+      </div>
+    </section>
+  </template>
+
+  <template pp-if="$store.keep.auth_ready && !$store.keep.auth_signed_in">
+    <section class="auth-gate" pp-transition="fade">
+      <div class="auth-gate__panel" pp-transition="fade-scale">
+        <div class="auth-gate__mark" aria-hidden="true">
+          <pine-icon name="user" size="28"></pine-icon>
+        </div>
+        <h1>Sign in to Keep</h1>
+        <p>Use your Google account to open this workspace.</p>
+        <keep-login></keep-login>
+        <p class="auth-gate__error" pp-show="error" pp-text="error"></p>
+      </div>
+    </section>
+  </template>
+
+  <template pp-if="$store.keep.auth_signed_in">
+    <div class="keep-auth-gate__main" pp-transition="fade-scale">
+      <slot></slot>
+    </div>
+  </template>
+</div>

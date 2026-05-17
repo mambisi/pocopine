@@ -16,6 +16,7 @@
 #[cfg(target_arch = "wasm32")]
 mod app;
 pub mod components;
+pub mod firebase_auth;
 pub mod model;
 #[cfg(pocopine_host)]
 pub mod sqlite_stream;
@@ -24,9 +25,10 @@ pub mod sync;
 pub mod utils;
 
 pub use components::{
-    KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepNoteBody,
-    KeepNoteCard, KeepNoteForm,
+    KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepLogin,
+    KeepNoteBody, KeepNoteCard, KeepNoteForm,
 };
+pub use firebase_auth::{keep_firebase_auth_plugin, FirebaseAuthUser, KeepFirebaseAuth};
 pub use model::*;
 pub use store::KeepStore;
 pub use sync::reset_keep_notes;

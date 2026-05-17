@@ -25,6 +25,12 @@ pub use view::{KeepCommandNote, KeepEditorData, KeepNoteCardRow};
 use view_mode::load_view_mode_preference;
 pub use view_mode::KeepViewMode;
 
+struct CachedAuth {
+    display_name: String,
+    email: String,
+    photo_url: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[store(name = "keep")]
 pub struct KeepStore {
@@ -54,6 +60,13 @@ pub struct KeepStore {
     pub selected_note_ids: Vec<String>,
     pub selection_label: String,
 
+    pub auth_ready: bool,
+    pub auth_signed_in: bool,
+    pub auth_display_name: String,
+    pub auth_email: String,
+    pub auth_photo_url: String,
+    pub auth_initial: String,
+
     pub status: String,
     pub next_local_id: u64,
     pub resetting: bool,
@@ -67,6 +80,22 @@ impl Default for KeepStore {
         // on_mount fires *after* the initial walk, so doing this in a
         // handler leaves the first render with section_kind = "" and
         // the PINNED/OTHERS filters evaluating to false.
+        let cached_auth = load_cached_auth_snapshot();
+        let auth_signed_in = cached_auth.is_some();
+        let auth_display_name = cached_auth
+            .as_ref()
+            .map(|auth| auth.display_name.clone())
+            .unwrap_or_default();
+        let auth_email = cached_auth
+            .as_ref()
+            .map(|auth| auth.email.clone())
+            .unwrap_or_default();
+        let auth_photo_url = cached_auth
+            .as_ref()
+            .map(|auth| auth.photo_url.clone())
+            .unwrap_or_default();
+        let auth_initial = actions::auth_initial(&auth_display_name, &auth_email);
+
         Self {
             notes: pocopine_sync::CollectionState::default(),
             tags: pocopine_sync::CollectionState::default(),
@@ -92,11 +121,40 @@ impl Default for KeepStore {
             selected_note_ids: Vec::new(),
             selection_label: String::new(),
 
+            auth_ready: auth_signed_in,
+            auth_signed_in,
+            auth_display_name,
+            auth_email,
+            auth_photo_url,
+            auth_initial,
+
             status: String::new(),
             next_local_id: 0,
             resetting: false,
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_cached_auth_snapshot() -> Option<CachedAuth> {
+    use pocopine_auth_client::SessionSnapshotStorage;
+
+    let storage = pocopine_auth_client::storage::LocalStorage::new(
+        crate::firebase_auth::KEEP_AUTH_SNAPSHOT_KEY,
+    );
+    let snapshot = storage.load_snapshot()?;
+    let (display_name, email, photo_url) =
+        crate::firebase_auth::keep_auth_fields_from_principal(&snapshot.principal)?;
+    Some(CachedAuth {
+        display_name,
+        email,
+        photo_url,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_cached_auth_snapshot() -> Option<CachedAuth> {
+    None
 }
 
 #[cfg(test)]

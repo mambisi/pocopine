@@ -1,18 +1,31 @@
 use pocopine::prelude::*;
+use wasm_bindgen::JsValue;
 
+use crate::firebase_auth::{KEEP_AUTH_SNAPSHOT_KEY, KEEP_FIREBASE_TOKEN_KEY};
 use crate::{
-    KeepBoard, KeepComposer, KeepEditor, KeepGridLayout, KeepListDetail, KeepNoteBody,
-    KeepNoteCard, KeepNoteForm, KeepStore,
+    keep_firebase_auth_plugin, KeepAuthGate, KeepBoard, KeepComposer, KeepEditor, KeepGridLayout,
+    KeepListDetail, KeepLogin, KeepNoteBody, KeepNoteCard, KeepNoteForm, KeepStore,
 };
 
 fn sync_client_plugin() -> pocopine_sync::SyncClientPlugin {
-    // Durable browser-side cache via OPFS-backed SQLite is the whole
-    // point of the keep example. No memory-store fallback — if the
-    // SQLite/OPFS path can't initialize, sync will surface the error
-    // rather than silently degrade to a non-durable store.
-    pocopine_sync::sync_plugin()
-        .with_live_wakeup(true)
-        .local_store(pocopine_sync_sqlite::SqliteLocalStore::new())
+    let plugin = pocopine_sync::sync_plugin().with_live_wakeup(true);
+
+    if browser_cross_origin_isolated() {
+        plugin.local_store(pocopine_sync_sqlite::SqliteLocalStore::new())
+    } else {
+        tracing::info!(
+            target: "pocopine.log",
+            "using IndexedDB sync cache because OPFS SQLite requires cross-origin isolation"
+        );
+        plugin.local_store(pocopine_sync_indexdb::IndexedDbLocalStore::new())
+    }
+}
+
+fn browser_cross_origin_isolated() -> bool {
+    js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crossOriginIsolated"))
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 #[wasm_bindgen(start)]
@@ -44,13 +57,29 @@ pub fn main() {
         "trash",
         "bell",
         "user",
+        "logout",
         "corner-down-right",
         "layout-grid",
         "layout-list",
     ];
     App::new()
+        .plugin(
+            pocopine_auth_client::auth_plugin()
+                .with_token_storage(pocopine_auth_client::storage::LocalStorage::new(
+                    KEEP_FIREBASE_TOKEN_KEY,
+                ))
+                .with_session_snapshot(pocopine_auth_client::storage::LocalStorage::new(
+                    KEEP_AUTH_SNAPSHOT_KEY,
+                ))
+                .wait_for_initial_auth_check(true)
+                .with_cross_tab_sync(true),
+        )
+        .plugin(keep_firebase_auth_plugin())
         .plugin(sync_client_plugin())
         .store::<KeepStore>()
+        .register::<pine::PineAvatarRoot>()
+        .register::<pine::PineAvatarImage>()
+        .register::<pine::PineAvatarFallback>()
         .register::<pine_icons::PineIcon>()
         .register::<pine::PineCommandRoot>()
         .register::<pine::PineCommandPortal>()
@@ -74,8 +103,10 @@ pub fn main() {
         .register::<pine::PinePopoverPortal>()
         .register::<pine::PinePopoverContent>()
         .register::<KeepBoard>()
+        .register::<KeepAuthGate>()
         .register::<KeepGridLayout>()
         .register::<KeepListDetail>()
+        .register::<KeepLogin>()
         .register::<KeepComposer>()
         .register::<KeepNoteCard>()
         .register::<KeepEditor>()

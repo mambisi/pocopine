@@ -38,6 +38,27 @@ impl KeepStore {
         self.sidebar_expanded = !self.sidebar_expanded;
     }
 
+    pub fn set_auth_user(
+        &mut self,
+        signed_in: bool,
+        display_name: String,
+        email: String,
+        photo_url: String,
+    ) {
+        self.auth_ready = true;
+        self.auth_signed_in = signed_in;
+        self.auth_display_name = display_name;
+        self.auth_email = email;
+        self.auth_photo_url = photo_url;
+        self.auth_initial = auth_initial(&self.auth_display_name, &self.auth_email);
+
+        if !signed_in {
+            self.clear_selection();
+            self.cancel_composer();
+            self.cancel_editor();
+        }
+    }
+
     pub fn show_notes(&mut self) {
         self.clear_selection();
         self.section_kind = "notes".into();
@@ -491,4 +512,13 @@ impl KeepStore {
     pub fn toggle_editor_pin(&mut self) {
         self.editor_data.pinned = !self.editor_data.pinned;
     }
+}
+
+pub(crate) fn auth_initial(display_name: &str, email: &str) -> String {
+    display_name
+        .chars()
+        .chain(email.chars())
+        .find(|ch| !ch.is_whitespace())
+        .map(|ch| ch.to_uppercase().collect())
+        .unwrap_or_else(|| "G".to_string())
 }

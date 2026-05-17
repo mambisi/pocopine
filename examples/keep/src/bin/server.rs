@@ -16,22 +16,44 @@ async fn main() -> std::io::Result<()> {
         .default_topics(sync_topics);
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let router = Router::new()
+    let cross_origin_isolated = cross_origin_isolation_enabled();
+    let mut router = Router::new()
         .merge(routes(live_hub))
-        .fallback_service(static_files(manifest_dir))
-        .layer(axum::middleware::map_response(
+        .fallback_service(static_files(manifest_dir));
+
+    if cross_origin_isolated {
+        router = router.layer(axum::middleware::map_response(
             cross_origin_isolation_headers,
         ));
-    let addr = "127.0.0.1:3022";
-    tracing::info!(target: "pocopine.log", %addr, "serving keep example");
+    }
+
+    let addr = std::env::var("POCOPINE_KEEP_ADDR").unwrap_or_else(|_| "127.0.0.1:3022".to_string());
+    tracing::info!(
+        target: "pocopine.log",
+        %addr,
+        cross_origin_isolated,
+        "serving keep example"
+    );
     Server::new(router)
         .plugin(sync_server_plugin(sync))
-        .serve(addr)
+        .serve(addr.as_str())
         .await
 }
 
 #[cfg(pocopine_browser)]
 fn main() {}
+
+#[cfg(pocopine_host)]
+fn cross_origin_isolation_enabled() -> bool {
+    let Ok(value) = std::env::var("POCOPINE_KEEP_CROSS_ORIGIN_ISOLATED") else {
+        return false;
+    };
+
+    value == "1"
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
+}
 
 #[cfg(pocopine_host)]
 async fn cross_origin_isolation_headers(
