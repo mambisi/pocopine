@@ -1,10 +1,10 @@
 use std::path::Path;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
 use crate::{build, client_modules, config, server, tailwind};
@@ -17,27 +17,8 @@ pub fn run(args: &ServeArgs) -> Result<()> {
     build::configured_bins(&project, &cfg, args.release)?;
 
     let (tx, rx) = channel::<Change>();
-    let tx_w = tx.clone();
-    let project_for_watch = project.clone();
-    let mut watcher: RecommendedWatcher =
-        notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if let Ok(ev) = res {
-                use notify::EventKind::*;
-                if matches!(ev.kind, Modify(_) | Create(_) | Remove(_)) {
-                    if let Some(change) = Change::from_event(&project_for_watch, &ev) {
-                        let _ = tx_w.send(change);
-                    }
-                }
-            }
-        })
-        .context("create file watcher")?;
     let src_dir = project.join("src");
-    watcher
-        .watch(&src_dir, RecursiveMode::Recursive)
-        .with_context(|| format!("watch {}", src_dir.display()))?;
-    watcher
-        .watch(&project, RecursiveMode::NonRecursive)
-        .with_context(|| format!("watch {}", project.display()))?;
+    let (_watcher, watcher_label) = start_watcher(&project, &src_dir, tx)?;
 
     // Kick off Tailwind in watch mode before serving so the first page
     // load already sees compiled CSS.
@@ -77,7 +58,10 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             true,
         )?);
     }
-    println!("👀 watching {} and package files", src_dir.display());
+    println!(
+        "👀 watching {} and package files ({watcher_label})",
+        src_dir.display()
+    );
 
     loop {
         if let Some(message) = server::poll_children(&mut children.bins)? {
@@ -117,6 +101,99 @@ pub fn run(args: &ServeArgs) -> Result<()> {
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         }
     }
+}
+
+enum DevWatcher {
+    Native(RecommendedWatcher),
+    Poll(PollWatcher),
+}
+
+impl DevWatcher {
+    fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+        match self {
+            Self::Native(watcher) => watcher.watch(path, mode),
+            Self::Poll(watcher) => watcher.watch(path, mode),
+        }
+    }
+}
+
+fn start_watcher(
+    project: &Path,
+    src_dir: &Path,
+    tx: Sender<Change>,
+) -> Result<(DevWatcher, &'static str)> {
+    match start_native_watcher(project, src_dir, tx.clone()) {
+        Ok(watcher) => Ok((DevWatcher::Native(watcher), "native watcher")),
+        Err(err) if should_fallback_to_polling(&err) => {
+            eprintln!(
+                "⚠ native file watcher limit reached; falling back to polling every 2s. \
+                 Raise fs.inotify.max_user_watches later for faster dev reloads."
+            );
+            let watcher = start_poll_watcher(project, src_dir, tx)
+                .context("create polling file watcher fallback")?;
+            Ok((DevWatcher::Poll(watcher), "polling watcher"))
+        }
+        Err(err) => Err(err).context("create file watcher"),
+    }
+}
+
+fn start_native_watcher(
+    project: &Path,
+    src_dir: &Path,
+    tx: Sender<Change>,
+) -> notify::Result<RecommendedWatcher> {
+    let mut watcher = DevWatcher::Native(notify::recommended_watcher(watcher_callback(
+        project.to_path_buf(),
+        tx,
+    ))?);
+    watch_dev_paths(&mut watcher, project, src_dir)?;
+    let DevWatcher::Native(watcher) = watcher else {
+        unreachable!("created native watcher")
+    };
+    Ok(watcher)
+}
+
+fn start_poll_watcher(
+    project: &Path,
+    src_dir: &Path,
+    tx: Sender<Change>,
+) -> notify::Result<PollWatcher> {
+    let config = Config::default().with_poll_interval(Duration::from_secs(2));
+    let mut watcher = DevWatcher::Poll(PollWatcher::new(
+        watcher_callback(project.to_path_buf(), tx),
+        config,
+    )?);
+    watch_dev_paths(&mut watcher, project, src_dir)?;
+    let DevWatcher::Poll(watcher) = watcher else {
+        unreachable!("created polling watcher")
+    };
+    Ok(watcher)
+}
+
+fn watch_dev_paths(watcher: &mut DevWatcher, project: &Path, src_dir: &Path) -> notify::Result<()> {
+    watcher.watch(src_dir, RecursiveMode::Recursive)?;
+    watcher.watch(project, RecursiveMode::NonRecursive)?;
+    Ok(())
+}
+
+fn watcher_callback(
+    project: std::path::PathBuf,
+    tx: Sender<Change>,
+) -> impl FnMut(notify::Result<Event>) {
+    move |res: notify::Result<Event>| {
+        if let Ok(ev) = res {
+            use notify::EventKind::*;
+            if matches!(ev.kind, Modify(_) | Create(_) | Remove(_)) {
+                if let Some(change) = Change::from_event(&project, &ev) {
+                    let _ = tx.send(change);
+                }
+            }
+        }
+    }
+}
+
+fn should_fallback_to_polling(err: &notify::Error) -> bool {
+    matches!(err.kind, ErrorKind::MaxFilesWatch)
 }
 
 #[derive(Default)]
