@@ -25,4 +25,6 @@
     <button @mousedown.prevent pp-on:click="reset">Reset</button>
   </div>
   <pine-rich-text-root debug-json="true" pp-bind:initial-doc="initial_doc"></pine-rich-text-root>
+  <div class="comment-box-label">Comment box (minimal runtime — paragraphs + basic marks only):</div>
+  <pine-rich-text-root runtime="comment" data-test="comment-editor"></pine-rich-text-root>
 </div>

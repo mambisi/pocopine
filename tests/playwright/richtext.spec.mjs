@@ -27,7 +27,7 @@ function collectRichTextDebug(page) {
 
 async function selectText(page, needle) {
   await page.evaluate((text) => {
-    const root = document.querySelector('pine-rich-text-root');
+    const root = document.querySelector('pine-rich-text-root:not([runtime])');
     if (!root) throw new Error('missing richtext root');
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -52,8 +52,8 @@ async function selectText(page, needle) {
 async function selectFirstTwoTopLevelParagraphs(page) {
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const paragraphs = [...surface.querySelectorAll(':scope > p')];
     const p1 = paragraphs[0];
     const p2 = paragraphs[1];
@@ -135,12 +135,12 @@ test('materializes task item checkboxes and toggles checked state', async ({ pag
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  await expect(page.locator('pine-rich-text-root')).toBeVisible();
+  await expect(page.locator('pine-rich-text-root:not([runtime])')).toBeVisible();
   await expect
     .poll(() => events.some((event) => event.debug_version === 'pine-richtext@0.1.0:debug-json-v1'))
     .toBe(true);
 
-  const taskItems = page.locator('pine-rich-text-root pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0)).toHaveAttribute('data-checked', 'true');
   await expect(taskItems.nth(1)).toHaveAttribute('data-checked', 'false');
@@ -202,7 +202,7 @@ test('materializes task item checkboxes and toggles checked state', async ({ pag
 
 test('typed text survives an immediate format toolbar click', async ({ page }) => {
   // Repro for the parent-doc-staleness bug: pp-model propagation from
-  // <pine-rich-text-root> back to <Editor> is deferred to tick::next.
+  // <pine-rich-text-root:not([runtime])> back to <Editor> is deferred to tick::next.
   // If the toolbar reads self.doc between a keystroke and the flush,
   // its dispatch overwrites the just-typed character. The test types a
   // recognizable marker into the first paragraph, immediately clicks
@@ -212,11 +212,11 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
 
   // Place the caret at the end of the first paragraph.
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     range.setStart(text, text.textContent.length);
@@ -231,7 +231,7 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   // Select the just-typed "XYZ" range so toggle_mark has a non-empty
   // selection to operate on.
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     const len = text.textContent.length;
@@ -247,7 +247,7 @@ test('typed text survives an immediate format toolbar click', async ({ page }) =
   // After the toolbar click, "XYZ" must still be in the doc and must
   // carry a <strong> wrapper (or otherwise be marked as strong).
   const firstParagraphHTML = await page.evaluate(() => {
-    return document.querySelector('pine-rich-text-root p[data-pos="0"]')?.innerHTML ?? '';
+    return document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]')?.innerHTML ?? '';
   });
   expect(firstParagraphHTML).toContain('XYZ');
   expect(firstParagraphHTML).toMatch(/<strong>[^<]*XYZ/);
@@ -263,18 +263,18 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
 
-  await page.locator('pine-rich-text-root p[data-pos]').nth(1).evaluate((paragraph) => {
+  await page.locator('pine-rich-text-root:not([runtime]) p[data-pos]').nth(1).evaluate((paragraph) => {
     paragraph.__pineSmokeParagraphToken = 'preserve-suffix';
   });
 
   const paragraphCountBefore = await page.locator(
-    'pine-rich-text-root > p, pine-rich-text-root .pine-rich-text > p',
+    'pine-rich-text-root:not([runtime]) > p, pine-rich-text-root:not([runtime]) .pine-rich-text > p',
   ).count();
 
   await page.evaluate(() => {
-    const p = document.querySelector('pine-rich-text-root p[data-pos="0"]');
+    const p = document.querySelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
     const text = p.firstChild;
     const range = document.createRange();
     range.setStart(text, text.textContent.length);
@@ -290,8 +290,8 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
 
   const paragraphHTMLs = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     return [...surface.querySelectorAll(':scope > p')].map((el) => el.outerHTML);
   });
   expect(paragraphHTMLs.length).toBeGreaterThanOrEqual(paragraphCountBefore + 1);
@@ -300,8 +300,8 @@ test('Enter at end of paragraph creates a visible new paragraph', async ({ page 
     .poll(() =>
       page.evaluate(() => {
         const surface =
-          document.querySelector('pine-rich-text-root .pine-rich-text') ??
-          document.querySelector('pine-rich-text-root');
+          document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+          document.querySelector('pine-rich-text-root:not([runtime])');
         return [...surface.querySelectorAll(':scope > p')]
           .find((paragraph) =>
             paragraph.textContent.includes('Select some text and use the toolbar:'),
@@ -322,7 +322,7 @@ test('toolbar bullet list creates one list item per selected paragraph', async (
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
 
   await selectFirstTwoTopLevelParagraphs(page);
   // Bulleted list is the 7th toolbar button in the current layout
@@ -331,8 +331,8 @@ test('toolbar bullet list creates one list item per selected paragraph', async (
 
   const listItems = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const list = [...surface.querySelectorAll(':scope > ul')]
       .find((ul) => !ul.classList.contains('task-list'));
     if (!list) return null;
@@ -358,14 +358,14 @@ test('toolbar ordered and checklist lists also create one item per selected para
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^1\. List$/ }).click();
 
   const orderedItems = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const list = surface.querySelector(':scope > ol');
     if (!list) return null;
     return {
@@ -390,11 +390,11 @@ test('toolbar ordered and checklist lists also create one item per selected para
   });
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^☑ List$/ }).click();
 
-  const taskList = page.locator('pine-rich-text-root ul.task-list').first();
+  const taskList = page.locator('pine-rich-text-root:not([runtime]) ul.task-list').first();
   await expect(taskList.locator('pine-task-item')).toHaveCount(2);
   await expect(taskList.locator('pine-task-item').nth(0)).toHaveAttribute('data-checked', 'false');
   await expect(taskList.locator('pine-task-item').nth(1)).toHaveAttribute('data-checked', 'false');
@@ -415,14 +415,14 @@ test('toolbar paragraph converts selected list items back into paragraphs', asyn
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
 
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const items = [...surface.querySelectorAll(':scope > ul:not(.task-list) > li')];
     if (items.length < 2) throw new Error('expected two bullet items');
     const first = items[0].querySelector('p').firstChild;
@@ -439,8 +439,8 @@ test('toolbar paragraph converts selected list items back into paragraphs', asyn
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     return {
       topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
       bulletLists: [...surface.querySelectorAll(':scope > ul')]
@@ -462,14 +462,14 @@ test('Backspace at the first bullet unwraps that item without deleting the rest 
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
 
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const paragraph = surface.querySelector(':scope > ul:not(.task-list) > li:first-child p');
     if (!paragraph?.firstChild) throw new Error('missing first bullet paragraph');
     const range = document.createRange();
@@ -484,8 +484,8 @@ test('Backspace at the first bullet unwraps that item without deleting the rest 
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const bullet = [...surface.querySelectorAll(':scope > ul')]
       .find((ul) => !ul.classList.contains('task-list'));
     return {
@@ -510,7 +510,7 @@ test('italic mark toggle reconciles one subtree and preserves task checkboxes', 
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
   await expect(taskItems).toHaveCount(2);
   await expect(taskItems.nth(0).locator('.pine-task-item-check')).toBeVisible();
   await taskItems.nth(0).locator('.pine-task-item-check').evaluate((check) => {
@@ -544,7 +544,7 @@ test('typing inside a task item preserves node-view chrome', async ({ page }) =>
   const events = collectRichTextDebug(page);
 
   await page.goto('/');
-  const taskItems = page.locator('pine-rich-text-root pine-task-item');
+  const taskItems = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
   await expect(taskItems).toHaveCount(2);
   await taskItems.nth(1).evaluate((item) => {
     item.__pineSmokeHostToken = 'preserve-host';
@@ -586,13 +586,13 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos]');
 
   // Select the same two-paragraph span the closed-variant test uses.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const paragraphs = [...surface.querySelectorAll(':scope > p')];
     const p1 = paragraphs[0];
     const p2 = paragraphs[1];
@@ -611,8 +611,8 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
   // dispatches on the surface itself or a descendant.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const event = new CustomEvent('pine:richtext:command', {
       bubbles: true,
       composed: true,
@@ -628,8 +628,8 @@ test('extension-contributed `Custom` command reaches the surface', async ({ page
 
   const ulHTML = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     return [...surface.querySelectorAll(':scope > ul')]
       .map((ul) => ul.outerHTML)
       .filter((html) => !html.includes('class="task-list"'))[0];
@@ -650,9 +650,9 @@ test('TaskListExtension::with_node_view renders custom task-item element', async
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root pine-task-item');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) pine-task-item');
 
-  const items = page.locator('pine-rich-text-root pine-task-item');
+  const items = page.locator('pine-rich-text-root:not([runtime]) pine-task-item');
   await expect(items).toHaveCount(2);
   // Every custom-element host must carry data-pos (so the reconciler
   // and selection bridge can find them) and the inner content host
@@ -673,7 +673,7 @@ test('clicking ordered list inside a bullet list converts in place without freez
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
 
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
@@ -682,8 +682,8 @@ test('clicking ordered list inside a bullet list converts in place without freez
   // known cursor.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const li = surface.querySelector(':scope > ul > li');
     const p = li.querySelector('p');
     const range = document.createRange();
@@ -701,8 +701,8 @@ test('clicking ordered list inside a bullet list converts in place without freez
 
   const result = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const list = [...surface.querySelectorAll(':scope > ol, :scope > ul')]
       .find((el) => !el.classList.contains('task-list'));
     return {
@@ -731,7 +731,7 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto('/');
-  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
   await selectFirstTwoTopLevelParagraphs(page);
   await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
   await page.waitForTimeout(150);
@@ -739,8 +739,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   // Drop cursor into the first new bullet item.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const li = surface.querySelector(':scope > ul > li');
     const p = li.querySelector('p');
     const range = document.createRange();
@@ -758,8 +758,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
 
   const afterTask = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const taskLists = [...surface.querySelectorAll(':scope > ul.task-list')];
     return taskLists.map((ul) => ({
       itemCount: ul.querySelectorAll(':scope > pine-task-item').length,
@@ -778,8 +778,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   // Cursor inside the freshly-converted task list.
   await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const taskList = [...surface.querySelectorAll(':scope > ul.task-list')].find((ul) =>
       ul.textContent.includes('Hello, pine-richtext'),
     );
@@ -799,8 +799,8 @@ test('bullet → task → bullet round-trips through the conversion contract', a
 
   const afterBullet = await page.evaluate(() => {
     const surface =
-      document.querySelector('pine-rich-text-root .pine-rich-text') ??
-      document.querySelector('pine-rich-text-root');
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
     const bullet = [...surface.querySelectorAll(':scope > ul')].find(
       (ul) => !ul.classList.contains('task-list'),
     );
@@ -815,4 +815,132 @@ test('bullet → task → bullet round-trips through the conversion contract', a
   expect(afterBullet.itemCount).toBe(2);
   expect(afterBullet.texts[0]).toContain('Hello, pine-richtext.');
   expect(errors).toEqual([]);
+});
+
+test('two editors on one page carry different schemas (Phase 4b C4)', async ({ page }) => {
+  // The demo now hosts two `<pine-rich-text-root>` mounts:
+  //   1. Default runtime — kitchen-sink: paragraphs + lists + task list + headings + history
+  //   2. `runtime="comment"` — minimal: only paragraph + basic marks, no headings, no lists,
+  //      no task items, no history.
+  // This test asserts the two surfaces materialize different initial docs AND that
+  // commands forbidden by the comment runtime's schema (e.g. wrap_in_task_list) are silent
+  // no-ops there — proving per-instance schema scoping end-to-end.
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="comment"] p[data-pos="0"]');
+
+  // Doc editor: has the seeded paragraphs + a `ul.task-list`.
+  const docHasTaskList = await page.evaluate(() => {
+    const doc = document.querySelector('pine-rich-text-root:not([runtime])');
+    return !!doc.querySelector('ul.task-list');
+  });
+  expect(docHasTaskList).toBe(true);
+
+  // Comment editor: only ONE paragraph, no lists / headings / task items.
+  const commentShape = await page.evaluate(() => {
+    const comment = document.querySelector('pine-rich-text-root[runtime="comment"]');
+    return {
+      paragraphCount: comment.querySelectorAll('p').length,
+      hasTaskList: !!comment.querySelector('ul.task-list'),
+      hasBulletList: !!comment.querySelector('ul:not(.task-list)'),
+      hasHeading: !!comment.querySelector('h1, h2, h3, h4, h5, h6'),
+    };
+  });
+  expect(commentShape.paragraphCount).toBe(1);
+  expect(commentShape.hasTaskList).toBe(false);
+  expect(commentShape.hasBulletList).toBe(false);
+  expect(commentShape.hasHeading).toBe(false);
+
+  // Now dispatch unsupported commands directly at the comment surface. The
+  // comment runtime's schema only knows `doc`/`paragraph`/`text` + marks, so
+  // `wrap_in_task_list`, `wrap_in_blockquote`, `set_block_type{heading}` all
+  // fail at schema lookup and the DOM stays unchanged. The listener lives on
+  // the INNER `.pine-rich-text` div (not the custom element wrapper), so
+  // target that directly.
+  const commentHtmlBefore = await page
+    .locator('pine-rich-text-root[runtime="comment"] .pine-rich-text')
+    .innerHTML();
+  await page.evaluate(() => {
+    const commentSurface = document.querySelector(
+      'pine-rich-text-root[runtime="comment"] .pine-rich-text',
+    );
+    const forbidden = [
+      { kind: 'wrap_in_list', list_type: 'task_list', item_type: 'task_item', attrs: {} },
+      { kind: 'wrap_in_list', list_type: 'bullet_list', item_type: 'list_item', attrs: {} },
+      { kind: 'wrap_in', node_type: 'blockquote', attrs: {} },
+      { kind: 'set_block_type', node_type: 'heading', attrs: { level: 1 } },
+      { kind: 'set_block_type', node_type: 'code_block', attrs: {} },
+    ];
+    for (const detail of forbidden) {
+      commentSurface.dispatchEvent(
+        new CustomEvent('pine:richtext:command', { detail, bubbles: true }),
+      );
+    }
+  });
+  await page.waitForTimeout(150);
+  const commentHtmlAfter = await page
+    .locator('pine-rich-text-root[runtime="comment"] .pine-rich-text')
+    .innerHTML();
+  expect(commentHtmlAfter).toBe(commentHtmlBefore);
+});
+
+test('runtime-scoped custom command only fires on its own editor (Phase 4b C4)', async ({
+  page,
+}) => {
+  // The demo's `CommentRuntimeExtension` contributes a single named command,
+  // `comment_submit`, that inserts `✓submitted` into the doc. The extension is
+  // only registered on the comment runtime — so the same
+  // `{ kind: "custom", name: "comment_submit" }` event fires against the comment
+  // editor (inserts text) but is a silent no-op against the doc editor (no such
+  // named command in its runtime's table). Proves per-instance command scoping.
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+  await page.waitForSelector('pine-rich-text-root[runtime="comment"] p[data-pos="0"]');
+
+  // Snapshot the doc editor's HTML so we can confirm it doesn't change.
+  const docHtmlBefore = await page.locator('pine-rich-text-root:not([runtime])').innerHTML();
+
+  // Dispatch against the doc editor's inner surface — no `comment_submit` command in its runtime.
+  await page.evaluate(() => {
+    const docSurface = document.querySelector(
+      'pine-rich-text-root:not([runtime]) .pine-rich-text',
+    );
+    docSurface.dispatchEvent(
+      new CustomEvent('pine:richtext:command', {
+        detail: { kind: 'custom', name: 'comment_submit', args: null },
+        bubbles: true,
+      }),
+    );
+  });
+  await page.waitForTimeout(120);
+  const docHtmlAfter = await page.locator('pine-rich-text-root:not([runtime])').innerHTML();
+  expect(docHtmlAfter).toBe(docHtmlBefore);
+
+  // Dispatch against the comment editor's inner surface — its runtime has the
+  // command, so the sentinel string should land in the comment's paragraph.
+  // The command uses `tr.insert_text` which operates on the live selection, so
+  // we first place a caret inside the empty paragraph.
+  await page.evaluate(() => {
+    const commentSurface = document.querySelector(
+      'pine-rich-text-root[runtime="comment"] .pine-rich-text',
+    );
+    const para = commentSurface.querySelector('p');
+    const range = document.createRange();
+    range.setStart(para, 0);
+    range.setEnd(para, 0);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    commentSurface.dispatchEvent(
+      new CustomEvent('pine:richtext:command', {
+        detail: { kind: 'custom', name: 'comment_submit', args: null },
+        bubbles: true,
+      }),
+    );
+  });
+  await page.waitForTimeout(120);
+  const commentText = await page
+    .locator('pine-rich-text-root[runtime="comment"]')
+    .textContent();
+  expect(commentText).toContain('✓submitted');
 });

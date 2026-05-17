@@ -19,6 +19,7 @@ pub mod extensions;
 pub mod history;
 pub mod model;
 pub mod render;
+pub mod runtime;
 pub mod schema_basic;
 pub mod state;
 pub mod transform;
