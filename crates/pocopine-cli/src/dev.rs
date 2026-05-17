@@ -1,13 +1,17 @@
 use std::path::Path;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use notify::{Config, ErrorKind, Event, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::args::ServeArgs;
 use crate::{build, client_modules, config, server, tailwind};
+
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CHANGE_QUIET_WINDOW: Duration = Duration::from_millis(350);
+const CHANGE_MAX_COALESCE: Duration = Duration::from_secs(4);
 
 pub fn run(args: &ServeArgs) -> Result<()> {
     let project = args.path.canonicalize()?;
@@ -69,12 +73,9 @@ pub fn run(args: &ServeArgs) -> Result<()> {
         if let Some(message) = server::poll_children(&mut children.bins)? {
             break Err(anyhow!("{message}"));
         }
-        match rx.recv_timeout(Duration::from_millis(250)) {
+        match rx.recv_timeout(CHILD_POLL_INTERVAL) {
             Ok(change) => {
-                let mut pending = change;
-                while let Ok(change) = rx.try_recv() {
-                    pending.merge(change);
-                }
+                let pending = coalesce_changes(&rx, change);
 
                 if pending.install {
                     println!("↻ installing client dependencies…");
@@ -99,10 +100,33 @@ pub fn run(args: &ServeArgs) -> Result<()> {
                     }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break Ok(()),
         }
     }
+}
+
+fn coalesce_changes(rx: &Receiver<Change>, first: Change) -> Change {
+    let mut pending = first;
+    let deadline = Instant::now() + CHANGE_MAX_COALESCE;
+
+    loop {
+        while let Ok(change) = rx.try_recv() {
+            pending.merge(change);
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let timeout = CHANGE_QUIET_WINDOW.min(deadline - now);
+        match rx.recv_timeout(timeout) {
+            Ok(change) => pending.merge(change),
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    pending
 }
 
 enum DevWatcher {
@@ -244,6 +268,12 @@ impl Change {
                     ..Self::default()
                 });
             }
+            if is_client_module_support_path(path) {
+                return Some(Self {
+                    client: true,
+                    ..Self::default()
+                });
+            }
             return Some(Self {
                 wasm: true,
                 ..Self::default()
@@ -252,10 +282,16 @@ impl Change {
 
         if path.parent() == Some(project) {
             let name = path.file_name().and_then(|name| name.to_str())?;
-            if is_package_file(name) {
+            if is_package_manifest(name) {
                 return Some(Self {
                     client: true,
                     install: true,
+                    ..Self::default()
+                });
+            }
+            if is_package_lockfile(name) {
+                return Some(Self {
+                    client: true,
                     ..Self::default()
                 });
             }
@@ -285,15 +321,21 @@ fn is_unsupported_client_module_path(path: &Path) -> bool {
     name.ends_with(".client.js") || name.ends_with(".client.jsx") || name.ends_with(".client.tsx")
 }
 
-fn is_package_file(name: &str) -> bool {
+fn is_client_module_support_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name.ends_with(".ts") || name.ends_with(".d.ts")
+}
+
+fn is_package_manifest(name: &str) -> bool {
+    name == "package.json"
+}
+
+fn is_package_lockfile(name: &str) -> bool {
     matches!(
         name,
-        "package.json"
-            | "pnpm-lock.yaml"
-            | "package-lock.json"
-            | "yarn.lock"
-            | "bun.lockb"
-            | "bun.lock"
+        "pnpm-lock.yaml" | "package-lock.json" | "yarn.lock" | "bun.lockb" | "bun.lock"
     )
 }
 
@@ -330,12 +372,34 @@ mod tests {
     }
 
     #[test]
-    fn package_files_install_and_rebundle_client_modules() {
+    fn typescript_support_files_rebundle_client_modules_only() {
+        assert_eq!(
+            Change::from_path(&project(), &project().join("src/firebase/bindings.ts")),
+            Some(Change {
+                client: true,
+                ..Change::default()
+            })
+        );
+    }
+
+    #[test]
+    fn package_json_installs_and_rebundles_client_modules() {
         assert_eq!(
             Change::from_path(&project(), &project().join("package.json")),
             Some(Change {
                 client: true,
                 install: true,
+                ..Change::default()
+            })
+        );
+    }
+
+    #[test]
+    fn package_lock_rebundles_without_installing_again() {
+        assert_eq!(
+            Change::from_path(&project(), &project().join("package-lock.json")),
+            Some(Change {
+                client: true,
                 ..Change::default()
             })
         );
