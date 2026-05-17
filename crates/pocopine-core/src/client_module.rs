@@ -1,7 +1,8 @@
-//! Typed access to CLI-bundled `.client.js` / `.client.ts` modules.
+//! Low-level access to CLI-bundled `.client.ts` modules.
 //!
 //! The CLI writes default exports into `window.__pp_client_modules`.
-//! This wrapper keeps app/plugin code away from raw `Reflect`,
+//! The public author-facing API is `#[pocopine::client_module]`;
+//! this wrapper keeps generated facades away from raw `Reflect`,
 //! `Promise`, and callback-lifetime plumbing.
 
 use std::error::Error;

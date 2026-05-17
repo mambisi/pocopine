@@ -1,6 +1,4 @@
 fn main() {
-    pocopine_client_build::generate().expect("generate Pocopine client module bindings");
-
     println!("cargo:rustc-check-cfg=cfg(pocopine_browser)");
     println!("cargo:rustc-check-cfg=cfg(pocopine_host)");
 

@@ -111,8 +111,8 @@ pub struct TypeField {
 
 #[derive(Clone, Debug)]
 pub struct BindingOptions {
-    /// Path to the runtime crate used by generated code. App crates
-    /// normally use `::pocopine`.
+    /// Path to the Pocopine umbrella crate used by generated code.
+    /// App crates normally use `::pocopine`.
     pub runtime_crate: String,
 }
 
@@ -236,29 +236,37 @@ fn module_binding_tokens(module: &ClientModule, runtime: &TokenStream) -> TokenS
 
     quote! {
         pub mod #rust_module {
+            pub const NAME: &str = #js_name;
+            pub type Error = #runtime::__private::ClientModuleError;
+
             #[derive(Clone, Debug)]
             pub struct Module {
-                inner: #runtime::ClientModule,
+                inner: #runtime::__private::ClientModule,
             }
 
-            pub fn required() -> Result<Module, #runtime::ClientModuleError> {
-                #runtime::ClientModule::required(#js_name).map(|inner| Module { inner })
+            pub fn required() -> Result<Module, Error> {
+                #runtime::__private::ClientModule::required(NAME).map(|inner| Module { inner })
             }
 
-            pub fn optional() -> Result<Option<Module>, #runtime::ClientModuleError> {
-                #runtime::ClientModule::optional(#js_name)
+            pub fn optional() -> Result<Option<Module>, Error> {
+                #runtime::__private::ClientModule::optional(NAME)
                     .map(|module| module.map(|inner| Module { inner }))
             }
 
             impl Module {
-                pub fn raw(&self) -> &#runtime::ClientModule {
+                pub fn name(&self) -> &str {
+                    self.inner.name()
+                }
+
+                #[doc(hidden)]
+                pub fn raw(&self) -> &#runtime::__private::ClientModule {
                     &self.inner
                 }
 
                 pub async fn call_async<T>(
                     &self,
                     method: impl AsRef<str>,
-                ) -> Result<T, #runtime::ClientModuleError>
+                ) -> Result<T, Error>
                 where
                     T: ::serde::de::DeserializeOwned,
                 {
@@ -269,8 +277,8 @@ fn module_binding_tokens(module: &ClientModule, runtime: &TokenStream) -> TokenS
                     &self,
                     scope: #runtime::ScopeId,
                     method: impl AsRef<str>,
-                    handler: impl FnMut(Result<T, #runtime::ClientModuleError>) + 'static,
-                ) -> Result<(), #runtime::ClientModuleError>
+                    handler: impl FnMut(Result<T, Error>) + 'static,
+                ) -> Result<(), Error>
                 where
                     T: ::serde::de::DeserializeOwned + 'static,
                 {
@@ -610,7 +618,8 @@ mod tests {
 
         let source = generate_rust_bindings(&[module], &BindingOptions::default());
         assert!(source.contains("pub mod firebase_auth"));
-        assert!(source.contains("ClientModule::required(\"firebase-auth\")"));
+        assert!(source.contains("pub const NAME: &str = \"firebase-auth\""));
+        assert!(source.contains("ClientModule::required(NAME)"));
         assert!(source.contains("pub fn raw(&self)"));
     }
 }

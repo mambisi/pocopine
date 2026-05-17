@@ -33,12 +33,27 @@ The CLI scans `src/**/*.client.ts`, writes a generated entry file under
 ## Rust Access
 
 Application code should treat `.client.ts` as a small SDK adapter.
-Pocopine exposes the bundled default export through `ClientModule` so Rust
-components and app plugins do not need to write raw `wasm-bindgen` reflection
-code:
+Declare a Rust facade with `#[pocopine::client_module]` so components and
+app plugins do not need raw `wasm-bindgen` reflection code or stringly module
+lookups:
 
 ```rust
-use pocopine::{ClientModule, ScopeId};
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {}
+```
+
+Use an empty inline module body. That keeps rustfmt from looking for a
+separate `src/firebase.rs` file before the macro expands.
+
+The module name comes from the filename. `src/Firebase.client.ts` registers as
+`firebase`, and `src/FirebaseAuth.client.ts` registers as `firebase-auth`.
+Names are normalized to kebab case, so `FirebaseAuth.client.ts` and
+`firebase-auth.client.ts` collide; the CLI reports that as a build error.
+
+Use the facade from app-owned services or plugins:
+
+```rust
+use pocopine::ScopeId;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -47,55 +62,38 @@ struct FirebaseUser {
     uid: String,
 }
 
-async fn sign_in() -> Result<Option<FirebaseUser>, pocopine::ClientModuleError> {
-    ClientModule::required("firebase")?
-        .call_async("signIn")
-        .await
+async fn sign_in() -> Result<Option<FirebaseUser>, firebase::Error> {
+    firebase::required()?.call_async("signIn").await
 }
 
 fn subscribe(
     scope: ScopeId,
-    handler: impl FnMut(Result<Option<FirebaseUser>, pocopine::ClientModuleError>) + 'static,
-) -> Result<(), pocopine::ClientModuleError> {
-    ClientModule::required("firebase")?
+    handler: impl FnMut(Result<Option<FirebaseUser>, firebase::Error>) + 'static,
+) -> Result<(), firebase::Error> {
+    firebase::required()?
         .subscribe(scope, "onAuthStateChanged", handler)
 }
 ```
 
-The module name comes from the filename. `src/Firebase.client.ts` registers as
-`firebase`, and `src/FirebaseAuth.client.ts` registers as `firebase-auth`.
-Names are normalized to kebab case, so `FirebaseAuth.client.ts` and
-`firebase-auth.client.ts` collide; the CLI reports that as a build error.
-
-## Generated Rust Bindings
-
-Apps can add the build helper so Cargo and rust-analyzer see generated module
-facades:
+`#[client_module]` also accepts `file = "..."` and `name = "..."` for explicit
+cases:
 
 ```rust
-// build.rs
-fn main() {
-    pocopine_client_build::generate().unwrap();
-}
+#[pocopine::client_module(file = "Firebase.client.ts", name = "firebase")]
+pub mod firebase {}
 ```
 
-```rust
-// src/lib.rs
-pub mod client_modules {
-    pocopine::include_client_modules!();
-}
-```
-
-Today the generated facade removes the stringly module lookup:
+The generated facade is intentionally thin today:
 
 ```rust
-let firebase = crate::client_modules::firebase::required()?;
-let user = firebase.call_async::<Option<FirebaseUser>>("signIn").await?;
+let user = firebase::required()?
+    .call_async::<Option<FirebaseUser>>("signIn")
+    .await?;
 ```
 
 The next codegen layer will extract the explicit TypeScript API from the
 `.client.ts` default export and generate typed method wrappers on top of the
-same facade.
+same facade, for example `firebase::required()?.sign_in().await?`.
 
 ## Commands
 
