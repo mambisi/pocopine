@@ -77,7 +77,9 @@ impl TransactionOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
     use pocopine_sync::SyncError;
+    #[cfg(not(target_arch = "wasm32"))]
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -113,6 +115,7 @@ mod tests {
         assert_eq!(tx.raw().log, vec!["created"]);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn transaction_options_run_commits_on_success_and_rolls_back_on_error() {
         #[derive(Clone, Default)]
