@@ -174,24 +174,18 @@ mod wasm {
 
     impl KeepFirebaseAuth {
         pub async fn sign_in(&self) -> Result<Option<FirebaseAuthUser>, String> {
-            module()?
-                .call_async("signIn")
-                .await
-                .map_err(|err| err.to_string())
+            module()?.sign_in().await.map_err(|err| err.to_string())
         }
 
         pub async fn initial_user(&self) -> Result<Option<FirebaseAuthUser>, String> {
             module()?
-                .call_async("initialUser")
+                .initial_user()
                 .await
                 .map_err(|err| err.to_string())
         }
 
         pub async fn sign_out(&self) -> Result<Option<FirebaseAuthUser>, String> {
-            module()?
-                .call_async("signOut")
-                .await
-                .map_err(|err| err.to_string())
+            module()?.sign_out().await.map_err(|err| err.to_string())
         }
 
         pub fn subscribe(
@@ -200,7 +194,7 @@ mod wasm {
             mut handler: impl FnMut(Result<Option<FirebaseAuthUser>, String>) + 'static,
         ) -> Result<(), String> {
             module()?
-                .subscribe(scope, "onAuthStateChanged", move |result| {
+                .on_auth_state_changed(scope, move |result| {
                     handler(result.map_err(|err| err.to_string()));
                 })
                 .map_err(|err| err.to_string())

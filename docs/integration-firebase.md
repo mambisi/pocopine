@@ -138,9 +138,6 @@ keeps components away from raw JavaScript reflection and makes the rest of the
 app read like Pocopine code.
 
 ```rust
-#[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {}
-
 use pocopine::{App, AppPlugin, ScopeId};
 use serde::Deserialize;
 
@@ -154,6 +151,33 @@ pub struct FirebaseAuthUser {
     pub name: String,
     #[serde(default, rename = "photoUrl")]
     pub photo_url: String,
+}
+
+#[pocopine::client_module("Firebase.client.ts")]
+pub mod firebase {
+    use super::FirebaseAuthUser;
+
+    impl Module {
+        pub async fn sign_in(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("signIn").await
+        }
+
+        pub async fn initial_user(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("initialUser").await
+        }
+
+        pub async fn sign_out(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("signOut").await
+        }
+
+        pub fn on_auth_state_changed(
+            &self,
+            scope: ::pocopine::ScopeId,
+            handler: impl FnMut(Result<Option<FirebaseAuthUser>, Error>) + 'static,
+        ) -> Result<(), Error> {
+            self.subscribe(scope, "onAuthStateChanged", handler)
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -178,15 +202,15 @@ pub fn firebase_auth_plugin() -> impl AppPlugin {
 #[cfg(target_arch = "wasm32")]
 impl FirebaseAuth {
     pub async fn sign_in(&self) -> Result<Option<FirebaseAuthUser>, String> {
-        module()?.call_async("signIn").await.map_err(|err| err.to_string())
+        module()?.sign_in().await.map_err(|err| err.to_string())
     }
 
     pub async fn initial_user(&self) -> Result<Option<FirebaseAuthUser>, String> {
-        module()?.call_async("initialUser").await.map_err(|err| err.to_string())
+        module()?.initial_user().await.map_err(|err| err.to_string())
     }
 
     pub async fn sign_out(&self) -> Result<Option<FirebaseAuthUser>, String> {
-        module()?.call_async("signOut").await.map_err(|err| err.to_string())
+        module()?.sign_out().await.map_err(|err| err.to_string())
     }
 
     pub fn subscribe(
@@ -195,7 +219,7 @@ impl FirebaseAuth {
         handler: impl FnMut(Result<Option<FirebaseAuthUser>, firebase::Error>) + 'static,
     ) -> Result<(), String> {
         module()?
-            .subscribe(scope, "onAuthStateChanged", handler)
+            .on_auth_state_changed(scope, handler)
             .map_err(|err| err.to_string())
     }
 }

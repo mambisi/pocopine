@@ -17,7 +17,31 @@
 mod app;
 pub mod components;
 #[pocopine::client_module("Firebase.client.ts")]
-pub mod firebase {}
+pub mod firebase {
+    use crate::firebase_auth::FirebaseAuthUser;
+
+    impl Module {
+        pub async fn sign_in(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("signIn").await
+        }
+
+        pub async fn initial_user(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("initialUser").await
+        }
+
+        pub async fn sign_out(&self) -> Result<Option<FirebaseAuthUser>, Error> {
+            self.call_async("signOut").await
+        }
+
+        pub fn on_auth_state_changed(
+            &self,
+            scope: ::pocopine::ScopeId,
+            handler: impl FnMut(Result<Option<FirebaseAuthUser>, Error>) + 'static,
+        ) -> Result<(), Error> {
+            self.subscribe(scope, "onAuthStateChanged", handler)
+        }
+    }
+}
 pub mod firebase_auth;
 pub mod model;
 #[cfg(pocopine_host)]

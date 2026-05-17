@@ -1031,7 +1031,13 @@ fn client_module_name_from_file(file: &LitStr) -> syn::Result<String> {
 ///
 /// ```ignore
 /// #[pocopine::client_module("Firebase.client.ts")]
-/// pub mod firebase {}
+/// pub mod firebase {
+///     impl Module {
+///         pub async fn sign_in(&self) -> Result<Option<crate::User>, Error> {
+///             self.call_async("signIn").await
+///         }
+///     }
+/// }
 /// ```
 #[proc_macro_attribute]
 pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -1041,20 +1047,10 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let input = parse_macro_input!(item as ItemMod);
 
-    if let Some((_, items)) = input.content.as_ref() {
-        if !items.is_empty() {
-            return syn::Error::new_spanned(
-                &input.ident,
-                "`#[client_module]` owns the module body; declare it as `pub mod name {}`",
-            )
-            .to_compile_error()
-            .into();
-        }
-    }
-
     let attrs = input.attrs;
     let vis = input.vis;
     let ident = input.ident;
+    let user_items = input.content.map(|(_, items)| items).unwrap_or_default();
     let module_name = match args.name {
         Some(name) => name.value(),
         None => match args.file {
@@ -1125,6 +1121,8 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
                     self.inner.subscribe(scope, method, handler)
                 }
             }
+
+            #(#user_items)*
         }
     }
     .into()
