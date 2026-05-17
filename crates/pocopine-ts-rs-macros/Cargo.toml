@@ -1,0 +1,21 @@
+[package]
+name = "pocopine-ts-rs-macros"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+repository.workspace = true
+description = "Pocopine-owned fork of the ts-rs derive macro."
+
+[features]
+serde-compat = ["termcolor"]
+no-serde-warnings = []
+
+[lib]
+name = "pocopine_ts_rs_macros"
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["extra-traits"] }
+termcolor = { version = "1", optional = true }

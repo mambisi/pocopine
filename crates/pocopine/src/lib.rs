@@ -54,14 +54,6 @@ pub use pocopine_macros::{
     app, client_module, component, handlers, job, protected, server, store, Emit,
 };
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! include_client_modules {
-    () => {
-        include!(concat!(env!("OUT_DIR"), "/pocopine_client_modules.rs"));
-    };
-}
-
 pub mod auth {
     pub use pocopine_auth::*;
 }

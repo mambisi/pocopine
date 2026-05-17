@@ -30,6 +30,7 @@
 #![feature(proc_macro_span)]
 
 use proc_macro::TokenStream;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream, Parser},
@@ -1026,17 +1027,121 @@ fn client_module_name_from_file(file: &LitStr) -> syn::Result<String> {
     Ok(kebab_case(base))
 }
 
+fn client_module_methods_from_file(
+    file: Option<&LitStr>,
+) -> syn::Result<Vec<pocopine_client_codegen::ClientFacadeMethod>> {
+    let Some(file) = file else {
+        return Ok(Vec::new());
+    };
+    let Some(path) = resolve_template_path(file) else {
+        return Err(syn::Error::new_spanned(
+            file,
+            format!(
+                "client module file `{}` could not be found relative to this module or CARGO_MANIFEST_DIR",
+                file.value()
+            ),
+        ));
+    };
+    let source = std::fs::read_to_string(&path).map_err(|err| {
+        syn::Error::new_spanned(
+            file,
+            format!(
+                "failed to read client module `{}`: {err}",
+                manifest_relative(&path)
+            ),
+        )
+    })?;
+    pocopine_client_codegen::extract_client_facade_methods(&source, &path).map_err(|err| {
+        syn::Error::new_spanned(
+            file,
+            format!(
+                "failed to parse client module `{}`: {err}",
+                manifest_relative(&path)
+            ),
+        )
+    })
+}
+
+fn client_module_method_tokens(
+    methods: &[pocopine_client_codegen::ClientFacadeMethod],
+) -> syn::Result<TokenStream2> {
+    let mut tokens = Vec::new();
+    for method in methods {
+        let rust_name = format_ident!("{}", method.rust_name);
+        let js_name = LitStr::new(&method.name, Span::call_site());
+        let output: Type = syn::parse_str(&method.output).map_err(|err| {
+            let label = match method.kind {
+                pocopine_client_codegen::ClientFacadeMethodKind::Async => "return",
+                pocopine_client_codegen::ClientFacadeMethodKind::Subscription => "callback",
+            };
+            syn::Error::new(
+                Span::call_site(),
+                format!(
+                    "unsupported client module {label} type `{}`: {err}",
+                    method.output
+                ),
+            )
+        })?;
+        match method.kind {
+            pocopine_client_codegen::ClientFacadeMethodKind::Async => {
+                tokens.push(quote! {
+                    pub async fn #rust_name(&self) -> Result<#output, Error> {
+                        self.call_async(#js_name).await
+                    }
+                });
+            }
+            pocopine_client_codegen::ClientFacadeMethodKind::Subscription => {
+                tokens.push(quote! {
+                    pub fn #rust_name(
+                        &self,
+                        scope: ::pocopine::ScopeId,
+                        handler: impl FnMut(Result<#output, Error>) + 'static,
+                    ) -> Result<(), Error> {
+                        self.subscribe(scope, #js_name, handler)
+                    }
+                });
+            }
+        }
+    }
+    Ok(quote! { #(#tokens)* })
+}
+
+#[cfg(test)]
+mod client_module_tests {
+    use super::*;
+
+    #[test]
+    fn generates_facade_tokens_from_codegen_methods() {
+        let methods = vec![
+            pocopine_client_codegen::ClientFacadeMethod {
+                name: "signIn".to_string(),
+                rust_name: "sign_in".to_string(),
+                kind: pocopine_client_codegen::ClientFacadeMethodKind::Async,
+                output: "Option<FirebaseAuthUser>".to_string(),
+            },
+            pocopine_client_codegen::ClientFacadeMethod {
+                name: "onAuthStateChanged".to_string(),
+                rust_name: "on_auth_state_changed".to_string(),
+                kind: pocopine_client_codegen::ClientFacadeMethodKind::Subscription,
+                output: "Option<FirebaseAuthUser>".to_string(),
+            },
+        ];
+
+        let tokens = client_module_method_tokens(&methods).unwrap().to_string();
+        assert!(tokens.contains("pub async fn sign_in"));
+        assert!(tokens.contains("self . call_async (\"signIn\")"));
+        assert!(tokens.contains("pub fn on_auth_state_changed"));
+        assert!(tokens.contains("self . subscribe (scope , \"onAuthStateChanged\""));
+    }
+}
+
 /// `#[client_module]` — declare a Rust facade for a typed `.client.ts`
 /// module bundled by the Pocopine CLI.
 ///
 /// ```ignore
 /// #[pocopine::client_module("Firebase.client.ts")]
 /// pub mod firebase {
-///     impl Module {
-///         pub async fn sign_in(&self) -> Result<Option<crate::User>, Error> {
-///             self.call_async("signIn").await
-///         }
-///     }
+///     use crate::User;
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -1051,6 +1156,14 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
     let vis = input.vis;
     let ident = input.ident;
     let user_items = input.content.map(|(_, items)| items).unwrap_or_default();
+    let file = args.file.clone();
+    let generated_methods = match client_module_methods_from_file(file.as_ref()) {
+        Ok(methods) => match client_module_method_tokens(&methods) {
+            Ok(tokens) => tokens,
+            Err(err) => return err.to_compile_error().into(),
+        },
+        Err(err) => return err.to_compile_error().into(),
+    };
     let module_name = match args.name {
         Some(name) => name.value(),
         None => match args.file {
@@ -1120,6 +1233,8 @@ pub fn client_module(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     self.inner.subscribe(scope, method, handler)
                 }
+
+                #generated_methods
             }
 
             #(#user_items)*

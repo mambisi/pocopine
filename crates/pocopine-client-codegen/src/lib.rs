@@ -1,23 +1,27 @@
-//! Shared client-module discovery and generated-binding scaffolding.
+//! Shared client-module discovery, runtime entry generation, and typed facade extraction.
 //!
-//! The CLI and `build.rs` helper both need the same view of managed
-//! client modules. Keeping discovery and the Rust-facing schema here
-//! prevents the bundler path and rust-analyzer path from drifting.
+//! The CLI and `#[client_module]` macro both need the same view of managed
+//! client modules. Keeping discovery and TypeScript API extraction here
+//! prevents the bundler path and macro path from drifting.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use proc_macro2::{Literal, TokenStream};
-use quote::{format_ident, quote};
+use oxc_allocator::Allocator;
+use oxc_ast::ast::{
+    BindingPattern, Declaration, ExportDefaultDeclarationKind, Expression, Function,
+    ObjectExpression, ObjectProperty, ObjectPropertyKind, Program, PropertyKey, Statement, TSType,
+    TSTypeName,
+};
+use oxc_parser::Parser as OxcParser;
+use oxc_span::{GetSpan, SourceType};
 use serde::{Deserialize, Serialize};
-
-pub const GENERATED_BINDINGS_FILE: &str = "pocopine_client_modules.rs";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiscoveryPolicy {
     /// Stable managed modules: `.client.ts` only. `.client.js` is
-    /// rejected because generated Rust bindings need an explicit typed
+    /// rejected because generated Rust facades need an explicit typed
     /// API surface.
     TypedOnly,
     /// Transitional runtime bundling mode. Kept for older examples or
@@ -58,69 +62,269 @@ impl ClientModule {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClientModuleSchema {
-    pub modules: Vec<ModuleSchema>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ModuleSchema {
-    pub name: String,
-    pub rust_module: String,
-    pub methods: Vec<ClientMethod>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClientMethod {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientFacadeMethod {
     pub name: String,
     pub rust_name: String,
-    pub kind: ClientMethodKind,
-    pub params: Vec<ClientParam>,
-    pub output: TypeExpr,
+    pub kind: ClientFacadeMethodKind,
+    pub output: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClientMethodKind {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientFacadeMethodKind {
     Async,
     Subscription,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClientParam {
-    pub name: String,
-    pub ty: TypeExpr,
+pub fn extract_client_facade_methods(
+    source: &str,
+    path: impl AsRef<Path>,
+) -> Result<Vec<ClientFacadeMethod>> {
+    let source_type = SourceType::from_path(path).unwrap_or(SourceType::ts());
+    extract_client_facade_methods_from_source(source, source_type)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum TypeExpr {
-    Null,
-    Bool,
-    String,
-    Number,
-    Option(Box<TypeExpr>),
-    Vec(Box<TypeExpr>),
-    Object(Vec<TypeField>),
+pub fn extract_client_facade_methods_from_source(
+    source: &str,
+    source_type: SourceType,
+) -> Result<Vec<ClientFacadeMethod>> {
+    let allocator = Allocator::default();
+    let parsed = OxcParser::new(&allocator, source, source_type).parse();
+    if parsed.panicked {
+        bail!("the TypeScript parser panicked while recovering from syntax errors");
+    }
+    if !parsed.errors.is_empty() {
+        bail!("{} syntax error(s)", parsed.errors.len());
+    }
+
+    Ok(client_facade_methods_from_program(&parsed.program, source))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TypeField {
-    pub name: String,
-    pub rust_name: String,
-    pub ty: TypeExpr,
+fn client_facade_methods_from_program(
+    program: &Program<'_>,
+    source: &str,
+) -> Vec<ClientFacadeMethod> {
+    let type_aliases = extract_type_aliases(program);
+    let mut methods = Vec::new();
+
+    for statement in &program.body {
+        let Statement::ExportDefaultDeclaration(default_export) = statement else {
+            continue;
+        };
+        let ExportDefaultDeclarationKind::ObjectExpression(object) = &default_export.declaration
+        else {
+            continue;
+        };
+
+        collect_client_module_object_methods(object, source, &type_aliases, &mut methods);
+    }
+
+    methods
 }
 
-#[derive(Clone, Debug)]
-pub struct BindingOptions {
-    /// Path to the Pocopine umbrella crate used by generated code.
-    /// App crates normally use `::pocopine`.
-    pub runtime_crate: String,
-}
-
-impl Default for BindingOptions {
-    fn default() -> Self {
-        Self {
-            runtime_crate: "::pocopine".to_string(),
+fn extract_type_aliases<'a>(program: &'a Program<'a>) -> HashMap<String, &'a TSType<'a>> {
+    let mut aliases = HashMap::new();
+    for statement in &program.body {
+        match statement {
+            Statement::TSTypeAliasDeclaration(alias) => {
+                aliases.insert(alias.id.name.as_str().to_string(), &alias.type_annotation);
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::TSTypeAliasDeclaration(alias)) = &export.declaration {
+                    aliases.insert(alias.id.name.as_str().to_string(), &alias.type_annotation);
+                }
+            }
+            _ => {}
         }
+    }
+    aliases
+}
+
+fn collect_client_module_object_methods(
+    object: &ObjectExpression<'_>,
+    source: &str,
+    type_aliases: &HashMap<String, &TSType<'_>>,
+    methods: &mut Vec<ClientFacadeMethod>,
+) {
+    for property in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            continue;
+        };
+        let Some(name) = property_key_name(&property.key) else {
+            continue;
+        };
+        let Some(function) = object_property_function(property) else {
+            continue;
+        };
+
+        if function.r#async {
+            if let Some(output) = async_method_output(function, source) {
+                methods.push(ClientFacadeMethod {
+                    name: name.to_string(),
+                    rust_name: rust_method_name(name),
+                    kind: ClientFacadeMethodKind::Async,
+                    output,
+                });
+            }
+        } else if let Some(output) = subscription_event_type(function, source, type_aliases) {
+            methods.push(ClientFacadeMethod {
+                name: name.to_string(),
+                rust_name: rust_method_name(name),
+                kind: ClientFacadeMethodKind::Subscription,
+                output,
+            });
+        }
+    }
+}
+
+fn property_key_name<'a>(key: &'a PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.as_str()),
+        PropertyKey::StringLiteral(literal) => Some(literal.value.as_str()),
+        _ => None,
+    }
+}
+
+fn object_property_function<'a>(property: &'a ObjectProperty<'a>) -> Option<&'a Function<'a>> {
+    match &property.value {
+        Expression::FunctionExpression(function) => Some(function),
+        _ => None,
+    }
+}
+
+fn async_method_output(function: &Function<'_>, source: &str) -> Option<String> {
+    let return_type = &function.return_type.as_ref()?.type_annotation;
+    let output = promise_type_argument(return_type)?;
+    Some(rust_type_from_oxc_ts_type(output, source))
+}
+
+fn promise_type_argument<'a>(ty: &'a TSType<'a>) -> Option<&'a TSType<'a>> {
+    match ty {
+        TSType::TSTypeReference(reference) if ts_type_name(&reference.type_name)? == "Promise" => {
+            reference.type_arguments.as_ref()?.params.first()
+        }
+        TSType::TSParenthesizedType(parenthesized) => {
+            promise_type_argument(&parenthesized.type_annotation)
+        }
+        _ => None,
+    }
+}
+
+fn subscription_event_type(
+    function: &Function<'_>,
+    source: &str,
+    type_aliases: &HashMap<String, &TSType<'_>>,
+) -> Option<String> {
+    let callback = function
+        .params
+        .items
+        .iter()
+        .find(|param| binding_pattern_name(&param.pattern) == Some("callback"))?;
+    let callback_ty = &callback.type_annotation.as_ref()?.type_annotation;
+    callback_event_type(callback_ty, source, type_aliases)
+}
+
+fn binding_pattern_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a str> {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.as_str()),
+        _ => None,
+    }
+}
+
+fn callback_event_type(
+    callback_ty: &TSType<'_>,
+    source: &str,
+    type_aliases: &HashMap<String, &TSType<'_>>,
+) -> Option<String> {
+    match callback_ty {
+        TSType::TSFunctionType(function) => {
+            let event = &function
+                .params
+                .items
+                .first()?
+                .type_annotation
+                .as_ref()?
+                .type_annotation;
+            Some(rust_type_from_oxc_ts_type(event, source))
+        }
+        TSType::TSTypeReference(reference) => {
+            let name = ts_type_name(&reference.type_name)?;
+            let alias = type_aliases.get(&name)?;
+            callback_event_type(alias, source, type_aliases)
+        }
+        TSType::TSParenthesizedType(parenthesized) => {
+            callback_event_type(&parenthesized.type_annotation, source, type_aliases)
+        }
+        _ => None,
+    }
+}
+
+fn rust_type_from_oxc_ts_type(ty: &TSType<'_>, source: &str) -> String {
+    match ty {
+        TSType::TSStringKeyword(_) => "String".to_string(),
+        TSType::TSBooleanKeyword(_) => "bool".to_string(),
+        TSType::TSNumberKeyword(_) => "f64".to_string(),
+        TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_) => {
+            "()".to_string()
+        }
+        TSType::TSArrayType(array) => {
+            format!(
+                "Vec<{}>",
+                rust_type_from_oxc_ts_type(&array.element_type, source)
+            )
+        }
+        TSType::TSTypeReference(reference) => {
+            let Some(name) = ts_type_name(&reference.type_name) else {
+                return ty.span().source_text(source).trim().to_string();
+            };
+            if name == "Array" {
+                if let Some(argument) = reference
+                    .type_arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.params.first())
+                {
+                    return format!("Vec<{}>", rust_type_from_oxc_ts_type(argument, source));
+                }
+            }
+            name
+        }
+        TSType::TSUnionType(union) => rust_type_from_oxc_union(union, source),
+        TSType::TSParenthesizedType(parenthesized) => {
+            rust_type_from_oxc_ts_type(&parenthesized.type_annotation, source)
+        }
+        _ => ty.span().source_text(source).trim().to_string(),
+    }
+}
+
+fn rust_type_from_oxc_union(union: &oxc_ast::ast::TSUnionType<'_>, source: &str) -> String {
+    let mut nullable = false;
+    let mut non_null = Vec::new();
+    for ty in &union.types {
+        match ty {
+            TSType::TSNullKeyword(_) | TSType::TSUndefinedKeyword(_) => nullable = true,
+            _ => non_null.push(ty),
+        }
+    }
+
+    if nullable && non_null.len() == 1 {
+        return format!(
+            "Option<{}>",
+            rust_type_from_oxc_ts_type(non_null[0], source)
+        );
+    }
+
+    union.span.source_text(source).trim().to_string()
+}
+
+fn ts_type_name(type_name: &TSTypeName<'_>) -> Option<String> {
+    match type_name {
+        TSTypeName::IdentifierReference(identifier) => Some(identifier.name.as_str().to_string()),
+        TSTypeName::QualifiedName(qualified) => Some(format!(
+            "{}.{}",
+            ts_type_name(&qualified.left)?,
+            qualified.right.name
+        )),
+        TSTypeName::ThisExpression(_) => None,
     }
 }
 
@@ -178,123 +382,6 @@ pub fn write_runtime_entry(
     Ok(entry)
 }
 
-pub fn write_rust_bindings(
-    project: impl AsRef<Path>,
-    out_dir: impl AsRef<Path>,
-) -> Result<PathBuf> {
-    write_rust_bindings_with_options(project, out_dir, &BindingOptions::default())
-}
-
-pub fn write_rust_bindings_with_options(
-    project: impl AsRef<Path>,
-    out_dir: impl AsRef<Path>,
-    options: &BindingOptions,
-) -> Result<PathBuf> {
-    let modules = discover_client_modules(project, DiscoveryPolicy::TypedOnly)?;
-    let out_dir = out_dir.as_ref();
-    std::fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
-    let path = out_dir.join(GENERATED_BINDINGS_FILE);
-    std::fs::write(&path, generate_rust_bindings(&modules, options))
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
-}
-
-pub fn generate_rust_bindings(modules: &[ClientModule], options: &BindingOptions) -> String {
-    if modules.is_empty() {
-        return format!(
-            "{}\n\n{}\n",
-            generated_header(),
-            "// No managed .client.ts modules were discovered."
-        );
-    }
-
-    let runtime = runtime_crate_tokens(options);
-    let modules = modules
-        .iter()
-        .map(|module| module_binding_tokens(module, &runtime));
-    let tokens = quote! {
-        #(#modules)*
-    };
-
-    format!("{}\n\n{}", generated_header(), format_rust_tokens(tokens))
-}
-
-fn generated_header() -> &'static str {
-    "// @generated by pocopine-client-codegen. Do not edit by hand."
-}
-
-fn runtime_crate_tokens(options: &BindingOptions) -> TokenStream {
-    options
-        .runtime_crate
-        .parse()
-        .expect("BindingOptions::runtime_crate must be a valid Rust path")
-}
-
-fn module_binding_tokens(module: &ClientModule, runtime: &TokenStream) -> TokenStream {
-    let rust_module = format_ident!("{}", module.rust_module());
-    let js_name = Literal::string(module.name());
-
-    quote! {
-        pub mod #rust_module {
-            pub const NAME: &str = #js_name;
-            pub type Error = #runtime::__private::ClientModuleError;
-
-            #[derive(Clone, Debug)]
-            pub struct Module {
-                inner: #runtime::__private::ClientModule,
-            }
-
-            pub fn required() -> Result<Module, Error> {
-                #runtime::__private::ClientModule::required(NAME).map(|inner| Module { inner })
-            }
-
-            pub fn optional() -> Result<Option<Module>, Error> {
-                #runtime::__private::ClientModule::optional(NAME)
-                    .map(|module| module.map(|inner| Module { inner }))
-            }
-
-            impl Module {
-                pub fn name(&self) -> &str {
-                    self.inner.name()
-                }
-
-                #[doc(hidden)]
-                pub fn raw(&self) -> &#runtime::__private::ClientModule {
-                    &self.inner
-                }
-
-                pub async fn call_async<T>(
-                    &self,
-                    method: impl AsRef<str>,
-                ) -> Result<T, Error>
-                where
-                    T: ::serde::de::DeserializeOwned,
-                {
-                    self.inner.call_async(method).await
-                }
-
-                pub fn subscribe<T>(
-                    &self,
-                    scope: #runtime::ScopeId,
-                    method: impl AsRef<str>,
-                    handler: impl FnMut(Result<T, Error>) + 'static,
-                ) -> Result<(), Error>
-                where
-                    T: ::serde::de::DeserializeOwned + 'static,
-                {
-                    self.inner.subscribe(scope, method, handler)
-                }
-            }
-        }
-    }
-}
-
-fn format_rust_tokens(tokens: TokenStream) -> String {
-    let source = tokens.to_string();
-    let syntax = syn::parse_file(&source).expect("generated client module bindings must parse");
-    prettyplease::unparse(&syntax)
-}
-
 pub fn client_module_name(file_name: &str) -> Result<String> {
     let base = file_name
         .strip_suffix(".client.ts")
@@ -322,6 +409,42 @@ pub fn rust_module_name(module_name: &str) -> String {
     let mut out = out.trim_matches('_').to_string();
     if out.is_empty() {
         out = "module".into();
+    }
+    if is_rust_keyword(&out) {
+        out.push('_');
+    }
+    out
+}
+
+pub fn rust_method_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    let mut prev_is_sep = true;
+    let mut prev_is_lower_or_digit = false;
+    for ch in name.chars() {
+        if ch == '-' || ch == '_' || ch == ' ' {
+            if !prev_is_sep {
+                out.push('_');
+            }
+            prev_is_sep = true;
+            prev_is_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_ascii_uppercase() {
+            if prev_is_lower_or_digit && !prev_is_sep {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_is_sep = false;
+            prev_is_lower_or_digit = false;
+        } else if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_is_sep = false;
+            prev_is_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        }
+    }
+    let mut out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        out = "method".into();
     }
     if is_rust_keyword(&out) {
         out.push('_');
@@ -536,6 +659,98 @@ mod tests {
     }
 
     #[test]
+    fn rust_method_names_are_snake_case_and_keyword_safe() {
+        assert_eq!(rust_method_name("signIn"), "sign_in");
+        assert_eq!(
+            rust_method_name("onAuthStateChanged"),
+            "on_auth_state_changed"
+        );
+        assert_eq!(rust_method_name("type"), "type_");
+    }
+
+    #[test]
+    fn extracts_async_and_subscription_methods_from_client_ts() {
+        let source = r#"
+            type AuthStateCallback = (user: FirebaseAuthUser | null) => void;
+
+            export default {
+              async signIn(): Promise<FirebaseAuthUser | null> {
+                return null;
+              },
+
+              async signOut(): Promise<FirebaseAuthUser | null> {
+                return null;
+              },
+
+              onAuthStateChanged(callback: AuthStateCallback): Unsubscribe {
+                return () => {};
+              },
+            };
+        "#;
+
+        let methods = extract_client_facade_methods_from_source(source, SourceType::ts()).unwrap();
+        assert_eq!(methods.len(), 3);
+        assert_eq!(
+            methods[0],
+            ClientFacadeMethod {
+                name: "signIn".to_string(),
+                rust_name: "sign_in".to_string(),
+                kind: ClientFacadeMethodKind::Async,
+                output: "Option<FirebaseAuthUser>".to_string(),
+            }
+        );
+        assert_eq!(
+            methods[2],
+            ClientFacadeMethod {
+                name: "onAuthStateChanged".to_string(),
+                rust_name: "on_auth_state_changed".to_string(),
+                kind: ClientFacadeMethodKind::Subscription,
+                output: "Option<FirebaseAuthUser>".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn maps_basic_typescript_types_to_rust() {
+        let source = r#"
+            export default {
+              async stringValue(): Promise<string> {
+                return "";
+              },
+              async boolValue(): Promise<boolean> {
+                return true;
+              },
+              async numberValue(): Promise<number> {
+                return 0;
+              },
+              async nullableValue(): Promise<FirebaseAuthUser | null> {
+                return null;
+              },
+              async arrayValue(): Promise<string[]> {
+                return [];
+              },
+            };
+        "#;
+
+        let methods = extract_client_facade_methods_from_source(source, SourceType::ts()).unwrap();
+        let outputs: Vec<_> = methods
+            .iter()
+            .map(|method| method.output.as_str())
+            .collect();
+
+        assert_eq!(
+            outputs,
+            vec![
+                "String",
+                "bool",
+                "f64",
+                "Option<FirebaseAuthUser>",
+                "Vec<String>"
+            ]
+        );
+    }
+
+    #[test]
     fn typed_discovery_rejects_js_and_tsx() {
         let root = unique_root("pocopine-codegen-discover");
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -605,21 +820,5 @@ mod tests {
         assert!(source.contains("R[\"firebase\"] = __pp_client_0.default"));
 
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn generated_bindings_include_module_facade() {
-        let module = ClientModule {
-            path: PathBuf::from("src/FirebaseAuth.client.ts"),
-            name: "firebase-auth".into(),
-            rust_module: "firebase_auth".into(),
-            source: ClientModuleSource::TypeScript,
-        };
-
-        let source = generate_rust_bindings(&[module], &BindingOptions::default());
-        assert!(source.contains("pub mod firebase_auth"));
-        assert!(source.contains("pub const NAME: &str = \"firebase-auth\""));
-        assert!(source.contains("ClientModule::required(NAME)"));
-        assert!(source.contains("pub fn raw(&self)"));
     }
 }
