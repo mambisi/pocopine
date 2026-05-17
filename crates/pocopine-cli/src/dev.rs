@@ -148,6 +148,7 @@ impl Change {
         if path.starts_with(&src) {
             if is_client_module_path(path) || is_unsupported_client_module_path(path) {
                 return Some(Self {
+                    wasm: is_client_module_path(path),
                     client: true,
                     ..Self::default()
                 });
@@ -215,10 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn client_modules_rebundle_without_wasm() {
+    fn typed_client_modules_rebuild_wasm_and_rebundle() {
         assert_eq!(
             Change::from_path(&project(), &project().join("src/FirebaseAuth.client.ts")),
             Some(Change {
+                wasm: true,
                 client: true,
                 ..Change::default()
             })
