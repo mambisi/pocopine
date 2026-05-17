@@ -154,7 +154,6 @@ impl Change {
             }
             return Some(Self {
                 wasm: true,
-                client: true,
                 ..Self::default()
             });
         }
@@ -227,12 +226,11 @@ mod tests {
     }
 
     #[test]
-    fn rust_source_rebuilds_wasm_and_client_bundle() {
+    fn rust_source_rebuilds_only_wasm() {
         assert_eq!(
             Change::from_path(&project(), &project().join("src/lib.rs")),
             Some(Change {
                 wasm: true,
-                client: true,
                 ..Change::default()
             })
         );

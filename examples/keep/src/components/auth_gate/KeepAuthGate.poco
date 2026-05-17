@@ -25,7 +25,7 @@
     </section>
   </template>
 
-  <template pp-if="$store.keep.auth_signed_in">
+  <template pp-if="$store.keep.auth_ready && $store.keep.auth_signed_in">
     <div class="keep-auth-gate__main" pp-transition="fade-scale">
       <slot></slot>
     </div>

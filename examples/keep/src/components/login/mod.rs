@@ -46,10 +46,10 @@ impl KeepLogin {
         let handle = pocopine::this::<Self>();
         pocopine::spawn_for_scope(handle.scope_id(), async move {
             let result = firebase.sign_in().await;
-            let user = result.clone().ok();
+            let user = result.as_ref().ok().and_then(|user| user.clone());
             handle.update(|login| login.apply_action_result(result));
             if let Some(user) = user {
-                publish_keep_auth_user(user);
+                publish_keep_auth_user(Some(user));
             }
         });
     }
@@ -68,7 +68,7 @@ impl KeepLogin {
         let handle = pocopine::this::<Self>();
         pocopine::spawn_for_scope(handle.scope_id(), async move {
             let result = firebase.sign_out().await;
-            let user = result.clone().ok();
+            let user = result.as_ref().ok().cloned();
             handle.update(|login| login.apply_action_result(result));
             if let Some(user) = user {
                 publish_keep_auth_user(user);

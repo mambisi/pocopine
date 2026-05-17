@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft (sketch) |
+| **Status** | Accepted, Phase 1 shipped |
 | **Author** | pocopine team |
 | **Created** | 2026-04-21 |
 | **Related** | [RFC 001 — Components](./rfc-001-components.md), [RFC 027 — Provide/Inject](./rfc-027-provide-inject.md) |
@@ -10,22 +10,22 @@
 ## 1. Summary
 
 Give authors a way to pull npm packages (Firebase, Stripe,
-PostHog, a WebSocket SDK, a canvas library…) into a pocopine
-component without breaking the "`.poco` is templates, `.rs` is
-logic" rule. The mechanism is a **client-module island** per
-component:
+PostHog, a WebSocket SDK, a canvas library…) into a Pocopine
+app without breaking the "`.poco` is templates, `.rs` is
+logic" rule. Phase 1 shipped a **client module adapter** model:
 
 - **`.poco`** — template, unchanged.
-- **`.rs`** — component state + Rust handlers, unchanged.
-- **`.client.js` / `.client.ts`** — optional sibling file that
-  default-exports a factory `(scope) => { … }`. Gets the npm
-  ecosystem through the Pocopine CLI-managed pipeline. Gains a
-  narrow bridge to the component lifecycle.
+- **`.rs`** — component state, handlers, stores, and app plugins.
+- **`.client.js` / `.client.ts`** — optional browser-only module
+  that imports npm packages normally and default-exports a plain
+  object of functions/subscriptions. The Pocopine CLI owns package
+  installation and esbuild bundling.
 
-Crucially the bridge is **opt-in per component**. 95% of
-components never touch it; components that do get scoped access
-to their own state plus pocopine lifecycle hooks — no
-window-global soup.
+The earlier per-component `ctx` factory/island design is deferred.
+The shipped model is deliberately smaller: SDK adapters are module
+singletons, and Rust reaches them through `ClientModule`. That is
+enough for Firebase, analytics, and other imperative SDKs without
+introducing a second reactive ownership surface.
 
 ## 2. Motivation
 
@@ -47,222 +47,133 @@ Authors today have two bad options:
    page, poke at `window.firebase` from Rust. Breaks teardown,
    typing, SSR-ability, and any serious build pipeline.
 
-The island gives a disciplined third path: a JS file that
-imports from npm normally, runs inside the component's
-lifecycle, and talks to state through one small API.
+The client module gives a disciplined third path: a JS file that
+imports from npm normally, exposes plain async functions and
+subscriptions, and lets Rust/Pocopine own UI state, teardown, route
+guards, and stores.
 
 ## 3. File layout
 
 ```
 src/
-  FirebaseAuth.poco          <!-- template, as today -->
-  FirebaseAuth.rs            // component state + Rust handlers
-  FirebaseAuth.client.js     // optional island
-  FirebaseAuth.client.ts     // also accepted; no TSX/JSX
+  Firebase.client.js         // browser SDK adapter
+  Firebase.client.ts         // also accepted; no TSX/JSX
+  firebase_auth.rs           // Rust wrapper around ClientModule
+  components/Login.poco      // normal Pocopine UI
 ```
 
-Presence of the `.client.js` / `.client.ts` is sensed by the `#[component]`
-macro via an explicit arg:
-
-```rust
-#[component(
-    template = "FirebaseAuth.poco",
-    client   = "FirebaseAuth.client.js",
-)]
-pub struct FirebaseAuth {
-    #[prop] pub project_id: String,
-    pub user: String,     // written by the JS side
-    pub error: String,
-}
-```
-
-No `client =` ⇒ no island ⇒ zero cost. With the arg, the macro
-emits registration code that binds the JS factory (looked up
-from a `window.__pp_client_modules` map) to the component's
-tag name.
+The CLI scans `src/**/*.client.js` and `src/**/*.client.ts`.
+No component macro argument is required. No `.client` files means
+zero JavaScript bundling cost. When files exist, the generated
+bundle registers their default exports by filename-derived names:
+`Firebase.client.js` becomes `firebase`, and
+`FirebaseAuth.client.ts` becomes `firebase-auth`.
 
 ## 4. Author surface (JS side)
 
-Vue-Composition-API-shaped. The factory destructures what it
-needs from a `ctx`, registers listeners, and **returns an object**
-whose keys become:
-
-- **Functions** → callable from Rust via `pocopine::js::call`.
-- **`mounted` / `unmounted`** → lifecycle hooks.
-- **Everything else** → reactive state writes on mount.
+Phase 1 uses a plain module object. Functions are callable from
+Rust via `ClientModule::call_async`; subscription functions are
+adapted with `ClientModule::subscribe`.
 
 ```js
-// FirebaseAuth.client.js
+// Firebase.client.js
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signOut as firebaseSignOut,
   onAuthStateChanged,
 } from "firebase/auth";
 
-export default ({ state, watch, refs, emit, inject }) => {
-  const app  = initializeApp({ projectId: state.project_id });
-  const auth = getAuth(app);
+const app = initializeApp({ projectId: "my-project" });
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
 
-  let unsub;
-
+async function userPayload(user) {
+  if (!user) {
+    return null;
+  }
   return {
-    mounted() {
-      unsub = onAuthStateChanged(auth, (u) => {
-        // `state` is a live proxy: writes trigger Rust effects
-        // the same way a proxy `set` trap does.
-        state.user = u ? u.displayName : "";
-      });
-    },
-
-    unmounted() {
-      unsub?.();
-    },
-
-    // Exposed async functions — callable from Rust via
-    // `pocopine::js::call("sign_in_with_popup", &[])`.
-    async sign_in_with_popup() {
-      try {
-        await signInWithPopup(auth, new GoogleAuthProvider());
-      } catch (e) {
-        state.error = e.message;
-      }
-    },
-
-    sign_out: () => auth.signOut(),
-  };
-};
-```
-
-Two-way reactivity is implicit: `state.x` reads subscribe if
-inside a `watch` observer; `state.x = v` writes trigger. No
-explicit `.get()` / `.set()` boilerplate.
-
-Composable-style helpers compose cleanly — this is where the
-Vue shape pays:
-
-```js
-// useAuth.js — author-written composable, reusable across components
-import { getAuth, onAuthStateChanged, signInWithPopup,
-         GoogleAuthProvider } from "firebase/auth";
-
-export function useAuth({ state, onUnmount }) {
-  const auth = getAuth();
-  const unsub = onAuthStateChanged(auth, (u) => {
-    state.user = u ? u.displayName : "";
-  });
-  onUnmount(unsub);
-
-  return {
-    signIn:  () => signInWithPopup(auth, new GoogleAuthProvider()),
-    signOut: () => auth.signOut(),
+    token: await user.getIdToken(),
+    uid: user.uid,
+    email: user.email,
+    name: user.displayName,
+    photoUrl: user.photoURL,
   };
 }
 
-// FirebaseAuth.client.js — just spreads the composable in.
-import { useAuth } from "./useAuth.js";
+export default {
+  async signIn() {
+    const credential = await signInWithPopup(auth, provider);
+    return userPayload(credential.user);
+  },
 
-export default (ctx) => {
-  const auth = useAuth(ctx);
-  return {
-    sign_in_with_popup: auth.signIn,
-    sign_out:           auth.signOut,
-    mounted() { /* extra per-component wiring if any */ },
-  };
+  async signOut() {
+    await firebaseSignOut(auth);
+    return null;
+  },
+
+  async initialUser() {
+    await auth.authStateReady();
+    return userPayload(auth.currentUser);
+  },
+
+  onAuthStateChanged(callback) {
+    return onAuthStateChanged(auth, async (user) => {
+      callback(await userPayload(user));
+    });
+  },
 };
 ```
 
-Spread assembly — the author's instinct of "this feels Vue-ish":
-
-```js
-// WithAnalytics.client.js
-import { usePostHog }   from "./composables/usePostHog.js";
-import { useFirestore } from "./composables/useFirestore.js";
-import { useRouteLog }  from "./composables/useRouteLog.js";
-
-export default (ctx) => ({
-  ...usePostHog(ctx,   { token: ctx.state.posthog_token }),
-  ...useFirestore(ctx, { project: ctx.state.project_id }),
-  ...useRouteLog(ctx),
-  mounted() {
-    ctx.emit("analytics:ready");
-  },
-});
-```
-
-Each `use*` returns `{ mounted, unmounted, some_rpc, ... }`;
-spreading collapses them into one setup-style return. Later
-keys win on conflict — same as Vue's `setup()` merge semantics.
-
-### `ctx` shape
-
-| Member                 | Shape                                      | Notes |
-|------------------------|--------------------------------------------|-------|
-| `ctx.state`            | `Proxy` over the scope's reactive fields   | Read = subscribe-if-inside-`watch`; write = trigger. Respects component boundary same as Rust handlers do. |
-| `ctx.watch(src, cb)`   | `(() => T, (T, T?) => void) => () => void` | Vue-style `watch`: source fn + callback. Returns unsubscribe. Also works with `(key: string, cb)` for quick field watches. |
-| `ctx.onUnmount(fn)`    | `(() => void) => void`                     | Secondary cleanup hook (composables use this; top-level islands can just return `unmounted`). Stacked LIFO. |
-| `ctx.refs(name)`       | `(string) => Element \| null`              | Resolve a `pp-ref="…"` from the template. |
-| `ctx.emit(name, d)`    | `(string, any) => void`                    | Dispatches a `CustomEvent` from the scope's root element. |
-| `ctx.el`               | `Element`                                  | The scope's root DOM element. For libraries that need a mount target. |
-| `ctx.inject(name)`     | `(string) => any`                          | RFC-027 inject by string id — keyed on the `InjectKey`'s debug name. |
-
-### Return-object keys
-
-| Key               | Meaning |
-|-------------------|---------|
-| `mounted()`       | Runs after first walk. One per returned object — but spread merging naturally composes several: wrap each composable's hook into a combined `mounted()` via an author helper, or rely on `ctx.onUnmount` / `ctx.watch` inside the composable body for setup that doesn't need the post-mount signal. |
-| `unmounted()`     | Runs before reactive teardown. Stacked LIFO with any `ctx.onUnmount(fn)` calls. |
-| any `Function`    | Exposed as a Rust-callable RPC. The key name is what Rust passes to `pocopine::js::call("name", &[])`. Async functions return a JS Promise; Rust awaits it via `wasm-bindgen-futures`. |
-| `mounted` + RPC   | Coexist. The runtime inspects the returned object once, extracts lifecycle keys, stashes the rest as the exposed map. |
-| anything else     | Warns in dev (`typeof !== "function"` + name isn't `mounted`/`unmounted`): ignored. Reserved for future expansion (`props`, `provide`, etc.). |
-
-### Why not plain `setup()` Composition style?
-
-Vue returns `{ foo: ref(0) }` from `setup()` and then renders
-them in the template. Pocopine's templates already bind to the
-Rust-owned `state.*` proxy — the island's job is the **side-
-effectful stuff** (SDK init, subscriptions, RPC handlers), not
-declaring state. Mixing Rust-state + JS-declared state would
-force a merge and introduce "which side owns this field"
-ambiguity. The chosen shape keeps state single-sourced in Rust,
-lifecycle + RPCs on the JS side — Vue Composition's *ergonomics*
-without its *ownership ambiguity*.
+The module should not mutate Pocopine stores or render UI. It returns
+plain JSON and unsubscribe functions. Rust owns the application model.
 
 ## 5. Author surface (Rust side)
 
 ```rust
 #[handlers]
 impl FirebaseAuth {
-    // Zero JS knowledge in Rust handlers. The bridge routes the
-    // call to the island's exposed function and awaits it via
-    // wasm-bindgen-futures.
     pub fn click_sign_in(&mut self) {
-        pocopine::js::call::<()>("sign_in_with_popup", &[]);
-    }
-
-    pub fn click_sign_out(&mut self) {
-        pocopine::js::call::<()>("sign_out", &[]);
+        let module = pocopine::ClientModule::required("firebase")?;
+        let user = module.call_async::<Option<FirebaseUser>>("signIn").await?;
+        // Convert plain JSON into a Pocopine Principal and store state.
     }
 }
 ```
 
 Error cases:
-- Component has no island ⇒ `js::call` returns `Err(NoIsland)`.
-- Function name not exposed ⇒ `Err(NotExposed)`.
-- Promise rejects ⇒ `Err(JsError(JsValue))`.
+- Client bundle is missing ⇒ `ClientModule::required` returns an error naming the module.
+- Function name is missing ⇒ `call_async` returns a module error.
+- Promise rejects or return value cannot deserialize ⇒ `call_async` returns a module error.
 
-For the happy path we offer an ergonomic variant:
+For reusable app code, wrap `ClientModule` in an app-owned plugin:
 
 ```rust
-pocopine::js::call::<serde_json::Value>("fetch_user_doc", &[user_id])
-    .await?;
+#[derive(Clone, Default)]
+pub struct FirebaseAuth;
+
+impl FirebaseAuth {
+    pub async fn sign_in(&self) -> Result<Option<FirebaseUser>, pocopine::ClientModuleError> {
+        pocopine::ClientModule::required("firebase")?
+            .call_async("signIn")
+            .await
+    }
+}
 ```
 
 Uses `serde-wasm-bindgen` for the return-type round-trip, same
 as `#[server]`.
 
-## 6. Lifecycle + state-sync contract
+## 6. Deferred scoped-island design
+
+The original sketch below describes a richer per-component factory
+with `ctx.state`, lifecycle hooks, refs, and `ctx.watch`. That is not
+part of the Phase 1 shipped API. Keep it here as design background for
+a possible later RFC; do not treat it as current documentation.
+
+## 7. Lifecycle + state-sync contract
 
 The island sits inside the existing walker mount pass. Its
 factory runs synchronously between Rust `on_setup` and the
@@ -408,7 +319,7 @@ const.
 | Factory calls `ctx.inject("X")` for a key no ancestor provided | Returns `undefined`. Matches Rust `inject` behaviour. |
 | Two islands in the same app register the same RPC name on different components | Fine — names are per-scope, not global. Two `sign_out`s on different components don't collide. |
 
-## 7. Runtime mechanics
+## 8. Runtime mechanics
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -535,7 +446,7 @@ struct JsIsland {
 
 Cleared by `walker::release_subtree` alongside refs/slots/effects.
 
-## 8. CLI integration
+## 9. CLI integration
 
 ### 8.1 Package management
 
@@ -646,7 +557,7 @@ client dependency install followed by a client rebundle in dev mode.
 Rust/template changes still rebuild wasm; client-module changes do not
 force a wasm rebuild.
 
-## 9. Error / edge cases
+## 10. Error / edge cases
 
 | Scenario | Behaviour |
 |---|---|
@@ -661,7 +572,7 @@ force a wasm rebuild.
 | SSR hydration | Out of scope — SSR doesn't run the island; first client mount initialises it. |
 | Build without JS tooling installed | CLI emits a tool-specific error with the `pocopine js install` path. The normal workflow stays inside Pocopine commands. |
 
-## 10. Implementation plan
+## 11. Implementation plan
 
 Three PRs, independently mergeable:
 
@@ -689,7 +600,7 @@ Three PRs, independently mergeable:
   pub fn sign_in_with_popup() { /* macro fills body */ }
   ```
 
-## 11. Out of scope
+## 12. Out of scope
 
 - **TSX/JSX and UI-framework islands.** `.client.ts` is accepted
   as typed JavaScript input to the Pocopine-managed bundler.
@@ -708,7 +619,7 @@ Three PRs, independently mergeable:
   Authors who want a singleton make a shared `firebase.js` and
   import from both islands.
 
-## 12. Open questions
+## 13. Open questions
 
 1. **Naming.** `.client.js` vs `.island.js` vs `.js` (bare).
    Leaning `.client.js` — matches SvelteKit / Nuxt / Remix
@@ -737,7 +648,7 @@ Three PRs, independently mergeable:
    `Handle<T>`. Typed-in-Rust, stringly-typed-in-JS — the
    trade is inherent, document it clearly.
 
-## 13. Alternatives considered
+## 14. Alternatives considered
 
 - **Svelte-style `<script>` in `.poco`.** Rejected: breaks the
   templates-only invariant; forces a `.poco` compiler; blurs

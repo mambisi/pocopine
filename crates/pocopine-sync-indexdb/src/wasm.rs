@@ -21,6 +21,11 @@ const STREAMS_STORE: &str = "streams";
 const IDENTITY_KEY: &str = "identity";
 
 thread_local! {
+    // Conservative correctness gate: IndexedDB transaction lifetimes
+    // are easy to get wrong across browsers, so the first shipped
+    // backend serializes all local-store work. A future optimization
+    // can narrow this to per-database or per-store gates once the
+    // multi-stream paths have browser coverage.
     static IDB_GATE: Rc<AsyncMutex<()>> = Rc::new(AsyncMutex::new(()));
 }
 

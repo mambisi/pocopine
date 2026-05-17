@@ -3313,6 +3313,7 @@ dependencies = [
  "pocopine-core",
  "serde",
  "serde_json",
+ "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

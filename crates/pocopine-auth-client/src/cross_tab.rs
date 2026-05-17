@@ -17,7 +17,10 @@
 //!    - Hydrates the local in-memory token from configured
 //!      [`crate::TokenStorage`] (the persistent tokens are how peer
 //!      tabs see *what* the new credential is).
-//!    - Bumps the local [`AuthSession`]'s epoch via
+//!    - If the persistent token is gone, clears the local
+//!      [`AuthSession`] principal to anonymous so peer tabs stop
+//!      rendering authenticated shells after sign-out.
+//!    - Otherwise bumps the local [`AuthSession`]'s epoch via
 //!      [`AuthSession::bump_epoch`] so the bearer middleware's fence
 //!      drops any in-flight responses captured under the old identity.
 //!    - Apps observing the session can react (call `/me`, refresh
@@ -65,12 +68,11 @@ thread_local! {
     /// Re-entrancy guard for inbound message handling.
     ///
     /// Currently dormant — the framework's listener calls
-    /// [`crate::hydrate_from_storage`] (which writes only to the
-    /// token slot and storage, never the session) and
-    /// [`crate::session::AuthSession::bump_epoch`] (which is
-    /// deliberately the broadcast-free epoch advance). Neither
-    /// triggers `broadcast_session_changed`, so today the flag never
-    /// fires.
+    /// [`crate::hydrate_from_storage`] and
+    /// [`crate::session::AuthSession::apply_cross_tab_token_state`].
+    /// The sign-out branch clears the principal through
+    /// `set_principal`, which normally broadcasts, so this flag is
+    /// load-bearing for peer sign-out.
     ///
     /// Kept as defensive scaffolding so app code that wraps inbound
     /// handling (e.g., calling `session.set_principal` from a custom
@@ -98,7 +100,7 @@ pub(crate) fn install(session: AuthSession) {
     let listener = Closure::<dyn FnMut(MessageEvent)>::new(move |_evt: MessageEvent| {
         SUPPRESS_BROADCAST.with(|c| c.set(true));
         crate::hydrate_from_storage();
-        session_for_listener.bump_epoch();
+        session_for_listener.apply_cross_tab_token_state(crate::active_token().is_some());
         SUPPRESS_BROADCAST.with(|c| c.set(false));
     });
     channel.set_onmessage(Some(listener.as_ref().unchecked_ref()));

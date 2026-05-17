@@ -189,6 +189,22 @@ impl AuthSession {
         inner.epoch = inner.epoch.saturating_add(1);
     }
 
+    /// Apply the token-state signal received from a peer tab.
+    ///
+    /// A missing token is definitive sign-out, so clear the local
+    /// principal and wake guards immediately. A present token means
+    /// the peer signed in or refreshed; the local tab still needs its
+    /// own provider/server identity check, so only bump the epoch to
+    /// fence stale in-flight responses.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn apply_cross_tab_token_state(&self, token_present: bool) {
+        if token_present {
+            self.bump_epoch();
+        } else {
+            self.set_principal(Principal::anonymous());
+        }
+    }
+
     /// Sign in: register `token` with the bearer middleware **and**
     /// publish `principal` on this session.
     pub fn sign_in(&self, token: impl Into<String>, principal: Principal) {
@@ -371,6 +387,40 @@ mod tests {
         let before = session.epoch();
         let principal_before = session.principal();
         session.bump_epoch();
+        assert_eq!(session.epoch(), before + 1);
+        assert_eq!(session.principal(), principal_before);
+    }
+
+    #[test]
+    fn cross_tab_missing_token_clears_principal() {
+        crate::storage::__reset_storage_for_test();
+        let storage = Rc::new(crate::storage::TestStorage::default());
+        crate::storage::install_session_snapshot_storage(storage.clone());
+
+        let session = AuthSession::new();
+        session.set_principal(Principal::from_user(AuthUser::new("u1")));
+        assert!(session.is_authenticated());
+        assert!(storage.snapshot.borrow().is_some());
+
+        session.apply_cross_tab_token_state(false);
+
+        assert!(!session.is_authenticated());
+        assert!(session.is_ready());
+        assert!(!session.is_restoring());
+        assert_eq!(session.epoch(), 2);
+        assert!(storage.snapshot.borrow().is_none());
+        crate::storage::__reset_storage_for_test();
+    }
+
+    #[test]
+    fn cross_tab_present_token_only_bumps_epoch() {
+        let session = AuthSession::new();
+        session.set_principal(Principal::from_user(AuthUser::new("u1")));
+        let before = session.epoch();
+        let principal_before = session.principal();
+
+        session.apply_cross_tab_token_state(true);
+
         assert_eq!(session.epoch(), before + 1);
         assert_eq!(session.principal(), principal_before);
     }

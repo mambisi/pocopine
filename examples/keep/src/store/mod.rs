@@ -137,14 +137,12 @@ impl Default for KeepStore {
 
 #[cfg(target_arch = "wasm32")]
 fn load_cached_auth_snapshot() -> Option<CachedAuth> {
-    use pocopine_auth_client::SessionSnapshotStorage;
-
-    let storage = pocopine_auth_client::storage::LocalStorage::new(
-        crate::firebase_auth::KEEP_AUTH_SNAPSHOT_KEY,
-    );
-    let snapshot = storage.load_snapshot()?;
+    let session = pocopine::Plugins.get::<pocopine_auth_client::AuthSession>()?;
+    if !session.is_authenticated() {
+        return None;
+    }
     let (display_name, email, photo_url) =
-        crate::firebase_auth::keep_auth_fields_from_principal(&snapshot.principal)?;
+        crate::firebase_auth::keep_auth_fields_from_principal(&session.principal())?;
     Some(CachedAuth {
         display_name,
         email,
