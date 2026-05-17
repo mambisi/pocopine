@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use pocopine::prelude::*;
 use pocopine::{current_scope_id, refs, watch_scope_field_scoped};
@@ -20,11 +21,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{CustomEvent, Element, Event, Range};
 
 use crate::commands::{self, BoxedCommand};
-use crate::extension::registry;
 use crate::history::{self as history};
-use crate::model::Attrs;
-use crate::render::node_views;
-use crate::schema_basic;
+use crate::model::{Attrs, Fragment, Node};
+use crate::runtime::{self, EditorRuntime};
 use crate::state::{EditorState, EditorStateConfig, Plugin, Transaction};
 use crate::transform::{AttrStep, Step};
 
@@ -111,10 +110,10 @@ pub enum CommandRequest {
 }
 
 impl CommandRequest {
-    fn into_command(self) -> Option<BoxedCommand> {
+    fn into_command(self, runtime: &EditorRuntime) -> Option<BoxedCommand> {
         Some(match self {
             CommandRequest::ToggleMark { mark } => {
-                let mark = schema_basic::schema().mark(&mark, Attrs::new()).ok()?;
+                let mark = runtime.schema().mark(&mark, Attrs::new()).ok()?;
                 commands::toggle_mark(mark)
             }
             CommandRequest::SetBlockType { node_type, attrs } => {
@@ -144,21 +143,42 @@ impl CommandRequest {
             }
             CommandRequest::ReplaceState { .. } => return None,
             CommandRequest::Custom { name, args } => {
-                let factory = crate::extension::registry::named_command(&name)?;
+                let factory = runtime.named_command(&name)?;
                 factory(args)?
             }
         })
     }
 }
 
-/// Plugin set every state-materialization path uses. Folding
-/// `schema()` here guarantees `install_base_extensions` has populated
-/// the registry before we read it, so extension-contributed plugins
-/// (including the built-in `HistoryExtension`) reach
-/// `EditorState::create` for every editor instance.
-fn default_plugins() -> Vec<Plugin> {
-    let _ = schema_basic::schema();
-    registry::merged_plugins()
+/// Plugin set every state-materialization path uses, scoped to the
+/// runtime this surface mounts against. Each surface gets its own
+/// plugin set so two editors with different runtimes don't share
+/// history (or any other) plugin state.
+fn runtime_plugins(runtime: &EditorRuntime) -> Vec<Plugin> {
+    runtime.plugins().to_vec()
+}
+
+/// Build an empty `doc(paragraph(empty))` valid against this runtime's
+/// schema. Used as the reconciler's sentinel `old_doc` at first mount
+/// and as the default seed when no `initial_doc` is bound.
+fn empty_doc_for_runtime(runtime: &EditorRuntime) -> Option<Node> {
+    let schema = runtime.schema();
+    let para = schema
+        .node("paragraph", Attrs::new(), Fragment::empty())
+        .ok()?;
+    schema.node("doc", Attrs::new(), Fragment::from(para)).ok()
+}
+
+/// JSON for the empty seed state of `runtime`, suitable for stashing
+/// in `PineRichTextRoot::doc` when no `initial_doc` is bound.
+fn empty_seed_state_json(runtime: &EditorRuntime) -> Option<Value> {
+    let document = empty_doc_for_runtime(runtime)?;
+    let state = EditorState::create(
+        EditorStateConfig::new(runtime.schema().clone(), document)
+            .plugins(runtime_plugins(runtime)),
+    )
+    .ok()?;
+    state.to_json().ok()
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -175,15 +195,40 @@ pub struct PineRichTextRoot {
     /// the parent the source of truth.
     #[prop]
     pub initial_doc: Value,
+    /// Name of the [`crate::runtime::EditorRuntime`] this surface
+    /// resolves against. `<pine-rich-text-root runtime="comment">`
+    /// looks up the runtime registered with
+    /// `pine_richtext::runtime::register("comment", …)`. Empty or
+    /// absent falls back to [`crate::runtime::registry::default`] —
+    /// the kitchen-sink default configuration.
+    #[prop]
+    pub runtime: String,
     /// Authoritative editor state JSON. Owned by this component.
     /// Toolbars / external dispatchers should NOT bind to this field
     /// directly — fire a `pine:richtext:command` CustomEvent instead.
     pub doc: Value,
 }
 
+impl PineRichTextRoot {
+    /// Resolve the [`EditorRuntime`] this surface mounts against. The
+    /// `runtime` prop names a registered runtime; an empty string
+    /// (the `Default::default()` of the prop) falls back to the
+    /// kitchen-sink default runtime — same configuration today's
+    /// global `schema_basic::schema()` produces.
+    fn resolve_runtime(&self) -> Arc<EditorRuntime> {
+        let name = self.runtime.as_str();
+        runtime::registry::resolve(if name.is_empty() { None } else { Some(name) })
+    }
+}
+
 #[handlers]
 impl PineRichTextRoot {
     fn on_setup(&mut self) {
+        // Resolve the runtime first — every other seed/serialize path
+        // below needs it to materialize an EditorState against the
+        // correct schema.
+        let runtime = self.resolve_runtime();
+
         // Seed `doc` from either a static `initial-doc` attribute or
         // fall back to a single empty paragraph. The dynamic
         // `pp-bind:initial-doc` path is picked up later by an effect
@@ -192,7 +237,7 @@ impl PineRichTextRoot {
         if self.doc.is_null() {
             if !self.initial_doc.is_null() {
                 self.doc = self.initial_doc.clone();
-            } else if let Some(seed) = Self::default_state_json() {
+            } else if let Some(seed) = empty_seed_state_json(&runtime) {
                 self.doc = seed;
             }
         }
@@ -206,6 +251,7 @@ impl PineRichTextRoot {
             return;
         };
         let handle = this::<Self>();
+        let runtime = self.resolve_runtime();
 
         // Pick up the dynamic `pp-bind:initial-doc` seed if it landed
         // after `on_setup` ran (the common case — pp-bind effects fire
@@ -216,14 +262,16 @@ impl PineRichTextRoot {
         // empty, so subsequent parent re-binds don't clobber edits.
         {
             let handle_for_seed = handle.clone();
+            let runtime_for_seed = runtime.clone();
             watch_scope_field_scoped::<Value, _>(scope, "initial_doc", move |seed, _| {
                 if seed.is_null() {
                     return;
                 }
                 let seed = seed.clone();
-                handle_for_seed.update(|root: &mut PineRichTextRoot| {
+                let runtime_for_seed = runtime_for_seed.clone();
+                handle_for_seed.update(move |root: &mut PineRichTextRoot| {
                     if root.doc.is_null()
-                        || root.doc == empty_doc_seed_state_json().unwrap_or_default()
+                        || root.doc == empty_seed_state_json(&runtime_for_seed).unwrap_or_default()
                     {
                         root.doc = seed;
                     }
@@ -234,20 +282,20 @@ impl PineRichTextRoot {
         // Initial paint + cursor sync. Use a sentinel empty doc as
         // `old_doc` so the reconciler's full-render branch
         // fires once at mount time.
-        let empty_doc = empty_doc_node();
-        paint_initial(&surface_el, &empty_doc, &self.doc);
-        mount_registered_node_views(&surface_el);
-        sync_cursor_from_doc(&surface_el, &self.doc);
+        let empty_doc = empty_doc_for_runtime(&runtime).expect("runtime schema supports empty doc");
+        paint_initial(&surface_el, &empty_doc, &self.doc, &runtime);
+        mount_registered_node_views(&surface_el, &runtime);
+        sync_cursor_from_doc(&surface_el, &self.doc, &runtime);
         log_debug_json(self.debug_json, "mount", json!({ "state": self.doc }));
 
         // Track the last-rendered doc so the diff path knows what to
         // compare against on each change.
         let last_doc = Rc::new(RefCell::new(
-            materialize_doc(&self.doc).unwrap_or(empty_doc),
+            materialize_doc(&self.doc, &runtime).unwrap_or(empty_doc),
         ));
 
         // Install keymap + beforeinput + selectionchange listeners.
-        let keymap = Rc::new(default_keymap());
+        let keymap = Rc::new(default_keymap(&runtime));
         let debug_json = self.debug_json;
 
         // `state_provider` resolves the current EditorState whenever an
@@ -258,13 +306,18 @@ impl PineRichTextRoot {
         // listener required (which would break drag-select).
         let handle_for_provider = handle.clone();
         let surface_for_provider = surface_el.clone();
+        let runtime_for_provider = runtime.clone();
         let state_provider: Rc<dyn Fn() -> Option<EditorState>> = Rc::new(move || {
             let state = handle_for_provider.with(|root: &PineRichTextRoot| {
                 if root.doc.is_null() {
                     return None;
                 }
-                EditorState::from_json(schema_basic::schema(), default_plugins(), root.doc.clone())
-                    .ok()
+                EditorState::from_json(
+                    runtime_for_provider.schema().clone(),
+                    runtime_plugins(&runtime_for_provider),
+                    root.doc.clone(),
+                )
+                .ok()
             })?;
             // Try to inject the live DOM selection. If the cursor isn't
             // inside the surface (e.g., the user clicked outside), keep
@@ -290,11 +343,13 @@ impl PineRichTextRoot {
         // apply the edit with a stale model selection and pollute
         // history bookmarks.
         let handle_for_dispatch = handle.clone();
+        let runtime_for_dispatch = runtime.clone();
         let dispatch = move |state: EditorState, tr: Transaction| {
+            let runtime_for_inner = runtime_for_dispatch.clone();
             handle_for_dispatch.update(move |root: &mut PineRichTextRoot| {
                 let Ok(current) = EditorState::from_json(
-                    schema_basic::schema(),
-                    default_plugins(),
+                    runtime_for_inner.schema().clone(),
+                    runtime_plugins(&runtime_for_inner),
                     root.doc.clone(),
                 ) else {
                     return;
@@ -369,6 +424,7 @@ impl PineRichTextRoot {
             let state_provider = state_provider.clone();
             let dispatch = dispatch.clone();
             let handle_for_replace = handle.clone();
+            let runtime_for_listener = runtime.clone();
             let cb = Closure::wrap(Box::new(move |event: Event| {
                 let Ok(custom) = event.dyn_into::<CustomEvent>() else {
                     return;
@@ -384,7 +440,7 @@ impl PineRichTextRoot {
                     pocopine_core::flush_sync();
                     return;
                 }
-                let cmd: BoxedCommand = match request.into_command() {
+                let cmd: BoxedCommand = match request.into_command(&runtime_for_listener) {
                     Some(cmd) => cmd,
                     None => return,
                 };
@@ -414,13 +470,19 @@ impl PineRichTextRoot {
         // selection-only updates would stomp over an in-progress drag.
         let surface_for_watch = surface_el;
         let last_doc_for_watch = last_doc;
+        let runtime_for_watch = runtime;
         watch_scope_field_scoped::<Value, _>(scope, "doc", move |new_value, _| {
-            let Some(new_doc) = materialize_doc(new_value) else {
+            let Some(new_doc) = materialize_doc(new_value, &runtime_for_watch) else {
                 return;
             };
             let reconcile_outcome = {
                 let old = last_doc_for_watch.borrow();
-                reconcile_surface_with_outcome(&surface_for_watch, &old, &new_doc)
+                reconcile_surface_with_outcome(
+                    &runtime_for_watch,
+                    &surface_for_watch,
+                    &old,
+                    &new_doc,
+                )
             };
             *last_doc_for_watch.borrow_mut() = new_doc;
             log_debug_json(
@@ -433,46 +495,54 @@ impl PineRichTextRoot {
                 }),
             );
             if reconcile_outcome.should_mount_node_views() {
-                mount_registered_node_views(&surface_for_watch);
+                mount_registered_node_views(&surface_for_watch, &runtime_for_watch);
             }
             if reconcile_outcome.should_sync_cursor() {
-                sync_cursor_from_doc(&surface_for_watch, new_value);
+                sync_cursor_from_doc(&surface_for_watch, new_value, &runtime_for_watch);
             }
         });
     }
+}
 
-    fn default_state_json() -> Option<Value> {
-        empty_doc_seed_state_json()
+/// Initial mount paint. Always replaces the surface's `innerHTML` with
+/// the rendered seed doc so any template-literal content (e.g. the
+/// `<!-- TODO -->` placeholder in `PineRichTextRoot.poco`) is cleared
+/// even when the seed doc is empty.
+///
+/// We can't go through the reconciler here because the reconciler's
+/// diff returns `Unchanged` when the seed doc is structurally
+/// identical to the sentinel `old_doc` (both empty paragraphs), and
+/// it would leave the template literal in place. Subsequent
+/// updates do go through the reconciler — by that point the surface
+/// has real model-owned DOM to diff against.
+fn paint_initial(surface: &Element, _old_doc: &Node, doc_json: &Value, runtime: &EditorRuntime) {
+    let Some(new_doc) = materialize_doc(doc_json, runtime) else {
+        return;
+    };
+    let html = crate::render::render_doc_to_html(runtime, &new_doc);
+    if let Ok(html_el) = surface.clone().dyn_into::<web_sys::HtmlElement>() {
+        html_el.set_inner_html(&html);
     }
 }
 
-fn empty_doc_seed_state_json() -> Option<Value> {
-    let schema = schema_basic::schema();
-    let para = schema_basic::paragraph(Vec::new()).ok()?;
-    let document = schema_basic::doc(vec![para]).ok()?;
-    let state =
-        EditorState::create(EditorStateConfig::new(schema, document).plugins(default_plugins()))
-            .ok()?;
-    state.to_json().ok()
+fn materialize_doc(doc_json: &Value, runtime: &EditorRuntime) -> Option<Node> {
+    EditorState::from_json(
+        runtime.schema().clone(),
+        runtime_plugins(runtime),
+        doc_json.clone(),
+    )
+    .ok()
+    .map(|s| s.doc().clone())
 }
 
-/// Initial mount paint. Reconciles from an empty doc to the seed doc so
-/// the full-render path lays down the surface markup once.
-fn paint_initial(surface: &Element, old_doc: &crate::model::Node, doc_json: &Value) {
-    let Some(new_doc) = materialize_doc(doc_json) else {
-        return;
-    };
-    reconcile_surface_with_outcome(surface, old_doc, &new_doc);
-}
-
-fn materialize_doc(doc_json: &Value) -> Option<crate::model::Node> {
-    EditorState::from_json(schema_basic::schema(), default_plugins(), doc_json.clone())
-        .ok()
-        .map(|s| s.doc().clone())
-}
-
-fn mount_registered_node_views(surface: &Element) {
-    for tag in node_views::registered_tags() {
+fn mount_registered_node_views(surface: &Element, runtime: &EditorRuntime) {
+    // C3: rendering is now runtime-scoped (`crate::render::Renderer` +
+    // `crate::view::reconciler::Reconciler` both read
+    // `runtime.lookup_node_view`), so the mount loop walks the runtime's
+    // tag map. Two surfaces with different runtimes can register
+    // different custom-element tags for the same node-type without
+    // colliding.
+    for tag in runtime.registered_tags() {
         let Ok(matches) = surface.query_selector_all(&tag) else {
             continue;
         };
@@ -489,16 +559,15 @@ fn mount_registered_node_views(surface: &Element) {
     }
 }
 
-fn empty_doc_node() -> crate::model::Node {
-    schema_basic::doc(vec![schema_basic::paragraph(Vec::new()).unwrap()]).unwrap()
-}
-
 /// Push the model selection into `window.getSelection()` so the visible
 /// caret matches what the model thinks the cursor is.
-fn sync_cursor_from_doc(surface: &Element, doc_json: &Value) {
-    let Some(state) =
-        EditorState::from_json(schema_basic::schema(), default_plugins(), doc_json.clone()).ok()
-    else {
+fn sync_cursor_from_doc(surface: &Element, doc_json: &Value, runtime: &EditorRuntime) {
+    let Some(state) = EditorState::from_json(
+        runtime.schema().clone(),
+        runtime_plugins(runtime),
+        doc_json.clone(),
+    )
+    .ok() else {
         return;
     };
     let (anchor, head) = match state.selection() {

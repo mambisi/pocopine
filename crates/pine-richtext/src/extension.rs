@@ -33,6 +33,7 @@ pub mod registry;
 /// Convenience re-export so apps can write
 /// `pine_richtext::extension::register(...)` without naming the
 /// registry submodule. Identical to [`registry::register`].
+#[allow(deprecated)]
 pub use registry::register;
 
 #[cfg(test)]

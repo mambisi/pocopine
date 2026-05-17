@@ -167,10 +167,15 @@ fn block_range_for_selection(state: &EditorState) -> Option<NodeRange> {
 const BUILTIN_LIST_ITEM_FALLBACK: &[&str] = &["list_item", "task_item"];
 
 fn is_list_item_type(name: &str) -> bool {
-    if crate::extension::registry::is_list_item_type(name) {
+    // Check the built-in fallback FIRST so the common cases
+    // (`list_item`, `task_item`) don't force a `runtime::default()`
+    // init (which would seal the legacy registry). Extension-
+    // contributed list-item types (`callout_item`, etc.) fall
+    // through to the runtime lookup.
+    if BUILTIN_LIST_ITEM_FALLBACK.contains(&name) {
         return true;
     }
-    BUILTIN_LIST_ITEM_FALLBACK.contains(&name)
+    crate::extension::registry::is_list_item_type(name)
 }
 
 fn is_list_node(node: &Node) -> bool {

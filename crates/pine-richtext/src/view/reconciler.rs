@@ -9,9 +9,9 @@
 
 use crate::model::{Attrs, Node as RichNode};
 use crate::render::{
-    attr_value_to_string, node_views, render_children_to_html, render_doc_to_html,
-    render_one_node_to_html,
+    attr_value_to_string, render_children_to_html, render_doc_to_html, render_one_node_to_html,
 };
+use crate::runtime::EditorRuntime;
 
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement, Node as DomNode};
@@ -90,150 +90,202 @@ impl ReconcileStats {
     }
 }
 
-/// Update `surface` and return the reconcile class used. This is useful
-/// for debug logging without making callers infer full resets from
-/// boolean DOM-change flags.
+/// Reconcile a surface element against a model doc, scoped to a runtime.
+/// Returns the outcome class so callers can decide whether to also sync
+/// the visible selection / mount registered node views.
 pub fn reconcile_surface_with_outcome(
+    runtime: &EditorRuntime,
     surface: &Element,
     old_doc: &RichNode,
     new_doc: &RichNode,
 ) -> ReconcileOutcome {
-    if old_doc == new_doc {
-        return ReconcileOutcome::Unchanged;
-    }
-
-    let mut stats = ReconcileStats::default();
-    let result = reconcile_children(surface, old_doc, new_doc, 0, &mut stats);
-    if result.is_ok() {
-        stats.outcome()
-    } else {
-        full_render(surface, new_doc)
-    }
+    Reconciler::new(runtime).reconcile_surface(surface, old_doc, new_doc)
 }
 
-fn full_render(surface: &Element, new_doc: &RichNode) -> ReconcileOutcome {
-    let html = render_doc_to_html(new_doc);
-    if set_inner_html(surface, &html) {
-        ReconcileOutcome::Full
-    } else {
-        ReconcileOutcome::Unchanged
-    }
+/// Stateless reconciler scoped to a single [`EditorRuntime`]. The
+/// runtime supplies the per-instance node-view registry used by every
+/// internal `node_view_*` resolution — same scope rules as
+/// [`crate::render::Renderer`].
+pub struct Reconciler<'a> {
+    runtime: &'a EditorRuntime,
 }
 
-fn reconcile_node(
-    dom: &Element,
-    old_node: &RichNode,
-    old_pos: usize,
-    new_node: &RichNode,
-    new_pos: usize,
-    stats: &mut ReconcileStats,
-) -> Result<(), ()> {
-    if old_node == new_node && old_pos == new_pos {
-        return Ok(());
+impl<'a> Reconciler<'a> {
+    pub fn new(runtime: &'a EditorRuntime) -> Self {
+        Self { runtime }
     }
 
-    if !dom_matches_node(dom, old_node) || !wrapper_compatible(old_node, new_node) {
-        replace_element(dom, new_node, new_pos)?;
-        stats.record_structural();
-        return Ok(());
-    }
-
-    update_data_pos(dom, new_pos)?;
-    if attrs_patchable(new_node) && old_node.attrs() != new_node.attrs() {
-        patch_reflected_attrs(dom, old_node.attrs(), new_node.attrs())?;
-        stats.record_attrs(new_pos);
-    }
-
-    if old_node == new_node {
-        refresh_descendant_positions(dom, new_node, new_pos)?;
-        return Ok(());
-    }
-
-    if renders_inline_children(new_node) {
-        let html = render_children_to_html(new_node, new_pos + 1);
-        set_inner_html(dom, &html).then_some(()).ok_or(())?;
-        stats.record_structural();
-        return Ok(());
-    }
-
-    if new_node.type_name() == "code_block" {
-        replace_element(dom, new_node, new_pos)?;
-        stats.record_structural();
-        return Ok(());
-    }
-
-    let content_root = content_root_for_node(dom, new_node)?;
-    reconcile_children(&content_root, old_node, new_node, new_pos + 1, stats)
-}
-
-fn reconcile_children(
-    content_root: &Element,
-    old_parent: &RichNode,
-    new_parent: &RichNode,
-    content_start: usize,
-    stats: &mut ReconcileStats,
-) -> Result<(), ()> {
-    if old_parent.content() == new_parent.content() {
-        return Ok(());
-    }
-
-    if old_parent.child_count() == 0 || new_parent.child_count() == 0 {
-        let html = render_children_to_html(new_parent, content_start);
-        set_inner_html(content_root, &html)
-            .then_some(())
-            .ok_or(())?;
-        stats.record_structural();
-        return Ok(());
-    }
-
-    let dom_children = direct_model_children(content_root);
-    if dom_children.len() != old_parent.child_count() {
-        return Err(());
-    }
-
-    let old_len = old_parent.child_count();
-    let new_len = new_parent.child_count();
-    let mut old_positions = child_positions(old_parent, content_start);
-    let mut new_positions = child_positions(new_parent, content_start);
-
-    let mut prefix = 0;
-    while prefix < old_len && prefix < new_len {
-        let old_child = old_parent.child(prefix).ok_or(())?;
-        let new_child = new_parent.child(prefix).ok_or(())?;
-        if old_child != new_child {
-            break;
+    pub fn reconcile_surface(
+        &self,
+        surface: &Element,
+        old_doc: &RichNode,
+        new_doc: &RichNode,
+    ) -> ReconcileOutcome {
+        if old_doc == new_doc {
+            return ReconcileOutcome::Unchanged;
         }
-        reconcile_node(
-            &dom_children[prefix],
-            old_child,
-            old_positions[prefix],
-            new_child,
-            new_positions[prefix],
-            stats,
-        )?;
-        prefix += 1;
-    }
 
-    let mut suffix = 0;
-    while suffix < old_len.saturating_sub(prefix) && suffix < new_len.saturating_sub(prefix) {
-        let old_index = old_len - suffix - 1;
-        let new_index = new_len - suffix - 1;
-        let old_child = old_parent.child(old_index).ok_or(())?;
-        let new_child = new_parent.child(new_index).ok_or(())?;
-        if old_child != new_child {
-            break;
+        let mut stats = ReconcileStats::default();
+        let result = self.reconcile_children(surface, old_doc, new_doc, 0, &mut stats);
+        if result.is_ok() {
+            stats.outcome()
+        } else {
+            self.full_render(surface, new_doc)
         }
-        suffix += 1;
     }
 
-    let old_mid_end = old_len - suffix;
-    let new_mid_end = new_len - suffix;
+    fn full_render(&self, surface: &Element, new_doc: &RichNode) -> ReconcileOutcome {
+        let html = render_doc_to_html(self.runtime, new_doc);
+        if set_inner_html(surface, &html) {
+            ReconcileOutcome::Full
+        } else {
+            ReconcileOutcome::Unchanged
+        }
+    }
 
-    if old_mid_end - prefix == new_mid_end - prefix {
-        for offset in 0..(old_mid_end - prefix) {
-            let old_index = prefix + offset;
-            let new_index = prefix + offset;
-            reconcile_node(
+    fn reconcile_node(
+        &self,
+        dom: &Element,
+        old_node: &RichNode,
+        old_pos: usize,
+        new_node: &RichNode,
+        new_pos: usize,
+        stats: &mut ReconcileStats,
+    ) -> Result<(), ()> {
+        if old_node == new_node && old_pos == new_pos {
+            return Ok(());
+        }
+
+        if !self.dom_matches_node(dom, old_node) || !self.wrapper_compatible(old_node, new_node) {
+            self.replace_element(dom, new_node, new_pos)?;
+            stats.record_structural();
+            return Ok(());
+        }
+
+        update_data_pos(dom, new_pos)?;
+        if self.attrs_patchable(new_node) && old_node.attrs() != new_node.attrs() {
+            patch_reflected_attrs(dom, old_node.attrs(), new_node.attrs())?;
+            stats.record_attrs(new_pos);
+        }
+
+        if old_node == new_node {
+            self.refresh_descendant_positions(dom, new_node, new_pos)?;
+            return Ok(());
+        }
+
+        if renders_inline_children(new_node) {
+            let html = render_children_to_html(self.runtime, new_node, new_pos + 1);
+            set_inner_html(dom, &html).then_some(()).ok_or(())?;
+            stats.record_structural();
+            return Ok(());
+        }
+
+        if new_node.type_name() == "code_block" {
+            self.replace_element(dom, new_node, new_pos)?;
+            stats.record_structural();
+            return Ok(());
+        }
+
+        let content_root = self.content_root_for_node(dom, new_node)?;
+        self.reconcile_children(&content_root, old_node, new_node, new_pos + 1, stats)
+    }
+
+    fn reconcile_children(
+        &self,
+        content_root: &Element,
+        old_parent: &RichNode,
+        new_parent: &RichNode,
+        content_start: usize,
+        stats: &mut ReconcileStats,
+    ) -> Result<(), ()> {
+        if old_parent.content() == new_parent.content() {
+            return Ok(());
+        }
+
+        if old_parent.child_count() == 0 || new_parent.child_count() == 0 {
+            let html = render_children_to_html(self.runtime, new_parent, content_start);
+            set_inner_html(content_root, &html)
+                .then_some(())
+                .ok_or(())?;
+            stats.record_structural();
+            return Ok(());
+        }
+
+        let dom_children = direct_model_children(content_root);
+        if dom_children.len() != old_parent.child_count() {
+            return Err(());
+        }
+
+        let old_len = old_parent.child_count();
+        let new_len = new_parent.child_count();
+        let mut old_positions = child_positions(old_parent, content_start);
+        let mut new_positions = child_positions(new_parent, content_start);
+
+        let mut prefix = 0;
+        while prefix < old_len && prefix < new_len {
+            let old_child = old_parent.child(prefix).ok_or(())?;
+            let new_child = new_parent.child(prefix).ok_or(())?;
+            if old_child != new_child {
+                break;
+            }
+            self.reconcile_node(
+                &dom_children[prefix],
+                old_child,
+                old_positions[prefix],
+                new_child,
+                new_positions[prefix],
+                stats,
+            )?;
+            prefix += 1;
+        }
+
+        let mut suffix = 0;
+        while suffix < old_len.saturating_sub(prefix) && suffix < new_len.saturating_sub(prefix) {
+            let old_index = old_len - suffix - 1;
+            let new_index = new_len - suffix - 1;
+            let old_child = old_parent.child(old_index).ok_or(())?;
+            let new_child = new_parent.child(new_index).ok_or(())?;
+            if old_child != new_child {
+                break;
+            }
+            suffix += 1;
+        }
+
+        let old_mid_end = old_len - suffix;
+        let new_mid_end = new_len - suffix;
+
+        if old_mid_end - prefix == new_mid_end - prefix {
+            for offset in 0..(old_mid_end - prefix) {
+                let old_index = prefix + offset;
+                let new_index = prefix + offset;
+                self.reconcile_node(
+                    &dom_children[old_index],
+                    old_parent.child(old_index).ok_or(())?,
+                    old_positions[old_index],
+                    new_parent.child(new_index).ok_or(())?,
+                    new_positions[new_index],
+                    stats,
+                )?;
+            }
+        } else {
+            self.replace_child_range(
+                content_root,
+                new_parent,
+                &dom_children,
+                &new_positions,
+                prefix,
+                old_mid_end,
+                new_mid_end,
+            )?;
+            stats.record_structural();
+        }
+
+        old_positions = child_positions(old_parent, content_start);
+        new_positions = child_positions(new_parent, content_start);
+        for offset in 0..suffix {
+            let old_index = old_len - suffix + offset;
+            let new_index = new_len - suffix + offset;
+            self.reconcile_node(
                 &dom_children[old_index],
                 old_parent.child(old_index).ok_or(())?,
                 old_positions[old_index],
@@ -242,111 +294,163 @@ fn reconcile_children(
                 stats,
             )?;
         }
-    } else {
-        replace_child_range(
-            content_root,
-            new_parent,
-            &dom_children,
-            &new_positions,
-            prefix,
-            old_mid_end,
-            new_mid_end,
-        )?;
-        stats.record_structural();
+
+        Ok(())
     }
 
-    old_positions = child_positions(old_parent, content_start);
-    new_positions = child_positions(new_parent, content_start);
-    for offset in 0..suffix {
-        let old_index = old_len - suffix + offset;
-        let new_index = new_len - suffix + offset;
-        reconcile_node(
-            &dom_children[old_index],
-            old_parent.child(old_index).ok_or(())?,
-            old_positions[old_index],
-            new_parent.child(new_index).ok_or(())?,
-            new_positions[new_index],
-            stats,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn replace_child_range(
-    content_root: &Element,
-    new_parent: &RichNode,
-    dom_children: &[Element],
-    new_positions: &[usize],
-    start: usize,
-    old_end: usize,
-    new_end: usize,
-) -> Result<(), ()> {
-    let reference = dom_children.get(old_end).map(|el| el.as_ref());
-    for old_index in start..old_end {
-        let child = dom_children.get(old_index).ok_or(())?;
-        let parent = child.parent_node().ok_or(())?;
-        parent.remove_child(child.as_ref()).map_err(|_| ())?;
-    }
-
-    if start == new_end {
-        return Ok(());
-    }
-
-    let mut html = String::new();
-    for (new_index, new_pos) in new_positions
-        .iter()
-        .copied()
-        .enumerate()
-        .take(new_end)
-        .skip(start)
-    {
-        let child = new_parent.child(new_index).ok_or(())?;
-        html.push_str(&render_one_node_to_html(child, new_pos));
-    }
-    insert_html_before(content_root, reference, &html)
-}
-
-fn refresh_descendant_positions(
-    dom: &Element,
-    node: &RichNode,
-    outer_pos: usize,
-) -> Result<(), ()> {
-    update_data_pos(dom, outer_pos)?;
-    if node.child_count() == 0 || renders_inline_children(node) {
-        if renders_inline_children(node) && node.content().iter().any(|child| !child.is_text()) {
-            let html = render_children_to_html(node, outer_pos + 1);
-            set_inner_html(dom, &html).then_some(()).ok_or(())?;
+    #[allow(clippy::too_many_arguments)]
+    fn replace_child_range(
+        &self,
+        content_root: &Element,
+        new_parent: &RichNode,
+        dom_children: &[Element],
+        new_positions: &[usize],
+        start: usize,
+        old_end: usize,
+        new_end: usize,
+    ) -> Result<(), ()> {
+        let reference = dom_children.get(old_end).map(|el| el.as_ref());
+        for old_index in start..old_end {
+            let child = dom_children.get(old_index).ok_or(())?;
+            let parent = child.parent_node().ok_or(())?;
+            parent.remove_child(child.as_ref()).map_err(|_| ())?;
         }
-        return Ok(());
-    }
-    if node.type_name() == "code_block" {
-        return Ok(());
+
+        if start == new_end {
+            return Ok(());
+        }
+
+        let mut html = String::new();
+        for (new_index, new_pos) in new_positions
+            .iter()
+            .copied()
+            .enumerate()
+            .take(new_end)
+            .skip(start)
+        {
+            let child = new_parent.child(new_index).ok_or(())?;
+            html.push_str(&render_one_node_to_html(self.runtime, child, new_pos));
+        }
+        insert_html_before(content_root, reference, &html)
     }
 
-    let content_root = content_root_for_node(dom, node)?;
-    let dom_children = direct_model_children(&content_root);
-    if dom_children.len() != node.child_count() {
-        return Err(());
-    }
-    let positions = child_positions(node, outer_pos + 1);
-    for (index, child_dom) in dom_children.iter().enumerate() {
-        refresh_descendant_positions(child_dom, node.child(index).ok_or(())?, positions[index])?;
-    }
-    Ok(())
-}
+    fn refresh_descendant_positions(
+        &self,
+        dom: &Element,
+        node: &RichNode,
+        outer_pos: usize,
+    ) -> Result<(), ()> {
+        update_data_pos(dom, outer_pos)?;
+        if node.child_count() == 0 || renders_inline_children(node) {
+            if renders_inline_children(node) && node.content().iter().any(|child| !child.is_text())
+            {
+                let html = render_children_to_html(self.runtime, node, outer_pos + 1);
+                set_inner_html(dom, &html).then_some(()).ok_or(())?;
+            }
+            return Ok(());
+        }
+        if node.type_name() == "code_block" {
+            return Ok(());
+        }
 
-fn replace_element(dom: &Element, new_node: &RichNode, new_pos: usize) -> Result<(), ()> {
-    let parent = dom.parent_node().ok_or(())?;
-    let html = render_one_node_to_html(new_node, new_pos);
-    let nodes = parse_html_nodes(dom, &html)?;
-    for node in nodes {
-        parent
-            .insert_before(&node, Some(dom.as_ref()))
-            .map_err(|_| ())?;
+        let content_root = self.content_root_for_node(dom, node)?;
+        let dom_children = direct_model_children(&content_root);
+        if dom_children.len() != node.child_count() {
+            return Err(());
+        }
+        let positions = child_positions(node, outer_pos + 1);
+        for (index, child_dom) in dom_children.iter().enumerate() {
+            self.refresh_descendant_positions(
+                child_dom,
+                node.child(index).ok_or(())?,
+                positions[index],
+            )?;
+        }
+        Ok(())
     }
-    parent.remove_child(dom.as_ref()).map_err(|_| ())?;
-    Ok(())
+
+    fn replace_element(
+        &self,
+        dom: &Element,
+        new_node: &RichNode,
+        new_pos: usize,
+    ) -> Result<(), ()> {
+        let parent = dom.parent_node().ok_or(())?;
+        let html = render_one_node_to_html(self.runtime, new_node, new_pos);
+        let nodes = parse_html_nodes(dom, &html)?;
+        for node in nodes {
+            parent
+                .insert_before(&node, Some(dom.as_ref()))
+                .map_err(|_| ())?;
+        }
+        parent.remove_child(dom.as_ref()).map_err(|_| ())?;
+        Ok(())
+    }
+
+    fn content_root_for_node(&self, dom: &Element, node: &RichNode) -> Result<Element, ()> {
+        if let Some(spec) = self.runtime.lookup_node_view(node.type_name()) {
+            if let Some(selector) = &spec.content_selector {
+                return dom.query_selector(selector).map_err(|_| ())?.ok_or(());
+            }
+        }
+        Ok(dom.clone())
+    }
+
+    fn attrs_patchable(&self, node: &RichNode) -> bool {
+        !node.is_text()
+            && (node.type_name() == "task_item"
+                || self.runtime.lookup_node_view(node.type_name()).is_some())
+    }
+
+    fn wrapper_compatible(&self, old_node: &RichNode, new_node: &RichNode) -> bool {
+        if old_node.is_text()
+            || new_node.is_text()
+            || old_node.type_name() != new_node.type_name()
+            || old_node.is_leaf() != new_node.is_leaf()
+        {
+            return false;
+        }
+
+        if let Some(new_spec) = self.runtime.lookup_node_view(new_node.type_name()) {
+            let Some(old_spec) = self.runtime.lookup_node_view(old_node.type_name()) else {
+                return false;
+            };
+            return old_spec.tag == new_spec.tag;
+        }
+
+        match new_node.type_name() {
+            "heading" => heading_level(old_node) == heading_level(new_node),
+            "task_item" => true,
+            _ => old_node.attrs() == new_node.attrs(),
+        }
+    }
+
+    fn dom_matches_node(&self, dom: &Element, node: &RichNode) -> bool {
+        self.expected_tag(node)
+            .is_some_and(|tag| dom.tag_name().eq_ignore_ascii_case(&tag))
+    }
+
+    fn expected_tag(&self, node: &RichNode) -> Option<String> {
+        if node.is_text() {
+            return None;
+        }
+        if let Some(spec) = self.runtime.lookup_node_view(node.type_name()) {
+            return Some(spec.tag.clone());
+        }
+        Some(match node.type_name() {
+            "paragraph" => "p".to_string(),
+            "blockquote" => "blockquote".to_string(),
+            "bullet_list" | "task_list" => "ul".to_string(),
+            "ordered_list" => "ol".to_string(),
+            "list_item" | "task_item" => "li".to_string(),
+            "heading" => format!("h{}", heading_level(node)),
+            "code_block" => "pre".to_string(),
+            "horizontal_rule" => "hr".to_string(),
+            "hard_break" => "br".to_string(),
+            "image" => "img".to_string(),
+            _ => "span".to_string(),
+        })
+    }
 }
 
 fn insert_html_before(
@@ -408,71 +512,8 @@ fn child_positions(parent: &RichNode, content_start: usize) -> Vec<usize> {
     positions
 }
 
-fn content_root_for_node(dom: &Element, node: &RichNode) -> Result<Element, ()> {
-    if let Some(spec) = node_views::lookup(node.type_name()) {
-        if let Some(selector) = spec.content_selector {
-            return dom.query_selector(&selector).map_err(|_| ())?.ok_or(());
-        }
-    }
-    Ok(dom.clone())
-}
-
 fn renders_inline_children(node: &RichNode) -> bool {
     matches!(node.type_name(), "paragraph" | "heading")
-}
-
-fn attrs_patchable(node: &RichNode) -> bool {
-    !node.is_text()
-        && (node.type_name() == "task_item" || node_views::lookup(node.type_name()).is_some())
-}
-
-fn wrapper_compatible(old_node: &RichNode, new_node: &RichNode) -> bool {
-    if old_node.is_text()
-        || new_node.is_text()
-        || old_node.type_name() != new_node.type_name()
-        || old_node.is_leaf() != new_node.is_leaf()
-    {
-        return false;
-    }
-
-    if let Some(new_spec) = node_views::lookup(new_node.type_name()) {
-        let Some(old_spec) = node_views::lookup(old_node.type_name()) else {
-            return false;
-        };
-        return old_spec.tag == new_spec.tag;
-    }
-
-    match new_node.type_name() {
-        "heading" => heading_level(old_node) == heading_level(new_node),
-        "task_item" => true,
-        _ => old_node.attrs() == new_node.attrs(),
-    }
-}
-
-fn dom_matches_node(dom: &Element, node: &RichNode) -> bool {
-    expected_tag(node).is_some_and(|tag| dom.tag_name().eq_ignore_ascii_case(&tag))
-}
-
-fn expected_tag(node: &RichNode) -> Option<String> {
-    if node.is_text() {
-        return None;
-    }
-    if let Some(spec) = node_views::lookup(node.type_name()) {
-        return Some(spec.tag);
-    }
-    Some(match node.type_name() {
-        "paragraph" => "p".to_string(),
-        "blockquote" => "blockquote".to_string(),
-        "bullet_list" | "task_list" => "ul".to_string(),
-        "ordered_list" => "ol".to_string(),
-        "list_item" | "task_item" => "li".to_string(),
-        "heading" => format!("h{}", heading_level(node)),
-        "code_block" => "pre".to_string(),
-        "horizontal_rule" => "hr".to_string(),
-        "hard_break" => "br".to_string(),
-        "image" => "img".to_string(),
-        _ => "span".to_string(),
-    })
 }
 
 fn heading_level(node: &RichNode) -> u64 {
@@ -560,8 +601,10 @@ mod tests {
         .unwrap();
         let next = state.apply(tr).unwrap();
 
+        let runtime = crate::runtime::RuntimeBuilder::new().build();
+        let rec = Reconciler::new(&runtime);
         let mut stats = ReconcileStats::default();
-        reconcile_children_for_plan(state.doc(), next.doc(), 0, &mut stats);
+        reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::NodeAttrs { pos: 1 },);
     }
@@ -576,8 +619,10 @@ mod tests {
 
         let next = apply_command(state.clone(), &*toggle_mark(schema_basic::em().unwrap()));
 
+        let runtime = crate::runtime::RuntimeBuilder::new().build();
+        let rec = Reconciler::new(&runtime);
         let mut stats = ReconcileStats::default();
-        reconcile_children_for_plan(state.doc(), next.doc(), 0, &mut stats);
+        reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
     }
@@ -592,8 +637,10 @@ mod tests {
 
         let next = apply_command(state.clone(), &*split_block());
 
+        let runtime = crate::runtime::RuntimeBuilder::new().build();
+        let rec = Reconciler::new(&runtime);
         let mut stats = ReconcileStats::default();
-        reconcile_children_for_plan(state.doc(), next.doc(), 0, &mut stats);
+        reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
     }
@@ -614,13 +661,16 @@ mod tests {
         .unwrap();
         let next = state.apply(tr).unwrap();
 
+        let runtime = crate::runtime::RuntimeBuilder::new().build();
+        let rec = Reconciler::new(&runtime);
         let mut stats = ReconcileStats::default();
-        reconcile_children_for_plan(state.doc(), next.doc(), 0, &mut stats);
+        reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
     }
 
     fn reconcile_children_for_plan(
+        rec: &Reconciler<'_>,
         old_parent: &RichNode,
         new_parent: &RichNode,
         content_start: usize,
@@ -647,6 +697,7 @@ mod tests {
                 break;
             }
             reconcile_node_for_plan(
+                rec,
                 old_child,
                 old_positions[prefix],
                 new_child,
@@ -675,6 +726,7 @@ mod tests {
                 let old_index = prefix + offset;
                 let new_index = prefix + offset;
                 reconcile_node_for_plan(
+                    rec,
                     old_parent.child(old_index).unwrap(),
                     old_positions[old_index],
                     new_parent.child(new_index).unwrap(),
@@ -690,6 +742,7 @@ mod tests {
             let old_index = old_len - suffix + offset;
             let new_index = new_len - suffix + offset;
             reconcile_node_for_plan(
+                rec,
                 old_parent.child(old_index).unwrap(),
                 old_positions[old_index],
                 new_parent.child(new_index).unwrap(),
@@ -700,6 +753,7 @@ mod tests {
     }
 
     fn reconcile_node_for_plan(
+        rec: &Reconciler<'_>,
         old_node: &RichNode,
         old_pos: usize,
         new_node: &RichNode,
@@ -709,11 +763,11 @@ mod tests {
         if old_node == new_node && old_pos == new_pos {
             return;
         }
-        if !wrapper_compatible(old_node, new_node) {
+        if !rec.wrapper_compatible(old_node, new_node) {
             stats.record_structural();
             return;
         }
-        if attrs_patchable(new_node) && old_node.attrs() != new_node.attrs() {
+        if rec.attrs_patchable(new_node) && old_node.attrs() != new_node.attrs() {
             stats.record_attrs(new_pos);
         }
         if old_node == new_node {
@@ -723,6 +777,6 @@ mod tests {
             stats.record_structural();
             return;
         }
-        reconcile_children_for_plan(old_node, new_node, new_pos + 1, stats);
+        reconcile_children_for_plan(rec, old_node, new_node, new_pos + 1, stats);
     }
 }

@@ -26,18 +26,17 @@ pub fn schema() -> Schema {
     SCHEMA
         .get_or_init(|| {
             // Build the base extension chain as `Arc`s so they can be
-            // shared between the schema fold and the base command /
-            // key-binding tables installed below.
+            // shared between the schema fold and the user-overlay
+            // resolution below. **Phase 4b C5:** the legacy
+            // `install_base_extensions` is gone (the BASE table was
+            // deleted). The schema fold is now purely structural; the
+            // command/keymap/plugin tables live on the per-instance
+            // `EditorRuntime` that the view actually reads from.
             let base: Vec<Arc<dyn RichTextExtension>> = default_extensions()
                 .into_iter()
                 .map(|boxed| -> Arc<dyn RichTextExtension> { Arc::from(boxed) })
                 .collect();
 
-            // Install base commands + key bindings BEFORE marking the
-            // schema realized, so reads via `named_command` /
-            // `merged_keymap_factories` see them as soon as the fold
-            // returns.
-            registry::install_base_extensions(base.iter().cloned());
             registry::mark_schema_realized();
 
             // Resolve the effective extension chain. For each base

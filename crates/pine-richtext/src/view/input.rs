@@ -66,19 +66,20 @@ impl Default for KeyMap {
     }
 }
 
-/// PM-style default keymap. Covers the keys most editors need:
-/// Backspace / Delete / Enter, plus Mod-A for select-all.
+/// PM-style default keymap for the given runtime. Covers the keys
+/// most editors need: Backspace / Delete / Enter, plus Mod-A for
+/// select-all.
 ///
 /// Extensions can contribute extra bindings through
 /// [`crate::extension::RichTextExtension::key_bindings`]; those are
 /// merged in *after* the base 4 entries below so the base remains
-/// inviolable (`KeyMap::lookup` is first-wins). Extension-vs-extension
-/// collisions resolve registration-order; see
-/// [`crate::extension::registry::merged_keymap_factories`].
-pub fn default_keymap() -> KeyMap {
+/// inviolable (`KeyMap::lookup` is first-wins). The runtime's
+/// extension chain determines which bindings appear — two surfaces
+/// with different runtimes can have different keymaps.
+pub fn default_keymap(runtime: &crate::runtime::EditorRuntime) -> KeyMap {
     let mut km = base_keymap();
-    for (combo, factory) in crate::extension::registry::merged_keymap_factories() {
-        km = km.bind(combo, factory());
+    for (combo, factory) in runtime.merged_keymap_factories() {
+        km = km.bind(combo.clone(), factory());
     }
     km
 }

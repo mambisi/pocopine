@@ -12,12 +12,17 @@
 //! so clicking them doesn't move keyboard focus off the surface and
 //! collapse the user's selection.
 
+use std::sync::Arc;
+
+use pine_richtext::commands::BoxedCommand;
 use pine_richtext::extension;
-use pine_richtext::extensions::TaskListExtension;
+use pine_richtext::extension::{NamedCommand, RichTextExtension};
+use pine_richtext::extensions::{CoreMarksExtension, TaskListExtension};
 use pine_richtext::history::history_plugin;
-use pine_richtext::model::Attrs;
+use pine_richtext::model::{Attrs, MarkPolicy, NodeSpec};
+use pine_richtext::runtime::{self, RuntimeBuilder};
 use pine_richtext::schema_basic;
-use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection};
+use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection, Transaction};
 use pine_richtext::view::root::{CommandRequest, COMMAND_EVENT};
 use pine_richtext::view::PineRichTextRoot;
 use pocopine::prelude::*;
@@ -228,19 +233,21 @@ struct TaskTogglePayload {
     checked: bool,
 }
 
-/// Find the editor surface element in the DOM. We assume there's only
-/// one `<pine-rich-text-root>` on the page for the demo. Real apps that
-/// host multiple editors would pass an explicit reference.
+/// Find the doc editor surface element in the DOM. The demo now hosts
+/// two `<pine-rich-text-root>` mounts — the kitchen-sink doc editor
+/// (no `runtime` attribute) and the minimal comment editor
+/// (`runtime="comment"`). The toolbar targets the doc editor by
+/// selecting the FIRST surface that has no `runtime` attribute set.
 fn find_surface() -> Option<Element> {
     let window = web_sys::window()?;
     let document = window.document()?;
     document
-        .query_selector("pine-rich-text-root .pine-rich-text")
+        .query_selector("pine-rich-text-root:not([runtime]) .pine-rich-text")
         .ok()
         .flatten()
         .or_else(|| {
             document
-                .query_selector("pine-rich-text-root")
+                .query_selector("pine-rich-text-root:not([runtime])")
                 .ok()
                 .flatten()
                 .and_then(|el| el.dyn_into::<Element>().ok())
@@ -366,15 +373,86 @@ impl PineTaskItem {
     }
 }
 
+/// Demo extension contributing the **minimal** schema for the
+/// comment runtime: only `doc`, `paragraph`, and `text`. No headings,
+/// blockquotes, code blocks, lists, task items, horizontal rules,
+/// images, or hard breaks. A caller dispatching `set_block_type`
+/// against the comment editor with `node_type: "heading"` (or any
+/// other unsupported type) fails at schema lookup — the runtime
+/// genuinely cannot represent non-paragraph blocks.
+struct CommentSchemaExtension;
+
+impl RichTextExtension for CommentSchemaExtension {
+    fn name(&self) -> &str {
+        "comment-schema"
+    }
+
+    fn nodes(&self) -> Vec<NodeSpec> {
+        vec![
+            NodeSpec::new("doc").content("paragraph+"),
+            NodeSpec::new("paragraph")
+                .group("block")
+                .content("inline*")
+                .marks(MarkPolicy::All),
+            NodeSpec::new("text").group("inline").inline(),
+        ]
+    }
+}
+
+/// Demo extension that contributes a single named command,
+/// `comment_submit`, which inserts a sentinel string into the doc.
+/// Used by the comment runtime to prove per-instance commands: the
+/// same `{ kind: "custom", name: "comment_submit" }` event fires
+/// against the comment editor (inserts text) but is a silent no-op
+/// against the doc editor (no such command in its runtime).
+struct CommentRuntimeExtension;
+
+impl RichTextExtension for CommentRuntimeExtension {
+    fn name(&self) -> &str {
+        "comment-runtime"
+    }
+
+    fn commands(&self) -> Vec<(String, NamedCommand)> {
+        let factory: NamedCommand = Arc::new(|_args| {
+            Some(Box::new(|state: &EditorState| -> Option<Transaction> {
+                let mut tr = state.tr();
+                tr.insert_text("✓submitted").ok()?;
+                Some(tr)
+            }) as BoxedCommand)
+        });
+        vec![("comment_submit".into(), factory)]
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn main() {
-    // Phase 4 — extension contract demo. `TaskListExtension::with_node_view`
-    // forwards `PineTaskItem`'s tag and content selector into
-    // `crate::render::node_views` at registration time, so the
-    // reconciler sees the binding before the schema is folded.
+    // The "default" runtime — the full kitchen-sink doc editor. The
+    // `extension::register(...)` path is the only way to customize the
+    // *default* runtime's extension list (named runtimes use
+    // `runtime::registry::register`). Soft-deprecated since Phase 4b
+    // C5; the deprecation warning is suppressed at this single
+    // call-site because no replacement API exists yet for
+    // "customize the default runtime."
+    #[allow(deprecated)]
     extension::register(Box::new(
         TaskListExtension::new().with_node_view::<PineTaskItem>(),
     ));
+
+    // The "comment" runtime — TRULY minimal: only `doc`, `paragraph`,
+    // and `text` plus the standard marks. No headings, blockquotes,
+    // code blocks, lists, task items, horizontal rules, images, or
+    // hard breaks. No history plugin. Schema-level enforcement: any
+    // `set_block_type` / `wrap_in` command targeting an unsupported
+    // node type fails at schema lookup.
+    let comment = RuntimeBuilder::new()
+        .name("comment")
+        .without_defaults()
+        .with(CommentSchemaExtension)
+        .with(CoreMarksExtension)
+        .with(CommentRuntimeExtension)
+        .build();
+    runtime::registry::register("comment", comment);
+
     App::new()
         .register::<Editor>()
         .register::<PineRichTextRoot>()

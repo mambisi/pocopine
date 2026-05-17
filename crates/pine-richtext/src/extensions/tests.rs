@@ -97,7 +97,11 @@ fn folded_schema_can_render_demo_seed_doc() {
     let list = task_list(vec![item]).unwrap();
     let document = doc(vec![p1, p2, list]).unwrap();
 
-    let html = render_doc_to_html(&document);
+    // Fresh runtime build (not the cached `runtime::registry::default`)
+    // so this test doesn't race with `extension::tests` /
+    // `runtime::tests` on the shared `SCHEMA_REALIZED` flag.
+    let runtime = crate::runtime::RuntimeBuilder::new().build();
+    let html = render_doc_to_html(&runtime, &document);
     assert!(html.contains(r#"<p data-pos="0">Hello, pine-richtext.</p>"#));
     assert!(html.contains("<strong>Bold</strong>"));
     assert!(html.contains("<em>italic</em>"));
