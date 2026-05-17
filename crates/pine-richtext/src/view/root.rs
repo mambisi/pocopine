@@ -405,6 +405,7 @@ impl PineRichTextRoot {
 
         let closures = install_listeners(
             surface_el.clone(),
+            runtime.clone(),
             state_provider.clone(),
             keymap,
             dispatch.clone(),

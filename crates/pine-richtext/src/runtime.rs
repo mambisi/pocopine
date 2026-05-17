@@ -31,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::extension::{KeyBindingFactory, NamedCommand, RichTextExtension};
+use crate::inputrules::InputRule;
 use crate::model::Schema;
 use crate::state::Plugin;
 
@@ -59,6 +60,7 @@ pub struct EditorRuntime {
     pub(crate) key_bindings: Vec<(String, KeyBindingFactory)>,
     pub(crate) plugins: Vec<Plugin>,
     pub(crate) list_item_types: HashSet<String>,
+    pub(crate) input_rules: Vec<InputRule>,
 }
 
 impl EditorRuntime {
@@ -134,6 +136,14 @@ impl EditorRuntime {
     /// ordered conversions.
     pub fn list_item_type_names(&self) -> &HashSet<String> {
         &self.list_item_types
+    }
+
+    /// Merged input rules contributed by this runtime's extensions
+    /// in registration order. The view-side `beforeinput` hook
+    /// consults this list (via [`crate::inputrules::run_rules`])
+    /// before defaulting to a plain text insert.
+    pub fn input_rules(&self) -> &[InputRule] {
+        &self.input_rules
     }
 }
 

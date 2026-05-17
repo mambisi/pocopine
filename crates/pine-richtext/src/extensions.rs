@@ -21,6 +21,8 @@ pub mod core_marks;
 pub mod core_nodes;
 pub mod history;
 pub mod lists;
+pub mod markdown_shortcuts;
+pub mod smart_typography;
 pub mod task_list;
 
 #[cfg(test)]
@@ -31,6 +33,8 @@ pub use core_marks::CoreMarksExtension;
 pub use core_nodes::CoreNodesExtension;
 pub use history::HistoryExtension;
 pub use lists::ListsExtension;
+pub use markdown_shortcuts::MarkdownShortcutsExtension;
+pub use smart_typography::SmartTypographyExtension;
 pub use task_list::TaskListExtension;
 
 use crate::extension::RichTextExtension;
