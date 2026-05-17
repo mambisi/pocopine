@@ -1115,3 +1115,169 @@ test('typing `> ` at start of an empty paragraph wraps it in a blockquote', asyn
     .toEqual(expect.arrayContaining([expect.stringContaining('a quote')]));
   expect(errors).toEqual([]);
 });
+
+test('Export MD button serializes the current doc to markdown', async ({ page }) => {
+  // Phase 6 C2: clicking Export MD reads the surface's current doc
+  // via the pp-model:doc binding, runs it through
+  // `EditorRuntime::markdown_serializer()`, and writes the result
+  // into a `<pre data-test="exported-markdown">` block.
+  //
+  // The default seed has a heading would-be (no, just paragraphs +
+  // a task list with one checked + one unchecked item) so the
+  // exported markdown must include the task-list lines AND the
+  // seeded paragraph text.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await page.locator('[data-test="export-md"]').click();
+
+  const exported = await expect
+    .poll(async () =>
+      page.locator('[data-test="exported-markdown"]').textContent(),
+    )
+    .not.toBe('');
+
+  const md = (await page.locator('[data-test="exported-markdown"]').textContent()) ?? '';
+  // Seeded paragraph text must round-trip.
+  expect(md).toContain('Hello, pine-richtext.');
+  // GFM task-list lines from `TaskListExtension::markdown_node_emitters`.
+  expect(md).toContain('[x] Schema with task_list / task_item');
+  expect(md).toContain('[ ] Click the box to toggle this item');
+  expect(errors).toEqual([]);
+});
+
+test('Export MD captures live edits made before clicking', async ({ page }) => {
+  // After typing into the surface, the pp-model:doc binding
+  // propagates the updated doc back to the Editor's `doc` field on
+  // the next tick. Click Export MD and verify the typed text is in
+  // the exported markdown.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  await caretAtEndOfFirstParagraph(page);
+  await page.keyboard.type(' LIVE-EDIT-MARKER');
+
+  await page.locator('[data-test="export-md"]').click();
+
+  await expect
+    .poll(async () =>
+      page.locator('[data-test="exported-markdown"]').textContent(),
+    )
+    .toContain('LIVE-EDIT-MARKER');
+  expect(errors).toEqual([]);
+});
+
+test('Import MD button parses markdown into the surface doc', async ({ page }) => {
+  // Phase 6 C3: the import-markdown textarea + button feeds
+  // `MarkdownParser` and dispatches `ReplaceState` so the surface
+  // swaps its doc. The result must contain the expected block
+  // structure (heading + paragraph + bullet list).
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  const md = [
+    '# Imported heading',
+    '',
+    'A paragraph from markdown.',
+    '',
+    '* one',
+    '* two',
+    '',
+  ].join('\n');
+
+  // Import block is in a `<details>` — open it so the textarea
+  // becomes visible to Playwright's fill action.
+  await page
+    .locator('.import-markdown-wrap')
+    .evaluate((d) => d.setAttribute('open', ''));
+  await page.locator('[data-test="import-markdown-input"]').fill(md);
+  await page.locator('[data-test="import-md"]').click();
+
+  // Heading materializes as <h1> directly under the surface.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector(
+            'pine-rich-text-root:not([runtime]) .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        return [...surface.querySelectorAll(':scope > h1')].map(
+          (el) => el.textContent,
+        );
+      }),
+    )
+    .toEqual(expect.arrayContaining([expect.stringContaining('Imported heading')]));
+
+  // Paragraph text survives.
+  const html = await page
+    .locator('pine-rich-text-root:not([runtime]) .pine-rich-text')
+    .innerHTML();
+  expect(html).toContain('A paragraph from markdown.');
+
+  // Bullet list with two items.
+  const bulletItems = await page.evaluate(() => {
+    const surface =
+      document.querySelector(
+        'pine-rich-text-root:not([runtime]) .pine-rich-text',
+      ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+    const ul = surface.querySelector(':scope > ul:not(.task-list)');
+    if (!ul) return [];
+    return [...ul.querySelectorAll(':scope > li')].map((li) => li.textContent);
+  });
+  expect(bulletItems).toEqual(expect.arrayContaining(['one', 'two']));
+
+  expect(errors).toEqual([]);
+});
+
+test('Import then Export round-trips through model', async ({ page }) => {
+  // End-to-end Phase 6: paste markdown into the import box,
+  // click Import MD → surface adopts the doc → click Export MD
+  // → the result reflects the imported content. Proves the full
+  // parse → model → serialize pipeline works in the browser.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  const md = '- [x] task one\n- [ ] task two\n';
+
+  await page
+    .locator('.import-markdown-wrap')
+    .evaluate((d) => d.setAttribute('open', ''));
+  await page.locator('[data-test="import-markdown-input"]').fill(md);
+  await page.locator('[data-test="import-md"]').click();
+
+  // Wait for the surface to repaint with the imported task list.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector(
+            'pine-rich-text-root:not([runtime]) .pine-rich-text',
+          ) ?? document.querySelector('pine-rich-text-root:not([runtime])');
+        return surface.querySelector(':scope > ul.task-list') !== null;
+      }),
+    )
+    .toBe(true);
+
+  await page.locator('[data-test="export-md"]').click();
+
+  await expect
+    .poll(async () =>
+      page.locator('[data-test="exported-markdown"]').textContent(),
+    )
+    .toContain('[x] task one');
+  const out = await page.locator('[data-test="exported-markdown"]').textContent();
+  expect(out).toContain('[ ] task two');
+  expect(errors).toEqual([]);
+});

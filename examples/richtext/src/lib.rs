@@ -25,7 +25,9 @@ use pine_richtext::model::{Attrs, MarkPolicy, NodeSpec};
 use pine_richtext::runtime::{self, RuntimeBuilder};
 use pine_richtext::schema_basic;
 use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection, Transaction};
-use pine_richtext::view::root::{CommandRequest, COMMAND_EVENT};
+use pine_richtext::view::root::{
+    CommandRequest, COMMAND_EVENT, EXPORT_MARKDOWN_REQUEST_EVENT, EXPORT_MARKDOWN_RESULT_EVENT,
+};
 use pine_richtext::view::PineRichTextRoot;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,13 @@ pub struct Editor {
     /// writes — so the parent never becomes a source of truth that
     /// could race the surface's reactive state.
     pub initial_doc: Value,
+    /// Latest markdown export. Rendered into the demo's "Exported
+    /// markdown" `<pre>` block whenever the user clicks Export MD.
+    /// Updated by the `pine:richtext:export-markdown-result`
+    /// listener installed in `on_ready` — the surface owns the
+    /// serialization (it has the live state) so the Editor never
+    /// has to mirror the doc.
+    pub exported_markdown: String,
 }
 
 #[handlers]
@@ -59,7 +68,8 @@ impl Editor {
             return;
         };
         let handle = this::<Editor>();
-        install_task_toggle_listener(root, handle);
+        install_task_toggle_listener(root.clone(), handle.clone());
+        install_export_markdown_listener(root, handle);
     }
 
     /// Toggle strong (Bold) on the currently selected text.
@@ -166,6 +176,80 @@ impl Editor {
             doc: initial_doc_json(),
         });
     }
+
+    /// Parse the import-markdown textarea's contents via the
+    /// default runtime's [`pine_richtext::markdown::MarkdownParser`]
+    /// and replace the surface's doc with the result. Routes
+    /// through `CommandRequest::ReplaceState` so the swap lands in
+    /// the same event pipeline as Reset and other state-
+    /// replacement operations.
+    ///
+    /// Reads the textarea straight from the DOM via the
+    /// `import_textarea` ref instead of binding `pp-model:value`
+    /// — `<textarea>` doesn't emit the `pp:update:value` channel
+    /// that `pp-model:value` listens for, so the binding wouldn't
+    /// propagate keystrokes back to `self.import_input`.
+    pub fn import_markdown(&mut self) {
+        let Some(scope) = pocopine::current_scope_id() else {
+            return;
+        };
+        let Some(el) = pocopine::refs::get_on(scope, "import_textarea") else {
+            return;
+        };
+        let Ok(textarea) = el.dyn_into::<web_sys::HtmlTextAreaElement>() else {
+            return;
+        };
+        let md = textarea.value();
+        if md.is_empty() {
+            return;
+        }
+        let runtime = runtime::registry::default();
+        let parser = runtime.markdown_parser();
+        let doc_node = match parser.parse(&md, runtime.schema()) {
+            Ok(node) => node,
+            Err(err) => {
+                self.exported_markdown = format!("(import error: {err})");
+                return;
+            }
+        };
+        let state = match EditorState::create(
+            EditorStateConfig::new(runtime.schema().clone(), doc_node).plugins(demo_plugins()),
+        ) {
+            Ok(state) => state,
+            Err(err) => {
+                self.exported_markdown = format!("(import error: {err})");
+                return;
+            }
+        };
+        let Ok(state_json) = state.to_json() else {
+            return;
+        };
+        Self::dispatch_command(CommandRequest::ReplaceState { doc: state_json });
+    }
+
+    /// Ask the surface to serialize its current doc to markdown.
+    /// Fires `pine:richtext:export-markdown` at the surface — the
+    /// surface runs `EditorRuntime::markdown_serializer()` against
+    /// its live state and responds with a
+    /// `pine:richtext:export-markdown-result` CustomEvent whose
+    /// `detail.markdown` is captured into `self.exported_markdown`
+    /// by the listener installed in `on_ready`.
+    ///
+    /// Going through the surface (instead of mirroring its doc
+    /// here) means typing-then-clicking exports the latest typed
+    /// content with no `tick::next` mirror lag.
+    pub fn export_markdown(&mut self) {
+        let Some(surface) = find_surface() else {
+            return;
+        };
+        let init = CustomEventInit::new();
+        init.set_bubbles(true);
+        let Ok(event) = CustomEvent::new_with_event_init_dict(EXPORT_MARKDOWN_REQUEST_EVENT, &init)
+        else {
+            return;
+        };
+        let _ = surface.dispatch_event(&event);
+    }
 }
 
 impl Editor {
@@ -203,6 +287,34 @@ impl Editor {
             value: json!(checked),
         });
     }
+}
+
+/// Listen for the `pine:richtext:export-markdown-result` custom
+/// event the surface emits after processing an export request.
+/// Captures the markdown string into the editor's
+/// `exported_markdown` field so the template can render it into
+/// `<pre data-test="exported-markdown">`.
+fn install_export_markdown_listener(event_target: Element, handle: pocopine::Handle<Editor>) {
+    let cb = Closure::wrap(Box::new(move |event: Event| {
+        let Ok(custom) = event.dyn_into::<CustomEvent>() else {
+            return;
+        };
+        let text = custom
+            .detail()
+            .as_string()
+            .unwrap_or_else(|| "(export returned non-string detail)".to_string());
+        let handle = handle.clone();
+        pocopine::tick::next(move || {
+            handle.update(move |editor: &mut Editor| {
+                editor.exported_markdown = text;
+            });
+        });
+    }) as Box<dyn FnMut(Event)>);
+    let _ = event_target.add_event_listener_with_callback(
+        EXPORT_MARKDOWN_RESULT_EVENT,
+        cb.as_ref().unchecked_ref(),
+    );
+    cb.forget();
 }
 
 /// Listen for the `pine:task-toggle` custom event bubbled up from

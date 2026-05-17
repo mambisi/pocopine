@@ -18,6 +18,7 @@ pub mod extension;
 pub mod extensions;
 pub mod history;
 pub mod inputrules;
+pub mod markdown;
 pub mod model;
 pub mod render;
 pub mod runtime;

@@ -45,6 +45,24 @@ const DEBUG_LOG_VERSION: &str = concat!(
 /// race where a parent's mirrored `doc` is one `tick::next` stale.
 pub const COMMAND_EVENT: &str = "pine:richtext:command";
 
+/// CustomEvent name external code dispatches at the surface to
+/// request a markdown export of the current doc. The surface
+/// responds by dispatching an [`EXPORT_MARKDOWN_RESULT_EVENT`]
+/// (carrying the serialized markdown as the event's `detail`
+/// string) on the same surface element. Decouples the parent from
+/// having to mirror the surface's authoritative doc to render
+/// markdown.
+pub const EXPORT_MARKDOWN_REQUEST_EVENT: &str = "pine:richtext:export-markdown";
+
+/// CustomEvent the surface dispatches in response to
+/// [`EXPORT_MARKDOWN_REQUEST_EVENT`]. The `detail` is a bare
+/// JavaScript string carrying either the serialized markdown
+/// (success) or one of the literal sentinels
+/// `"(export error: …)"` / `"(state unavailable)"` (failure).
+/// Consume with `event.detail` (JS) or
+/// `custom.detail().as_string()` (Rust/wasm-bindgen).
+pub const EXPORT_MARKDOWN_RESULT_EVENT: &str = "pine:richtext:export-markdown-result";
+
 /// Payload of a [`COMMAND_EVENT`] CustomEvent. Variants intentionally
 /// stay close to `pine_richtext::commands::*` so the wire shape stays
 /// thin — a toolbar serializes one of these into the `detail`, the
@@ -455,6 +473,48 @@ impl PineRichTextRoot {
             }) as Box<dyn FnMut(Event)>);
             let _ = surface_el
                 .add_event_listener_with_callback(COMMAND_EVENT, cb.as_ref().unchecked_ref());
+            slot.borrow_mut().push(cb);
+        }
+
+        // Export-markdown bridge: external code dispatches
+        // `pine:richtext:export-markdown` at the surface; the
+        // surface resolves the current state via state_provider,
+        // runs `runtime.markdown_serializer().serialize(...)`, and
+        // dispatches a `pine:richtext:export-markdown-result`
+        // CustomEvent back. `detail` is a JS string carrying the
+        // serialized markdown (or an `"(export error: …)"` /
+        // `"(state unavailable)"` sentinel on failure). The parent
+        // doesn't have to mirror the doc to render an export.
+        {
+            let state_provider = state_provider.clone();
+            let runtime_for_export = runtime.clone();
+            let surface_for_response = surface_el.clone();
+            let cb = Closure::wrap(Box::new(move |_event: Event| {
+                let markdown = match state_provider() {
+                    Some(state) => {
+                        let serializer = runtime_for_export.markdown_serializer();
+                        match serializer.serialize(state.doc()) {
+                            Ok(md) => md,
+                            Err(err) => format!("(export error: {err})"),
+                        }
+                    }
+                    None => "(state unavailable)".to_string(),
+                };
+                let detail_js = wasm_bindgen::JsValue::from_str(&markdown);
+                let init = web_sys::CustomEventInit::new();
+                init.set_bubbles(true);
+                init.set_detail(&detail_js);
+                let Ok(response) =
+                    CustomEvent::new_with_event_init_dict(EXPORT_MARKDOWN_RESULT_EVENT, &init)
+                else {
+                    return;
+                };
+                let _ = surface_for_response.dispatch_event(&response);
+            }) as Box<dyn FnMut(Event)>);
+            let _ = surface_el.add_event_listener_with_callback(
+                EXPORT_MARKDOWN_REQUEST_EVENT,
+                cb.as_ref().unchecked_ref(),
+            );
             slot.borrow_mut().push(cb);
         }
 
