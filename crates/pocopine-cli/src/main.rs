@@ -59,6 +59,7 @@ fn run_project(args: args::ServeArgs) -> Result<()> {
     let cfg = config::load(&args.path)?;
     build::wasm(&project, args.release)?;
     client_modules::build(&project, args.release)?;
+    build::configured_bins(&project, &cfg, args.release)?;
     if let Some(tw) = cfg.tailwind.as_ref() {
         tailwind::run_once(&project, tw, args.release)?;
     }

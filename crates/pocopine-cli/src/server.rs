@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde_json::Value;
 
 use crate::client_modules;
 use crate::config::PocopineConfig;
@@ -48,28 +49,84 @@ pub fn spawn_bin(
         .canonicalize()
         .with_context(|| format!("resolve {}", path.display()))?;
     let project_tools = tools::ProjectTools::load(&project)?;
-    let mut cmd = project_tools.cargo().command();
-    cmd.arg("run").arg("--bin").arg(bin);
-    if release {
-        cmd.arg("--release");
-    }
+    let executable = built_bin_path(&project, &project_tools, bin, release)?;
+    let mut cmd = Command::new(&executable);
     cmd.current_dir(&project);
     if default_redis_url {
         ensure_redis_env(&mut cmd);
     }
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     println!(
-        "▶ spawning `{bin}` (cargo run --bin {bin} in {})",
-        project.display()
+        "▶ spawning `{bin}` ({} in {})",
+        executable.display(),
+        project.display(),
     );
     let child = cmd
         .spawn()
-        .with_context(|| format!("failed to spawn server bin `{bin}`"))?;
+        .with_context(|| format!("failed to spawn configured bin `{}`", executable.display()))?;
     Ok(BinChild {
         child,
         bin: bin.into(),
         role,
     })
+}
+
+fn built_bin_path(
+    project: &Path,
+    project_tools: &tools::ProjectTools,
+    bin: &str,
+    release: bool,
+) -> Result<PathBuf> {
+    let target_dir = cargo_target_dir(project, project_tools)?;
+    let path = bin_executable_path(&target_dir, bin, release);
+    if path.is_file() {
+        return Ok(path);
+    }
+    bail!(
+        "configured bin `{bin}` was not found at {}; run `pocopine build` first",
+        path.display()
+    )
+}
+
+fn cargo_target_dir(project: &Path, project_tools: &tools::ProjectTools) -> Result<PathBuf> {
+    let mut cmd = project_tools.cargo().command();
+    cmd.arg("metadata")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .current_dir(project)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = cmd.output().context("invoke cargo metadata")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "cargo metadata failed with {}{}",
+            output.status,
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    let metadata: Value =
+        serde_json::from_slice(&output.stdout).context("parse cargo metadata JSON")?;
+    let target_dir = metadata
+        .get("target_directory")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("cargo metadata did not include target_directory"))?;
+    Ok(PathBuf::from(target_dir))
+}
+
+fn bin_executable_path(target_dir: &Path, bin: &str, release: bool) -> PathBuf {
+    let profile = if release { "release" } else { "debug" };
+    let executable = if cfg!(windows) {
+        format!("{bin}.exe")
+    } else {
+        bin.to_string()
+    };
+    target_dir.join(profile).join(executable)
 }
 
 pub fn validate_worker_backend_for_separate_process(default_redis_url: bool) -> Result<()> {
@@ -294,5 +351,24 @@ fn mime_of(path: &Path) -> &'static str {
         "ico" => "image/x-icon",
         "map" => "application/json",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bin_path_uses_cargo_target_profile_dir() {
+        let path = bin_executable_path(Path::new("/tmp/pocopine-target"), "server", false);
+        let executable = if cfg!(windows) {
+            "server.exe"
+        } else {
+            "server"
+        };
+        assert!(path.ends_with(Path::new("debug").join(executable)));
+
+        let path = bin_executable_path(Path::new("/tmp/pocopine-target"), "server", true);
+        assert!(path.ends_with(Path::new("release").join(executable)));
     }
 }
