@@ -7,7 +7,6 @@
 
 mod support;
 
-use pine_richtext::commands::Command;
 use pine_richtext::history::{history_plugin, redo, redo_depth, undo, undo_depth};
 use pine_richtext::state::{EditorState, EditorStateConfig, Selection};
 

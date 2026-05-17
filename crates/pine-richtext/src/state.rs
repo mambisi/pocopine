@@ -661,6 +661,19 @@ impl Transaction {
         Ok(self)
     }
 
+    /// Wrap `[from..to]` in a chain of wrappers (outer-first). See
+    /// [`crate::transform::Transform::wrap_chain`].
+    pub fn wrap_chain<I>(&mut self, from: usize, to: usize, chain: I) -> RichTextResult<&mut Self>
+    where
+        I: IntoIterator<Item = crate::transform::WrapperSpec>,
+    {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.wrap_chain(from, to, chain)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
     /// Replace `[from..to]` with the given content fragment.
     pub fn replace_with(
         &mut self,

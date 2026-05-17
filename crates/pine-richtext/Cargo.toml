@@ -4,15 +4,63 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust-native rich text document model, transforms, and editor state for Pine."
+description = "Rust-native rich text document model, transforms, editor state, commands, history, and (optional) browser view for Pine."
 
 [lib]
-crate-type = ["rlib"]
+# `cdylib` produces a wasm artifact when the `view` feature is on so apps
+# can consume the editor surface directly; `rlib` keeps the crate
+# consumable by other Rust libraries (which is also how the model/transform
+# tests run today, with no wasm bindings).
+crate-type = ["cdylib", "rlib"]
 doctest = false
+
+[features]
+# By default this crate is target-agnostic: pure model + transform + state
+# + commands + history. No DOM, no wasm.
+default = []
+# Opt-in browser view: pulls in pocopine, wasm-bindgen, and web-sys to
+# render an `EditorState` into a contentEditable surface, sync the DOM
+# selection back into the model, and dispatch commands on keystrokes.
+view = [
+    "dep:pocopine",
+    "dep:pocopine-core",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+    "dep:js-sys",
+    "dep:serde-wasm-bindgen",
+]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Feature-gated browser-view dependencies.
+pocopine = { path = "../pocopine", optional = true }
+pocopine-core = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+
+[dependencies.web-sys]
+version = "0.3"
+optional = true
+features = [
+    "AbstractRange",
+    "console",
+    "Document",
+    "DocumentFragment",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlElement",
+    "InputEvent",
+    "KeyboardEvent",
+    "Node",
+    "Range",
+    "Selection",
+    "StaticRange",
+    "Window",
+]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }

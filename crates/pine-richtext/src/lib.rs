@@ -16,8 +16,20 @@ mod error;
 pub mod commands;
 pub mod history;
 pub mod model;
+pub mod render;
 pub mod schema_basic;
 pub mod state;
 pub mod transform;
+
+/// Browser view layer. Renders an `EditorState` into a contentEditable
+/// surface, captures keystrokes, and translates the DOM selection back
+/// into a model `Selection`. Gated behind the `view` feature; enable it
+/// in apps that target wasm and want an editable surface:
+///
+/// ```toml
+/// pine-richtext = { workspace = true, features = ["view"] }
+/// ```
+#[cfg(feature = "view")]
+pub mod view;
 
 pub use error::{RichTextError, RichTextResult};

@@ -271,7 +271,7 @@ impl Step {
                 obj.insert("stepType".to_string(), json!("replace"));
                 obj.insert("from".to_string(), json!(step.from));
                 obj.insert("to".to_string(), json!(step.to));
-                if step.slice.content.len() != 0
+                if !step.slice.content.is_empty()
                     || step.slice.open_start != 0
                     || step.slice.open_end != 0
                 {
@@ -1368,6 +1368,7 @@ impl Transform {
         let old_content = node.content().clone();
         let type_name = node_type.unwrap_or_else(|| node.type_name()).to_string();
         let node_type = self.schema.node_type(&type_name)?;
+        let attrs = self.schema.resolve_node_attrs(&type_name, attrs)?;
         let marks = marks.unwrap_or_else(|| node.marks().to_vec());
         let shell = Node::unchecked(
             type_name,
@@ -1519,7 +1520,35 @@ impl Transform {
         node_type: impl Into<String>,
         attrs: Attrs,
     ) -> RichTextResult<&mut Self> {
-        let node_type = node_type.into();
+        self.wrap_chain(
+            from,
+            to,
+            std::iter::once(WrapperSpec {
+                type_name: node_type.into(),
+                attrs,
+            }),
+        )
+    }
+
+    /// Wrap the gap `[from, to]` in a chain of wrappers — outermost
+    /// first. Mirrors PM's `tr.wrap(range, wrappers)`. The whole chain
+    /// gets placed by a single `ReplaceAround` step with `openStart` /
+    /// `openEnd` equal to `chain.len()`, so the inner-most wrapper
+    /// absorbs the gap content. Use this (not `wrap`) when the schema
+    /// requires intermediate wrappers between the gap parent and the
+    /// target — e.g. wrapping paragraphs in `bullet_list` requires the
+    /// `list_item` step between, returned by `find_wrapping`.
+    pub fn wrap_chain<I>(&mut self, from: usize, to: usize, chain: I) -> RichTextResult<&mut Self>
+    where
+        I: IntoIterator<Item = WrapperSpec>,
+    {
+        let chain: Vec<WrapperSpec> = chain.into_iter().collect();
+        if chain.is_empty() {
+            return Err(RichTextError::Transform(
+                "wrap_chain requires at least one wrapper".to_string(),
+            ));
+        }
+
         let from_resolved = self.doc.resolve(from)?;
         let to_resolved = self.doc.resolve(to)?;
         let depth = from_resolved.shared_depth(to);
@@ -1556,20 +1585,37 @@ impl Transform {
                 size: self.doc.content_size(),
             })?;
 
-        // Build an empty wrapper without going through schema.node() (which
-        // would reject empty content for `block+`-style wrappers). The wrapper
-        // is filled with the gap content during the step's apply, and the
-        // schema check on the resulting document catches genuine misuse.
-        let wrapper_type = self.schema.node_type(&node_type)?;
-        let wrapper = Node::unchecked(
-            node_type.clone(),
-            attrs,
-            Vec::new(),
-            Fragment::empty(),
-            None,
-            wrapper_type.content_expr().is_empty(),
-        );
-        let slice = Slice::new(Fragment::from(wrapper), 0, 0);
+        // Build the wrapper chain from the inside out so each outer
+        // wrapper's only child is the next wrapper down. The innermost
+        // wrapper is empty — the ReplaceAround step's `openStart` /
+        // `openEnd` markers tell the fitter to splice the gap content
+        // there, so we never have to construct a wrapper that holds
+        // the existing paragraphs ourselves.
+        let mut wrapper: Option<Node> = None;
+        for spec in chain.iter().rev() {
+            let wrapper_type = self.schema.node_type(&spec.type_name)?;
+            let attrs = self
+                .schema
+                .resolve_node_attrs(&spec.type_name, spec.attrs.clone())?;
+            let content = match wrapper.take() {
+                None => Fragment::empty(),
+                Some(inner) => Fragment::from(inner),
+            };
+            wrapper = Some(Node::unchecked(
+                spec.type_name.clone(),
+                attrs,
+                Vec::new(),
+                content,
+                None,
+                wrapper_type.content_expr().is_empty(),
+            ));
+        }
+        let outer = wrapper.expect("non-empty chain produces an outer wrapper");
+        // PM's `wrap(range, wrappers)`: the slice is closed on both
+        // sides (`openStart = openEnd = 0`); the `insert` field of the
+        // ReplaceAround step tells the step which depth inside the
+        // chain to splice the original gap content at.
+        let slice = Slice::new(Fragment::from(outer), 0, 0);
 
         self.step(Step::ReplaceAround(ReplaceAroundStep {
             from: start_pos,
@@ -1577,7 +1623,7 @@ impl Transform {
             gap_from: start_pos,
             gap_to: end_pos,
             slice,
-            insert: 1,
+            insert: chain.len(),
             structure: true,
         }))
     }
@@ -2764,10 +2810,19 @@ fn insert_into_fragment(
     for (index, child) in fragment.as_slice().iter().enumerate() {
         let end = offset + child.node_size();
         if pos > offset && pos < end && !child.is_text() && !child.is_leaf() {
-            let inner = pos - offset - 1;
+            // Position falls inside this child's content — recurse one
+            // wrapper deeper. Matches PM's `insertInto`, which keeps
+            // descending until the position lands at a fragment-level
+            // boundary; only then does it splice. Without the recursion
+            // a 2-wrapper insert (e.g. `bullet_list > list_item`) would
+            // hit `Fragment::replace_between` and crack open the inner
+            // wrapper, producing `[wrapper-open-half, gap…, wrapper-
+            // close-half]` instead of the nested structure.
+            let inner_pos = pos - offset - 1;
+            let inner_content = insert_into_fragment(child.content().clone(), inner_pos, inserted)?;
             let mut children = fragment.as_slice().to_vec();
             let mut next = child.clone();
-            next.content = child.content().replace_between(inner, inner, inserted)?;
+            next.content = inner_content;
             children[index] = next;
             return Ok(Fragment::from(children));
         }

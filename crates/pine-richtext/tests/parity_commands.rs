@@ -17,7 +17,8 @@ use pine_richtext::commands::{
     self, chain_commands, delete_selection, join_backward, join_down, join_forward,
     join_textblock_backward, join_textblock_forward, join_up, lift, lift_empty_block, select_all,
     select_node_backward, select_node_forward, select_parent_node, select_textblock_end,
-    select_textblock_start, set_block_type, split_block, toggle_mark, wrap_in, Command,
+    select_textblock_start, set_block_type, split_block, split_list_item, toggle_mark, wrap_in,
+    wrap_in_list, Command,
 };
 use pine_richtext::model::Attrs;
 use pine_richtext::schema_basic;
@@ -280,6 +281,7 @@ fn commands_split_block_splits_at_cursor() {
         state.doc(),
         &doc(vec![paragraph_text("fo"), paragraph_text("o")]),
     );
+    assert_eq!(state.selection(), &Selection::text(5));
 }
 
 #[test]
@@ -297,6 +299,44 @@ fn commands_split_block_deletes_then_splits_a_range() {
         state.doc(),
         &doc(vec![paragraph_text("fo"), paragraph_text("r")]),
     );
+    assert_eq!(state.selection(), &Selection::text(5));
+}
+
+#[test]
+fn commands_split_list_item_keeps_selection_in_new_item_for_typing() {
+    let tagged = tagged_doc(vec![tagged_bullet_list(vec![tagged_list_item_text(
+        "one<a>",
+    )
+    .into()])
+    .into()]);
+    let pos = tagged.tag("a");
+    let state = state_with_doc(tagged.node);
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(pos)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*split_list_item(&["list_item", "task_item"]), state);
+    assert_eq!(
+        state.doc(),
+        &doc(vec![bullet_list(vec![
+            list_item_text("one"),
+            list_item(vec![empty_paragraph()])
+        ])]),
+    );
+    assert_eq!(state.selection(), &Selection::text(10));
+
+    let mut tr = state.tr();
+    tr.insert_text("x").unwrap();
+    let state = state.apply(tr).unwrap();
+
+    assert_eq!(
+        state.doc(),
+        &doc(vec![bullet_list(vec![
+            list_item_text("one"),
+            list_item_text("x")
+        ])]),
+    );
+    assert_eq!(state.selection(), &Selection::text(11));
 }
 
 // ---------- wrap_in / set_block_type / toggle_mark ----------
@@ -327,6 +367,32 @@ fn commands_wrap_in_does_not_apply_when_wrapper_cannot_contain_target() {
     tr.set_selection(Selection::All).unwrap();
     let state = state.apply(tr).unwrap();
     assert!(wrap_in("paragraph", Attrs::new()).apply(&state).is_none());
+}
+
+#[test]
+fn commands_wrap_in_list_creates_one_item_per_selected_block() {
+    let tagged = tagged_doc(vec![
+        tagged_paragraph_text("al<a>pha").into(),
+        tagged_paragraph_text("bra<b>vo").into(),
+    ]);
+    let from = tagged.tag("a");
+    let to = tagged.tag("b");
+    let state = state_with_doc(tagged.node);
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text_between(from, to)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(
+        &*wrap_in_list("bullet_list", "list_item", Attrs::new()),
+        state,
+    );
+    assert_eq!(
+        state.doc(),
+        &doc(vec![bullet_list(vec![
+            list_item_text("alpha"),
+            list_item_text("bravo"),
+        ])]),
+    );
 }
 
 #[test]
