@@ -234,14 +234,28 @@ fn load_string(kind: BrowserStorageKind, key: &str) -> Option<String> {
 #[cfg(target_arch = "wasm32")]
 fn save_string(kind: BrowserStorageKind, key: &str, value: &str) {
     if let Some(storage) = browser_storage(kind) {
-        let _ = storage.set_item(key, value);
+        if let Err(err) = storage.set_item(key, value) {
+            tracing::warn!(
+                target: "pocopine.log",
+                key,
+                error = ?err,
+                "failed to write pocopine auth storage"
+            );
+        }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn clear_string(kind: BrowserStorageKind, key: &str) {
     if let Some(storage) = browser_storage(kind) {
-        let _ = storage.remove_item(key);
+        if let Err(err) = storage.remove_item(key) {
+            tracing::warn!(
+                target: "pocopine.log",
+                key,
+                error = ?err,
+                "failed to clear pocopine auth storage"
+            );
+        }
     }
 }
 
@@ -252,8 +266,14 @@ fn load_json<T: serde::de::DeserializeOwned>(kind: BrowserStorageKind, key: &str
 
 #[cfg(target_arch = "wasm32")]
 fn save_json<T: serde::Serialize>(kind: BrowserStorageKind, key: &str, value: &T) {
-    if let Ok(raw) = serde_json::to_string(value) {
-        save_string(kind, key, &raw);
+    match serde_json::to_string(value) {
+        Ok(raw) => save_string(kind, key, &raw),
+        Err(err) => tracing::warn!(
+            target: "pocopine.log",
+            key,
+            error = %err,
+            "failed to encode pocopine auth snapshot"
+        ),
     }
 }
 

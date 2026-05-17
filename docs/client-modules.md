@@ -14,13 +14,13 @@ toolkit path so authors still use Pocopine commands as the front door.
   ```js
   import { initializeApp } from "firebase/app";
 
-  export default function firebaseAuth(scope) {
-    return {
-      mounted() {
-        initializeApp(scope.props.firebaseConfig);
-      },
-    };
-  }
+  const app = initializeApp({ projectId: "my-project" });
+
+  export default {
+    appName() {
+      return app.name;
+    },
+  };
   ```
 
 - Do not use `.client.jsx`, `.client.tsx`, React/Vue/Svelte/Solid/Preact
@@ -65,6 +65,8 @@ fn subscribe(
 
 The module name comes from the filename. `src/Firebase.client.js` registers as
 `firebase`, and `src/FirebaseAuth.client.ts` registers as `firebase-auth`.
+Names are normalized to kebab case, so `FirebaseAuth.client.ts` and
+`firebase-auth.client.ts` collide; the CLI reports that as a build error.
 
 ## Commands
 

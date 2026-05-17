@@ -302,12 +302,14 @@ impl LoginButton {
 
         pocopine::spawn_for_scope(handle.scope_id(), async move {
             let result = firebase.sign_in().await;
-            let user = result.clone().ok().flatten();
+            let user = result.as_ref().ok().and_then(|user| user.clone());
             handle.update(|login| {
                 login.loading = false;
                 login.error = result.err().unwrap_or_default();
             });
-            publish_firebase_user(user);
+            if let Some(user) = user {
+                publish_firebase_user(Some(user));
+            }
         });
     }
 }
@@ -379,4 +381,7 @@ UX. Its example sync stream is not multi-user authorization.
   separately from Firebase popup auth. Some browsers require
   cross-origin isolation for OPFS SQLite, while Firebase popup auth
   prefers the non-isolated setup.
-
+- `with_cross_tab_sync(true)` clears Pocopine's local principal in
+  peer tabs when the persisted token disappears. Sign-in and token
+  refresh messages only bump the session epoch; the receiving tab
+  should still let Firebase or `/me` publish the confirmed identity.
