@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::model::{Fragment, Mark, Node, Schema, Slice};
+use crate::model::{Attrs, Fragment, Mark, Node, Schema, Slice};
 use crate::transform::{Mapping, StepMap, Transform};
 use crate::{RichTextError, RichTextResult};
 
@@ -604,6 +604,90 @@ impl Transaction {
         let marks = self.marks_for_selection(&selection)?;
         let node = self.transform.schema().text(text, marks)?;
         self.replace_selection_with(node)
+    }
+
+    /// Push a single pre-built step onto the transaction. Used by
+    /// `history::undo` / `redo` to replay already-inverted steps without
+    /// rebuilding them from a higher-level operation.
+    pub fn step(&mut self, step: crate::transform::Step) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.step(step)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Lift the closest block ancestor of `[from..to]` out of its parent.
+    /// Mirrors PM's `Transaction.lift(range, target)` collapsed to pine's
+    /// position-style API.
+    pub fn lift(&mut self, from: usize, to: usize) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.lift(from, to)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Join the boundary at `pos` with the block before it.
+    pub fn join(&mut self, pos: usize) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.join(pos)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Split the node at `pos` at the given depth.
+    pub fn split(&mut self, pos: usize, depth: usize) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.split(pos, depth)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Wrap `[from..to]` in a node of the given type.
+    pub fn wrap(
+        &mut self,
+        from: usize,
+        to: usize,
+        node_type: &str,
+        attrs: Attrs,
+    ) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.wrap(from, to, node_type, attrs)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Replace `[from..to]` with the given content fragment.
+    pub fn replace_with(
+        &mut self,
+        from: usize,
+        to: usize,
+        content: Fragment,
+    ) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.replace_with(from, to, content)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
+    /// Change the type of every textblock in `[from..to]`.
+    pub fn set_block_type(
+        &mut self,
+        from: usize,
+        to: usize,
+        node_type: &str,
+        attrs: Attrs,
+    ) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.set_block_type(from, to, node_type, attrs)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
     }
 
     /// Add a mark.
