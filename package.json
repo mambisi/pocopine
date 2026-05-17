@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:richtext": "wasm-pack build examples/richtext --target web --out-dir pkg",
+    "test:richtext-smoke": "npm run build:richtext && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

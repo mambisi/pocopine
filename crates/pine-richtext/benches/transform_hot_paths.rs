@@ -113,11 +113,7 @@ fn bench_replace_inline_into_block(c: &mut Criterion) {
     let doc = doc_with_paragraphs(50);
     // Slice = a hard_break (inline content) inserted between two top-level
     // paragraphs — exercises fit_inline_slice_inside_block_parent.
-    let inline_slice = Slice::new(
-        Fragment::from(schema_basic::hard_break().unwrap()),
-        0,
-        0,
-    );
+    let inline_slice = Slice::new(Fragment::from(schema_basic::hard_break().unwrap()), 0, 0);
     // Position between paragraph 25 and 26.
     let mut acc = 0;
     for i in 0..25 {
@@ -140,11 +136,7 @@ fn bench_replace_block_into_textblock(c: &mut Criterion) {
     let doc = doc_with_paragraphs(50);
     // Slice = a flat paragraph inserted in the middle of a textblock —
     // exercises fit_block_slice_inside_textblock.
-    let block_slice = Slice::new(
-        Fragment::from(paragraph_with("inserted block")),
-        0,
-        0,
-    );
+    let block_slice = Slice::new(Fragment::from(paragraph_with("inserted block")), 0, 0);
     // Position inside the 25th paragraph's text.
     let mut acc = 0;
     for i in 0..25 {

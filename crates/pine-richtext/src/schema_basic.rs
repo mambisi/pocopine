@@ -2,7 +2,9 @@ use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
-use crate::model::{Attrs, Fragment, Mark, MarkPolicy, MarkSpec, Node, NodeSpec, Schema, Whitespace};
+use crate::model::{
+    Attrs, Fragment, Mark, MarkPolicy, MarkSpec, Node, NodeSpec, Schema, Whitespace,
+};
 use crate::RichTextResult;
 
 /// Return the basic rich text schema.
@@ -17,10 +19,16 @@ pub fn schema() -> Schema {
                     NodeSpec::new("blockquote")
                         .group("block")
                         .content("block+")
-                        .defining_for_content(),
+                        .defining(),
                 )
                 .node(NodeSpec::new("horizontal_rule").group("block").atom())
-                .node(NodeSpec::new("heading").group("block").content("inline*"))
+                .node(
+                    NodeSpec::new("heading")
+                        .group("block")
+                        .content("inline*")
+                        .defining()
+                        .attr("level", json!(1)),
+                )
                 .node(
                     NodeSpec::new("code_block")
                         .group("block")
@@ -28,7 +36,7 @@ pub fn schema() -> Schema {
                         .marks(MarkPolicy::None)
                         .code()
                         .whitespace(Whitespace::Pre)
-                        .defining_for_content(),
+                        .defining(),
                 )
                 .node(
                     NodeSpec::new("bullet_list")
@@ -38,12 +46,24 @@ pub fn schema() -> Schema {
                 .node(
                     NodeSpec::new("ordered_list")
                         .group("block")
-                        .content("list_item+"),
+                        .content("list_item+")
+                        .attr("order", json!(1)),
                 )
                 .node(
                     NodeSpec::new("list_item")
                         .content("paragraph block*")
                         .defining(),
+                )
+                .node(
+                    NodeSpec::new("task_list")
+                        .group("block")
+                        .content("task_item+"),
+                )
+                .node(
+                    NodeSpec::new("task_item")
+                        .content("paragraph block*")
+                        .defining()
+                        .attr("checked", json!(false)),
                 )
                 .node(NodeSpec::new("text").group("inline").inline())
                 .node(
@@ -51,10 +71,24 @@ pub fn schema() -> Schema {
                         .group("inline")
                         .inline()
                         .atom()
-                        .marks(MarkPolicy::None),
+                        .marks(MarkPolicy::None)
+                        .required_attr("src")
+                        .attr("alt", Value::Null)
+                        .attr("title", Value::Null),
                 )
-                .node(NodeSpec::new("hard_break").group("inline").inline().atom())
-                .mark(MarkSpec::new("link").inclusive(false))
+                .node(
+                    NodeSpec::new("hard_break")
+                        .group("inline")
+                        .inline()
+                        .atom()
+                        .non_selectable(),
+                )
+                .mark(
+                    MarkSpec::new("link")
+                        .required_attr("href")
+                        .attr("title", Value::Null)
+                        .inclusive(false),
+                )
                 .mark(MarkSpec::new("em"))
                 .mark(MarkSpec::new("strong"))
                 .mark(MarkSpec::new("code").excludes("_"))
@@ -147,6 +181,18 @@ pub fn bullet_list(items: Vec<Node>) -> RichTextResult<Node> {
 /// Build an ordered list node.
 pub fn ordered_list(items: Vec<Node>) -> RichTextResult<Node> {
     schema().node("ordered_list", Attrs::new(), Fragment::from(items))
+}
+
+/// Build a task (checklist) item node.
+pub fn task_item(checked: bool, children: Vec<Node>) -> RichTextResult<Node> {
+    let mut attrs = Attrs::new();
+    attrs.insert("checked".to_string(), json!(checked));
+    schema().node("task_item", attrs, Fragment::from(children))
+}
+
+/// Build a task (checklist) list node.
+pub fn task_list(items: Vec<Node>) -> RichTextResult<Node> {
+    schema().node("task_list", Attrs::new(), Fragment::from(items))
 }
 
 /// Build a link mark.

@@ -1,0 +1,1 @@
+<root class="pine-task-item" pp-ref="root" :data-checked="checked" contenteditable="false"><button class="pine-task-item-check" type="button" contenteditable="false" tabindex="-1" @mousedown.prevent pp-on:click="toggle"></button><div class="pine-task-item-content" data-pine-richtext-content contenteditable="true"><slot></slot></div></root>

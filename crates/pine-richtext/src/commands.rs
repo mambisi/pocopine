@@ -13,7 +13,7 @@
 
 use crate::model::{Attrs, Mark, Node, NodeRange, ResolvedPos};
 use crate::state::{EditorState, Selection, Transaction};
-use crate::transform::{can_join, find_wrapping, join_point, lift_target};
+use crate::transform::{can_join, find_wrapping, join_point, lift_target, AttrStep, Step};
 
 /// A reusable editor command. Implementors decide whether the command
 /// applies at the given state and, if so, return the transaction that
@@ -264,8 +264,75 @@ pub fn split_block() -> BoxedCommand {
             return None;
         }
         tr.split(pos, 1).ok()?;
+        set_selection_near(&mut tr, state, pos + 2).ok()?;
         Some(tr)
     })
+}
+
+/// Split the enclosing list-item-like node so Enter creates a new
+/// sibling item. Mirrors PM's `splitListItem(itemType)`, generalized to
+/// accept multiple item types so one binding covers both `list_item`
+/// and `task_item`.
+///
+/// Returns `None` when the cursor isn't inside any of the named types —
+/// callers should chain this before plain `split_block` so a regular
+/// paragraph still splits.
+pub fn split_list_item(item_types: &[&str]) -> BoxedCommand {
+    let names: Vec<String> = item_types.iter().map(|s| (*s).to_string()).collect();
+    boxed(move |state| {
+        let sel = state.selection();
+        let from = sel.from(state.doc());
+        let to = sel.to(state.doc());
+        let resolved = state.doc().resolve(from).ok()?;
+        let item_depth = (0..=resolved.depth()).rev().find(|&d| {
+            resolved
+                .node(d)
+                .map(|n| names.iter().any(|name| name == n.type_name()))
+                .unwrap_or(false)
+        })?;
+        // +1 because split_depth counts from the cursor's parent outward,
+        // and we want to also split the list_item itself.
+        let split_depth = resolved.depth() - item_depth + 1;
+        let mut tr = state.tr();
+        if from < to {
+            tr.delete(from, to).ok()?;
+        }
+        let pos = tr.selection().map(|s| s.from(tr.doc())).unwrap_or(from);
+        if !crate::transform::can_split(tr.doc(), pos, split_depth, state.schema()) {
+            return None;
+        }
+        let original_item = resolved.node(item_depth)?;
+        let original_item_type = original_item.type_name().to_string();
+        tr.split(pos, split_depth).ok()?;
+
+        // pine's `tr.split` clones the original node's attrs onto both
+        // halves. For `task_item` that means hitting Enter on a checked
+        // item produces a new checked sibling — surprising UX. Reset
+        // `checked` to the schema default on the right-half item.
+        if original_item_type == "task_item" {
+            // After `tr.split(pos, depth)` the split point grows by
+            // `depth` close tokens before the new right-half opens, so
+            // the right-half item's outer position is `pos + depth`.
+            let new_item_pos = pos + split_depth;
+            let _ = tr.step(Step::Attr(AttrStep {
+                pos: new_item_pos,
+                attr: "checked".to_string(),
+                value: Some(serde_json::json!(false)),
+            }));
+        }
+        set_selection_near(&mut tr, state, pos + split_depth * 2).ok()?;
+        Some(tr)
+    })
+}
+
+fn set_selection_near(
+    tr: &mut Transaction,
+    state: &EditorState,
+    pos: usize,
+) -> crate::RichTextResult<()> {
+    let selection = Selection::near(tr.doc(), state.schema(), pos, 1)?;
+    tr.set_selection(selection)?;
+    Ok(())
 }
 
 // ====================================================================
@@ -522,16 +589,73 @@ pub fn select_node_forward() -> BoxedCommand {
 // ====================================================================
 
 /// Wrap the selection in a node of the given type. Mirrors PM's
-/// `wrapIn(type, attrs)`.
+/// `wrapIn(type, attrs)`. When the schema needs intermediate wrappers
+/// between the gap parent and the target (e.g. `bullet_list` is
+/// `list_item+`, but we're handed a `paragraph` selection), the
+/// resolver's chain is applied as a single `wrap_chain` step so the
+/// inner wrapper absorbs the paragraphs and the schema check passes.
 pub fn wrap_in(node_type: impl Into<String>, attrs: Attrs) -> BoxedCommand {
     let node_type = node_type.into();
     boxed(move |state| {
         let range = block_range_for_selection(state)?;
         let target = state.schema().node_type(&node_type).ok()?;
-        find_wrapping(&range, target, attrs.clone(), state.schema())?;
+        let chain = find_wrapping(&range, target, attrs.clone(), state.schema())?;
         let mut tr = state.tr();
-        tr.wrap(range.start(), range.end(), &node_type, attrs.clone())
-            .ok()?;
+        tr.wrap_chain(range.start(), range.end(), chain).ok()?;
+        Some(tr)
+    })
+}
+
+/// Wrap the selection in a list, making every selected sibling block
+/// its own list item. This is the list-specific command equivalent to
+/// ProseMirror's `wrapInList`: `wrap_in("bullet_list")` intentionally
+/// wraps the selected blocks in one `list_item`, while this command
+/// performs the follow-up splits that list toolbar buttons need.
+pub fn wrap_in_list(
+    list_type: impl Into<String>,
+    item_type: impl Into<String>,
+    attrs: Attrs,
+) -> BoxedCommand {
+    let list_type = list_type.into();
+    let item_type = item_type.into();
+    boxed(move |state| {
+        let range = block_range_for_selection(state)?;
+        let target = state.schema().node_type(&list_type).ok()?;
+        let chain = find_wrapping(&range, target, attrs.clone(), state.schema())?;
+
+        let found_list = chain
+            .iter()
+            .position(|spec| spec.type_name == list_type)
+            .map(|index| index + 1)?;
+        if !chain.iter().any(|spec| spec.type_name == item_type) {
+            return None;
+        }
+        let split_depth = chain.len().checked_sub(found_list)?;
+        if split_depth == 0 {
+            return None;
+        }
+
+        let parent = range.parent().clone();
+        let start = range.start();
+        let end = range.end();
+        let start_index = range.start_index();
+        let end_index = range.end_index();
+        let mut tr = state.tr();
+        tr.wrap_chain(start, end, chain.clone()).ok()?;
+
+        let mut split_pos = start + chain.len();
+        for index in start_index..end_index {
+            if index > start_index {
+                if !crate::transform::can_split(tr.doc(), split_pos, split_depth, state.schema()) {
+                    return None;
+                }
+                tr.split(split_pos, split_depth).ok()?;
+                split_pos += 2 * split_depth;
+            }
+            let child = parent.content().child(index)?;
+            split_pos += child.node_size();
+        }
+
         Some(tr)
     })
 }
@@ -607,5 +731,200 @@ struct ChainedCommands {
 impl Command for ChainedCommands {
     fn apply(&self, state: &EditorState) -> Option<Transaction> {
         self.commands.iter().find_map(|c| c.apply(state))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema_basic;
+    use crate::state::{EditorState, EditorStateConfig};
+
+    /// End of "one" inside `<ul><li><p>one</p></li></ul>` → cursor is at
+    /// model position 4 (doc 0 → ul opens, 1 → li opens, 2 → p opens,
+    /// 3..6 → "one", 6 → p closes). `split_list_item` should turn the
+    /// single `<li>` into two — the original holding "one" and a new
+    /// empty one after it.
+    #[test]
+    fn split_list_item_creates_a_new_sibling_li() {
+        let li = schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+            "one",
+            Vec::new(),
+        )
+        .unwrap()])
+        .unwrap()])
+        .unwrap();
+        let ul = schema_basic::bullet_list(vec![li]).unwrap();
+        let doc = schema_basic::doc(vec![ul]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(6)),
+        )
+        .unwrap();
+        let cmd = split_list_item(&["list_item", "task_item"]);
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let ul = next.doc().content().child(0).unwrap();
+        assert_eq!(ul.type_name(), "bullet_list");
+        assert_eq!(ul.child_count(), 2, "should produce two list items");
+        assert_eq!(ul.content().child(0).unwrap().text_content(), "one");
+        assert_eq!(ul.content().child(1).unwrap().text_content(), "");
+    }
+
+    /// Selecting text that spans two paragraphs and dispatching
+    /// `wrap_in("bullet_list")` should produce one bullet list with
+    /// the two paragraphs wrapped in a single list_item (matching
+    /// PM's behavior — Enter inside the wrap splits the list_item
+    /// further if the user wants distinct items).
+    #[test]
+    fn wrap_in_bullet_list_with_multi_paragraph_selection() {
+        let p1 = schema_basic::paragraph(vec![schema_basic::text("alpha", Vec::new()).unwrap()])
+            .unwrap();
+        let p2 = schema_basic::paragraph(vec![schema_basic::text("bravo", Vec::new()).unwrap()])
+            .unwrap();
+        let doc = schema_basic::doc(vec![p1, p2]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                // anchor inside p1 text, head inside p2 text
+                .selection(Selection::text_between(3, 10)),
+        )
+        .unwrap();
+        let cmd = wrap_in("bullet_list", Attrs::new());
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let outer = next.doc().content().child(0).unwrap();
+        assert_eq!(outer.type_name(), "bullet_list");
+        assert_eq!(
+            outer.child_count(),
+            1,
+            "single list_item wraps both paragraphs"
+        );
+        let item = outer.content().child(0).unwrap();
+        assert_eq!(item.type_name(), "list_item");
+        assert_eq!(item.child_count(), 2);
+        assert_eq!(item.content().child(0).unwrap().text_content(), "alpha");
+        assert_eq!(item.content().child(1).unwrap().text_content(), "bravo");
+    }
+
+    #[test]
+    fn wrap_in_list_bullet_list_splits_selected_blocks_into_items() {
+        let p1 = schema_basic::paragraph(vec![schema_basic::text("alpha", Vec::new()).unwrap()])
+            .unwrap();
+        let p2 = schema_basic::paragraph(vec![schema_basic::text("bravo", Vec::new()).unwrap()])
+            .unwrap();
+        let doc = schema_basic::doc(vec![p1, p2]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                .selection(Selection::text_between(3, 10)),
+        )
+        .unwrap();
+        let cmd = wrap_in_list("bullet_list", "list_item", Attrs::new());
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "bullet_list");
+        assert_eq!(list.child_count(), 2);
+        assert_eq!(list.content().child(0).unwrap().type_name(), "list_item");
+        assert_eq!(list.content().child(0).unwrap().text_content(), "alpha");
+        assert_eq!(list.content().child(1).unwrap().type_name(), "list_item");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "bravo");
+    }
+
+    #[test]
+    fn wrap_in_list_ordered_list_resolves_default_order_attr() {
+        let blocks = ["one", "two", "three"]
+            .into_iter()
+            .map(|value| {
+                schema_basic::paragraph(vec![schema_basic::text(value, Vec::new()).unwrap()])
+                    .unwrap()
+            })
+            .collect();
+        let doc = schema_basic::doc(blocks).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                .selection(Selection::text_between(2, 14)),
+        )
+        .unwrap();
+        let cmd = wrap_in_list("ordered_list", "list_item", Attrs::new());
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "ordered_list");
+        assert_eq!(
+            list.attrs().get("order"),
+            Some(&serde_json::json!(1)),
+            "wrapper attrs should be resolved through the schema"
+        );
+        assert_eq!(list.child_count(), 3);
+        assert_eq!(list.content().child(0).unwrap().text_content(), "one");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "two");
+        assert_eq!(list.content().child(2).unwrap().text_content(), "three");
+    }
+
+    #[test]
+    fn wrap_in_list_task_list_creates_unchecked_task_items() {
+        let p1 =
+            schema_basic::paragraph(vec![schema_basic::text("todo", Vec::new()).unwrap()]).unwrap();
+        let p2 = schema_basic::paragraph(vec![schema_basic::text("later", Vec::new()).unwrap()])
+            .unwrap();
+        let doc = schema_basic::doc(vec![p1, p2]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                .selection(Selection::text_between(2, 10)),
+        )
+        .unwrap();
+        let cmd = wrap_in_list("task_list", "task_item", Attrs::new());
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "task_list");
+        assert_eq!(list.child_count(), 2);
+        for index in 0..2 {
+            let item = list.content().child(index).unwrap();
+            assert_eq!(item.type_name(), "task_item");
+            assert_eq!(
+                item.attrs().get("checked").and_then(|v| v.as_bool()),
+                Some(false)
+            );
+        }
+        assert_eq!(list.content().child(0).unwrap().text_content(), "todo");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "later");
+    }
+
+    /// Same flow for `task_item` — the new sibling inherits the type but
+    /// gets the schema's default `checked: false` attribute.
+    #[test]
+    fn split_list_item_creates_a_new_task_item_with_default_attrs() {
+        let item = schema_basic::task_item(
+            true,
+            vec![
+                schema_basic::paragraph(vec![schema_basic::text("done", Vec::new()).unwrap()])
+                    .unwrap(),
+            ],
+        )
+        .unwrap();
+        let list = schema_basic::task_list(vec![item]).unwrap();
+        let doc = schema_basic::doc(vec![list]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(7)),
+        )
+        .unwrap();
+        let cmd = split_list_item(&["list_item", "task_item"]);
+        let tr = cmd.apply(&state).expect("command should apply");
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.child_count(), 2);
+        let new_item = list.content().child(1).unwrap();
+        assert_eq!(new_item.type_name(), "task_item");
+        assert_eq!(
+            new_item.attrs().get("checked").and_then(|v| v.as_bool()),
+            Some(false),
+            "new task_item should default to unchecked"
+        );
     }
 }

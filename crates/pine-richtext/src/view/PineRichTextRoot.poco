@@ -1,0 +1,11 @@
+<root class="pine-rich-text"
+      contenteditable="true"
+      pp-ref="surface"
+      :data-empty="state == null">
+  <!-- TODO: doc renderer goes here. Today the surface is empty and
+       contentEditable lets the browser handle text input, but no model
+       sync runs yet. The next step is a `render` module that walks
+       `state.doc()` and produces the matching DOM, plus a `selection`
+       module that maps `window.getSelection()` ranges back into a model
+       Selection. -->
+</root>

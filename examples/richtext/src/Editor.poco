@@ -1,0 +1,28 @@
+<div class="richtext-demo" pp-ref="root">
+  <div class="toolbar">
+    <!-- `@mousedown.prevent` keeps keyboard focus in the contentEditable
+         surface when the user clicks a toolbar button. Without it the
+         click moves focus to the button, which collapses the active text
+         selection in the editor and the format handler reads an empty
+         selection. -->
+    <button @mousedown.prevent pp-on:click="toggle_bold"><b>B</b></button>
+    <button @mousedown.prevent pp-on:click="toggle_em"><i>I</i></button>
+    <button @mousedown.prevent pp-on:click="toggle_code"><code>{ }</code></button>
+    <span class="sep"></span>
+    <button @mousedown.prevent pp-on:click="make_h1">H1</button>
+    <button @mousedown.prevent pp-on:click="make_h2">H2</button>
+    <button @mousedown.prevent pp-on:click="make_paragraph">P</button>
+    <span class="sep"></span>
+    <button @mousedown.prevent pp-on:click="wrap_in_blockquote">Quote</button>
+    <button @mousedown.prevent pp-on:click="wrap_in_bullet_list" title="Bulleted list">• List</button>
+    <button @mousedown.prevent pp-on:click="wrap_in_ordered_list" title="Numbered list">1. List</button>
+    <button @mousedown.prevent pp-on:click="wrap_in_task_list" title="Checklist">☑ List</button>
+    <button @mousedown.prevent pp-on:click="lift_block">Lift</button>
+    <span class="sep"></span>
+    <button @mousedown.prevent pp-on:click="undo" title="Undo">↶</button>
+    <button @mousedown.prevent pp-on:click="redo" title="Redo">↷</button>
+    <span class="sep"></span>
+    <button @mousedown.prevent pp-on:click="reset">Reset</button>
+  </div>
+  <pine-rich-text-root debug-json="true" pp-bind:initial-doc="initial_doc"></pine-rich-text-root>
+</div>

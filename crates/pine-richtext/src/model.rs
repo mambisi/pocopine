@@ -142,6 +142,11 @@ impl Schema {
         Ok(Mark { name, attrs })
     }
 
+    pub(crate) fn resolve_node_attrs(&self, name: &str, attrs: Attrs) -> RichTextResult<Attrs> {
+        let node_type = self.node_type(name)?;
+        resolve_attrs(&node_type.attrs, attrs, name)
+    }
+
     /// Build the default valid node for a node type when one can be inferred.
     pub fn default_node(&self, name: &str) -> RichTextResult<Node> {
         self.default_node_with_depth(name, 0)
@@ -3369,19 +3374,21 @@ fn split_names(input: &str) -> impl Iterator<Item = String> + '_ {
 /// for backwards compatibility with pre-AttributeSpec call sites.
 fn resolve_attrs(
     spec: &BTreeMap<String, AttributeSpec>,
-    mut attrs: Attrs,
+    attrs: Attrs,
     owner: &str,
 ) -> RichTextResult<Attrs> {
     if spec.is_empty() {
         return Ok(attrs);
     }
+    let mut resolved = Attrs::new();
     for (name, attr_spec) in spec {
-        if attrs.contains_key(name) {
+        if let Some(value) = attrs.get(name) {
+            resolved.insert(name.clone(), value.clone());
             continue;
         }
         match attr_spec.default_value() {
             Some(default) => {
-                attrs.insert(name.clone(), default.clone());
+                resolved.insert(name.clone(), default.clone());
             }
             None => {
                 return Err(RichTextError::InvalidContent(format!(
@@ -3390,7 +3397,7 @@ fn resolve_attrs(
             }
         }
     }
-    Ok(attrs)
+    Ok(resolved)
 }
 
 #[cfg(test)]

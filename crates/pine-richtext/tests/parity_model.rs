@@ -992,9 +992,25 @@ fn model_schema_basic_flags_defining_wrappers() {
         .unwrap()
         .is_defining_for_content());
     assert!(schema
+        .node_type("blockquote")
+        .unwrap()
+        .is_defining_as_context());
+    assert!(schema
+        .node_type("heading")
+        .unwrap()
+        .is_defining_for_content());
+    assert!(schema
+        .node_type("heading")
+        .unwrap()
+        .is_defining_as_context());
+    assert!(schema
         .node_type("code_block")
         .unwrap()
         .is_defining_for_content());
+    assert!(schema
+        .node_type("code_block")
+        .unwrap()
+        .is_defining_as_context());
     assert!(schema
         .node_type("list_item")
         .unwrap()
@@ -1007,6 +1023,49 @@ fn model_schema_basic_flags_defining_wrappers() {
         .node_type("paragraph")
         .unwrap()
         .is_defining_for_content());
+    assert!(!schema.node_type("hard_break").unwrap().is_selectable());
+}
+
+#[test]
+fn model_schema_basic_declares_builtin_attrs() {
+    let schema = schema_basic::schema();
+
+    let heading = schema
+        .node("heading", Attrs::new(), Fragment::empty())
+        .unwrap();
+    assert_eq!(heading.attrs().get("level"), Some(&json!(1)));
+
+    let item = schema_basic::list_item(vec![paragraph_text("one")]).unwrap();
+    let ordered = schema
+        .node("ordered_list", Attrs::new(), Fragment::from(item))
+        .unwrap();
+    assert_eq!(ordered.attrs().get("order"), Some(&json!(1)));
+
+    let missing_image_src = schema
+        .node("image", Attrs::new(), Fragment::empty())
+        .unwrap_err();
+    assert!(missing_image_src
+        .to_string()
+        .contains("missing required attribute src"));
+    let image =
+        schema_basic::image("image.png", Option::<String>::None, Option::<String>::None).unwrap();
+    assert_eq!(image.attrs().get("src"), Some(&json!("image.png")));
+    assert_eq!(image.attrs().get("alt"), Some(&json!(null)));
+    assert_eq!(image.attrs().get("title"), Some(&json!(null)));
+
+    let missing_link_href = schema.mark("link", Attrs::new()).unwrap_err();
+    assert!(missing_link_href
+        .to_string()
+        .contains("missing required attribute href"));
+    let link = schema_basic::link("https://example.test", Option::<String>::None).unwrap();
+    assert_eq!(
+        link.attrs().get("href"),
+        Some(&json!("https://example.test"))
+    );
+    assert_eq!(link.attrs().get("title"), Some(&json!(null)));
+
+    let task = schema_basic::task_item(false, vec![paragraph_text("todo")]).unwrap();
+    assert_eq!(task.attrs().get("checked"), Some(&json!(false)));
 }
 
 #[test]
@@ -1043,8 +1102,11 @@ fn model_attribute_spec_fills_defaults_and_requires_missing() {
     let mut attrs = Attrs::new();
     attrs.insert("id".to_string(), json!("p2"));
     attrs.insert("title".to_string(), json!("Cover"));
+    attrs.insert("ignored".to_string(), json!(true));
     let page = schema.node("page", attrs, Fragment::empty()).unwrap();
+    assert_eq!(page.attrs().get("id"), Some(&json!("p2")));
     assert_eq!(page.attrs().get("title"), Some(&json!("Cover")));
+    assert_eq!(page.attrs().get("ignored"), None);
 
     // AttributeSpec accessors round-trip.
     let optional = AttributeSpec::with_default(json!(0));

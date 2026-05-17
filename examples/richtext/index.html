@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pine-richtext demo</title>
+  <link rel="icon" href="data:," />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      padding: 2rem;
+      max-width: 48rem;
+      margin: 0 auto;
+      color: #222;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 1.5rem; }
+
+    /* The whole editor is a single card. Toolbar + surface live
+       inside the same border; a thin divider separates them. */
+    .richtext-demo {
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      overflow: hidden;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 0;
+      align-items: center;
+      padding: 4px 6px;
+      border-bottom: 1px solid #e5e5e5;
+      flex-wrap: wrap;
+      background: #fafafa;
+    }
+    .toolbar button {
+      border: 0;
+      background: transparent;
+      padding: 4px 8px;
+      margin: 0;
+      cursor: pointer;
+      font: inherit;
+      color: #555;
+      border-radius: 2px;
+      line-height: 1.2;
+    }
+    .toolbar button:hover { background: #efefef; color: #111; }
+    .toolbar button:active { background: #e5e5e5; }
+    .toolbar button:focus { outline: none; }
+    .toolbar button:focus-visible { outline: 2px solid #4a90e2; outline-offset: -2px; }
+    .toolbar .sep {
+      display: inline-block;
+      width: 1px;
+      align-self: stretch;
+      background: #e5e5e5;
+      margin: 4px 6px;
+    }
+
+    pine-rich-text-root {
+      display: block;
+      padding: 12px 16px;
+      min-height: 8rem;
+      /* Kill the browser's contentEditable focus ring — the card
+         border around the whole component is the focus surface,
+         not the inner editing area. */
+      outline: none;
+      border: 0;
+      /* contentEditable collapses consecutive whitespace by default;
+         preserve every char so the model and the DOM stay 1:1. */
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+    }
+    pine-rich-text-root:focus,
+    pine-rich-text-root:focus-visible,
+    pine-rich-text-root *:focus { outline: none; }
+
+    pine-rich-text-root p { margin: 0 0 0.6em; }
+    pine-rich-text-root p:last-child { margin-bottom: 0; }
+    pine-rich-text-root h1 { font-size: 1.5rem; margin: 0.6em 0 0.4em; }
+    pine-rich-text-root h2 { font-size: 1.2rem; margin: 0.6em 0 0.4em; }
+    pine-rich-text-root blockquote {
+      margin: 0 0 0.6em;
+      padding-left: 1em;
+      border-left: 3px solid #ddd;
+      color: #666;
+    }
+    pine-rich-text-root code {
+      background: #f4f4f4;
+      padding: 0.1em 0.3em;
+      border-radius: 2px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.95em;
+    }
+    pine-rich-text-root ul,
+    pine-rich-text-root ol {
+      margin: 0 0 0.6em;
+      padding-left: 1.5em;
+    }
+    pine-rich-text-root li > p { margin: 0; }
+
+    /* Checklist: `<pine-task-item>` is registered as the node-view for
+       the `task_item` model node. It renders a checkbox button + a
+       `<slot>` for the inline content. The list itself hides the
+       default bullet and leaves room for the checkbox. */
+    pine-rich-text-root ul.task-list {
+      list-style: none;
+      padding-left: 1.75em;
+    }
+    pine-rich-text-root pine-task-item {
+      display: block;
+      margin: 0;
+    }
+    pine-rich-text-root pine-task-item .pine-task-item {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      column-gap: 8px;
+      align-items: start;
+    }
+    pine-rich-text-root .pine-task-item-check {
+      width: 14px;
+      height: 14px;
+      padding: 0;
+      margin: 0.3em 0 0;
+      border: 1.5px solid #999;
+      border-radius: 3px;
+      background: #fff;
+      cursor: pointer;
+      box-sizing: border-box;
+      appearance: none;
+      justify-self: center;
+      user-select: none;
+    }
+    pine-rich-text-root .pine-task-item-content { min-width: 0; }
+    pine-rich-text-root .pine-task-item-content > p { margin: 0; }
+    pine-rich-text-root pine-task-item[data-checked="true"] .pine-task-item-check {
+      background: #4a90e2;
+      border-color: #4a90e2;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M3 8.5l3 3 7-7'/></svg>");
+      background-size: 12px 12px;
+      background-repeat: no-repeat;
+      background-position: center;
+    }
+    pine-rich-text-root pine-task-item[data-checked="true"] .pine-task-item-content,
+    pine-rich-text-root pine-task-item[data-checked="true"] p {
+      color: #999;
+      text-decoration: line-through;
+    }
+  </style>
+</head>
+<body>
+  <h1>pine-richtext demo</h1>
+  <div pp-app>
+    <editor></editor>
+  </div>
+
+  <script type="module">
+    import init from "/pkg/richtext.js?v=debug-json-v1";
+    init();
+  </script>
+</body>
+</html>

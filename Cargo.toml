@@ -43,6 +43,7 @@ members = [
     "jsbench/yew",
     "jsbench/tags_input_repro",
     "examples/website",
+    "examples/richtext",
     "examples/site",
     "examples/spa",
     "examples/sync",
