@@ -410,6 +410,100 @@ test('toolbar ordered and checklist lists also create one item per selected para
   expect(errors).toEqual([]);
 });
 
+test('toolbar paragraph converts selected list items back into paragraphs', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await selectFirstTwoTopLevelParagraphs(page);
+  await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
+
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const items = [...surface.querySelectorAll(':scope > ul:not(.task-list) > li')];
+    if (items.length < 2) throw new Error('expected two bullet items');
+    const first = items[0].querySelector('p').firstChild;
+    const second = items[1].querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(second, Math.min(second.textContent.length, 3));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  await page.locator('.toolbar button', { hasText: /^P$/ }).click();
+
+  const result = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    return {
+      topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
+      bulletLists: [...surface.querySelectorAll(':scope > ul')]
+        .filter((ul) => !ul.classList.contains('task-list'))
+        .map((ul) => [...ul.children].map((li) => li.textContent.trim())),
+    };
+  });
+
+  expect(result.topParagraphs[0]).toBe('Hello, pine-richtext.');
+  expect(result.topParagraphs[1]).toContain('Select some text and use the toolbar:');
+  expect(result.bulletLists).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('Backspace at the first bullet unwraps that item without deleting the rest of the list', async ({
+  page,
+}) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+  await selectFirstTwoTopLevelParagraphs(page);
+  await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
+
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const paragraph = surface.querySelector(':scope > ul:not(.task-list) > li:first-child p');
+    if (!paragraph?.firstChild) throw new Error('missing first bullet paragraph');
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild, 0);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  await page.keyboard.press('Backspace');
+
+  const result = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const bullet = [...surface.querySelectorAll(':scope > ul')]
+      .find((ul) => !ul.classList.contains('task-list'));
+    return {
+      topParagraphs: [...surface.querySelectorAll(':scope > p')].map((p) => p.textContent),
+      bulletItems: bullet ? [...bullet.children].map((li) => li.textContent.trim()) : [],
+      taskItems: [...surface.querySelectorAll(':scope > ul.task-list > pine-task-item')].map(
+        (item) => item.textContent.trim(),
+      ),
+    };
+  });
+
+  expect(result.topParagraphs[0]).toBe('Hello, pine-richtext.');
+  expect(result.bulletItems).toHaveLength(1);
+  expect(result.bulletItems[0]).toContain('Select some text and use the toolbar:');
+  expect(result.taskItems).toHaveLength(2);
+  expect(errors).toEqual([]);
+});
+
 test('italic mark toggle reconciles one subtree and preserves task checkboxes', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -480,5 +574,245 @@ test('typing inside a task item preserves node-view chrome', async ({ page }) =>
   await expectTaskItemChromeHasNoTextNodes(taskItems.nth(1));
   await expectTaskItemContentEditableBoundary(taskItems.nth(1));
   await expectTaskItemsTight(taskItems);
+  expect(errors).toEqual([]);
+});
+
+test('extension-contributed `Custom` command reaches the surface', async ({ page }) => {
+  // Phase 4: the open `pine:richtext:command` `{ kind: "custom", name,
+  // args }` shape resolves through the registry, so an
+  // extension-contributed `wrap_in_bullet_list` produces the same DOM
+  // as the closed `kind: "wrap_in_list", ...` variant did before.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root p[data-pos]');
+
+  // Select the same two-paragraph span the closed-variant test uses.
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const paragraphs = [...surface.querySelectorAll(':scope > p')];
+    const p1 = paragraphs[0];
+    const p2 = paragraphs[1];
+    if (!p1 || !p2) throw new Error('need at least two paragraphs');
+    const range = document.createRange();
+    range.setStart(p1.firstChild, 0);
+    range.setEnd(p2.firstChild, p2.firstChild.textContent.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  // Dispatch the open-variant CustomEvent on the surface element.
+  // Use `bubbles: true` and `composed: true` so the listener
+  // registered on the surface fires regardless of whether the test
+  // dispatches on the surface itself or a descendant.
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const event = new CustomEvent('pine:richtext:command', {
+      bubbles: true,
+      composed: true,
+      detail: {
+        kind: 'custom',
+        name: 'wrap_in_bullet_list',
+        args: {},
+      },
+    });
+    surface.dispatchEvent(event);
+  });
+  await page.waitForTimeout(150);
+
+  const ulHTML = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    return [...surface.querySelectorAll(':scope > ul')]
+      .map((ul) => ul.outerHTML)
+      .filter((html) => !html.includes('class="task-list"'))[0];
+  });
+  expect(ulHTML).toBeTruthy();
+  expect(ulHTML).toMatch(/<ul[^>]*>\s*<li[^>]*>[\s\S]*<\/li>\s*<li[^>]*>[\s\S]*<\/li>\s*<\/ul>/);
+  expect(errors).toEqual([]);
+});
+
+test('TaskListExtension::with_node_view renders custom task-item element', async ({ page }) => {
+  // Phase 4 C4: the demo registers `TaskListExtension::with_node_view::<PineTaskItem>()`,
+  // which forwards the `pine-task-item` tag + `data-pine-richtext-content`
+  // selector eagerly into the render::node_views registry. The
+  // reconciler picks that up when rendering `task_item` nodes.
+  // Asserting the seed doc's custom-element layout closes the
+  // extension contract.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root pine-task-item');
+
+  const items = page.locator('pine-rich-text-root pine-task-item');
+  await expect(items).toHaveCount(2);
+  // Every custom-element host must carry data-pos (so the reconciler
+  // and selection bridge can find them) and the inner content host
+  // (so the reconciler knows where to render inline content).
+  for (let i = 0; i < 2; i += 1) {
+    await expect(items.nth(i)).toHaveAttribute('data-pos', /\d+/);
+    await expect(items.nth(i).locator('[data-pine-richtext-content]')).toBeVisible();
+  }
+  expect(errors).toEqual([]);
+});
+
+test('clicking ordered list inside a bullet list converts in place without freezing', async ({ page }) => {
+  // Pre-fix this clicked-button took ~4 seconds because wrap_in_list
+  // pushed find_wrapping's BFS to depth 6 trying to find a way to wrap
+  // already-inside-a-list selection. The new fast path detects the
+  // ancestor list and swaps its type via replace_with.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+
+  await selectFirstTwoTopLevelParagraphs(page);
+  await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
+  // Selection should be inside the new bullet list now. Drop it into
+  // the first li explicitly so the conversion test starts from a
+  // known cursor.
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const li = surface.querySelector(':scope > ul > li');
+    const p = li.querySelector('p');
+    const range = document.createRange();
+    range.setStart(p.firstChild, 0);
+    range.setEnd(p.firstChild, 2);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  const started = Date.now();
+  await page.locator('.toolbar button', { hasText: /^1\. List$/ }).click({ timeout: 1500 });
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeLessThan(1500);
+
+  const result = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const list = [...surface.querySelectorAll(':scope > ol, :scope > ul')]
+      .find((el) => !el.classList.contains('task-list'));
+    return {
+      tag: list?.tagName,
+      childCount: list?.children.length,
+      texts: list ? [...list.children].map((li) => li.textContent.trim()) : null,
+    };
+  });
+  expect(result.tag).toBe('OL');
+  expect(result.childCount).toBe(2);
+  expect(result.texts?.[0]).toContain('Hello, pine-richtext.');
+  expect(result.texts?.[1]).toContain('Select some text');
+  expect(errors).toEqual([]);
+});
+
+test('bullet → task → bullet round-trips through the conversion contract', async ({ page }) => {
+  // Bullet and task lists have different *item* types (`list_item` vs
+  // `task_item`), so the conversion contract has to rebuild each
+  // item with the target type — not just swap the wrapper. The
+  // pre-conversion-contract code couldn't see task_list as a
+  // "list-shaped" ancestor when the target was bullet_list (item
+  // type mismatch), and walked the slow BFS again. This regression
+  // test asserts the round-trip works AND stays under 1500ms each
+  // way.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root p[data-pos="0"]');
+  await selectFirstTwoTopLevelParagraphs(page);
+  await page.locator('.toolbar button', { hasText: /^• List$/ }).click();
+  await page.waitForTimeout(150);
+
+  // Drop cursor into the first new bullet item.
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const li = surface.querySelector(':scope > ul > li');
+    const p = li.querySelector('p');
+    const range = document.createRange();
+    range.setStart(p.firstChild, 0);
+    range.setEnd(p.firstChild, 2);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  // bullet → task
+  let started = Date.now();
+  await page.locator('.toolbar button', { hasText: /^☑ List$/ }).click({ timeout: 1500 });
+  expect(Date.now() - started).toBeLessThan(1500);
+
+  const afterTask = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const taskLists = [...surface.querySelectorAll(':scope > ul.task-list')];
+    return taskLists.map((ul) => ({
+      itemCount: ul.querySelectorAll(':scope > pine-task-item').length,
+      texts: [...ul.querySelectorAll(':scope > pine-task-item')].map((item) =>
+        item.textContent.trim(),
+      ),
+    }));
+  });
+  // First task-list is from the seed doc; second should be the newly
+  // converted one with paragraph 1+2.
+  expect(afterTask.length).toBe(2);
+  const newTask = afterTask.find((u) => u.texts.some((t) => t.includes('Hello, pine-richtext')));
+  expect(newTask).toBeTruthy();
+  expect(newTask.itemCount).toBe(2);
+
+  // Cursor inside the freshly-converted task list.
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const taskList = [...surface.querySelectorAll(':scope > ul.task-list')].find((ul) =>
+      ul.textContent.includes('Hello, pine-richtext'),
+    );
+    const para = taskList.querySelector('pine-task-item p');
+    const range = document.createRange();
+    range.setStart(para.firstChild, 0);
+    range.setEnd(para.firstChild, 2);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  // task → bullet
+  started = Date.now();
+  await page.locator('.toolbar button', { hasText: /^• List$/ }).click({ timeout: 1500 });
+  expect(Date.now() - started).toBeLessThan(1500);
+
+  const afterBullet = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root');
+    const bullet = [...surface.querySelectorAll(':scope > ul')].find(
+      (ul) => !ul.classList.contains('task-list'),
+    );
+    return bullet
+      ? {
+          itemCount: bullet.querySelectorAll(':scope > li').length,
+          texts: [...bullet.querySelectorAll(':scope > li')].map((li) => li.textContent.trim()),
+        }
+      : null;
+  });
+  expect(afterBullet).toBeTruthy();
+  expect(afterBullet.itemCount).toBe(2);
+  expect(afterBullet.texts[0]).toContain('Hello, pine-richtext.');
   expect(errors).toEqual([]);
 });

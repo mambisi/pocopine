@@ -14,6 +14,8 @@
 mod error;
 
 pub mod commands;
+pub mod extension;
+pub mod extensions;
 pub mod history;
 pub mod model;
 pub mod render;

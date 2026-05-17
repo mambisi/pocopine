@@ -11,7 +11,7 @@
 //! [`base_keymap`]. Most commands are produced by free functions returning
 //! a boxed trait object so they can be stored in a `HashMap<&str, _>`.
 
-use crate::model::{Attrs, Mark, Node, NodeRange, ResolvedPos};
+use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, ResolvedPos};
 use crate::state::{EditorState, Selection, Transaction};
 use crate::transform::{can_join, find_wrapping, join_point, lift_target, AttrStep, Step};
 
@@ -155,6 +155,129 @@ fn block_range_for_selection(state: &EditorState) -> Option<NodeRange> {
         .resolve(state.selection().to(state.doc()))
         .ok()?;
     from.block_range(Some(&to))
+}
+
+/// Built-in fallback names pine recognizes as "list item shape" —
+/// used only when the extension registry hasn't realized yet (rare:
+/// tests poking command factories directly before `schema()` runs).
+/// Live registration data comes from
+/// [`crate::extension::registry::is_list_item_type`], populated by
+/// every extension's [`RichTextExtension::list_item_types`] in the
+/// schema fold.
+const BUILTIN_LIST_ITEM_FALLBACK: &[&str] = &["list_item", "task_item"];
+
+fn is_list_item_type(name: &str) -> bool {
+    if crate::extension::registry::is_list_item_type(name) {
+        return true;
+    }
+    BUILTIN_LIST_ITEM_FALLBACK.contains(&name)
+}
+
+fn is_list_node(node: &Node) -> bool {
+    node.content()
+        .child(0)
+        .is_some_and(|child| is_list_item_type(child.type_name()))
+}
+
+/// Walk up from `pos` looking for the nearest ancestor whose first
+/// child has a list-item-shaped type (`list_item`, `task_item`, …).
+/// Returns the ancestor's outer position, node_size, and a clone of
+/// the ancestor so callers can swap it out with a different list type
+/// while preserving — and re-typing — its children.
+fn enclosing_list_ancestor(doc: &Node, pos: usize) -> Option<(usize, usize, Node)> {
+    let resolved = doc.resolve(pos).ok()?;
+    for depth in (1..=resolved.depth()).rev() {
+        let ancestor = resolved.node(depth)?;
+        if let Some(first_child) = ancestor.content().child(0) {
+            if is_list_item_type(first_child.type_name()) {
+                let outer = resolved.before(depth)?;
+                return Some((outer, ancestor.node_size(), ancestor.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn list_range_for_selection(state: &EditorState) -> Option<NodeRange> {
+    let from = state
+        .doc()
+        .resolve(state.selection().from(state.doc()))
+        .ok()?;
+    let to = state
+        .doc()
+        .resolve(state.selection().to(state.doc()))
+        .ok()?;
+    from.block_range_with(Some(&to), is_list_node)
+}
+
+fn list_segment_node(state: &EditorState, list: &Node, from: usize, to: usize) -> Option<Node> {
+    if from >= to {
+        return None;
+    }
+
+    let mut attrs = list.attrs().clone();
+    if list.type_name() == "ordered_list" {
+        let base = list
+            .attrs()
+            .get("order")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1);
+        attrs.insert("order".to_string(), serde_json::json!(base + from as u64));
+    }
+
+    let items = list.content().as_slice()[from..to].to_vec();
+    state
+        .schema()
+        .node(list.type_name(), attrs, Fragment::from(items))
+        .ok()
+}
+
+fn blocks_from_list_item(state: &EditorState, item: &Node) -> Option<Vec<Node>> {
+    let mut blocks = item.content().as_slice().to_vec();
+    if blocks.is_empty() {
+        blocks.push(
+            state
+                .schema()
+                .node("paragraph", Attrs::new(), Fragment::empty())
+                .ok()?,
+        );
+    }
+    Some(blocks)
+}
+
+fn unwrap_list_items_to_blocks_transaction(state: &EditorState) -> Option<Transaction> {
+    let range = list_range_for_selection(state)?;
+    let list = range.parent().clone();
+    let start_index = range.start_index();
+    let end_index = range.end_index();
+    if start_index >= end_index || end_index > list.child_count() {
+        return None;
+    }
+
+    let list_pos = range.from_resolved().before(range.depth())?;
+    let mut replacement = Vec::new();
+
+    if let Some(before) = list_segment_node(state, &list, 0, start_index) {
+        replacement.push(before);
+    }
+
+    for index in start_index..end_index {
+        let item = list.content().child(index)?;
+        replacement.extend(blocks_from_list_item(state, item)?);
+    }
+
+    if let Some(after) = list_segment_node(state, &list, end_index, list.child_count()) {
+        replacement.push(after);
+    }
+
+    let mut tr = state.tr();
+    tr.replace_with(
+        list_pos,
+        list_pos + list.node_size(),
+        Fragment::from(replacement),
+    )
+    .ok()?;
+    Some(tr)
 }
 
 /// Lift the closest ancestor block of the selection out of its parent.
@@ -620,6 +743,45 @@ pub fn wrap_in_list(
     let item_type = item_type.into();
     boxed(move |state| {
         let range = block_range_for_selection(state)?;
+
+        // Fast path: if the selection is already inside a list-shaped
+        // ancestor, treat the click as a type conversion (or a no-op
+        // when the ancestor is already the target type). Without this
+        // guard `find_wrapping` walks `ContentMatch::find_wrapping`'s
+        // BFS to depth 6 and produces a deep nested chain that the
+        // user did not ask for — measured ~4 seconds on a basic
+        // schema, which presents as a UI freeze.
+        if let Some((list_pos, list_size, ancestor)) =
+            enclosing_list_ancestor(state.doc(), range.start())
+        {
+            if ancestor.type_name() == list_type {
+                return None;
+            }
+            // Rebuild each item with `item_type`. When the source and
+            // target item types match (bullet ↔ ordered, both
+            // `list_item`) this is essentially a clone with the same
+            // content. When they differ (bullet/ordered ↔ task) the
+            // schema applies the new type's default attrs — e.g.
+            // bullet → task creates unchecked task_items.
+            let schema = state.schema();
+            let new_items: Vec<Node> = ancestor
+                .content()
+                .iter()
+                .map(|item| {
+                    schema
+                        .node(&item_type, Attrs::new(), item.content().clone())
+                        .ok()
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let new_list = schema
+                .node(&list_type, attrs.clone(), Fragment::from(new_items))
+                .ok()?;
+            let mut tr = state.tr();
+            tr.replace_with(list_pos, list_pos + list_size, Fragment::from(new_list))
+                .ok()?;
+            return Some(tr);
+        }
+
         let target = state.schema().node_type(&list_type).ok()?;
         let chain = find_wrapping(&range, target, attrs.clone(), state.schema())?;
 
@@ -672,6 +834,9 @@ pub fn set_block_type(node_type: impl Into<String>, attrs: Attrs) -> BoxedComman
         tr.set_block_type(from, to, &node_type, attrs.clone())
             .ok()?;
         if tr.transform().steps().is_empty() {
+            if node_type == "paragraph" {
+                return unwrap_list_items_to_blocks_transaction(state);
+            }
             return None;
         }
         Some(tr)
@@ -893,6 +1058,270 @@ mod tests {
         }
         assert_eq!(list.content().child(0).unwrap().text_content(), "todo");
         assert_eq!(list.content().child(1).unwrap().text_content(), "later");
+    }
+
+    /// Converting a bullet list to ordered list while the selection is
+    /// already inside the bullet list must (a) not push find_wrapping's
+    /// BFS to depth 6 (the cause of the 4-second freeze before this
+    /// fast path), and (b) actually change the wrapping list's type
+    /// while preserving its list_items.
+    #[test]
+    fn wrap_in_list_converts_existing_list_type_in_place() {
+        // bullet_list[list_item[paragraph("a")], list_item[paragraph("b")]]
+        let item = |text: &str| -> Node {
+            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+                text,
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap()])
+            .unwrap()
+        };
+        let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
+        let doc = schema_basic::doc(vec![bullet]).unwrap();
+
+        // Cursor inside paragraph("alpha") of the first item.
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(4)),
+        )
+        .unwrap();
+
+        let cmd = wrap_in_list("ordered_list", "list_item", Attrs::new());
+        let started = std::time::Instant::now();
+        let tr = cmd.apply(&state).expect("command should apply");
+        let elapsed = started.elapsed();
+        // The pre-fix BFS path took multiple seconds. The fast path
+        // should complete in microseconds; bound the regression at
+        // 200ms to allow for noisy CI.
+        assert!(
+            elapsed.as_millis() < 200,
+            "wrap_in_list on a list ancestor took {:?}, expected fast path",
+            elapsed,
+        );
+
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "ordered_list");
+        assert_eq!(list.child_count(), 2);
+        assert_eq!(list.content().child(0).unwrap().text_content(), "alpha");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "bravo");
+    }
+
+    /// Bullet → Task conversion: the existing list_items get
+    /// rewritten as task_items (default `checked: false`).
+    #[test]
+    fn wrap_in_list_converts_bullet_to_task_rewriting_items() {
+        let item = |text: &str| -> Node {
+            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+                text,
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap()])
+            .unwrap()
+        };
+        let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
+        let doc = schema_basic::doc(vec![bullet]).unwrap();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(4)),
+        )
+        .unwrap();
+
+        let cmd = wrap_in_list("task_list", "task_item", Attrs::new());
+        let started = std::time::Instant::now();
+        let tr = cmd.apply(&state).expect("command should apply");
+        assert!(
+            started.elapsed().as_millis() < 200,
+            "bullet→task conversion took {:?}",
+            started.elapsed()
+        );
+
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "task_list");
+        assert_eq!(list.child_count(), 2);
+        for index in 0..2 {
+            let item = list.content().child(index).unwrap();
+            assert_eq!(item.type_name(), "task_item");
+            assert_eq!(
+                item.attrs().get("checked").and_then(|v| v.as_bool()),
+                Some(false),
+                "converted items default to unchecked"
+            );
+        }
+        assert_eq!(list.content().child(0).unwrap().text_content(), "alpha");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "bravo");
+    }
+
+    /// Task → Bullet conversion: task_items get rewritten as
+    /// list_items, dropping the `checked` attribute.
+    #[test]
+    fn wrap_in_list_converts_task_to_bullet_dropping_checked_attr() {
+        let task = schema_basic::task_list(vec![
+            schema_basic::task_item(
+                true,
+                vec![schema_basic::paragraph(
+                    vec![schema_basic::text("done", Vec::new()).unwrap()],
+                )
+                .unwrap()],
+            )
+            .unwrap(),
+            schema_basic::task_item(
+                false,
+                vec![schema_basic::paragraph(
+                    vec![schema_basic::text("todo", Vec::new()).unwrap()],
+                )
+                .unwrap()],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let doc = schema_basic::doc(vec![task]).unwrap();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(4)),
+        )
+        .unwrap();
+
+        let cmd = wrap_in_list("bullet_list", "list_item", Attrs::new());
+        let started = std::time::Instant::now();
+        let tr = cmd.apply(&state).expect("command should apply");
+        assert!(
+            started.elapsed().as_millis() < 200,
+            "task→bullet conversion took {:?}",
+            started.elapsed()
+        );
+
+        let next = state.apply(tr).unwrap();
+        let list = next.doc().content().child(0).unwrap();
+        assert_eq!(list.type_name(), "bullet_list");
+        assert_eq!(list.child_count(), 2);
+        assert_eq!(list.content().child(0).unwrap().type_name(), "list_item");
+        assert!(
+            !list
+                .content()
+                .child(0)
+                .unwrap()
+                .attrs()
+                .contains_key("checked"),
+            "list_item should not carry a `checked` attribute"
+        );
+        assert_eq!(list.content().child(0).unwrap().text_content(), "done");
+        assert_eq!(list.content().child(1).unwrap().text_content(), "todo");
+    }
+
+    /// Clicking the same list-type button while already inside that
+    /// list is a no-op (returns None) rather than a freeze or
+    /// double-wrap.
+    #[test]
+    fn wrap_in_list_returns_none_when_already_in_same_list_type() {
+        let item =
+            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+                "alpha",
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap()])
+            .unwrap();
+        let bullet = schema_basic::bullet_list(vec![item]).unwrap();
+        let doc = schema_basic::doc(vec![bullet]).unwrap();
+
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(4)),
+        )
+        .unwrap();
+
+        let cmd = wrap_in_list("bullet_list", "list_item", Attrs::new());
+        assert!(cmd.apply(&state).is_none());
+    }
+
+    #[test]
+    fn set_paragraph_unwraps_selected_list_items() {
+        let item = |text: &str| -> Node {
+            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+                text,
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap()])
+            .unwrap()
+        };
+        let bullet = schema_basic::bullet_list(vec![item("alpha"), item("bravo")]).unwrap();
+        let doc = schema_basic::doc(vec![bullet]).unwrap();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc)
+                .selection(Selection::text_between(4, 14)),
+        )
+        .unwrap();
+
+        let cmd = set_block_type("paragraph", Attrs::new());
+        let tr = cmd
+            .apply(&state)
+            .expect("paragraph command should unwrap list");
+        let next = state.apply(tr).unwrap();
+
+        assert_eq!(next.doc().child_count(), 2);
+        assert_eq!(
+            next.doc().content().child(0).unwrap().type_name(),
+            "paragraph"
+        );
+        assert_eq!(
+            next.doc().content().child(0).unwrap().text_content(),
+            "alpha"
+        );
+        assert_eq!(
+            next.doc().content().child(1).unwrap().type_name(),
+            "paragraph"
+        );
+        assert_eq!(
+            next.doc().content().child(1).unwrap().text_content(),
+            "bravo"
+        );
+    }
+
+    #[test]
+    fn set_paragraph_unwraps_middle_ordered_item_and_preserves_tail_order() {
+        let item = |text: &str| -> Node {
+            schema_basic::list_item(vec![schema_basic::paragraph(vec![schema_basic::text(
+                text,
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap()])
+            .unwrap()
+        };
+        let ordered =
+            schema_basic::ordered_list(vec![item("alpha"), item("bravo"), item("charlie")])
+                .unwrap();
+        let doc = schema_basic::doc(vec![ordered]).unwrap();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema_basic::schema(), doc).selection(Selection::text(13)),
+        )
+        .unwrap();
+
+        let cmd = set_block_type("paragraph", Attrs::new());
+        let tr = cmd
+            .apply(&state)
+            .expect("paragraph command should unwrap selected item");
+        let next = state.apply(tr).unwrap();
+
+        assert_eq!(next.doc().child_count(), 3);
+        let before = next.doc().content().child(0).unwrap();
+        assert_eq!(before.type_name(), "ordered_list");
+        assert_eq!(before.child_count(), 1);
+        assert_eq!(before.content().child(0).unwrap().text_content(), "alpha");
+
+        let paragraph = next.doc().content().child(1).unwrap();
+        assert_eq!(paragraph.type_name(), "paragraph");
+        assert_eq!(paragraph.text_content(), "bravo");
+
+        let after = next.doc().content().child(2).unwrap();
+        assert_eq!(after.type_name(), "ordered_list");
+        assert_eq!(
+            after.attrs().get("order"),
+            Some(&serde_json::json!(3)),
+            "tail ordered list should continue numbering after the unwrapped item"
+        );
+        assert_eq!(after.content().child(0).unwrap().text_content(), "charlie");
     }
 
     /// Same flow for `task_item` — the new sibling inherits the type but
