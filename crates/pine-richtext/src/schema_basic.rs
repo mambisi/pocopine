@@ -1,99 +1,74 @@
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
-use crate::model::{
-    Attrs, Fragment, Mark, MarkPolicy, MarkSpec, Node, NodeSpec, Schema, Whitespace,
-};
+use crate::extension::{registry, RichTextExtension};
+use crate::extensions::default_extensions;
+use crate::model::{Attrs, Fragment, Mark, Node, Schema};
 use crate::RichTextResult;
 
-/// Return the basic rich text schema.
+/// Return the basic rich text schema, composed by folding the canonical
+/// set of base extensions (see [`crate::extensions::default_extensions`])
+/// — possibly with same-named entries shadowed by user-registered
+/// extensions ([`crate::extension::registry::register`]) — followed by
+/// any extra user-registered extensions whose `name()` doesn't match a
+/// base. The first call to this function seals the registry:
+/// subsequent `register(…)` calls panic.
+///
+/// **User-name-wins semantics**: an app that calls
+/// `extension::register(TaskListExtension::with_node_view::<C>())`
+/// effectively replaces the default `TaskListExtension::new()` in the
+/// fold position, preserving today's schema-rank order while letting
+/// the user override node-view bindings, commands, or key bindings.
 pub fn schema() -> Schema {
     static SCHEMA: OnceLock<Schema> = OnceLock::new();
     SCHEMA
         .get_or_init(|| {
-            Schema::builder()
-                .node(NodeSpec::new("doc").content("block+"))
-                .node(NodeSpec::new("paragraph").group("block").content("inline*"))
-                .node(
-                    NodeSpec::new("blockquote")
-                        .group("block")
-                        .content("block+")
-                        .defining(),
-                )
-                .node(NodeSpec::new("horizontal_rule").group("block").atom())
-                .node(
-                    NodeSpec::new("heading")
-                        .group("block")
-                        .content("inline*")
-                        .defining()
-                        .attr("level", json!(1)),
-                )
-                .node(
-                    NodeSpec::new("code_block")
-                        .group("block")
-                        .content("text*")
-                        .marks(MarkPolicy::None)
-                        .code()
-                        .whitespace(Whitespace::Pre)
-                        .defining(),
-                )
-                .node(
-                    NodeSpec::new("bullet_list")
-                        .group("block")
-                        .content("list_item+"),
-                )
-                .node(
-                    NodeSpec::new("ordered_list")
-                        .group("block")
-                        .content("list_item+")
-                        .attr("order", json!(1)),
-                )
-                .node(
-                    NodeSpec::new("list_item")
-                        .content("paragraph block*")
-                        .defining(),
-                )
-                .node(
-                    NodeSpec::new("task_list")
-                        .group("block")
-                        .content("task_item+"),
-                )
-                .node(
-                    NodeSpec::new("task_item")
-                        .content("paragraph block*")
-                        .defining()
-                        .attr("checked", json!(false)),
-                )
-                .node(NodeSpec::new("text").group("inline").inline())
-                .node(
-                    NodeSpec::new("image")
-                        .group("inline")
-                        .inline()
-                        .atom()
-                        .marks(MarkPolicy::None)
-                        .required_attr("src")
-                        .attr("alt", Value::Null)
-                        .attr("title", Value::Null),
-                )
-                .node(
-                    NodeSpec::new("hard_break")
-                        .group("inline")
-                        .inline()
-                        .atom()
-                        .non_selectable(),
-                )
-                .mark(
-                    MarkSpec::new("link")
-                        .required_attr("href")
-                        .attr("title", Value::Null)
-                        .inclusive(false),
-                )
-                .mark(MarkSpec::new("em"))
-                .mark(MarkSpec::new("strong"))
-                .mark(MarkSpec::new("code").excludes("_"))
-                .finish()
-                .expect("basic schema is valid")
+            // Build the base extension chain as `Arc`s so they can be
+            // shared between the schema fold and the base command /
+            // key-binding tables installed below.
+            let base: Vec<Arc<dyn RichTextExtension>> = default_extensions()
+                .into_iter()
+                .map(|boxed| -> Arc<dyn RichTextExtension> { Arc::from(boxed) })
+                .collect();
+
+            // Install base commands + key bindings BEFORE marking the
+            // schema realized, so reads via `named_command` /
+            // `merged_keymap_factories` see them as soon as the fold
+            // returns.
+            registry::install_base_extensions(base.iter().cloned());
+            registry::mark_schema_realized();
+
+            // Resolve the effective extension chain. For each base
+            // slot, swap in the user-registered extension with the
+            // same `name()` if present; otherwise keep the base. Then
+            // append any user extensions with names that don't appear
+            // in the base set.
+            let user: Vec<Arc<dyn RichTextExtension>> = registry::registered();
+            let base_names: HashSet<String> = base.iter().map(|e| e.name().to_string()).collect();
+
+            let mut effective: Vec<Arc<dyn RichTextExtension>> = Vec::with_capacity(base.len());
+            for base_ext in &base {
+                let replacement = user.iter().find(|u| u.name() == base_ext.name());
+                effective.push(replacement.cloned().unwrap_or_else(|| base_ext.clone()));
+            }
+            for user_ext in &user {
+                if !base_names.contains(user_ext.name()) {
+                    effective.push(user_ext.clone());
+                }
+            }
+
+            let mut builder = Schema::builder();
+            for ext in &effective {
+                for spec in ext.nodes() {
+                    builder = builder.node(spec);
+                }
+                for spec in ext.marks() {
+                    builder = builder.mark(spec);
+                }
+            }
+            builder.finish().expect("composed basic schema is valid")
         })
         .clone()
 }

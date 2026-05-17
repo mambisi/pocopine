@@ -20,18 +20,27 @@ use crate::state::Selection;
 
 /// DOM caret position → model content position. Returns `None` when
 /// the DOM position can't be located inside `surface`.
+///
+/// Browser [`web_sys::Range`] offsets into text nodes are **UTF-16
+/// code units** (the JS string-length unit). Pine's model counts text
+/// in **Unicode scalar values** (`char`s). For BMP-only text the two
+/// are equal; for emoji and other non-BMP code points one scalar
+/// occupies two code units and a naive `offset as usize` puts the
+/// caret in the wrong place. [`utf16_offset_to_char`] does the
+/// conversion right at the text-node boundary.
 pub fn dom_pos_to_model(surface: &Element, node: &DomNode, offset: u32) -> Option<usize> {
     if !node_inside_surface(surface, node) {
         return None;
     }
 
-    // Text node: the caret is `offset` chars into this text node.
     if node.node_type() == DomNode::TEXT_NODE {
         let parent = node.parent_element()?;
         let textblock = nearest_tagged_ancestor(surface, &parent)?;
         let content_start = textblock_content_start(surface, &textblock);
         let inner = text_offset_within(&textblock, node)?;
-        return Some(content_start + inner + offset as usize);
+        let text = node.text_content().unwrap_or_default();
+        let char_offset = utf16_offset_to_char(&text, offset);
+        return Some(content_start + inner + char_offset);
     }
 
     // Element node: `offset` is an index into its children. Sum the
@@ -40,6 +49,39 @@ pub fn dom_pos_to_model(surface: &Element, node: &DomNode, offset: u32) -> Optio
     let content_start = textblock_content_start(surface, &element);
     let inner = sibling_size_before(&element, offset as usize);
     Some(content_start + inner)
+}
+
+/// Convert a UTF-16 code-unit offset (what [`web_sys::Range`] uses
+/// when pointing into a text node) into a Unicode scalar (`char`)
+/// offset (what pine's model counts text in). Saturates at the
+/// scalar length of `text` when `utf16_offset` is past the end. An
+/// offset that lands *inside* a surrogate pair clamps to the boundary
+/// BEFORE the pair — browsers never produce such offsets, but a
+/// defensive implementation prevents a buggy `Range` from advancing
+/// the caret past a code point boundary.
+fn utf16_offset_to_char(text: &str, utf16_offset: u32) -> usize {
+    let mut utf16_seen: u32 = 0;
+    let mut chars_seen: usize = 0;
+    for ch in text.chars() {
+        let next = utf16_seen.saturating_add(ch.len_utf16() as u32);
+        if next > utf16_offset {
+            return chars_seen;
+        }
+        utf16_seen = next;
+        chars_seen += 1;
+    }
+    chars_seen
+}
+
+/// Inverse of [`utf16_offset_to_char`]: convert a Unicode scalar
+/// (`char`) offset into a UTF-16 code-unit offset suitable for
+/// [`web_sys::Range::set_start`] / `set_end`. Saturates at the
+/// UTF-16 length of `text` when `char_offset` is past the end.
+fn char_offset_to_utf16(text: &str, char_offset: usize) -> u32 {
+    text.chars()
+        .take(char_offset)
+        .map(|ch| ch.len_utf16() as u32)
+        .sum()
 }
 
 /// Model content position → DOM `(node, offset)` the caller can feed
@@ -236,7 +278,12 @@ fn walk_node(
             if child.is_text() {
                 let chars_in = target - pos;
                 let text_node = dom_text_node_at(&dom_el, child_dom_index as usize)?;
-                return Some((text_node, chars_in as u32));
+                // Browser [`web_sys::Range::set_start`] takes a UTF-16
+                // code-unit offset; pine's model counts text in
+                // `char`s. Translate before handing the offset back.
+                let text = text_node.text_content().unwrap_or_default();
+                let utf16_offset = char_offset_to_utf16(&text, chars_in);
+                return Some((text_node, utf16_offset));
             }
             if let Some(found) = walk_node(surface, child, Some(pos), target) {
                 return Some(found);
@@ -293,4 +340,57 @@ fn walk_for_text(parent: &DomNode, target_i: usize, idx: &mut usize) -> Option<D
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{char_offset_to_utf16, utf16_offset_to_char};
+
+    /// 🙂 occupies one Unicode scalar but two UTF-16 code units (it's a
+    /// non-BMP code point, U+1F642, encoded as a surrogate pair).
+    /// `🙂a` is 2 chars / 3 UTF-16 units. The pair of helpers must
+    /// round-trip exactly when the offset lands ON a char boundary.
+    #[test]
+    fn utf16_round_trip_for_emoji_text() {
+        let text = "🙂a";
+        // After the emoji: 1 char, 2 UTF-16 units.
+        assert_eq!(utf16_offset_to_char(text, 2), 1);
+        assert_eq!(char_offset_to_utf16(text, 1), 2);
+        // End of string: 2 chars, 3 UTF-16 units.
+        assert_eq!(utf16_offset_to_char(text, 3), 2);
+        assert_eq!(char_offset_to_utf16(text, 2), 3);
+        // Start of string: identity at 0.
+        assert_eq!(utf16_offset_to_char(text, 0), 0);
+        assert_eq!(char_offset_to_utf16(text, 0), 0);
+    }
+
+    /// UTF-16 offset *inside* a surrogate pair clamps to the char
+    /// boundary BEFORE it — the browser's `Range` API will never put
+    /// us inside a surrogate pair, but the helper must be defensive
+    /// against bogus inputs (e.g. a buggy mutation observer).
+    #[test]
+    fn utf16_offset_inside_surrogate_clamps_to_previous_char() {
+        let text = "🙂a";
+        assert_eq!(utf16_offset_to_char(text, 1), 0);
+    }
+
+    /// Offsets past the end of `text` saturate at the scalar length
+    /// (matches the browser's "selection at end of text node" case).
+    #[test]
+    fn utf16_offset_past_end_saturates() {
+        let text = "ab";
+        assert_eq!(utf16_offset_to_char(text, 99), 2);
+        assert_eq!(char_offset_to_utf16(text, 99), 2);
+    }
+
+    /// BMP-only text round-trips trivially: char count == UTF-16 unit
+    /// count, so neither helper changes the offset.
+    #[test]
+    fn ascii_text_is_identity() {
+        let text = "hello, world";
+        for offset in 0..=text.len() {
+            assert_eq!(utf16_offset_to_char(text, offset as u32), offset);
+            assert_eq!(char_offset_to_utf16(text, offset), offset as u32);
+        }
+    }
 }

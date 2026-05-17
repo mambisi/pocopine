@@ -20,7 +20,8 @@ use wasm_bindgen::JsCast;
 use web_sys::{CustomEvent, Element, Event, Range};
 
 use crate::commands::{self, BoxedCommand};
-use crate::history::{self as history, history_plugin};
+use crate::extension::registry;
+use crate::history::{self as history};
 use crate::model::Attrs;
 use crate::render::node_views;
 use crate::schema_basic;
@@ -98,6 +99,15 @@ pub enum CommandRequest {
     /// "Reset" button so the surface can swap docs through the same
     /// event pipeline it uses for every other command.
     ReplaceState { doc: serde_json::Value },
+    /// Dispatch an extension-contributed command by registered name.
+    /// `args` is forwarded to the [`crate::extension::NamedCommand`]
+    /// factory; an unknown name or malformed args resolves to a silent
+    /// no-op (same as a non-applicable command).
+    Custom {
+        name: String,
+        #[serde(default)]
+        args: serde_json::Value,
+    },
 }
 
 impl CommandRequest {
@@ -133,16 +143,22 @@ impl CommandRequest {
                 })
             }
             CommandRequest::ReplaceState { .. } => return None,
+            CommandRequest::Custom { name, args } => {
+                let factory = crate::extension::registry::named_command(&name)?;
+                factory(args)?
+            }
         })
     }
 }
 
-/// Plugin set every state-materialization path uses. Kept in one place
-/// so the surface's `state_provider`, the initial seed, and the dispatch
-/// path all install the same plugins — otherwise the history branches
-/// in the JSON would silently drop on the next round-trip.
+/// Plugin set every state-materialization path uses. Folding
+/// `schema()` here guarantees `install_base_extensions` has populated
+/// the registry before we read it, so extension-contributed plugins
+/// (including the built-in `HistoryExtension`) reach
+/// `EditorState::create` for every editor instance.
 fn default_plugins() -> Vec<Plugin> {
-    vec![history_plugin()]
+    let _ = schema_basic::schema();
+    registry::merged_plugins()
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -570,4 +586,40 @@ fn log_to_console(message: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 fn log_to_console(message: &str) {
     let _ = message;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommandRequest;
+    use serde_json::json;
+
+    #[test]
+    fn custom_variant_deserializes_from_kind_tagged_payload() {
+        let value = json!({
+            "kind": "custom",
+            "name": "wrap_in_bullet_list",
+            "args": {}
+        });
+        let req: CommandRequest = serde_json::from_value(value).expect("deserialize");
+        match req {
+            CommandRequest::Custom { name, args } => {
+                assert_eq!(name, "wrap_in_bullet_list");
+                assert!(args.is_object());
+            }
+            other => panic!("expected Custom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn custom_variant_defaults_args_when_omitted() {
+        let value = json!({ "kind": "custom", "name": "undo" });
+        let req: CommandRequest = serde_json::from_value(value).expect("deserialize");
+        match req {
+            CommandRequest::Custom { name, args } => {
+                assert_eq!(name, "undo");
+                assert!(args.is_null());
+            }
+            other => panic!("expected Custom, got {:?}", other),
+        }
+    }
 }

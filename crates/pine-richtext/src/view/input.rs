@@ -69,9 +69,24 @@ impl Default for KeyMap {
 /// PM-style default keymap. Covers the keys most editors need:
 /// Backspace / Delete / Enter, plus Mod-A for select-all.
 ///
-/// Customize by passing your own KeyMap to the component (TODO once the
-/// surface exposes a keymap prop).
+/// Extensions can contribute extra bindings through
+/// [`crate::extension::RichTextExtension::key_bindings`]; those are
+/// merged in *after* the base 4 entries below so the base remains
+/// inviolable (`KeyMap::lookup` is first-wins). Extension-vs-extension
+/// collisions resolve registration-order; see
+/// [`crate::extension::registry::merged_keymap_factories`].
 pub fn default_keymap() -> KeyMap {
+    let mut km = base_keymap();
+    for (combo, factory) in crate::extension::registry::merged_keymap_factories() {
+        km = km.bind(combo, factory());
+    }
+    km
+}
+
+/// The 4 hardcoded bindings the framework always installs. Separated
+/// from [`default_keymap`] so tests can assert the base set
+/// independently of any extension contributions.
+fn base_keymap() -> KeyMap {
     KeyMap::new()
         .bind(
             "Backspace",

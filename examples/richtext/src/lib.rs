@@ -12,12 +12,14 @@
 //! so clicking them doesn't move keyboard focus off the surface and
 //! collapse the user's selection.
 
+use pine_richtext::extension;
+use pine_richtext::extensions::TaskListExtension;
 use pine_richtext::history::history_plugin;
 use pine_richtext::model::Attrs;
 use pine_richtext::schema_basic;
 use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection};
 use pine_richtext::view::root::{CommandRequest, COMMAND_EVENT};
-use pine_richtext::view::{node_view, PineRichTextRoot};
+use pine_richtext::view::PineRichTextRoot;
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -366,11 +368,13 @@ impl PineTaskItem {
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    node_view::register_with_content(
-        "task_item",
-        "pine-task-item",
-        "[data-pine-richtext-content]",
-    );
+    // Phase 4 — extension contract demo. `TaskListExtension::with_node_view`
+    // forwards `PineTaskItem`'s tag and content selector into
+    // `crate::render::node_views` at registration time, so the
+    // reconciler sees the binding before the schema is folded.
+    extension::register(Box::new(
+        TaskListExtension::new().with_node_view::<PineTaskItem>(),
+    ));
     App::new()
         .register::<Editor>()
         .register::<PineRichTextRoot>()

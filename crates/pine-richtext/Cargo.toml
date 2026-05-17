@@ -33,6 +33,7 @@ view = [
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 # Feature-gated browser-view dependencies.
 pocopine = { path = "../pocopine", optional = true }
