@@ -11,6 +11,7 @@ mod options;
 mod outcome;
 mod row;
 mod transaction;
+mod view;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod resource;
@@ -36,3 +37,7 @@ pub use source::{CrudConflict, CrudRemoveResult, CrudSource, CrudWriteResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use resource::RowVersionOf;
 pub use transaction::{Transaction, TransactionBindable, TransactionFuture, TransactionRunner};
+pub use view::{
+    local_resource_view, LocalResourcePendingMutation, LocalResourceRow, LocalResourceRowStatus,
+    LocalResourceView,
+};
