@@ -32,7 +32,10 @@ place. The client runtime hydrates cached rows before network pull,
 persists pull/push outcomes into the store, and replays stored pending
 mutations during `open()`. `pocopine-sync-sqlite` now contains the shared
 schema, a native SQLite implementation, and a browser SQLite WASM + OPFS
-worker implementation behind the same store trait.
+worker implementation behind the same store trait. Queued mutations can
+also carry an optional local-only optimistic row, which lets the client
+restore non-row CRUD overlays after reload without changing the `/push`
+wire payload.
 
 ## Crate Boundaries
 
@@ -139,6 +142,12 @@ pub trait SyncLocalStore {
         mutation: ClientMutation<serde_json::Value>,
     ) -> SyncLocalFuture<'_, ()>;
 
+    fn enqueue_pending_mutation(
+        &self,
+        stream: &SyncStreamName,
+        pending: LocalPendingMutation,
+    ) -> SyncLocalFuture<'_, ()>;
+
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()>;
 
     fn pending_mutations(
@@ -225,6 +234,7 @@ create table __pocopine_mutations (
   base_version text,
   op text not null,
   payload text,
+  optimistic_row text,
   status text not null,
   error text,
   created_at_ms integer not null,

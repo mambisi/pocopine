@@ -16,6 +16,12 @@ Pocopine already has the pieces needed to build on:
 - `pocopine-sync` owns `/open`, `/pull`, `/push`, stream registration,
   cursor types, `CollectionState<T>`, mutation ids, pending replay, and
   the `SyncLocalStore` trait.
+- `CollectionState<T>` keeps canonical server rows separate from the
+  rendered merged view, then rebases pending local mutations over
+  canonical rows after hydration, pulls, push outcomes, and replay.
+- Pending local mutations can persist an optional local-only optimistic row
+  alongside the wire mutation, so non-row CRUD payloads can still rebuild
+  their rendered overlay after reload.
 - `pocopine-live` wakes clients after server-side changes. It remains a
   wake-up channel, not a row transport.
 - `pocopine-sync-sqlite` exists. It provides a durable local store with a
@@ -44,12 +50,17 @@ hydrate canonical rows from local store
   -> render the rebased view
 ```
 
-Today the store can persist rows and pending mutations, and the client can
-replay pending mutations during `open()`. The missing piece is a first
-class rebase layer that treats pending local mutations as an overlay over
-canonical server rows. Without that, a pull can temporarily replace
-optimistic state, cause flicker, or leave row flags too coarse for a
-serious offline UI.
+The core `CollectionState<T>` rebase slice is now in place: server pulls
+update canonical rows, pending overlays replay in deterministic queue
+order, rejected writes roll back to the latest canonical rows, and
+row-shaped pending upserts can be reconstructed from local-store
+hydration before replay.
+
+The remaining work is generated resource ergonomics and typed resource
+views. Generated CRUD methods need to produce the durable optimistic rows
+automatically, and typed query/resource views still need to expose the
+rebased state without forcing app code to inspect protocol structs
+directly.
 
 Deliverables:
 
@@ -240,7 +251,8 @@ simple and hard to misuse.
 
 ## Recommended Implementation Order
 
-1. Finish rebase of pending mutations over canonical rows.
+1. Harden resource-level rebase on top of the core canonical/overlay
+   state model.
 2. Add typed local resource/query views over `SyncLocalStore`.
 3. Generate CRUD client methods and options APIs.
 4. Add transaction-backed server helper paths for source write + mutation
