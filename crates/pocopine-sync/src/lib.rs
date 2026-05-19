@@ -20,8 +20,9 @@ mod server;
 pub use error::{SyncError, SyncResult};
 pub use local_memory::MemoryLocalStore;
 pub use local_store::{
-    generate_sync_device_id, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
-    LocalStreamSnapshot, MutationIdGenerator, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore,
+    generate_sync_device_id, LocalChangeBatch, LocalPendingMutation, LocalPushResult,
+    LocalSnapshotBatch, LocalStreamSnapshot, MutationIdGenerator, SyncLocalFuture,
+    SyncLocalIdentity, SyncLocalStore,
 };
 pub use protocol::{
     sync_stream_tag, ClientMutation, ClientMutationDraft, MutationId, RowKey, RowVersion,

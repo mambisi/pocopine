@@ -1,6 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     ClientMutation, MutationId, SyncChange, SyncCollectionName, SyncConflict, SyncCursor,
@@ -123,6 +124,61 @@ impl MutationIdGenerator {
     }
 }
 
+/// Local-only queued mutation metadata.
+///
+/// `mutation` is the wire payload sent to `/push`. `optimistic_row` is never
+/// sent to the server; it lets the client reconstruct the rendered pending
+/// overlay after reload when the wire payload is not itself a row.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LocalPendingMutation {
+    pub mutation: ClientMutation<Value>,
+    #[serde(default)]
+    pub optimistic_row: Option<SyncRow<Value>>,
+}
+
+impl LocalPendingMutation {
+    pub fn new(mutation: ClientMutation<Value>) -> Self {
+        Self {
+            mutation,
+            optimistic_row: None,
+        }
+    }
+
+    pub fn with_optimistic_row(mut self, optimistic_row: Option<SyncRow<Value>>) -> Self {
+        self.optimistic_row = optimistic_row;
+        self
+    }
+}
+
+impl<'de> Deserialize<'de> for LocalPendingMutation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum PendingMutationRepr {
+            Record {
+                mutation: ClientMutation<Value>,
+                #[serde(default)]
+                optimistic_row: Option<SyncRow<Value>>,
+            },
+            Legacy(ClientMutation<Value>),
+        }
+
+        match PendingMutationRepr::deserialize(deserializer)? {
+            PendingMutationRepr::Record {
+                mutation,
+                optimistic_row,
+            } => Ok(Self {
+                mutation,
+                optimistic_row,
+            }),
+            PendingMutationRepr::Legacy(mutation) => Ok(Self::new(mutation)),
+        }
+    }
+}
+
 /// Locally cached rows and cursor for one stream.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LocalStreamSnapshot {
@@ -132,7 +188,7 @@ pub struct LocalStreamSnapshot {
     #[serde(default)]
     pub rows: Vec<SyncRow<serde_json::Value>>,
     #[serde(default)]
-    pub pending_mutations: Vec<ClientMutation<serde_json::Value>>,
+    pub pending_mutations: Vec<LocalPendingMutation>,
 }
 
 impl LocalStreamSnapshot {
@@ -265,6 +321,16 @@ pub trait SyncLocalStore {
         mutation: ClientMutation<serde_json::Value>,
     ) -> SyncLocalFuture<'_, ()>;
 
+    /// Persist a local pending mutation and its optional optimistic row before
+    /// the mutation is sent to the server.
+    fn enqueue_pending_mutation(
+        &self,
+        stream: &SyncStreamName,
+        pending: LocalPendingMutation,
+    ) -> SyncLocalFuture<'_, ()> {
+        self.enqueue_mutation(stream, pending.mutation)
+    }
+
     /// Persist accepted, rejected, or conflicted mutation outcomes.
     ///
     /// Row `pending` flags persisted here describe the latest server outcome.
@@ -383,6 +449,43 @@ mod tests {
         assert!(snapshot.cursor.is_none());
         assert!(snapshot.rows.is_empty());
         assert!(snapshot.pending_mutations.is_empty());
+    }
+
+    #[test]
+    fn local_pending_mutation_reads_legacy_wire_shape() {
+        let legacy = serde_json::json!({
+            "id": "device_abc:1",
+            "key": "post_1",
+            "op": "upsert",
+            "base_version": "row_1",
+            "payload": {"title": "Legacy"}
+        });
+
+        let pending: LocalPendingMutation = serde_json::from_value(legacy).unwrap();
+
+        assert_eq!(pending.mutation.id.as_str(), "device_abc:1");
+        assert_eq!(pending.mutation.key.as_ref().unwrap().as_str(), "post_1");
+        assert!(pending.optimistic_row.is_none());
+    }
+
+    #[test]
+    fn local_pending_mutation_records_optimistic_row() {
+        let mutation = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"op": "create"}),
+        };
+        let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Visible"})).unwrap();
+
+        let pending = LocalPendingMutation::new(mutation.clone())
+            .with_optimistic_row(Some(optimistic.clone()));
+        let round_trip: LocalPendingMutation =
+            serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap();
+
+        assert_eq!(round_trip.mutation, mutation);
+        assert_eq!(round_trip.optimistic_row, Some(optimistic));
     }
 
     #[test]

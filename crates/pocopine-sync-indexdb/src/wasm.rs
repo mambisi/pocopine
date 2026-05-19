@@ -3,9 +3,10 @@ use std::{collections::BTreeMap, fmt, rc::Rc};
 use futures::lock::Mutex as AsyncMutex;
 use js_sys::{Function, Promise, Reflect};
 use pocopine_sync::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
-    LocalStreamSnapshot, MutationId, RowKey, SyncError, SyncLocalFuture, SyncLocalIdentity,
-    SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
+    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey, SyncError,
+    SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow,
+    SyncStreamName,
 };
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -121,9 +122,17 @@ impl SyncLocalStore for IndexedDbLocalStore {
         stream: &SyncStreamName,
         mutation: ClientMutation<serde_json::Value>,
     ) -> SyncLocalFuture<'_, ()> {
+        self.enqueue_pending_mutation(stream, LocalPendingMutation::new(mutation))
+    }
+
+    fn enqueue_pending_mutation(
+        &self,
+        stream: &SyncStreamName,
+        pending: LocalPendingMutation,
+    ) -> SyncLocalFuture<'_, ()> {
         let database_name = self.database_name.clone();
         let stream = stream.clone();
-        self.run(enqueue_mutation(database_name, stream, mutation))
+        self.run(enqueue_mutation(database_name, stream, pending))
     }
 
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
@@ -140,7 +149,10 @@ impl SyncLocalStore for IndexedDbLocalStore {
         self.run(async move {
             Ok(hydrate_stream(database_name, stream)
                 .await?
-                .pending_mutations)
+                .pending_mutations
+                .into_iter()
+                .map(|pending| pending.mutation)
+                .collect())
         })
     }
 }
@@ -255,7 +267,7 @@ async fn apply_changes(database_name: String, changes: LocalChangeBatch) -> Sync
 async fn enqueue_mutation(
     database_name: String,
     stream: SyncStreamName,
-    mutation: ClientMutation<serde_json::Value>,
+    pending: LocalPendingMutation,
 ) -> SyncResult<()> {
     let database = open_database(&database_name).await?;
     let transaction = transaction(&database, STREAMS_STORE, IdbTransactionMode::Readwrite)?;
@@ -265,11 +277,11 @@ async fn enqueue_mutation(
     if let Some(existing) = state
         .pending_mutations
         .iter_mut()
-        .find(|existing| existing.id == mutation.id)
+        .find(|existing| existing.mutation.id == pending.mutation.id)
     {
-        *existing = mutation;
+        *existing = pending;
     } else {
-        state.pending_mutations.push(mutation);
+        state.pending_mutations.push(pending);
     }
     put_stream_state(&store, &state).await?;
     await_transaction(done).await?;
@@ -291,20 +303,22 @@ async fn mark_push_result(database_name: String, result: LocalPushResult) -> Syn
     }
 
     for id in result.accepted {
-        state.pending_mutations.retain(|mutation| mutation.id != id);
+        state
+            .pending_mutations
+            .retain(|pending| pending.mutation.id != id);
     }
 
     for rejected in result.rejected {
         state
             .pending_mutations
-            .retain(|mutation| mutation.id != rejected.mutation_id);
+            .retain(|pending| pending.mutation.id != rejected.mutation_id);
     }
 
     let mut rows = rows_by_key(state.rows);
     for conflict in result.conflicts {
         state
             .pending_mutations
-            .retain(|mutation| mutation.id != conflict.mutation_id);
+            .retain(|pending| pending.mutation.id != conflict.mutation_id);
         if let Some(mut row) = conflict.server_row {
             row.pending = false;
             row.conflict = true;

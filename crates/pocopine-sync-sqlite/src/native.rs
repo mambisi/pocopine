@@ -6,10 +6,10 @@ use std::{
 };
 
 use pocopine_sync::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
-    LocalStreamSnapshot, MutationId, RowKey, RowVersion, SyncCollectionName, SyncCursor,
-    SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
-    SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
+    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey, RowVersion,
+    SyncCollectionName, SyncCursor, SyncDeviceId, SyncError, SyncLocalFuture, SyncLocalIdentity,
+    SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
@@ -92,8 +92,16 @@ impl SyncLocalStore for SqliteLocalStore {
         stream: &SyncStreamName,
         mutation: ClientMutation<serde_json::Value>,
     ) -> SyncLocalFuture<'_, ()> {
+        self.enqueue_pending_mutation(stream, LocalPendingMutation::new(mutation))
+    }
+
+    fn enqueue_pending_mutation(
+        &self,
+        stream: &SyncStreamName,
+        pending: LocalPendingMutation,
+    ) -> SyncLocalFuture<'_, ()> {
         let stream = stream.clone();
-        Self::ready(self.with_conn(|conn| enqueue_mutation(conn, stream, mutation)))
+        Self::ready(self.with_conn(|conn| enqueue_mutation(conn, stream, pending)))
     }
 
     fn mark_push_result(&self, result: LocalPushResult) -> SyncLocalFuture<'_, ()> {
@@ -114,6 +122,7 @@ fn bootstrap_schema(conn: &mut Connection) -> SyncResult<()> {
     for sql in BOOTSTRAP_SQL {
         tx.execute_batch(sql).map_err(sqlite_error)?;
     }
+    migrate_schema(&tx)?;
     validate_schema_version(&tx)?;
     upsert_meta(&tx, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
     tx.commit().map_err(sqlite_error)
@@ -154,6 +163,44 @@ fn validate_schema_version(tx: &Transaction<'_>) -> SyncResult<()> {
     }
 
     Ok(())
+}
+
+fn migrate_schema(tx: &Transaction<'_>) -> SyncResult<()> {
+    let existing = select_meta_tx(tx, META_SCHEMA_VERSION)?;
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    let version = existing.parse::<u32>().map_err(|_| {
+        SyncError::backend(format!(
+            "invalid sync sqlite schema version in local store: {existing}"
+        ))
+    })?;
+    if version == 2 && !column_exists(tx, "__pocopine_mutations", "optimistic_row")? {
+        tx.execute(
+            "alter table __pocopine_mutations add column optimistic_row text",
+            [],
+        )
+        .map_err(sqlite_error)?;
+    }
+    if version == 2 {
+        upsert_meta(tx, META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
+    }
+    Ok(())
+}
+
+fn column_exists(tx: &Transaction<'_>, table: &str, column: &str) -> SyncResult<bool> {
+    let mut stmt = tx
+        .prepare(&format!("pragma table_info({table})"))
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_error)?;
+    for row in rows {
+        if row.map_err(sqlite_error)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn load_identity(conn: &mut Connection) -> SyncResult<Option<SyncLocalIdentity>> {
@@ -232,7 +279,7 @@ fn hydrate_stream(
         .map_err(sqlite_error)?;
 
     let rows = load_rows(conn, &stream)?;
-    let pending_mutations = pending_mutations(conn, &stream)?;
+    let pending_mutations = pending_mutation_records(conn, &stream)?;
     let Some((collection, cursor)) = stream_meta else {
         if rows.is_empty() && pending_mutations.is_empty() {
             return Ok(LocalStreamSnapshot::empty(stream));
@@ -317,10 +364,16 @@ fn apply_changes(conn: &mut Connection, changes: LocalChangeBatch) -> SyncResult
 fn enqueue_mutation(
     conn: &mut Connection,
     stream: SyncStreamName,
-    mutation: ClientMutation<serde_json::Value>,
+    pending: LocalPendingMutation,
 ) -> SyncResult<()> {
     let now = epoch_ms();
+    let mutation = pending.mutation;
     let payload = serde_json::to_string(&mutation.payload)?;
+    let optimistic_row = pending
+        .optimistic_row
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
     conn.execute(
         UPSERT_MUTATION_SQL,
         params![
@@ -330,6 +383,7 @@ fn enqueue_mutation(
             mutation.base_version.as_ref().map(RowVersion::as_str),
             op_to_str(mutation.op),
             payload,
+            optimistic_row,
             now,
         ],
     )
@@ -394,6 +448,16 @@ fn pending_mutations(
     conn: &mut Connection,
     stream: &SyncStreamName,
 ) -> SyncResult<Vec<ClientMutation<serde_json::Value>>> {
+    Ok(pending_mutation_records(conn, stream)?
+        .into_iter()
+        .map(|pending| pending.mutation)
+        .collect())
+}
+
+fn pending_mutation_records(
+    conn: &mut Connection,
+    stream: &SyncStreamName,
+) -> SyncResult<Vec<LocalPendingMutation>> {
     let mut stmt = conn
         .prepare(SELECT_PENDING_MUTATIONS_SQL)
         .map_err(sqlite_error)?;
@@ -404,22 +468,36 @@ fn pending_mutations(
             let base_version: Option<String> = row.get(2)?;
             let op: String = row.get(3)?;
             let payload: Option<String> = row.get(4)?;
-            Ok((mutation_id, row_key, base_version, op, payload))
+            let optimistic_row: Option<String> = row.get(5)?;
+            Ok((
+                mutation_id,
+                row_key,
+                base_version,
+                op,
+                payload,
+                optimistic_row,
+            ))
         })
         .map_err(sqlite_error)?;
 
     let mut mutations = Vec::new();
     for row in rows {
-        let (mutation_id, row_key, base_version, op, payload) = row.map_err(sqlite_error)?;
-        mutations.push(ClientMutation {
-            id: pocopine_sync::MutationId::new(mutation_id)?,
-            key: row_key.map(RowKey::new).transpose()?,
-            base_version: base_version.map(RowVersion::new).transpose()?,
-            op: op_from_str(&op)?,
-            payload: payload
-                .map(|payload| serde_json::from_str(&payload))
-                .transpose()?
-                .unwrap_or(serde_json::Value::Null),
+        let (mutation_id, row_key, base_version, op, payload, optimistic_row) =
+            row.map_err(sqlite_error)?;
+        mutations.push(LocalPendingMutation {
+            mutation: ClientMutation {
+                id: pocopine_sync::MutationId::new(mutation_id)?,
+                key: row_key.map(RowKey::new).transpose()?,
+                base_version: base_version.map(RowVersion::new).transpose()?,
+                op: op_from_str(&op)?,
+                payload: payload
+                    .map(|payload| serde_json::from_str(&payload))
+                    .transpose()?
+                    .unwrap_or(serde_json::Value::Null),
+            },
+            optimistic_row: optimistic_row
+                .map(|row| serde_json::from_str(&row))
+                .transpose()?,
         });
     }
     Ok(mutations)
@@ -754,6 +832,47 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_store_round_trips_pending_optimistic_rows() {
+        let store = SqliteLocalStore::open_in_memory().unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let mutation = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({
+                "op": "create",
+                "payload": {"id": "post_1", "draft": {"title": "Envelope only"}}
+            }),
+        };
+        let optimistic = SyncRow::new(
+            "post_1",
+            serde_json::json!({"id": "post_1", "title": "Visible"}),
+        )
+        .unwrap();
+
+        block(
+            store.enqueue_pending_mutation(
+                &stream,
+                LocalPendingMutation::new(mutation.clone())
+                    .with_optimistic_row(Some(optimistic.clone())),
+            ),
+        )
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(snapshot.pending_mutations[0].mutation, mutation);
+        assert_eq!(
+            snapshot.pending_mutations[0].optimistic_row.as_ref(),
+            Some(&optimistic)
+        );
+        assert_eq!(
+            block(store.pending_mutations(&stream)).unwrap(),
+            vec![snapshot.pending_mutations[0].mutation.clone()]
+        );
+    }
+
+    #[test]
     fn sqlite_store_persists_push_cursor_before_snapshot_when_collection_is_present() {
         let store = SqliteLocalStore::open_in_memory().unwrap();
         let stream = SyncStreamName::new("posts").unwrap();
@@ -853,6 +972,81 @@ mod tests {
         assert!(err
             .to_string()
             .contains("incompatible sync sqlite schema version"));
+    }
+
+    #[test]
+    fn sqlite_store_migrates_v2_pending_mutations_to_optimistic_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table __pocopine_meta (
+                key text primary key,
+                value text not null
+            );
+            create table __pocopine_streams (
+                stream text primary key,
+                collection text not null,
+                cursor text,
+                schema_version integer not null,
+                updated_at_ms integer not null
+            );
+            create table __pocopine_rows (
+                stream text not null,
+                row_key text not null,
+                version text,
+                payload text not null,
+                pending integer not null default 0,
+                conflict integer not null default 0,
+                updated_at_ms integer not null,
+                primary key (stream, row_key)
+            );
+            create table __pocopine_mutations (
+                enqueue_seq integer primary key autoincrement,
+                stream text not null,
+                mutation_id text not null unique,
+                row_key text,
+                base_version text,
+                op text not null,
+                payload text,
+                status text not null,
+                error text,
+                created_at_ms integer not null,
+                updated_at_ms integer not null
+            );
+            insert into __pocopine_meta (key, value) values ('schema_version', '2');",
+        )
+        .unwrap();
+
+        let store = SqliteLocalStore::from_connection(conn).unwrap();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let mutation = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({"op": "create"}),
+        };
+        let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Visible"})).unwrap();
+
+        block(store.enqueue_pending_mutation(
+            &stream,
+            LocalPendingMutation::new(mutation).with_optimistic_row(Some(optimistic.clone())),
+        ))
+        .unwrap();
+
+        let snapshot = block(store.hydrate_stream(&stream)).unwrap();
+        assert_eq!(
+            snapshot.pending_mutations[0].optimistic_row.as_ref(),
+            Some(&optimistic)
+        );
+        store
+            .with_conn(|conn| {
+                assert_eq!(
+                    select_meta(conn, META_SCHEMA_VERSION)?,
+                    Some(SCHEMA_VERSION.to_string())
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
