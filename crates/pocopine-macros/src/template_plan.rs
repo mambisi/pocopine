@@ -256,6 +256,16 @@ struct AnalysisCtx {
     /// time, not by re-discovering through the mount).
     #[allow(dead_code)]
     requires_walker: bool,
+    /// RFC 081 Phase 2 Codex-P2 fix — `pp-ref` names harvested
+    /// from lifted-body and slot-fragment subtrees that don't
+    /// share `self.refs` (each nested `walk` collects into its
+    /// own `AnalysisCtx`). Aggregated as the outer plan is
+    /// built so the macro-emitted `<ComponentName>Refs` struct
+    /// still gets accessors for pp-refs inside `pp-if` /
+    /// `pp-for` / `pp-teleport` / dynamic-slot bodies. Names
+    /// only — node_paths inside lifted fragments aren't
+    /// meaningful at the parent's plan layer.
+    refs_from_lifted: Vec<String>,
 }
 
 /// Shared across the whole top-level analysis — fragment fn
@@ -538,15 +548,42 @@ impl AnalysisCtx {
     /// runtime) collapse to one accessor here — the generated
     /// `fn <name>(&self) -> RefAccessor` then resolves whichever
     /// row's element happened to win.
+    ///
+    /// Includes refs from lifted bodies (`pp-if` / `pp-for` /
+    /// `pp-teleport` subtrees, dynamic slot fragments) via the
+    /// `refs_from_lifted` aggregator — those nested
+    /// `AnalysisCtx`s register against the parent's runtime
+    /// scope at install time, so the typed API must expose
+    /// them too.
     fn ref_names_dedup(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::with_capacity(self.refs.len());
+        let mut out = Vec::with_capacity(self.refs.len() + self.refs_from_lifted.len());
         for r in &self.refs {
             if seen.insert(r.name.clone()) {
                 out.push(r.name.clone());
             }
         }
+        for name in &self.refs_from_lifted {
+            if seen.insert(name.clone()) {
+                out.push(name.clone());
+            }
+        }
         out
+    }
+
+    /// Drain a nested context's ref names (its own `refs` plus
+    /// anything it already aggregated from deeper lifts) into
+    /// this context's `refs_from_lifted`. Called after each
+    /// `analyze_lift_body` / `analyze_slot_subtree` return so
+    /// refs inside lifted subtrees still reach the outer
+    /// `<ComponentName>Refs` codegen.
+    fn absorb_lifted_refs(&mut self, nested: &AnalysisCtx) {
+        for r in &nested.refs {
+            self.refs_from_lifted.push(r.name.clone());
+        }
+        for name in &nested.refs_from_lifted {
+            self.refs_from_lifted.push(name.clone());
+        }
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {
@@ -1440,6 +1477,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     None
                 } else {
                     let lifted = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                        ctx.absorb_lifted_refs(&body_ctx);
                         let ident = emissions.alloc_if_body_ident("for_body");
                         emissions.if_bodies.push(IfBodyEmission {
                             ident: ident.clone(),
@@ -1511,6 +1549,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // body into a fragment fn (same v1 envelope as
             // pp-if / pp-for body lifting).
             let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                ctx.absorb_lifted_refs(&body_ctx);
                 let ident = emissions.alloc_if_body_ident("teleport_body");
                 emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
@@ -1589,6 +1628,7 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             // the body falls outside, `body_fn_ident` stays
             // `None` and the legacy clone+walk path runs.
             let body_fn_ident = analyze_lift_body(el, emissions).map(|(html, body_ctx)| {
+                ctx.absorb_lifted_refs(&body_ctx);
                 let ident = emissions.alloc_if_body_ident("if_body");
                 emissions.if_bodies.push(IfBodyEmission {
                     ident: ident.clone(),
@@ -1743,6 +1783,12 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
                     .filter(|s| !s.is_empty());
                 match analyze_slot_subtree(&tpl.children, emissions) {
                     Some(emission) => {
+                        // RFC 081 P2 — absorb pp-ref names from
+                        // the dynamic slot's plan so the outer
+                        // `<ComponentName>Refs` exposes them.
+                        if let SlotFragmentEmission::Dynamic { plan, .. } = &emission {
+                            ctx.absorb_lifted_refs(plan);
+                        }
                         // Duplicate `pp-slot=NAME` at compile time:
                         // both lift fragments get pushed; the
                         // runtime `SlotSet::named` HashMap insert
@@ -1774,6 +1820,11 @@ fn walk(el: &Element, ctx: &mut AnalysisCtx, emissions: &mut Emissions, path: &m
             if has_meaningful_default {
                 match analyze_slot_subtree(&default_children, emissions) {
                     Some(emission) => {
+                        // RFC 081 P2 — absorb pp-ref names from
+                        // the default slot's plan.
+                        if let SlotFragmentEmission::Dynamic { plan, .. } = &emission {
+                            ctx.absorb_lifted_refs(plan);
+                        }
                         slot_fragments.push((
                             "default".to_string(),
                             emission.ident().clone(),

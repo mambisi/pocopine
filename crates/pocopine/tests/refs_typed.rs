@@ -38,7 +38,11 @@ struct TypedRefsChild {
 }
 
 #[handlers]
-impl TypedRefsChild {}
+impl TypedRefsChild {
+    pub fn on_mount(&mut self) {
+        CHILD_MOUNT_COUNT.with(|c| *c.borrow_mut() += 1);
+    }
+}
 
 impl TypedRefsChild {
     pub fn seed_value(&self) -> u32 {
@@ -54,12 +58,21 @@ thread_local! {
     static OBSERVED_SEED: RefCell<Option<u32>> = const { RefCell::new(None) };
     static OBSERVED_MISMATCH_IS_NONE: RefCell<Option<bool>> = const { RefCell::new(None) };
     static OBSERVED_ELEMENT_PRESENT: RefCell<Option<bool>> = const { RefCell::new(None) };
+    /// Codex P1 regression — counts `on_mount` invocations on
+    /// the child. The Phase 1 host stamp used to also be
+    /// `SCOPE_ID_KEY`, which made `fire_mount_hook` fire the
+    /// child's `on_mount` twice (once for the host, once for
+    /// the inner template root). The fix moved the host stamp
+    /// to a separate key the lifecycle dispatch ignores. This
+    /// counter pins the fix: must equal 1 after a single mount.
+    static CHILD_MOUNT_COUNT: RefCell<u32> = const { RefCell::new(0) };
 }
 
 fn reset_observations() {
     OBSERVED_SEED.with(|c| *c.borrow_mut() = None);
     OBSERVED_MISMATCH_IS_NONE.with(|c| *c.borrow_mut() = None);
     OBSERVED_ELEMENT_PRESENT.with(|c| *c.borrow_mut() = None);
+    CHILD_MOUNT_COUNT.with(|c| *c.borrow_mut() = 0);
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -144,6 +157,136 @@ async fn generated_refs_struct_resolves_child_component_handle() {
 }
 
 #[wasm_bindgen_test]
+async fn host_stamp_does_not_double_fire_child_lifecycle() {
+    // Codex review P1 regression. With the original Phase 1
+    // implementation, the host stamp reused `SCOPE_ID_KEY`,
+    // and `finalize_compiled_subtree` would call
+    // `fire_mount_hook` once for the host and once for the
+    // inner template root, firing the child's `on_mount`
+    // twice for a single mount. The fix moves the host
+    // stamp to `HOST_CHILD_SCOPE_ID_KEY` (separate from
+    // `SCOPE_ID_KEY`) so lifecycle dispatch only sees the
+    // inner root.
+    reset_observations();
+    let host = mount();
+    tick().await;
+    let mount_count = CHILD_MOUNT_COUNT.with(|c| *c.borrow());
+    assert_eq!(
+        mount_count, 1,
+        "child `on_mount` must fire exactly once per mount"
+    );
+    host.remove();
+}
+
+// Codex P2 regression — a `pp-ref` inside a `pp-if` body
+// is collected into a separate nested AnalysisCtx in the
+// macro, so the original Phase 2 codegen omitted accessors
+// for it. The fix aggregates nested ref names via
+// `absorb_lifted_refs`; this component would not compile
+// (no `lifted` method on the generated Refs struct) if the
+// aggregation regressed.
+thread_local! {
+    static OBSERVED_LIFTED_REF_PRESENT: RefCell<Option<bool>> = const { RefCell::new(None) };
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "typed-refs-lifted-parent",
+    template_inline = r#"<div class="trlp">
+        <template pp-if="true">
+            <span pp-ref="lifted">inside pp-if body</span>
+        </template>
+    </div>"#
+)]
+struct TypedRefsLiftedParent {}
+
+#[handlers]
+impl TypedRefsLiftedParent {
+    pub fn on_ready(&self, refs: TypedRefsLiftedParentRefs) {
+        // If this line wouldn't compile, the macro regressed
+        // (missed the pp-ref inside the pp-if body). The
+        // runtime resolution may legitimately return None
+        // when the controller hasn't materialized the body
+        // yet — but the method must EXIST.
+        let element = refs.lifted().element();
+        OBSERVED_LIFTED_REF_PRESENT.with(|c| *c.borrow_mut() = Some(element.is_some()));
+    }
+}
+
+#[wasm_bindgen_test]
+async fn generated_refs_struct_includes_pp_refs_from_lifted_bodies() {
+    OBSERVED_LIFTED_REF_PRESENT.with(|c| *c.borrow_mut() = None);
+    TypedRefsLiftedParent::register();
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html("<typed-refs-lifted-parent></typed-refs-lifted-parent>");
+    body.append_child(&host).unwrap();
+    let el = host
+        .query_selector("typed-refs-lifted-parent")
+        .unwrap()
+        .unwrap();
+    pocopine_core::mount::mount_child_component(&el, "typed-refs-lifted-parent");
+    pocopine_core::mount::finalize_compiled_subtree(&el);
+    tick().await;
+
+    // The accessor exists (compile-checked above); the
+    // pp-if body should materialize before on_ready fires,
+    // so the element lookup resolves.
+    let lifted_present = OBSERVED_LIFTED_REF_PRESENT.with(|c| *c.borrow());
+    assert_eq!(
+        lifted_present,
+        Some(true),
+        "pp-ref inside pp-if body must be reachable through the typed `lifted()` accessor"
+    );
+    host.remove();
+}
+
+// Codex P2 — kebab/dot/colon in `pp-ref` names normalize to
+// underscore for the generated method ident. Two refs whose
+// normalized form collides emit a `compile_error!` (covered
+// by build-time compilation, not this runtime test). The
+// positive case here pins that distinct normalized names
+// emit distinct methods.
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "typed-refs-kebab",
+    template_inline = r#"<div class="trk">
+        <span pp-ref="form-root">a</span>
+        <span pp-ref="title-input">b</span>
+    </div>"#
+)]
+struct TypedRefsKebab {}
+
+#[handlers]
+impl TypedRefsKebab {
+    pub fn on_ready(&self, refs: TypedRefsKebabRefs) {
+        // Method idents are snake_case normalized from kebab
+        // — `form-root` → `form_root`, `title-input` →
+        // `title_input`. If the normalization regressed,
+        // these calls would not compile.
+        let _ = refs.form_root().element();
+        let _ = refs.title_input().element();
+    }
+}
+
+#[wasm_bindgen_test]
+async fn generated_refs_struct_normalizes_kebab_to_snake_case_idents() {
+    TypedRefsKebab::register();
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html("<typed-refs-kebab></typed-refs-kebab>");
+    body.append_child(&host).unwrap();
+    let el = host.query_selector("typed-refs-kebab").unwrap().unwrap();
+    pocopine_core::mount::mount_child_component(&el, "typed-refs-kebab");
+    pocopine_core::mount::finalize_compiled_subtree(&el);
+    tick().await;
+    // No runtime assertion — the test passes by virtue of
+    // `on_ready` having compiled with both kebab-derived
+    // method names.
+    host.remove();
+}
+
+#[wasm_bindgen_test]
 async fn generated_refs_struct_method_name_is_compile_time_typo_safe() {
     // The point of Phase 2: the generated method `fn body(&self)`
     // means a typo at the call site fails to compile. We can't
@@ -156,9 +299,16 @@ async fn generated_refs_struct_method_name_is_compile_time_typo_safe() {
     // codegen and the resolution semantics together.
     let host = mount();
     tick().await;
+    // The parent's scope id lives on the inner template root,
+    // not the custom-element host — `<typed-refs-parent>` is
+    // the host; `<div class="trp">` (its first element child)
+    // is the rendered root with `SCOPE_ID_KEY`.
     let parent_host = host.query_selector("typed-refs-parent").unwrap().unwrap();
+    let parent_root = parent_host
+        .first_element_child()
+        .expect("rendered template root");
     let parent_scope_id =
-        pocopine_core::mount::scope_id_of_element(&parent_host).expect("parent scope id");
+        pocopine_core::mount::scope_id_of_element(&parent_root).expect("parent scope id");
     // Directly resolve via the free-fn to confirm the name lands
     // in the parent scope's ref table.
     let resolved = pocopine_core::refs::get_component_on::<TypedRefsChild>(parent_scope_id, "body");
