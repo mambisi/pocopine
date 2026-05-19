@@ -375,6 +375,16 @@ fn mount_component(
         stamp_plugin_metadata(&root, tag, scope.id, plugin_hooks, mount_start_ms);
         let _ = root.remove_attribute("data-pp-scope-id");
 
+        // RFC 081 — stamp the *custom-element host* with the
+        // child's scope id too. Lets a parent that tags this
+        // element with `pp-ref="name"` resolve a typed
+        // [`Handle<Child>`](crate::handle::Handle) via
+        // [`crate::refs::get_component`] without DOM-walking
+        // the inner template. The host doesn't carry
+        // `SCOPE_PROXY_KEY` — proxy reads still go through
+        // the bound template root.
+        set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
+
         // Fallthrough (RFC-010).
         apply_fallthrough_attrs(el, &root, &scope);
 
@@ -545,6 +555,14 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     set_private(&user_root, SCOPE_PROXY_KEY, &proxy);
     stamp_plugin_metadata(&user_root, tag, scope.id, plugin_hooks, mount_start_ms);
     let _ = user_root.remove_attribute("data-pp-scope-id");
+
+    // RFC 081 — stamp the host (outer custom-tag element)
+    // with the child's scope id too, mirroring the normal
+    // mount path. Lets a parent reach a typed
+    // [`Handle<Child>`](crate::handle::Handle) via
+    // [`crate::refs::get_component`] on a pp-ref-tagged
+    // pp-as host.
+    set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
 
     let plan_root = pp_as_render_root(&user_root);
 
