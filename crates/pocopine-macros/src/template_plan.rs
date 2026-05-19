@@ -75,6 +75,13 @@ pub(crate) struct EmittedTemplatePlan {
     /// mounts use this generated body directly; the generic
     /// plan applier remains for lifted fragment internals only.
     pub specialized_mount_body: Option<TokenStream>,
+    /// RFC 081 — every `pp-ref="name"` collected from the
+    /// template, dedup'd in template-order. The consuming
+    /// macro emits a `<ComponentName>Refs` struct with one
+    /// `fn <name>(&self) -> RefAccessor` per entry so handlers
+    /// can write `refs.body()` instead of
+    /// `refs::get_component::<T>("body")`.
+    pub ref_names: Vec<String>,
 }
 
 /// Walk the template AST, classify every directive, return the
@@ -118,6 +125,7 @@ pub(crate) fn analyze_template_plan(
             slot_fragment_fns: TokenStream::new(),
             if_body_fns: TokenStream::new(),
             specialized_mount_body: None,
+            ref_names: ctx.ref_names_dedup(),
         };
     }
     let cleaned_html = serialize_cleaned(&ast.roots, &ctx);
@@ -133,12 +141,14 @@ pub(crate) fn analyze_template_plan(
         None
     };
     let specialized_mount_body = ctx.emit_specialized_mount_body();
+    let ref_names = ctx.ref_names_dedup();
     EmittedTemplatePlan {
         plan_tokens,
         cleaned_html: Some(cleaned_html),
         slot_fragment_fns,
         if_body_fns,
         specialized_mount_body,
+        ref_names,
     }
 }
 
@@ -520,6 +530,23 @@ impl AnalysisCtx {
             || !self.opaque_directives.is_empty()
             || !self.interps.is_empty()
             || !self.native_models.is_empty()
+    }
+
+    /// RFC 081 — every distinct `pp-ref="name"` collected from
+    /// the template, in template-order. Two refs with the same
+    /// name in different `pp-for` rows (last-wins resolution at
+    /// runtime) collapse to one accessor here — the generated
+    /// `fn <name>(&self) -> RefAccessor` then resolves whichever
+    /// row's element happened to win.
+    fn ref_names_dedup(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(self.refs.len());
+        for r in &self.refs {
+            if seen.insert(r.name.clone()) {
+                out.push(r.name.clone());
+            }
+        }
+        out
     }
 
     fn emit_specialized_mount_body(&self) -> Option<TokenStream> {

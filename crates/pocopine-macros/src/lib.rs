@@ -940,6 +940,27 @@ pub(crate) fn kebab_case(ident: &str) -> String {
     out
 }
 
+/// RFC 081 — convert a `pp-ref` name to a valid Rust method
+/// identifier for the generated `<ComponentName>Refs` struct.
+/// Kebab/dot/colon to underscore, leading non-alpha to a
+/// prefixed underscore. Names that already look like snake_case
+/// (e.g. `form_root`, `title_input`) pass through unchanged.
+pub(crate) fn normalize_ref_method_ident(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 1);
+    for (i, c) in name.chars().enumerate() {
+        let mapped = match c {
+            'a'..='z' | 'A'..='Z' | '_' => c,
+            '0'..='9' if i > 0 => c,
+            _ => '_',
+        };
+        out.push(mapped);
+    }
+    if out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
+}
+
 struct ClientModuleArgs {
     file: Option<LitStr>,
     name: Option<LitStr>,
@@ -2095,6 +2116,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             slot_fragment_fns: proc_macro2::TokenStream::new(),
             if_body_fns: proc_macro2::TokenStream::new(),
             specialized_mount_body: None,
+            ref_names: Vec::new(),
         });
 
     // Build the literal to feed into `compile_template`:
@@ -2392,9 +2414,78 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    // RFC 081 — generated `<ComponentName>Refs<'a>` struct.
+    // One method per `pp-ref="name"` in the template. Each
+    // returns a typed `RefAccessor` carrying (scope_id, name)
+    // so callers reach `.element()` / `.as_::<T>()` /
+    // `.component::<T>()` with the name fixed at codegen time
+    // (typo → unknown method, fails to build).
+    //
+    // Wired as a `From<LifecycleContext<'a>>` extractor so
+    // handlers take the typed struct directly:
+    //
+    //     fn on_ready(&self, refs: KeepNoteFormRefs) {
+    //         let body = refs.body().component::<KeepNoteBody>()?;
+    //     }
+    //
+    // Always emitted (even for components with zero pp-refs)
+    // for two reasons: keeps the From extractor extractor-name
+    // discoverable, and the empty struct is dead-code-eliminable
+    // when no handler consumes it.
+    let refs_struct_ident =
+        proc_macro2::Ident::new(&format!("{ident_str}Refs"), struct_ident.span());
+    let ref_accessor_methods = template_plan.ref_names.iter().map(|name| {
+        let method_ident =
+            proc_macro2::Ident::new(&normalize_ref_method_ident(name), struct_ident.span());
+        let name_lit = proc_macro2::Literal::string(name);
+        quote! {
+            /// Typed accessor for the
+            #[doc = #name_lit]
+            /// `pp-ref`. Returns a [`::pocopine::__private::RefAccessor`]
+            /// carrying the scope id + ref name baked in; call
+            /// `.element()`, `.as_::<T>()`, or `.component::<T>()`
+            /// to resolve.
+            pub fn #method_ident(&self) -> ::pocopine::__private::RefAccessor {
+                ::pocopine::__private::RefAccessor::__new(self.scope_id, #name_lit)
+            }
+        }
+    });
+    let refs_struct_tokens = quote! {
+        /// Macro-generated typed refs struct (RFC 081 Phase 2).
+        /// One method per `pp-ref="name"` in the component's
+        /// template. Reach via the `From<LifecycleContext>`
+        /// extractor: write
+        /// `fn on_ready(&self, refs: #refs_struct_ident)` and
+        /// call `refs.<name>().component::<T>()` etc.
+        #[doc(hidden)]
+        #[derive(Clone, Copy)]
+        pub struct #refs_struct_ident<'__poc_refs> {
+            scope_id: ::pocopine::__private::ScopeId,
+            _m: ::core::marker::PhantomData<&'__poc_refs ()>,
+        }
+
+        impl<'__poc_refs> #refs_struct_ident<'__poc_refs> {
+            #(#ref_accessor_methods)*
+        }
+
+        impl<'__poc_refs> ::core::convert::From<
+            ::pocopine::__private::LifecycleContext<'__poc_refs>,
+        > for #refs_struct_ident<'__poc_refs> {
+            fn from(
+                ctx: ::pocopine::__private::LifecycleContext<'__poc_refs>,
+            ) -> Self {
+                Self {
+                    scope_id: ctx.scope_id,
+                    _m: ::core::marker::PhantomData,
+                }
+            }
+        }
+    };
+
     let out = quote! {
         #input
         #template_plan_item_tokens
+        #refs_struct_tokens
 
         // RFC 049 — marker traits + blanket impls for each
         // #[slot(accepts=...)] / #[slot(only=...)] declared on
