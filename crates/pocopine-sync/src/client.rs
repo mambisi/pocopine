@@ -11,9 +11,10 @@ use crate::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    sync_stream_tag, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot,
-    SyncChange, SyncConflict, SyncOpenRequest, SyncOpenResponse, SyncPullMode, SyncPullRequest,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse,
+    sync_stream_tag, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    LocalStreamSnapshot, PendingMutation, SyncChange, SyncConflict, SyncOp, SyncOpenRequest,
+    SyncOpenResponse, SyncPullMode, SyncPullRequest, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse,
 };
 
 /// Selector from an app-owned component/store into one sync collection field.
@@ -185,7 +186,7 @@ where
     /// Pull initial data and, when configured, open a live wake-up stream.
     pub fn open(self) -> SyncResult<()>
     where
-        T: serde::de::DeserializeOwned + serde::Serialize,
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize,
     {
         self.open_impl()
     }
@@ -193,7 +194,7 @@ where
     /// Trigger a manual pull.
     pub fn pull(self) -> SyncResult<()>
     where
-        T: serde::de::DeserializeOwned + serde::Serialize,
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize,
     {
         self.pull_impl(SyncReason::Manual, false)
     }
@@ -288,7 +289,7 @@ where
 impl<C, T> SyncCollection<C, T>
 where
     C: 'static,
-    T: serde::de::DeserializeOwned + serde::Serialize + 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
     fn open_impl(self) -> SyncResult<()> {
         let stream = self.stream_value()?;
@@ -559,7 +560,7 @@ fn start_open_then_pull<C, T>(
     live_wakeup: Option<LiveWakeupOptions>,
 ) where
     C: 'static,
-    T: serde::de::DeserializeOwned + serde::Serialize + 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
     let open_url = endpoint_path(&endpoint, "open");
     let pull_url = endpoint_path(&endpoint, "pull");
@@ -573,11 +574,19 @@ fn start_open_then_pull<C, T>(
         match local_store.hydrate_stream(&stream).await {
             Ok(snapshot) => {
                 local_cursor = snapshot.cursor.clone();
-                pending_mutations = snapshot.pending_mutations.clone();
+                pending_mutations = snapshot
+                    .pending_mutations
+                    .iter()
+                    .map(|pending| pending.mutation.clone())
+                    .collect();
                 match decode_local_snapshot(snapshot) {
-                    Ok((rows, cursor, pending_count)) => {
+                    Ok((rows, cursor, pending_for_state)) => {
                         handle.update(|state| {
-                            selector(state).apply_local_snapshot(rows, cursor, pending_count);
+                            selector(state).apply_local_snapshot_with_pending(
+                                rows,
+                                cursor,
+                                pending_for_state,
+                            );
                         });
                     }
                     Err(err) => {
@@ -639,7 +648,11 @@ fn start_open_then_pull<C, T>(
             )
             .await
             {
-                Ok(()) => {}
+                Ok(response) => {
+                    handle.update(|state| {
+                        selector(state).apply_push(response);
+                    });
+                }
                 Err(err) => {
                     local_error = Some(format!("pending sync mutation replay failed: {err}"));
                 }
@@ -687,7 +700,7 @@ fn open_live_wakeup<C, T>(
     options: LiveWakeupOptions,
 ) where
     C: 'static,
-    T: serde::de::DeserializeOwned + serde::Serialize + 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
     let live_tag = sync_stream_tag(stream.as_str());
     let mut refresh = pocopine_live::LiveRefresh::scoped()
@@ -779,7 +792,7 @@ fn start_pull<C, T>(
     live_event: bool,
 ) where
     C: 'static,
-    T: serde::de::DeserializeOwned + serde::Serialize + 'static,
+    T: Clone + serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
     let pull_url = endpoint_path(&endpoint, "pull");
 
@@ -939,8 +952,8 @@ async fn run_push<C, T, M>(
     let mutation_key = mutation.key.clone();
 
     if queue_offline {
-        let local_mutation = match mutation_to_value(&mutation) {
-            Ok(mutation) => mutation,
+        let local_pending = match pending_mutation_to_value(&mutation, optimistic.as_ref()) {
+            Ok(pending) => pending,
             Err(err) => {
                 handle.update(|state| {
                     selector(state).set_error(format!("sync mutation encode failed: {err}"));
@@ -948,7 +961,10 @@ async fn run_push<C, T, M>(
                 return;
             }
         };
-        if let Err(err) = local_store.enqueue_mutation(&stream, local_mutation).await {
+        if let Err(err) = local_store
+            .enqueue_pending_mutation(&stream, local_pending)
+            .await
+        {
             handle.update(|state| {
                 selector(state).set_error(format!("local sync mutation enqueue failed: {err}"));
             });
@@ -1029,17 +1045,21 @@ async fn run_push<C, T, M>(
 #[cfg(target_arch = "wasm32")]
 fn decode_local_snapshot<T>(
     snapshot: LocalStreamSnapshot,
-) -> SyncResult<(Vec<SyncRow<T>>, Option<SyncCursor>, u64)>
+) -> SyncResult<(Vec<SyncRow<T>>, Option<SyncCursor>, Vec<PendingMutation<T>>)>
 where
     T: serde::de::DeserializeOwned,
 {
-    let pending_count = snapshot.pending_mutations.len() as u64;
+    let pending_mutations = snapshot
+        .pending_mutations
+        .into_iter()
+        .map(pending_mutation_from_local)
+        .collect::<SyncResult<Vec<_>>>()?;
     let rows = snapshot
         .rows
         .into_iter()
         .map(row_from_value)
         .collect::<SyncResult<Vec<_>>>()?;
-    Ok((rows, snapshot.cursor, pending_count))
+    Ok((rows, snapshot.cursor, pending_mutations))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1048,7 +1068,7 @@ async fn replay_pending_mutations<T>(
     push_url: &str,
     stream: SyncStreamName,
     pending_mutations: Vec<ClientMutation<Value>>,
-) -> SyncResult<()>
+) -> SyncResult<SyncPushResponse<T>>
 where
     T: serde::de::DeserializeOwned + serde::Serialize + 'static,
 {
@@ -1059,7 +1079,53 @@ where
     .await
     .map_err(|err| SyncError::client(err.to_string()))?;
     let result = local_push_result_from_response(&response)?;
-    local_store.mark_push_result(result).await
+    local_store.mark_push_result(result).await?;
+    Ok(response)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pending_mutation_from_local<T>(pending: LocalPendingMutation) -> SyncResult<PendingMutation<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let LocalPendingMutation {
+        mutation,
+        optimistic_row,
+    } = pending;
+    let optimistic = match optimistic_row {
+        Some(row) => Some(row_from_value(row)?),
+        None => pending_optimistic_from_payload(&mutation),
+    };
+
+    Ok(PendingMutation {
+        id: mutation.id,
+        op: mutation.op,
+        key: mutation.key,
+        before: None,
+        before_rows: Vec::new(),
+        optimistic,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pending_optimistic_from_payload<T>(mutation: &ClientMutation<Value>) -> Option<SyncRow<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match mutation.op {
+        SyncOp::Upsert => mutation.key.clone().and_then(|key| {
+            serde_json::from_value(mutation.payload.clone())
+                .ok()
+                .map(|value| SyncRow {
+                    key,
+                    version: mutation.base_version.clone(),
+                    value,
+                    pending: true,
+                    conflict: false,
+                })
+        }),
+        SyncOp::Delete | SyncOp::Reset => None,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1140,6 +1206,19 @@ where
         base_version: mutation.base_version.clone(),
         payload: serde_json::to_value(&mutation.payload)?,
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pending_mutation_to_value<M, T>(
+    mutation: &ClientMutation<M>,
+    optimistic: Option<&SyncRow<T>>,
+) -> SyncResult<LocalPendingMutation>
+where
+    M: serde::Serialize,
+    T: serde::Serialize,
+{
+    Ok(LocalPendingMutation::new(mutation_to_value(mutation)?)
+        .with_optimistic_row(optimistic.map(row_to_value).transpose()?))
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -5,9 +5,10 @@ use std::{
 };
 
 use crate::{
-    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch,
-    LocalStreamSnapshot, MutationId, RowKey, SyncCollectionName, SyncError, SyncLocalFuture,
-    SyncLocalIdentity, SyncLocalStore, SyncOp, SyncResult, SyncRow, SyncStreamName,
+    generate_sync_device_id, ClientMutation, LocalChangeBatch, LocalPendingMutation,
+    LocalPushResult, LocalSnapshotBatch, LocalStreamSnapshot, MutationId, RowKey,
+    SyncCollectionName, SyncError, SyncLocalFuture, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncResult, SyncRow, SyncStreamName,
 };
 
 /// In-memory [`SyncLocalStore`] implementation for tests and demos.
@@ -30,7 +31,7 @@ struct MemoryStreamState {
     collection: Option<SyncCollectionName>,
     cursor: Option<crate::SyncCursor>,
     rows: BTreeMap<RowKey, SyncRow<serde_json::Value>>,
-    pending: Vec<ClientMutation<serde_json::Value>>,
+    pending: Vec<LocalPendingMutation>,
 }
 
 impl MemoryLocalStore {
@@ -147,17 +148,25 @@ impl SyncLocalStore for MemoryLocalStore {
         stream: &SyncStreamName,
         mutation: ClientMutation<serde_json::Value>,
     ) -> SyncLocalFuture<'_, ()> {
+        self.enqueue_pending_mutation(stream, LocalPendingMutation::new(mutation))
+    }
+
+    fn enqueue_pending_mutation(
+        &self,
+        stream: &SyncStreamName,
+        pending: LocalPendingMutation,
+    ) -> SyncLocalFuture<'_, ()> {
         let stream = stream.clone();
         Self::ready(self.with_inner(|inner| {
             let state = inner.streams.entry(stream).or_default();
             if let Some(existing) = state
                 .pending
                 .iter_mut()
-                .find(|existing| existing.id == mutation.id)
+                .find(|existing| existing.mutation.id == pending.mutation.id)
             {
-                *existing = mutation;
+                *existing = pending;
             } else {
-                state.pending.push(mutation);
+                state.pending.push(pending);
             }
             Ok(())
         }))
@@ -174,19 +183,19 @@ impl SyncLocalStore for MemoryLocalStore {
             }
 
             for id in result.accepted {
-                state.pending.retain(|mutation| mutation.id != id);
+                state.pending.retain(|pending| pending.mutation.id != id);
             }
 
             for rejected in result.rejected {
                 state
                     .pending
-                    .retain(|mutation| mutation.id != rejected.mutation_id);
+                    .retain(|pending| pending.mutation.id != rejected.mutation_id);
             }
 
             for conflict in result.conflicts {
                 state
                     .pending
-                    .retain(|mutation| mutation.id != conflict.mutation_id);
+                    .retain(|pending| pending.mutation.id != conflict.mutation_id);
                 if let Some(mut row) = conflict.server_row {
                     row.pending = false;
                     row.conflict = true;
@@ -218,7 +227,13 @@ impl SyncLocalStore for MemoryLocalStore {
             Ok(inner
                 .streams
                 .get(&stream)
-                .map(|state| state.pending.clone())
+                .map(|state| {
+                    state
+                        .pending
+                        .iter()
+                        .map(|pending| pending.mutation.clone())
+                        .collect()
+                })
                 .unwrap_or_default())
         }))
     }
@@ -614,8 +629,52 @@ mod tests {
             .unwrap();
 
         let snapshot = store.hydrate_stream(&stream).await.unwrap();
-        assert_eq!(snapshot.pending_mutations, vec![mutation]);
+        assert_eq!(
+            snapshot.pending_mutations,
+            vec![LocalPendingMutation::new(mutation)]
+        );
         assert_eq!(snapshot.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_store_preserves_pending_optimistic_rows() {
+        let store = MemoryLocalStore::new();
+        let stream = SyncStreamName::new("posts").unwrap();
+        let mutation = ClientMutation {
+            id: MutationId::new("device_abc:1").unwrap(),
+            key: Some(RowKey::new("post_1").unwrap()),
+            op: SyncOp::Upsert,
+            base_version: None,
+            payload: serde_json::json!({
+                "op": "create",
+                "payload": {"id": "post_1", "draft": {"title": "Envelope only"}}
+            }),
+        };
+        let optimistic = SyncRow::new(
+            "post_1",
+            serde_json::json!({"id": "post_1", "title": "Visible"}),
+        )
+        .unwrap();
+
+        store
+            .enqueue_pending_mutation(
+                &stream,
+                LocalPendingMutation::new(mutation.clone())
+                    .with_optimistic_row(Some(optimistic.clone())),
+            )
+            .await
+            .unwrap();
+
+        let snapshot = store.hydrate_stream(&stream).await.unwrap();
+        assert_eq!(snapshot.pending_mutations[0].mutation, mutation);
+        assert_eq!(
+            snapshot.pending_mutations[0].optimistic_row.as_ref(),
+            Some(&optimistic)
+        );
+        assert_eq!(
+            store.pending_mutations(&stream).await.unwrap(),
+            vec![snapshot.pending_mutations[0].mutation.clone()]
+        );
     }
 
     #[tokio::test]

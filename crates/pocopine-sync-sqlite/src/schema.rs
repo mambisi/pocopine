@@ -1,5 +1,5 @@
 /// Current Pocopine sync SQLite schema version.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Metadata table for device identity and internal settings.
 pub const META_TABLE: &str = "__pocopine_meta";
@@ -48,6 +48,7 @@ pub const BOOTSTRAP_SQL: &[&str] = &[
         base_version text,
         op text not null,
         payload text,
+        optimistic_row text,
         status text not null,
         error text,
         created_at_ms integer not null,
@@ -93,14 +94,15 @@ pub const UPDATE_ROW_CONFLICT_SQL: &str =
 
 /// SQL upsert used for durable pending mutations.
 pub const UPSERT_MUTATION_SQL: &str = "insert into __pocopine_mutations
-    (stream, mutation_id, row_key, base_version, op, payload, status, error, created_at_ms, updated_at_ms)
-    values (?1, ?2, ?3, ?4, ?5, ?6, 'pending', null, ?7, ?7)
+    (stream, mutation_id, row_key, base_version, op, payload, optimistic_row, status, error, created_at_ms, updated_at_ms)
+    values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', null, ?8, ?8)
     on conflict(mutation_id) do update set
         stream = excluded.stream,
         row_key = excluded.row_key,
         base_version = excluded.base_version,
         op = excluded.op,
         payload = excluded.payload,
+        optimistic_row = excluded.optimistic_row,
         status = 'pending',
         error = null,
         updated_at_ms = excluded.updated_at_ms";
@@ -110,7 +112,7 @@ pub const DELETE_MUTATION_SQL: &str = "delete from __pocopine_mutations where mu
 
 /// SQL query used to load pending mutations for a stream in enqueue order.
 pub const SELECT_PENDING_MUTATIONS_SQL: &str =
-    "select mutation_id, row_key, base_version, op, payload
+    "select mutation_id, row_key, base_version, op, payload, optimistic_row
     from __pocopine_mutations
     where stream = ?1 and status = 'pending'
     order by enqueue_seq asc";

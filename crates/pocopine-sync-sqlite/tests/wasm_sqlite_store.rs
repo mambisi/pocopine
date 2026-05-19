@@ -1,8 +1,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use pocopine_sync::{
-    ClientMutation, LocalPushResult, LocalSnapshotBatch, MutationId, RowKey, SyncCollectionName,
-    SyncCursor, SyncDeviceId, SyncLocalIdentity, SyncLocalStore, SyncOp, SyncRow, SyncStreamName,
+    ClientMutation, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch, MutationId, RowKey,
+    SyncCollectionName, SyncCursor, SyncDeviceId, SyncLocalIdentity, SyncLocalStore, SyncOp,
+    SyncRow, SyncStreamName,
 };
 use pocopine_sync_sqlite::SqliteLocalStore;
 use wasm_bindgen_test::*;
@@ -58,15 +59,30 @@ async fn sqlite_wasm_store_round_trips_cached_rows_and_pending_mutations() {
         key: Some(RowKey::new("post_1").unwrap()),
         op: SyncOp::Upsert,
         base_version: Some(pocopine_sync::RowVersion::new("row_1").unwrap()),
-        payload: serde_json::json!({"title": "Updated"}),
+        payload: serde_json::json!({
+            "op": "save",
+            "payload": {"id": "post_1", "draft": {"title": "Updated"}}
+        }),
     };
+    let optimistic = SyncRow::new("post_1", serde_json::json!({"title": "Updated"})).unwrap();
     store
-        .enqueue_mutation(&stream, mutation.clone())
+        .enqueue_pending_mutation(
+            &stream,
+            LocalPendingMutation::new(mutation.clone())
+                .with_optimistic_row(Some(optimistic.clone())),
+        )
         .await
         .unwrap();
     assert_eq!(
         store.pending_mutations(&stream).await.unwrap(),
         vec![mutation]
+    );
+    let pending_snapshot = store.hydrate_stream(&stream).await.unwrap();
+    assert_eq!(
+        pending_snapshot.pending_mutations[0]
+            .optimistic_row
+            .as_ref(),
+        Some(&optimistic)
     );
 
     store

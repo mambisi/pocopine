@@ -1,9 +1,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use pocopine_sync::{
-    ClientMutation, LocalChangeBatch, LocalPushResult, LocalSnapshotBatch, MutationId, RowKey,
-    RowVersion, SyncChange, SyncCollectionName, SyncCursor, SyncDeviceId, SyncLocalIdentity,
-    SyncLocalStore, SyncOp, SyncPushResponse, SyncRow, SyncStreamName,
+    ClientMutation, LocalChangeBatch, LocalPendingMutation, LocalPushResult, LocalSnapshotBatch,
+    MutationId, RowKey, RowVersion, SyncChange, SyncCollectionName, SyncCursor, SyncDeviceId,
+    SyncLocalIdentity, SyncLocalStore, SyncOp, SyncPushResponse, SyncRow, SyncStreamName,
 };
 use pocopine_sync_indexdb::IndexedDbLocalStore;
 use wasm_bindgen_test::*;
@@ -31,8 +31,12 @@ async fn indexeddb_store_persists_identity_snapshot_and_pending_mutations() {
         key: Some(RowKey::new("post_2").unwrap()),
         op: SyncOp::Upsert,
         base_version: Some(RowVersion::new("row_1").unwrap()),
-        payload: serde_json::json!({"title": "Pending"}),
+        payload: serde_json::json!({
+            "op": "create",
+            "payload": {"id": "post_2", "draft": {"title": "Pending"}}
+        }),
     };
+    let optimistic = SyncRow::new("post_2", serde_json::json!({"title": "Pending"})).unwrap();
 
     store.save_identity(identity.clone()).await.unwrap();
     store
@@ -45,7 +49,11 @@ async fn indexeddb_store_persists_identity_snapshot_and_pending_mutations() {
         .await
         .unwrap();
     store
-        .enqueue_mutation(&stream, mutation.clone())
+        .enqueue_pending_mutation(
+            &stream,
+            LocalPendingMutation::new(mutation.clone())
+                .with_optimistic_row(Some(optimistic.clone())),
+        )
         .await
         .unwrap();
 
@@ -56,7 +64,15 @@ async fn indexeddb_store_persists_identity_snapshot_and_pending_mutations() {
     assert_eq!(snapshot.collection, Some(collection));
     assert_eq!(snapshot.cursor.unwrap().as_str(), "cursor_1");
     assert_eq!(snapshot.rows, vec![row]);
-    assert_eq!(snapshot.pending_mutations, vec![mutation]);
+    assert_eq!(snapshot.pending_mutations[0].mutation, mutation);
+    assert_eq!(
+        snapshot.pending_mutations[0].optimistic_row.as_ref(),
+        Some(&optimistic)
+    );
+    assert_eq!(
+        reopened.pending_mutations(&stream).await.unwrap(),
+        vec![snapshot.pending_mutations[0].mutation.clone()]
+    );
 }
 
 #[wasm_bindgen_test(async)]
