@@ -29,8 +29,8 @@ Pocopine already has the pieces needed to build on:
   OPFS implementation through the same `SyncLocalStore` API.
 - `pocopine-sync-crud` defines the first resource contract:
   `ResourceId`, CRUD mutation payloads, write policies, transaction
-  binding, `CrudSource`, bounded snapshot pulls, and exact mutation
-  replay dedupe.
+  binding, `CrudSource`, bounded snapshot pulls, exact mutation replay
+  dedupe, and a typed `LocalResourceView` over rebased sync state.
 
 That means we are past "can the browser persist sync state?" The next
 work is making persisted sync state behave like a complete local-first
@@ -56,11 +56,12 @@ order, rejected writes roll back to the latest canonical rows, and
 row-shaped pending upserts can be reconstructed from local-store
 hydration before replay.
 
-The remaining work is generated resource ergonomics and typed resource
-views. Generated CRUD methods need to produce the durable optimistic rows
-automatically, and typed query/resource views still need to expose the
-rebased state without forcing app code to inspect protocol structs
-directly.
+The first typed view slice is now in place: `LocalResourceView<Id, Row>`
+turns `CollectionState<Row>` into typed visible rows, canonical
+`base_version` values, hidden pending deletes, pending/conflict flags, and
+collection metadata. Generated CRUD methods still need to produce durable
+optimistic rows automatically and build on that view instead of exposing
+protocol structs directly.
 
 Deliverables:
 
@@ -251,10 +252,11 @@ simple and hard to misuse.
 
 ## Recommended Implementation Order
 
-1. Harden resource-level rebase on top of the core canonical/overlay
-   state model.
-2. Add typed local resource/query views over `SyncLocalStore`.
-3. Generate CRUD client methods and options APIs.
+1. Harden generated resource methods on top of the core canonical/overlay
+   state model and typed `LocalResourceView`.
+2. Extend typed local resource/query views beyond owned snapshots into
+   framework-native subscriptions.
+3. Generate CRUD client methods and options APIs that use the typed view.
 4. Add transaction-backed server helper paths for source write + mutation
    log insert.
 5. Add SQLx helper adapters for server CRUD sources, without becoming an

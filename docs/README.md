@@ -57,6 +57,10 @@ looks the way it does — the code itself tells you *what*.
   current roadmap for turning the shipped sync protocol, local store, and
   SQLite backend into a database-agnostic local-first sync engine without
   becoming a sync database.
+- [`sync-conflict-architecture.md`](./sync-conflict-architecture.md) —
+  deep dive on the sync layers, canonical-vs-rendered local state,
+  pending overlays, push outcomes, conflict resolution direction, and the
+  invariants future sync/resource authors must preserve.
 - [`sync-crud.md`](./sync-crud.md) — `pocopine-sync-crud` helper layer:
   `CrudSource`, `ResourceId`, CRUD mutation payloads, write policies,
   transaction binding, the non-macro runtime adapter, planned proc-macro

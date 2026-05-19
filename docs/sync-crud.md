@@ -877,6 +877,12 @@ rejected
 conflict
 ```
 
+`LocalResourceView<Id, Row>` is the typed read side for this state. It
+converts the low-level `CollectionState<Row>` into visible resource rows,
+canonical `base_version` values, pending mutations, pending/conflict
+flags, and collection metadata. Generated CRUD clients should consume this
+view instead of exposing raw protocol structs to application code.
+
 ## Conflict And `get`
 
 `get` is required in the trait because conflict recovery and detail pages
@@ -906,8 +912,9 @@ the testable contract:
 - mapping into `SyncCollection::push_with_generated_id` through
   `ClientMutationDraft`,
 - helper APIs for optimistic rows,
+- typed local resource views over `CollectionState<Row>`,
 - unit tests for ids, payload mapping, write policies, queued outcomes,
-  and transaction binding,
+  local views, and transaction binding,
 - low-level sync helpers for online-only push behavior,
 - docs for the next non-macro and macro slices.
 
