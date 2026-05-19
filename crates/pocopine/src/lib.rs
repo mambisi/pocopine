@@ -128,6 +128,10 @@ pub mod __private {
         LifecycleContext, Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener,
         StaticLiteral, StaticPropKind, StaticRowPlan, Store, WriteOrigin,
     };
+    // RFC 081 — typed ref accessor used by the macro-generated
+    // `<ComponentName>Refs` struct.
+    pub use pocopine_core::reactive::ScopeId;
+    pub use pocopine_core::refs::RefAccessor;
     #[cfg(not(target_arch = "wasm32"))]
     pub use pocopine_jobs as jobs;
     // RFC 060 Tier 4 — `phf` re-exported for `app!{}` macro use.

@@ -137,6 +137,66 @@ pub fn get_component_on<T: 'static>(parent_scope: ScopeId, name: &str) -> Option
     Some(Handle::new(rc, child_scope))
 }
 
+/// Compile-time-named ref accessor (RFC 081 Layer 1). Carries the
+/// scope id + the ref name baked in by `#[component]` codegen, so
+/// callers reach all three resolution flavours through one entry
+/// point without restating the name:
+///
+/// ```ignore
+/// fn save(&self, refs: KeepNoteFormRefs) {
+///     let el     = refs.body().element();                   // Option<Element>
+///     let input  = refs.title_input().as_::<HtmlInputElement>(); // Option<HtmlInputElement>
+///     let body   = refs.body().component::<KeepNoteBody>(); // Option<Handle<KeepNoteBody>>
+/// }
+/// ```
+///
+/// Constructed by macro-emitted accessors — there's no reason for
+/// authors to build one by hand. The `name` field is a
+/// `&'static str` so a typo in a generated method body would
+/// surface at macro-expand time (before user code compiles).
+#[derive(Clone, Copy)]
+pub struct RefAccessor {
+    scope_id: ScopeId,
+    name: &'static str,
+}
+
+impl RefAccessor {
+    /// Internal constructor — macro-emitted only. Not part of the
+    /// user-facing surface; calling this from outside generated
+    /// code defeats the compile-time name check the codegen
+    /// provides.
+    #[doc(hidden)]
+    pub fn __new(scope_id: ScopeId, name: &'static str) -> Self {
+        Self { scope_id, name }
+    }
+
+    /// The `pp-ref` name this accessor was generated for. Useful
+    /// for diagnostics / tracing; not part of the typical call
+    /// site.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Untyped DOM element. Equivalent to
+    /// [`get_on(scope, name)`](get_on) but with the name fixed.
+    pub fn element(&self) -> Option<Element> {
+        get_on(self.scope_id, self.name)
+    }
+
+    /// `JsCast`-downcast variant. Equivalent to
+    /// [`get_as`] when called from the current scope.
+    pub fn as_<T: JsCast>(&self) -> Option<T> {
+        self.element()?.dyn_into::<T>().ok()
+    }
+
+    /// Typed child-component handle. Equivalent to
+    /// [`get_component_on::<T>(scope, name)`](get_component_on)
+    /// with the name fixed.
+    pub fn component<T: 'static>(&self) -> Option<Handle<T>> {
+        get_component_on::<T>(self.scope_id, self.name)
+    }
+}
+
 /// Build a plain JS object snapshot of every ref registered on
 /// `scope_id`. Used to resolve the `$refs` magic — templates can read
 /// `$refs.search` without importing anything.
