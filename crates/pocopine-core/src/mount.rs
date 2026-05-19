@@ -55,6 +55,17 @@ use crate::templates::{is_registered, template_for};
 const SCOPE_ID_KEY: &str = "__pp_scope_id";
 const SCOPE_PROXY_KEY: &str = "__pp_scope_proxy";
 const SCOPE_BORROWED_KEY: &str = "__pp_scope_borrowed";
+/// RFC 081 — stamped on a child component's custom-element
+/// host (the outer `<keep-note-body>` tag, not the inner
+/// template root). Carries the child scope id so a parent's
+/// `refs::get_component::<T>("name")` can resolve a typed
+/// handle through the parent's `pp-ref="name"` entry. Kept
+/// distinct from `SCOPE_ID_KEY` so `fire_mount_hook` /
+/// `release_subtree` (which iterate every element with
+/// `SCOPE_ID_KEY`) don't see the host twice and double-fire
+/// `on_mount` / `on_unmount` / plugin events for the same
+/// scope.
+const HOST_CHILD_SCOPE_ID_KEY: &str = "__pp_host_child_scope_id";
 const EFFECTS_KEY: &str = "__pp_effects";
 const LISTENERS_KEY: &str = "__pp_listeners";
 const WALKED_KEY: &str = "__pp_walked";
@@ -127,6 +138,34 @@ pub fn bind_scope_id_only(el: &Element, scope_id: ScopeId) {
 pub fn scope_id_of_element(el: &Element) -> Option<ScopeId> {
     let id_num = get_private(el, SCOPE_ID_KEY).and_then(|v| v.as_f64())?;
     Some(ScopeId(id_num as u64))
+}
+
+/// RFC 081 — when `el` is the custom-element host of a child
+/// component, returns the child scope id stamped at mount
+/// time by [`mount_component`] /
+/// [`try_mount_component_as`]. Returns `None` for non-host
+/// elements (plain DOM, template roots — those carry
+/// `SCOPE_ID_KEY` and resolve through
+/// [`scope_id_of_element`] instead). The two keys are kept
+/// distinct so `fire_mount_hook` and `release_subtree` (which
+/// iterate every element with `SCOPE_ID_KEY`) never see the
+/// host as a duplicate copy of the child's scope.
+pub fn host_child_scope_id_of(el: &Element) -> Option<ScopeId> {
+    let id_num = get_private(el, HOST_CHILD_SCOPE_ID_KEY).and_then(|v| v.as_f64())?;
+    Some(ScopeId(id_num as u64))
+}
+
+/// RFC 081 — write the host-child stamp directly. Internal
+/// helper used by [`mount_component`] and its `pp-as` sibling,
+/// also exposed for tests that simulate a mounted child host
+/// without going through the full mount path.
+#[doc(hidden)]
+pub fn bind_host_child_scope(el: &Element, scope_id: ScopeId) {
+    set_private(
+        el,
+        HOST_CHILD_SCOPE_ID_KEY,
+        &JsValue::from_f64(scope_id.0 as f64),
+    );
 }
 
 /// Pin a **borrowed** scope. Same lookup semantics as `bind_scope_to`,
@@ -375,15 +414,19 @@ fn mount_component(
         stamp_plugin_metadata(&root, tag, scope.id, plugin_hooks, mount_start_ms);
         let _ = root.remove_attribute("data-pp-scope-id");
 
-        // RFC 081 — stamp the *custom-element host* with the
-        // child's scope id too. Lets a parent that tags this
-        // element with `pp-ref="name"` resolve a typed
+        // RFC 081 — stamp the *custom-element host* with a
+        // separate `HOST_CHILD_SCOPE_ID_KEY` so a parent's
+        // `pp-ref="name"` on this tag can resolve a typed
         // [`Handle<Child>`](crate::handle::Handle) via
-        // [`crate::refs::get_component`] without DOM-walking
-        // the inner template. The host doesn't carry
-        // `SCOPE_PROXY_KEY` — proxy reads still go through
-        // the bound template root.
-        set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
+        // [`crate::refs::get_component`]. Distinct from
+        // `SCOPE_ID_KEY` (which `fire_mount_hook` and
+        // `release_subtree` iterate) so the host doesn't
+        // double-fire the child's lifecycle hooks.
+        set_private(
+            el,
+            HOST_CHILD_SCOPE_ID_KEY,
+            &JsValue::from_f64(scope.id.0 as f64),
+        );
 
         // Fallthrough (RFC-010).
         apply_fallthrough_attrs(el, &root, &scope);
@@ -556,13 +599,16 @@ fn try_mount_component_as(el: &Element, tag: &str) -> bool {
     stamp_plugin_metadata(&user_root, tag, scope.id, plugin_hooks, mount_start_ms);
     let _ = user_root.remove_attribute("data-pp-scope-id");
 
-    // RFC 081 — stamp the host (outer custom-tag element)
-    // with the child's scope id too, mirroring the normal
-    // mount path. Lets a parent reach a typed
-    // [`Handle<Child>`](crate::handle::Handle) via
-    // [`crate::refs::get_component`] on a pp-ref-tagged
-    // pp-as host.
-    set_private(el, SCOPE_ID_KEY, &JsValue::from_f64(scope.id.0 as f64));
+    // RFC 081 — same host stamp as the normal mount path
+    // (see `HOST_CHILD_SCOPE_ID_KEY` doc). Distinct from
+    // `SCOPE_ID_KEY` so lifecycle dispatch / teardown don't
+    // visit the host as if it were a second copy of the
+    // child's scope.
+    set_private(
+        el,
+        HOST_CHILD_SCOPE_ID_KEY,
+        &JsValue::from_f64(scope.id.0 as f64),
+    );
 
     let plan_root = pp_as_render_root(&user_root);
 

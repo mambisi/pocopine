@@ -89,7 +89,10 @@ fn make_host(scope_id_to_stamp: Option<pocopine_core::reactive::ScopeId>) -> web
         .expect("test runs in wasm-pack node with document");
     let el = doc.create_element("div").expect("create_element succeeds");
     if let Some(scope_id) = scope_id_to_stamp {
-        pocopine_core::mount::bind_scope_id_only(&el, scope_id);
+        // RFC 081 — mount_component stamps the child host with
+        // HOST_CHILD_SCOPE_ID_KEY (distinct from SCOPE_ID_KEY
+        // so the host doesn't show up to fire_mount_hook).
+        pocopine_core::mount::bind_host_child_scope(&el, scope_id);
     }
     el
 }

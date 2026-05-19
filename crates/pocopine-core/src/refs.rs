@@ -123,12 +123,17 @@ pub fn get_component<T: 'static>(name: &str) -> Option<Handle<T>> {
 /// [`get_on`]).
 pub fn get_component_on<T: 'static>(parent_scope: ScopeId, name: &str) -> Option<Handle<T>> {
     let el = get_on(parent_scope, name)?;
-    let child_scope = crate::mount::scope_id_of_element(&el)?;
-    // Reject plain DOM elements pinned in the same scope as the
-    // caller — those carry no SCOPE_ID_KEY, but a template root
-    // happens to share its component's scope id with its parent's
-    // ref entry in rare layouts; this guard keeps "ref to self"
-    // from resolving as "child of self".
+    // RFC 081 — primary path: the element is a child
+    // component's custom-element host, stamped at mount
+    // time with `HOST_CHILD_SCOPE_ID_KEY`. Falls back to
+    // `SCOPE_ID_KEY` for the rare case where a
+    // `pp-ref` lands directly on a scope-bound element
+    // that ISN'T a host (e.g. an inner template root
+    // bound via `bind_scope_to`). The self-scope guard
+    // catches the case where the ref points back at the
+    // parent's own template root.
+    let child_scope = crate::mount::host_child_scope_id_of(&el)
+        .or_else(|| crate::mount::scope_id_of_element(&el))?;
     if child_scope == parent_scope {
         return None;
     }

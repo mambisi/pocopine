@@ -2434,13 +2434,51 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // when no handler consumes it.
     let refs_struct_ident =
         proc_macro2::Ident::new(&format!("{ident_str}Refs"), struct_ident.span());
-    let ref_accessor_methods = template_plan.ref_names.iter().map(|name| {
-        let method_ident =
-            proc_macro2::Ident::new(&normalize_ref_method_ident(name), struct_ident.span());
-        let name_lit = proc_macro2::Literal::string(name);
+    // RFC 081 Phase 2 Codex-P2 fix — `ref_names` is dedup'd
+    // by RAW `pp-ref` string in the template-plan analyser,
+    // but `normalize_ref_method_ident` maps `body-main`,
+    // `body.main`, and `body_main` all to the same Rust
+    // ident `body_main`. Emitting duplicate inherent methods
+    // would fail to compile with a confusing E0592. Instead,
+    // group raw names by their normalized form and emit a
+    // typed `compile_error!` per collision so the author
+    // sees exactly which template names clashed.
+    let mut method_name_groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for name in &template_plan.ref_names {
+        method_name_groups
+            .entry(normalize_ref_method_ident(name))
+            .or_default()
+            .push(name.clone());
+    }
+    let ref_collision_errors: Vec<TokenStream2> = method_name_groups
+        .iter()
+        .filter(|(_, raw)| raw.len() > 1)
+        .map(|(method_name, raw_names)| {
+            let msg = format!(
+                "RFC 081: `pp-ref` names {raw:?} all normalize to the Rust method \
+                 identifier `{method_name}` for the generated `{ident_str}Refs` accessor. \
+                 Rename one of the templates' `pp-ref=\"...\"` attributes so each \
+                 normalizes to a distinct method name (kebab/dot/colon → underscore).",
+                raw = raw_names,
+            );
+            let lit = proc_macro2::Literal::string(&msg);
+            quote! {
+                ::core::compile_error!(#lit);
+            }
+        })
+        .collect();
+    let ref_accessor_methods = method_name_groups.iter().map(|(method_name, raw_names)| {
+        let method_ident = proc_macro2::Ident::new(method_name, struct_ident.span());
+        // Use the first raw name as the runtime lookup key
+        // — when the collision diagnostic above fires, the
+        // build won't reach mount anyway; when there's no
+        // collision the group has exactly one entry.
+        let name_lit = proc_macro2::Literal::string(&raw_names[0]);
+        let doc_lit = proc_macro2::Literal::string(&raw_names[0]);
         quote! {
             /// Typed accessor for the
-            #[doc = #name_lit]
+            #[doc = #doc_lit]
             /// `pp-ref`. Returns a [`::pocopine::__private::RefAccessor`]
             /// carrying the scope id + ref name baked in; call
             /// `.element()`, `.as_::<T>()`, or `.component::<T>()`
@@ -2463,6 +2501,11 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             scope_id: ::pocopine::__private::ScopeId,
             _m: ::core::marker::PhantomData<&'__poc_refs ()>,
         }
+
+        // RFC 081 Phase 2 Codex-P2 — collision diagnostics
+        // emitted at module scope so each clashing pair of
+        // `pp-ref` names produces one clear error.
+        #(#ref_collision_errors)*
 
         impl<'__poc_refs> #refs_struct_ident<'__poc_refs> {
             #(#ref_accessor_methods)*
