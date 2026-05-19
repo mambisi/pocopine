@@ -264,6 +264,15 @@ impl<'a> Refs<'a> {
     pub fn get_as<T: JsCast>(&self, name: &str) -> Option<T> {
         self.get(name).and_then(|el| el.dyn_into().ok())
     }
+
+    /// Look up a child-component handle by `pp-ref="name"`
+    /// (RFC 081). Returns `None` when the named ref isn't a
+    /// child-component host or the registered child's Rust
+    /// type doesn't match `T`. Mirrors the free-fn
+    /// [`crate::refs::get_component`].
+    pub fn get_component<T: 'static>(&self, name: &str) -> Option<crate::handle::Handle<T>> {
+        crate::refs::get_component_on::<T>(self.scope_id, name)
+    }
 }
 
 impl<'a> From<LifecycleContext<'a>> for Refs<'a> {
