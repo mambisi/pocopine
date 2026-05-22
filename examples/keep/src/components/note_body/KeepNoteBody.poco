@@ -1,12 +1,11 @@
 <div class="note-body-editor" :data-kind="kind">
   <template pp-if="kind == 'text'">
-    <pine-textarea
-      class="note-body-input"
-      placeholder="Take a note…"
-      rows="3"
-      autosize
-      pp-model:value="body"
-    ></pine-textarea>
+    <pine-rich-text-root
+      pp-ref="surface"
+      class="note-body-input note-body-richtext"
+      runtime="keep"
+      suppress-doc-changed="true"
+    ></pine-rich-text-root>
   </template>
 
   <div class="cl note-body-checklist" pp-show="kind == 'checklist'">

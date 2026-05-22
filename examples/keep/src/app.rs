@@ -62,6 +62,27 @@ pub fn main() {
         "layout-grid",
         "layout-list",
     ];
+    // Per-instance runtime for Keep note bodies. Adds markdown-
+    // style typing shortcuts and smart typography on top of the
+    // default extension chain:
+    //   * `# ` … `###### ` → heading
+    //   * `* ` / `- ` / `+ ` → bullet list
+    //   * `1. ` → ordered list
+    //   * `> ` → blockquote
+    //   * ``` → code block
+    //   * `--` → em-dash, `...` → ellipsis, smart quotes
+    //
+    // Surfaces opt into it via `<pine-rich-text-root runtime="keep">`.
+    // Registered before `App::run()` (after that point the
+    // runtime registry seals on first resolve).
+    let keep_runtime = pine_richtext::runtime::RuntimeBuilder::new()
+        .name("keep")
+        .with(crate::richtext_schema::KeepNoteSchemaExtension)
+        .with(pine_richtext::extensions::SmartTypographyExtension)
+        .with(pine_richtext::extensions::MarkdownShortcutsExtension)
+        .build();
+    pine_richtext::runtime::registry::register("keep", keep_runtime);
+
     App::new()
         .plugin(
             pocopine_auth_client::auth_plugin()
@@ -112,5 +133,6 @@ pub fn main() {
         .register::<KeepEditor>()
         .register::<KeepNoteForm>()
         .register::<KeepNoteBody>()
+        .register::<pine_richtext::view::PineRichTextRoot>()
         .run();
 }

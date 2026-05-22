@@ -1,3 +1,117 @@
+/* ─── rich text ─── */
+
+.note-body-editor {
+  min-height: 0;
+}
+
+/* Rich-text body — `<pine-rich-text-root>` mounts a
+   contentEditable surface inside `.pine-rich-text`. Match the
+   plain-textarea look so the rich variant doesn't visually
+   stand out as a different control. */
+.note-body-richtext {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  max-height: calc(95vh - 170px);
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 4px;
+}
+
+/* Kill every browser-default focus indicator. Both the host
+   custom element and the inner contenteditable surface can pick
+   up `:focus-visible` rings; we match the plain-textarea look,
+   which doesn't paint one. */
+.note-body-richtext,
+.note-body-richtext:focus,
+.note-body-richtext:focus-within,
+.note-body-richtext:focus-visible,
+.note-body-richtext.pine-rich-text,
+.note-body-richtext.pine-rich-text:focus,
+.note-body-richtext.pine-rich-text:focus-visible,
+.note-body-richtext .pine-rich-text,
+.note-body-richtext .pine-rich-text:focus,
+.note-body-richtext .pine-rich-text:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border: 0;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) {
+  min-height: 72px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Title node — seamless top-of-doc heading. pine-richtext's
+   default renderer emits `<span data-pos="0" data-type="title">`
+   for the `title` node type; turn that into a block-styled title
+   with CSS.
+   The leading `h1:first-child` selector covers the loaded-doc
+   path: `editor.set::<Markdown>(saved_body)` re-parses `# Title`
+   as a `heading` (the markdown vocabulary has no separate title),
+   so the first child is a `<h1 data-type="heading">` instead of
+   `<span data-type="title">`. The schema accepts either as the
+   doc's leading slot; both render identically here. */
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > span[data-type='title'],
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1:first-child {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  padding: 0;
+  line-height: 1.25;
+}
+
+/* Empty-state placeholder mirroring the textarea's "Title" hint.
+   Applies to both the freshly-typed title node and the loaded
+   heading-1 in the title slot. */
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > span[data-type='title']:empty::before,
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > h1:first-child:empty::before {
+  content: 'Title';
+  color: var(--fg-3);
+  pointer-events: none;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) p {
+  margin: 0 0 0.5em;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) > :last-child {
+  margin-bottom: 0;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) h1,
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) h2 {
+  margin: 0 0 0.4em;
+  font-weight: 600;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) h1 { font-size: 1.4em; }
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) h2 { font-size: 1.2em; }
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) ul,
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) ol {
+  margin: 0 0 0.5em;
+  padding-left: 1.5em;
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) blockquote {
+  margin: 0 0 0.5em;
+  padding-left: 0.75em;
+  border-left: 2px solid var(--fg-3);
+  color: var(--fg-2);
+}
+
+:is(.note-body-richtext.pine-rich-text, .note-body-richtext .pine-rich-text) code {
+  background: var(--bg-2);
+  padding: 0 0.25em;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
 /* ─── checklist ─── */
 
 .note > .cl {

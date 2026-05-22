@@ -763,6 +763,7 @@ mod tests {
             id: id.to_string(),
             title: title.to_string(),
             body: String::new(),
+            body_state: None,
             color: "default".to_string(),
             pinned: false,
             archived: false,

@@ -4,18 +4,9 @@
   data-pp-outside-exempt=".composer.collapsed,.modal-note .note-pin,.palette--popover,.label-pop"
   @click.outside="auto_save"
 >
-  <pine-input
-    class="note-title-input"
-    placeholder="Title"
-    pp-model:value="title"
-    @keydown.ctrl.enter="save"
-    @keydown.meta.enter="save"
-    @keydown.escape="cancel"
-  ></pine-input>
-
   <keep-note-body
+    pp-ref="body"
     pp-bind:kind="kind"
-    pp-model:body="body"
     pp-model:todos="todos"
     pp-model:todo-text="todo_text"
     @keydown.ctrl.enter="save"
