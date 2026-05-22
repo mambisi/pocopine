@@ -349,5 +349,41 @@
                          @pp:chart:legend-toggle="toggle_pie_slice"
                          pp-bind:items="pie_legend"></pine-chart-legend>
     </article>
+
+    <article class="chart-card chart-card--radial">
+      <header class="chart-card-header">
+        <h2>Readiness rings</h2>
+        <div class="chart-card-actions" role="group" aria-label="Readiness rings dataset">
+          <button type="button"
+                  :aria-pressed="radial_dataset == 'growth' ? 'true' : 'false'"
+                  :data-active="radial_dataset == 'growth'"
+                  @click="show_radial_growth">Growth</button>
+          <button type="button"
+                  :aria-pressed="radial_dataset == 'latency' ? 'true' : 'false'"
+                  :data-active="radial_dataset == 'latency'"
+                  @click="show_radial_latency">Latency</button>
+        </div>
+      </header>
+      <pine-chart-responsive class="chart-panel chart-panel--radial"
+                             width="min(280px, 100%)"
+                             aspect_ratio="1"
+                             min_height="220">
+        <pine-radial-bar-chart label="Readiness rings"
+                               pp-bind:data="radial_data"
+                               inner_radius="0.34"
+                               ring_gap="7"
+                               pp-bind:center_label="radial_center_label"
+                               pp-bind:center_value="radial_center_value"
+                               animate="true"
+                               animation_duration="180"
+                               animation_easing="ease-out"></pine-radial-bar-chart>
+      </pine-chart-responsive>
+
+      <pine-chart-legend class="chart-card-legend"
+                         label="Readiness rings legend"
+                         interactive="true"
+                         @pp:chart:legend-toggle="toggle_radial_bar"
+                         pp-bind:items="radial_legend"></pine-chart-legend>
+    </article>
   </section>
 </root>

@@ -5,9 +5,9 @@ usually connect to detail panels, filters, or route changes.
 
 ## Selection
 
-Line markers, area markers, scatter points, bars, and pie/donut slices emit
-`pp:chart:select` when selected by pointer or keyboard. The event payload is
-`ChartSelection`:
+Line markers, area markers, scatter points, bars, pie/donut slices, and radial
+bars emit `pp:chart:select` when selected by pointer or keyboard. The event
+payload is `ChartSelection`:
 
 ```rust
 use pine_charts::{ChartSelection, ChartSelectionEnd};
@@ -15,7 +15,7 @@ use pine_charts::{ChartSelection, ChartSelectionEnd};
 
 Payload fields:
 
-- `chart`: `"line"`, `"area"`, `"scatter"`, `"bar"`, or `"pie"`
+- `chart`: `"line"`, `"area"`, `"scatter"`, `"bar"`, `"pie"`, or `"radial"`
 - `kind`: `"xy"`, `"category"`, or `"share"`
 - `key`: stable rendered mark key
 - `label`: human-readable selection label
@@ -23,8 +23,8 @@ Payload fields:
 - `series`: series label when present
 - `category`: categorical label for bars
 - `x` / `y`: numeric coordinates for line and scatter charts
-- `value`: numeric value for bars and pie/donut slices
-- `percentage`: share percentage for pie/donut slices
+- `value`: numeric value for bars, pie/donut slices, and radial bars
+- `percentage`: share percentage for pie/donut slices and radial bars
 - `x_label` / `y_label`: formatted point coordinates for `xy` selections
 - `value_label`: formatted value for `category` and `share` selections
 - `percentage_label`: formatted percentage for `share` selections
@@ -47,8 +47,8 @@ removes the selected mark. Use `pp:chart:select` for drilldown/detail panels and
 
 ## Hover
 
-Line, scatter, area, bar, and pie/donut charts emit `pp:chart:hover` while the
-pointer is over an interactive chart mark. Pointer exit emits
+Line, scatter, area, bar, pie/donut, and radial charts emit `pp:chart:hover`
+while the pointer is over an interactive chart mark. Pointer exit emits
 `pp:chart:hover-end`. Hover events are pointer-driven, so custom handlers should
 stay cheap and push expensive work outside the pointer path. The hover payload
 is `ChartHover`:
@@ -60,7 +60,7 @@ use pocopine::prelude::JsValue;
 
 Payload fields:
 
-- `chart`: `"line"`, `"scatter"`, `"area"`, `"bar"`, or `"pie"`
+- `chart`: `"line"`, `"scatter"`, `"area"`, `"bar"`, `"pie"`, or `"radial"`
 - `kind`: `"xy"`, `"category"`, or `"share"`
 - `key`
 - `label`
@@ -84,9 +84,9 @@ Payload fields:
 - `category`: bar hovers. `label` and `category` are the category label,
   `series` is populated for grouped/stacked series, and `value` /
   `value_label` are populated.
-- `share`: pie and donut hovers. `label` is the slice label, `value`,
-  `value_label`, `percentage`, and `percentage_label` are populated, and
-  `series` / `category` are empty.
+- `share`: pie, donut, and radial hovers. `label` is the slice or ring label,
+  `value`, `value_label`, `percentage`, and `percentage_label` are populated,
+  and `series` / `category` are empty.
 
 `aria_label` always matches the rendered mark's accessible label. Prefer
 `label` for concise custom UI and `aria_label` when mirroring the chart's

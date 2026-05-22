@@ -314,6 +314,7 @@
     .pine-chart-root[data-animate="true"] .pine-chart-marker,
     .pine-chart-root[data-animate="true"] .pine-chart-pie-slice,
     .pine-chart-root[data-animate="true"] .pine-chart-point,
+    .pine-chart-root[data-animate="true"] .pine-chart-radial-bar,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-line,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
@@ -326,6 +327,7 @@
     .pine-chart-root[data-animate="true"] .pine-chart-area,
     .pine-chart-root[data-animate="true"] .pine-chart-marker,
     .pine-chart-root[data-animate="true"] .pine-chart-point,
+    .pine-chart-root[data-animate="true"] .pine-chart-radial-bar,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-icon-plane,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-marker,
     .pine-chart-root[data-animate="true"] .pine-layer-chart-reference-dot {
@@ -494,14 +496,16 @@
     .pine-chart-marker[data-focused],
     .pine-chart-point[data-focused],
     .pine-chart-bar[data-focused],
-    .pine-chart-pie-slice[data-focused] {
+    .pine-chart-pie-slice[data-focused],
+    .pine-chart-radial-bar[data-focused] {
       stroke-dasharray: 3 2;
     }
 
     .pine-chart-marker[data-selected],
     .pine-chart-point[data-selected],
     .pine-chart-bar[data-selected],
-    .pine-chart-pie-slice[data-selected] {
+    .pine-chart-pie-slice[data-selected],
+    .pine-chart-radial-bar[data-selected] {
       stroke: #18212f;
       stroke-width: 3;
     }
@@ -644,6 +648,42 @@
       color: #7c3aed;
     }
 
+    .pine-chart-radial-track {
+      opacity: 0.14;
+      stroke: #526173;
+      stroke-linecap: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .pine-chart-radial-bar {
+      stroke: currentColor;
+      stroke-linecap: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .pine-chart-radial-bar[data-visible="false"] {
+      display: none;
+    }
+
+    .pine-chart-radial-bar[data-hovered] {
+      opacity: 0.92;
+    }
+
+    .pine-chart-radial-bar[data-label="Activation"],
+    .pine-chart-radial-bar[data-label="API"] {
+      color: #16a085;
+    }
+
+    .pine-chart-radial-bar[data-label="Retention"],
+    .pine-chart-radial-bar[data-label="Render"] {
+      color: #d96c2c;
+    }
+
+    .pine-chart-radial-bar[data-label="Revenue"],
+    .pine-chart-radial-bar[data-label="Network"] {
+      color: #1d6fd8;
+    }
+
     .pine-chart-center-value {
       fill: #18212f;
       font-size: 30px;
@@ -698,6 +738,7 @@
     }
 
     .pine-chart-legend-marker[data-series="Organic"],
+    .pine-chart-legend-marker[data-series="Activation"],
     .pine-chart-legend-marker[data-series="API"] {
       background: #16a085;
     }
@@ -711,6 +752,7 @@
     }
 
     .pine-chart-legend-marker[data-series="Referral"],
+    .pine-chart-legend-marker[data-series="Retention"],
     .pine-chart-legend-marker[data-series="Target"],
     .pine-chart-legend-marker[data-series="Segment B"],
     .pine-chart-legend-marker[data-series="Render"] {
@@ -718,6 +760,7 @@
     }
 
     .pine-chart-legend-marker[data-series="Paid"],
+    .pine-chart-legend-marker[data-series="Revenue"],
     .pine-chart-legend-marker[data-series="Network"] {
       background: #1d6fd8;
     }

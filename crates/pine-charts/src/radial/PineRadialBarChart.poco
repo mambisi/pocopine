@@ -1,0 +1,123 @@
+<root class="pine-chart-root pine-radial-bar-chart"
+      role="img"
+      :aria-label="label"
+      :data-state="state"
+      :data-empty="empty"
+      :data-invalid="invalid"
+      :data-hover="hover_visible"
+      :data-tooltip="tooltip_mode"
+      :data-animate="animate"
+      :data-animation-duration="animation_duration"
+      :data-animation-easing="animation_easing"
+      :style="animation_style"
+      tabindex="0"
+      @keydown.arrow-right.prevent="focus_next_bar"
+      @keydown.arrow-down.prevent="focus_next_bar"
+      @keydown.arrow-left.prevent="focus_prev_bar"
+      @keydown.arrow-up.prevent="focus_prev_bar"
+      @keydown.enter.prevent="select_focused_bar"
+      @keydown.space.prevent="select_focused_bar"
+      @keydown.escape.prevent="clear_selection">
+  <svg class="pine-chart-svg"
+       :width="width"
+       :height="height"
+       :viewBox="view_box"
+       preserveAspectRatio="xMidYMid meet"
+       aria-hidden="true"
+       focusable="false"
+       @pointermove="on_pointer_move"
+       @pointerleave="clear_hover"
+       @click="clear_selection">
+    <g class="pine-chart-radial-tracks" data-layer="tracks">
+      <template pp-for="bar in bars" pp-key="bar.key">
+        <path class="pine-chart-radial-track"
+              :d="bar.track_d"
+              fill="none"
+              :stroke-width="bar.stroke_width"
+              :data-key="bar.key"
+              :data-label="bar.label"
+              :data-value="bar.value"
+              :data-max="bar.max"
+              :data-percentage="bar.percentage"
+              @click.stop="select_bar(bar.key)"></path>
+      </template>
+    </g>
+    <g class="pine-chart-radial-bars" data-layer="series">
+      <template pp-for="bar in bars" pp-key="bar.key">
+        <path class="pine-chart-radial-bar"
+              :d="bar.value_d"
+              fill="none"
+              role="option"
+              :aria-label="bar.aria_label"
+              :aria-selected="bar.key == selected_key ? 'true' : 'false'"
+              :stroke-width="bar.stroke_width"
+              :data-key="bar.key"
+              :data-label="bar.label"
+              :data-value="bar.value"
+              :data-max="bar.max"
+              :data-percentage="bar.percentage"
+              :data-visible="bar.value_visible"
+              :data-hovered="bar.key == hover_key"
+              :data-focused="bar.key == focused_key"
+              :data-selected="bar.key == selected_key"
+              @click.stop="select_bar(bar.key)"></path>
+      </template>
+    </g>
+    <g class="pine-chart-radial-hover"
+       data-layer="hover"
+       aria-hidden="true"
+       pointer-events="none"
+       :style="hover_visible ? '' : 'display: none;'">
+      <path class="pine-chart-radial-bar pine-chart-radial-hover-bar"
+            :d="hover_bar.value_d"
+            fill="none"
+            :stroke-width="hover_bar.stroke_width"
+            :data-key="hover_bar.key"
+            :data-label="hover_bar.label"
+            :data-value="hover_bar.value"
+            :data-max="hover_bar.max"
+            :data-percentage="hover_bar.percentage"
+            data-hovered="true"></path>
+    </g>
+    <g pp-show="center_visible"
+       class="pine-chart-center"
+       data-layer="labels"
+       aria-hidden="true"
+       pointer-events="none">
+      <text class="pine-chart-center-value"
+            :x="center_x"
+            :y="center_value_y"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            pp-text="center_value_text"></text>
+      <text class="pine-chart-center-label"
+            :x="center_x"
+            :y="center_label_y"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            pp-text="center_label_text"></text>
+    </g>
+  </svg>
+  <div class="pine-chart-tooltip pine-chart-radial-tooltip"
+       :aria-hidden="tooltip_aria_hidden"
+       role="status"
+       :aria-label="hover_aria_label"
+       :style="hover_style"
+       :data-tooltip-x="hover_placement_x"
+       :data-tooltip-y="hover_placement_y"
+       :data-label="hover_label"
+       :data-value="hover_value"
+       :data-percentage="hover_percentage">
+    <span class="pine-chart-tooltip-label"
+          pp-text="hover_label"></span>
+    <span class="pine-chart-tooltip-value"
+          pp-text="hover_value_label"></span>
+    <span class="pine-chart-tooltip-percentage"
+          pp-text="hover_percentage_label"></span>
+  </div>
+  <span class="pine-chart-status" pp-show="invalid" pp-text="error"></span>
+  <span pp-show="empty"
+        class="pine-chart-status pine-chart-status-empty"
+        role="status"
+        pp-text="empty_message"></span>
+</root>

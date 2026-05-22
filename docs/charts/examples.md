@@ -22,7 +22,8 @@ prove that applications can assemble chart blocks into their own product UI:
 - persistent selection details driven by `pp:chart:select`,
 - interactive legends that mutate application-owned visible data,
 - responsive wrappers that keep SVG text and circular marks unstretched,
-- empty states when filtering hides all visible data.
+- empty states when filtering hides all visible data,
+- independent radial progress rings for non-part-of-total metrics.
 
 The example intentionally uses the same public API an application would use:
 
@@ -38,17 +39,21 @@ The example intentionally uses the same public API an application would use:
   component,
 - `Vec<ChartPieSlice>` plus bound `inner_radius`, `start_angle`, and
   `end_angle` props for pie, donut, and half-donut variants,
+- `Vec<ChartRadialBar>` plus bound `inner_radius` and `ring_gap` props for
+  progress-ring variants,
 - `line_legend_items(&line_series)` to drive a separate line legend,
 - `scatter_legend_items(&scatter_series)` to drive a separate scatter legend,
 - `area_legend_items(&area_series)` to drive a separate area legend,
 - `bar_legend_items(&bar_series)` to drive a separate legend,
-- `pie_legend_items(&pie_data)` to drive radial legends,
+- `pie_legend_items(&pie_data)` to drive pie/donut legends,
+- `radial_bar_legend_items(&radial_data)` to drive radial bar legends,
 - `<pine-line-chart pp-bind:series="line_series">` in the template,
 - `<pine-scatter-chart pp-bind:series="scatter_series">` in the template,
 - `<pine-area-chart pp-bind:series="area_series">` in the template,
 - `<pine-bar-chart pp-bind:series="bar_series" pp-bind:mode="bar_mode">` in
   the template,
 - `<pine-pie-chart pp-bind:data="pie_data">` in the template,
+- `<pine-radial-bar-chart pp-bind:data="radial_data">` in the template,
 - `x_label` and `y_label` attributes for chart axis labels,
 - `tooltip="none"` plus `pp:chart:hover` / `pp:chart:hover-end` handlers for an
   app-owned tooltip,
@@ -57,8 +62,9 @@ The example intentionally uses the same public API an application would use:
 - `<pine-chart-legend pp-bind:items="line_legend">`,
   `<pine-chart-legend pp-bind:items="scatter_legend">`,
   `<pine-chart-legend pp-bind:items="area_legend">`,
-  `<pine-chart-legend pp-bind:items="bar_legend">`, and
-  `<pine-chart-legend pp-bind:items="pie_legend">` in the template,
+  `<pine-chart-legend pp-bind:items="bar_legend">`,
+  `<pine-chart-legend pp-bind:items="pie_legend">`, and
+  `<pine-chart-legend pp-bind:items="radial_legend">` in the template,
 - CSS selectors from the chart styling contract.
 
 This example should be extended whenever a new chart primitive becomes public.
