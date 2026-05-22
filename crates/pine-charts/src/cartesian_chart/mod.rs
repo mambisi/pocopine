@@ -1004,7 +1004,7 @@ impl PineYAxis {
 /// `#[prop(flatten)]` (RFC-044 §5.10): the container is one Rust
 /// field, but the wire surface stays one attribute per leaf, so
 /// `<pine-line-series key=… label=… color=…>` is unchanged.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SeriesCommon {
     pub key: String,
     pub label: String,
@@ -1066,13 +1066,11 @@ impl PineLineSeries {
         update_root(|root| root.remove_line_series(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
+    // One watcher for every flattened `SeriesCommon` leaf — RFC-044
+    // §5.10.5 dual-key triggering fires it when `label` / `color` /
+    // `visible` change. Replaces three per-leaf handlers.
+    #[watch(common)]
+    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
         self.sync();
     }
 
@@ -1098,11 +1096,6 @@ impl PineLineSeries {
 
     #[watch(data)]
     fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
-        self.sync();
-    }
-
-    #[watch(visible)]
-    fn on_visible(&mut self, _: bool, _: Option<bool>) {
         self.sync();
     }
 }
@@ -1146,23 +1139,15 @@ impl PineBarSeries {
         update_root(|root| root.remove_bar_series(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
+    // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
+    // leaves (`label` / `color` / `visible`).
+    #[watch(common)]
+    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
         self.sync();
     }
 
     #[watch(data)]
     fn on_data(&mut self, _: Vec<ChartBar>, _: Option<Vec<ChartBar>>) {
-        self.sync();
-    }
-
-    #[watch(visible)]
-    fn on_visible(&mut self, _: bool, _: Option<bool>) {
         self.sync();
     }
 }
@@ -1218,18 +1203,15 @@ impl PineAreaSeries {
         update_root(|root| root.remove_area_series(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
+    // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
+    // leaves (`label` / `color` / `visible`).
+    #[watch(common)]
+    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
         self.sync();
     }
 
     #[watch(fill)]
     fn on_fill(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
         self.sync();
     }
 
@@ -1240,11 +1222,6 @@ impl PineAreaSeries {
 
     #[watch(points)]
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.sync();
-    }
-
-    #[watch(visible)]
-    fn on_visible(&mut self, _: bool, _: Option<bool>) {
         self.sync();
     }
 }
@@ -1299,13 +1276,10 @@ impl PineScatterSeries {
         update_root(|root| root.remove_scatter_series(&self.component_key));
     }
 
-    #[watch(label)]
-    fn on_label(&mut self, _: String, _: Option<String>) {
-        self.sync();
-    }
-
-    #[watch(color)]
-    fn on_color(&mut self, _: String, _: Option<String>) {
+    // RFC-044 §5.10.5 — one watcher for the flattened `SeriesCommon`
+    // leaves (`label` / `color` / `visible`).
+    #[watch(common)]
+    fn on_common(&mut self, _: SeriesCommon, _: Option<SeriesCommon>) {
         self.sync();
     }
 
@@ -1316,11 +1290,6 @@ impl PineScatterSeries {
 
     #[watch(points)]
     fn on_points(&mut self, _: Vec<ChartPoint>, _: Option<Vec<ChartPoint>>) {
-        self.sync();
-    }
-
-    #[watch(visible)]
-    fn on_visible(&mut self, _: bool, _: Option<bool>) {
         self.sync();
     }
 }
