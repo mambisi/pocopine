@@ -1,0 +1,16 @@
+[package]
+name = "pocopine-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Procfile-style entrypoint for pocopine runtime images (RFC 080 §5.3). Dispatches argv[1] to the matching binary inside the production OCI image."
+
+[[bin]]
+name = "pocopine-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# stdlib only — the launcher is the smallest possible PID-1 shim. No tokio,
+# no anyhow, no logging crate. It runs once per container start and either
+# execs into the real binary (so PID 1 becomes the target) or exits.
