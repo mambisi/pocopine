@@ -463,86 +463,185 @@ the parent side — parents move from `pp-model:start` /
 `pp-model:end` to `pp-model:range`. For components that can't
 break that contract, see §5.10.
 
-### 5.10 `#[model(flatten)]` — parent-side per-field wire shape
+### 5.10 `flatten` — exploding a struct field into per-leaf wire keys
 
-When a component wants struct-typed internals (for code
-organisation / atomic local mutation) but needs to preserve a
-parent binding surface that's one wire-key per leaf, apply
-`#[model(flatten)]` to the struct-typed field:
+`flatten` is a **role-agnostic modifier**, available on both field
+roles:
+
+- **`#[prop(flatten)]`** — the struct's leaves become parent-writable
+  **props only**. Inbound — static attr, `pp-bind`, `pp-model`
+  mirror-in — but no `pp:update:` channel. This is the one-way-in
+  form, for component *families* that group several one-way props
+  into a shared struct.
+- **`#[model(flatten)]`** — the struct's leaves become parent-writable
+  props **and** child-emittable models: each leaf additionally gets
+  its own `pp:update:<leaf>` channel. This is the
+  backwards-compatibility escape valve for two-way components whose
+  existing parent contract is flat.
+
+In both cases the motivation is the same: the component wants a
+struct-typed *internal* field — for code organisation, for a
+definition shared across a component family, for atomic local
+mutation — but needs the parent binding surface to stay **one
+wire-key per leaf**.
 
 ```rust
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct DateRange {
-    pub start: Option<DateValue>,
-    pub end: Option<DateValue>,
+pub struct SeriesCommon {
+    pub key: String,
+    pub label: String,
+    pub color: String,
+    pub visible: bool,
 }
 
 #[component(...)]
-pub struct PineRangeCalendarRoot {
-    #[model(flatten)]
-    pub range: DateRange,
+pub struct PineLineSeries {
+    // Four leaves — `key`, `label`, `color`, `visible` — shared
+    // verbatim by every cartesian-series component. One Rust field;
+    // the wire stays one attribute per leaf.
+    #[prop(flatten = ["key", "label", "color", "visible"])]
+    pub common: SeriesCommon,
+    #[prop]
+    pub stroke_width: f64,
+    // …series-specific props…
 }
 ```
 
-No companion attribute on the inner struct is required. `Serialize`
-+ `DeserializeOwned` are already contract requirements for any
-`#[model]`-bearing field (§5.4), so the runtime discovers the
-leaf list by serialising `&self.range` once at scope mount and
-reading its key set — same path the non-flatten struct form
-already walks to produce the `detail` payload. Adding a field
-to `DateRange` auto-flattens into the model surface with no
-changes to the component.
+The container (`common`) is one Rust field — internal state, neither
+prop nor model. Each listed leaf is synthesised as an independent
+public wire key whose get/set routes through the container's serde
+impl. `<pine-line-series key="…" label="…" color="…">` is unchanged
+from a layout where `key` / `label` / `color` were four separate
+`#[prop]` fields — `flatten` is precisely the modifier that lets a
+shared struct field *not* regress the flat attribute-per-prop
+authoring surface.
 
-Wire semantics under `flatten`:
+#### 5.10.1 Wire semantics
 
-- Parent binds per-leaf: `pp-model:start="my_start"`
-  `pp-model:end="my_end"` as before.
-- Outbound emission fires per-leaf: `pp:update:start` with
-  scalar `Option<DateValue>` detail, `pp:update:end` likewise.
-  **Atomicity is lost on the wire** — parents see N independent
-  events per handler, same as the pre-struct flat layout would
-  have produced.
-- Inbound mirror-in writes land on `self.range.<leaf>`: the
-  runtime serialises the current struct, splices the new leaf
-  value into the object, and deserialises back into the field.
-  One serde round-trip per mirror-in write; cost-equivalent to
-  the pre-landing `Option<T>` empty-string shim path.
+- **Parent binds per-leaf:** static attr `label="Sales"`,
+  `pp-bind:label="expr"`, or — for `#[model(flatten)]` —
+  `pp-model:label`.
+- **Inbound mirror-in** writes land on `self.<container>.<leaf>`: the
+  runtime serialises the container, splices the new leaf value into
+  the object, and deserialises back into the field. One serde
+  round-trip per write — cost-equivalent to the pre-landing
+  `Option<T>` empty-string shim path.
+- **Outbound emission** fires per-leaf — `pp:update:<leaf>` carrying
+  the leaf's scalar value — **only for `#[model(flatten)]`**.
+  `#[prop(flatten)]` leaves never emit. Atomicity is lost on the wire
+  for model-flatten: a parent sees N independent events, same as a
+  pre-struct flat layout would have produced.
 
-`flatten` is the **backwards-compatibility escape valve** for
-components whose existing parent contract is flat. New
-components with atomic contracts should use the plain
-struct-typed form (§5.9) and take the atomicity benefit.
+#### 5.10.2 Explicit leaf list
 
-#### 5.10.1 Explicit leaf override
-
-When the wire leaf list must diverge from the struct's real
-serde keys — a foreign struct with wire names that don't match
-their Rust field identifiers, or a subset of the struct the
-component intentionally exposes — the attribute accepts an
-explicit list:
+v1 requires an **explicit leaf list**. Each name must be a valid key
+in the container's serialised form (honouring `#[serde(rename)]` on
+the inner struct's fields); names not present are silently dropped,
+matching inbound-mirror behaviour for unknown parent-side keys. The
+explicit list also lets a component expose a deliberate *subset* of
+the struct, or flatten a foreign struct whose wire names don't match
+their Rust identifiers.
 
 ```rust
+#[prop(flatten = ["key", "label", "color", "visible"])]
 #[model(flatten = ["start", "end"])]
-pub range: SomeForeignCrate::DateRange,
 ```
 
-The explicit list short-circuits the auto-discovery step. Each
-listed name must be a valid key in the struct's serialised
-form; names not present are silently dropped (matching
-inbound-mirror behaviour for unknown parent-side keys).
+Bare `#[prop(flatten)]` / `#[model(flatten)]` — auto-discovery, where
+the runtime reads the leaf set by serialising the container once at
+mount — is **reserved**. The macro emits a hard error pointing at the
+explicit form. Auto-discovery needs a runtime leaves side-table the
+current static-match codegen cannot produce, and interacts badly with
+`skip_serializing_if` (§5.10.6); it is deferred to a follow-up.
 
-Constraints in v1 (both forms):
+#### 5.10.3 Leaf typing and static-attr coercion
 
-- `flatten` is incompatible with `#[model(name = "...")]` —
-  there's no single wire name to rename when the field is
-  exploded. Per-leaf rename is future work.
-- No per-leaf serde overrides yet — a leaf's wire name equals
-  its serde key (which honours `#[serde(rename = "...")]` on
-  the inner struct's field, because auto-discovery reads the
-  serialised output).
-- Nested flattening (a flattened struct containing another
-  flattened struct) is not supported in v1; use a single flat
-  level.
+The attribute carries leaf *names*, not types — the macro has no
+statically-known Rust type at the leaf granularity. A leaf's
+`static_prop_kind` (which governs how an authored string attribute is
+coerced) is instead resolved by **probing the serialised container**:
+during `apply_static_props` the runtime serialises the
+default-constructed container and inspects the leaf's JS type —
+boolean → `Bool`, number → `Number`, string → `String`, otherwise
+`Auto`.
+
+This is load-bearing. A `String` leaf with a numeric-looking authored
+value (`label="2024"`) *must* be classified `String`, so the value is
+not coerced to a number — a number spliced into the container fails
+the leaf's serde round-trip and the write is silently dropped.
+
+The probe is accurate for every non-`Option` leaf. An `Option::None`
+leaf serialises to `null`, carries no type witness, and falls back to
+`Auto` — the same limitation the non-flatten `Option<T>` static-attr
+path already has. A fully typed leaf contract (covering `Option`
+leaves and foreign structs) is future work (§11).
+
+#### 5.10.4 Collision rules
+
+A flatten leaf must not shadow a real struct field, nor another
+flatten leaf — both would race for the same scope-state key with
+divergent get/set arms. The macro **hard-errors** on any collision,
+including a leaf named after its own container field.
+
+#### 5.10.5 Reactivity — watching flatten leaves
+
+Each leaf is a first-class scope-state key, so **`#[watch(<leaf>)]`
+works unchanged**: a write to `label="…"` / `pp-model:label` triggers
+the `label` key and the watcher fires. This is the supported reactive
+pattern for flatten leaves — a component migrating a flat set of
+`#[prop]` fields into a flattened struct keeps its per-leaf
+`#[watch(label)]` / `#[watch(color)]` handlers verbatim.
+
+A **single `#[watch(<container>)]`** that fires on *any* leaf change
+is **not supported in v1**. A leaf write triggers the *leaf* key, not
+the container key — a watcher keyed on the container would never
+fire. Supporting it needs dual-key triggering (a leaf write notifies
+both the leaf key and the container key); that is deliberately out of
+scope here and called out as future work (§11). In v1, watch the
+leaves individually.
+
+#### 5.10.6 `skip_serializing_if` on a flattened container
+
+`skip_serializing_if` on an inner field can omit a leaf key from the
+serialised object. Under the **explicit leaf list** this is benign:
+`get(<leaf>)` returns `null` for an omitted leaf and the set arm
+splices the value back regardless. It becomes load-bearing only for
+the reserved auto-discovery form, where an omitted key would vanish
+from the discovered leaf set — a further reason auto-discovery is
+deferred. Components should avoid `skip_serializing_if` on leaves
+they intend to expose.
+
+#### 5.10.7 Performance — keep hot leaves unflattened
+
+Every inbound write to *any* leaf costs one serialise + one
+deserialise of the **whole** container. Negligible for small scalar
+config (`key` / `label` / `color` / `visible`); wasteful for large or
+frequently-updated payloads. **Do not flatten hot leaves** — a
+`Vec<ChartPoint>` `points` field, a large `data` blob. Leave those as
+direct `#[prop]` fields and flatten only the shared scalar config.
+pine-charts does exactly this: `SeriesCommon` carries the four
+scalars; `points` / `data` stay unflattened `#[prop]` fields.
+
+Constraints in v1 (both roles):
+
+- `flatten` requires an explicit leaf list; bare auto-discovery is
+  reserved (§5.10.2).
+- `flatten` is incompatible with `#[model(name = "...")]` — there is
+  no single wire name to rename when the field is exploded. Per-leaf
+  rename is future work.
+- No per-leaf serde overrides — a leaf's wire name equals its serde
+  key (which honours `#[serde(rename = "...")]` on the inner struct's
+  field).
+- Nested flattening (a flattened struct containing another flattened
+  struct) is not supported in v1; use a single flat level.
+- `#[watch(<container>)]` is not supported — watch leaves
+  individually (§5.10.5).
+
+New components with an *atomic* two-way contract should still prefer
+the plain struct-typed `#[model]` form (§5.9) and take the
+single-emit atomicity benefit; `#[model(flatten)]` exists for flat
+legacy contracts. `#[prop(flatten)]` has no such caveat — it is the
+recommended shape for shared one-way component-family config.
 
 ## 6. Rationale
 
@@ -872,17 +971,18 @@ This RFC takes the following positions:
    flush carries the whole struct as `detail`. No new attribute,
    no new runtime machinery — the existing `#[model]` path emits
    whatever the field's serde shape is.
-6. **Flatten is opt-in per struct-typed field (§5.10).**
-   `#[model(flatten)]` explodes a struct field back into per-leaf
-   wire emission for components whose parent contract must stay
-   flat. The runtime auto-discovers the leaf list by serialising
-   the field once at mount — no companion attribute on the inner
-   struct, no syn-level introspection; `Serialize` +
-   `DeserializeOwned` are already model-field requirements so
-   the lookup path exists. Adding a field to the inner struct
-   auto-flattens. `#[model(flatten = ["start", "end"])]` is the
-   explicit-list override for foreign structs or intentional
-   subsets.
+6. **`flatten` is a role-agnostic modifier, opt-in per
+   struct-typed field (§5.10).**
+   It explodes a struct field into per-leaf wire keys whose get/set
+   route through the container's serde impl, so a shared or
+   organisational struct field does not regress the flat
+   attribute-per-prop authoring surface. `#[prop(flatten)]` exposes
+   the leaves as inbound props only; `#[model(flatten)]` additionally
+   gives each leaf a `pp:update:<leaf>` channel. v1 takes an explicit
+   leaf list — `#[prop(flatten = ["key", "label", …])]`; bare
+   auto-discovery is reserved. Per-leaf `static_prop_kind` is resolved
+   by probing the serialised container so a `String` leaf is not
+   miscoerced. Leaf-name collisions are a hard error.
 
 Future work, intentionally deferred:
 
@@ -894,11 +994,27 @@ Future work, intentionally deferred:
    single-unit atomicity; cross-unit atomicity is the open
    frontier.
 2. **Per-leaf rename + nested flatten.**
-   `#[model(flatten)]` today maps a leaf's wire name 1:1 to its
-   Rust field name, and forbids nesting. A future pass could
-   support `flatten_rename` (author-chosen per-leaf wire names)
-   and nested flattening (a `#[model_struct]` containing another
-   `#[model_struct]`). Both are additive and don't block v1.
+   `flatten` today maps a leaf's wire name 1:1 to its Rust field
+   name, and forbids nesting. A future pass could support
+   `flatten_rename` (author-chosen per-leaf wire names) and nested
+   flattening (a flattened struct containing another). Both are
+   additive and don't block v1.
+3. **Bare `flatten` auto-discovery.**
+   `#[prop(flatten)]` / `#[model(flatten)]` with no explicit list —
+   the runtime reads the leaf set by serialising the container once
+   at mount. Needs a runtime leaves side-table the current
+   static-match codegen cannot produce, and a resolution for
+   `skip_serializing_if` hiding keys (§5.10.6). Reserved; the macro
+   errors today and points at the explicit-list form.
+4. **`#[watch(<container>)]` via dual-key triggering.**
+   A single watcher on the container field that fires on any leaf
+   change. Needs a leaf write to notify both the leaf key and the
+   container key (§5.10.5). v1 watches leaves individually.
+5. **A fully typed leaf contract.**
+   Per-leaf `static_prop_kind` is probed from the serialised default
+   value (§5.10.3), which cannot type an `Option::None` leaf. A
+   derive on the container struct could surface exact per-leaf types
+   (and the leaf list, feeding item 3).
 
 ## 12. Why this helps others understand the system
 
