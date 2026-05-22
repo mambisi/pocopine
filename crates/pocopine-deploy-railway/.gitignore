@@ -1,0 +1,3 @@
+# graphql-client's compile-time input — fetched with ./fetch-schema.sh,
+# not vendored (Railway's introspection JSON is ~1.5 MB).
+/schema.json
