@@ -227,21 +227,26 @@ fn home() -> Result<PathBuf> {
 fn write_secure(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("toml.tmp");
 
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
+    // Scope the file so it is closed (dropped) before the rename below —
+    // an open handle can block a rename on Windows. A block, rather than
+    // an explicit `drop(f)`, because `std::fs::File` is a no-op stub on
+    // wasm where `drop()` of a non-`Drop` type is a clippy error.
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("opening {}", tmp.display()))?;
+        f.write_all(bytes)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        f.sync_all()
+            .with_context(|| format!("fsync {}", tmp.display()))?;
     }
-    let mut f = opts
-        .open(&tmp)
-        .with_context(|| format!("opening {}", tmp.display()))?;
-    f.write_all(bytes)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    f.sync_all()
-        .with_context(|| format!("fsync {}", tmp.display()))?;
-    drop(f);
 
     #[cfg(unix)]
     {
