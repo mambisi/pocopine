@@ -25,7 +25,7 @@
     <button @mousedown.prevent pp-on:click="reset">Reset</button>
     <button @mousedown.prevent pp-on:click="export_markdown" data-test="export-md">Export MD</button>
   </div>
-  <pine-rich-text-root debug-json="true" pp-bind:initial-doc="initial_doc"></pine-rich-text-root>
+  <pine-rich-text-root pp-bind:debug-json="emit_debug_json" debug-perf="true" pp-bind:initial-doc="initial_doc"></pine-rich-text-root>
   <details class="exported-markdown-wrap">
     <summary>Exported markdown</summary>
     <pre data-test="exported-markdown">{{ exported_markdown }}</pre>

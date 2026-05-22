@@ -25,10 +25,8 @@ use pine_richtext::model::{Attrs, MarkPolicy, NodeSpec};
 use pine_richtext::runtime::{self, RuntimeBuilder};
 use pine_richtext::schema_basic;
 use pine_richtext::state::{EditorState, EditorStateConfig, Plugin, Selection, Transaction};
-use pine_richtext::view::root::{
-    CommandRequest, COMMAND_EVENT, EXPORT_MARKDOWN_REQUEST_EVENT, EXPORT_MARKDOWN_RESULT_EVENT,
-};
-use pine_richtext::view::PineRichTextRoot;
+use pine_richtext::view::root::CommandRequest;
+use pine_richtext::view::{Editor as RichTextHandle, Markdown, PineRichTextRoot};
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -53,14 +51,33 @@ pub struct Editor {
     /// serialization (it has the live state) so the Editor never
     /// has to mirror the doc.
     pub exported_markdown: String,
+    /// Whether to forward debug-json to the surface. Always on for
+    /// the regular demo (the smoke tests subscribe to
+    /// `pine-richtext:json` events). Disabled when the URL carries
+    /// `?bench=...` so perf measurements aren't dominated by the
+    /// three full-state serializations per keystroke that debug-json
+    /// performs (before / transaction / after).
+    pub emit_debug_json: bool,
 }
 
 #[handlers]
 impl Editor {
-    fn on_mount(&mut self) {
+    /// Run in `on_setup` (not `on_mount`) so the values land before the
+    /// `<pine-rich-text-root>` child mounts and captures its props. The
+    /// surface reads `debug_json` once in its own setup; setting it
+    /// after the child mount races the child's lifecycle and leaves the
+    /// surface configured for the wrong mode.
+    fn on_setup(&mut self) {
+        let bench_spec = bench_spec_from_url();
         if self.initial_doc.is_null() {
-            self.initial_doc = initial_doc_json();
+            self.initial_doc = match bench_spec {
+                Some(spec) => bench_doc_json(&spec),
+                None => initial_doc_json(),
+            };
         }
+        // Smoke tests need debug-json; perf tests don't. Default on
+        // for the kitchen-sink demo, off when bench mode is active.
+        self.emit_debug_json = bench_spec.is_none();
     }
 
     fn on_ready(&self, refs: pocopine::Refs) {
@@ -68,127 +85,104 @@ impl Editor {
             return;
         };
         let handle = this::<Editor>();
-        install_task_toggle_listener(root.clone(), handle.clone());
-        install_export_markdown_listener(root, handle);
+        install_task_toggle_listener(root, handle);
     }
 
     /// Toggle strong (Bold) on the currently selected text.
     pub fn toggle_bold(&mut self) {
-        Self::dispatch_command(CommandRequest::ToggleMark {
-            mark: "strong".into(),
-        });
+        self.with_editor(|e| e.toggle_mark("strong"));
     }
 
     /// Toggle em (Italic) on the currently selected text.
     pub fn toggle_em(&mut self) {
-        Self::dispatch_command(CommandRequest::ToggleMark { mark: "em".into() });
+        self.with_editor(|e| e.toggle_mark("em"));
     }
 
     /// Toggle code on the currently selected text.
     pub fn toggle_code(&mut self) {
-        Self::dispatch_command(CommandRequest::ToggleMark {
-            mark: "code".into(),
-        });
+        self.with_editor(|e| e.toggle_mark("code"));
     }
 
     /// Convert the block containing the cursor (or every block in the
     /// selection) to a level-1 heading.
     pub fn make_h1(&mut self) {
-        let mut attrs = Attrs::new();
-        attrs.insert("level".to_string(), serde_json::json!(1));
-        Self::dispatch_command(CommandRequest::SetBlockType {
-            node_type: "heading".into(),
-            attrs,
-        });
+        self.set_heading_level(1);
     }
 
     /// Convert the affected blocks to level-2 headings.
     pub fn make_h2(&mut self) {
-        let mut attrs = Attrs::new();
-        attrs.insert("level".to_string(), serde_json::json!(2));
-        Self::dispatch_command(CommandRequest::SetBlockType {
-            node_type: "heading".into(),
-            attrs,
-        });
+        self.set_heading_level(2);
     }
 
     /// Convert the affected blocks back to plain paragraphs.
     pub fn make_paragraph(&mut self) {
-        Self::dispatch_command(CommandRequest::SetBlockType {
-            node_type: "paragraph".into(),
-            attrs: Attrs::new(),
+        self.with_editor(|e| {
+            e.dispatch(CommandRequest::SetBlockType {
+                node_type: "paragraph".into(),
+                attrs: Attrs::new(),
+            })
         });
     }
 
     /// Wrap the affected blocks in a blockquote.
     pub fn wrap_in_blockquote(&mut self) {
-        Self::dispatch_command(CommandRequest::WrapIn {
-            node_type: "blockquote".into(),
-            attrs: Attrs::new(),
+        self.with_editor(|e| {
+            e.dispatch(CommandRequest::WrapIn {
+                node_type: "blockquote".into(),
+                attrs: Attrs::new(),
+            })
         });
     }
 
     /// Wrap the affected blocks in a bullet list.
     pub fn wrap_in_bullet_list(&mut self) {
-        Self::dispatch_command(CommandRequest::WrapInList {
-            list_type: "bullet_list".into(),
-            item_type: "list_item".into(),
-            attrs: Attrs::new(),
-        });
+        self.wrap_in_list("bullet_list", "list_item");
     }
 
     /// Wrap the affected blocks in an ordered list.
     pub fn wrap_in_ordered_list(&mut self) {
-        Self::dispatch_command(CommandRequest::WrapInList {
-            list_type: "ordered_list".into(),
-            item_type: "list_item".into(),
-            attrs: Attrs::new(),
-        });
+        self.wrap_in_list("ordered_list", "list_item");
     }
 
     /// Wrap the affected blocks in a task (checklist) list.
     pub fn wrap_in_task_list(&mut self) {
-        Self::dispatch_command(CommandRequest::WrapInList {
-            list_type: "task_list".into(),
-            item_type: "task_item".into(),
-            attrs: Attrs::new(),
-        });
+        self.wrap_in_list("task_list", "task_item");
     }
 
     /// Lift the affected blocks out of their wrapper.
     pub fn lift_block(&mut self) {
-        Self::dispatch_command(CommandRequest::Lift);
+        self.with_editor(|e| e.dispatch(CommandRequest::Lift));
     }
 
     /// Undo the last edit.
     pub fn undo(&mut self) {
-        Self::dispatch_command(CommandRequest::Undo);
+        self.with_editor(|e| e.undo());
     }
 
     /// Redo the most recently undone edit.
     pub fn redo(&mut self) {
-        Self::dispatch_command(CommandRequest::Redo);
+        self.with_editor(|e| e.redo());
     }
 
     /// Reset the doc to the demo's starting content.
     pub fn reset(&mut self) {
-        Self::dispatch_command(CommandRequest::ReplaceState {
-            doc: initial_doc_json(),
+        self.with_editor(|e| {
+            e.dispatch(CommandRequest::ReplaceState {
+                doc: initial_doc_json(),
+            })
         });
     }
 
-    /// Parse the import-markdown textarea's contents via the
-    /// default runtime's [`pine_richtext::markdown::MarkdownParser`]
-    /// and replace the surface's doc with the result. Routes
-    /// through `CommandRequest::ReplaceState` so the swap lands in
-    /// the same event pipeline as Reset and other state-
-    /// replacement operations.
+    /// Parse the import-markdown textarea's contents and replace
+    /// the surface's doc with the result. Goes through the typed
+    /// [`RichTextHandle::set`] entry point so the swap lands in the
+    /// same event pipeline as Reset and other state-replacement
+    /// operations.
     ///
     /// Reads the textarea straight from the DOM via the
     /// `import_textarea` ref instead of binding `pp-model:value`
     /// — `<textarea>` doesn't emit the `pp:update:value` channel
-    /// that `pp-model:value` listens for, so the binding wouldn't
-    /// propagate keystrokes back to `self.import_input`.
+    /// that `pp-model:value` listens for.
     pub fn import_markdown(&mut self) {
         let Some(scope) = pocopine::current_scope_id() else {
             return;
@@ -203,118 +197,82 @@ impl Editor {
         if md.is_empty() {
             return;
         }
-        let runtime = runtime::registry::default();
-        let parser = runtime.markdown_parser();
-        let doc_node = match parser.parse(&md, runtime.schema()) {
-            Ok(node) => node,
-            Err(err) => {
+        if let Some(editor) = self.editor_handle() {
+            if let Err(err) = editor.set::<Markdown>(&md) {
                 self.exported_markdown = format!("(import error: {err})");
-                return;
             }
-        };
-        let state = match EditorState::create(
-            EditorStateConfig::new(runtime.schema().clone(), doc_node).plugins(demo_plugins()),
-        ) {
-            Ok(state) => state,
-            Err(err) => {
-                self.exported_markdown = format!("(import error: {err})");
-                return;
-            }
-        };
-        let Ok(state_json) = state.to_json() else {
-            return;
-        };
-        Self::dispatch_command(CommandRequest::ReplaceState { doc: state_json });
+        }
     }
 
-    /// Ask the surface to serialize its current doc to markdown.
-    /// Fires `pine:richtext:export-markdown` at the surface — the
-    /// surface runs `EditorRuntime::markdown_serializer()` against
-    /// its live state and responds with a
-    /// `pine:richtext:export-markdown-result` CustomEvent whose
-    /// `detail.markdown` is captured into `self.exported_markdown`
-    /// by the listener installed in `on_ready`.
-    ///
-    /// Going through the surface (instead of mirroring its doc
-    /// here) means typing-then-clicking exports the latest typed
-    /// content with no `tick::next` mirror lag.
+    /// Snapshot the surface's current doc to markdown and render
+    /// it into the demo's `<pre data-test="exported-markdown">`.
+    /// Synchronous round-trip through the typed
+    /// [`RichTextHandle::get`] helper — no listener installation,
+    /// no `tick::next` lag.
     pub fn export_markdown(&mut self) {
-        let Some(surface) = find_surface() else {
+        let Some(editor) = self.editor_handle() else {
             return;
         };
-        let init = CustomEventInit::new();
-        init.set_bubbles(true);
-        let Ok(event) = CustomEvent::new_with_event_init_dict(EXPORT_MARKDOWN_REQUEST_EVENT, &init)
-        else {
-            return;
+        self.exported_markdown = match editor.get::<Markdown>() {
+            Ok(md) => md,
+            Err(err) => format!("(export error: {err})"),
         };
-        let _ = surface.dispatch_event(&event);
     }
 }
 
 impl Editor {
-    /// Dispatch a [`CommandRequest`] to the editor surface as a
-    /// CustomEvent. The surface runs the command through its own
-    /// `state_provider`, which reads the live (child-owned) doc and
-    /// the live DOM selection — sidestepping the `pp-model` round-trip
-    /// that would otherwise have the parent's mirrored `doc` lag a
-    /// `tick::next` behind any typing the user just did.
-    fn dispatch_command(request: CommandRequest) {
-        let Some(surface) = find_surface() else {
-            return;
-        };
-        let Ok(detail) = serde_wasm_bindgen::to_value(&request) else {
-            return;
-        };
-        let init = CustomEventInit::new();
-        init.set_bubbles(true);
-        init.set_detail(&detail);
-        let Ok(event) = CustomEvent::new_with_event_init_dict(COMMAND_EVENT, &init) else {
-            return;
-        };
-        let _ = surface.dispatch_event(&event);
+    /// Resolve a typed handle for the demo's `<pine-rich-text-root>`
+    /// surface, scoped to this component's `root` ref so we never
+    /// accidentally pick up the comment-editor surface hosted
+    /// elsewhere on the page.
+    fn editor_handle(&self) -> Option<RichTextHandle> {
+        let scope = pocopine::current_scope_id()?;
+        let root = pocopine::refs::get_on(scope, "root")?;
+        RichTextHandle::find(&root)
+    }
+
+    fn with_editor<F>(&self, action: F)
+    where
+        F: FnOnce(&RichTextHandle) -> Result<(), pine_richtext::view::EditorError>,
+    {
+        if let Some(editor) = self.editor_handle() {
+            let _ = action(&editor);
+        }
+    }
+
+    fn set_heading_level(&self, level: u32) {
+        let mut attrs = Attrs::new();
+        attrs.insert("level".to_string(), serde_json::json!(level));
+        self.with_editor(move |e| {
+            e.dispatch(CommandRequest::SetBlockType {
+                node_type: "heading".into(),
+                attrs,
+            })
+        });
+    }
+
+    fn wrap_in_list(&self, list_type: &str, item_type: &str) {
+        self.with_editor(|e| {
+            e.dispatch(CommandRequest::WrapInList {
+                list_type: list_type.into(),
+                item_type: item_type.into(),
+                attrs: Attrs::new(),
+            })
+        });
     }
 
     /// Flip the `checked` attribute on the `task_item` at `pos`. Called
     /// from the `pine:task-toggle` custom event dispatched by the
-    /// `<pine-task-item>` node-view component. Reuses the surface's
-    /// command event so the toggle lands in the same transaction
-    /// pipeline as the toolbar — no stale-doc race possible.
+    /// `<pine-task-item>` node-view component.
     fn toggle_task_checked(&mut self, pos: usize, checked: bool) {
-        Self::dispatch_command(CommandRequest::SetNodeAttr {
-            pos,
-            attr: "checked".into(),
-            value: json!(checked),
+        self.with_editor(|e| {
+            e.dispatch(CommandRequest::SetNodeAttr {
+                pos,
+                attr: "checked".into(),
+                value: json!(checked),
+            })
         });
     }
-}
-
-/// Listen for the `pine:richtext:export-markdown-result` custom
-/// event the surface emits after processing an export request.
-/// Captures the markdown string into the editor's
-/// `exported_markdown` field so the template can render it into
-/// `<pre data-test="exported-markdown">`.
-fn install_export_markdown_listener(event_target: Element, handle: pocopine::Handle<Editor>) {
-    let cb = Closure::wrap(Box::new(move |event: Event| {
-        let Ok(custom) = event.dyn_into::<CustomEvent>() else {
-            return;
-        };
-        let text = custom
-            .detail()
-            .as_string()
-            .unwrap_or_else(|| "(export returned non-string detail)".to_string());
-        let handle = handle.clone();
-        pocopine::tick::next(move || {
-            handle.update(move |editor: &mut Editor| {
-                editor.exported_markdown = text;
-            });
-        });
-    }) as Box<dyn FnMut(Event)>);
-    let _ = event_target.add_event_listener_with_callback(
-        EXPORT_MARKDOWN_RESULT_EVENT,
-        cb.as_ref().unchecked_ref(),
-    );
-    cb.forget();
 }
 
 /// Listen for the `pine:task-toggle` custom event bubbled up from
@@ -347,25 +305,158 @@ struct TaskTogglePayload {
     checked: bool,
 }
 
-/// Find the doc editor surface element in the DOM. The demo now hosts
-/// two `<pine-rich-text-root>` mounts — the kitchen-sink doc editor
-/// (no `runtime` attribute) and the minimal comment editor
-/// (`runtime="comment"`). The toolbar targets the doc editor by
-/// selecting the FIRST surface that has no `runtime` attribute set.
-fn find_surface() -> Option<Element> {
-    let window = web_sys::window()?;
-    let document = window.document()?;
-    document
-        .query_selector("pine-rich-text-root:not([runtime]) .pine-rich-text")
-        .ok()
-        .flatten()
-        .or_else(|| {
-            document
-                .query_selector("pine-rich-text-root:not([runtime])")
-                .ok()
-                .flatten()
-                .and_then(|el| el.dyn_into::<Element>().ok())
-        })
+/// Bench config parsed out of `window.location.search`. The harness
+/// drives the demo via `?bench=large&paragraphs=500&words=80` so a
+/// single demo binary supports many doc sizes without recompiling.
+///
+/// The `shape` axis selects the block layout the seed doc generates
+/// — plain paragraphs by default, or task items (custom-element
+/// node-views) for the `tasks` preset. Different shapes exercise
+/// different reconciler paths and let us isolate custom-component
+/// cost from plain-paragraph cost.
+#[derive(Clone, Copy)]
+struct BenchSpec {
+    shape: BenchShape,
+    blocks: usize,
+    words_per_block: usize,
+}
+
+// `BenchShape` is only constructed inside `bench_spec_from_url`, which
+// is `cfg(target_arch = "wasm32")`. Host builds see the variants as
+// unconstructed dead code; allow that since the enum still needs to
+// exist on host so the matching codepaths typecheck.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+enum BenchShape {
+    Paragraphs,
+    TaskItems,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn bench_spec_from_url() -> Option<BenchSpec> {
+    let search = web_sys::window()?.location().search().ok()?;
+    if search.is_empty() {
+        return None;
+    }
+    // Strip the leading `?` so we can split on `&` cleanly.
+    let trimmed = search.trim_start_matches('?');
+    let mut bench: Option<&str> = None;
+    let mut paragraphs: Option<usize> = None;
+    let mut words: Option<usize> = None;
+    for pair in trimmed.split('&') {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next().unwrap_or("");
+        let value = it.next().unwrap_or("");
+        match key {
+            "bench" => bench = Some(value),
+            "paragraphs" => paragraphs = value.parse().ok(),
+            "words" => words = value.parse().ok(),
+            _ => {}
+        }
+    }
+    let preset = bench?;
+    let (default_p, default_w, shape) = match preset {
+        "small" => (20, 12, BenchShape::Paragraphs),
+        "medium" => (100, 40, BenchShape::Paragraphs),
+        "large" => (500, 80, BenchShape::Paragraphs),
+        "xl" => (2000, 80, BenchShape::Paragraphs),
+        // `tasks` seeds many `<pine-task-item>` node-views, which
+        // exercise the custom-element render path the plain-paragraph
+        // presets skip. Default count matches `large` so cross-shape
+        // comparisons are like-for-like.
+        "tasks" => (500, 8, BenchShape::TaskItems),
+        _ => return None,
+    };
+    Some(BenchSpec {
+        shape,
+        blocks: paragraphs.unwrap_or(default_p),
+        words_per_block: words.unwrap_or(default_w),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bench_spec_from_url() -> Option<BenchSpec> {
+    None
+}
+
+fn bench_doc_json(spec: &BenchSpec) -> Value {
+    let schema = schema_basic::schema();
+    let lorem = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua";
+    let words: Vec<&str> = lorem.split_whitespace().collect();
+    let block_text = |block_idx: usize| -> String {
+        let mut s = String::with_capacity(spec.words_per_block * 8);
+        for word_idx in 0..spec.words_per_block {
+            if word_idx > 0 {
+                s.push(' ');
+            }
+            s.push_str(words[(block_idx + word_idx) % words.len()]);
+        }
+        s.push('.');
+        s
+    };
+
+    let document = match spec.shape {
+        BenchShape::Paragraphs => {
+            let mut blocks: Vec<pine_richtext::model::Node> = Vec::with_capacity(spec.blocks + 1);
+            blocks.push(
+                schema_basic::paragraph(vec![schema_basic::text(
+                    format!(
+                        "Bench doc ({} paragraphs × {} words). Type into me to measure keystroke latency.",
+                        spec.blocks, spec.words_per_block
+                    ),
+                    Vec::new(),
+                )
+                .unwrap()])
+                .unwrap(),
+            );
+            for i in 0..spec.blocks {
+                blocks.push(
+                    schema_basic::paragraph(vec![
+                        schema_basic::text(block_text(i), Vec::new()).unwrap()
+                    ])
+                    .unwrap(),
+                );
+            }
+            schema_basic::doc(blocks).unwrap()
+        }
+        BenchShape::TaskItems => {
+            // One leading paragraph for caret placement (the harness
+            // looks up `p[data-pos="0"]`), then a single `task_list`
+            // wrapping `spec.blocks` task items. Half checked / half
+            // unchecked so reconciler attr-only patches and content
+            // patches both get exercised across the run.
+            let leading = schema_basic::paragraph(vec![schema_basic::text(
+                format!(
+                    "Bench doc ({} task items × {} words). Type into me to measure custom-element keystroke latency.",
+                    spec.blocks, spec.words_per_block
+                ),
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap();
+            let mut items: Vec<pine_richtext::model::Node> = Vec::with_capacity(spec.blocks);
+            for i in 0..spec.blocks {
+                items.push(
+                    schema_basic::task_item(
+                        i % 2 == 0,
+                        vec![schema_basic::paragraph(vec![schema_basic::text(
+                            block_text(i),
+                            Vec::new(),
+                        )
+                        .unwrap()])
+                        .unwrap()],
+                    )
+                    .unwrap(),
+                );
+            }
+            let task_list = schema_basic::task_list(items).unwrap();
+            schema_basic::doc(vec![leading, task_list]).unwrap()
+        }
+    };
+    let state =
+        EditorState::create(EditorStateConfig::new(schema, document).plugins(demo_plugins()))
+            .unwrap();
+    state.to_json().unwrap()
 }
 
 fn initial_doc_json() -> Value {
