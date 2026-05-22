@@ -13,6 +13,11 @@ keep-list-detail {
 
 .list-pane {
   flex: 0 0 320px;
+  /* Without min-width: 0 + max-width, a long unbroken title would
+     push the flex item past 320px (flex items default to
+     min-width: auto, which expands to fit min-content). */
+  min-width: 0;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -151,6 +156,12 @@ keep-list-detail {
   align-items: stretch;
   gap: 3px;
   width: 100%;
+  /* min-width:0 stops the row from being forced wider than its
+     flex-item slot by long inline content; overflow:hidden is a
+     belt-and-suspenders clip if a child somehow escapes the
+     ellipsis (e.g. emoji-only label chips). */
+  min-width: 0;
+  overflow: hidden;
   padding: 10px 12px 10px 14px;
   border-radius: 6px;
   background: transparent;
@@ -197,6 +208,9 @@ keep-list-detail {
 }
 
 .list-row__title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: -.005em;
@@ -204,18 +218,25 @@ keep-list-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  word-break: break-word;
 }
 
 .list-row__preview {
+  display: -webkit-box;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12.5px;
   line-height: 1.35;
   color: var(--fg-2);
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   max-height: 34px;
+  /* Break long unbroken tokens (markdown URLs, code) so they
+     ellipsis instead of forcing horizontal overflow. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .list-row__preview--todos {
