@@ -20,6 +20,7 @@ mod args;
 mod build;
 mod client_modules;
 mod config;
+mod deploy;
 mod dev;
 mod doctor;
 mod server;
@@ -38,6 +39,7 @@ fn main() -> Result<()> {
         Cmd::Run(args) => run_project(args),
         Cmd::Dev(args) => dev::run(&args),
         Cmd::Doctor(args) => doctor::run(&args),
+        Cmd::Deploy(args) => deploy::run(&args),
         Cmd::Js(args) => run_js(args),
     }
 }
