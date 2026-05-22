@@ -999,15 +999,35 @@ impl PineYAxis {
     }
 }
 
+/// Props every cartesian series component shares — `key`, `label`,
+/// `color`, `visible`. Flattened into each series struct via
+/// `#[prop(flatten)]` (RFC-044 §5.10): the container is one Rust
+/// field, but the wire surface stays one attribute per leaf, so
+/// `<pine-line-series key=… label=… color=…>` is unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SeriesCommon {
+    pub key: String,
+    pub label: String,
+    pub color: String,
+    pub visible: bool,
+}
+
+impl Default for SeriesCommon {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            label: String::new(),
+            color: "currentColor".into(),
+            visible: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineLineSeries.poco", role = "visual")]
 pub struct PineLineSeries {
-    #[prop]
-    pub key: String,
-    #[prop]
-    pub label: String,
-    #[prop]
-    pub color: String,
+    #[prop(flatten = ["key", "label", "color", "visible"])]
+    pub common: SeriesCommon,
     #[prop]
     pub stroke_width: f64,
     #[prop]
@@ -1018,23 +1038,18 @@ pub struct PineLineSeries {
     pub points: Vec<ChartPoint>,
     #[prop]
     pub data: Vec<ChartBar>,
-    #[prop]
-    pub visible: bool,
     pub component_key: String,
 }
 
 impl Default for PineLineSeries {
     fn default() -> Self {
         Self {
-            key: String::new(),
-            label: String::new(),
-            color: "currentColor".into(),
+            common: SeriesCommon::default(),
             stroke_width: DEFAULT_STROKE_WIDTH,
             show_markers: false,
             marker_radius: DEFAULT_MARKER_RADIUS,
             points: Vec::new(),
             data: Vec::new(),
-            visible: true,
             component_key: String::new(),
         }
     }
@@ -1043,7 +1058,7 @@ impl Default for PineLineSeries {
 #[handlers]
 impl PineLineSeries {
     fn on_setup(&mut self) {
-        ensure_component_key(&mut self.component_key, "line-series", &self.key);
+        ensure_component_key(&mut self.component_key, "line-series", &self.common.key);
         self.sync();
     }
 
@@ -1097,52 +1112,33 @@ impl PineLineSeries {
         update_root(|root| {
             root.upsert_line_series(CartesianLineSeriesConfig {
                 key: self.component_key.clone(),
-                label: self.label.clone(),
-                color: color_or_current(&self.color),
+                label: self.common.label.clone(),
+                color: color_or_current(&self.common.color),
                 stroke_width: self.stroke_width,
                 show_markers: self.show_markers,
                 marker_radius: self.marker_radius,
                 points: self.points.clone(),
                 data: self.data.clone(),
-                visible: self.visible,
+                visible: self.common.visible,
             });
         });
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[component(template = "PineBarSeries.poco", role = "visual")]
 pub struct PineBarSeries {
-    #[prop]
-    pub key: String,
-    #[prop]
-    pub label: String,
-    #[prop]
-    pub color: String,
+    #[prop(flatten = ["key", "label", "color", "visible"])]
+    pub common: SeriesCommon,
     #[prop]
     pub data: Vec<ChartBar>,
-    #[prop]
-    pub visible: bool,
     pub component_key: String,
-}
-
-impl Default for PineBarSeries {
-    fn default() -> Self {
-        Self {
-            key: String::new(),
-            label: String::new(),
-            color: "currentColor".into(),
-            data: Vec::new(),
-            visible: true,
-            component_key: String::new(),
-        }
-    }
 }
 
 #[handlers]
 impl PineBarSeries {
     fn on_setup(&mut self) {
-        ensure_component_key(&mut self.component_key, "bar-series", &self.key);
+        ensure_component_key(&mut self.component_key, "bar-series", &self.common.key);
         self.sync();
     }
 
@@ -1176,10 +1172,10 @@ impl PineBarSeries {
         update_root(|root| {
             root.upsert_bar_series(CartesianBarSeriesConfig {
                 key: self.component_key.clone(),
-                label: self.label.clone(),
-                color: color_or_current(&self.color),
+                label: self.common.label.clone(),
+                color: color_or_current(&self.common.color),
                 data: self.data.clone(),
-                visible: self.visible,
+                visible: self.common.visible,
             });
         });
     }
@@ -1188,33 +1184,24 @@ impl PineBarSeries {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineAreaSeries.poco", role = "visual")]
 pub struct PineAreaSeries {
-    #[prop]
-    pub key: String,
-    #[prop]
-    pub label: String,
+    #[prop(flatten = ["key", "label", "color", "visible"])]
+    pub common: SeriesCommon,
     #[prop]
     pub fill: String,
-    #[prop]
-    pub color: String,
     #[prop]
     pub stroke_width: f64,
     #[prop]
     pub points: Vec<ChartPoint>,
-    #[prop]
-    pub visible: bool,
     pub component_key: String,
 }
 
 impl Default for PineAreaSeries {
     fn default() -> Self {
         Self {
-            key: String::new(),
-            label: String::new(),
+            common: SeriesCommon::default(),
             fill: "currentColor".into(),
-            color: "currentColor".into(),
             stroke_width: DEFAULT_STROKE_WIDTH,
             points: Vec::new(),
-            visible: true,
             component_key: String::new(),
         }
     }
@@ -1223,7 +1210,7 @@ impl Default for PineAreaSeries {
 #[handlers]
 impl PineAreaSeries {
     fn on_setup(&mut self) {
-        ensure_component_key(&mut self.component_key, "area-series", &self.key);
+        ensure_component_key(&mut self.component_key, "area-series", &self.common.key);
         self.sync();
     }
 
@@ -1267,12 +1254,12 @@ impl PineAreaSeries {
         update_root(|root| {
             root.upsert_area_series(CartesianAreaSeriesConfig {
                 key: self.component_key.clone(),
-                label: self.label.clone(),
+                label: self.common.label.clone(),
                 fill: color_or_current(&self.fill),
-                color: color_or_current(&self.color),
+                color: color_or_current(&self.common.color),
                 stroke_width: self.stroke_width,
                 points: self.points.clone(),
-                visible: self.visible,
+                visible: self.common.visible,
             });
         });
     }
@@ -1281,30 +1268,21 @@ impl PineAreaSeries {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineScatterSeries.poco", role = "visual")]
 pub struct PineScatterSeries {
-    #[prop]
-    pub key: String,
-    #[prop]
-    pub label: String,
-    #[prop]
-    pub color: String,
+    #[prop(flatten = ["key", "label", "color", "visible"])]
+    pub common: SeriesCommon,
     #[prop]
     pub point_radius: f64,
     #[prop]
     pub points: Vec<ChartPoint>,
-    #[prop]
-    pub visible: bool,
     pub component_key: String,
 }
 
 impl Default for PineScatterSeries {
     fn default() -> Self {
         Self {
-            key: String::new(),
-            label: String::new(),
-            color: "currentColor".into(),
+            common: SeriesCommon::default(),
             point_radius: DEFAULT_MARKER_RADIUS,
             points: Vec::new(),
-            visible: true,
             component_key: String::new(),
         }
     }
@@ -1313,7 +1291,7 @@ impl Default for PineScatterSeries {
 #[handlers]
 impl PineScatterSeries {
     fn on_setup(&mut self) {
-        ensure_component_key(&mut self.component_key, "scatter-series", &self.key);
+        ensure_component_key(&mut self.component_key, "scatter-series", &self.common.key);
         self.sync();
     }
 
@@ -1352,11 +1330,11 @@ impl PineScatterSeries {
         update_root(|root| {
             root.upsert_scatter_series(CartesianScatterSeriesConfig {
                 key: self.component_key.clone(),
-                label: self.label.clone(),
-                color: color_or_current(&self.color),
+                label: self.common.label.clone(),
+                color: color_or_current(&self.common.color),
                 point_radius: self.point_radius,
                 points: self.points.clone(),
-                visible: self.visible,
+                visible: self.common.visible,
             });
         });
     }
