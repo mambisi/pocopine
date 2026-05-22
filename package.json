@@ -3,7 +3,8 @@
   "type": "module",
   "scripts": {
     "build:richtext": "wasm-pack build examples/richtext --target web --out-dir pkg",
-    "test:richtext-smoke": "npm run build:richtext && playwright test"
+    "test:richtext-smoke": "npm run build:richtext && playwright test richtext.spec.mjs",
+    "test:richtext-perf": "npm run build:richtext && playwright test richtext.perf.spec.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0"

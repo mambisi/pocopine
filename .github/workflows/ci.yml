@@ -49,6 +49,7 @@ jobs:
       observability: ${{ steps.filter.outputs.observability }}
       redis: ${{ steps.filter.outputs.redis }}
       browser: ${{ steps.filter.outputs.browser }}
+      richtext_perf: ${{ steps.filter.outputs.richtext_perf }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
@@ -103,6 +104,14 @@ jobs:
               - 'crates/pocopine/**'
               - 'crates/pocopine-core/**'
               - 'crates/pocopine-macros/**'
+              - '.github/workflows/ci.yml'
+            richtext_perf:
+              - 'crates/pine-richtext/**'
+              - 'examples/richtext/**'
+              - 'tests/playwright/**'
+              - 'playwright.config.mjs'
+              - 'package.json'
+              - 'package-lock.json'
               - '.github/workflows/ci.yml'
             ci:
               - '.github/workflows/**'
@@ -462,3 +471,65 @@ jobs:
             wasm-pack build --release --target web "$ex"
             echo "::endgroup::"
           done
+
+  richtext-perf:
+    name: pine-richtext perf (playwright)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.richtext_perf == 'true'
+    # Browser perf bench: builds examples/richtext to wasm, then types
+    # / Enter / backspace into a 20–500-paragraph doc and writes one
+    # JSON report per scenario under target/perf/. The assertions are
+    # generous (per-scenario wall-clock budgets, 30–60 s) so the job
+    # fails on catastrophic regressions but rides through normal
+    # run-to-run noise. The artifact upload is the primary signal —
+    # reviewers compare target/perf/*.json before/after.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-18
+          targets: wasm32-unknown-unknown
+      - name: install wasm-pack (pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: richtext-perf
+          workspaces: examples/richtext
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      # Use the playwright-bundled chromium-headless-shell — runs
+      # offline and avoids relying on a chrome-stable install on the
+      # runner. Matches what `playwright.config.mjs` falls back to
+      # when `PLAYWRIGHT_BROWSER_CHANNEL` is unset on CI.
+      - name: install playwright chromium
+        run: npx playwright install --with-deps chromium
+      - name: build richtext wasm
+        run: npm run build:richtext
+      - name: run perf spec
+        run: npx playwright test richtext.perf.spec.mjs --reporter=list
+      - name: print perf summaries
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in target/perf/*.json; do
+            echo "::group::$f"
+            cat "$f"
+            echo
+            echo "::endgroup::"
+          done
+      - name: upload perf reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: richtext-perf-reports
+          path: target/perf/*.json
+          if-no-files-found: warn
+          retention-days: 30

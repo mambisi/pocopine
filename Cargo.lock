@@ -2769,6 +2769,7 @@ dependencies = [
  "pine",
  "pine-icons",
  "pine-motion",
+ "pine-richtext",
  "pocopine",
  "pocopine-auth-client",
  "pocopine-events",
@@ -2787,6 +2788,7 @@ dependencies = [
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
