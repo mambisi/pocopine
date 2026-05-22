@@ -21,6 +21,8 @@ pub enum Cmd {
     Dev(ServeArgs),
     /// Check local tools and project configuration used by Pocopine.
     Doctor(DoctorArgs),
+    /// Deploy to a registered host adapter (RFC 080).
+    Deploy(DeployArgs),
     /// Managed JavaScript toolkit commands for typed `.client.ts` modules.
     Js(JsArgs),
 }
@@ -69,6 +71,63 @@ pub struct JsArgs {
     pub path: PathBuf,
     #[command(subcommand)]
     pub cmd: JsCmd,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct DeployArgs {
+    /// Path to the project crate (defaults to current dir).
+    #[arg(long, default_value = ".", global = true)]
+    pub path: PathBuf,
+
+    /// Subcommand. If omitted, runs a deploy with the flags below.
+    #[command(subcommand)]
+    pub cmd: Option<DeployCmd>,
+
+    /// Target host adapter (e.g. `fly`).
+    #[arg(long)]
+    pub target: Option<String>,
+
+    /// Print the rendered config and planned API calls; touch nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Deploy to the production environment. Sets the env to
+    /// `production`, suffixes the host app name with `-production`,
+    /// and applies any overrides under
+    /// `[package.metadata.pocopine.deploy.production]` in Cargo.toml
+    /// (env vars + host-specific blocks). Without this flag, deploys
+    /// are env-agnostic (no suffix, no override block).
+    #[arg(long)]
+    pub prod: bool,
+
+    /// Skip the local build + push. Use this when CI (or a previous
+    /// `pocopine deploy`) has already pushed the image; the adapter
+    /// will reuse the deterministic image tag and only run the
+    /// host-API deploy.
+    #[arg(long)]
+    pub skip_build: bool,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DeployCmd {
+    /// Manage host API tokens (`~/.pocopine/credentials.toml`).
+    Auth(AuthArgs),
+    /// Validate config, probe host APIs, check tokens + docker daemon.
+    Doctor,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct AuthArgs {
+    /// Host name (e.g. `fly`). Required unless `--list` or `--revoke`.
+    pub host: Option<String>,
+
+    /// List configured tokens and their source (file/env).
+    #[arg(long, conflicts_with = "host")]
+    pub list: bool,
+
+    /// Remove the stored token for the given host.
+    #[arg(long, value_name = "HOST")]
+    pub revoke: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
