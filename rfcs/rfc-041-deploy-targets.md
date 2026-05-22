@@ -2,10 +2,17 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Superseded |
+| **Superseded by** | [RFC 080 — Heroku-style deploy contract](./rfc-080-deploy-contract.md) |
 | **Author** | pocopine team |
 | **Created** | 2026-04-22 |
 | **Related** | [RFC 002 — App / Stores / Servers](./rfc-002-app-stores-servers.md), [RFC 037 — JS client module bridge (draft)](./rfc-037-js-bridge.md) |
+
+> **Note (2026-05-17):** Superseded by RFC 080. This RFC's "thin
+> shell-out wrapper" framing predates workers (RFC 067) and collab
+> (RFC 073), and its first-class Shuttle.rs target is no longer viable
+> (Shuttle.dev wound down in 2026). Target analyses below remain useful
+> as background.
 
 ## 1. Summary
 
