@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use pine_charts::{
     line_legend_items, set_line_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries, LegendItem,
-    LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT, CHART_SELECT_END_EVENT,
-    CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
+    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartRadialBar,
+    ChartScatterSeries, LegendItem, LegendToggle, CHART_HOVER_END_EVENT, CHART_HOVER_EVENT,
+    CHART_SELECT_END_EVENT, CHART_SELECT_EVENT, LEGEND_TOGGLE_EVENT,
 };
 use pocopine::prelude::*;
 use wasm_bindgen::closure::Closure;
@@ -2430,6 +2430,159 @@ async fn pie_chart_renders_donut_slices_and_selection() {
 
     assert!(second.has_attribute("data-selected"));
     assert!(!first.has_attribute("data-selected"));
+
+    host.remove();
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[component(template_inline = r#"
+<div>
+  <pine-radial-bar-chart class="readiness-chart"
+                         label="Readiness"
+                         width="120"
+                         height="120"
+                         margin_top="0"
+                         margin_right="0"
+                         margin_bottom="0"
+                         margin_left="0"
+                         inner_radius="0.3"
+                         ring_gap="4"
+                         center_label="Average"
+                         center_value="63%"
+                         pp-bind:data="data"></pine-radial-bar-chart>
+</div>
+"#)]
+struct RadialBarChartFixture {
+    data: Vec<ChartRadialBar>,
+}
+
+impl Default for RadialBarChartFixture {
+    fn default() -> Self {
+        Self {
+            data: vec![
+                ChartRadialBar::new("Activation", 75.0, 100.0),
+                ChartRadialBar::new("Retention", 50.0, 100.0),
+            ],
+        }
+    }
+}
+
+#[handlers]
+impl RadialBarChartFixture {}
+
+#[wasm_bindgen_test]
+async fn radial_bar_chart_renders_rings_hover_and_selection() {
+    let host = mount_fixture::<RadialBarChartFixture>();
+    settle().await;
+
+    let chart = host
+        .query_selector(".pine-radial-bar-chart")
+        .unwrap()
+        .unwrap();
+    assert_eq!(chart.get_attribute("role").as_deref(), Some("img"));
+    assert_eq!(
+        chart.get_attribute("aria-label").as_deref(),
+        Some("Readiness")
+    );
+    assert_eq!(chart.get_attribute("data-state").as_deref(), Some("ready"));
+    assert_eq!(chart.get_attribute("tabindex").as_deref(), Some("0"));
+    assert!(!chart.has_attribute("data-hover"));
+
+    let svg = host.query_selector("svg.pine-chart-svg").unwrap().unwrap();
+    assert_eq!(
+        direct_svg_layers(&svg),
+        vec!["tracks", "series", "hover", "labels"]
+    );
+
+    let tracks = host.query_selector_all(".pine-chart-radial-track").unwrap();
+    assert_eq!(tracks.length(), 2);
+    let bars = host
+        .query_selector_all(".pine-chart-radial-bar[role='option']")
+        .unwrap();
+    assert_eq!(bars.length(), 2);
+    let first = bars.get(0).unwrap().dyn_into::<Element>().unwrap();
+    assert_eq!(
+        first.namespace_uri().as_deref(),
+        Some("http://www.w3.org/2000/svg"),
+    );
+    assert_eq!(
+        first.get_attribute("data-label").as_deref(),
+        Some("Activation")
+    );
+    assert_eq!(first.get_attribute("data-value").as_deref(), Some("75"));
+    assert_eq!(first.get_attribute("data-max").as_deref(), Some("100"));
+    assert_eq!(
+        first.get_attribute("data-percentage").as_deref(),
+        Some("75")
+    );
+    assert_eq!(
+        first.get_attribute("aria-label").as_deref(),
+        Some("Activation: 75 of 100 (75%)")
+    );
+
+    let center_value = host
+        .query_selector(".pine-chart-center-value")
+        .unwrap()
+        .unwrap();
+    assert_eq!(center_value.text_content().as_deref(), Some("63%"));
+    assert_eq!(center_value.get_attribute("x").as_deref(), Some("60"));
+    assert_eq!(center_value.get_attribute("y").as_deref(), Some("50"));
+    let center_label = host
+        .query_selector(".pine-chart-center-label")
+        .unwrap()
+        .unwrap();
+    assert_eq!(center_label.text_content().as_deref(), Some("Average"));
+    assert_eq!(center_label.get_attribute("x").as_deref(), Some("60"));
+    assert_eq!(center_label.get_attribute("y").as_deref(), Some("76"));
+
+    let hover_chart = listen_string_field(&chart, CHART_HOVER_EVENT, "chart");
+    let hover_kind = listen_string_field(&chart, CHART_HOVER_EVENT, "kind");
+    let hover_label = listen_string_field(&chart, CHART_HOVER_EVENT, "label");
+    dispatch_pointer_move(&svg, 60.0, 10.0);
+    settle().await;
+
+    let hover_bar = host
+        .query_selector(".pine-chart-radial-hover .pine-chart-radial-bar")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<Element>()
+        .unwrap();
+    assert_eq!(
+        hover_bar.get_attribute("data-label").as_deref(),
+        Some("Activation")
+    );
+    let tooltip = host
+        .query_selector(".pine-chart-radial-tooltip")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tooltip.get_attribute("data-label").as_deref(),
+        Some("Activation")
+    );
+    assert_eq!(tooltip.get_attribute("data-value").as_deref(), Some("75"));
+    assert_eq!(
+        tooltip.get_attribute("data-percentage").as_deref(),
+        Some("75")
+    );
+    assert_eq!(hover_chart.borrow().as_deref(), Some("radial"));
+    assert_eq!(hover_kind.borrow().as_deref(), Some("share"));
+    assert_eq!(hover_label.borrow().as_deref(), Some("Activation"));
+
+    let selected_label = listen_string_field(&chart, CHART_SELECT_EVENT, "label");
+    dispatch_click(&first);
+    settle().await;
+
+    assert!(first.has_attribute("data-focused"));
+    assert!(first.has_attribute("data-selected"));
+    assert_eq!(
+        selected_label.borrow().as_deref(),
+        Some("Activation: 75 of 100 (75%)")
+    );
+
+    dispatch_keydown(&chart, "ArrowRight");
+    settle().await;
+    let second = bars.get(1).unwrap().dyn_into::<Element>().unwrap();
+    assert!(second.has_attribute("data-focused"));
 
     host.remove();
 }

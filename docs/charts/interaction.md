@@ -25,9 +25,10 @@ Hover activates only while the pointer is inside the plot rectangle, not while
 it is over margins, axes, or tick labels.
 
 Line, scatter, and area charts select the nearest sampled point by SVG distance.
-Bar charts select the painted SVG rect under the pointer. Pie and donut charts
-select the hovered slice. All of them emit `pp:chart:hover` while hover is
-visible and `pp:chart:hover-end` when it clears.
+Bar charts select the painted SVG rect under the pointer. Pie/donut charts
+select the hovered slice, and radial bar charts select the hovered ring. All of
+them emit `pp:chart:hover` while hover is visible and `pp:chart:hover-end` when
+it clears.
 
 The built-in hover surface exposes:
 
@@ -107,12 +108,12 @@ pub fn hide_custom_tooltip(&mut self) {
 
 ## Selection And Drilldown
 
-Line markers, area markers, scatter points, bars, and pie/donut slices expose a
-small selection contract. The chart root is keyboard focusable. Arrow keys move
-the focused item, Enter or Space selects it, and Escape clears selection. Line
-and area plot clicks select the current hovered sample. Scatter, bar, and pie
-clicks select the clicked point, bar, or slice. Background chart clicks clear
-selection when there is no hovered sample.
+Line markers, area markers, scatter points, bars, pie/donut slices, and radial
+bars expose a small selection contract. The chart root is keyboard focusable.
+Arrow keys move the focused item, Enter or Space selects it, and Escape clears
+selection. Line and area plot clicks select the current hovered sample. Scatter,
+bar, pie, and radial clicks select the clicked point, bar, slice, or ring.
+Background chart clicks clear selection when there is no hovered sample.
 
 Selection emits a bubbling `pp:chart:select` event, and clearing emits
 `pp:chart:select-end`. Rendered selectable marks expose:

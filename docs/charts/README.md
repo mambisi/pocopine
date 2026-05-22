@@ -10,7 +10,7 @@ The first layer is intentionally low level:
 - linear and band scales,
 - SVG path builders for line and area series,
 - single-line, multi-line, scatter, area, grouped bar, stacked bar, pie/donut,
-  legend, marker, and hover components,
+  radial bar, legend, marker, and hover components,
 - strict finite-number validation.
 
 Higher level components build on those primitives instead of hiding them. That
@@ -38,8 +38,8 @@ Applications own:
 - routing, persistence, analytics, and domain-specific labels.
 
 That boundary keeps the public API low-to-high: use the ready-made line, bar,
-area, scatter, pie, and Cartesian components when they fit; drop to layered SVG
-blocks when the visualization needs custom marks.
+area, scatter, pie, radial, and Cartesian components when they fit; drop to
+layered SVG blocks when the visualization needs custom marks.
 
 ## Styling Contract
 

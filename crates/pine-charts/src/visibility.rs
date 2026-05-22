@@ -1,6 +1,10 @@
 use crate::legend::series_label_or_default;
 use crate::pie::slice_label;
-use crate::{ChartAreaSeries, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartScatterSeries};
+use crate::radial::radial_bar_label;
+use crate::{
+    ChartAreaSeries, ChartBarSeries, ChartLineSeries, ChartPieSlice, ChartRadialBar,
+    ChartScatterSeries,
+};
 
 trait VisibleSeries {
     fn label(&self) -> &str;
@@ -165,6 +169,42 @@ pub fn toggle_pie_slice_visibility(data: &mut [ChartPieSlice], key: &str) -> boo
     true
 }
 
+pub fn set_radial_bar_visible(data: &mut [ChartRadialBar], key: &str, visible: bool) -> bool {
+    let Some(bar) = data
+        .iter_mut()
+        .enumerate()
+        .find(|(index, bar)| {
+            format!(
+                "radial-bar-{index}-{}",
+                radial_bar_label(&bar.label, *index)
+            ) == key
+        })
+        .map(|(_, bar)| bar)
+    else {
+        return false;
+    };
+    bar.visible = visible;
+    true
+}
+
+pub fn toggle_radial_bar_visibility(data: &mut [ChartRadialBar], key: &str) -> bool {
+    let Some(bar) = data
+        .iter_mut()
+        .enumerate()
+        .find(|(index, bar)| {
+            format!(
+                "radial-bar-{index}-{}",
+                radial_bar_label(&bar.label, *index)
+            ) == key
+        })
+        .map(|(_, bar)| bar)
+    else {
+        return false;
+    };
+    bar.visible = !bar.visible;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +247,18 @@ mod tests {
         assert!(set_pie_slice_visible(
             &mut data,
             "pie-slice-0-Slice 1",
+            false,
+        ));
+        assert!(!data[0].visible);
+    }
+
+    #[test]
+    fn updates_radial_visibility_by_bar_key() {
+        let mut data = vec![ChartRadialBar::new("", 4.0, 8.0)];
+
+        assert!(set_radial_bar_visible(
+            &mut data,
+            "radial-bar-0-Bar 1",
             false,
         ));
         assert!(!data[0].visible);

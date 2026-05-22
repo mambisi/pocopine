@@ -4,7 +4,8 @@ The first component layer is intentionally small: `PineLineChart` renders SVG
 line charts from numeric points or named numeric series, `PineScatterChart`
 renders point-only numeric series, `PineAreaChart` renders closed SVG area fills
 from the same numeric shape, `PineBarChart` renders categorical values as SVG
-bars, and `PinePieChart` renders pie, donut, half-pie, and half-donut slices.
+bars, `PinePieChart` renders pie, donut, half-pie, and half-donut slices, and
+`PineRadialBarChart` renders radial progress rings.
 `PineLayerChart` provides the lower-level compound component surface for custom
 SVG compositions: child tags register lines, guides, markers, labels, and
 annotations into one root-owned SVG.
@@ -329,6 +330,46 @@ solid pie. Full donuts center the two-line stack in the middle of the circle.
 Half donuts keep the label on the chart center line and place the value above
 it, which keeps progress labels visually attached to the half-ring instead of
 drifting into the empty half of the SVG box.
+
+## Radial Bar Chart
+
+`PineRadialBarChart` accepts `Vec<ChartRadialBar>` and renders each visible
+item as its own progress ring. Use it for independent completion or health
+metrics; use `PinePieChart` when the values are parts of one total.
+
+Each `ChartRadialBar` has a `value` and `max`. The component is intentionally
+strict: `max` must be positive, `value` must be non-negative, and `value` cannot
+exceed `max`. Invalid progress data fails loudly instead of drawing misleading
+overfilled rings.
+
+```rust
+use pine_charts::{radial_bar_legend_items, ChartRadialBar};
+
+let bars = vec![
+    ChartRadialBar::new("Activation", 84.0, 100.0),
+    ChartRadialBar::new("Retention", 68.0, 100.0),
+    ChartRadialBar::new("Revenue", 92.0, 100.0),
+];
+let legend_items = radial_bar_legend_items(&bars);
+```
+
+```html
+<pine-radial-bar-chart
+  label="Readiness"
+  pp-bind:data="bars"
+  inner_radius="0.34"
+  ring_gap="7"
+  center_label="Average"
+  pp-bind:center_value="average_label"
+  width="320"
+  height="320"></pine-radial-bar-chart>
+```
+
+The root exposes the same hover and selection events as pie/donut charts with a
+`kind="share"` payload. Each ring exposes `data-label`, `data-value`,
+`data-max`, `data-percentage`, `data-focused`, and `data-selected`.
+The rendered SVG uses separate `tracks`, `series`, `hover`, and `labels` layers
+so applications can style progress tracks and active bars independently.
 
 ## Legend
 

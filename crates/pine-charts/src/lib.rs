@@ -18,6 +18,7 @@ pub mod line;
 mod marks;
 pub mod path;
 pub mod pie;
+pub mod radial;
 pub mod responsive;
 pub mod scale;
 pub mod scatter;
@@ -65,6 +66,10 @@ pub use path::{area_path, line_path};
 pub use pie::{
     pie_legend_items, ChartPieSlice, PieChartGeometry, PieChartOptions, PinePieChart, SvgPieSlice,
 };
+pub use radial::{
+    radial_bar_legend_items, ChartRadialBar, PineRadialBarChart, RadialBarChartGeometry,
+    RadialBarChartOptions, SvgRadialBar,
+};
 pub use responsive::{PineChartResponsive, ResponsiveChartSize};
 pub use scale::{BandScale, LinearScale, Tick};
 pub use scatter::{
@@ -74,9 +79,9 @@ pub use scatter::{
 pub use svg::{SvgAxisLabel, SvgLine, SvgTickLabel};
 pub use visibility::{
     set_area_series_visible, set_bar_series_visible, set_line_series_visible,
-    set_pie_slice_visible, set_scatter_series_visible, toggle_area_series_visibility,
-    toggle_bar_series_visibility, toggle_line_series_visibility, toggle_pie_slice_visibility,
-    toggle_scatter_series_visibility,
+    set_pie_slice_visible, set_radial_bar_visible, set_scatter_series_visible,
+    toggle_area_series_visibility, toggle_bar_series_visibility, toggle_line_series_visibility,
+    toggle_pie_slice_visibility, toggle_radial_bar_visibility, toggle_scatter_series_visibility,
 };
 
 /// Register every Pine Charts custom-element tag.
@@ -103,6 +108,7 @@ pub fn register_all() {
     PineChartResponsive::register();
     PineLineChart::register();
     PinePieChart::register();
+    PineRadialBarChart::register();
     PineScatterChart::register();
     PineScatterSeries::register();
     PineXAxis::register();

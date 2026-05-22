@@ -1,9 +1,9 @@
 use pine_charts::{
     area_legend_items, bar_legend_items, line_legend_items, scatter_legend_items,
-    set_area_series_visible, set_bar_series_visible, set_pie_slice_visible,
+    set_area_series_visible, set_bar_series_visible, set_pie_slice_visible, set_radial_bar_visible,
     set_scatter_series_visible, ChartAreaSeries, ChartBar, ChartBarSeries, ChartHover,
-    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartScatterSeries,
-    ChartSelection, LegendItem, LegendToggle,
+    ChartLayerPoint, ChartLineSeries, ChartPieSlice, ChartPoint, ChartRadialBar,
+    ChartScatterSeries, ChartSelection, LegendItem, LegendToggle,
 };
 use pocopine::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ pub struct ChartDemo {
     pub bar_dataset: String,
     pub scatter_dataset: String,
     pub pie_dataset: String,
+    pub radial_dataset: String,
     pub bar_mode: String,
     pub pie_shape: String,
     pub line_series: Vec<ChartLineSeries>,
@@ -48,6 +49,10 @@ pub struct ChartDemo {
     pub pie_end_angle: f64,
     pub pie_center_label: String,
     pub pie_center_value: String,
+    pub radial_data: Vec<ChartRadialBar>,
+    pub radial_legend: Vec<LegendItem>,
+    pub radial_center_label: String,
+    pub radial_center_value: String,
     pub custom_tooltip_visible: bool,
     pub custom_tooltip_title: String,
     pub custom_tooltip_value: String,
@@ -68,6 +73,7 @@ impl Default for ChartDemo {
         let bar_series = growth_bar_series();
         let scatter_series = growth_scatter_series();
         let pie_data = growth_pie_data();
+        let radial_data = growth_radial_data();
         let pie_center_value = pie_total_label(&pie_data);
         Self {
             combo_dataset: "growth".into(),
@@ -75,6 +81,7 @@ impl Default for ChartDemo {
             bar_dataset: "growth".into(),
             scatter_dataset: "growth".into(),
             pie_dataset: "growth".into(),
+            radial_dataset: "growth".into(),
             bar_mode: "grouped".into(),
             pie_shape: "pie".into(),
             line_legend: line_legend_items(&line_series),
@@ -107,6 +114,10 @@ impl Default for ChartDemo {
             pie_end_angle: 270.0,
             pie_center_label: "Total".into(),
             pie_center_value,
+            radial_legend: pine_charts::radial_bar_legend_items(&radial_data),
+            radial_center_label: "Average".into(),
+            radial_center_value: radial_average_label(&radial_data),
+            radial_data,
             custom_tooltip_visible: false,
             custom_tooltip_title: "Custom tooltip".into(),
             custom_tooltip_value: "Hover the trend area".into(),
@@ -219,6 +230,22 @@ impl ChartDemo {
         self.update_pie_center();
     }
 
+    pub fn show_radial_growth(&mut self) {
+        let radial_data = growth_radial_data();
+        self.radial_dataset = "growth".into();
+        self.radial_legend = pine_charts::radial_bar_legend_items(&radial_data);
+        self.radial_center_value = radial_average_label(&radial_data);
+        self.radial_data = radial_data;
+    }
+
+    pub fn show_radial_latency(&mut self) {
+        let radial_data = latency_radial_data();
+        self.radial_dataset = "latency".into();
+        self.radial_legend = pine_charts::radial_bar_legend_items(&radial_data);
+        self.radial_center_value = radial_average_label(&radial_data);
+        self.radial_data = radial_data;
+    }
+
     pub fn show_grouped(&mut self) {
         self.bar_mode = "grouped".into();
     }
@@ -285,6 +312,16 @@ impl ChartDemo {
         if set_pie_slice_visible(&mut self.pie_data, &toggle.key, toggle.active) {
             self.pie_legend = pine_charts::pie_legend_items(&self.pie_data);
             self.update_pie_center();
+        }
+    }
+
+    pub fn toggle_radial_bar(&mut self, event: JsValue) {
+        let Some(toggle) = LegendToggle::from_event_value(event) else {
+            return;
+        };
+        if set_radial_bar_visible(&mut self.radial_data, &toggle.key, toggle.active) {
+            self.radial_legend = pine_charts::radial_bar_legend_items(&self.radial_data);
+            self.radial_center_value = radial_average_label(&self.radial_data);
         }
     }
 
@@ -703,6 +740,22 @@ fn latency_pie_data() -> Vec<ChartPieSlice> {
     ]
 }
 
+fn growth_radial_data() -> Vec<ChartRadialBar> {
+    vec![
+        ChartRadialBar::new("Activation", 84.0, 100.0),
+        ChartRadialBar::new("Retention", 68.0, 100.0),
+        ChartRadialBar::new("Revenue", 92.0, 100.0),
+    ]
+}
+
+fn latency_radial_data() -> Vec<ChartRadialBar> {
+    vec![
+        ChartRadialBar::new("API", 74.0, 100.0),
+        ChartRadialBar::new("Render", 62.0, 100.0),
+        ChartRadialBar::new("Network", 58.0, 100.0),
+    ]
+}
+
 fn pie_total_label(data: &[ChartPieSlice]) -> String {
     data.iter()
         .filter(|slice| slice.visible)
@@ -710,6 +763,19 @@ fn pie_total_label(data: &[ChartPieSlice]) -> String {
         .sum::<f64>()
         .round()
         .to_string()
+}
+
+fn radial_average_label(data: &[ChartRadialBar]) -> String {
+    let visible = data.iter().filter(|bar| bar.visible).collect::<Vec<_>>();
+    if visible.is_empty() {
+        return "0%".into();
+    }
+    let average = visible
+        .iter()
+        .map(|bar| bar.value / bar.max * 100.0)
+        .sum::<f64>()
+        / visible.len() as f64;
+    format!("{}%", average.round())
 }
 
 #[wasm_bindgen(start)]
