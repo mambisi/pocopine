@@ -442,6 +442,7 @@ impl KeepStore {
             id: id.clone(),
             title: String::new(),
             body: String::new(),
+            body_state: None,
             color: "default".into(),
             pinned: false,
             archived: false,

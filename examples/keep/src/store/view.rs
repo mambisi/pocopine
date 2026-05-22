@@ -1,13 +1,22 @@
+use pine_richtext::model::Node as RichTextNode;
 use serde::{Deserialize, Serialize};
 
 use crate::{KeepNote, KeepTodo};
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+// `body_state: Option<RichTextNode>` transitively holds
+// `serde_json::Value` in node attrs; `Value` isn't `Eq`. The
+// reactive watchers only need `PartialEq` for change detection
+// (`prev != next`), so dropping `Eq` is safe.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct KeepEditorData {
     pub id: String,
     pub kind: String,
     pub title: String,
     pub body: String,
+    /// Canonical doc state for text notes (`None` for
+    /// checklists). Mirrors [`KeepNote::body_state`].
+    #[serde(default, deserialize_with = "crate::model::deserialize_optional_node")]
+    pub body_state: Option<RichTextNode>,
     pub color: String,
     pub todos: Vec<KeepTodo>,
     pub labels: Vec<String>,
@@ -25,6 +34,7 @@ impl KeepEditorData {
             },
             title: note.title,
             body: note.body,
+            body_state: note.body_state,
             color: note.color,
             todos: note.todos,
             labels: note.labels,
@@ -33,11 +43,17 @@ impl KeepEditorData {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+// Same `Eq` story as `KeepEditorData`: dropped because
+// `body_state` is `Option<Node>`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct KeepFormNote {
     pub note_id: String,
     pub title: String,
     pub body: String,
+    /// Doc state [`Node`]. The form's text-note save path fills
+    /// this via `editor.get::<DocNode>()`; checklist saves
+    /// leave it `None`.
+    pub body_state: Option<RichTextNode>,
     pub color: String,
     pub todos: Vec<KeepTodo>,
     pub labels: Vec<String>,
@@ -53,7 +69,9 @@ pub struct KeepCommandNote {
     pub search_value: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+// `Eq` dropped because the embedded `KeepNote.body_state`
+// transitively carries `serde_json::Value` attrs.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct KeepNoteCardRow {
     pub key: String,
     pub value: KeepNote,

@@ -18,6 +18,7 @@ mod app;
 pub mod components;
 pub mod firebase;
 pub mod model;
+pub mod richtext_schema;
 #[cfg(pocopine_host)]
 pub mod sqlite_stream;
 pub mod store;

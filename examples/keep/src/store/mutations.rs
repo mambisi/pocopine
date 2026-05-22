@@ -9,6 +9,10 @@ impl KeepStore {
         let note_id = form.note_id;
         let title = form.title.trim().to_string();
         let body = form.body.trim().to_string();
+        // `body_state` is the canonical doc Value — pass it
+        // through as-is. `Value::Null` is the "empty / not a
+        // text note" sentinel.
+        let body_state = form.body_state;
         let color = form.color;
         let todos = form.todos;
         let labels = normalize_labels(form.labels);
@@ -30,6 +34,7 @@ impl KeepStore {
                 id: id.clone(),
                 title,
                 body,
+                body_state,
                 color,
                 pinned: false,
                 archived: false,
@@ -61,6 +66,7 @@ impl KeepStore {
         self.update_note(&note_id, "edit", |note| {
             note.title = title;
             note.body = body;
+            note.body_state = body_state;
             note.color = color;
             note.todos = todos;
             note.labels = labels;
@@ -75,6 +81,7 @@ impl KeepStore {
         }
         let title = form.title.trim().to_string();
         let body = form.body.trim().to_string();
+        let body_state = form.body_state;
         let color = form.color;
         let todos = form.todos;
         let labels = normalize_labels(form.labels);
@@ -86,6 +93,7 @@ impl KeepStore {
         self.update_note(&note_id, "archive", |note| {
             note.title = title;
             note.body = body;
+            note.body_state = body_state;
             note.color = color;
             note.todos = todos;
             note.labels = labels;
