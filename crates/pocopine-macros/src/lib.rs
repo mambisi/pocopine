@@ -1943,6 +1943,22 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .flat_map(|(_, leaves, _)| leaves.iter())
         .collect();
 
+    // RFC-044 §5.10 — leaf → container map for `flatten_container_of`.
+    // A write to any leaf mutates the whole container field, so the
+    // proxy `set` trap triggers the container key too, letting one
+    // `#[watch(<container>)]` fire on any leaf change. Role-agnostic:
+    // both `#[prop(flatten)]` and `#[model(flatten)]` leaves map here.
+    let mut flatten_container_arms: Vec<proc_macro2::TokenStream> = Vec::new();
+    for (container, leaves, _) in &flatten_fields {
+        let container_name = container.to_string();
+        let container_name = container_name.trim_start_matches("r#");
+        for leaf in leaves {
+            flatten_container_arms.push(quote! {
+                #leaf => ::core::option::Option::Some(#container_name),
+            });
+        }
+    }
+
     let keys_arr = field_names
         .iter()
         .chain(flatten_leaf_names.iter().copied())
@@ -2745,6 +2761,15 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             fn static_prop_kind(&self, key: &str) -> ::pocopine::__private::StaticPropKind {
                 #static_prop_kind_body
+            }
+            fn flatten_container_of(
+                &self,
+                key: &str,
+            ) -> ::core::option::Option<&'static str> {
+                match key {
+                    #(#flatten_container_arms)*
+                    _ => ::core::option::Option::None,
+                }
             }
             fn is_model(&self, key: &str) -> bool {
                 #is_model_body

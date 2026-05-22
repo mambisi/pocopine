@@ -76,6 +76,18 @@ pub trait ComponentState: 'static {
         StaticPropKind::Auto
     }
 
+    /// RFC-044 §5.10 — for a `flatten` leaf key, the container field
+    /// key it writes through; `None` for ordinary keys. A write to a
+    /// flattened leaf mutates the *whole* container field, so the
+    /// proxy `set` trap triggers both the leaf key and the container
+    /// key — that is what lets a single `#[watch(<container>)]` fire
+    /// when any one leaf changes. Defaults to `None` so non-component
+    /// scopes and flatten-free components need no override.
+    fn flatten_container_of(&self, key: &str) -> Option<&'static str> {
+        let _ = key;
+        None
+    }
+
     /// True iff `key` is a `#[model]` field. Runtime uses this for
     /// assignment-driven model publication and devtools metadata.
     fn is_model(&self, key: &str) -> bool {
@@ -502,16 +514,28 @@ impl Scope {
                 crate::model_runtime::with_scope_write(scope_id, origin, || {
                     state_for_set.borrow_mut().set(&key_str, value);
                 });
+                // RFC-044 §5.10 — a write to a `flatten` leaf mutates
+                // the whole container field. Resolve the container key
+                // (short borrow, released before the triggers below)
+                // so its cache is invalidated and `#[watch(<container>)]`
+                // fires alongside the per-leaf watch.
+                let flatten_container = state_for_set.borrow().flatten_container_of(&key_str);
                 // RFC 054 phase A — invalidate the field's cached
-                // JsValue. Next reader will re-serialise from Rust
-                // state, picking up the write the `set_closure` just
-                // applied.
+                // JsValue (and the container's, if any). Next reader
+                // will re-serialise from Rust state, picking up the
+                // write the `set_closure` just applied.
                 FIELD_CACHE.with(|c| {
                     if let Some(m) = c.borrow_mut().get_mut(&scope_id) {
                         m.remove(&key_str);
+                        if let Some(container) = flatten_container {
+                            m.remove(container);
+                        }
                     }
                 });
                 trigger(scope_id, &key_str);
+                if let Some(container) = flatten_container {
+                    trigger(scope_id, container);
+                }
                 true
             },
         )
