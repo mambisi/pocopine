@@ -375,8 +375,8 @@
                                pp-bind:center_label="radial_center_label"
                                pp-bind:center_value="radial_center_value"
                                animate="true"
-                               animation_duration="180"
-                               animation_easing="ease-out"></pine-radial-bar-chart>
+                               animation_duration="900"
+                               animation_easing="ease"></pine-radial-bar-chart>
       </pine-chart-responsive>
 
       <pine-chart-legend class="chart-card-legend"
