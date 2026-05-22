@@ -1,0 +1,28 @@
+[package]
+name = "pocopine-deploy-fly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fly.io deploy adapter for pocopine (RFC 080 §6). Talks to api.machines.dev directly; no flyctl required."
+
+[dependencies]
+anyhow = "1"
+pocopine-deploy = { workspace = true }
+semver = { version = "1", features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }
+
+# `reqwest::blocking` is unavailable on wasm32 (and host-only deploy
+# adapters have no reason to be linked into wasm bundles). The crate's
+# trait impl still compiles under wasm — only the HTTP client lives
+# behind this cfg.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
