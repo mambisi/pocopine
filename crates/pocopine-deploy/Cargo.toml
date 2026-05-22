@@ -1,0 +1,19 @@
+[package]
+name = "pocopine-deploy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RFC 080 — deploy contract and built-in adapters for pocopine apps. Host-API-direct; no host CLIs."
+
+[dependencies]
+anyhow = "1"
+semver = { version = "1", features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }
+url = "2.5"
+
+[dev-dependencies]
+tempfile = "3"
