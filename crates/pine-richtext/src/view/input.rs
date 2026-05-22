@@ -22,19 +22,30 @@
 //! position (`delete_selection`, `toggle_mark`, `insert_text`, etc.)
 //! get the up-to-date DOM selection that way.
 
+#[cfg(target_arch = "wasm32")]
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use serde_json::{json, Value};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, Event, InputEvent, KeyboardEvent, StaticRange};
+use web_sys::{ClipboardEvent, Element, Event, InputEvent, KeyboardEvent, StaticRange};
 
 use crate::commands::{self, Command};
 use crate::inputrules::{plugin as inputrules_plugin, run_rules};
+use crate::model::{Node, Slice};
 use crate::runtime::EditorRuntime;
-use crate::state::{EditorState, Transaction};
+use crate::state::{EditorState, Selection, Transaction};
 
 use super::selection::dom_pos_to_model;
+
+const INPUT_DEBUG_LOG_VERSION: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    "@",
+    env!("CARGO_PKG_VERSION"),
+    ":debug-json-v1"
+);
 
 /// Lookup table from key combo (e.g. `"Mod-b"`, `"Enter"`, `"Backspace"`)
 /// to a boxed command. Built by [`default_keymap`] and consulted on
@@ -153,6 +164,48 @@ pub fn key_combo(event: &KeyboardEvent) -> String {
     parts.join("-")
 }
 
+fn simple_text_delete_defer_reason(
+    surface: &Element,
+    event: &KeyboardEvent,
+    combo: &str,
+) -> &'static str {
+    if !matches!(combo, "Backspace" | "Delete") {
+        return "not_delete_key";
+    }
+    if event.meta_key() || event.ctrl_key() || event.alt_key() || event.shift_key() {
+        return "modified_delete_key";
+    }
+
+    let Some(selection) = web_sys::window().and_then(|w| w.get_selection().ok().flatten()) else {
+        return "missing_dom_selection";
+    };
+    if !selection.is_collapsed() {
+        return "selection_not_collapsed";
+    }
+    let Some(anchor_node) = selection.anchor_node() else {
+        return "missing_anchor_node";
+    };
+    if !surface.contains(Some(&anchor_node)) {
+        return "selection_outside_surface";
+    }
+    if anchor_node.node_type() != web_sys::Node::TEXT_NODE {
+        return "anchor_not_text_node";
+    }
+
+    let offset = selection.anchor_offset() as usize;
+    let text_len = anchor_node
+        .node_value()
+        .map(|value| value.encode_utf16().count())
+        .unwrap_or(0);
+    match combo {
+        "Backspace" if offset > 0 => "defer_text_delete_to_beforeinput",
+        "Backspace" => "at_text_start",
+        "Delete" if offset < text_len => "defer_text_delete_to_beforeinput",
+        "Delete" => "at_text_end",
+        _ => "not_delete_key",
+    }
+}
+
 /// Wire `keydown`/`beforeinput`/`selectionchange` listeners on the
 /// `surface` element. `dispatch` is invoked with the state snapshot the
 /// command used plus the transaction it produced; the caller (the
@@ -165,14 +218,16 @@ pub fn key_combo(event: &KeyboardEvent) -> String {
 pub fn install_listeners<F>(
     surface: Element,
     runtime: Arc<EditorRuntime>,
-    state_provider: Rc<dyn Fn() -> Option<EditorState>>,
+    state_provider: Rc<dyn Fn(bool) -> Option<EditorState>>,
     keymap: Rc<KeyMap>,
+    debug_perf: bool,
     dispatch: F,
 ) -> Vec<Closure<dyn FnMut(Event)>>
 where
-    F: Fn(EditorState, Transaction) + 'static,
+    F: Fn(EditorState, Transaction, bool) + 'static,
 {
     let dispatch = Rc::new(dispatch);
+    let runtime_name = runtime.name().map(str::to_string);
 
     let mut closures: Vec<Closure<dyn FnMut(Event)>> = Vec::new();
 
@@ -181,7 +236,10 @@ where
         let state_provider = state_provider.clone();
         let keymap = keymap.clone();
         let dispatch = dispatch.clone();
+        let runtime_for_log = runtime_name.clone();
+        let surface_for_keydown = surface.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
+            let started_at = perf_now_ms();
             let Ok(ev) = event.clone().dyn_into::<KeyboardEvent>() else {
                 return;
             };
@@ -189,12 +247,96 @@ where
             let Some(cmd) = keymap.lookup(&combo) else {
                 return;
             };
-            let Some(state) = state_provider() else {
+            let delete_defer_reason =
+                simple_text_delete_defer_reason(&surface_for_keydown, &ev, &combo);
+            let delete_defer_reason_value = if matches!(combo.as_str(), "Backspace" | "Delete") {
+                json!(delete_defer_reason)
+            } else {
+                Value::Null
+            };
+            if delete_defer_reason == "defer_text_delete_to_beforeinput" {
+                log_input_perf(
+                    debug_perf,
+                    "input.keydown",
+                    json!({
+                        "runtime": runtime_for_log.clone(),
+                        "combo": combo.clone(),
+                        "handled": false,
+                        "reason": "defer_text_delete_to_beforeinput",
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    }),
+                );
+                return;
+            }
+            let state_started_at = perf_now_ms();
+            let Some(state) = state_provider(true) else {
+                log_input_perf(
+                    debug_perf,
+                    "input.keydown",
+                    json!({
+                        "runtime": runtime_for_log,
+                        "combo": combo,
+                        "handled": false,
+                        "reason": "missing_state",
+                        "delete_defer_reason": delete_defer_reason_value,
+                        "state_ms": round_ms(perf_now_ms() - state_started_at),
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    }),
+                );
                 return;
             };
-            let Some(tr) = cmd.apply(&state) else { return };
+            let command_started_at = perf_now_ms();
+            let Some(tr) = cmd.apply(&state) else {
+                log_input_perf(
+                    debug_perf,
+                    "input.keydown",
+                    json!({
+                        "runtime": runtime_for_log,
+                        "combo": combo,
+                        "handled": false,
+                        "reason": "command_none",
+                        "delete_defer_reason": delete_defer_reason_value,
+                        "state_ms": round_ms(command_started_at - state_started_at),
+                        "command_ms": round_ms(perf_now_ms() - command_started_at),
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    }),
+                );
+                return;
+            };
             ev.prevent_default();
-            dispatch(state, tr);
+            log_input_perf(
+                debug_perf,
+                "input.keydown",
+                json!({
+                    "runtime": runtime_for_log.clone(),
+                    "combo": combo.clone(),
+                    "handled": true,
+                    "steps": tr.transform().steps().len(),
+                    "state_ms": round_ms(command_started_at - state_started_at),
+                    "command_ms": round_ms(perf_now_ms() - command_started_at),
+                    "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                }),
+            );
+            dispatch(state, tr, true);
+            log_input_perf(
+                debug_perf,
+                "input.keydown.complete",
+                json!({
+                    "runtime": runtime_for_log.clone(),
+                    "combo": combo.clone(),
+                    "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                }),
+            );
+            schedule_next_frame_perf(
+                debug_perf,
+                "input.next_frame",
+                json!({
+                    "runtime": runtime_for_log.clone(),
+                    "source": "keydown",
+                    "combo": combo,
+                }),
+                started_at,
+            );
         }) as Box<dyn FnMut(Event)>);
         let _ = surface.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
         closures.push(cb);
@@ -217,7 +359,9 @@ where
         let state_provider = state_provider.clone();
         let dispatch = dispatch.clone();
         let runtime_for_input = runtime.clone();
+        let runtime_for_log = runtime_name.clone();
         let cb = Closure::wrap(Box::new(move |event: Event| {
+            let started_at = perf_now_ms();
             let Ok(ev) = event.clone().dyn_into::<InputEvent>() else {
                 return;
             };
@@ -228,9 +372,54 @@ where
                     if data.is_empty() {
                         return;
                     }
-                    let Some(state) = state_provider() else {
+                    let data_chars = data.chars().count();
+                    let range_started_at = perf_now_ms();
+                    let target_range = target_range_only_to_model(&surface_for_input, &ev);
+                    let target_range_found = target_range.is_some();
+                    let mut target_range_applied = false;
+                    let range_ms = perf_now_ms() - range_started_at;
+                    let state_started_at = perf_now_ms();
+                    let Some(mut state) = state_provider(!target_range_found) else {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "missing_state",
+                                "target_range": target_range_found,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
                         return;
                     };
+                    if let Some((from, to)) = target_range {
+                        if let Some(next) = state_with_text_selection(state, from, to) {
+                            state = next;
+                            target_range_applied = true;
+                        } else if let Some(live_state) = state_provider(true) {
+                            state = live_state;
+                        } else {
+                            log_input_perf(
+                                debug_perf,
+                                "input.beforeinput",
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "input_type": input_type.clone(),
+                                    "handled": false,
+                                    "reason": "target_selection_error",
+                                    "target_range": true,
+                                    "range_ms": round_ms(range_ms),
+                                    "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                    "total_ms": round_ms(perf_now_ms() - started_at),
+                                }),
+                            );
+                            return;
+                        }
+                    }
 
                     // Consult input rules FIRST. If any rule matches
                     // the text immediately preceding the cursor plus
@@ -252,17 +441,111 @@ where
                                 );
                             }
                             ev.prevent_default();
-                            dispatch(state, tr);
+                            log_input_perf(
+                                debug_perf,
+                                "input.beforeinput",
+                                json!({
+                                    "runtime": runtime_for_log,
+                                    "input_type": input_type,
+                                    "handled": true,
+                                    "rule": true,
+                                    "data_chars": data_chars,
+                                    "target_range": target_range_found,
+                                    "target_range_applied": target_range_applied,
+                                    "range_ms": round_ms(range_ms),
+                                    "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                    "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                                }),
+                            );
+                            let input_type_for_log = input_type.clone();
+                            dispatch(state, tr, false);
+                            log_input_perf(
+                                debug_perf,
+                                "input.beforeinput.complete",
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "input_type": input_type_for_log.clone(),
+                                    "rule": true,
+                                    "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                                }),
+                            );
+                            schedule_next_frame_perf(
+                                debug_perf,
+                                "input.next_frame",
+                                json!({
+                                    "runtime": runtime_for_log.clone(),
+                                    "source": "beforeinput",
+                                    "input_type": input_type_for_log,
+                                    "rule": true,
+                                }),
+                                started_at,
+                            );
                             return;
                         }
                     }
 
-                    let mut tr = state.tr();
-                    if tr.insert_text(data).is_err() {
-                        return;
-                    }
                     ev.prevent_default();
-                    dispatch(state, tr);
+                    let transaction_started_at = perf_now_ms();
+                    if let Some(tr) = insert_text_transaction(&state, data) {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": true,
+                                "rule": false,
+                                "data_chars": data_chars,
+                                "target_range": target_range_found,
+                                "target_range_applied": target_range_applied,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(transaction_started_at - state_started_at),
+                                "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
+                                "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                        let input_type_for_log = input_type.clone();
+                        dispatch(state, tr, false);
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput.complete",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type_for_log.clone(),
+                                "rule": false,
+                                "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                        schedule_next_frame_perf(
+                            debug_perf,
+                            "input.next_frame",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "source": "beforeinput",
+                                "input_type": input_type_for_log,
+                                "rule": false,
+                            }),
+                            started_at,
+                        );
+                    } else {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "transaction_none",
+                                "data_chars": data_chars,
+                                "target_range": target_range_found,
+                                "target_range_applied": target_range_applied,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(transaction_started_at - state_started_at),
+                                "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
+                    }
                 }
                 "deleteContentBackward"
                 | "deleteContentForward"
@@ -275,29 +558,225 @@ where
                 | "deleteContent"
                 | "deleteByCut"
                 | "deleteByDrag" => {
-                    let Some(state) = state_provider() else {
+                    let range_started_at = perf_now_ms();
+                    let target_range = target_range_only_to_model(&surface_for_input, &ev);
+                    let target_range_found = target_range.is_some();
+                    let target_range_ms = perf_now_ms() - range_started_at;
+                    let state_started_at = perf_now_ms();
+                    let Some(state) = state_provider(!target_range_found) else {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "missing_state",
+                                "target_range": target_range_found,
+                                "range_ms": round_ms(target_range_ms),
+                                "state_ms": round_ms(perf_now_ms() - state_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
                         return;
                     };
-                    let Some((from, to)) =
-                        target_range_to_model(&surface_for_input, &ev, &state, &input_type)
-                    else {
+                    let fallback_range_started_at = perf_now_ms();
+                    let range = target_range.or_else(|| delete_fallback_range(&state, &input_type));
+                    let range_ms = target_range_ms + (perf_now_ms() - fallback_range_started_at);
+                    let Some((from, to)) = range else {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "missing_range",
+                                "target_range": target_range_found,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(fallback_range_started_at - state_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
                         return;
                     };
                     if from == to {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "empty_range",
+                                "target_range": target_range_found,
+                                "range_ms": round_ms(range_ms),
+                                "state_ms": round_ms(fallback_range_started_at - state_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
                         return;
                     }
+                    let transaction_started_at = perf_now_ms();
                     let mut tr = state.tr();
                     if tr.delete(from, to).is_err() {
+                        log_input_perf(
+                            debug_perf,
+                            "input.beforeinput",
+                            json!({
+                                "runtime": runtime_for_log.clone(),
+                                "input_type": input_type.clone(),
+                                "handled": false,
+                                "reason": "transaction_error",
+                                "from": from,
+                                "to": to,
+                                "target_range": target_range_found,
+                                "state_ms": round_ms(fallback_range_started_at - state_started_at),
+                                "range_ms": round_ms(range_ms),
+                                "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
+                                "total_ms": round_ms(perf_now_ms() - started_at),
+                            }),
+                        );
                         return;
                     }
                     ev.prevent_default();
-                    dispatch(state, tr);
+                    log_input_perf(
+                        debug_perf,
+                        "input.beforeinput",
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "input_type": input_type.clone(),
+                            "handled": true,
+                            "from": from,
+                            "to": to,
+                            "deleted_units": to.saturating_sub(from),
+                            "target_range": target_range_found,
+                            "state_ms": round_ms(fallback_range_started_at - state_started_at),
+                            "range_ms": round_ms(range_ms),
+                            "transaction_ms": round_ms(perf_now_ms() - transaction_started_at),
+                            "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                        }),
+                    );
+                    let input_type_for_log = input_type.clone();
+                    dispatch(state, tr, false);
+                    log_input_perf(
+                        debug_perf,
+                        "input.beforeinput.complete",
+                        json!({
+                            "runtime": runtime_for_log,
+                            "input_type": input_type_for_log.clone(),
+                            "total_after_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                        }),
+                    );
+                    schedule_next_frame_perf(
+                        debug_perf,
+                        "input.next_frame",
+                        json!({
+                            "runtime": runtime_for_log.clone(),
+                            "source": "beforeinput",
+                            "input_type": input_type_for_log,
+                        }),
+                        started_at,
+                    );
                 }
                 _ => {}
             }
         }) as Box<dyn FnMut(Event)>);
         let _ =
             surface.add_event_listener_with_callback("beforeinput", cb.as_ref().unchecked_ref());
+        closures.push(cb);
+    }
+
+    // preventDefault is critical: the browser's default paste mutates
+    // the contentEditable DOM directly, leaving the model stale and
+    // silently losing pasted content on the next save.
+    {
+        let state_provider = state_provider.clone();
+        let dispatch = dispatch.clone();
+        let runtime_for_paste = runtime.clone();
+        let runtime_for_log = runtime_name.clone();
+        let cb = Closure::wrap(Box::new(move |event: Event| {
+            let started_at = perf_now_ms();
+            let Ok(ev) = event.clone().dyn_into::<ClipboardEvent>() else {
+                return;
+            };
+            let Some(clipboard) = ev.clipboard_data() else {
+                return;
+            };
+            let text = clipboard.get_data("text/plain").unwrap_or_default();
+            if text.is_empty() {
+                return;
+            }
+            ev.prevent_default();
+            let Some(state) = state_provider(true) else {
+                log_input_perf(
+                    debug_perf,
+                    "input.paste",
+                    json!({
+                        "runtime": runtime_for_log.clone(),
+                        "handled": false,
+                        "reason": "missing_state",
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    }),
+                );
+                return;
+            };
+            let parse_started_at = perf_now_ms();
+            let parser = runtime_for_paste.markdown_parser();
+            let parsed = parser.parse(&text, state.schema());
+            let parse_ms = perf_now_ms() - parse_started_at;
+            let (tr_opt, mode) = match parsed {
+                Ok(doc) => match paste_transaction_from_doc(&state, &doc) {
+                    Some(tr) => (Some(tr), "markdown"),
+                    None => (
+                        insert_text_transaction(&state, text.clone()),
+                        "plain_fallback",
+                    ),
+                },
+                Err(_) => (
+                    insert_text_transaction(&state, text.clone()),
+                    "plain_fallback",
+                ),
+            };
+            let Some(tr) = tr_opt else {
+                log_input_perf(
+                    debug_perf,
+                    "input.paste",
+                    json!({
+                        "runtime": runtime_for_log.clone(),
+                        "handled": false,
+                        "reason": "no_transaction",
+                        "mode": mode,
+                        "parse_ms": round_ms(parse_ms),
+                        "total_ms": round_ms(perf_now_ms() - started_at),
+                    }),
+                );
+                return;
+            };
+            log_input_perf(
+                debug_perf,
+                "input.paste",
+                json!({
+                    "runtime": runtime_for_log.clone(),
+                    "handled": true,
+                    "mode": mode,
+                    "chars": text.chars().count(),
+                    "parse_ms": round_ms(parse_ms),
+                    "total_before_dispatch_ms": round_ms(perf_now_ms() - started_at),
+                }),
+            );
+            dispatch(state, tr, false);
+            schedule_next_frame_perf(
+                debug_perf,
+                "input.next_frame",
+                json!({
+                    "runtime": runtime_for_log,
+                    "source": "paste",
+                }),
+                started_at,
+            );
+        }) as Box<dyn FnMut(Event)>);
+        let _ = surface.add_event_listener_with_callback("paste", cb.as_ref().unchecked_ref());
         closures.push(cb);
     }
 
@@ -309,21 +788,90 @@ where
     closures
 }
 
-/// Translate the first range in `InputEvent.getTargetRanges()` into a
-/// `(from, to)` model position pair. Browsers populate that array on
-/// every `delete*` input type so userland editors don't have to redo
-/// caret/word boundary logic.
+/// Build a paste transaction from a markdown-parsed document.
 ///
-/// Falls back to a 1-char delete around the current model selection
-/// when `getTargetRanges()` is empty or doesn't map cleanly — that
-/// covers older browsers and the rare case where a deletion's anchor
-/// node lives outside the surface.
-fn target_range_to_model(
-    surface: &Element,
-    event: &InputEvent,
+/// Per-edge open-depth heuristic, mirroring ProseMirror's default
+/// paste behaviour:
+/// - If the leading block is a paragraph, open the slice at start
+///   (depth 1) so its inline content merges into the destination
+///   paragraph at the cursor.
+/// - If the trailing block is a paragraph, open the slice at end
+///   so its inline content joins the destination's trailing
+///   content.
+/// - Headings, lists, blockquotes and other structural blocks stay
+///   closed at the boundary and insert as-is.
+///
+/// Pasting "**foo**" (single paragraph) thus merges inline; pasting
+/// `## title\n\n- item` keeps the heading and bullet_list as blocks
+/// (splitting the cursor's paragraph instead of dissolving them
+/// into inline text).
+fn paste_transaction_from_doc(state: &EditorState, doc: &Node) -> Option<Transaction> {
+    let content = doc.content().clone();
+    if content.is_empty() {
+        return None;
+    }
+    let first_is_para = content
+        .child(0)
+        .map(|n| n.type_name() == "paragraph")
+        .unwrap_or(false);
+    let last_is_para = content
+        .child(content.len().saturating_sub(1))
+        .map(|n| n.type_name() == "paragraph")
+        .unwrap_or(false);
+    let open_start = usize::from(first_is_para);
+    let open_end = usize::from(last_is_para);
+
+    // Try the per-edge open heuristic first. Falls back to a closed
+    // (0, 0) slice if the fitter can't accept asymmetric opens —
+    // pine's `fit_block_slice_inside_textblock` only handles fully
+    // closed slices today, so e.g. [heading, paragraph] with
+    // open_end=1 needs the closed-slice retry to land at all.
+    try_replace_selection(state, &content, open_start, open_end)
+        .or_else(|| try_replace_selection(state, &content, 0, 0))
+}
+
+fn try_replace_selection(
     state: &EditorState,
-    input_type: &str,
-) -> Option<(usize, usize)> {
+    content: &crate::model::Fragment,
+    open_start: usize,
+    open_end: usize,
+) -> Option<Transaction> {
+    let mut tr = state.tr();
+    tr.replace_selection(Slice::new(content.clone(), open_start, open_end))
+        .ok()?;
+    Some(tr)
+}
+
+fn insert_text_transaction(state: &EditorState, text: String) -> Option<Transaction> {
+    let mut tr = state.tr();
+    if tr.insert_text(text.clone()).is_ok() {
+        return Some(tr);
+    }
+
+    let pos = state.selection().from(state.doc());
+    let near = Selection::near(state.doc(), state.schema(), pos, 1).ok()?;
+    let mut tr = state.tr();
+    tr.set_selection(near).ok()?;
+    tr.insert_text(text).ok()?;
+    Some(tr)
+}
+
+fn state_with_text_selection(state: EditorState, from: usize, to: usize) -> Option<EditorState> {
+    let selection = Selection::text_between_near(state.doc(), state.schema(), from, to, None)
+        .unwrap_or(Selection::Text {
+            anchor: from,
+            head: to,
+        });
+    let mut tr = state.tr();
+    tr.set_selection(selection).ok()?;
+    state.apply(tr).ok()
+}
+
+/// Translate the first range in `InputEvent.getTargetRanges()` into a
+/// `(from, to)` model position pair. Browsers populate that array for
+/// modern `beforeinput` edits, which lets us avoid a separate
+/// `window.getSelection()` scan on the hot typing/deletion path.
+fn target_range_only_to_model(surface: &Element, event: &InputEvent) -> Option<(usize, usize)> {
     let ranges = event.get_target_ranges();
     if ranges.length() > 0 {
         if let Ok(range) = ranges.get(0).dyn_into::<StaticRange>() {
@@ -335,6 +883,13 @@ fn target_range_to_model(
             }
         }
     }
+    None
+}
+
+/// Fallback for browsers or edit shapes that do not provide a usable
+/// target range. This path relies on the model selection, so callers
+/// should request live selection when they expect to use it.
+fn delete_fallback_range(state: &EditorState, input_type: &str) -> Option<(usize, usize)> {
     // Fallback: derive a sensible single-step range from the model
     // selection. Used when the browser didn't supply target ranges
     // (older WebKit on `deleteWordBackward`, e.g.) or when the range
@@ -384,4 +939,200 @@ pub fn read_dom_selection(surface: &Element) -> Option<crate::state::Selection> 
     let anchor = dom_pos_to_model(surface, &anchor_node, sel.anchor_offset())?;
     let head = dom_pos_to_model(surface, &focus_node, sel.focus_offset())?;
     Some(crate::state::Selection::text_between(anchor, head))
+}
+
+fn log_input_perf(enabled: bool, event: &str, payload: Value) {
+    if !enabled {
+        return;
+    }
+    let value = json!({
+        "debug_version": INPUT_DEBUG_LOG_VERSION,
+        "event": event,
+        "payload": payload,
+    });
+    let Ok(message) = serde_json::to_string(&value) else {
+        return;
+    };
+    log_to_console_with_label("pine-richtext:perf", &message);
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static NEXT_FRAME_PERF_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(target_arch = "wasm32")]
+fn schedule_next_frame_perf(
+    enabled: bool,
+    event: &'static str,
+    mut payload: Value,
+    started_at: f64,
+) {
+    if !enabled {
+        return;
+    }
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let already_pending = NEXT_FRAME_PERF_PENDING.with(|pending| {
+        if pending.get() {
+            true
+        } else {
+            pending.set(true);
+            false
+        }
+    });
+    if already_pending {
+        return;
+    }
+    let callback = Closure::once_into_js(move || {
+        NEXT_FRAME_PERF_PENDING.with(|pending| pending.set(false));
+        if let Value::Object(ref mut map) = payload {
+            map.insert(
+                "next_frame_ms".to_string(),
+                json!(round_ms(perf_now_ms() - started_at)),
+            );
+        }
+        log_input_perf(true, event, payload);
+    });
+    let _ = window.request_animation_frame(callback.as_ref().unchecked_ref());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule_next_frame_perf(enabled: bool, event: &'static str, payload: Value, started_at: f64) {
+    let _ = enabled;
+    let _ = event;
+    let _ = payload;
+    let _ = started_at;
+}
+
+fn round_ms(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn perf_now_ms() -> f64 {
+    // `performance.now()` gives sub-millisecond resolution (microseconds
+    // in Chrome). `Date.now()` only resolves to whole milliseconds, which
+    // hides sub-ms hot paths in the dispatch fan-out. Fallback to
+    // `Date.now()` if `window.performance` is unavailable (no DOM —
+    // happens in some test embeddings).
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or_else(js_sys::Date::now)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn perf_now_ms() -> f64 {
+    0.0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn log_to_console_with_label(label: &str, message: &str) {
+    web_sys::console::log_2(&label.into(), &message.into());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn log_to_console_with_label(label: &str, message: &str) {
+    let _ = label;
+    let _ = message;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_text_transaction, paste_transaction_from_doc};
+    use crate::markdown::MarkdownParser;
+    use crate::schema_basic;
+    use crate::state::{EditorState, EditorStateConfig, Selection};
+
+    fn state_with_paragraph(text: &str, cursor: usize) -> EditorState {
+        let schema = schema_basic::schema();
+        let doc = schema_basic::doc(vec![schema_basic::paragraph(vec![schema_basic::text(
+            text,
+            Vec::new(),
+        )
+        .unwrap()])
+        .unwrap()])
+        .unwrap();
+        EditorState::create(EditorStateConfig::new(schema, doc).selection(Selection::text(cursor)))
+            .unwrap()
+    }
+
+    #[test]
+    fn insert_text_recovers_from_doc_boundary_selection() {
+        let state = state_with_paragraph("hello", 0);
+
+        let tr = insert_text_transaction(&state, "G".to_string())
+            .expect("typing at a doc boundary should move into the first textblock");
+        let next = state.apply(tr).unwrap();
+
+        assert_eq!(next.doc().text_content(), "Ghello");
+        assert_eq!(next.selection(), &Selection::text(2));
+    }
+
+    #[test]
+    fn paste_inline_markdown_merges_into_current_paragraph() {
+        // Cursor between "hel|lo" — pasting "**bold**" should drop a
+        // strong-marked "bold" run into the same paragraph.
+        let state = state_with_paragraph("hello", 4);
+        let parser = MarkdownParser::new();
+        let parsed = parser
+            .parse("**bold**", state.schema())
+            .expect("markdown parses");
+        let tr = paste_transaction_from_doc(&state, &parsed).expect("paste transaction builds");
+        let next = state.apply(tr).unwrap();
+        assert_eq!(
+            next.doc().text_content(),
+            "helboldlo",
+            "pasted inline content merges into the current paragraph"
+        );
+        assert_eq!(next.doc().child_count(), 1, "still one block");
+    }
+
+    #[test]
+    fn paste_multi_block_markdown_splits_and_inserts_blocks() {
+        // Cursor between "hel|lo" — pasting two paragraphs should split
+        // the current paragraph and drop the new block in between.
+        let state = state_with_paragraph("hello", 4);
+        let parser = MarkdownParser::new();
+        let parsed = parser
+            .parse("alpha\n\nbeta", state.schema())
+            .expect("markdown parses");
+        let tr = paste_transaction_from_doc(&state, &parsed).expect("paste transaction builds");
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.doc().child_count(), 2);
+        assert_eq!(next.doc().child(0).unwrap().text_content(), "helalpha");
+        assert_eq!(next.doc().child(1).unwrap().text_content(), "betalo");
+    }
+
+    #[test]
+    fn paste_preserves_heading_when_first_block_is_heading() {
+        // Multi-block markdown starting with a heading: heading stays
+        // a heading block (per-edge open heuristic: open_start=0 when
+        // the first block is structural), the cursor's paragraph
+        // splits, and the trailing paragraph content of the pasted
+        // doc merges into the cursor's tail.
+        let state = state_with_paragraph("hello", 5);
+        let parser = MarkdownParser::new();
+        let parsed = parser
+            .parse("# Title\n\nbody", state.schema())
+            .expect("markdown parses");
+        let tr = paste_transaction_from_doc(&state, &parsed).expect("paste transaction builds");
+        let next = state.apply(tr).unwrap();
+        let text = next.doc().text_content();
+        assert!(text.contains("Title"), "heading text present: {text:?}");
+        assert!(text.contains("body"), "body text present: {text:?}");
+        let mut saw_heading = false;
+        for i in 0..next.doc().child_count() {
+            if next.doc().child(i).unwrap().type_name() == "heading" {
+                saw_heading = true;
+                break;
+            }
+        }
+        assert!(
+            saw_heading,
+            "pasted heading should survive as a heading block"
+        );
+    }
 }

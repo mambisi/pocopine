@@ -11,9 +11,11 @@
 //! [`base_keymap`]. Most commands are produced by free functions returning
 //! a boxed trait object so they can be stored in a `HashMap<&str, _>`.
 
-use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, ResolvedPos};
+use crate::model::{Attrs, Fragment, Mark, Node, NodeRange, ResolvedPos, Schema};
 use crate::state::{EditorState, Selection, Transaction};
-use crate::transform::{can_join, find_wrapping, join_point, lift_target, AttrStep, Step};
+use crate::transform::{
+    can_join, can_split_into, find_wrapping, join_point, lift_target, AttrStep, Step, TypeAfter,
+};
 
 /// A reusable editor command. Implementors decide whether the command
 /// applies at the given state and, if so, return the transaction that
@@ -388,13 +390,46 @@ pub fn split_block() -> BoxedCommand {
             tr.delete(from, to).ok()?;
         }
         let pos = tr.selection().map(|s| s.from(tr.doc())).unwrap_or(from);
-        if !crate::transform::can_split(tr.doc(), pos, 1, state.schema()) {
-            return None;
+        if let Some(paragraph_after) = default_textblock_after(tr.doc(), pos, state.schema()) {
+            let types_after = [Some(paragraph_after)];
+            if !can_split_into(tr.doc(), pos, 1, &types_after, state.schema()) {
+                return None;
+            }
+            tr.split_into(pos, 1, &types_after).ok()?;
+        } else if crate::transform::can_split(tr.doc(), pos, 1, state.schema()) {
+            tr.split(pos, 1).ok()?;
+        } else {
+            let paragraph_after = [Some(TypeAfter::new("paragraph"))];
+            if !can_split_into(tr.doc(), pos, 1, &paragraph_after, state.schema()) {
+                return None;
+            }
+            tr.split_into(pos, 1, &paragraph_after).ok()?;
         }
-        tr.split(pos, 1).ok()?;
         set_selection_near(&mut tr, state, pos + 2).ok()?;
         Some(tr)
     })
+}
+
+fn default_textblock_after(doc: &Node, pos: usize, schema: &Schema) -> Option<TypeAfter> {
+    let resolved = doc.resolve(pos).ok()?;
+    if resolved.depth() == 0 {
+        return None;
+    }
+
+    let parent = resolved.parent();
+    let parent_type = schema.node_type(parent.type_name()).ok()?;
+    if !parent_type.inline_content(schema) || resolved.parent_offset() != parent.content_size() {
+        return None;
+    }
+
+    let grand_depth = resolved.depth().checked_sub(1)?;
+    let grand = resolved.node(grand_depth)?;
+    let index_after = resolved.index_after(grand_depth)?;
+    let default = grand
+        .content_match_at(index_after, schema)
+        .ok()?
+        .default_textblock_type()?;
+    Some(TypeAfter::new(default.name()))
 }
 
 /// Split the enclosing list-item-like node so Enter creates a new
@@ -907,8 +942,30 @@ impl Command for ChainedCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::RichTextExtension;
+    use crate::model::{Attrs, Fragment, MarkPolicy, NodeSpec};
     use crate::schema_basic;
     use crate::state::{EditorState, EditorStateConfig};
+
+    struct TitleSchemaExtension;
+
+    impl RichTextExtension for TitleSchemaExtension {
+        fn name(&self) -> &str {
+            "core_nodes"
+        }
+
+        fn nodes(&self) -> Vec<NodeSpec> {
+            vec![
+                NodeSpec::new("doc").content("title block*"),
+                NodeSpec::new("title")
+                    .group("title")
+                    .content("inline*")
+                    .marks(MarkPolicy::None)
+                    .defining(),
+                NodeSpec::new("paragraph").group("block").content("inline*"),
+            ]
+        }
+    }
 
     /// End of "one" inside `<ul><li><p>one</p></li></ul>` → cursor is at
     /// model position 4 (doc 0 → ul opens, 1 → li opens, 2 → p opens,
@@ -1360,5 +1417,44 @@ mod tests {
             Some(false),
             "new task_item should default to unchecked"
         );
+    }
+
+    #[test]
+    fn split_block_turns_custom_required_title_into_paragraph() {
+        let runtime = crate::runtime::RuntimeBuilder::new()
+            .with(TitleSchemaExtension)
+            .build();
+        let schema = runtime.schema();
+        let title = schema
+            .node(
+                "title",
+                Attrs::new(),
+                Fragment::from(schema.text("Draft", Vec::new()).unwrap()),
+            )
+            .unwrap();
+        let doc = schema
+            .node("doc", Attrs::new(), Fragment::from(title))
+            .unwrap();
+        let state = EditorState::create(
+            EditorStateConfig::new(schema.clone(), doc).selection(Selection::text(6)),
+        )
+        .unwrap();
+
+        let tr = split_block()
+            .apply(&state)
+            .expect("title should split into a body paragraph");
+        let next = state.apply(tr).unwrap();
+
+        assert_eq!(next.doc().child_count(), 2);
+        assert_eq!(next.doc().content().child(0).unwrap().type_name(), "title");
+        assert_eq!(
+            next.doc().content().child(0).unwrap().text_content(),
+            "Draft"
+        );
+        assert_eq!(
+            next.doc().content().child(1).unwrap().type_name(),
+            "paragraph"
+        );
+        assert_eq!(next.selection(), &Selection::text(8));
     }
 }

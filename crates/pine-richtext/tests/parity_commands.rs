@@ -285,6 +285,37 @@ fn commands_split_block_splits_at_cursor() {
 }
 
 #[test]
+fn commands_split_block_at_heading_end_creates_default_paragraph() {
+    let tagged = tagged_doc(vec![tagged_heading_text(1, "Head<a>").into()]);
+    let pos = tagged.tag("a");
+    let state = state_with_doc(tagged.node);
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(pos)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*split_block(), state);
+    assert_eq!(
+        state.doc(),
+        &doc(vec![heading(1, "Head"), empty_paragraph()])
+    );
+    assert_eq!(state.selection(), &Selection::text(7));
+}
+
+#[test]
+fn commands_split_block_inside_heading_keeps_heading_type() {
+    let tagged = tagged_doc(vec![tagged_heading_text(1, "He<a>ad").into()]);
+    let pos = tagged.tag("a");
+    let state = state_with_doc(tagged.node);
+    let mut tr = state.tr();
+    tr.set_selection(Selection::text(pos)).unwrap();
+    let state = state.apply(tr).unwrap();
+
+    let state = run(&*split_block(), state);
+    assert_eq!(state.doc(), &doc(vec![heading(1, "He"), heading(1, "ad")]));
+    assert_eq!(state.selection(), &Selection::text(5));
+}
+
+#[test]
 fn commands_split_block_deletes_then_splits_a_range() {
     let tagged = tagged_doc(vec![tagged_paragraph_text("fo<a>oba<b>r").into()]);
     let from = tagged.tag("a");

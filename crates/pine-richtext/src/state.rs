@@ -646,6 +646,20 @@ impl Transaction {
         Ok(self)
     }
 
+    /// Split the node at `pos` while overriding right-side node types.
+    pub fn split_into(
+        &mut self,
+        pos: usize,
+        depth: usize,
+        types_after: &[Option<crate::transform::TypeAfter>],
+    ) -> RichTextResult<&mut Self> {
+        let map_start = self.transform.maps().len();
+        self.stored_marks = None;
+        self.transform.split_into(pos, depth, types_after)?;
+        self.map_selection_from(map_start)?;
+        Ok(self)
+    }
+
     /// Wrap `[from..to]` in a node of the given type.
     pub fn wrap(
         &mut self,
@@ -843,7 +857,13 @@ pub struct EditorState {
     selection: Selection,
     stored_marks: Option<Vec<Mark>>,
     plugins: Vec<Plugin>,
-    plugin_state: BTreeMap<String, Value>,
+    /// Plugin state Values are wrapped in `Arc` so `EditorState::clone`
+    /// is O(plugins) instead of O(sum-of-plugin-state-sizes). The
+    /// `history` plugin in particular grows its Value monotonically
+    /// as the user types, and the dispatch / state_provider closures
+    /// both clone the state on every keystroke — without `Arc` here,
+    /// each clone walked the whole history tree.
+    plugin_state: BTreeMap<String, Arc<Value>>,
 }
 
 impl fmt::Debug for EditorState {
@@ -861,7 +881,9 @@ impl EditorState {
     /// Create editor state.
     pub fn create(config: EditorStateConfig) -> RichTextResult<Self> {
         config.schema.check_node(&config.doc)?;
-        let selection = config.selection.unwrap_or_else(|| Selection::text(0));
+        let selection = config
+            .selection
+            .unwrap_or_else(|| Selection::at_start(&config.doc, &config.schema));
         selection.validate(&config.doc)?;
 
         let mut state = Self {
@@ -876,7 +898,9 @@ impl EditorState {
         for plugin in &state.plugins {
             if let Some(field) = &plugin.state_field {
                 let value = field.init(&state)?;
-                state.plugin_state.insert(plugin.key.clone(), value);
+                state
+                    .plugin_state
+                    .insert(plugin.key.clone(), Arc::new(value));
             }
         }
 
@@ -913,7 +937,32 @@ impl EditorState {
 
     /// Plugin state value by key.
     pub fn plugin_state(&self, key: &str) -> Option<&Value> {
-        self.plugin_state.get(key)
+        self.plugin_state.get(key).map(|v| &**v)
+    }
+
+    /// Return a new state with `selection` substituted for the current
+    /// one. Skips the plugin state field loop and transaction
+    /// filter/append hooks — appropriate for callers that want to
+    /// inject the live DOM cursor before running a command, where no
+    /// transform step is involved. Validates the selection against
+    /// the doc.
+    ///
+    /// This is cheaper than `state.tr() + tr.set_selection + state.apply`
+    /// for two reasons: it avoids the upfront `BTreeMap::clone` of
+    /// plugin_state inside `apply_without_append`, and it skips the
+    /// plugin loop entirely (every plugin's `apply_in_place` is a
+    /// no-op for an empty-step transaction, but the loop still runs
+    /// and the prior remove-then-reinsert dance still touches every
+    /// entry).
+    pub fn with_selection(&self, selection: Selection) -> RichTextResult<Self> {
+        selection.validate(&self.doc)?;
+        let stores_marks = matches!(&selection, Selection::Text { anchor, head } if anchor == head);
+        let mut next = self.clone();
+        next.selection = selection;
+        if !stores_marks {
+            next.stored_marks = None;
+        }
+        Ok(next)
     }
 
     /// Apply a transaction, including append-transaction hooks.
@@ -936,9 +985,9 @@ impl EditorState {
         let mut next_plugin_state = BTreeMap::new();
         for plugin in &state.plugins {
             if let Some(existing) = self.plugin_state.get(&plugin.key) {
-                next_plugin_state.insert(plugin.key.clone(), existing.clone());
+                next_plugin_state.insert(plugin.key.clone(), Arc::clone(existing));
             } else if let Some(field) = &plugin.state_field {
-                next_plugin_state.insert(plugin.key.clone(), field.init(&state)?);
+                next_plugin_state.insert(plugin.key.clone(), Arc::new(field.init(&state)?));
             }
         }
         state.plugin_state = next_plugin_state;
@@ -947,11 +996,16 @@ impl EditorState {
 
     /// Serialize state in the Rust-native format.
     pub fn to_json(&self) -> RichTextResult<Value> {
+        // `Arc<Value>` doesn't implement `Serialize` without serde's
+        // `rc` feature; build a borrowed view that serde can walk
+        // directly. Cheap — references only.
+        let plugin_state: BTreeMap<&String, &Value> =
+            self.plugin_state.iter().map(|(k, v)| (k, &**v)).collect();
         Ok(json!({
             "doc": self.doc,
             "selection": self.selection,
             "stored_marks": self.stored_marks,
-            "plugin_state": self.plugin_state,
+            "plugin_state": plugin_state,
         }))
     }
 
@@ -976,7 +1030,7 @@ impl EditorState {
         })?;
         for (key, value) in decoded.plugin_state {
             if state.plugins.iter().any(|plugin| plugin.key == key) {
-                state.plugin_state.insert(key, value);
+                state.plugin_state.insert(key, Arc::new(value));
             }
         }
         Ok(state)
@@ -1056,16 +1110,38 @@ impl EditorState {
             plugin_state: self.plugin_state.clone(),
         };
 
-        for plugin in &self.plugins {
-            if let Some(field) = &plugin.state_field {
-                let old = self
-                    .plugin_state
-                    .get(&plugin.key)
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let value = field.apply(transaction, &old, self, &next)?;
-                next.plugin_state.insert(plugin.key.clone(), value);
-            }
+        // Plugin state fields run via `apply_in_place` so plugins that
+        // override it (e.g. `history_plugin`) can mutate their Value in
+        // place — pushing one event to a Vec — instead of paying
+        // serde_json::from_value + to_value over the entire (growing)
+        // plugin state every commit. Plugins that don't override
+        // `apply_in_place` keep the original semantics through the
+        // default impl.
+        //
+        // The plugin_state values are `Arc<Value>`, so `make_mut`
+        // clones the underlying Value only when it's shared with
+        // another state — the common case during `state.apply` (the
+        // new state shares Arc with the old). Plugins that early-
+        // return inside `apply_in_place` without writing avoid the
+        // clone entirely.
+        let plugin_keys: Vec<(String, Arc<dyn StateField>)> = self
+            .plugins
+            .iter()
+            .filter_map(|p| p.state_field.as_ref().map(|f| (p.key.clone(), f.clone())))
+            .collect();
+        for (key, field) in plugin_keys {
+            let mut value = next
+                .plugin_state
+                .remove(&key)
+                .unwrap_or_else(|| Arc::new(Value::Null));
+            // `make_mut` clones the underlying Value if multiple Arcs
+            // share it; otherwise returns the existing storage in
+            // place. The clone cost is paid per-mutating-plugin, not
+            // per-state-apply, which matters when a plugin's value
+            // grows monotonically (history).
+            let value_ref = Arc::make_mut(&mut value);
+            field.apply_in_place(transaction, value_ref, self, &next)?;
+            next.plugin_state.insert(key, value);
         }
 
         Ok(next)
@@ -1085,6 +1161,30 @@ pub trait StateField: Send + Sync {
         old_state: &EditorState,
         new_state: &EditorState,
     ) -> RichTextResult<Value>;
+
+    /// Apply a transaction to plugin state, mutating the current
+    /// value in place. Override this to skip the
+    /// `clone → from_value → mutate → to_value` round-trip when a
+    /// plugin can update its representation cheaply
+    /// — `history_plugin` is the canonical example: pushing a single
+    /// event to `done.as_array_mut()` is O(1), whereas the
+    /// fallback `apply` deserializes and re-serializes the full
+    /// (and growing) history on every commit.
+    ///
+    /// The default implementation routes through `apply` for
+    /// backwards compatibility with plugins written before this
+    /// method existed.
+    fn apply_in_place(
+        &self,
+        transaction: &Transaction,
+        value: &mut Value,
+        old_state: &EditorState,
+        new_state: &EditorState,
+    ) -> RichTextResult<()> {
+        let new = self.apply(transaction, value, old_state, new_state)?;
+        *value = new;
+        Ok(())
+    }
 }
 
 impl<F, G> StateField for StateFieldFns<F, G>
@@ -1111,6 +1211,49 @@ where
 pub struct StateFieldFns<F, G> {
     init: F,
     apply: G,
+}
+
+/// Closure-backed state field whose apply hook mutates the existing
+/// value in place. The default `apply` method clones first, so plugins
+/// that build this from already-allocated Value subtrees still get the
+/// allocation savings — only the original `Value::clone` survives, not
+/// a full `serde_json::from_value` + `to_value` round-trip over the
+/// whole field state.
+pub struct InPlaceStateFieldFns<I, A> {
+    init: I,
+    apply_in_place: A,
+}
+
+impl<I, A> StateField for InPlaceStateFieldFns<I, A>
+where
+    I: Fn(&EditorState) -> RichTextResult<Value> + Send + Sync,
+    A: Fn(&Transaction, &mut Value, &EditorState, &EditorState) -> RichTextResult<()> + Send + Sync,
+{
+    fn init(&self, state: &EditorState) -> RichTextResult<Value> {
+        (self.init)(state)
+    }
+
+    fn apply(
+        &self,
+        transaction: &Transaction,
+        value: &Value,
+        old_state: &EditorState,
+        new_state: &EditorState,
+    ) -> RichTextResult<Value> {
+        let mut owned = value.clone();
+        (self.apply_in_place)(transaction, &mut owned, old_state, new_state)?;
+        Ok(owned)
+    }
+
+    fn apply_in_place(
+        &self,
+        transaction: &Transaction,
+        value: &mut Value,
+        old_state: &EditorState,
+        new_state: &EditorState,
+    ) -> RichTextResult<()> {
+        (self.apply_in_place)(transaction, value, old_state, new_state)
+    }
 }
 
 type FilterHook =
@@ -1186,6 +1329,26 @@ impl PluginBuilder {
         self
     }
 
+    /// Add an in-place state field. The apply closure takes a mutable
+    /// reference to the existing Value and updates it directly, which
+    /// is the cheap path for plugins whose state is a growing
+    /// collection (history is the canonical example: pushing one event
+    /// to `done` is O(1), full round-trip is O(N)).
+    pub fn state_field_in_place<I, A>(mut self, init: I, apply: A) -> Self
+    where
+        I: Fn(&EditorState) -> RichTextResult<Value> + Send + Sync + 'static,
+        A: Fn(&Transaction, &mut Value, &EditorState, &EditorState) -> RichTextResult<()>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.state_field = Some(Arc::new(InPlaceStateFieldFns {
+            init,
+            apply_in_place: apply,
+        }));
+        self
+    }
+
     /// Add a transaction filter hook.
     pub fn filter_transaction<F>(mut self, filter: F) -> Self
     where
@@ -1223,7 +1386,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{Fragment, Slice};
+    use crate::model::{Fragment, MarkPolicy, NodeSpec, Slice};
     use crate::schema_basic;
 
     fn state() -> EditorState {
@@ -1249,6 +1412,38 @@ mod tests {
         let next = state.apply(tr).unwrap();
         assert_eq!(next.selection(), &Selection::text(7));
         assert_eq!(next.doc().text_content(), "hello!");
+    }
+
+    #[test]
+    fn editor_state_default_selection_starts_inside_first_textblock() {
+        let state = state();
+
+        assert_eq!(state.selection(), &Selection::text(1));
+    }
+
+    #[test]
+    fn editor_state_default_selection_enters_required_title_node() {
+        let schema = crate::model::Schema::builder()
+            .node(NodeSpec::new("doc").content("title block*"))
+            .node(
+                NodeSpec::new("title")
+                    .group("title")
+                    .content("inline*")
+                    .marks(MarkPolicy::None),
+            )
+            .node(NodeSpec::new("paragraph").group("block").content("inline*"))
+            .node(NodeSpec::new("text").group("inline").inline())
+            .finish()
+            .unwrap();
+        let title = schema
+            .node("title", Attrs::new(), Fragment::empty())
+            .unwrap();
+        let doc = schema
+            .node("doc", Attrs::new(), Fragment::from(title))
+            .unwrap();
+        let state = EditorState::create(EditorStateConfig::new(schema, doc)).unwrap();
+
+        assert_eq!(state.selection(), &Selection::text(1));
     }
 
     #[test]
@@ -1295,6 +1490,18 @@ mod tests {
         let next = next.apply(tr).unwrap();
         assert_eq!(next.doc().text_content(), "heylo");
         assert_eq!(next.selection(), &Selection::text(4));
+    }
+
+    #[test]
+    fn transaction_insert_text_preserves_consecutive_spaces() {
+        let state = state();
+        let mut tr = state.tr();
+        tr.set_selection(Selection::text(6)).unwrap();
+        tr.insert_text("  ").unwrap();
+
+        let next = state.apply(tr).unwrap();
+        assert_eq!(next.doc().text_content(), "hello  ");
+        assert_eq!(next.selection(), &Selection::text(8));
     }
 
     #[test]
