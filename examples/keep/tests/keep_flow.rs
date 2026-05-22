@@ -81,6 +81,7 @@ async fn keep_push_and_live_wakeup_share_the_stream_topic() {
             id: "note_from_push".to_string(),
             title: "CI note".to_string(),
             body: "incremental pull should receive this row".to_string(),
+            body_state: None,
             color: "sky".to_string(),
             pinned: false,
             archived: false,

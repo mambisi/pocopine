@@ -556,9 +556,14 @@ test('typing inside a task item preserves node-view chrome', async ({ page }) =>
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
   await page.keyboard.type(' updated');
 
+  // Either `text` (plain-text inline fast path landed in commit 4) or
+  // `reconciled` (older structural patch) preserves the surrounding
+  // node-view chrome — what matters for this regression test is the
+  // chrome assertions below, not which patch class the reconciler
+  // picked.
   await expect
     .poll(() => events.findLast((event) => event.event === 'watch.doc')?.payload?.patch)
-    .toBe('reconciled');
+    .toMatch(/^(text|reconciled)$/);
   await expect(taskItems.nth(1).locator('.pine-task-item-content p')).toContainText(
     'Click the box to toggle this item updated',
   );
@@ -1279,5 +1284,126 @@ test('Import then Export round-trips through model', async ({ page }) => {
     .toContain('[x] task one');
   const out = await page.locator('[data-test="exported-markdown"]').textContent();
   expect(out).toContain('[ ] task two');
+  expect(errors).toEqual([]);
+});
+
+test('Mod+a selects the entire surface (selection-only commit syncs DOM caret)', async ({ page }) => {
+  // Regression: select_all sets `Selection::All` without touching
+  // the doc, so the reconciler short-circuits as `Unchanged`. The
+  // watcher used to skip cursor sync on `Unchanged`, leaving the
+  // visible caret pinned at its previous position. Now the watcher
+  // tracks the previous selection and syncs the DOM range when the
+  // model selection changes even if no DOM mutation happened.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  // Park the caret somewhere inside the surface so the "before"
+  // selection is collapsed and clearly not equal to "all".
+  await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
+    surface.focus();
+    const firstText = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT).nextNode();
+    if (!firstText) throw new Error('no text node to seed caret');
+    const range = document.createRange();
+    range.setStart(firstText, 0);
+    range.setEnd(firstText, 0);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+
+  // Press Mod+a — the keymap binding fires `commands::select_all`,
+  // which lands a selection-only transaction. The watcher must
+  // notice the selection change and re-issue the DOM range.
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.press(`${modifier}+a`);
+
+  const selectionInfo = await page.evaluate(() => {
+    const surface =
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
+    const sel = window.getSelection();
+    const range = sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (!range) return { covered: false };
+    const surfaceText = surface.textContent ?? '';
+    const selected = range.toString();
+    return {
+      covered: selected.length > 0 && selected.length >= surfaceText.length - 4,
+      selectedLen: selected.length,
+      surfaceLen: surfaceText.length,
+    };
+  });
+
+  expect(selectionInfo.covered).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('pasting multi-block markdown preserves heading and list structure', async ({ page }) => {
+  // Regression: the paste handler used to use open_start=open_end=1
+  // unconditionally, which dissolved leading headings and trailing
+  // lists into the cursor's paragraph. Per-edge heuristic now keeps
+  // structural blocks closed; this test exercises the user-reported
+  // markdown blob to keep the regression locked.
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await page.goto('/');
+  await page.waitForSelector('pine-rich-text-root:not([runtime]) p[data-pos="0"]');
+
+  const md = '## What I should *not* do\n\n- Don\'t start in TypeScript\n- Docker-only is the scope\n';
+
+  // Dispatch a real `paste` event with a populated DataTransfer.
+  // beforeinput-`insertFromPaste` won't fire under Playwright without
+  // a real clipboard write; the paste-event path is what production
+  // installs and the only path the handler listens on.
+  await page.evaluate((markdown) => {
+    const surface =
+      document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+      document.querySelector('pine-rich-text-root:not([runtime])');
+    surface.focus();
+    const firstText = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT).nextNode();
+    if (firstText) {
+      const range = document.createRange();
+      range.setStart(firstText, 0);
+      range.setEnd(firstText, 0);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    const dt = new DataTransfer();
+    dt.setData('text/plain', markdown);
+    surface.dispatchEvent(
+      new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, md);
+
+  // Heading + bullet list must both materialise.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const surface =
+          document.querySelector('pine-rich-text-root:not([runtime]) .pine-rich-text') ??
+          document.querySelector('pine-rich-text-root:not([runtime])');
+        return {
+          hasHeading: surface.querySelector('h1, h2, h3, h4, h5, h6') !== null,
+          hasList: surface.querySelector('ul, ol') !== null,
+          headingText:
+            surface.querySelector('h2')?.textContent ??
+            surface.querySelector('h1, h3, h4, h5, h6')?.textContent ??
+            '',
+        };
+      }),
+    )
+    .toMatchObject({ hasHeading: true, hasList: true });
+
   expect(errors).toEqual([]);
 });
