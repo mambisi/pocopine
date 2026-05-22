@@ -46,6 +46,12 @@ use pulldown_cmark_to_cmark::{
     calculate_code_block_token_count, cmark_with_options, Options as RenderOptions,
 };
 
+/// Re-export `pulldown_cmark` so extension authors can build
+/// [`MarkdownParseRule`] `get_attrs` closures and [`NodeEmitter`]
+/// callbacks without taking pulldown-cmark as a direct
+/// dependency. Use `pine_richtext::markdown::pulldown_cmark::{Event, Tag, …}`.
+pub use ::pulldown_cmark;
+
 /// Default fence length when no code block is present (matches the
 /// library's `DEFAULT_OPTIONS.code_block_token_count = 4`).
 const DEFAULT_CODE_BLOCK_TOKEN_COUNT: usize = 4;
