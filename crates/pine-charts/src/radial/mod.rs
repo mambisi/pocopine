@@ -138,10 +138,11 @@ impl RadialBarChartGeometry {
                     format!("{label}: {value_label} of {max_label} ({percentage_label})");
                 let value_end_angle = start_angle + span * (bar.value / bar.max);
                 let track_d = arc_path(center, radius, start_angle, end_angle)?;
+                let progress = bar.value / bar.max;
                 let value_d = if bar.value == 0.0 {
                     String::new()
                 } else {
-                    arc_path(center, radius, start_angle, value_end_angle)?
+                    track_d.clone()
                 };
                 let label_angle = if bar.value == 0.0 {
                     start_angle
@@ -163,6 +164,7 @@ impl RadialBarChartGeometry {
                     track_d,
                     value_d,
                     value_visible: bar.value > 0.0,
+                    stroke_dasharray: stroke_dasharray(progress),
                     radius,
                     inner_radius: inner,
                     outer_radius: outer,
@@ -219,6 +221,7 @@ pub struct SvgRadialBar {
     pub track_d: String,
     pub value_d: String,
     pub value_visible: bool,
+    pub stroke_dasharray: String,
     pub radius: f64,
     pub inner_radius: f64,
     pub outer_radius: f64,
@@ -894,8 +897,33 @@ fn arc_path(center: Point, radius: f64, start_angle: f64, end_angle: f64) -> Cha
             value: radius.to_string(),
         });
     }
-    let end_angle = visible_arc_end(start_angle, end_angle);
     let start = polar_point(center, radius, start_angle);
+    if is_full_arc(start_angle, end_angle) {
+        let mid = polar_point(center, radius, start_angle + FULL_CIRCLE_DEGREES * 0.5);
+        let mut path = String::new();
+        write_point(&mut path, "M", start)?;
+        write!(
+            path,
+            " A{},{} 0 1 1 {},{}",
+            clean(radius),
+            clean(radius),
+            clean(mid.x),
+            clean(mid.y)
+        )
+        .expect("writing to string should not fail");
+        write!(
+            path,
+            " A{},{} 0 1 1 {},{}",
+            clean(radius),
+            clean(radius),
+            clean(start.x),
+            clean(start.y)
+        )
+        .expect("writing to string should not fail");
+        return Ok(path);
+    }
+
+    let end_angle = visible_arc_end(start_angle, end_angle);
     let end = polar_point(center, radius, end_angle);
     let large_arc = if (end_angle - start_angle).abs() > 180.0 {
         1
@@ -915,6 +943,14 @@ fn arc_path(center: Point, radius: f64, start_angle: f64, end_angle: f64) -> Cha
     )
     .expect("writing to string should not fail");
     Ok(path)
+}
+
+fn stroke_dasharray(progress: f64) -> String {
+    format!("{} 1", clean(progress.clamp(0.0, 1.0)))
+}
+
+fn is_full_arc(start_angle: f64, end_angle: f64) -> bool {
+    (end_angle - start_angle).abs() >= FULL_CIRCLE_DEGREES
 }
 
 fn visible_arc_end(start_angle: f64, end_angle: f64) -> f64 {
@@ -997,7 +1033,31 @@ mod tests {
         assert_eq!(geometry.bars[0].outer_radius, 50.0);
         assert_eq!(geometry.bars[0].stroke_width, 18.0);
         assert!(geometry.bars[0].value_d.starts_with("M50,9"));
+        assert_eq!(geometry.bars[0].value_d, geometry.bars[0].track_d);
+        assert_eq!(geometry.bars[0].stroke_dasharray, "0.75 1");
         assert_eq!(geometry.legend_items.len(), 2);
+    }
+
+    #[test]
+    fn radial_geometry_closes_full_rings_with_two_arcs() {
+        let options = RadialBarChartOptions {
+            width: 100.0,
+            height: 100.0,
+            margins: ChartMargins::ZERO,
+            inner_radius: 0.5,
+            ring_gap: 0.0,
+            start_angle: -90.0,
+            end_angle: 270.0,
+        };
+        let geometry =
+            RadialBarChartGeometry::new(&[ChartRadialBar::new("Done", 10.0, 10.0)], &options)
+                .unwrap();
+        let bar = &geometry.bars[0];
+
+        assert_eq!(bar.value_d, bar.track_d);
+        assert_eq!(bar.stroke_dasharray, "1 1");
+        assert_eq!(bar.value_d.matches(" A").count(), 2);
+        assert!(bar.value_d.ends_with("50,12.5"));
     }
 
     #[test]
@@ -1011,6 +1071,7 @@ mod tests {
         assert_eq!(geometry.bars.len(), 1);
         assert!(!geometry.bars[0].value_visible);
         assert!(geometry.bars[0].value_d.is_empty());
+        assert_eq!(geometry.bars[0].stroke_dasharray, "0 1");
     }
 
     #[test]

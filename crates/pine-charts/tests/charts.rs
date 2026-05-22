@@ -2511,6 +2511,12 @@ async fn radial_bar_chart_renders_rings_hover_and_selection() {
     );
     assert_eq!(first.get_attribute("data-value").as_deref(), Some("75"));
     assert_eq!(first.get_attribute("data-max").as_deref(), Some("100"));
+    assert_eq!(first.get_attribute("pathLength").as_deref(), Some("1"));
+    assert_eq!(
+        first.get_attribute("stroke-dasharray").as_deref(),
+        Some("0.75 1")
+    );
+    assert_eq!(first.get_attribute("d").unwrap().matches(" A").count(), 2);
     assert_eq!(
         first.get_attribute("data-percentage").as_deref(),
         Some("75")
