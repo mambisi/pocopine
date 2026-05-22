@@ -831,6 +831,11 @@ impl NodeType {
     pub fn content_expr(&self) -> &ContentExpr {
         &self.content
     }
+
+    /// Whether this node type has required attributes with no defaults.
+    pub fn has_required_attrs(&self) -> bool {
+        self.attrs.values().any(|attr| !attr.has_default())
+    }
 }
 
 impl PartialEq for NodeType {
@@ -1025,7 +1030,7 @@ impl ContentExpr {
         schema: &'a Schema,
         content: &Fragment,
     ) -> Option<ContentMatch<'a>> {
-        if self.can_complete(schema, content) {
+        if self.can_match_prefix(schema, content) {
             Some(ContentMatch {
                 expr: self,
                 schema,
@@ -1049,6 +1054,13 @@ impl ContentExpr {
     /// Return true when this expression can match inline child nodes.
     pub fn allows_inline(&self, schema: &Schema) -> bool {
         self.root.allows_inline(schema)
+    }
+
+    fn can_match_prefix(&self, schema: &Schema, content: &Fragment) -> bool {
+        !self
+            .root
+            .residuals_after(schema, content.as_slice())
+            .is_empty()
     }
 
     fn fill_between(
@@ -1179,12 +1191,70 @@ impl<'a> ContentMatch<'a> {
     }
 
     /// Match a single node of the given type, returning the new cursor.
-    /// Mirrors upstream `ContentMatch.matchType`. Pine doesn't have PM's
-    /// state-graph internals so this routes through `match_fragment` with a
-    /// synthetic single-element fragment built from `node_type`'s defaults.
+    /// Mirrors upstream `ContentMatch.matchType`: only the node type is
+    /// consulted, not a fully materialized default node. This keeps invalid
+    /// candidates cheap in schemas where `createAndFill` would recurse through
+    /// required wrappers.
     pub fn match_type(&self, node_type: &NodeType) -> Option<Self> {
-        let synthetic = self.schema.default_node(node_type.name()).ok()?;
+        let synthetic = synthetic_node_for_type(node_type);
         self.match_fragment(&Fragment::from(synthetic))
+    }
+
+    /// The first outgoing non-text node type that can be generated without
+    /// required attributes. Mirrors upstream `ContentMatch.defaultType`.
+    pub fn default_type(&self) -> Option<&'a NodeType> {
+        self.next_node_type_names().into_iter().find_map(|name| {
+            let node_type = self.schema.node_type(&name).ok()?;
+            if node_type.name() != "text" && !node_type.has_required_attrs() {
+                Some(node_type)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The first default type that is a textblock.
+    pub fn default_textblock_type(&self) -> Option<&'a NodeType> {
+        self.next_node_type_names().into_iter().find_map(|name| {
+            let node_type = self.schema.node_type(&name).ok()?;
+            if node_type.name() != "text"
+                && !node_type.is_inline()
+                && node_type.inline_content(self.schema)
+                && !node_type.has_required_attrs()
+            {
+                Some(node_type)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn next_node_type_names(&self) -> Vec<String> {
+        let mut ranked = self
+            .expr
+            .root
+            .residuals_after(self.schema, self.matched.as_slice())
+            .into_iter()
+            .flat_map(|residual| residual.first_terms())
+            .flat_map(|term| self.schema.node_names_for_term(&term))
+            .filter_map(|name| {
+                let rank = self.schema.inner.nodes.get(&name)?.rank;
+                Some((rank, name))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+        let mut seen = BTreeSet::new();
+        ranked
+            .into_iter()
+            .filter_map(|(_, name)| {
+                if seen.insert(name.clone()) {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Find a chain of wrapper node types whose nesting around `target` produces
@@ -1279,6 +1349,86 @@ enum ContentNode {
 }
 
 impl ContentNode {
+    fn nullable(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            Self::Name(_) => false,
+            Self::Seq(parts) => parts.iter().all(Self::nullable),
+            Self::Choice(parts) => parts.iter().any(Self::nullable),
+            Self::Repeat { node, min, .. } => *min == 0 || node.nullable(),
+        }
+    }
+
+    fn first_terms(&self) -> Vec<String> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::Name(name) => vec![name.clone()],
+            Self::Seq(parts) => {
+                let mut terms = Vec::new();
+                for part in parts {
+                    terms.extend(part.first_terms());
+                    if !part.nullable() {
+                        break;
+                    }
+                }
+                terms
+            }
+            Self::Choice(parts) => parts.iter().flat_map(Self::first_terms).collect(),
+            Self::Repeat { node, .. } => node.first_terms(),
+        }
+    }
+
+    fn residuals_after(&self, schema: &Schema, children: &[Node]) -> Vec<ContentNode> {
+        let mut residuals = vec![self.clone()];
+        for child in children {
+            let mut next = Vec::new();
+            for residual in residuals {
+                push_unique_nodes(&mut next, residual.consume_child(schema, child));
+            }
+            if next.is_empty() {
+                return Vec::new();
+            }
+            residuals = next;
+        }
+        residuals
+    }
+
+    fn consume_child(&self, schema: &Schema, child: &Node) -> Vec<ContentNode> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::Name(name) => {
+                if child.name == *name || schema.is_group_member(&child.name, name) {
+                    vec![Self::Empty]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::Seq(parts) => consume_child_in_sequence(parts, schema, child),
+            Self::Choice(parts) => {
+                let mut out = Vec::new();
+                for part in parts {
+                    push_unique_nodes(&mut out, part.consume_child(schema, child));
+                }
+                out
+            }
+            Self::Repeat { node, min, max } => {
+                if matches!(max, Some(0)) {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                let rest = repeat_node(
+                    node.as_ref().clone(),
+                    min.saturating_sub(1),
+                    max.map(|max| max.saturating_sub(1)),
+                );
+                for residual in node.consume_child(schema, child) {
+                    out.push(seq_node(vec![residual, rest.clone()]));
+                }
+                out
+            }
+        }
+    }
+
     fn collect_terms(&self, names: &mut BTreeSet<String>) {
         match self {
             Self::Empty => {}
@@ -1403,6 +1553,70 @@ impl ContentNode {
                 results.into_iter().collect()
             }
         }
+    }
+}
+
+fn consume_child_in_sequence(
+    parts: &[ContentNode],
+    schema: &Schema,
+    child: &Node,
+) -> Vec<ContentNode> {
+    let mut out = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        if !parts[..index].iter().all(ContentNode::nullable) {
+            break;
+        }
+        let suffix = parts[index + 1..].to_vec();
+        for residual in part.consume_child(schema, child) {
+            let mut next = Vec::with_capacity(1 + suffix.len());
+            next.push(residual);
+            next.extend(suffix.clone());
+            out.push(seq_node(next));
+        }
+    }
+    out
+}
+
+fn push_unique_nodes(target: &mut Vec<ContentNode>, nodes: Vec<ContentNode>) {
+    for node in nodes {
+        if !target.contains(&node) {
+            target.push(node);
+        }
+    }
+}
+
+fn seq_node(parts: Vec<ContentNode>) -> ContentNode {
+    let mut normalized = parts
+        .into_iter()
+        .filter(|part| !matches!(part, ContentNode::Empty))
+        .collect::<Vec<_>>();
+    match normalized.len() {
+        0 => ContentNode::Empty,
+        1 => normalized.pop().expect("one normalized node"),
+        _ => ContentNode::Seq(normalized),
+    }
+}
+
+fn repeat_node(node: ContentNode, min: usize, max: Option<usize>) -> ContentNode {
+    if matches!(max, Some(0)) || matches!(node, ContentNode::Empty) {
+        ContentNode::Empty
+    } else {
+        ContentNode::Repeat {
+            node: Box::new(node),
+            min,
+            max,
+        }
+    }
+}
+
+fn synthetic_node_for_type(node_type: &NodeType) -> Node {
+    Node {
+        name: node_type.name().to_string(),
+        attrs: Attrs::new(),
+        marks: Vec::new(),
+        content: Fragment::empty(),
+        text: (node_type.name() == "text").then(String::new),
+        leaf: node_type.content_expr().is_empty(),
     }
 }
 
@@ -2377,9 +2591,25 @@ impl<'de> Deserialize<'de> for Node {
 ///
 /// Children are stored behind an `Arc` so clones are refcount bumps rather
 /// than deep tree copies. Mutating methods use `Arc::make_mut` (copy-on-write).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Fragment {
     pub(crate) children: Arc<Vec<Node>>,
+}
+
+impl PartialEq for Fragment {
+    /// `Arc::ptr_eq` fast-path — Fragments that share the same
+    /// `Arc<Vec<Node>>` are structurally equal by construction.
+    /// The reconciler's `if old_node == new_node` short-circuit
+    /// at the top of every `reconcile_node` call is what makes
+    /// this matter: when a transaction modifies one paragraph
+    /// in a 500-paragraph doc, all the other 499 paragraphs
+    /// land in the new tree as Arc clones. Without this
+    /// fast-path, comparing each unchanged subtree walked
+    /// recursively through every text leaf. With it, each
+    /// subtree comparison is one pointer compare.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.children, &other.children) || self.children == other.children
+    }
 }
 
 impl Fragment {
@@ -3467,6 +3697,43 @@ mod tests {
         assert!(!paragraph.is_leaf());
         assert_eq!(paragraph.node_size(), 2);
         assert_eq!(paragraph.content_size(), 0);
+    }
+
+    #[test]
+    fn content_match_default_textblock_uses_outgoing_terms() {
+        let schema = Schema::builder()
+            .node(NodeSpec::new("doc").content("title block*"))
+            .node(NodeSpec::new("title").group("title").content("inline*"))
+            .node(
+                NodeSpec::new("required_block")
+                    .group("block")
+                    .content("inline*")
+                    .required_attr("kind"),
+            )
+            .node(NodeSpec::new("paragraph").group("block").content("inline*"))
+            .node(NodeSpec::new("heading").group("block").content("inline*"))
+            .node(NodeSpec::new("text").group("inline").inline())
+            .finish()
+            .unwrap();
+        let title = schema
+            .node(
+                "title",
+                Attrs::new(),
+                Fragment::from(schema.text("Draft", Vec::new()).unwrap()),
+            )
+            .unwrap();
+        let doc = schema
+            .node("doc", Attrs::new(), Fragment::from(title))
+            .unwrap();
+
+        let content_match = doc.content_match_at(1, &schema).unwrap();
+        assert!(content_match
+            .match_type(schema.node_type("title").unwrap())
+            .is_none());
+        assert_eq!(
+            content_match.default_textblock_type().map(NodeType::name),
+            Some("paragraph")
+        );
     }
 
     #[test]

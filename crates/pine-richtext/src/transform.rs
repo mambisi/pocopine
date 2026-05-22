@@ -1506,6 +1506,18 @@ impl Transform {
         self.replace_whole_doc(new_doc)
     }
 
+    /// Split the parent node at a position while overriding the right-side
+    /// node type at one or more split levels.
+    pub fn split_into(
+        &mut self,
+        pos: usize,
+        depth: usize,
+        types_after: &[Option<TypeAfter>],
+    ) -> RichTextResult<&mut Self> {
+        let new_doc = split_doc_at_into(&self.doc, pos, depth, types_after, &self.schema)?;
+        self.replace_whole_doc(new_doc)
+    }
+
     /// Join sibling nodes around a boundary position.
     pub fn join(&mut self, pos: usize) -> RichTextResult<&mut Self> {
         let new_doc = join_doc_at(&self.doc, pos, &self.schema)?;
@@ -2833,6 +2845,16 @@ fn insert_into_fragment(
 }
 
 fn split_doc_at(doc: &Node, pos: usize, depth: usize, schema: &Schema) -> RichTextResult<Node> {
+    split_doc_at_into(doc, pos, depth, &[], schema)
+}
+
+fn split_doc_at_into(
+    doc: &Node,
+    pos: usize,
+    depth: usize,
+    types_after: &[Option<TypeAfter>],
+    schema: &Schema,
+) -> RichTextResult<Node> {
     if depth == 0 {
         return Err(RichTextError::Transform(
             "split depth must be at least 1".to_string(),
@@ -2867,8 +2889,12 @@ fn split_doc_at(doc: &Node, pos: usize, depth: usize, schema: &Schema) -> RichTe
 
     let split_offset = pos - resolved.start(target_depth).unwrap_or(pos);
     let mut left = target.copy_with_content(target.content().cut(0, split_offset)?);
-    let mut right =
-        target.copy_with_content(target.content().cut(split_offset, target.content_size())?);
+    let mut right = split_right_node(
+        schema,
+        target,
+        target.content().cut(split_offset, target.content_size())?,
+        type_after_at(types_after, depth.saturating_sub(1)),
+    )?;
 
     for level in 1..depth {
         let ancestor_depth = target_depth - level;
@@ -2893,7 +2919,12 @@ fn split_doc_at(doc: &Node, pos: usize, depth: usize, schema: &Schema) -> RichTe
 
         let mut right_children = vec![right];
         right_children.extend_from_slice(&ancestor.content().as_slice()[child_index + 1..]);
-        let next_right = ancestor.copy_with_content(Fragment::from(right_children));
+        let next_right = split_right_node(
+            schema,
+            ancestor,
+            Fragment::from(right_children),
+            type_after_at(types_after, depth - level - 1),
+        )?;
 
         left = next_left;
         right = next_right;
@@ -2917,6 +2948,21 @@ fn split_doc_at(doc: &Node, pos: usize, depth: usize, schema: &Schema) -> RichTe
     grand.content.merge_adjacent_text();
     schema.check_node(&new_doc)?;
     Ok(new_doc)
+}
+
+fn split_right_node(
+    schema: &Schema,
+    source: &Node,
+    content: Fragment,
+    type_after: Option<&TypeAfter>,
+) -> RichTextResult<Node> {
+    let Some(type_after) = type_after else {
+        return Ok(source.copy_with_content(content));
+    };
+    let replacement = schema
+        .node(&type_after.type_name, type_after.attrs.clone(), content)?
+        .with_marks(source.marks().to_vec());
+    Ok(replacement)
 }
 
 fn join_doc_at(doc: &Node, pos: usize, schema: &Schema) -> RichTextResult<Node> {

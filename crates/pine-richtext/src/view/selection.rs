@@ -194,8 +194,7 @@ fn walk_text_offset(parent: &DomNode, target: &DomNode, acc: &mut usize) -> bool
 
 /// Sum the model size of the first `k` children of `parent`. Each
 /// child's size is derived from the `data-pos` gap to the NEXT sibling
-/// (or, for the last child, from its visible text length plus
-/// open+close tokens when it's a wrapper).
+/// (or, for the last child, from its rendered subtree).
 fn sibling_size_before(parent: &Element, k: usize) -> usize {
     let mut acc = 0usize;
     let children = parent.child_nodes();
@@ -217,13 +216,39 @@ fn sibling_size_before(parent: &Element, k: usize) -> usize {
                 continue;
             }
         }
-        // Fall back: use textContent length + 2 (open/close tokens)
-        // for wrappers, or 1 for leaves.
-        let text_len = child_el.text_content().unwrap_or_default().chars().count();
-        let is_leaf = child_el.children().length() == 0;
-        acc += text_len + if is_leaf { 0 } else { 2 };
+        if child_el.has_attribute("data-pos") {
+            acc += rendered_model_node_size(child_el);
+        } else {
+            acc += rendered_content_size(child_el);
+        }
     }
     acc
+}
+
+fn rendered_content_size(parent: &Element) -> usize {
+    sibling_size_before(parent, parent.child_nodes().length() as usize)
+}
+
+fn rendered_model_node_size(el: &Element) -> usize {
+    if rendered_leaf_node(el) {
+        1
+    } else {
+        rendered_content_size(el) + 2
+    }
+}
+
+fn rendered_leaf_node(el: &Element) -> bool {
+    let tag = el.tag_name().to_ascii_lowercase();
+    if matches!(tag.as_str(), "br" | "hr" | "img") {
+        return true;
+    }
+
+    // Unknown schema nodes render as `<span data-type="...">`, so
+    // even when empty they are still wrappers with open/close model
+    // tokens. A custom atom rendered as an empty custom element has no
+    // children and no data-type fallback marker, so count it as one
+    // model position.
+    el.child_nodes().length() == 0 && !el.has_attribute("data-type")
 }
 
 fn next_sibling_data_pos(el: &Element) -> Option<usize> {

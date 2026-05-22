@@ -21,6 +21,8 @@ use web_sys::{Element, HtmlElement, Node as DomNode};
 pub enum ReconcileOutcome {
     /// The old and new docs were equal; no DOM mutation happened.
     Unchanged,
+    /// Plain inline text changed in place without reparsing element HTML.
+    Text,
     /// Only reflected node attrs changed in place.
     NodeAttrs { pos: usize },
     /// One or more model children/subtrees were reconciled in place.
@@ -40,7 +42,7 @@ impl ReconcileOutcome {
     /// the model selection. Attr-only patches intentionally skip this
     /// so node-view chrome clicks do not move or recreate the cursor.
     pub fn should_sync_cursor(self) -> bool {
-        matches!(self, Self::Reconciled | Self::Full)
+        matches!(self, Self::Text | Self::Reconciled | Self::Full)
     }
 
     /// Whether newly-rendered DOM may contain custom node-view tags
@@ -53,6 +55,7 @@ impl ReconcileOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unchanged => "unchanged",
+            Self::Text => "text",
             Self::NodeAttrs { .. } => "node_attrs",
             Self::Reconciled => "reconciled",
             Self::Full => "full",
@@ -64,6 +67,7 @@ impl ReconcileOutcome {
 struct ReconcileStats {
     attr_changes: usize,
     first_attr_pos: Option<usize>,
+    text_changes: usize,
     structural_changes: usize,
 }
 
@@ -73,6 +77,10 @@ impl ReconcileStats {
         self.first_attr_pos.get_or_insert(pos);
     }
 
+    fn record_text(&mut self) {
+        self.text_changes += 1;
+    }
+
     fn record_structural(&mut self) {
         self.structural_changes += 1;
     }
@@ -80,6 +88,8 @@ impl ReconcileStats {
     fn outcome(self) -> ReconcileOutcome {
         if self.structural_changes > 0 {
             ReconcileOutcome::Reconciled
+        } else if self.text_changes > 0 {
+            ReconcileOutcome::Text
         } else if self.attr_changes > 0 {
             ReconcileOutcome::NodeAttrs {
                 pos: self.first_attr_pos.unwrap_or(0),
@@ -173,7 +183,11 @@ impl<'a> Reconciler<'a> {
             return Ok(());
         }
 
-        if renders_inline_children(new_node) {
+        if self.renders_inline_children(new_node) {
+            if self.patch_plain_text_inline_children(dom, old_node, new_node)? {
+                stats.record_text();
+                return Ok(());
+            }
             let html = render_children_to_html(self.runtime, new_node, new_pos + 1);
             set_inner_html(dom, &html).then_some(()).ok_or(())?;
             stats.record_structural();
@@ -211,7 +225,7 @@ impl<'a> Reconciler<'a> {
             return Ok(());
         }
 
-        let dom_children = direct_model_children(content_root);
+        let dom_children = direct_model_children(content_root)?;
         if dom_children.len() != old_parent.child_count() {
             return Err(());
         }
@@ -341,8 +355,9 @@ impl<'a> Reconciler<'a> {
         outer_pos: usize,
     ) -> Result<(), ()> {
         update_data_pos(dom, outer_pos)?;
-        if node.child_count() == 0 || renders_inline_children(node) {
-            if renders_inline_children(node) && node.content().iter().any(|child| !child.is_text())
+        if node.child_count() == 0 || self.renders_inline_children(node) {
+            if self.renders_inline_children(node)
+                && node.content().iter().any(|child| !child.is_text())
             {
                 let html = render_children_to_html(self.runtime, node, outer_pos + 1);
                 set_inner_html(dom, &html).then_some(()).ok_or(())?;
@@ -354,7 +369,7 @@ impl<'a> Reconciler<'a> {
         }
 
         let content_root = self.content_root_for_node(dom, node)?;
-        let dom_children = direct_model_children(&content_root);
+        let dom_children = direct_model_children(&content_root)?;
         if dom_children.len() != node.child_count() {
             return Err(());
         }
@@ -400,6 +415,43 @@ impl<'a> Reconciler<'a> {
         !node.is_text()
             && (node.type_name() == "task_item"
                 || self.runtime.lookup_node_view(node.type_name()).is_some())
+    }
+
+    fn renders_inline_children(&self, node: &RichNode) -> bool {
+        !node.is_text()
+            && node.type_name() != "code_block"
+            && self.runtime.lookup_node_view(node.type_name()).is_none()
+            && self
+                .runtime
+                .schema()
+                .node_type(node.type_name())
+                .is_ok_and(|node_type| node_type.inline_content(self.runtime.schema()))
+    }
+
+    fn patch_plain_text_inline_children(
+        &self,
+        dom: &Element,
+        old_node: &RichNode,
+        new_node: &RichNode,
+    ) -> Result<bool, ()> {
+        let Some(_) = single_unmarked_text_child(old_node) else {
+            return Ok(false);
+        };
+        let Some(new_text) = single_unmarked_text_child(new_node) else {
+            return Ok(false);
+        };
+        let children = dom.child_nodes();
+        if children.length() != 1 {
+            return Ok(false);
+        }
+        let Some(child) = children.item(0) else {
+            return Ok(false);
+        };
+        if child.node_type() != DomNode::TEXT_NODE {
+            return Ok(false);
+        }
+        child.set_node_value(Some(new_text));
+        Ok(true)
     }
 
     fn wrapper_compatible(&self, old_node: &RichNode, new_node: &RichNode) -> bool {
@@ -488,18 +540,35 @@ fn set_inner_html(element: &Element, html: &str) -> bool {
     }
 }
 
-fn direct_model_children(root: &Element) -> Vec<Element> {
-    let children = root.children();
+fn direct_model_children(root: &Element) -> Result<Vec<Element>, ()> {
+    let children = root.child_nodes();
     let mut out = Vec::new();
     for index in 0..children.length() {
         let Some(child) = children.item(index) else {
             continue;
         };
+        if child.node_type() == DomNode::TEXT_NODE {
+            if child
+                .text_content()
+                .is_some_and(|text| !text.trim().is_empty())
+            {
+                return Err(());
+            }
+            continue;
+        }
+        if child.node_type() == DomNode::COMMENT_NODE {
+            continue;
+        }
+        let Some(child) = child.dyn_ref::<Element>() else {
+            continue;
+        };
         if child.has_attribute("data-pos") {
-            out.push(child);
+            out.push(child.clone());
+        } else {
+            return Err(());
         }
     }
-    out
+    Ok(out)
 }
 
 fn child_positions(parent: &RichNode, content_start: usize) -> Vec<usize> {
@@ -512,8 +581,16 @@ fn child_positions(parent: &RichNode, content_start: usize) -> Vec<usize> {
     positions
 }
 
-fn renders_inline_children(node: &RichNode) -> bool {
-    matches!(node.type_name(), "paragraph" | "heading")
+fn single_unmarked_text_child(node: &RichNode) -> Option<&str> {
+    if node.child_count() != 1 {
+        return None;
+    }
+    let child = node.child(0)?;
+    if child.is_text() && child.marks().is_empty() {
+        child.text()
+    } else {
+        None
+    }
 }
 
 fn heading_level(node: &RichNode) -> u64 {
@@ -550,6 +627,9 @@ fn patch_reflected_attrs(dom: &Element, old_attrs: &Attrs, new_attrs: &Attrs) ->
 mod tests {
     use super::*;
     use crate::commands::{split_block, toggle_mark, Command};
+    use crate::extension::RichTextExtension;
+    use crate::model::{Fragment, MarkPolicy, NodeSpec};
+    use crate::runtime::RuntimeBuilder;
     use crate::schema_basic;
     use crate::state::{EditorState, EditorStateConfig, Selection};
     use crate::transform::{AttrStep, Step};
@@ -589,6 +669,26 @@ mod tests {
         schema_basic::doc(vec![schema_basic::task_list(vec![item]).unwrap()]).unwrap()
     }
 
+    struct TitleSchemaExtension;
+
+    impl RichTextExtension for TitleSchemaExtension {
+        fn name(&self) -> &str {
+            "core_nodes"
+        }
+
+        fn nodes(&self) -> Vec<NodeSpec> {
+            vec![
+                NodeSpec::new("doc").content("title block*"),
+                NodeSpec::new("title")
+                    .group("title")
+                    .content("inline*")
+                    .marks(MarkPolicy::None)
+                    .defining(),
+                NodeSpec::new("paragraph").group("block").content("inline*"),
+            ]
+        }
+    }
+
     #[test]
     fn task_item_attr_toggle_is_attr_only() {
         let state = state_with_doc(task_doc(false));
@@ -625,6 +725,22 @@ mod tests {
         reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
+    }
+
+    #[test]
+    fn plain_text_insert_patches_inline_text_without_structural_html() {
+        let state = state_with_doc(doc(vec![paragraph_text("hello")]));
+        let state = with_selection(state, Selection::text(6));
+        let mut tr = state.tr();
+        tr.insert_text("!").unwrap();
+        let next = state.apply(tr).unwrap();
+
+        let runtime = crate::runtime::RuntimeBuilder::new().build();
+        let rec = Reconciler::new(&runtime);
+        let mut stats = ReconcileStats::default();
+        reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
+
+        assert_eq!(stats.outcome(), ReconcileOutcome::Text);
     }
 
     #[test]
@@ -667,6 +783,26 @@ mod tests {
         reconcile_children_for_plan(&rec, state.doc(), next.doc(), 0, &mut stats);
 
         assert_eq!(stats.outcome(), ReconcileOutcome::Reconciled);
+    }
+
+    #[test]
+    fn custom_inline_textblock_uses_inline_reconcile_path() {
+        let runtime = RuntimeBuilder::new().with(TitleSchemaExtension).build();
+        let schema = runtime.schema();
+        let title = schema
+            .node(
+                "title",
+                Attrs::new(),
+                Fragment::from(schema.text("Draft", Vec::new()).unwrap()),
+            )
+            .unwrap();
+
+        let rec = Reconciler::new(&runtime);
+
+        assert!(
+            rec.renders_inline_children(&title),
+            "custom title textblock should patch its inline children instead of falling through to DOM-child reconciliation"
+        );
     }
 
     fn reconcile_children_for_plan(
@@ -773,7 +909,17 @@ mod tests {
         if old_node == new_node {
             return;
         }
-        if renders_inline_children(new_node) || new_node.type_name() == "code_block" {
+        if rec.renders_inline_children(new_node) {
+            if single_unmarked_text_child(old_node).is_some()
+                && single_unmarked_text_child(new_node).is_some()
+            {
+                stats.record_text();
+            } else {
+                stats.record_structural();
+            }
+            return;
+        }
+        if new_node.type_name() == "code_block" {
             stats.record_structural();
             return;
         }
