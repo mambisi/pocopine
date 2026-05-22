@@ -1,0 +1,72 @@
+# GraphQL operations for the Railway deploy adapter.
+#
+# `graphql_client` validates every field below against the committed
+# `schema.json` at compile time — a renamed or removed field is a build
+# error, not a runtime 4xx. Refresh `schema.json` by re-running
+# `graphql-client introspect-schema https://backboard.railway.com/graphql/v2`.
+
+query FindProjects {
+  projects {
+    edges {
+      node {
+        id
+        name
+        environments {
+          edges {
+            node {
+              id
+              name
+            }
+          }
+        }
+        services {
+          edges {
+            node {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+mutation CreateProject($input: ProjectCreateInput!) {
+  projectCreate(input: $input) {
+    id
+  }
+}
+
+mutation CreateService($input: ServiceCreateInput!) {
+  serviceCreate(input: $input) {
+    id
+    name
+  }
+}
+
+mutation UpdateServiceInstance(
+  $serviceId: String!
+  $environmentId: String
+  $input: ServiceInstanceUpdateInput!
+) {
+  serviceInstanceUpdate(
+    serviceId: $serviceId
+    environmentId: $environmentId
+    input: $input
+  )
+}
+
+mutation UpsertVariables($input: VariableCollectionUpsertInput!) {
+  variableCollectionUpsert(input: $input)
+}
+
+mutation DeployServiceInstance($serviceId: String!, $environmentId: String!) {
+  serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+}
+
+mutation CreateServiceDomain($input: ServiceDomainCreateInput!) {
+  serviceDomainCreate(input: $input) {
+    domain
+  }
+}

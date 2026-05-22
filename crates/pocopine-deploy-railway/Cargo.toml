@@ -1,0 +1,34 @@
+[package]
+name = "pocopine-deploy-railway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Railway deploy adapter for pocopine (RFC 080 §6 + Appendix A). Talks to Railway's GraphQL API directly; no railway CLI required."
+
+[dependencies]
+anyhow = "1"
+pocopine-deploy = { workspace = true }
+semver = { version = "1", features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }
+
+# `build.rs` downloads Railway's GraphQL schema (graphql-client's
+# compile-time input) when it is missing — see build.rs.
+[build-dependencies]
+ureq = "2"
+
+# Railway's GraphQL API is host-only. Matches pocopine-deploy-fly /
+# pocopine-deploy-render so `cargo check --target wasm32-unknown-unknown`
+# stays clean — the trait impl compiles on every target, only the HTTP
+# client lives behind this cfg. `graphql_client` derives the typed
+# client from the committed `schema.json` (compile-time query checks).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+graphql_client = { version = "0.16", features = ["reqwest-blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
