@@ -8,6 +8,9 @@ description = "RFC 080 — deploy contract and built-in adapters for pocopine ap
 
 [dependencies]
 anyhow = "1"
+# Compile-time Jinja-like templates for the generated Dockerfile +
+# Dockerfile.dockerignore. Lives in `templates/`.
+askama = { workspace = true }
 semver = { version = "1", features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
