@@ -36,6 +36,7 @@ pub mod mount;
 pub mod path;
 pub mod plugin;
 pub mod profiler;
+pub mod props;
 pub mod reactive;
 pub mod refs;
 pub mod registry;
@@ -96,6 +97,7 @@ pub use plugin::{
 pub use profiler::mount::{
     enabled as mount_profile_enabled, report as report_mount_profile, reset as reset_mount_profile,
 };
+pub use props::{PropValue, Props};
 pub use reactive::{
     batch, current_effect, effect, effect_scoped, effect_with, flush_sync, on_cleanup, release,
     run_now, set_auto_flush, track, trigger_scope, EffectId, EffectOptions, ScopeId, SignalId,

@@ -1004,11 +1004,15 @@ impl PineYAxis {
 /// `#[prop(flatten)]` (RFC-044 §5.10): the container is one Rust
 /// field, but the wire surface stays one attribute per leaf, so
 /// `<pine-line-series key=… label=… color=…>` is unchanged.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Props, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SeriesCommon {
+    #[prop]
     pub key: String,
+    #[prop]
     pub label: String,
+    #[prop]
     pub color: String,
+    #[prop]
     pub visible: bool,
 }
 
@@ -1026,7 +1030,7 @@ impl Default for SeriesCommon {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineLineSeries.poco", role = "visual")]
 pub struct PineLineSeries {
-    #[prop(flatten = ["key", "label", "color", "visible"])]
+    #[prop(flatten)]
     pub common: SeriesCommon,
     #[prop]
     pub stroke_width: f64,
@@ -1121,7 +1125,7 @@ impl PineLineSeries {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[component(template = "PineBarSeries.poco", role = "visual")]
 pub struct PineBarSeries {
-    #[prop(flatten = ["key", "label", "color", "visible"])]
+    #[prop(flatten)]
     pub common: SeriesCommon,
     #[prop]
     pub data: Vec<ChartBar>,
@@ -1169,7 +1173,7 @@ impl PineBarSeries {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineAreaSeries.poco", role = "visual")]
 pub struct PineAreaSeries {
-    #[prop(flatten = ["key", "label", "color", "visible"])]
+    #[prop(flatten)]
     pub common: SeriesCommon,
     #[prop]
     pub fill: String,
@@ -1245,7 +1249,7 @@ impl PineAreaSeries {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[component(template = "PineScatterSeries.poco", role = "visual")]
 pub struct PineScatterSeries {
-    #[prop(flatten = ["key", "label", "color", "visible"])]
+    #[prop(flatten)]
     pub common: SeriesCommon,
     #[prop]
     pub point_radius: f64,

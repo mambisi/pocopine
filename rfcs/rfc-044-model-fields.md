@@ -532,49 +532,82 @@ authoring surface.
   for model-flatten: a parent sees N independent events, same as a
   pre-struct flat layout would have produced.
 
-#### 5.10.2 Explicit leaf list
+#### 5.10.2 Two surface shapes — bare or explicit
 
-v1 requires an **explicit leaf list**. Each name must be a valid key
-in the container's serialised form (honouring `#[serde(rename)]` on
-the inner struct's fields); names not present are silently dropped,
-matching inbound-mirror behaviour for unknown parent-side keys. The
-explicit list also lets a component expose a deliberate *subset* of
-the struct, or flatten a foreign struct whose wire names don't match
-their Rust identifiers.
+`flatten` accepts two field-attribute forms.
+
+**Bare — `#[prop(flatten)]` / `#[model(flatten)]`.** The container's
+type must implement `Props` — typically via `#[derive(Props)]`:
 
 ```rust
-#[prop(flatten = ["key", "label", "color", "visible"])]
-#[model(flatten = ["start", "end"])]
+#[derive(Props, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeriesCommon {
+    #[prop] pub key: String,
+    #[prop] pub label: String,
+    #[prop] pub color: String,
+    #[prop] pub visible: bool,
+}
+
+#[component(...)]
+pub struct PineLineSeries {
+    #[prop(flatten)]
+    pub common: SeriesCommon,
+}
 ```
 
-Bare `#[prop(flatten)]` / `#[model(flatten)]` — auto-discovery, where
-the runtime reads the leaf set by serialising the container once at
-mount — is **reserved**. The macro emits a hard error pointing at the
-explicit form. Auto-discovery needs a runtime leaves side-table the
-current static-match codegen cannot produce, and interacts badly with
-`skip_serializing_if` (§5.10.6); it is deferred to a follow-up.
+The struct is **self-describing**: `#[derive(Props)]` reads its
+`#[prop]` fields (declaration order) and emits a `Props` impl
+exposing the leaf list, direct per-leaf get/set, and exact per-leaf
+`static_prop_kind`. The `#[component]` macro routes the bare flatten
+field through `<SeriesCommon as Props>` at runtime — no whole-struct
+serde round-trip per leaf write, and no static leaf list to keep in
+sync with the struct.
+
+**Explicit — `#[prop(flatten = ["a","b"])]` / `#[model(flatten = […])]`.**
+For foreign structs (where you can't add a derive), deliberate
+*subsets* of a struct, or wire-key renaming via `#[serde(rename)]` on
+the inner struct's fields. Each listed name must be a valid key in
+the container's serialised form; unknown names are silently dropped.
+Leaf get/set goes through serde (`to_value`/`Reflect`/`from_value`)
+on the whole container, and per-leaf `static_prop_kind` is resolved
+by the runtime probe (§5.10.3).
+
+The two forms coexist on a single component; explicit-list arms run
+first, then bare-flatten containers' leaves are consulted in
+declaration order. New components should prefer the bare form when
+the container is first-party — it is faster, has exact leaf types,
+and removes leaf-list duplication.
 
 #### 5.10.3 Leaf typing and static-attr coercion
 
-The attribute carries leaf *names*, not types — the macro has no
-statically-known Rust type at the leaf granularity. A leaf's
-`static_prop_kind` (which governs how an authored string attribute is
-coerced) is instead resolved by **probing the serialised container**:
-during `apply_static_props` the runtime serialises the
-default-constructed container and inspects the leaf's JS type —
-boolean → `Bool`, number → `Number`, string → `String`, otherwise
-`Auto`.
+The two surface shapes have *different* per-leaf `static_prop_kind`
+strategies — they resolve the same hazard with different precision.
 
-This is load-bearing. A `String` leaf with a numeric-looking authored
-value (`label="2024"`) *must* be classified `String`, so the value is
-not coerced to a number — a number spliced into the container fails
-the leaf's serde round-trip and the write is silently dropped.
+The hazard: a `String` leaf with a numeric-looking authored value
+(`label="2024"`) *must* be classified `String`, so the value is not
+coerced to a number — a number spliced into the container fails the
+leaf's round-trip and the write is silently dropped.
 
-The probe is accurate for every non-`Option` leaf. An `Option::None`
-leaf serialises to `null`, carries no type witness, and falls back to
-`Auto` — the same limitation the non-flatten `Option<T>` static-attr
-path already has. A fully typed leaf contract (covering `Option`
-leaves and foreign structs) is future work (§11).
+**Bare `#[prop(flatten)]` (via `#[derive(Props)]`).** The derive sees
+each leaf field's Rust type and emits `prop_static_kind` as a direct
+match over `<FieldTy as PropValue>::prop_static_kind()` — `String` →
+`String`, `bool` → `Bool`, the int / float numerics → `Number`,
+`Option<T>` → `T::prop_static_kind()`. **Exact** at compile time —
+no runtime probe, and `Option::None` leaves are typed correctly.
+
+**Explicit `#[prop(flatten = [...])]`.** The attribute carries leaf
+*names*, not types — the macro has no statically-known Rust type at
+the leaf granularity, so a leaf's kind is resolved by **probing the
+serialised container**: during `apply_static_props` the runtime
+serialises the default-constructed container and inspects the leaf's
+JS type — boolean → `Bool`, number → `Number`, string → `String`,
+otherwise `Auto`. Accurate for every non-`Option` leaf; an
+`Option::None` default serialises to `null`, carries no type witness,
+and falls back to `Auto` — the same gap the non-flatten `Option<T>`
+static-attr path has.
+
+The bare form's exact typing is the recommended path; the explicit
+form's probe is the foreign-struct fallback.
 
 #### 5.10.4 Collision rules
 
@@ -619,29 +652,42 @@ Two caveats:
 #### 5.10.6 `skip_serializing_if` on a flattened container
 
 `skip_serializing_if` on an inner field can omit a leaf key from the
-serialised object. Under the **explicit leaf list** this is benign:
-`get(<leaf>)` returns `null` for an omitted leaf and the set arm
-splices the value back regardless. It becomes load-bearing only for
-the reserved auto-discovery form, where an omitted key would vanish
-from the discovered leaf set — a further reason auto-discovery is
-deferred. Components should avoid `skip_serializing_if` on leaves
-they intend to expose.
+serialised object. Under either surface shape it is essentially
+benign: `get(<leaf>)` returns `null` for an omitted leaf and the set
+arm splices the value back regardless. The bare form (`Props`)
+sidesteps the issue entirely — leaves are enumerated by the derive
+from the struct's field list, not from a serialised default, so a
+`skip_serializing_if`-hidden leaf still appears in `prop_leaves()`.
+Components should still avoid `skip_serializing_if` on leaves they
+intend to expose.
 
 #### 5.10.7 Performance — keep hot leaves unflattened
 
-Every inbound write to *any* leaf costs one serialise + one
-deserialise of the **whole** container. Negligible for small scalar
-config (`key` / `label` / `color` / `visible`); wasteful for large or
-frequently-updated payloads. **Do not flatten hot leaves** — a
-`Vec<ChartPoint>` `points` field, a large `data` blob. Leave those as
-direct `#[prop]` fields and flatten only the shared scalar config.
-pine-charts does exactly this: `SeriesCommon` carries the four
-scalars; `points` / `data` stay unflattened `#[prop]` fields.
+The per-leaf cost differs by surface shape.
+
+- **Bare flatten (`#[derive(Props)]`).** Per-leaf get/set is a direct
+  `<FieldTy as PropValue>::to_prop_js` / `from_prop_js` call —
+  scalar-fast, no whole-struct serialise.
+- **Explicit-list flatten.** Per-leaf get/set serialises + deserialises
+  the **whole** container through `serde_wasm_bindgen`. Negligible
+  for small scalar config; wasteful for large or frequently-updated
+  payloads.
+
+**Don't flatten hot leaves** — a `Vec<ChartPoint>` `points` field, a
+large `data` blob. Leave those as direct `#[prop]` fields and flatten
+only the shared scalar config. pine-charts does exactly this:
+`SeriesCommon` carries the four scalars; `points` / `data` stay
+unflattened `#[prop]` fields. The rule is sharper for the explicit
+form but applies to both — flatten is for shared *scalar* config.
 
 Constraints in v1 (both roles):
 
-- `flatten` requires an explicit leaf list; bare auto-discovery is
-  reserved (§5.10.2).
+- Bare `flatten` requires the container's type to implement `Props`
+  (typically via `#[derive(Props)]`); leaf field types must implement
+  `PropValue` (v1 ships impls for `String`, `bool`, the int/float
+  numerics, and `Option<T: PropValue>`). Explicit-list `flatten`
+  stays available for foreign structs and intentional subsets
+  (§5.10.2).
 - `flatten` is incompatible with `#[model(name = "...")]` — there is
   no single wire name to rename when the field is exploded. Per-leaf
   rename is future work.
@@ -987,16 +1033,21 @@ This RFC takes the following positions:
    whatever the field's serde shape is.
 6. **`flatten` is a role-agnostic modifier, opt-in per
    struct-typed field (§5.10).**
-   It explodes a struct field into per-leaf wire keys whose get/set
-   route through the container's serde impl, so a shared or
-   organisational struct field does not regress the flat
+   It explodes a struct field into per-leaf wire keys, so a shared
+   or organisational struct field does not regress the flat
    attribute-per-prop authoring surface. `#[prop(flatten)]` exposes
    the leaves as inbound props only; `#[model(flatten)]` additionally
-   gives each leaf a `pp:update:<leaf>` channel. v1 takes an explicit
-   leaf list — `#[prop(flatten = ["key", "label", …])]`; bare
-   auto-discovery is reserved. Per-leaf `static_prop_kind` is resolved
-   by probing the serialised container so a `String` leaf is not
-   miscoerced. Leaf-name collisions are a hard error.
+   gives each leaf a `pp:update:<leaf>` channel.
+   Two surface shapes coexist: **bare** `#[prop(flatten)]` /
+   `#[model(flatten)]` when the container's type implements `Props`
+   (typically via `#[derive(Props)]`) — leaves are enumerated by the
+   derive, leaf get/set is a direct typed `PropValue` call (no
+   whole-struct serde round-trip), and per-leaf `static_prop_kind` is
+   exact at compile time; or **explicit** `#[prop(flatten = […])]`
+   for foreign structs / intentional subsets, where leaves resolve
+   through serde on the whole container and `static_prop_kind` is
+   probed at runtime. Leaf-name collisions across the static set are
+   a hard error.
 
 Future work, intentionally deferred:
 
@@ -1013,23 +1064,22 @@ Future work, intentionally deferred:
    `flatten_rename` (author-chosen per-leaf wire names) and nested
    flattening (a flattened struct containing another). Both are
    additive and don't block v1.
-3. **Bare `flatten` auto-discovery.**
-   `#[prop(flatten)]` / `#[model(flatten)]` with no explicit list —
-   the runtime reads the leaf set by serialising the container once
-   at mount. Needs a runtime leaves side-table the current
-   static-match codegen cannot produce, and a resolution for
-   `skip_serializing_if` hiding keys (§5.10.6). Reserved; the macro
-   errors today and points at the explicit-list form.
-4. **Coalescing multi-leaf writes for `#[watch(<container>)]`.**
+3. **Coalescing multi-leaf writes for `#[watch(<container>)]`.**
    Dual-key triggering (§5.10.5) is implemented, but a batch that
    writes N leaves fires the container watch N times. A future pass
    could microtask-coalesce a multi-leaf write into one container
    fire — additive, and a no-op for the single-leaf-write case.
-5. **A fully typed leaf contract.**
-   Per-leaf `static_prop_kind` is probed from the serialised default
-   value (§5.10.3), which cannot type an `Option::None` leaf. A
-   derive on the container struct could surface exact per-leaf types
-   (and the leaf list, feeding item 3).
+4. **`PropValue` escape hatch for non-scalar leaves.**
+   v1 `PropValue` impls cover `String`, `bool`, the int / float
+   numerics, and `Option<T: PropValue>`. A `#[prop(with = …)]`
+   escape hatch (and / or a derive for enum leaves) would let custom
+   leaf types implement `PropValue` without manual `to_prop_js` /
+   `from_prop_js`.
+5. **`#[derive(Props)]` emits `Serialize` / `Deserialize`.**
+   v1 keeps a `Props` struct deriving serde alongside `Props` (so
+   `#[component]` structs that derive `Serialize` work without
+   change). A future pass could have the `Props` derive emit the
+   serde impl itself, dropping the per-struct boilerplate.
 
 ## 12. Why this helps others understand the system
 
