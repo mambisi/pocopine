@@ -266,7 +266,7 @@ impl DeployAdapter for FlyAdapter {
 
     fn render_config(&self, spec: &DeploySpec, out: &mut StagedFiles) {
         out.write("Dockerfile", common::render_dockerfile(spec));
-        out.write(".dockerignore", common::DOCKERIGNORE);
+        out.write("Dockerfile.dockerignore", common::dockerignore());
         out.write("fly.toml", render_fly_toml(spec));
     }
 
@@ -277,8 +277,11 @@ impl DeployAdapter for FlyAdapter {
 
         let tag = image_tag(spec);
         let docker = DockerClient::new();
+        // Context `.` is the workspace root (set by the CLI) so sibling
+        // crates like pocopine-launcher are visible to the build stage.
+        let dockerfile = spec.dockerfile_path();
         docker
-            .build(Path::new("."), &tag, Some(Path::new("Dockerfile")))
+            .build(Path::new("."), &tag, Some(Path::new(&dockerfile)))
             .context("fly: docker build failed")?;
         Ok(Artefact::OciImage { tag })
     }
@@ -521,6 +524,9 @@ fn upsert_machine_for_process(
         }
     }
 
+    let mut machine_env = env.clone();
+    machine_env.extend(pocopine_deploy::common::port_env(proc));
+
     let create_req = machines::CreateMachineRequest {
         name: format!("{proc_name}-{replica}"),
         region: region.to_owned(),
@@ -533,7 +539,7 @@ fn upsert_machine_for_process(
                 cmd: vec![proc_name.to_owned()],
                 ..Default::default()
             }),
-            env: env.clone(),
+            env: machine_env,
             services,
             metadata,
             mounts: mounts.to_vec(),
@@ -797,6 +803,7 @@ mod tests {
         services.insert("redis".into(), ServiceSpec { required: true });
         DeploySpec {
             app_name: "test-app".into(),
+            package_name: "test-app".into(),
             git_sha: "abc1234".into(),
             git_remote: None,
             mode: Mode::Fullstack,
@@ -811,6 +818,9 @@ mod tests {
             first_deploy: true,
             skip_build: false,
             environment: None,
+            workspace_subpath: String::new(),
+            has_rust_toolchain: false,
+            static_files: vec!["index.html".into(), "pkg".into()],
         }
     }
 
@@ -847,7 +857,7 @@ mod tests {
         assert!(fly_toml.contains("path = \"/healthz\""));
 
         assert!(staged.get("Dockerfile").is_some());
-        assert!(staged.get(".dockerignore").is_some());
+        assert!(staged.get("Dockerfile.dockerignore").is_some());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
