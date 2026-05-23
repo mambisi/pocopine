@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! HTTP integration tests for `RailwayClient`. Each test spins up a
 //! `wiremock` server, points the blocking client at its URL as the
 //! GraphQL endpoint, and asserts on the exact mutation/query name +

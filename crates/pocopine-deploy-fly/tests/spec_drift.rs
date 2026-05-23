@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Live schema-drift test for the Fly adapter.
 //!
 //! Fly publishes a public OpenAPI spec for the Machines API. Rather than

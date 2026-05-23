@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Live schema-drift test for the Render adapter.
 //!
 //! Render publishes a public OpenAPI spec. Rather than vendoring the

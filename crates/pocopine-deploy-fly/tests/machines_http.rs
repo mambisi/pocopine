@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! HTTP integration tests for `MachinesClient` (RFC 080 Phase 4
 //! follow-up). Each test spins up a `wiremock` server, points the
 //! blocking client at its base URL, and asserts on the exact HTTP

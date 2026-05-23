@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Live schema-drift test for the Railway adapter.
 //!
 //! Railway publishes no OpenAPI file, so the "spec" is the GraphQL
