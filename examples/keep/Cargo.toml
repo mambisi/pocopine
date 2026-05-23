@@ -9,6 +9,19 @@ publish = false
 bin = "server"
 port = 3022
 
+[package.metadata.pocopine.deploy]
+mode = "fullstack"
+
+[package.metadata.pocopine.deploy.processes.web]
+bin = "server"
+port = 3022
+
+[package.metadata.pocopine.deploy.render]
+# Replace with your Render workspace ID (Account Settings -> Workspaces).
+owner_id = "REPLACE_WITH_RENDER_WORKSPACE_ID"
+region = "oregon"
+plan = "starter"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
