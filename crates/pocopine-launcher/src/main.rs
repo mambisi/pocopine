@@ -16,18 +16,28 @@
 
 #![forbid(unsafe_code)]
 
+// Host-only PID 1 shim. wasm32 has no `std::os::unix` or `Command`;
+// stub `main` keeps the crate in workspace builds.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::env;
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::unix::process::CommandExt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::{Command, ExitCode};
 
 /// Resolve a process name to a binary path. Env var first, then the
 /// legacy hard-coded fallback. `bin_for_with_env` exists as a testing
 /// seam — it takes an explicit lookup closure so tests don't mutate
 /// process env.
+#[cfg(not(target_arch = "wasm32"))]
 fn bin_for(process: &str) -> Option<String> {
     bin_for_with_env(process, env_lookup)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bin_for_with_env<F>(process: &str, env: F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
@@ -49,6 +59,7 @@ where
 /// Process name → env var name: `web` → `POCOPINE_PROC_WEB`,
 /// `my-api` → `POCOPINE_PROC_MY_API`. Non-alphanumeric bytes collapse
 /// to `_`, matching the credentials store's encoding.
+#[cfg(not(target_arch = "wasm32"))]
 fn env_var_name(process: &str) -> String {
     let normalised: String = process
         .chars()
@@ -63,10 +74,12 @@ fn env_var_name(process: &str) -> String {
     format!("POCOPINE_PROC_{normalised}")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn env_lookup(key: &str) -> Option<String> {
     env::var(key).ok()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
 
@@ -96,7 +109,7 @@ fn main() -> ExitCode {
     ExitCode::from(126) // EX_NOPERM-ish: binary exists by build invariant but we couldn't run it.
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use std::collections::HashMap;
