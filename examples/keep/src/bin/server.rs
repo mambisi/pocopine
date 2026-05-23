@@ -15,11 +15,14 @@ async fn main() -> std::io::Result<()> {
         .allow_topics(sync_topics.clone())
         .default_topics(sync_topics);
 
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    // $POCOPINE_DIST is set by the deploy container (RFC 080 §4.2);
+    // unset under `pocopine dev`, so fall back to the source tree.
+    let static_dir =
+        std::env::var("POCOPINE_DIST").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
     let cross_origin_isolated = cross_origin_isolation_enabled();
     let mut router = Router::new()
         .merge(routes(live_hub))
-        .fallback_service(static_files(manifest_dir));
+        .fallback_service(static_files(&static_dir));
 
     if cross_origin_isolated {
         router = router.layer(axum::middleware::map_response(
@@ -27,7 +30,11 @@ async fn main() -> std::io::Result<()> {
         ));
     }
 
-    let addr = std::env::var("POCOPINE_KEEP_ADDR").unwrap_or_else(|_| "127.0.0.1:3022".to_string());
+    // Bind: $PORT (host-injected) → $POCOPINE_KEEP_ADDR → local default.
+    let addr = std::env::var("PORT")
+        .map(|p| format!("0.0.0.0:{p}"))
+        .or_else(|_| std::env::var("POCOPINE_KEEP_ADDR"))
+        .unwrap_or_else(|_| "127.0.0.1:3022".to_string());
     tracing::info!(
         target: "pocopine.log",
         %addr,
