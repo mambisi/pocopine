@@ -123,11 +123,20 @@ impl DeployAdapter for RenderAdapter {
 
         // Required Render override fields.
         let overrides = render_override(spec);
-        if overrides.owner_id.as_deref().unwrap_or("").is_empty() {
+        let raw_owner = overrides.owner_id.as_deref().unwrap_or("");
+        if raw_owner.is_empty() {
             out.push(Constraint::Refuse(
                 "render requires `[deploy.render].owner_id` (workspace ID — copy it from your Render dashboard's Account Settings → Workspaces)."
                     .into(),
             ));
+        } else if is_placeholder_owner_id(raw_owner) {
+            // Templates ship a `REPLACE_WITH_RENDER_WORKSPACE_ID`
+            // sentinel so users know where to paste. Catching it here
+            // turns a confusing 404 from Render's API ("owner not
+            // found") into a clear next step before the deploy starts.
+            out.push(Constraint::Refuse(format!(
+                "render: `[deploy.render].owner_id = \"{raw_owner}\"` is still the placeholder value. Replace it with your real workspace ID from Render's dashboard (Account Settings → Workspaces).",
+            )));
         }
         // Resolve the container registry — explicit `image_registry`,
         // else derived from the git remote (Phase 18). An unresolvable
@@ -200,7 +209,7 @@ impl DeployAdapter for RenderAdapter {
 
     fn render_config(&self, spec: &DeploySpec, out: &mut StagedFiles) {
         out.write("Dockerfile", common::render_dockerfile(spec));
-        out.write(".dockerignore", common::DOCKERIGNORE);
+        out.write("Dockerfile.dockerignore", common::dockerignore());
         out.write("render.yaml", render_yaml(spec));
     }
 
@@ -218,8 +227,9 @@ impl DeployAdapter for RenderAdapter {
 
         let tag = image_tag(spec);
         let docker = DockerClient::new();
+        let dockerfile = spec.dockerfile_path();
         docker
-            .build(Path::new("."), &tag, Some(Path::new("Dockerfile")))
+            .build(Path::new("."), &tag, Some(Path::new(&dockerfile)))
             .context("render: docker build failed")?;
         Ok(Artefact::OciImage { tag })
     }
@@ -307,13 +317,7 @@ impl DeployAdapter for RenderAdapter {
                 "background_worker"
             };
 
-            // Per-service env vars: the shared launcher reads
-            // `POCOPINE_PROCESS` (RFC 080 §5.3) to dispatch to the
-            // right bin. Without this, every Render service would
-            // start the container and exit with usage. Inject before
-            // pushing.
-            let mut service_env_vars = env_vars.clone();
-            service_env_vars.push(("POCOPINE_PROCESS".into(), proc_name.to_owned()));
+            let service_env_vars = build_service_env_vars(&env_vars, proc_name, proc);
 
             let existing = client.find_service_by_name(&service_name)?;
             let svc = match existing {
@@ -390,6 +394,28 @@ impl DeployAdapter for RenderAdapter {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
+
+/// Per-service env pushed to Render: base `[deploy.env]` literals +
+/// `POCOPINE_PROCESS` (launcher dispatch) + `PORT` for public procs
+/// (so Render's ingress and the app agree; default would be 10000).
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn build_service_env_vars(
+    env_vars: &[(String, String)],
+    proc_name: &str,
+    proc: &pocopine_deploy::ProcessSpec,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = env_vars.to_vec();
+    out.push(("POCOPINE_PROCESS".into(), proc_name.to_owned()));
+    out.extend(pocopine_deploy::common::port_env(proc));
+    out
+}
+
+/// Reject sentinel strings the example templates ship — they're
+/// non-empty but would 404 from Render's API as "owner not found".
+fn is_placeholder_owner_id(s: &str) -> bool {
+    let upper = s.trim().to_ascii_uppercase();
+    upper.starts_with("REPLACE_WITH") || upper == "<REPLACE_ME>" || upper == "TODO"
+}
 
 /// Render service names must match `[a-z0-9][a-z0-9_-]{0,62}`. Same
 /// rule we apply to Fly's machine names; we re-check here so the adapter
@@ -605,6 +631,7 @@ mod tests {
 
         DeploySpec {
             app_name: "test-app".into(),
+            package_name: "test-app".into(),
             git_sha: "abc1234".into(),
             git_remote: None,
             mode: Mode::Fullstack,
@@ -619,6 +646,9 @@ mod tests {
             first_deploy: true,
             skip_build: false,
             environment: None,
+            workspace_subpath: String::new(),
+            has_rust_toolchain: false,
+            static_files: vec!["index.html".into(), "pkg".into()],
         }
     }
 
@@ -703,6 +733,80 @@ mod tests {
     fn image_tag_uses_registry_app_name_and_sha() {
         let spec = fullstack_spec_with_render_config();
         assert_eq!(image_tag(&spec), "ghcr.io/myorg/test-app:abc1234");
+    }
+
+    #[test]
+    fn build_service_env_vars_injects_process_and_port() {
+        let proc = pocopine_deploy::ProcessSpec {
+            bin: "server".into(),
+            port: Some(3022),
+            healthcheck: None,
+            scale: pocopine_deploy::Scale { min: 1, max: 1 },
+            public: None,
+        };
+        let env = vec![("LOG_LEVEL".to_string(), "info".to_string())];
+        let out = build_service_env_vars(&env, "web", &proc);
+        assert!(
+            out.contains(&("LOG_LEVEL".into(), "info".into())),
+            "base env preserved",
+        );
+        assert!(
+            out.contains(&("POCOPINE_PROCESS".into(), "web".into())),
+            "POCOPINE_PROCESS injected for launcher dispatch",
+        );
+        assert!(
+            out.contains(&("PORT".into(), "3022".into())),
+            "PORT injected from spec port",
+        );
+    }
+
+    #[test]
+    fn build_service_env_vars_skips_port_for_workers() {
+        let proc = pocopine_deploy::ProcessSpec {
+            bin: "worker".into(),
+            // A worker may have a port (e.g. health probe), but if it
+            // isn't public Render doesn't route to it.
+            port: Some(7000),
+            healthcheck: None,
+            scale: pocopine_deploy::Scale { min: 1, max: 1 },
+            public: Some(false),
+        };
+        let out = build_service_env_vars(&[], "worker", &proc);
+        assert!(
+            !out.iter().any(|(k, _)| k == "PORT"),
+            "private process doesn't get PORT (Render won't route)",
+        );
+    }
+
+    #[test]
+    fn refuses_placeholder_owner_id() {
+        // The template ships `REPLACE_WITH_RENDER_WORKSPACE_ID` so
+        // users know where to paste. It's non-empty so the old
+        // `is_empty` check passed, then Render's API would 404 with
+        // an unclear "owner not found". detect_constraints now catches
+        // it earlier with the original "where to find it" hint.
+        let mut spec = fullstack_spec_with_render_config();
+        let render_block = toml::toml! {
+            owner_id = "REPLACE_WITH_RENDER_WORKSPACE_ID"
+            image_registry = "ghcr.io/myorg"
+        };
+        spec.host_overrides
+            .insert("render".into(), toml::Value::from(render_block));
+        let cs = RenderAdapter.detect_constraints(&spec);
+        assert!(cs.iter().any(|c| matches!(
+            c,
+            Constraint::Refuse(s) if s.contains("placeholder") && s.contains("REPLACE_WITH"),
+        )));
+    }
+
+    #[test]
+    fn is_placeholder_owner_id_recognises_template_sentinels() {
+        assert!(is_placeholder_owner_id("REPLACE_WITH_RENDER_WORKSPACE_ID"));
+        assert!(is_placeholder_owner_id("replace_with_anything"));
+        assert!(is_placeholder_owner_id("TODO"));
+        assert!(is_placeholder_owner_id("<REPLACE_ME>"));
+        assert!(!is_placeholder_owner_id("wrk-abc123"));
+        assert!(!is_placeholder_owner_id("owner-12345"));
     }
 
     #[test]
