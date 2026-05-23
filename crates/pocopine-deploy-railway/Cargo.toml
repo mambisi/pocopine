@@ -29,6 +29,7 @@ ureq = "2"
 graphql_client = { version = "0.16", features = ["reqwest-blocking"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-webpki-roots"] }
 
-[dev-dependencies]
+# Host-only: wiremock + tokio's rt-multi-thread pull in mio (no wasm32 backend).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
