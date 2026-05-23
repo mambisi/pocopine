@@ -1716,7 +1716,19 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 };
                 match parsed {
                     Ok((name, flatten, bare)) => {
-                        if let Some(leaves) = flatten {
+                        // RFC-044 §5.10 — `flatten` is incompatible with
+                        // `name`: there is no single wire name to rename
+                        // when the field is exploded into per-leaf keys.
+                        // Catch the combination instead of silently
+                        // dropping `name` on the floor.
+                        if name.is_some() && (flatten.is_some() || bare) {
+                            observe_err = Some(syn::Error::new_spanned(
+                                a,
+                                "#[model(name = \"...\", flatten…)] is not allowed — \
+                                 `flatten` explodes the field into per-leaf wire keys, \
+                                 so a single rename has no target. Drop one of the two.",
+                            ));
+                        } else if let Some(leaves) = flatten {
                             // Explicit-list flatten — container is
                             // internal, leaves take the prop + model
                             // role (added to `flatten_fields`).
@@ -2056,6 +2068,82 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .flat_map(|(_, leaves, _)| leaves.iter())
         .collect();
 
+    // RFC-044 §5.10.4 — collision shield for the bare-flatten
+    // fallthrough. A bare leaf is only known at runtime; without
+    // guarding the `_` arms a key that ALSO names a real struct field
+    // (or an explicit-flatten leaf) would be misclassified as
+    // belonging to a bare container — `is_prop("x")` would flip true
+    // via the bare OR-term even when `x` is unmarked state, and
+    // `flatten_container_of("x")` would point at the wrong container,
+    // dual-triggering a `#[watch(<container>)]` that wasn't actually
+    // mutated. Gate the fallthrough on "key isn't already a static
+    // known key".
+    //
+    // `static_known_field_names_check` matches every real struct
+    // field (used by `flatten_container_of` / `model_name`, whose
+    // static arms cover only explicit-flatten leaves).
+    // `static_known_keys_check` matches every real field PLUS every
+    // explicit-flatten leaf (used by `is_prop` / `is_model`, whose
+    // matches-cover only the *role-marked* subset).
+    let static_known_field_names_check = if field_names.is_empty() {
+        quote! { false }
+    } else {
+        quote! { matches!(key, #(#field_names)|*) }
+    };
+    let static_known_keys_check_idents: Vec<&String> = field_names
+        .iter()
+        .chain(flatten_leaf_names.iter().copied())
+        .collect();
+    let static_known_keys_check = if static_known_keys_check_idents.is_empty() {
+        quote! { false }
+    } else {
+        quote! { matches!(key, #(#static_known_keys_check_idents)|*) }
+    };
+    // Runtime collision audit emitted into `keys()` initialisation —
+    // panics on first call (mount time) if any bare-flatten leaf
+    // collides with a real field, an explicit-flatten leaf, or
+    // another bare leaf. Compile-time const-eval is future work
+    // (needs an inherent `const` on the `Props` impl); this fails
+    // loud at mount, matching RFC §5.10.4's "hard error" promise in
+    // practice without blocking the v1 derive shape.
+    let static_known_keys_audit_arr = static_known_keys_check_idents.iter().map(|n| quote! { #n });
+    let bare_flatten_audit_extends = bare_flatten_fields.iter().map(|(_, ty, _)| {
+        quote! {
+            __bare_leaves.extend_from_slice(
+                <#ty as ::pocopine::__private::Props>::prop_leaves(),
+            );
+        }
+    });
+    let bare_flatten_collision_audit = if bare_flatten_fields.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            // Gathered once on first `keys()` call; panics on any
+            // leaf-name collision (RFC-044 §5.10.4).
+            let mut __bare_leaves: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
+            #(#bare_flatten_audit_extends)*
+            let __static_known: &[&'static str] = &[#(#static_known_keys_audit_arr),*];
+            for __i in 0..__bare_leaves.len() {
+                let __leaf = __bare_leaves[__i];
+                if __static_known.contains(&__leaf) {
+                    panic!(
+                        "RFC-044 §5.10.4 — bare-flatten leaf `{}` collides with \
+                         an existing field or explicit-flatten leaf on this \
+                         component; rename the leaf",
+                        __leaf,
+                    );
+                }
+                if __bare_leaves[..__i].contains(&__leaf) {
+                    panic!(
+                        "RFC-044 §5.10.4 — bare-flatten leaf `{}` is exposed by \
+                         more than one container on this component",
+                        __leaf,
+                    );
+                }
+            }
+        }
+    };
+
     // RFC-044 §5.10 — leaf → container map for `flatten_container_of`.
     // A write to any leaf mutates the whole container field, so the
     // proxy `set` trap triggers the container key too, letting one
@@ -2102,10 +2190,16 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     ) {
         (true, true) => quote! { let _ = key; false },
         (false, true) => quote! { matches!(key, #(#prop_field_names)|*) },
-        (true, false) => quote! { #(#bare_flatten_is_prop_terms)||* },
+        // Bare-flatten OR-terms are gated by `!static_known_keys_check`
+        // so a real field that shadows a bare leaf doesn't flip
+        // `is_prop` to true via the bare path (RFC-044 §5.10.4).
+        (true, false) => quote! {
+            !(#static_known_keys_check) && (#(#bare_flatten_is_prop_terms)||*)
+        },
         (false, false) => quote! {
             matches!(key, #(#prop_field_names)|*)
-                || #(#bare_flatten_is_prop_terms)||*
+                || (!(#static_known_keys_check)
+                    && (#(#bare_flatten_is_prop_terms)||*))
         },
     };
 
@@ -2178,17 +2272,22 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .collect();
     // Same shape as `is_prop_body` (above) — bare model-flatten
     // containers contribute OR terms resolved through
-    // `<Ty as Props>::prop_leaves()` at runtime.
+    // `<Ty as Props>::prop_leaves()` at runtime, gated by
+    // `!static_known_keys_check` so a real field that happens to
+    // share a bare leaf's name doesn't bleed into the model role.
     let is_model_body = match (
         model_field_names.is_empty(),
         bare_flatten_is_model_terms.is_empty(),
     ) {
         (true, true) => quote! { let _ = key; false },
         (false, true) => quote! { matches!(key, #(#model_field_names)|*) },
-        (true, false) => quote! { #(#bare_flatten_is_model_terms)||* },
+        (true, false) => quote! {
+            !(#static_known_keys_check) && (#(#bare_flatten_is_model_terms)||*)
+        },
         (false, false) => quote! {
             matches!(key, #(#model_field_names)|*)
-                || #(#bare_flatten_is_model_terms)||*
+                || (!(#static_known_keys_check)
+                    && (#(#bare_flatten_is_model_terms)||*))
         },
     };
     let model_name_arms = field_names
@@ -2894,6 +2993,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                         <Self as ::pocopine::__private::HandlerDispatch>::computed_keys(),
                     );
                     #(#bare_flatten_keys_extend)*
+                    // RFC-044 §5.10.4 — one-time bare-flatten leaf
+                    // collision audit. No-op when the component has
+                    // no bare flatten fields.
+                    #bare_flatten_collision_audit
                     let __boxed: ::std::boxed::Box<[&'static str]> = __keys.into_boxed_slice();
                     ::std::boxed::Box::leak(__boxed)
                 })
@@ -2911,6 +3014,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 match key {
                     #(#flatten_container_arms)*
                     _ => {
+                        // RFC-044 §5.10.4 — a real struct field that
+                        // happens to share a bare-flatten leaf's name
+                        // must not falsely report a container (which
+                        // would trigger `#[watch(<container>)]` on a
+                        // write that only touched the field).
+                        if #static_known_field_names_check {
+                            return ::core::option::Option::None;
+                        }
                         #(#bare_flatten_container_lookups)*
                         ::core::option::Option::None
                     }
@@ -2923,6 +3034,13 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 match key {
                     #(#model_name_arms)*
                     _ => {
+                        // RFC-044 §5.10.4 — gate the bare-model-flatten
+                        // fallthrough so a real field's name can't
+                        // accidentally be reported as a wire-emitted
+                        // model leaf.
+                        if #static_known_field_names_check {
+                            return ::core::option::Option::None;
+                        }
                         #(#bare_flatten_model_name_lookups)*
                         ::core::option::Option::None
                     }

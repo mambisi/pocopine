@@ -349,3 +349,176 @@ async fn bare_flatten_leaves_round_trip_through_static_attrs() {
 
     host.remove();
 }
+
+// ─── bare-flatten + pp-bind + #[watch(<container>)] dual-trigger ───
+
+thread_local! {
+    static BARE_COMMON_FIRES: Cell<u32> = const { Cell::new(0) };
+    static BARE_LABEL_FIRES: Cell<u32> = const { Cell::new(0) };
+    static BARE_LAST_COMMON_LABEL: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+#[derive(Props, Default, Clone, PartialEq, Serialize, Deserialize)]
+struct BareWatchLeaves {
+    #[prop]
+    label: String,
+    #[prop]
+    color: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "bare-flatten-watch-child",
+    template_inline = r#"<div><span class="lbl" pp-text="label"></span></div>"#
+)]
+struct BareFlattenWatchChild {
+    #[prop(flatten)]
+    common: BareWatchLeaves,
+}
+
+#[handlers]
+impl BareFlattenWatchChild {
+    // Confirms RFC-044 §5.10.5 dual-key triggering still fires through
+    // the bare-flatten path, not just the explicit-list path PR #102
+    // tested.
+    #[watch(common)]
+    fn on_common(&mut self, new: BareWatchLeaves, _: Option<BareWatchLeaves>) {
+        BARE_COMMON_FIRES.with(|c| c.set(c.get() + 1));
+        BARE_LAST_COMMON_LABEL.with(|s| *s.borrow_mut() = new.label.clone());
+    }
+
+    #[watch(label)]
+    fn on_label(&mut self, _: String, _: Option<String>) {
+        BARE_LABEL_FIRES.with(|c| c.set(c.get() + 1));
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "bare-flatten-watch-parent",
+    template_inline = r#"<div>
+        <bare-flatten-watch-child pp-bind:label="child_label"></bare-flatten-watch-child>
+        <button class="bump" pp-on:click="bump"></button>
+    </div>"#
+)]
+struct BareFlattenWatchParent {
+    child_label: String,
+}
+
+#[handlers]
+impl BareFlattenWatchParent {
+    fn bump(&mut self) {
+        self.child_label = "fresh".into();
+    }
+}
+
+#[wasm_bindgen_test]
+async fn bare_flatten_pp_bind_fires_both_leaf_and_container_watch() {
+    BareFlattenWatchChild::register();
+    BareFlattenWatchParent::register();
+    let host = mount(
+        "bare-flatten-watch-parent",
+        r#"<bare-flatten-watch-parent></bare-flatten-watch-parent>"#,
+    );
+    settle().await;
+
+    BARE_COMMON_FIRES.with(|c| c.set(0));
+    BARE_LABEL_FIRES.with(|c| c.set(0));
+    BARE_LAST_COMMON_LABEL.with(|s| s.borrow_mut().clear());
+
+    host.query_selector(".bump")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    assert_eq!(
+        BARE_COMMON_FIRES.with(|c| c.get()),
+        1,
+        "#[watch(common)] fires through the bare-flatten path",
+    );
+    assert_eq!(
+        BARE_LABEL_FIRES.with(|c| c.get()),
+        1,
+        "per-leaf #[watch(label)] still fires alongside",
+    );
+    assert_eq!(
+        BARE_LAST_COMMON_LABEL.with(|s| s.borrow().clone()),
+        "fresh",
+        "container watch observes the updated leaf value",
+    );
+    assert_eq!(read(&host, ".lbl"), "fresh");
+
+    host.remove();
+}
+
+// ─── Option<T> empty-string → None (lossy, documented) ───
+
+thread_local! {
+    static OPTION_LEAF_IS_NONE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+#[derive(Props, Default, Clone, PartialEq, Serialize, Deserialize)]
+struct OptionLeaves {
+    #[prop]
+    code: Option<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "option-flatten-target",
+    template_inline = r#"<div>
+        <button class="probe" pp-on:click="probe"></button>
+    </div>"#
+)]
+struct OptionFlattenTarget {
+    #[prop(flatten)]
+    common: OptionLeaves,
+}
+
+#[handlers]
+impl OptionFlattenTarget {
+    fn probe(&mut self) {
+        OPTION_LEAF_IS_NONE.with(|c| c.set(Some(self.common.code.is_none())));
+    }
+}
+
+#[wasm_bindgen_test]
+async fn option_leaf_collapses_empty_string_attr_to_none() {
+    // Documented lossy behaviour (`PropValue<Option<T>>::from_prop_js`
+    // in `pocopine-core/src/props.rs`): an empty static attribute is
+    // indistinguishable from "absent" and coerces to `None`. A real
+    // `Some(String::new())` over `pp-bind` would collapse the same
+    // way — same as the explicit-list flatten path (RFC-044 §5.4).
+    OptionFlattenTarget::register();
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html(r#"<option-flatten-target code=""></option-flatten-target>"#);
+    body.append_child(&host).unwrap();
+    let el = host
+        .query_selector("option-flatten-target")
+        .unwrap()
+        .unwrap();
+    pocopine_core::mount::mount_child_component(&el, "option-flatten-target");
+    pocopine_core::mount::finalize_compiled_subtree(&el);
+    settle().await;
+
+    OPTION_LEAF_IS_NONE.with(|c| c.set(None));
+    host.query_selector(".probe")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    settle().await;
+
+    assert_eq!(
+        OPTION_LEAF_IS_NONE.with(|c| c.get()),
+        Some(true),
+        "Option<String> leaf with empty-string static attr lands as None",
+    );
+
+    host.remove();
+}
