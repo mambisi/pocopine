@@ -19,7 +19,7 @@
 //!     tokens for every known host.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -48,6 +48,12 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
     let deploy_table = deploy_table_from_manifest(&manifest)?;
     let git_sha = short_git_sha(&project)?;
 
+    // workspace_root → docker build context; subpath is "" for
+    // standalone projects, e.g. "examples/keep" for workspace members.
+    let workspace_root = discover_workspace_root(&project)?;
+    let workspace_subpath =
+        normalize_workspace_subpath(project.strip_prefix(&workspace_root).ok())?;
+
     let target = args
         .target
         .as_deref()
@@ -59,9 +65,7 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
         None
     };
     let mut spec = spec::parse(deploy_table.clone(), app_name, git_sha, environment)?;
-    // first_deploy: derived from .pocopine/deploy/<target>.toml presence.
-    // The state file is env-scoped so production and staging deploys
-    // track their first-deploy state independently.
+    // first_deploy is per-(target, env) so prod and staging track separately.
     let state_basename = match spec.environment.as_deref() {
         Some(env) => format!("{target}-{env}.toml"),
         None => format!("{target}.toml"),
@@ -69,10 +73,9 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
     let state_file = project.join(".pocopine/deploy").join(&state_basename);
     spec.first_deploy = !state_file.exists();
     spec.skip_build = args.skip_build;
-    // The `origin` remote lets adapters derive a default container
-    // registry (GitHub → GHCR, GitLab → GitLab CR) when no explicit
-    // `image_registry` is set. Best-effort: `None` if there's no remote.
     spec.git_remote = discover_git_remote(&project);
+    spec.workspace_subpath = workspace_subpath.clone();
+    spec.has_rust_toolchain = workspace_root.join("rust-toolchain.toml").exists();
 
     let adapter = resolve_adapter(target)?;
 
@@ -98,11 +101,21 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
     adapter.render_config(&spec, &mut staged);
 
     if args.dry_run {
-        eprintln!(
-            "--dry-run: would write {} file(s) under {}",
-            staged.len(),
-            project.display(),
-        );
+        if workspace_subpath.is_empty() {
+            eprintln!(
+                "--dry-run: would write {} file(s) under {}",
+                staged.len(),
+                project.display(),
+            );
+        } else {
+            eprintln!(
+                "--dry-run: workspace member detected — project `{}` at `{}/` \
+                 (docker build context: workspace root). Would write {} file(s) under the project dir.",
+                spec.app_name,
+                workspace_subpath,
+                staged.len(),
+            );
+        }
         for (path, content) in staged.iter() {
             println!("\n=== {path} ===");
             println!("{content}");
@@ -115,20 +128,15 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
         return Ok(());
     }
 
-    // 3. Flush staged files to disk. Refuse to clobber a hand-edited
-    //    file that doesn't carry our `GENERATED_MARKER` — RFC 080 §7
-    //    expects regenerated files to be warned/frozen, not silently
-    //    overwritten.
+    // 3. Flush staged files. flush_one refuses to clobber hand-edited
+    //    files that lack GENERATED_MARKER (RFC 080 §7).
     for (path, content) in staged.iter() {
         let dest = project.join(path);
         flush_one(&dest, content)?;
     }
 
-    // 4. Build the client bundle + configured bins exactly the same
-    //    way `pocopine build --release` does, so the Dockerfile's
-    //    final-stage COPY picks up fresh assets instead of a stale
-    //    `pkg/` or empty `dist/`. Skipped under `--skip-build`: the
-    //    image is expected to already be in the host's registry.
+    // 4. Build the same artefacts as `pocopine build --release` so
+    //    the Dockerfile's COPY picks up fresh wasm + bundles.
     if !args.skip_build {
         let cfg = crate::config::load(&args.path)?;
         crate::build::wasm(&project, true)?;
@@ -139,10 +147,11 @@ fn run_deploy(args: &DeployArgs) -> Result<()> {
         }
     }
 
-    // 5. CD into project so adapter `build_artefact` (which calls
-    //    `docker build .`) and `deploy` resolve files at the right root.
+    // 5. `docker build .` runs from the workspace root so workspace
+    //    members' sibling crates (e.g. pocopine-launcher) are visible.
     let original_cwd = std::env::current_dir().ok();
-    std::env::set_current_dir(&project).with_context(|| format!("cd {}", project.display()))?;
+    std::env::set_current_dir(&workspace_root)
+        .with_context(|| format!("cd {}", workspace_root.display()))?;
     let result = (|| -> Result<()> {
         let artefact = if args.skip_build {
             adapter.default_artefact(&spec)
@@ -345,6 +354,53 @@ fn short_git_sha(project: &Path) -> Result<String> {
     Ok(sha.chars().take(7).collect())
 }
 
+/// Normalize a subpath for Dockerfile COPY: backslash → `/`, trim
+/// trailing slash, refuse whitespace/control chars (which would break
+/// the unquoted COPY tokenization).
+fn normalize_workspace_subpath(rel: Option<&Path>) -> Result<String> {
+    let Some(rel) = rel else {
+        return Ok(String::new());
+    };
+    let normalized = rel.to_string_lossy().replace('\\', "/");
+    if normalized.is_empty() {
+        return Ok(String::new());
+    }
+    if normalized
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
+        bail!(
+            "workspace subpath `{normalized}` contains whitespace/control characters that would break Dockerfile COPY. \
+             Rename the project directory to a path without spaces.",
+        );
+    }
+    Ok(normalized.trim_end_matches('/').to_owned())
+}
+
+/// Walk up from `project` for a `Cargo.toml` containing `[workspace]`.
+/// The innermost wins; standalone projects (no `[workspace]` anywhere)
+/// return `project` itself. Read/parse errors propagate.
+fn discover_workspace_root(project: &Path) -> Result<PathBuf> {
+    let mut cursor: Option<&Path> = Some(project);
+    while let Some(dir) = cursor {
+        let cargo_toml = dir.join("Cargo.toml");
+        match std::fs::read_to_string(&cargo_toml) {
+            Ok(raw) => {
+                let v: toml::Value = raw
+                    .parse()
+                    .with_context(|| format!("parsing `{}`", cargo_toml.display()))?;
+                if v.get("workspace").is_some() {
+                    return Ok(dir.to_path_buf());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("reading `{}`", cargo_toml.display())),
+        }
+        cursor = dir.parent();
+    }
+    Ok(project.to_path_buf())
+}
+
 /// Best-effort `git remote get-url origin`. Returns `None` when there is
 /// no `origin` remote — adapters then fall back to requiring an explicit
 /// `image_registry`.
@@ -471,6 +527,127 @@ mod tests {
         flush_one(&dest, "# Generated by pocopine-deploy (new)\nnew\n").unwrap();
         let after = std::fs::read_to_string(&dest).unwrap();
         assert!(after.contains("new"));
+    }
+
+    #[test]
+    fn normalize_workspace_subpath_handles_unix_paths() {
+        let got = normalize_workspace_subpath(Some(Path::new("examples/keep"))).unwrap();
+        assert_eq!(got, "examples/keep");
+    }
+
+    #[test]
+    fn normalize_workspace_subpath_converts_backslashes() {
+        let got = normalize_workspace_subpath(Some(Path::new("examples\\keep"))).unwrap();
+        assert_eq!(got, "examples/keep");
+    }
+
+    #[test]
+    fn normalize_workspace_subpath_refuses_whitespace() {
+        let err = normalize_workspace_subpath(Some(Path::new("my project/keep")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whitespace"));
+    }
+
+    #[test]
+    fn normalize_workspace_subpath_trims_trailing_slash() {
+        let got = normalize_workspace_subpath(Some(Path::new("examples/keep/"))).unwrap();
+        assert_eq!(got, "examples/keep");
+    }
+
+    #[test]
+    fn normalize_workspace_subpath_empty_when_no_rel() {
+        assert_eq!(normalize_workspace_subpath(None).unwrap(), "");
+    }
+
+    #[test]
+    fn discover_workspace_root_finds_workspace_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"examples/keep\"]\n",
+        )
+        .unwrap();
+        let member = root.path().join("examples/keep");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"keep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let found = discover_workspace_root(&member).unwrap();
+        // canonicalize: macOS tempdir resolves through `/private/`.
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            root.path().canonicalize().unwrap(),
+        );
+    }
+
+    #[test]
+    fn discover_workspace_root_returns_project_when_it_is_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+        let found = discover_workspace_root(dir.path()).unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap(),
+        );
+    }
+
+    #[test]
+    fn discover_workspace_root_picks_innermost_for_nested_workspaces() {
+        let outer = tempfile::tempdir().unwrap();
+        std::fs::write(
+            outer.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"inner\"]\n",
+        )
+        .unwrap();
+        let inner = outer.path().join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(
+            inner.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\n",
+        )
+        .unwrap();
+        let app = inner.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let found = discover_workspace_root(&app).unwrap();
+        assert_eq!(found.canonicalize().unwrap(), inner.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn discover_workspace_root_surfaces_parse_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "this = is not valid toml [[").unwrap();
+        let err = discover_workspace_root(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("parsing"));
+    }
+
+    #[test]
+    fn discover_workspace_root_collapses_for_standalone_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("standalone");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"standalone\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let found = discover_workspace_root(&project).unwrap();
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            project.canonicalize().unwrap(),
+        );
     }
 
     #[test]
