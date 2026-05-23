@@ -80,12 +80,25 @@ macro_rules! impl_numeric_prop_value {
     )* };
 }
 
-impl_numeric_prop_value!(f32, f64, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+// JS numbers are IEEE-754 doubles, so `i64` / `u64` over the safe-int
+// range (±2^53) would silently lose precision through `as f64` and
+// the round-trip back. Restrict the v1 impls to widths that round-trip
+// losslessly. `usize` / `isize` are safe — pocopine targets wasm32
+// only, where they are 32-bit. A future revision can add `i64` / `u64`
+// via `BigInt` if a real prop type needs them.
+impl_numeric_prop_value!(f32, f64, i8, i16, i32, isize, u8, u16, u32, usize);
 
 /// `Option<T>` impl — `None` round-trips through `JsValue::NULL`, and
-/// an empty-string inbound write coerces to `None` to match the
+/// an empty-string inbound value coerces to `None` to match the
 /// long-standing empty-attribute → `None` convention the explicit
-/// flatten path also honours.
+/// flatten path also honours (RFC-044 §5.4).
+///
+/// Note this is lossy for `Option<String>` going through `pp-bind`:
+/// a parent's `Some(String::new())` becomes `None` on the child
+/// because the value is indistinguishable from an empty static
+/// attribute `<… leaf=""/>`. Use a sentinel or a separate flag if
+/// you need to round-trip a real empty string; the same caveat
+/// applies to the explicit-list flatten path.
 impl<T: PropValue> PropValue for Option<T> {
     fn to_prop_js(&self) -> JsValue {
         match self {
