@@ -18,17 +18,19 @@ pub enum Mode {
 #[derive(Debug, Clone)]
 pub struct DeploySpec {
     pub app_name: String,
+    /// Unsuffixed `[package].name` for `cargo build -p <pkg>`. Distinct
+    /// from `app_name`, which `--prod` suffixes with `-production`.
+    pub package_name: String,
     pub git_sha: String,
-    /// The project's `origin` git remote URL, when there is one.
-    /// CLI-discovered (like `git_sha`); used to derive a default
-    /// container registry — see [`crate::resolve_registry`].
+    /// Project's `origin` URL, used to derive a default container
+    /// registry — see [`crate::resolve_registry`].
     pub git_remote: Option<String>,
     pub mode: Mode,
     pub processes: BTreeMap<String, ProcessSpec>,
     pub services: BTreeMap<String, ServiceSpec>,
     pub env: BTreeMap<String, EnvValue>,
-    /// Host-namespaced overrides (`[deploy.fly]`, `[deploy.railway]`, …).
-    /// Each adapter pulls its own block via [`DeploySpec::host_override`].
+    /// Host-namespaced overrides (`[deploy.fly]`, …). Read via
+    /// [`DeploySpec::host_override`].
     pub host_overrides: BTreeMap<String, toml::Value>,
 
     // Build-artefact metadata (RFC 080 §9 — populated by `pocopine build`).
@@ -39,21 +41,29 @@ pub struct DeploySpec {
 
     pub first_deploy: bool,
 
-    /// `pocopine deploy --skip-build` was passed. Adapters reading this
-    /// should return the deterministic artefact (no `docker build`) and
-    /// skip any local push step — the image is expected to already be
-    /// in the host's registry from a previous build.
+    /// `--skip-build` was passed; reuse the host's pushed image.
     pub skip_build: bool,
 
-    /// Target environment, e.g. `Some("production")` for
-    /// `pocopine deploy --prod`. `None` = no env-scoped overrides and
-    /// no app-name suffix (the "ambient" environment).
-    ///
-    /// When set, `parse` merges `[deploy.<env>]` sub-table fields into
-    /// the base spec (env vars + host overrides) and suffixes the app
-    /// name with `-<env>` so prod and staging deploy to distinct host
-    /// apps.
+    /// `Some("production")` for `--prod`. When set, `parse` merges
+    /// `[deploy.<env>]` into the base spec and suffixes `app_name`
+    /// with `-<env>` so envs deploy to distinct host apps.
     pub environment: Option<String>,
+
+    /// Project path relative to the docker-build context (the cargo
+    /// workspace root). Empty for standalone repos, `"examples/keep"`
+    /// for workspace members. Static-asset COPYs in the runtime stage
+    /// are prefixed with this.
+    pub workspace_subpath: String,
+
+    /// `true` when `rust-toolchain.toml` exists at the workspace root.
+    /// Triggers a cached-layer rustup pre-install in the Dockerfile —
+    /// `pocopine-macros`'s `proc_macro_span` needs the pinned nightly.
+    pub has_rust_toolchain: bool,
+
+    /// Project-relative entries copied into `$POCOPINE_DIST`. Default
+    /// `["index.html", "pkg"]`; users add `app.css`, `public/`, etc.
+    /// via `[deploy] static_files`.
+    pub static_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +192,18 @@ impl DeploySpec {
     pub fn is_first_deploy(&self) -> bool {
         self.first_deploy
     }
+
+    /// Path of the rendered `Dockerfile` relative to the docker-build
+    /// context (the workspace root). Returns `"Dockerfile"` for
+    /// standalone projects and `"<subpath>/Dockerfile"` for workspace
+    /// members. Adapters pass this to `docker build -f`.
+    pub fn dockerfile_path(&self) -> String {
+        if self.workspace_subpath.is_empty() {
+            "Dockerfile".to_owned()
+        } else {
+            format!("{}/Dockerfile", self.workspace_subpath)
+        }
+    }
 }
 
 /// Parse a `[deploy]` table value (already extracted from `Pocopine.toml`)
@@ -213,6 +235,8 @@ pub fn parse(
         services: BTreeMap<String, ServiceSpec>,
         #[serde(default)]
         env: BTreeMap<String, EnvValue>,
+        #[serde(default)]
+        static_files: Option<Vec<String>>,
         #[serde(flatten)]
         host_overrides: BTreeMap<String, toml::Value>,
     }
@@ -221,7 +245,18 @@ pub fn parse(
     }
 
     let raw: Raw = table.try_into()?;
+    let static_files = raw
+        .static_files
+        .unwrap_or_else(|| vec!["index.html".to_string(), "pkg".to_string()]);
+    for entry in &static_files {
+        if entry.is_empty() || entry.starts_with('/') || entry.split('/').any(|seg| seg == "..") {
+            anyhow::bail!(
+                "[deploy] static_files entries must be project-relative and contain no `..` segments; got `{entry}`",
+            );
+        }
+    }
 
+    let package_name = app_name.clone();
     let final_app_name = match environment.as_deref() {
         Some(env) => format!("{app_name}-{env}"),
         None => app_name,
@@ -229,6 +264,7 @@ pub fn parse(
 
     let mut spec = DeploySpec {
         app_name: final_app_name,
+        package_name,
         git_sha,
         git_remote: None,
         mode: raw.mode,
@@ -243,6 +279,9 @@ pub fn parse(
         first_deploy: false,
         skip_build: false,
         environment: environment.clone(),
+        workspace_subpath: String::new(),
+        has_rust_toolchain: false,
+        static_files,
     };
 
     if let Some(env) = environment.as_deref() {
@@ -419,6 +458,52 @@ mod tests {
         .to_string();
         assert!(err.contains("[deploy.<env>.processes]"));
         assert!(err.contains("not yet implemented"));
+    }
+
+    #[test]
+    fn parse_defaults_static_files_to_index_html_and_pkg() {
+        let mut t = toml::value::Table::new();
+        t.insert("mode".into(), toml::Value::String("fullstack".into()));
+        let spec = parse(toml::Value::Table(t), "myapp".into(), "sha".into(), None).unwrap();
+        assert_eq!(spec.static_files, vec!["index.html", "pkg"]);
+    }
+
+    #[test]
+    fn parse_accepts_explicit_static_files() {
+        let table = toml::toml! {
+            mode = "fullstack"
+            static_files = ["index.html", "pkg", "app.css", "public"]
+        };
+        let spec = parse(table.into(), "myapp".into(), "sha".into(), None).unwrap();
+        assert_eq!(
+            spec.static_files,
+            vec!["index.html", "pkg", "app.css", "public"],
+        );
+    }
+
+    #[test]
+    fn parse_rejects_static_files_with_parent_segment() {
+        let table = toml::toml! {
+            mode = "fullstack"
+            static_files = ["index.html", "../secrets"]
+        };
+        let err = parse(table.into(), "myapp".into(), "sha".into(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("static_files"));
+        assert!(err.contains(".."));
+    }
+
+    #[test]
+    fn parse_rejects_static_files_with_absolute_path() {
+        let table = toml::toml! {
+            mode = "fullstack"
+            static_files = ["/etc/passwd"]
+        };
+        let err = parse(table.into(), "myapp".into(), "sha".into(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("static_files"));
     }
 
     #[test]
