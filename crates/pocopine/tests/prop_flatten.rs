@@ -270,3 +270,82 @@ async fn writing_a_leaf_fires_both_the_leaf_and_the_container_watch() {
 
     host.remove();
 }
+
+// ──────────── #[derive(Props)] + bare #[prop(flatten)] ────────────
+
+#[derive(Props, Default, Clone, PartialEq, Serialize, Deserialize)]
+struct BareLeaves {
+    #[prop]
+    heading: String,
+    #[prop]
+    code: String,
+    #[prop]
+    enabled: bool,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[component(
+    name = "bare-flatten-target",
+    template_inline = r#"<div>
+        <span class="b-heading" pp-text="heading"></span>
+        <span class="b-code" pp-text="code"></span>
+        <span class="b-enabled" pp-text="enabled"></span>
+    </div>"#
+)]
+struct BareFlattenTarget {
+    #[prop(flatten)]
+    leaves: BareLeaves,
+}
+
+#[handlers]
+impl BareFlattenTarget {}
+
+#[wasm_bindgen_test]
+fn bare_flatten_via_derive_props_exposes_leaves_through_the_trait() {
+    // No explicit leaf list on `#[prop(flatten)]` — the macro routes
+    // through `<BareLeaves as Props>::prop_leaves()` at runtime.
+    let c = BareFlattenTarget::default();
+    // leaves are props (parent-writable)
+    assert!(c.is_prop("heading"));
+    assert!(c.is_prop("code"));
+    assert!(c.is_prop("enabled"));
+    // …but NOT models — `#[prop(flatten)]` is inbound-only
+    assert!(!c.is_model("heading"));
+    // leaf → container map resolved at runtime
+    assert_eq!(c.flatten_container_of("heading"), Some("leaves"));
+    assert_eq!(c.flatten_container_of("code"), Some("leaves"));
+    assert_eq!(c.flatten_container_of("enabled"), Some("leaves"));
+    // the container field itself is not a leaf
+    assert_eq!(c.flatten_container_of("leaves"), None);
+    // unknown key
+    assert_eq!(c.flatten_container_of("nope"), None);
+}
+
+#[wasm_bindgen_test]
+async fn bare_flatten_leaves_round_trip_through_static_attrs() {
+    BareFlattenTarget::register();
+    let body = doc().body().unwrap();
+    let host = doc().create_element("div").unwrap();
+    host.set_inner_html(
+        r#"<bare-flatten-target
+            heading="Sales"
+            code="2024"
+            enabled="true"></bare-flatten-target>"#,
+    );
+    body.append_child(&host).unwrap();
+    let el = host.query_selector("bare-flatten-target").unwrap().unwrap();
+    pocopine_core::mount::mount_child_component(&el, "bare-flatten-target");
+    pocopine_core::mount::finalize_compiled_subtree(&el);
+    tick().await;
+
+    // Each leaf reaches `self.leaves.<leaf>` and renders by its bare
+    // wire name. `code="2024"` proves exact-type coercion: the derive
+    // reports `<String as PropValue>::prop_static_kind() == String`
+    // (no runtime probe), so the numeric-looking value stays a string
+    // and is NOT coerced to a number — closing the §5.10.3 gap.
+    assert_eq!(read(&host, ".b-heading"), "Sales");
+    assert_eq!(read(&host, ".b-code"), "2024");
+    assert_eq!(read(&host, ".b-enabled"), "true");
+
+    host.remove();
+}

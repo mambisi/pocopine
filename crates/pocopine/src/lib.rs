@@ -51,7 +51,7 @@ pub use pocopine_jobs::{JobError, JobResult};
 // Note: `store` exists in both the value namespace (the accessor `fn store<T>()`)
 // and the macro namespace (the attribute `#[store]`). They don't collide.
 pub use pocopine_macros::{
-    app, client_module, component, handlers, job, protected, server, store, Emit,
+    app, client_module, component, handlers, job, protected, server, store, Emit, Props,
 };
 
 pub mod auth {
@@ -98,11 +98,11 @@ pub mod prelude {
         ComponentUnmounted, Computed, ContextKey, ContextMarker, Emit, ForComponent, Handle, Hook,
         Inject, JobError, JobResult, Loader, LoaderContext, LoaderError, LocalStorage,
         NearestParent, Parent, Permission, Plugin, PluginValidationError, Plugins, Principal,
-        ReturnTo, Role, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface, RouteGuard,
-        RouteGuardDecision, RouteLoader, RouteNavigationCompleted, RouteNavigationFailed,
-        RouteNavigationStarted, RouteRejection, RouteRejectionAction, RouteRejectionContext,
-        RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal, Scope, ScopeId,
-        ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
+        Props, ReturnTo, Role, RouteComponent, RouteConfig, RouteContext, RouteErrorSurface,
+        RouteGuard, RouteGuardDecision, RouteLoader, RouteNavigationCompleted,
+        RouteNavigationFailed, RouteNavigationStarted, RouteRejection, RouteRejectionAction,
+        RouteRejectionContext, RouteRejectionHandler, RouteTarget, RouteTargetError, RwSignal,
+        Scope, ScopeId, ServerError, ServerFunctionClientCompleted, ServerFunctionClientFailed,
         ServerFunctionClientStarted, ServerResult, Setter, Signal, StorageError, Store,
     };
     pub use wasm_bindgen::prelude::*;
@@ -125,8 +125,8 @@ pub mod __private {
         spawn_scoped as runtime_spawn_scoped, store_scope, task::TaskHandle, track,
         with_write_origin, BindingKind, ClientModule, ClientModuleError, Component,
         ComponentMountFn, ComponentState, ComponentVTable, FromHandlerArg, Handle, HandlerDispatch,
-        LifecycleContext, Scope, StaticBinOp, StaticBinding, StaticExpr, StaticListener,
-        StaticLiteral, StaticPropKind, StaticRowPlan, Store, WriteOrigin,
+        LifecycleContext, PropValue, Props, Scope, StaticBinOp, StaticBinding, StaticExpr,
+        StaticListener, StaticLiteral, StaticPropKind, StaticRowPlan, Store, WriteOrigin,
     };
     // RFC 081 — typed ref accessor used by the macro-generated
     // `<ComponentName>Refs` struct.

@@ -1532,6 +1532,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     // `is_model = false` → `#[prop(flatten)]`: leaves are
     //   parent-writable props only — inbound, no `pp:update:` channel.
     let mut flatten_fields: Vec<(syn::Ident, Vec<String>, bool)> = Vec::new();
+    // Bare-flatten fields — `#[prop(flatten)]` / `#[model(flatten)]`
+    // with no explicit list. The field's type must implement
+    // `::pocopine::__private::Props` (typically via
+    // `#[derive(Props)]`); the runtime fallthrough in get / set /
+    // keys / is_prop / is_model / static_prop_kind /
+    // flatten_container_of / model_name routes through that trait.
+    // Tuple is `(container_ident, container_type, is_model)`.
+    let mut bare_flatten_fields: Vec<(syn::Ident, syn::Type, bool)> = Vec::new();
     for field in input.fields.iter_mut() {
         let Some(ident) = field.ident.clone() else {
             continue;
@@ -1546,14 +1554,15 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             if a.path().is_ident("prop") {
                 // Shapes accepted:
                 //   #[prop]                                  bare
-                //   #[prop(flatten = ["leaf1", "leaf2"])]    inbound per-leaf shape
-                //   #[prop(flatten)]                         (reserved — auto-discovery)
+                //   #[prop(flatten = ["leaf1", "leaf2"])]    explicit-list flatten
+                //   #[prop(flatten)]                         bare flatten — field type
+                //                                            must impl `Props`
                 match &a.meta {
                     Meta::Path(_) => {
                         is_prop = true;
                     }
                     Meta::List(_) => {
-                        let parsed: syn::Result<Vec<String>> =
+                        let parsed: syn::Result<Option<Vec<String>>> =
                             a.parse_args_with(|input: syn::parse::ParseStream| {
                                 let mut flatten_leaves: Option<Vec<String>> = None;
                                 let mut bare_flatten = false;
@@ -1590,28 +1599,34 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                                         input.parse::<Token![,]>()?;
                                     }
                                 }
-                                match flatten_leaves {
-                                    Some(leaves) => Ok(leaves),
-                                    None if bare_flatten => Err(syn::Error::new_spanned(
+                                match (flatten_leaves, bare_flatten) {
+                                    // explicit leaf list
+                                    (Some(leaves), _) => Ok(Some(leaves)),
+                                    // bare `#[prop(flatten)]` — field
+                                    // type must impl `Props`; leaves
+                                    // resolve through the trait at
+                                    // runtime.
+                                    (None, true) => Ok(None),
+                                    (None, false) => Err(syn::Error::new_spanned(
                                         a,
-                                        "bare #[prop(flatten)] auto-discovery is not yet \
-                                         implemented — provide an explicit leaf list: \
-                                         #[prop(flatten = [\"field1\", \"field2\"])]",
-                                    )),
-                                    None => Err(syn::Error::new_spanned(
-                                        a,
-                                        "#[prop] list form expects `flatten = [...]`",
+                                        "#[prop] list form expects `flatten` or \
+                                         `flatten = [\"leaf1\", \"leaf2\"]`",
                                     )),
                                 }
                             });
                         match parsed {
-                            Ok(leaves) => {
-                                // Container is internal — not prop,
-                                // not model. Leaves take the prop
-                                // role (added to `flatten_fields`
-                                // with `is_model = false`).
+                            Ok(Some(leaves)) => {
+                                // Explicit-list flatten — container is
+                                // internal, leaves take the prop role.
                                 is_prop = false;
                                 flatten_fields.push((ident.clone(), leaves, false));
+                            }
+                            Ok(None) => {
+                                // Bare flatten — container is
+                                // internal, leaves resolve through
+                                // `<FieldTy as Props>` at runtime.
+                                is_prop = false;
+                                bare_flatten_fields.push((ident.clone(), field_ty.clone(), false));
                             }
                             Err(e) => observe_err = Some(e),
                         }
@@ -1630,8 +1645,9 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 // Shapes accepted:
                 //   #[model]                                  bare
                 //   #[model(name = "…")]                      wire-name rename
-                //   #[model(flatten = ["leaf1", "leaf2"])]    per-leaf wire shape
-                //   #[model(flatten)]                         (reserved — see below)
+                //   #[model(flatten = ["leaf1", "leaf2"])]    explicit-list flatten
+                //   #[model(flatten)]                         bare flatten — field type
+                //                                              must impl `Props`
                 let parsed: syn::Result<(Option<String>, Option<Vec<String>>, bool)> = match &a.meta
                 {
                     Meta::Path(_) => Ok((None, None, false)),
@@ -1670,14 +1686,14 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                                     ));
                                 }
                             } else if key == "flatten" {
-                                // Bare `#[model(flatten)]` —
-                                // auto-discovery form per RFC-044
-                                // §5.10. Reserved for a follow-up
-                                // PR that adds the runtime leaves
-                                // side-table; today's macro emits
-                                // static match arms and can't
-                                // produce those without knowing
-                                // the leaf list.
+                                // Bare `#[model(flatten)]` — the
+                                // field type must implement
+                                // `Props` (typically via
+                                // `#[derive(Props)]`). Leaves
+                                // resolve through that trait at
+                                // runtime; outer match below
+                                // pushes the container into
+                                // `bare_flatten_fields`.
                                 bare_flatten = true;
                             } else {
                                 return Err(syn::Error::new_spanned(
@@ -1700,24 +1716,25 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                 };
                 match parsed {
                     Ok((name, flatten, bare)) => {
-                        if bare && flatten.is_none() {
-                            observe_err = Some(syn::Error::new_spanned(
-                                a,
-                                "bare #[model(flatten)] auto-discovery is not yet \
-                                 implemented — provide an explicit leaf list: \
-                                 #[model(flatten = [\"field1\", \"field2\"])]",
-                            ));
-                        } else if let Some(leaves) = flatten {
-                            // Container is internal — not prop, not
-                            // model. Leaves take those roles (added
-                            // to `flatten_fields` below, spliced into
-                            // codegen after the per-field loop).
-                            // `is_model = true` — model-flatten leaves
-                            // are both parent-writable and emittable.
+                        if let Some(leaves) = flatten {
+                            // Explicit-list flatten — container is
+                            // internal, leaves take the prop + model
+                            // role (added to `flatten_fields`).
                             is_prop = false;
                             is_model = false;
                             model_name = None;
                             flatten_fields.push((ident.clone(), leaves, true));
+                        } else if bare {
+                            // Bare `#[model(flatten)]` — container is
+                            // internal, leaves resolve through
+                            // `<FieldTy as Props>` at runtime and
+                            // additionally carry the `#[model]` role
+                            // (`is_model = true` -> per-leaf
+                            // `pp:update:<leaf>` channel).
+                            is_prop = false;
+                            is_model = false;
+                            model_name = None;
+                            bare_flatten_fields.push((ident.clone(), field_ty.clone(), true));
                         } else {
                             is_prop = true;
                             is_model = true;
@@ -1817,6 +1834,102 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     }
+
+    // RFC-044 §5.10 — bare-flatten codegen precompute. For each
+    // `#[prop(flatten)]` / `#[model(flatten)]` field with NO explicit
+    // leaf list, the field's type must implement
+    // `::pocopine::__private::Props` (typically via
+    // `#[derive(Props)]`); the runtime fallthrough below routes leaf
+    // metadata through that trait at runtime. Explicit-list flatten
+    // (still supported, RFC-044 §5.10.2) emits static match arms; the
+    // two paths coexist and the explicit arms run first.
+    let bare_flatten_is_prop_terms: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(_, ty, _)| {
+            quote! {
+                <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key)
+            }
+        })
+        .collect();
+    let bare_flatten_is_model_terms: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .filter(|(_, _, is_model)| *is_model)
+        .map(|(_, ty, _)| {
+            quote! {
+                <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key)
+            }
+        })
+        .collect();
+    let bare_flatten_keys_extend: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(_, ty, _)| {
+            quote! {
+                __keys.extend_from_slice(
+                    <#ty as ::pocopine::__private::Props>::prop_leaves(),
+                );
+            }
+        })
+        .collect();
+    let bare_flatten_get_lookups: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(ident, ty, _)| {
+            quote! {
+                if <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key) {
+                    return ::pocopine::__private::Props::prop_get(&self.#ident, key);
+                }
+            }
+        })
+        .collect();
+    let bare_flatten_set_lookups: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(ident, ty, _)| {
+            quote! {
+                if <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key) {
+                    return ::pocopine::__private::Props::prop_set(
+                        &mut self.#ident,
+                        key,
+                        value,
+                    );
+                }
+            }
+        })
+        .collect();
+    let bare_flatten_static_kind_lookups: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(_, ty, _)| {
+            quote! {
+                if <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key) {
+                    return <#ty as ::pocopine::__private::Props>::prop_static_kind(key);
+                }
+            }
+        })
+        .collect();
+    let bare_flatten_container_lookups: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .map(|(ident, ty, _)| {
+            let container_name = ident.to_string().trim_start_matches("r#").to_string();
+            quote! {
+                if <#ty as ::pocopine::__private::Props>::prop_leaves().contains(&key) {
+                    return ::core::option::Option::Some(#container_name);
+                }
+            }
+        })
+        .collect();
+    let bare_flatten_model_name_lookups: Vec<proc_macro2::TokenStream> = bare_flatten_fields
+        .iter()
+        .filter(|(_, _, is_model)| *is_model)
+        .map(|(_, ty, _)| {
+            quote! {
+                for __leaf in
+                    <#ty as ::pocopine::__private::Props>::prop_leaves().iter()
+                {
+                    if *__leaf == key {
+                        return ::core::option::Option::Some(*__leaf);
+                    }
+                }
+            }
+        })
+        .collect();
 
     // RFC-044 §5.10 flatten-leaf codegen. For each `flatten = ["a",
     // "b"]` container field, each leaf becomes a synthetic public
@@ -1980,11 +2093,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .chain(flatten_leaf_names.iter().copied())
         .collect();
     // `matches!(key, a | b | c)` needs at least one pattern —
-    // fall back to a `false` literal when no field is a prop.
-    let is_prop_body = if prop_field_names.is_empty() {
-        quote! { let _ = key; false }
-    } else {
-        quote! { matches!(key, #(#prop_field_names)|*) }
+    // fall back to a `false` literal when no field is a prop. Each
+    // bare-flatten container contributes an extra OR term resolved
+    // through `<Ty as Props>::prop_leaves()` at runtime.
+    let is_prop_body = match (
+        prop_field_names.is_empty(),
+        bare_flatten_is_prop_terms.is_empty(),
+    ) {
+        (true, true) => quote! { let _ = key; false },
+        (false, true) => quote! { matches!(key, #(#prop_field_names)|*) },
+        (true, false) => quote! { #(#bare_flatten_is_prop_terms)||* },
+        (false, false) => quote! {
+            matches!(key, #(#prop_field_names)|*)
+                || #(#bare_flatten_is_prop_terms)||*
+        },
     };
 
     // Flatten leaves have no statically-known Rust type at the
@@ -2039,7 +2161,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     let static_prop_kind_body = quote! {
         match key {
             #(#static_prop_kind_arms)*
-            _ => ::pocopine::__private::StaticPropKind::Auto,
+            _ => {
+                #(#bare_flatten_static_kind_lookups)*
+                ::pocopine::__private::StaticPropKind::Auto
+            }
         }
     };
 
@@ -2051,10 +2176,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
         .filter_map(|(n, is_model)| is_model.then_some(n))
         .chain(flatten_model_leaf_names.iter().copied())
         .collect();
-    let is_model_body = if model_field_names.is_empty() {
-        quote! { let _ = key; false }
-    } else {
-        quote! { matches!(key, #(#model_field_names)|*) }
+    // Same shape as `is_prop_body` (above) — bare model-flatten
+    // containers contribute OR terms resolved through
+    // `<Ty as Props>::prop_leaves()` at runtime.
+    let is_model_body = match (
+        model_field_names.is_empty(),
+        bare_flatten_is_model_terms.is_empty(),
+    ) {
+        (true, true) => quote! { let _ = key; false },
+        (false, true) => quote! { matches!(key, #(#model_field_names)|*) },
+        (true, false) => quote! { #(#bare_flatten_is_model_terms)||* },
+        (false, false) => quote! {
+            matches!(key, #(#model_field_names)|*)
+                || #(#bare_flatten_is_model_terms)||*
+        },
     };
     let model_name_arms = field_names
         .iter()
@@ -2734,14 +2869,20 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn get(&self, key: &str) -> ::pocopine::__private::JsValue {
                 match key {
                     #(#get_arms)*
-                    _ => <Self as ::pocopine::__private::HandlerDispatch>::computed_get(self, key)
-                        .unwrap_or(::pocopine::__private::JsValue::UNDEFINED),
+                    _ => {
+                        #(#bare_flatten_get_lookups)*
+                        <Self as ::pocopine::__private::HandlerDispatch>::computed_get(self, key)
+                            .unwrap_or(::pocopine::__private::JsValue::UNDEFINED)
+                    }
                 }
             }
             fn set(&mut self, key: &str, value: ::pocopine::__private::JsValue) {
                 match key {
                     #(#set_arms)*
-                    _ => {}
+                    _ => {
+                        #(#bare_flatten_set_lookups)*
+                        let _ = value;
+                    }
                 }
             }
             fn keys(&self) -> &'static [&'static str] {
@@ -2752,6 +2893,7 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
                     __keys.extend_from_slice(
                         <Self as ::pocopine::__private::HandlerDispatch>::computed_keys(),
                     );
+                    #(#bare_flatten_keys_extend)*
                     let __boxed: ::std::boxed::Box<[&'static str]> = __keys.into_boxed_slice();
                     ::std::boxed::Box::leak(__boxed)
                 })
@@ -2768,7 +2910,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::core::option::Option<&'static str> {
                 match key {
                     #(#flatten_container_arms)*
-                    _ => ::core::option::Option::None,
+                    _ => {
+                        #(#bare_flatten_container_lookups)*
+                        ::core::option::Option::None
+                    }
                 }
             }
             fn is_model(&self, key: &str) -> bool {
@@ -2777,7 +2922,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn model_name(&self, key: &str) -> ::core::option::Option<&'static str> {
                 match key {
                     #(#model_name_arms)*
-                    _ => ::core::option::Option::None,
+                    _ => {
+                        #(#bare_flatten_model_name_lookups)*
+                        ::core::option::Option::None
+                    }
                 }
             }
             fn get_model_value(&self, key: &str) -> ::pocopine::__private::JsValue {
@@ -4962,6 +5110,145 @@ pub fn derive_emit(input: TokenStream) -> TokenStream {
                 match name {
                     #(#from_event_arms)*
                     _ => ::core::option::Option::None,
+                }
+            }
+        }
+    };
+    out.into()
+}
+
+// ── RFC-044 §5.10 — `#[derive(Props)]` ────────────────────────────
+
+/// Generates a `Props` impl for a flatten-container struct.
+///
+/// Fields marked `#[prop]` become wire leaves (in declaration order);
+/// unmarked fields are ignored. Leaf field types must implement
+/// `PropValue` (impls ship for `String`, `bool`, the int/float
+/// numerics, and `Option<T: PropValue>`).
+///
+/// ```ignore
+/// #[derive(Props, Default, Clone, PartialEq, Serialize, Deserialize)]
+/// pub struct SeriesCommon {
+///     #[prop] pub key: String,
+///     #[prop] pub label: String,
+///     #[prop] pub color: String,
+///     #[prop] pub visible: bool,
+/// }
+/// ```
+#[proc_macro_derive(Props, attributes(prop))]
+pub fn derive_props(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Props)] can only be applied to structs",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let Fields::Named(fields) = &data.fields else {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Props)] requires a struct with named fields",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    // Collect (ident, type) for every field marked `#[prop]`. Order
+    // follows declaration order, which is what `prop_leaves()`
+    // returns. Unmarked fields are internal — same role split as
+    // `#[component]` (RFC-031): `#[prop]` = exposed, default = state.
+    let mut leaves: Vec<(syn::Ident, syn::Type)> = Vec::new();
+    for field in fields.named.iter() {
+        if !field.attrs.iter().any(|a| a.path().is_ident("prop")) {
+            continue;
+        }
+        let Some(ident) = field.ident.clone() else {
+            continue;
+        };
+        leaves.push((ident, field.ty.clone()));
+    }
+
+    if leaves.is_empty() {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "#[derive(Props)] requires at least one field marked `#[prop]`",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let leaf_names: Vec<String> = leaves
+        .iter()
+        .map(|(i, _)| i.to_string().trim_start_matches("r#").to_string())
+        .collect();
+
+    let get_arms = leaves.iter().zip(leaf_names.iter()).map(|((id, _), name)| {
+        quote! {
+            #name => ::pocopine::__private::PropValue::to_prop_js(&self.#id),
+        }
+    });
+
+    let set_arms = leaves
+        .iter()
+        .zip(leaf_names.iter())
+        .map(|((id, ty), name)| {
+            quote! {
+                #name => {
+                    if let ::core::option::Option::Some(__v) =
+                        <#ty as ::pocopine::__private::PropValue>::from_prop_js(value)
+                    {
+                        self.#id = __v;
+                    }
+                }
+            }
+        });
+
+    let kind_arms = leaves.iter().zip(leaf_names.iter()).map(|((_, ty), name)| {
+        quote! {
+            #name => <#ty as ::pocopine::__private::PropValue>::prop_static_kind(),
+        }
+    });
+
+    let out = quote! {
+        impl #impl_generics ::pocopine::__private::Props for #struct_ident #ty_generics
+            #where_clause
+        {
+            fn prop_leaves() -> &'static [&'static str] {
+                &[#(#leaf_names),*]
+            }
+            fn prop_get(
+                &self,
+                leaf: &str,
+            ) -> ::pocopine::__private::JsValue {
+                match leaf {
+                    #(#get_arms)*
+                    _ => ::pocopine::__private::JsValue::UNDEFINED,
+                }
+            }
+            fn prop_set(
+                &mut self,
+                leaf: &str,
+                value: ::pocopine::__private::JsValue,
+            ) {
+                match leaf {
+                    #(#set_arms)*
+                    _ => {
+                        let _ = value;
+                    }
+                }
+            }
+            fn prop_static_kind(
+                leaf: &str,
+            ) -> ::pocopine::__private::StaticPropKind {
+                match leaf {
+                    #(#kind_arms)*
+                    _ => ::pocopine::__private::StaticPropKind::Auto,
                 }
             }
         }
