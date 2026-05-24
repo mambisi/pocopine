@@ -237,11 +237,14 @@ If the sync name is not a valid Rust module identifier, use
 
 ```rust
 pub mod customers {
+    #[allow(unused_imports)]
+    use super::*;
+
     pub const NAME: &str = "customers";
 
     pub type Id = uuid::Uuid;
-    pub type Row = super::Customer;
-    pub type Draft = super::CustomerDraft;
+    pub type Row = Customer;
+    pub type Draft = CustomerDraft;
 
     pub type CreateOptions = pocopine_sync_crud::CreateOptions<Row>;
     pub type SaveOptions = pocopine_sync_crud::SaveOptions<Row>;
@@ -252,9 +255,9 @@ pub mod customers {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resource(
-        source: super::Customers,
+        source: Customers,
     ) -> pocopine_sync::SyncResult<
-        pocopine_sync_crud::CrudResourceBuilder<super::Customers>,
+        pocopine_sync_crud::CrudResourceBuilder<Customers>,
     > {
         pocopine_sync_crud::resource(NAME, source)
     }
@@ -300,6 +303,11 @@ server targets. That lets authors keep the resource definition in a
 shared crate without making the browser compile server-only traits,
 database clients, or `async_trait`.
 
+Only the impl is gated by the macro. If the source type itself contains
+server-only fields such as `sqlx::PgPool`, the app must also gate that
+source type or keep it in a server-only module. Shared row and draft
+types should remain available to both targets.
+
 `Client<C>` and `client(...)` are portable type/runtime helpers. Only
 `collection(...)` is wasm-only because it references `pocopine::Handle`
 and the browser sync plugin. `client(...)` owns the `LocalResourceView`
@@ -316,6 +324,12 @@ id encoding or loaded rows for the wrong resource type.
 
 The generated `new_id()` wrapper specializes the runtime helper to the
 resource `Id`, so callers never write turbofish syntax.
+
+The generated `collection(...)` helper assumes the client crate depends
+on the umbrella `pocopine` crate because it names `pocopine::Handle`.
+Apps that build on `pocopine-sync` without the umbrella can still call
+`SyncClient::collection(...).stream(customers::NAME)` directly, then
+pass the returned streamed collection to `customers::client(...)`.
 
 Generated outcome aliases expose the runtime fields exactly:
 
