@@ -86,7 +86,9 @@ pieces:
 - `CrudMutationLog` and `MemoryCrudMutationLog` so accepted mutation ids are explicit and replayed writes do not silently run twice,
 - exact replay validation so a reused mutation id with a different operation, row id, or payload is rejected,
 - `local_resource_view(...)` and `LocalResourceView<Id, Row>` for typed read-side state over `CollectionState<Row>`,
+- `LocalResourceView::conflicts()` and `LocalResourceView::conflict_for(...)` for conflict UI lookup without raw sync rows,
 - `client_resource(collection, view)` and `CrudClientResource` for non-macro client CRUD methods,
+- `CrudClientResource::use_server`, `retry_local`, and `merge_with` as the first conservative conflict-resolution helpers,
 - durable generated-id queueing for `WritePolicy::QueueOffline`,
 - online-confirmed generated-id push for `WritePolicy::RequireOnline`,
 - low-level `pocopine-sync` online-only push helpers,
@@ -94,7 +96,7 @@ pieces:
 - generated resource aliases: `Id`, `Row`, `Draft`, `CreateOptions`, `SaveOptions`, `RemoveOptions`, `Queued`, `Outcome`, and `Client<C>`,
 - generated server registration: `customers::resource(source)`,
 - generated client helpers: `customers::new_id()`, `view(...)`, `collection(...)`, `client(...)`, and `use_resource(...)`,
-- generated `Resource<C>` methods: `open`, `pull`, `view`, `client`, `create`, `create_with_options`, `save`, `save_with_options`, `remove`, and `remove_with_options`,
+- generated `Resource<C>` methods: `open`, `pull`, `view`, `client`, `create`, `create_with_options`, `save`, `save_with_options`, `remove`, `remove_with_options`, `use_server`, `retry_local`, `retry_local_with_options`, `merge_with`, and `merge_with_options`,
 - route-level integration coverage proving a CRUD resource registered with `SyncServer` serves `/pull` and `/push` through the normal sync plugin.
 
 The remaining higher-level layer is deliberately smaller now:
@@ -102,7 +104,8 @@ The remaining higher-level layer is deliberately smaller now:
 - fluent options builders such as `customers.create_options().optimistic(row).send(...)`,
 - transaction convenience helpers such as `customers.transaction_options().require_online().run(...)`,
 - macro tests that exercise more complete generated browser-style call sites,
-- example app wiring that shows the generated helper in a real component.
+- example app wiring that shows the generated helper in a real component,
+- a true `discard_local` helper that also purges queued pending mutations for one row key.
 
 ## Server Trait
 
@@ -402,6 +405,14 @@ if view.has_conflicts() {
     self.badge = "conflict".to_string();
 }
 
+for conflict in view.conflicts() {
+    self.conflict_ids.push(conflict.id.clone());
+}
+
+if let Some(row) = view.conflict_for(&customer_id) {
+    self.conflict_reason = format!("row {} needs review", row.id);
+}
+
 for row in &view.rows {
     match row.status {
         pocopine_sync_crud::LocalResourceRowStatus::Synced => {}
@@ -420,6 +431,17 @@ known for that id, even when the visible row includes a local optimistic
 overlay. `save` and `remove` use that value by default. Pending writes for
 the same id are not silently merged into a synthetic version; stale server
 responses still return explicit conflicts.
+
+Conflict resolution helpers use the same view. `use_server(id)` clears a
+local conflict marker after the user chooses the known canonical server
+row. It does not remove unrelated pending mutations for that row. A true
+"discard local pending edits" helper is deferred until the local-store
+contract has a durable row-scoped pending-mutation purge operation.
+
+`retry_local(id, draft)` and `merge_with(id, draft)` queue a new save
+using the latest canonical `base_version` from the view. The conflict
+marker remains visible until the server accepts the retry and returns a
+new canonical row.
 
 ## Generated Client API
 
@@ -451,6 +473,28 @@ customers
     .await?;
 
 customers.remove(customer.id).await?;
+
+customers.use_server(customer.id).await?;
+
+customers
+    .retry_local(
+        customer.id,
+        CustomerDraft {
+            name: edited_name.clone(),
+            email: edited_email.clone(),
+        },
+    )
+    .await?;
+
+customers
+    .merge_with(
+        customer.id,
+        CustomerDraft {
+            name: merged_name,
+            email: merged_email,
+        },
+    )
+    .await?;
 ```
 
 Advanced callers can override defaults with `_with_options`:
@@ -536,6 +580,22 @@ and comparison, not `Option<SyncRow<Row>>`. The row version stays in the
 canonical sync state. A retry should read the refreshed
 `LocalResourceView::base_version(&id)` after reconciliation or after a
 pull, rather than deriving a retry version from the typed conflict row.
+
+Generated resources expose the first explicit resolution helpers:
+
+```rust
+customers.use_server(id).await?;
+customers.retry_local(id, draft).await?;
+customers.merge_with(id, merged_draft).await?;
+```
+
+`use_server` clears the local conflict marker and keeps the known server
+row. `retry_local` and `merge_with` enqueue a new save against the latest
+canonical base. They intentionally keep the conflict visible until the
+server accepts the retry. There is no `discard_local` helper yet because
+that name implies pending local mutations for the row are removed from
+the durable queue; the current local-store contract does not expose that
+operation.
 
 If `get` returns `None`, the client should treat the row as gone or not
 visible. It should not assume the caller is allowed to know which case it

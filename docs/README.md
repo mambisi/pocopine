@@ -66,9 +66,9 @@ looks the way it does — the code itself tells you *what*.
   invariants future sync/resource authors must preserve.
 - [`sync-crud.md`](./sync-crud.md) — `pocopine-sync-crud` helper layer:
   `CrudSource`, `ResourceId`, CRUD mutation payloads, write policies,
-  transaction binding, the non-macro runtime adapter, planned proc-macro
-  generated typed CRUD methods, and the boundary that keeps Pocopine out
-  of ORM territory.
+  transaction binding, the non-macro runtime adapter, generated typed
+  CRUD methods, conservative conflict helpers, and the boundary that
+  keeps Pocopine out of ORM territory.
 - [`sync-crud-macro-contract.md`](./sync-crud-macro-contract.md) —
   concrete generated CRUD macro API contract, including the server
   resource module shape, client binding helpers, queued/online handling,
